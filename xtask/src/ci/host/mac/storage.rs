@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::{
-    runner_images::JobVm,
+    runner_images::job_vm,
     runners::{docker_host, docker_socket},
 };
 #[cfg(test)]
@@ -67,14 +67,12 @@ pub(super) struct HostStorage<'a> {
     available_sequence: RefCell<VecDeque<u64>>,
 }
 
-struct Agents;
-
-impl Agents {
-    const LAUNCHCTL: &'static str = "/bin/launchctl";
-    const RUNNING: &'static str = "running";
+mod agents {
+    pub(super) const LAUNCHCTL: &str = "/bin/launchctl";
+    pub(super) const RUNNING: &str = "running";
     /// A host with no launchd has no agents to be wrong about, and the Linux
     /// executor runs this same command.
-    const ABSENT: &'static str = "not-applicable";
+    pub(super) const ABSENT: &str = "not-applicable";
 }
 
 #[derive(Serialize)]
@@ -348,7 +346,7 @@ impl<'a> HostStorage<'a> {
         let agents = self.agent_states();
         let down: Vec<&str> = agents
             .iter()
-            .filter(|(_, state)| ![Agents::RUNNING, Agents::ABSENT].contains(*state))
+            .filter(|(_, state)| ![agents::RUNNING, agents::ABSENT].contains(*state))
             .map(|(name, _)| *name)
             .collect();
         serde_json::to_writer(
@@ -379,18 +377,18 @@ impl<'a> HostStorage<'a> {
     /// On a host with no launchd there is nothing to say, and this must not
     /// invent a fault: the Linux executor runs the same command.
     fn agent_states(&self) -> BTreeMap<&'a str, &'static str> {
-        if !Path::new(Agents::LAUNCHCTL).is_file() {
+        if !Path::new(agents::LAUNCHCTL).is_file() {
             return self
                 .config
                 .host
                 .always_on_agents
                 .iter()
-                .map(|name| (name.as_str(), Agents::ABSENT))
+                .map(|name| (name.as_str(), agents::ABSENT))
                 .collect();
         }
         let listing = self
             .process
-            .capture(Agents::LAUNCHCTL, &["list"], "launchd agent listing")
+            .capture(agents::LAUNCHCTL, &["list"], "launchd agent listing")
             .unwrap_or_default();
         agent_states_from(&listing, &self.config.host.always_on_agents)
     }
@@ -792,7 +790,7 @@ impl<'a> HostStorage<'a> {
 
     /// Delete the macOS job VM once no runner is serving from it.
     ///
-    /// The macOS lane clones [`JobVm::NAME`] from the base bundle and destroys
+    /// The macOS lane clones [`job_vm::NAME`] from the base bundle and destroys
     /// it at both ends of every runner loop, so the clone is disposable by
     /// construction: a runner that finds it missing makes another. When the
     /// runner dies between those ends the clone outlives it, and nothing ever
@@ -827,7 +825,7 @@ impl<'a> HostStorage<'a> {
         let Ok(home) = self.config.host.tart_home() else {
             return;
         };
-        let bundle = home.join("vms").join(JobVm::NAME);
+        let bundle = home.join("vms").join(job_vm::NAME);
         if !tart.is_file() || !bundle.is_dir() {
             return;
         }
@@ -837,9 +835,9 @@ impl<'a> HostStorage<'a> {
         if !older_than_time(touched, age) || self.job_vm_is_running(&tart) {
             return;
         }
-        info!(vm = JobVm::NAME, bundle = %bundle.display(), "removing abandoned macOS job VM");
+        info!(vm = job_vm::NAME, bundle = %bundle.display(), "removing abandoned macOS job VM");
         let mut command = self.process.command(&tart);
-        command.args(["delete", JobVm::NAME]);
+        command.args(["delete", job_vm::NAME]);
         if let Err(error) = self
             .process
             .run_command(&mut command, "delete abandoned CI macOS VM")
@@ -867,7 +865,9 @@ impl<'a> HostStorage<'a> {
         let Ok(listed) = serde_json::from_slice::<Vec<TartVm>>(&output.stdout) else {
             return true;
         };
-        listed.iter().any(|vm| vm.name == JobVm::NAME && vm.running)
+        listed
+            .iter()
+            .any(|vm| vm.name == job_vm::NAME && vm.running)
     }
 
     fn prune_docker_cache(&self, age: &str) {
@@ -1139,7 +1139,7 @@ fn agent_states_from<'a>(
                         if pid == "-" {
                             "stopped"
                         } else {
-                            Agents::RUNNING
+                            agents::RUNNING
                         }
                     })
                 })

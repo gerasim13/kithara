@@ -16,10 +16,8 @@ use crate::pipeline::{
     seek::skip::{apply as apply_skip, apply_frames},
 };
 
-struct Consts;
-
-impl Consts {
-    const PRIME_STEPS_PER_PASS: usize = 8;
+mod consts {
+    pub(super) const PRIME_STEPS_PER_PASS: usize = 8;
 }
 
 pub(crate) enum IncomingDecode {
@@ -390,7 +388,7 @@ impl super::core::ActiveDecode {
             PromotionReadiness::NeedIncoming => {}
         }
         let mut outcome = IncomingPrime::Pending;
-        for _ in 0..Consts::PRIME_STEPS_PER_PASS {
+        for _ in 0..consts::PRIME_STEPS_PER_PASS {
             generation.decoder_mut().prepare_next_chunk();
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {

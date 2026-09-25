@@ -13,12 +13,10 @@ use kithara_devtools::{Ctx, util::check_tool};
 
 use crate::config::{KitharaExt, PublishConfig};
 
-struct Consts;
-
-impl Consts {
+mod consts {
     /// User-agent used for registry availability checks when the project
     /// config leaves `publish.user_agent` empty.
-    const DEFAULT_USER_AGENT: &'static str = "xtask-publish";
+    pub(super) const DEFAULT_USER_AGENT: &str = "xtask-publish";
 }
 
 #[derive(Debug, clap::Args)]
@@ -391,7 +389,7 @@ fn registry_has(
     let path = version.map_or_else(|| name.to_string(), |version| format!("{name}/{version}"));
     let url = format!("https://crates.io/api/v1/crates/{path}");
     let user_agent = if configured_agent.is_empty() {
-        Consts::DEFAULT_USER_AGENT
+        consts::DEFAULT_USER_AGENT
     } else {
         configured_agent
     };

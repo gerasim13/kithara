@@ -20,18 +20,16 @@ use crate::{
     logging::{RedactedNetError, RedactedUrl},
 };
 
+mod consts {
+    pub(super) const AES_KEY_LEN: usize = 16;
+    pub(super) const IV_SEQUENCE_OFFSET: usize = 8;
+}
+
 /// DRM key fetch + processor pipeline.
 ///
 /// Resolves optional provider processing through a [`KeyProcessorRegistry`].
 /// The registry supplies a fully prepared wire request; this type owns only
 /// cache coordination, fetching, validation, and processor execution.
-struct Consts;
-
-impl Consts {
-    const AES_KEY_LEN: usize = 16;
-    const IV_SEQUENCE_OFFSET: usize = 8;
-}
-
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 pub struct KeyStore<S>
 where
@@ -253,7 +251,7 @@ where
     pub async fn get_raw_key(
         &self,
         url: &Url,
-        _iv: Option<[u8; Consts::AES_KEY_LEN]>,
+        _iv: Option<[u8; consts::AES_KEY_LEN]>,
     ) -> HlsResult<Bytes> {
         if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
             tracing::debug!(url = %RedactedUrl::new(url), "key: served from in-memory cache");
@@ -400,7 +398,7 @@ where
 }
 
 fn validate_aes128_key(bytes: &[u8]) -> HlsResult<()> {
-    if bytes.len() == Consts::AES_KEY_LEN {
+    if bytes.len() == consts::AES_KEY_LEN {
         return Ok(());
     }
     Err(invalid_key_length(bytes.len()))
@@ -414,19 +412,19 @@ fn validated_key_bytes(bytes: &[u8]) -> HlsResult<Bytes> {
 fn invalid_key_length(actual: usize) -> HlsError {
     HlsError::KeyProcessing(format!(
         "AES-128 key must be {} bytes, got {actual}",
-        Consts::AES_KEY_LEN
+        consts::AES_KEY_LEN
     ))
 }
 
 pub(crate) fn derive_iv(
     key_info: &crate::playlist::parse::KeyInfo,
     sequence: u64,
-) -> [u8; Consts::AES_KEY_LEN] {
+) -> [u8; consts::AES_KEY_LEN] {
     if let Some(iv) = key_info.iv {
         return iv;
     }
-    let mut iv = [0u8; Consts::AES_KEY_LEN];
-    iv[Consts::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
+    let mut iv = [0u8; consts::AES_KEY_LEN];
+    iv[consts::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
     iv
 }
 
@@ -452,7 +450,7 @@ where
 {
     let key_url = resolve_key_url(key_info, segment_url)?;
     let key_bytes = key_store.get_cached_key(&key_url)?;
-    let key: [u8; Consts::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
+    let key: [u8; consts::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
         publish_key_fetch_failed(
             &key_store.bus,
             &key_url,

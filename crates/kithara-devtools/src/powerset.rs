@@ -5,9 +5,8 @@ use clap::Args;
 
 use crate::{Ctx, common::project::FeatureInvariant};
 
-struct Consts;
-impl Consts {
-    const DEPTH: &'static str = "2";
+mod consts {
+    pub(super) const DEPTH: &str = "2";
 }
 
 #[derive(Debug, Args)]
@@ -49,7 +48,7 @@ fn plan(ctx: &Ctx, no_dev_deps: bool) -> Result<Vec<Vec<String>>> {
             "check".to_owned(),
             "--feature-powerset".to_owned(),
             "--depth".to_owned(),
-            Consts::DEPTH.to_owned(),
+            consts::DEPTH.to_owned(),
         ];
         if no_dev_deps {
             args.push("--no-dev-deps".to_owned());

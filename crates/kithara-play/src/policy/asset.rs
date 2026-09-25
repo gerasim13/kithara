@@ -6,12 +6,10 @@ use url::Url;
 
 use super::domain::DomainPattern;
 
-struct Consts;
-
-impl Consts {
-    const DISCRIMINATOR_DOMAIN: &[u8] = b"kithara.play.query-discriminator.v1\0";
-    const HASH_BYTES: usize = 16;
-    const IDENTITY_DOMAIN: &[u8] = b"kithara.play.query-identity.v1\0";
+mod consts {
+    pub(super) const DISCRIMINATOR_DOMAIN: &[u8] = b"kithara.play.query-discriminator.v1\0";
+    pub(super) const HASH_BYTES: usize = 16;
+    pub(super) const IDENTITY_DOMAIN: &[u8] = b"kithara.play.query-identity.v1\0";
 }
 
 /// Domain rule selecting the case-sensitive query keys that identify content.
@@ -84,7 +82,7 @@ impl QueryIdentityRule {
         }
 
         let mut hasher = Sha256::new();
-        hasher.update(Consts::IDENTITY_DOMAIN);
+        hasher.update(consts::IDENTITY_DOMAIN);
         for key in &self.keys {
             hash_field(&mut hasher, key.as_bytes());
             let values = pairs
@@ -161,7 +159,7 @@ impl AssetLayout for QueryIdentityLayout {
 
 fn combined_discriminator(discriminator: Option<&str>, identity: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(Consts::DISCRIMINATOR_DOMAIN);
+    hasher.update(consts::DISCRIMINATOR_DOMAIN);
     if let Some(discriminator) = discriminator {
         hasher.update([1]);
         hash_field(&mut hasher, discriminator.as_bytes());
@@ -183,5 +181,5 @@ fn hash_len(hasher: &mut Sha256, value: usize) {
 
 fn finish_hash(hasher: Sha256) -> String {
     let hash = hasher.finalize();
-    hex::encode(&hash[..Consts::HASH_BYTES])
+    hex::encode(&hash[..consts::HASH_BYTES])
 }

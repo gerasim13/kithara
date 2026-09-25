@@ -9,11 +9,10 @@ use serde::Serialize;
 
 use crate::{Ctx, common::baseline::Baseline};
 
-struct Consts;
-impl Consts {
-    const BASELINE_CONFIG_DIRS: &'static [&'static str] =
+mod consts {
+    pub(super) const BASELINE_CONFIG_DIRS: &[&str] =
         &[".config/arch", ".config/style", ".config/idioms"];
-    const COMMENTED_CONFIG_TEMPLATE: &'static str = r#"
+    pub(super) const COMMENTED_CONFIG_TEMPLATE: &str = r#"
 # Optional generic tooling config sections. Uncomment only the settings this workspace owns.
 #
 # [health]
@@ -68,9 +67,9 @@ impl Consts {
 # [workspace-scan]
 # exclude = []
 "#;
-    const CONFIG_REL: &'static str = ".config/xtask.toml";
+    pub(super) const CONFIG_REL: &str = ".config/xtask.toml";
 
-    const MAIN_RS_SNIPPET: &'static str = r#"use clap::{Parser, Subcommand};
+    pub(super) const MAIN_RS_SNIPPET: &str = r#"use clap::{Parser, Subcommand};
 use kithara_devtools::{CoreCommand, Ctx};
 
 #[derive(Debug, Parser)]
@@ -152,18 +151,18 @@ pub(crate) fn run(args: &InitArgs, ctx: &Ctx) -> Result<()> {
         write_file(baseline, b"")?;
     }
 
-    println!("{}", Consts::MAIN_RS_SNIPPET);
+    println!("{}", consts::MAIN_RS_SNIPPET);
     Ok(())
 }
 
 fn target_files(root: &Path) -> TargetFiles {
-    let baselines = Consts::BASELINE_CONFIG_DIRS
+    let baselines = consts::BASELINE_CONFIG_DIRS
         .iter()
         .map(|dir| Baseline::path(&root.join(dir)))
         .collect();
     TargetFiles {
         baselines,
-        config: root.join(Consts::CONFIG_REL),
+        config: root.join(consts::CONFIG_REL),
     }
 }
 
@@ -184,7 +183,7 @@ fn render_config(project_name: &str) -> Result<String> {
     if !text.ends_with('\n') {
         text.push('\n');
     }
-    text.push_str(Consts::COMMENTED_CONFIG_TEMPLATE);
+    text.push_str(consts::COMMENTED_CONFIG_TEMPLATE);
     Ok(text)
 }
 

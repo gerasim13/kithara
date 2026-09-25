@@ -16,13 +16,12 @@ use crate::ci::{
 /// firmware it can boot from, a
 /// software TPM it refuses to install without, the tool that creates it, and
 /// one to build the answer file that installs it unattended.
-struct Consts;
-impl Consts {
+mod consts {
     /// The uid the runner image runs its jobs as. It is the image's, not this
     /// machine's, so it is written beside the code that mounts into that image.
-    const JOB_USER: u32 = 1000;
+    pub(super) const JOB_USER: u32 = 1000;
 
-    const HOST_PACKAGES: [&'static str; 10] = [
+    pub(super) const HOST_PACKAGES: [&str; 10] = [
         "iptables",
         "dnsmasq-base",
         "qemu-utils",
@@ -97,7 +96,7 @@ pub(super) fn install_tools(process: &Process) -> Result<()> {
     // Only what is missing. Naming a package that is already installed invites
     // apt to upgrade it, and upgrading the GPU stack underneath a machine that
     // is serving other work is not this command's business.
-    let missing: Vec<&str> = Consts::HOST_PACKAGES
+    let missing: Vec<&str> = consts::HOST_PACKAGES
         .into_iter()
         .filter(|package| {
             // A package dpkg cannot describe at all is missing just as surely
@@ -162,7 +161,7 @@ fn require_linux() -> Result<()> {
 fn give_to_the_job(process: &Process, volume: &str, pins: &CiPins) -> Result<()> {
     let mount_type = super::container::Container::mount_type(volume);
     let mount = format!("type={mount_type},source={volume},target=/volume");
-    let owner = format!("chown {user}:{user} /volume", user = Consts::JOB_USER);
+    let owner = format!("chown {user}:{user} /volume", user = consts::JOB_USER);
     process.run(
         "docker",
         &[

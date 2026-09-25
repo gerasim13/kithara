@@ -41,14 +41,14 @@ use super::{
 };
 use crate::config::XtaskCacheConfig;
 
-struct Consts;
+mod consts {
+    use super::Duration;
 
-impl Consts {
-    const BUILD_OUTPUT_LIMIT: usize = 4096;
+    pub(super) const BUILD_OUTPUT_LIMIT: usize = 4096;
     #[cfg(unix)]
-    const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
+    pub(super) const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
     #[cfg(unix)]
-    const CHILD_TERMINATION_GRACE: Duration = Duration::from_secs(2);
+    pub(super) const CHILD_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 }
 
 #[derive(Debug, Args)]
@@ -337,7 +337,7 @@ where
         .stdout
         .take()
         .context("capture xtask self-cache build output")?;
-    let reader = thread::spawn(move || read_bounded_output(stdout, Consts::BUILD_OUTPUT_LIMIT));
+    let reader = thread::spawn(move || read_bounded_output(stdout, consts::BUILD_OUTPUT_LIMIT));
     let status = wait(&mut child);
     let output = reader
         .join()
@@ -368,9 +368,9 @@ fn artifact(root: &Path) -> Result<()> {
 
 fn parse_artifact(root: &Path, output: &[u8]) -> Result<PathBuf> {
     ensure!(
-        output.len() <= Consts::BUILD_OUTPUT_LIMIT,
+        output.len() <= consts::BUILD_OUTPUT_LIMIT,
         "xtask self-cache build output exceeds {} bytes",
-        Consts::BUILD_OUTPUT_LIMIT
+        consts::BUILD_OUTPUT_LIMIT
     );
     let body = std::str::from_utf8(output).context("xtask self-cache build output is not UTF-8")?;
     let value = body
@@ -438,7 +438,7 @@ fn supervise(child: &mut Child, parent: u32, signals: &BuildSignals) -> Result<E
         {
             return Ok(status);
         }
-        thread::sleep(Consts::CHILD_POLL_INTERVAL);
+        thread::sleep(consts::CHILD_POLL_INTERVAL);
     }
 }
 
@@ -446,7 +446,7 @@ fn supervise(child: &mut Child, parent: u32, signals: &BuildSignals) -> Result<E
 fn terminate(child: &mut Child, signal: Signal) -> Result<()> {
     let process = child.id();
     signal_group(process, signal)?;
-    let deadline = Instant::now() + Consts::CHILD_TERMINATION_GRACE;
+    let deadline = Instant::now() + consts::CHILD_TERMINATION_GRACE;
     let mut leader_reaped = false;
     loop {
         if !leader_reaped
@@ -475,18 +475,18 @@ fn terminate(child: &mut Child, signal: Signal) -> Result<()> {
             wait_for_group_exit(process)?;
             return Ok(());
         }
-        thread::sleep(Consts::CHILD_POLL_INTERVAL);
+        thread::sleep(consts::CHILD_POLL_INTERVAL);
     }
 }
 
 #[cfg(unix)]
 fn wait_for_group_exit(process: u32) -> Result<()> {
-    let deadline = Instant::now() + Consts::CHILD_TERMINATION_GRACE;
+    let deadline = Instant::now() + consts::CHILD_TERMINATION_GRACE;
     while process_group_exists(process)? {
         if Instant::now() >= deadline {
             bail!("killed xtask self-cache Cargo process group did not exit");
         }
-        thread::sleep(Consts::CHILD_POLL_INTERVAL);
+        thread::sleep(consts::CHILD_POLL_INTERVAL);
     }
     Ok(())
 }

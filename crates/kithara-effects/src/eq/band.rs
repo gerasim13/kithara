@@ -3,17 +3,15 @@ use num_traits::cast::AsPrimitive;
 
 use crate::GainDb;
 
-struct Consts;
-
-impl Consts {
-    const BAND_MAX_FREQ: f32 = 18000.0;
-    const BAND_MIN_FREQ: f32 = 60.0;
+mod consts {
+    pub(super) const BAND_MAX_FREQ: f32 = 18000.0;
+    pub(super) const BAND_MIN_FREQ: f32 = 60.0;
     /// Centre frequency a band starts at before the caller places it.
-    const DEFAULT_FREQ: f32 = 1000.0;
-    const HIGH_SHELF_DISCRIMINANT: u8 = 2;
-    const LOG_FREQ_BASE: f32 = 10.0;
-    const Q_REFERENCE_BANDS: f32 = 10.0;
-    const Q_SCALE_FACTOR: f32 = 1.4;
+    pub(super) const DEFAULT_FREQ: f32 = 1000.0;
+    pub(super) const HIGH_SHELF_DISCRIMINANT: u8 = 2;
+    pub(super) const LOG_FREQ_BASE: f32 = 10.0;
+    pub(super) const Q_REFERENCE_BANDS: f32 = 10.0;
+    pub(super) const Q_SCALE_FACTOR: f32 = 1.4;
 }
 
 /// The type of biquad filter used for an EQ band.
@@ -31,7 +29,7 @@ impl From<u8> for FilterKind {
     fn from(value: u8) -> Self {
         match value {
             0 => Self::LowShelf,
-            Consts::HIGH_SHELF_DISCRIMINANT => Self::HighShelf,
+            consts::HIGH_SHELF_DISCRIMINANT => Self::HighShelf,
             _ => Self::Peaking,
         }
     }
@@ -50,7 +48,7 @@ pub struct EqBandConfig {
     #[builder(default)]
     #[field(get(copy))]
     gain_db: GainDb,
-    #[builder(default = Consts::DEFAULT_FREQ)]
+    #[builder(default = consts::DEFAULT_FREQ)]
     frequency: f32,
     #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
     q_factor: f32,
@@ -70,20 +68,20 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
     }
 
     let count_f32: f32 = count.as_();
-    let q_factor = Consts::Q_SCALE_FACTOR * (count_f32 / Consts::Q_REFERENCE_BANDS).sqrt();
+    let q_factor = consts::Q_SCALE_FACTOR * (count_f32 / consts::Q_REFERENCE_BANDS).sqrt();
 
     if count == 1 {
         return vec![
             EqBandConfig::builder()
-                .frequency((Consts::BAND_MIN_FREQ * Consts::BAND_MAX_FREQ).sqrt())
+                .frequency((consts::BAND_MIN_FREQ * consts::BAND_MAX_FREQ).sqrt())
                 .q_factor(q_factor)
                 .build(),
         ];
     }
 
-    let log_min = Consts::BAND_MIN_FREQ.log10();
+    let log_min = consts::BAND_MIN_FREQ.log10();
     let last_count_f32: f32 = (count - 1).as_();
-    let log_step = (Consts::BAND_MAX_FREQ.log10() - log_min) / last_count_f32;
+    let log_step = (consts::BAND_MAX_FREQ.log10() - log_min) / last_count_f32;
     let last = count - 1;
 
     (0..count)
@@ -98,7 +96,7 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
             let index_f32: f32 = index.as_();
             EqBandConfig::builder()
                 .kind(kind)
-                .frequency(Consts::LOG_FREQ_BASE.powf(index_f32.mul_add(log_step, log_min)))
+                .frequency(consts::LOG_FREQ_BASE.powf(index_f32.mul_add(log_step, log_min)))
                 .q_factor(q_factor)
                 .build()
         })
@@ -122,14 +120,14 @@ mod tests {
             0 => assert!(bands.is_empty()),
             1 => {
                 assert!(
-                    (bands[0].frequency() - (Consts::BAND_MIN_FREQ * Consts::BAND_MAX_FREQ).sqrt())
+                    (bands[0].frequency() - (consts::BAND_MIN_FREQ * consts::BAND_MAX_FREQ).sqrt())
                         .abs()
                         < 1.0
                 );
             }
             10 => {
-                assert!((bands[0].frequency() - Consts::BAND_MIN_FREQ).abs() < 1.0);
-                assert!((bands[9].frequency() - Consts::BAND_MAX_FREQ).abs() < 1.0);
+                assert!((bands[0].frequency() - consts::BAND_MIN_FREQ).abs() < 1.0);
+                assert!((bands[9].frequency() - consts::BAND_MAX_FREQ).abs() < 1.0);
                 assert!(
                     bands
                         .windows(2)

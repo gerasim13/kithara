@@ -24,20 +24,18 @@ use kithara_resampler::rubato::RubatoBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 
-struct Consts;
-
-impl Consts {
-    const BITS_PER_SAMPLE: u16 = 16;
-    const BITS_PER_SAMPLE_OFFSET: usize = 34;
-    const CHANNELS_OFFSET: usize = 22;
-    const CHUNK_FRAMES: usize = 4_096;
-    const DATA_BYTES_OFFSET: usize = 40;
-    const HEADER_BYTES: usize = 44;
-    const PCM_FORMAT: u16 = 1;
-    const PCM_FORMAT_OFFSET: usize = 20;
-    const SAMPLE_BYTES: usize = 2;
-    const SAMPLE_RATE_OFFSET: usize = 24;
-    const SAMPLE_SCALE: f32 = 32_768.0;
+mod consts {
+    pub(super) const BITS_PER_SAMPLE: u16 = 16;
+    pub(super) const BITS_PER_SAMPLE_OFFSET: usize = 34;
+    pub(super) const CHANNELS_OFFSET: usize = 22;
+    pub(super) const CHUNK_FRAMES: usize = 4_096;
+    pub(super) const DATA_BYTES_OFFSET: usize = 40;
+    pub(super) const HEADER_BYTES: usize = 44;
+    pub(super) const PCM_FORMAT: u16 = 1;
+    pub(super) const PCM_FORMAT_OFFSET: usize = 20;
+    pub(super) const SAMPLE_BYTES: usize = 2;
+    pub(super) const SAMPLE_RATE_OFFSET: usize = 24;
+    pub(super) const SAMPLE_SCALE: f32 = 32_768.0;
 }
 
 pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
@@ -153,30 +151,30 @@ impl PcmReader {
         {
             return Err("expected a canonical RIFF/WAVE PCM file".to_owned());
         }
-        let format = u16_field(bytes, Consts::PCM_FORMAT_OFFSET)?;
-        let bits = u16_field(bytes, Consts::BITS_PER_SAMPLE_OFFSET)?;
-        let channels = u16_field(bytes, Consts::CHANNELS_OFFSET)?;
-        let sample_rate = NonZeroU32::new(u32_field(bytes, Consts::SAMPLE_RATE_OFFSET)?)
+        let format = u16_field(bytes, consts::PCM_FORMAT_OFFSET)?;
+        let bits = u16_field(bytes, consts::BITS_PER_SAMPLE_OFFSET)?;
+        let channels = u16_field(bytes, consts::CHANNELS_OFFSET)?;
+        let sample_rate = NonZeroU32::new(u32_field(bytes, consts::SAMPLE_RATE_OFFSET)?)
             .ok_or_else(|| "sample rate is zero".to_owned())?;
-        if format != Consts::PCM_FORMAT || bits != Consts::BITS_PER_SAMPLE || channels == 0 {
+        if format != consts::PCM_FORMAT || bits != consts::BITS_PER_SAMPLE || channels == 0 {
             return Err(format!(
                 "unsupported WAV format={format}, bits={bits}, channels={channels}"
             ));
         }
-        let data_bytes = usize::try_from(u32_field(bytes, Consts::DATA_BYTES_OFFSET)?)
+        let data_bytes = usize::try_from(u32_field(bytes, consts::DATA_BYTES_OFFSET)?)
             .map_err(|error| format!("WAV data size: {error}"))?;
         let payload = bytes
-            .get(Consts::HEADER_BYTES..Consts::HEADER_BYTES.saturating_add(data_bytes))
+            .get(consts::HEADER_BYTES..consts::HEADER_BYTES.saturating_add(data_bytes))
             .ok_or_else(|| "WAV data chunk is truncated".to_owned())?;
         if !payload
             .len()
-            .is_multiple_of(usize::from(channels) * Consts::SAMPLE_BYTES)
+            .is_multiple_of(usize::from(channels) * consts::SAMPLE_BYTES)
         {
             return Err("WAV data does not contain complete frames".to_owned());
         }
         let samples = payload
-            .chunks_exact(Consts::SAMPLE_BYTES)
-            .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / Consts::SAMPLE_SCALE)
+            .chunks_exact(consts::SAMPLE_BYTES)
+            .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / consts::SAMPLE_SCALE)
             .collect();
         Ok(Self {
             samples,
@@ -222,7 +220,7 @@ impl AudioRead for PcmReader {
         }
         let start = self.cursor;
         let end = start
-            .saturating_add(Consts::CHUNK_FRAMES)
+            .saturating_add(consts::CHUNK_FRAMES)
             .min(self.total_frames());
         let channels = usize::from(self.spec.channels);
         let sample_start = start * channels;

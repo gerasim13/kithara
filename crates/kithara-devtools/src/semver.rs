@@ -6,9 +6,8 @@ use serde::Deserialize;
 
 use crate::{Ctx, util::check_tool, verdict::NotClean};
 
-struct Consts;
-impl Consts {
-    const INSTALL_HINT: &'static str = "cargo install cargo-semver-checks";
+mod consts {
+    pub(super) const INSTALL_HINT: &str = "cargo install cargo-semver-checks";
 }
 
 #[derive(Debug, Args)]
@@ -39,7 +38,7 @@ pub(crate) fn run(args: &SemverArgs, ctx: &Ctx) -> Result<()> {
         &["semver-checks", "--version"],
         ctx.config
             .tools
-            .install_hint("cargo-semver-checks", Consts::INSTALL_HINT),
+            .install_hint("cargo-semver-checks", consts::INSTALL_HINT),
     )?;
     let baseline_members = members_at(&args.baseline)?;
     let (packages, missing) =

@@ -17,12 +17,12 @@ use tracing::info;
 pub(crate) const TARGET_SLOT_CACHE_NAMESPACE: &str = "target-slots";
 pub(crate) const TARGET_HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
 
-struct Consts;
+mod consts {
+    use super::Duration;
 
-impl Consts {
     // Two cleanup intervals tolerate a paused VM while bounding a killed job's
     // stale claim. A live helper refreshes this every 30 seconds.
-    const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+    pub(super) const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -377,7 +377,7 @@ fn heartbeat_is_fresh(path: &Path, metadata: &fs::Metadata) -> bool {
     let Ok(age) = SystemTime::now().duration_since(modified) else {
         return true;
     };
-    if age <= Consts::HEARTBEAT_MAX_AGE {
+    if age <= consts::HEARTBEAT_MAX_AGE {
         return true;
     }
     let _ = fs::remove_file(path);
@@ -829,7 +829,7 @@ mod tests {
         let file = File::create(&heartbeat).unwrap();
         file.set_times(
             FileTimes::new().set_modified(
-                SystemTime::now() - Consts::HEARTBEAT_MAX_AGE - Duration::from_secs(1),
+                SystemTime::now() - consts::HEARTBEAT_MAX_AGE - Duration::from_secs(1),
             ),
         )
         .unwrap();

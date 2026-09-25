@@ -29,20 +29,20 @@ use crate::{
     tags::{is_maybe_info_tag, is_maybe_vbri_tag, try_read_info_tag, try_read_vbri_tag},
 };
 
-struct FormatInfos;
+mod format_infos {
+    use super::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3, FormatInfo};
 
-impl FormatInfos {
-    const MP1: FormatInfo = FormatInfo {
+    pub(super) const MP1: FormatInfo = FormatInfo {
         format: FORMAT_ID_MP1,
         short_name: "mp1",
         long_name: "MPEG Audio Layer 1 Native",
     };
-    const MP2: FormatInfo = FormatInfo {
+    pub(super) const MP2: FormatInfo = FormatInfo {
         format: FORMAT_ID_MP2,
         short_name: "mp2",
         long_name: "MPEG Audio Layer 2 Native",
     };
-    const MP3: FormatInfo = FormatInfo {
+    pub(super) const MP3: FormatInfo = FormatInfo {
         format: FORMAT_ID_MP3,
         short_name: "mp3",
         long_name: "MPEG Audio Layer 3 Native",
@@ -93,7 +93,7 @@ impl ProbeableFormat<'_> for MpaReader<'_> {
     fn probe_data() -> &'static [ProbeFormatData] {
         &[
             support_format!(
-                FormatInfos::MP1,
+                format_infos::MP1,
                 &["mp1"],
                 &["audio/mpeg", "audio/mp1"],
                 &[
@@ -106,7 +106,7 @@ impl ProbeableFormat<'_> for MpaReader<'_> {
                 ]
             ),
             support_format!(
-                FormatInfos::MP2,
+                format_infos::MP2,
                 &["mp2"],
                 &["audio/mpeg", "audio/mp2"],
                 &[
@@ -119,7 +119,7 @@ impl ProbeableFormat<'_> for MpaReader<'_> {
                 ]
             ),
             support_format!(
-                FormatInfos::MP3,
+                format_infos::MP3,
                 &["mp3"],
                 &["audio/mpeg", "audio/mp3"],
                 &[
@@ -485,9 +485,9 @@ impl<'s> MpaReader<'s> {
         let header = read_mpeg_frame_strict_into(&mut mss, &mut packet)?;
         let packet = &packet[..MPEG_HEADER_LEN + header.frame_size];
         let format_info = match header.layer {
-            MpegLayer::Layer1 => &FormatInfos::MP1,
-            MpegLayer::Layer2 => &FormatInfos::MP2,
-            MpegLayer::Layer3 => &FormatInfos::MP3,
+            MpegLayer::Layer1 => &format_infos::MP1,
+            MpegLayer::Layer2 => &format_infos::MP2,
+            MpegLayer::Layer3 => &format_infos::MP3,
         };
 
         let mut codec_params = AudioCodecParameters::new();

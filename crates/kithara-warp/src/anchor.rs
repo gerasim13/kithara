@@ -278,16 +278,14 @@ mod tests {
 
     use super::{CoordinateError, SessionAnchor, SessionBeat};
 
-    struct Consts;
-
-    impl Consts {
-        const BEATS_PER_SECOND: f64 = 2.0;
-        const FRAMES_PER_BEAT: i64 = 24_000;
-        const RATE: u32 = 48_000;
+    mod consts {
+        pub(super) const BEATS_PER_SECOND: f64 = 2.0;
+        pub(super) const FRAMES_PER_BEAT: i64 = 24_000;
+        pub(super) const RATE: u32 = 48_000;
     }
 
     fn rate() -> NonZeroU32 {
-        NonZeroU32::new(Consts::RATE).expect("invariant: the fixture rate is non-zero")
+        NonZeroU32::new(consts::RATE).expect("invariant: the fixture rate is non-zero")
     }
 
     fn beat(value: f64) -> SessionBeat {
@@ -298,7 +296,7 @@ mod tests {
         SessionAnchor::new(
             SessionFrame::new(frame),
             beat(at_beat),
-            Consts::BEATS_PER_SECOND,
+            consts::BEATS_PER_SECOND,
             rate(),
         )
         .expect("invariant: the fixture tempo is a positive rate")
@@ -307,7 +305,7 @@ mod tests {
     #[kithara::test]
     fn frame_at_inverts_beat_at_exactly() {
         let anchor = anchor_at(1_024, 2.5);
-        let frame = SessionFrame::new(1_024 + Consts::FRAMES_PER_BEAT * 3);
+        let frame = SessionFrame::new(1_024 + consts::FRAMES_PER_BEAT * 3);
 
         let round_tripped = anchor
             .beat_at(frame)
@@ -345,7 +343,7 @@ mod tests {
         assert_eq!(beat_value(retargeted, 100), before.0);
         assert_eq!(retargeted.tempo_at(frame(100)), before.1);
         assert!(
-            before.1 > Consts::BEATS_PER_SECOND && before.1 < 3.0,
+            before.1 > consts::BEATS_PER_SECOND && before.1 < 3.0,
             "a retarget mid-ramp starts from the smoothed tempo, got {}",
             before.1
         );
@@ -357,7 +355,7 @@ mod tests {
             .retarget(frame(48_000), 3.0, SMOOTH_SECONDS)
             .expect("invariant: the target is a positive rate");
 
-        assert_eq!(ramp.tempo_at(frame(0)), Consts::BEATS_PER_SECOND);
+        assert_eq!(ramp.tempo_at(frame(0)), consts::BEATS_PER_SECOND);
         assert_eq!(beat_value(ramp, 0), 2.0);
         assert_eq!(
             ramp.frame_at(SessionBeat::new(2.0).expect("invariant: a finite beat")),
@@ -370,7 +368,7 @@ mod tests {
         let ramp = anchor_at(0, 4.0)
             .retarget(frame(0), 3.0, SMOOTH_SECONDS)
             .expect("invariant: the target is a positive rate");
-        let rate = f64::from(Consts::RATE);
+        let rate = f64::from(consts::RATE);
         let frames = 2_048_i64;
         let integrated = (0..frames)
             .map(|at| (ramp.tempo_at(frame(at)) + ramp.tempo_at(frame(at + 1))) / (2.0 * rate))
@@ -406,10 +404,10 @@ mod tests {
         let ramp = anchor_at(0, 0.0)
             .retarget(frame(0), 3.0, SMOOTH_SECONDS)
             .expect("invariant: the target is a positive rate");
-        let settled = Consts::FRAMES_PER_BEAT * 4;
+        let settled = consts::FRAMES_PER_BEAT * 4;
 
         let advanced =
-            beat_value(ramp, settled + Consts::FRAMES_PER_BEAT) - beat_value(ramp, settled);
+            beat_value(ramp, settled + consts::FRAMES_PER_BEAT) - beat_value(ramp, settled);
 
         assert!(
             (advanced - 1.5).abs() < 1e-9,
@@ -427,7 +425,7 @@ mod tests {
                 .expect("invariant: every knob position is a positive rate");
             let tempo = ramp.tempo_at(frame(step * 128));
             assert!(
-                (1.9..=Consts::BEATS_PER_SECOND.max(2.1)).contains(&tempo),
+                (1.9..=consts::BEATS_PER_SECOND.max(2.1)).contains(&tempo),
                 "step {step}: tempo {tempo} left the knob range"
             );
         }

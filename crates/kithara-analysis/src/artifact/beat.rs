@@ -4,14 +4,14 @@ use kithara_platform::sync::Arc;
 
 use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
 
-struct Consts;
+mod consts {
+    use super::size_of;
 
-impl Consts {
-    const FRAME_BYTES: usize = size_of::<u64>() + size_of::<u32>() + size_of::<f32>();
-    const LEN_PREFIX_BYTES: usize = size_of::<u64>();
-    const LIST_COUNT: usize = 3;
-    const SEGMENT_BYTES: usize = size_of::<u64>() * 2 + size_of::<f64>();
-    const VERSION: u32 = 2;
+    pub(super) const FRAME_BYTES: usize = size_of::<u64>() + size_of::<u32>() + size_of::<f32>();
+    pub(super) const LEN_PREFIX_BYTES: usize = size_of::<u64>();
+    pub(super) const LIST_COUNT: usize = 3;
+    pub(super) const SEGMENT_BYTES: usize = size_of::<u64>() * 2 + size_of::<f64>();
+    pub(super) const VERSION: u32 = 2;
 }
 
 /// One artifact marker: its source frame, and the confidence the detector
@@ -117,7 +117,7 @@ impl TryFrom<&[u8]> for BeatArtifact {
 }
 
 impl Blob for BeatArtifact {
-    const VERSION: u32 = Consts::VERSION;
+    const VERSION: u32 = consts::VERSION;
 
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
         let bpm = read_finite(r)?;
@@ -138,9 +138,9 @@ impl Blob for BeatArtifact {
     fn encode(&self, w: &mut Writer<'_>) {
         w.reserve(
             size_of::<f64>()
-                + Consts::LIST_COUNT * Consts::LEN_PREFIX_BYTES
-                + Consts::FRAME_BYTES * (self.beats.len() + self.downbeats.len())
-                + Consts::SEGMENT_BYTES * self.regions.len(),
+                + consts::LIST_COUNT * consts::LEN_PREFIX_BYTES
+                + consts::FRAME_BYTES * (self.beats.len() + self.downbeats.len())
+                + consts::SEGMENT_BYTES * self.regions.len(),
         );
         w.write_f64(self.bpm);
         write_marks(w, &self.beats, &self.beat_confidence);

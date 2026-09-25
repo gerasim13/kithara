@@ -50,13 +50,11 @@ mod tests {
 
     use super::TimestampTag;
 
-    struct Consts;
-
-    impl Consts {
-        const MPEG_TIMESCALE: u32 = 90_000;
-        const OWNER: &'static [u8] = b"com.apple.streaming.transportStreamTimestamp\0";
-        const SAMPLE_RATE: u32 = 48_000;
-        const WRAP: u64 = 1 << 33;
+    mod consts {
+        pub(super) const MPEG_TIMESCALE: u32 = 90_000;
+        pub(super) const OWNER: &[u8] = b"com.apple.streaming.transportStreamTimestamp\0";
+        pub(super) const SAMPLE_RATE: u32 = 48_000;
+        pub(super) const WRAP: u64 = 1 << 33;
     }
 
     fn timestamp_bytes(tag: &[u8]) -> [u8; 8] {
@@ -67,7 +65,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_tag_is_an_id3_header_a_priv_frame_and_eight_timestamp_bytes() {
-        let tag = TimestampTag::render(Consts::SAMPLE_RATE.into(), Consts::SAMPLE_RATE);
+        let tag = TimestampTag::render(consts::SAMPLE_RATE.into(), consts::SAMPLE_RATE);
 
         assert_eq!(
             tag.as_slice(),
@@ -78,7 +76,7 @@ mod tests {
                 b"PRIV".as_slice(),
                 &[0, 0, 0, 53],
                 &[0, 0],
-                Consts::OWNER,
+                consts::OWNER,
                 &90_000_u64.to_be_bytes(),
             ]
             .concat()
@@ -89,7 +87,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_declared_sizes_span_the_rendered_tag() {
-        let tag = TimestampTag::render(0, Consts::SAMPLE_RATE);
+        let tag = TimestampTag::render(0, consts::SAMPLE_RATE);
 
         assert_eq!(
             usize::from(tag[TimestampTag::TAG_HEADER_LEN - 1]),
@@ -105,10 +103,10 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_timestamp_leaves_the_top_thirty_one_bits_zero() {
-        let tag = TimestampTag::render(Consts::WRAP - 1, Consts::MPEG_TIMESCALE);
+        let tag = TimestampTag::render(consts::WRAP - 1, consts::MPEG_TIMESCALE);
         let timestamp = timestamp_bytes(&tag);
 
-        assert_eq!(u64::from_be_bytes(timestamp), Consts::WRAP - 1);
+        assert_eq!(u64::from_be_bytes(timestamp), consts::WRAP - 1);
         assert_eq!(&timestamp[..3], &[0, 0, 0]);
         assert_eq!(timestamp[3], 1, "bit 32 is the timestamp's top bit");
     }
@@ -116,20 +114,20 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn the_timestamp_wraps_at_thirty_three_bits() {
         assert_eq!(
-            TimestampTag::mpeg_timestamp(Consts::WRAP, Consts::MPEG_TIMESCALE),
+            TimestampTag::mpeg_timestamp(consts::WRAP, consts::MPEG_TIMESCALE),
             0
         );
         assert_eq!(
-            TimestampTag::mpeg_timestamp(Consts::WRAP + 1, Consts::MPEG_TIMESCALE),
+            TimestampTag::mpeg_timestamp(consts::WRAP + 1, consts::MPEG_TIMESCALE),
             1
         );
     }
 
     #[kithara::test(native, flash(false))]
     fn the_conversion_rounds_to_the_nearest_tick() {
-        assert_eq!(TimestampTag::mpeg_timestamp(1, Consts::SAMPLE_RATE), 2);
+        assert_eq!(TimestampTag::mpeg_timestamp(1, consts::SAMPLE_RATE), 2);
         assert_eq!(
-            TimestampTag::mpeg_timestamp(1_024, Consts::SAMPLE_RATE),
+            TimestampTag::mpeg_timestamp(1_024, consts::SAMPLE_RATE),
             1_920
         );
     }

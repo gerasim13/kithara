@@ -17,31 +17,25 @@ use crate::{
     header::MPEG_HEADER_LEN,
 };
 
-struct TagIds;
-
-impl TagIds {
-    const INFO: [u8; 4] = *b"Info";
-    const LEN: usize = 4;
-    const VBRI: [u8; 4] = *b"VBRI";
-    const XING: [u8; 4] = *b"Xing";
+mod tag_ids {
+    pub(super) const INFO: [u8; 4] = *b"Info";
+    pub(super) const LEN: usize = 4;
+    pub(super) const VBRI: [u8; 4] = *b"VBRI";
+    pub(super) const XING: [u8; 4] = *b"Xing";
 }
 
-struct XingLayout;
-
-impl XingLayout {
-    const BYTES_FLAG: u32 = 0x2;
-    const QUALITY_FLAG: u32 = 0x8;
-    const TOC_FLAG: u32 = 0x4;
-    const TOC_LEN: usize = 100;
+mod xing_layout {
+    pub(super) const BYTES_FLAG: u32 = 0x2;
+    pub(super) const QUALITY_FLAG: u32 = 0x8;
+    pub(super) const TOC_FLAG: u32 = 0x4;
+    pub(super) const TOC_LEN: usize = 100;
 }
 
-struct LameLayout;
-
-impl LameLayout {
-    const DECODER_DELAY: u32 = 529;
-    const ENCODER_ID_LEN: usize = 4;
-    const ENCODER_LEN: usize = 9;
-    const TRIM_BITS: u32 = 12;
+mod lame_layout {
+    pub(super) const DECODER_DELAY: u32 = 529;
+    pub(super) const ENCODER_ID_LEN: usize = 4;
+    pub(super) const ENCODER_LEN: usize = 9;
+    pub(super) const TRIM_BITS: u32 = 12;
 }
 
 const VBRI_TAG_OFFSET: usize = 36;
@@ -83,7 +77,7 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
 
     let id = reader.read_quad_bytes()?;
 
-    if id != TagIds::XING && id != TagIds::INFO {
+    if id != tag_ids::XING && id != tag_ids::INFO {
         return Ok(None);
     }
 
@@ -95,21 +89,21 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
         None
     };
 
-    if flags & XingLayout::BYTES_FLAG != 0 {
+    if flags & xing_layout::BYTES_FLAG != 0 {
         let _num_bytes = reader.read_be_u32()?;
     }
 
-    if flags & XingLayout::TOC_FLAG != 0 {
-        let mut toc = [0; XingLayout::TOC_LEN];
+    if flags & xing_layout::TOC_FLAG != 0 {
+        let mut toc = [0; xing_layout::TOC_LEN];
         reader.read_buf_exact(&mut toc)?;
     }
 
-    if flags & XingLayout::QUALITY_FLAG != 0 {
+    if flags & xing_layout::QUALITY_FLAG != 0 {
         let _quality = reader.read_be_u32()?;
     }
 
     let lame = if reader.inner().bytes_available() >= MIN_LAME_EXT_LEN {
-        let mut encoder = [0; LameLayout::ENCODER_LEN];
+        let mut encoder = [0; lame_layout::ENCODER_LEN];
         reader.read_buf_exact(&mut encoder)?;
 
         let _revision = reader.read_u8()?;
@@ -127,14 +121,14 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
         let (enc_delay, enc_padding) = {
             let trim = reader.read_be_u24()?;
 
-            if encoder[..LameLayout::ENCODER_ID_LEN] == *b"LAME"
-                || encoder[..LameLayout::ENCODER_ID_LEN] == *b"Lavf"
-                || encoder[..LameLayout::ENCODER_ID_LEN] == *b"Lavc"
+            if encoder[..lame_layout::ENCODER_ID_LEN] == *b"LAME"
+                || encoder[..lame_layout::ENCODER_ID_LEN] == *b"Lavf"
+                || encoder[..lame_layout::ENCODER_ID_LEN] == *b"Lavc"
             {
-                let delay = LameLayout::DECODER_DELAY + (trim >> LameLayout::TRIM_BITS);
-                let padding = trim & ((1 << LameLayout::TRIM_BITS) - 1);
+                let delay = lame_layout::DECODER_DELAY + (trim >> lame_layout::TRIM_BITS);
+                let padding = trim & ((1 << lame_layout::TRIM_BITS) - 1);
 
-                (delay, padding.saturating_sub(LameLayout::DECODER_DELAY))
+                (delay, padding.saturating_sub(lame_layout::DECODER_DELAY))
             } else {
                 (0, 0)
             }
@@ -151,7 +145,7 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
 
             let _music_crc = reader.read_be_u16()?;
 
-            if header.has_crc || encoder[..LameLayout::ENCODER_ID_LEN] == *b"LAME" {
+            if header.has_crc || encoder[..lame_layout::ENCODER_ID_LEN] == *b"LAME" {
                 Some(reader.inner_mut().read_be_u16()?)
             } else {
                 None
@@ -195,9 +189,9 @@ pub(crate) fn is_maybe_info_tag(buf: &[u8], header: &FrameHeader) -> bool {
         return false;
     }
 
-    let id = &buf[offset..offset + TagIds::LEN];
+    let id = &buf[offset..offset + tag_ids::LEN];
 
-    if id != TagIds::XING && id != TagIds::INFO {
+    if id != tag_ids::XING && id != tag_ids::INFO {
         return false;
     }
 
@@ -225,7 +219,7 @@ fn try_read_vbri_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Vb
 
     let id = reader.read_quad_bytes()?;
 
-    if id != TagIds::VBRI {
+    if id != tag_ids::VBRI {
         return Ok(None);
     }
 
@@ -256,9 +250,9 @@ pub(crate) fn is_maybe_vbri_tag(buf: &[u8], header: &FrameHeader) -> bool {
         return false;
     }
 
-    let id = &buf[VBRI_TAG_OFFSET..VBRI_TAG_OFFSET + TagIds::LEN];
+    let id = &buf[VBRI_TAG_OFFSET..VBRI_TAG_OFFSET + tag_ids::LEN];
 
-    if id != TagIds::VBRI {
+    if id != tag_ids::VBRI {
         return false;
     }
 

@@ -328,12 +328,12 @@ mod tests {
         test_pools::{TestPools, pools},
     };
 
-    struct Items;
+    mod items {
+        use super::TrackId;
 
-    impl Items {
-        const BACKGROUND: TrackId = TrackId(9);
-        const OUTGOING: TrackId = TrackId(7);
-        const PROMOTED: TrackId = TrackId(8);
+        pub(super) const BACKGROUND: TrackId = TrackId(9);
+        pub(super) const OUTGOING: TrackId = TrackId(7);
+        pub(super) const PROMOTED: TrackId = TrackId(8);
     }
 
     /// A started player holding one slot — the slot the phase calls current.
@@ -384,7 +384,7 @@ mod tests {
     }
 
     fn eof_notification() -> PlayerNotification {
-        stop_notification(Items::OUTGOING, "leading.mp3", TrackPlaybackStopReason::Eof)
+        stop_notification(items::OUTGOING, "leading.mp3", TrackPlaybackStopReason::Eof)
     }
 
     /// Each test dispatches exactly one notification, so the first role a
@@ -408,7 +408,7 @@ mod tests {
     fn eof_playback_stopped_notification_maps_to_item_end_event() {
         let event = player_event_from_notification(
             &eof_notification(),
-            ItemRole::Leading(track(Items::OUTGOING, SlotId::new(0), "leading.mp3")),
+            ItemRole::Leading(track(items::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
         assert!(matches!(
             event,
@@ -422,13 +422,13 @@ mod tests {
     fn failed_playback_stopped_notification_carries_the_role() {
         let event = player_event_from_notification(
             &stop_notification(
-                Items::OUTGOING,
+                items::OUTGOING,
                 "leading.mp3",
                 TrackPlaybackStopReason::Failed(PlaybackFault::Decode(
                     DecodeErrorKind::InvalidData,
                 )),
             ),
-            ItemRole::Background(track(Items::OUTGOING, SlotId::new(0), "leading.mp3")),
+            ItemRole::Background(track(items::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
         assert!(matches!(
             event,
@@ -443,11 +443,11 @@ mod tests {
     fn playback_stopped_notification_does_not_map_to_item_end_event() {
         let event = player_event_from_notification(
             &stop_notification(
-                Items::OUTGOING,
+                items::OUTGOING,
                 "leading.mp3",
                 TrackPlaybackStopReason::Stop,
             ),
-            ItemRole::Leading(track(Items::OUTGOING, SlotId::new(0), "leading.mp3")),
+            ItemRole::Leading(track(items::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
         assert!(event.is_none());
     }
@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(
             published_role(&mut rx),
             Some(ItemRole::Leading(track(
-                Items::OUTGOING,
+                items::OUTGOING,
                 slot,
                 "leading.mp3",
             ))),
@@ -482,7 +482,7 @@ mod tests {
         Notifier::new(&player).dispatch_notification(
             background,
             &stop_notification(
-                Items::BACKGROUND,
+                items::BACKGROUND,
                 "leading.mp3",
                 TrackPlaybackStopReason::Eof,
             ),
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(
             published_role(&mut rx),
             Some(ItemRole::Background(track(
-                Items::BACKGROUND,
+                items::BACKGROUND,
                 background,
                 "leading.mp3",
             ))),
@@ -507,18 +507,18 @@ mod tests {
     #[kithara::test]
     fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
         let (player, slot) = player_with_slot();
-        activate_pending(&player, Items::PROMOTED, "same.mp3");
+        activate_pending(&player, items::PROMOTED, "same.mp3");
         let mut rx = player.subscribe();
 
         Notifier::new(&player).dispatch_notification(
             slot,
-            &stop_notification(Items::OUTGOING, "same.mp3", TrackPlaybackStopReason::Eof),
+            &stop_notification(items::OUTGOING, "same.mp3", TrackPlaybackStopReason::Eof),
         );
 
         assert_eq!(
             published_role(&mut rx),
             Some(ItemRole::Outgoing(
-                track(Items::OUTGOING, slot, "same.mp3",)
+                track(items::OUTGOING, slot, "same.mp3",)
             )),
             "the track promoted over is not the one the listener is hearing"
         );
@@ -529,17 +529,17 @@ mod tests {
     #[kithara::test]
     fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
         let (player, slot) = player_with_slot();
-        activate_pending(&player, Items::PROMOTED, "same.mp3");
+        activate_pending(&player, items::PROMOTED, "same.mp3");
         let mut rx = player.subscribe();
 
         Notifier::new(&player).dispatch_notification(
             slot,
-            &stop_notification(Items::PROMOTED, "same.mp3", TrackPlaybackStopReason::Eof),
+            &stop_notification(items::PROMOTED, "same.mp3", TrackPlaybackStopReason::Eof),
         );
 
         assert_eq!(
             published_role(&mut rx),
-            Some(ItemRole::Leading(track(Items::PROMOTED, slot, "same.mp3",))),
+            Some(ItemRole::Leading(track(items::PROMOTED, slot, "same.mp3",))),
             "the promoted track is the one being heard"
         );
     }
@@ -557,14 +557,14 @@ mod tests {
             background,
             &PlayerNotification::PlaybackStarted {
                 src: Arc::from("background.mp3"),
-                item_id: Items::BACKGROUND,
+                item_id: items::BACKGROUND,
             },
         );
 
         assert_eq!(
             published_role(&mut rx),
             Some(ItemRole::Background(track(
-                Items::BACKGROUND,
+                items::BACKGROUND,
                 background,
                 "background.mp3"
             ))),

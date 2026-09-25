@@ -18,11 +18,9 @@ use crate::{
     GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation,
 };
 
-struct Consts;
-
-impl Consts {
-    const AUDIO_EVENT_CAPACITY: usize = 64;
-    const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
+mod consts {
+    pub(super) const AUDIO_EVENT_CAPACITY: usize = 64;
+    pub(super) const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 }
 
 /// Reader-side event sink.
@@ -76,7 +74,7 @@ impl AudioEvents {
     }
 
     pub(super) fn deferred(bus: &EventBus) -> Arc<DeferredBus<AudioLaneEvent>> {
-        Arc::new(DeferredBus::new(bus.clone(), Consts::AUDIO_EVENT_CAPACITY))
+        Arc::new(DeferredBus::new(bus.clone(), consts::AUDIO_EVENT_CAPACITY))
     }
 
     pub(super) fn fill_result(
@@ -143,7 +141,7 @@ impl AudioEvents {
         let position_ms = clamp_millis(playhead.position());
         if let Some((last_epoch, last_ms)) = self.last_progress_emit
             && last_epoch == epoch
-            && position_ms.abs_diff(last_ms) < Consts::PROGRESS_EMIT_MIN_DELTA_MS
+            && position_ms.abs_diff(last_ms) < consts::PROGRESS_EMIT_MIN_DELTA_MS
         {
             return;
         }

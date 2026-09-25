@@ -10,15 +10,15 @@ use std::{
 
 use anyhow::{Context, Error, Result, anyhow};
 
-struct Consts;
+mod consts {
+    use super::Duration;
 
-impl Consts {
     /// Caps queued output at 128 `KiB`; full queues apply backpressure to readers.
-    const CHANNEL_DEPTH: usize = 8;
+    pub(super) const CHANNEL_DEPTH: usize = 8;
     /// Bounds reader-failure detection latency while the sibling stream is idle.
-    const READER_POLL_INTERVAL: Duration = Duration::from_millis(20);
+    pub(super) const READER_POLL_INTERVAL: Duration = Duration::from_millis(20);
     /// Amortizes reads without accumulating a complete stress log in memory.
-    const READ_BUFFER_BYTES: usize = 16 * 1024;
+    pub(super) const READ_BUFFER_BYTES: usize = 16 * 1024;
 }
 
 #[derive(Clone, Copy)]
@@ -117,7 +117,7 @@ pub(super) fn run(command: &mut Command, log_path: &Path) -> Result<ExitStatus> 
     };
 
     thread::scope(|scope| {
-        let (sender, receiver) = mpsc::sync_channel(Consts::CHANNEL_DEPTH);
+        let (sender, receiver) = mpsc::sync_channel(consts::CHANNEL_DEPTH);
         let stdout_sender = sender.clone();
         let mut stdout_reader =
             Some(scope.spawn(move || read_stream(stdout, Stream::Stdout, &stdout_sender)));
@@ -129,7 +129,7 @@ pub(super) fn run(command: &mut Command, log_path: &Path) -> Result<ExitStatus> 
         let mut stdout_available = true;
 
         loop {
-            match receiver.recv_timeout(Consts::READER_POLL_INTERVAL) {
+            match receiver.recv_timeout(consts::READER_POLL_INTERVAL) {
                 Ok(chunk) => {
                     if log_available && let Err(error) = writer.write_log(&chunk.bytes) {
                         log_available = false;
@@ -212,7 +212,7 @@ fn run_stderr_to(
             anyhow!("captured stress command has no stderr pipe"),
         );
     };
-    let mut buffer = [0_u8; Consts::READ_BUFFER_BYTES];
+    let mut buffer = [0_u8; consts::READ_BUFFER_BYTES];
     loop {
         let count = match stderr.read(&mut buffer).context("read child stderr") {
             Ok(count) => count,
@@ -261,7 +261,7 @@ fn create_log(path: &Path) -> Result<File> {
 }
 
 fn read_stream<R: Read>(mut reader: R, stream: Stream, sender: &SyncSender<Chunk>) -> Result<()> {
-    let mut buffer = [0_u8; Consts::READ_BUFFER_BYTES];
+    let mut buffer = [0_u8; consts::READ_BUFFER_BYTES];
     loop {
         let count = reader
             .read(&mut buffer)

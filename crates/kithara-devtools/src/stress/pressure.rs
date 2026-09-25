@@ -15,10 +15,10 @@ use serde::Serialize;
 
 pub(crate) const SCHEMA: &str = "devtools.pressure.v2";
 
-struct Consts;
+mod consts {
+    use super::Duration;
 
-impl Consts {
-    const CGROUP_METRICS: &[(&str, &str)] = &[
+    pub(super) const CGROUP_METRICS: &[(&str, &str)] = &[
         ("cgroup.cpu.stat", "cpu.stat"),
         ("cgroup.cpu.pressure", "cpu.pressure"),
         ("cgroup.memory.current", "memory.current"),
@@ -31,11 +31,11 @@ impl Consts {
         ("cgroup.pids.events", "pids.events"),
         ("cgroup.cpuset.cpus.effective", "cpuset.cpus.effective"),
     ];
-    const MAX_METRIC_BYTES: usize = 32 * 1_024;
-    const MAX_METRIC_READ_BYTES: u64 = 32 * 1_024 + 1;
-    const MAX_RECORD_BYTES: usize = 1_048_576;
-    const MAX_RECOVERY_BYTES: u64 = 2 * 1_048_576 + 2;
-    const MEMINFO_FIELDS: &[&str] = &[
+    pub(super) const MAX_METRIC_BYTES: usize = 32 * 1_024;
+    pub(super) const MAX_METRIC_READ_BYTES: u64 = 32 * 1_024 + 1;
+    pub(super) const MAX_RECORD_BYTES: usize = 1_048_576;
+    pub(super) const MAX_RECOVERY_BYTES: u64 = 2 * 1_048_576 + 2;
+    pub(super) const MEMINFO_FIELDS: &[&str] = &[
         "MemTotal",
         "MemFree",
         "MemAvailable",
@@ -44,12 +44,12 @@ impl Consts {
         "SwapTotal",
         "SwapFree",
     ];
-    const PROC_METRICS: &[(&str, &str)] = &[
+    pub(super) const PROC_METRICS: &[(&str, &str)] = &[
         ("proc.pressure.cpu", "pressure/cpu"),
         ("proc.pressure.memory", "pressure/memory"),
         ("proc.pressure.io", "pressure/io"),
     ];
-    const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+    pub(super) const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 }
 
 pub(super) struct Sampler {
@@ -283,7 +283,7 @@ fn worker_loop(
     context: &SampleContext,
 ) -> Result<()> {
     loop {
-        match receiver.recv_timeout(Consts::SAMPLE_INTERVAL) {
+        match receiver.recv_timeout(consts::SAMPLE_INTERVAL) {
             Ok(()) => return Ok(()),
             Err(RecvTimeoutError::Disconnected) => {
                 return Err(anyhow!(
@@ -319,7 +319,7 @@ fn collect(context: &SampleContext) -> Result<Observation> {
     if let Some(loadavg) = loadavg {
         metrics.insert("proc.loadavg".to_owned(), loadavg);
     }
-    for &(key, relative) in Consts::PROC_METRICS {
+    for &(key, relative) in consts::PROC_METRICS {
         insert_available(&mut metrics, key, &context.proc_path.join(relative))?;
     }
     if let Some(stat) = read_available(&context.proc_path.join("stat"))? {
@@ -329,7 +329,7 @@ fn collect(context: &SampleContext) -> Result<Observation> {
         collect_meminfo(&mut metrics, &meminfo);
     }
     if let Some(cgroup_path) = &context.cgroup_path {
-        for &(key, relative) in Consts::CGROUP_METRICS {
+        for &(key, relative) in consts::CGROUP_METRICS {
             insert_available(&mut metrics, key, &cgroup_path.join(relative))?;
         }
     }
@@ -354,14 +354,14 @@ fn read_available(path: &Path) -> Result<Option<String>> {
             );
         }
     };
-    let mut bytes = Vec::with_capacity(Consts::MAX_METRIC_BYTES.saturating_add(1));
-    file.take(Consts::MAX_METRIC_READ_BYTES)
+    let mut bytes = Vec::with_capacity(consts::MAX_METRIC_BYTES.saturating_add(1));
+    file.take(consts::MAX_METRIC_READ_BYTES)
         .read_to_end(&mut bytes)
         .with_context(|| format!("read pressure metric {}", path.display()))?;
     ensure!(
-        bytes.len() <= Consts::MAX_METRIC_BYTES,
+        bytes.len() <= consts::MAX_METRIC_BYTES,
         "pressure metric exceeds {} bytes: {}",
-        Consts::MAX_METRIC_BYTES,
+        consts::MAX_METRIC_BYTES,
         path.display()
     );
     let value = String::from_utf8(bytes)
@@ -385,7 +385,7 @@ fn collect_meminfo(metrics: &mut BTreeMap<String, String>, meminfo: &str) {
         let Some((name, value)) = line.split_once(':') else {
             continue;
         };
-        if Consts::MEMINFO_FIELDS.contains(&name) {
+        if consts::MEMINFO_FIELDS.contains(&name) {
             metrics.insert(format!("proc.meminfo.{name}"), value.trim().to_owned());
         }
     }
@@ -465,9 +465,9 @@ fn needs_record_delimiter(path: &Path) -> Result<bool> {
 fn write_record(writer: &mut BufWriter<File>, record: &impl Serialize) -> Result<()> {
     let encoded = serde_json::to_vec(record).context("serialize pressure record")?;
     ensure!(
-        encoded.len() <= Consts::MAX_RECORD_BYTES,
+        encoded.len() <= consts::MAX_RECORD_BYTES,
         "pressure record exceeds {} bytes",
-        Consts::MAX_RECORD_BYTES,
+        consts::MAX_RECORD_BYTES,
     );
     writer
         .write_all(&encoded)
@@ -500,7 +500,7 @@ fn append_unhealthy_end(path: &Path, primary_exit_code: Option<i32>) -> Result<(
         .metadata()
         .with_context(|| format!("inspect pressure artifact tail {}", path.display()))?
         .len();
-    let tail_bytes = file_len.min(Consts::MAX_RECOVERY_BYTES);
+    let tail_bytes = file_len.min(consts::MAX_RECOVERY_BYTES);
     let offset = i64::try_from(tail_bytes).context("pressure artifact tail offset exceeds i64")?;
     file.seek(SeekFrom::End(-offset))
         .with_context(|| format!("seek pressure artifact tail {}", path.display()))?;

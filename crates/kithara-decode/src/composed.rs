@@ -1186,14 +1186,12 @@ mod seek_trim_tests {
         traits::Decoder,
     };
 
-    struct Consts;
-
-    impl Consts {
-        const CHANNELS: u16 = 2;
-        const OUTPUT_SAMPLE_RATE: u32 = 48_000;
-        const PACKET_COUNT: u64 = 6;
-        const PACKET_FRAMES: u32 = 1024;
-        const SAMPLE_RATE: u32 = 44_100;
+    mod consts {
+        pub(super) const CHANNELS: u16 = 2;
+        pub(super) const OUTPUT_SAMPLE_RATE: u32 = 48_000;
+        pub(super) const PACKET_COUNT: u64 = 6;
+        pub(super) const PACKET_FRAMES: u32 = 1024;
+        pub(super) const SAMPLE_RATE: u32 = 44_100;
     }
 
     fn test_spec(sample_rate: u32) -> AudioSpec {
@@ -1299,7 +1297,7 @@ mod seek_trim_tests {
     }
 
     fn empty_track() -> TrackInfo {
-        track_with_rate(Consts::SAMPLE_RATE)
+        track_with_rate(consts::SAMPLE_RATE)
     }
 
     fn track_with_rate(sample_rate: u32) -> TrackInfo {
@@ -1314,15 +1312,15 @@ mod seek_trim_tests {
     }
 
     fn packet_duration() -> Duration {
-        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+        test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES))
     }
 
     fn regular_seek_frames() -> Vec<BoundaryFrame> {
-        (0..Consts::PACKET_COUNT)
+        (0..consts::PACKET_COUNT)
             .map(|packet_idx| BoundaryFrame {
                 pts: test_duration(
-                    Consts::SAMPLE_RATE,
-                    packet_idx.saturating_mul(u64::from(Consts::PACKET_FRAMES)),
+                    consts::SAMPLE_RATE,
+                    packet_idx.saturating_mul(u64::from(consts::PACKET_FRAMES)),
                 ),
                 duration: packet_duration(),
             })
@@ -1391,12 +1389,12 @@ mod seek_trim_tests {
             "decode_frame must be called for pre-target frames so MDCT advances"
         );
 
-        let packet = test_duration(Consts::SAMPLE_RATE, 1_024);
+        let packet = test_duration(consts::SAMPLE_RATE, 1_024);
         let codec = CountingCodec::new(
             trim_silence.clone(),
             AudioSpec::new(
-                Consts::CHANNELS,
-                NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
+                consts::CHANNELS,
+                NonZeroU32::new(consts::SAMPLE_RATE).expect("test rate"),
             ),
             1_024,
         )
@@ -1457,7 +1455,7 @@ mod seek_trim_tests {
         let codec = CountingCodec::new(
             trim_silence.clone(),
             AudioSpec::new(
-                Consts::CHANNELS,
+                consts::CHANNELS,
                 NonZeroU32::new(OUTPUT_SAMPLE_RATE).expect("test rate"),
             ),
             SUPPLIED_FRAMES,
@@ -1581,26 +1579,26 @@ mod seek_trim_tests {
 
     #[kithara::test]
     #[case::packet_boundary(
-        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES)),
+        test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES)),
         SeekTrimLayout::RegularPackets
     )]
     #[case::mid_packet(
-        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512),
+        test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES) + 512),
         SeekTrimLayout::RegularPackets
     )]
     #[case::unknown_packet_duration(
-        test_duration(Consts::SAMPLE_RATE, 512),
+        test_duration(consts::SAMPLE_RATE, 512),
         SeekTrimLayout::UnknownPacketDuration
     )]
     #[case::rounding_hair_past_boundary(
-        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+        test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES))
             .saturating_add(Duration::from_nanos(1)),
         SeekTrimLayout::RoundedPastTarget
     )]
     #[case::multiple_fully_pre_target_packets(
         test_duration(
-            Consts::SAMPLE_RATE,
-            u64::from(Consts::PACKET_FRAMES) * 3 + 512,
+            consts::SAMPLE_RATE,
+            u64::from(consts::PACKET_FRAMES) * 3 + 512,
         ),
         SeekTrimLayout::RegularPackets
     )]
@@ -1613,10 +1611,10 @@ mod seek_trim_tests {
         let codec = CountingCodec::new(
             trim_silence.clone(),
             AudioSpec::new(
-                Consts::CHANNELS,
-                NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
+                consts::CHANNELS,
+                NonZeroU32::new(consts::SAMPLE_RATE).expect("test rate"),
             ),
-            Consts::PACKET_FRAMES,
+            consts::PACKET_FRAMES,
         );
         let demuxer = BoundaryFrameDemuxer {
             track: empty_track(),
@@ -1631,18 +1629,18 @@ mod seek_trim_tests {
         let DecoderChunkOutcome::Chunk(chunk) = outcome else {
             panic!("expected Chunk, got {outcome:?}");
         };
-        let expected_frame = test_frame(Consts::SAMPLE_RATE, target);
-        let packet_offset = expected_frame % u64::from(Consts::PACKET_FRAMES);
+        let expected_frame = test_frame(consts::SAMPLE_RATE, target);
+        let packet_offset = expected_frame % u64::from(consts::PACKET_FRAMES);
         let expected_frames = if packet_offset == 0 {
-            Consts::PACKET_FRAMES
+            consts::PACKET_FRAMES
         } else {
-            Consts::PACKET_FRAMES - u32::try_from(packet_offset).expect("packet offset fits in u32")
+            consts::PACKET_FRAMES - u32::try_from(packet_offset).expect("packet offset fits in u32")
         };
 
         assert_eq!(chunk.meta.frame_offset, expected_frame);
         assert_eq!(chunk.meta.timestamp, target);
         assert_eq!(
-            test_frame(Consts::SAMPLE_RATE, chunk.meta.timestamp),
+            test_frame(consts::SAMPLE_RATE, chunk.meta.timestamp),
             expected_frame
         );
         assert!(
@@ -1660,24 +1658,24 @@ mod seek_trim_tests {
         zero_packet: &'static [u8],
     ) {
         let source_packet_start =
-            test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES));
-        let target = test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512);
+            test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES));
+        let target = test_duration(consts::SAMPLE_RATE, u64::from(consts::PACKET_FRAMES) + 512);
         let output_packet_frames = u32::try_from(frames_to_trim(
             Duration::ZERO,
             packet_duration(),
-            Consts::OUTPUT_SAMPLE_RATE,
+            consts::OUTPUT_SAMPLE_RATE,
         ))
         .expect("output packet frame count fits in u32");
         let codec = CountingCodec::new(
             trim_silence.clone(),
             AudioSpec::new(
-                Consts::CHANNELS,
-                NonZeroU32::new(Consts::OUTPUT_SAMPLE_RATE).expect("test rate"),
+                consts::CHANNELS,
+                NonZeroU32::new(consts::OUTPUT_SAMPLE_RATE).expect("test rate"),
             ),
             output_packet_frames,
         );
         let demuxer = BoundaryFrameDemuxer {
-            track: track_with_rate(Consts::SAMPLE_RATE),
+            track: track_with_rate(consts::SAMPLE_RATE),
             held: zero_packet.to_vec(),
             frames: regular_seek_frames(),
             idx: 0,
@@ -1689,14 +1687,14 @@ mod seek_trim_tests {
         let DecoderChunkOutcome::Chunk(chunk) = outcome else {
             panic!("expected Chunk, got {outcome:?}");
         };
-        let expected_trim = frames_to_trim(source_packet_start, target, Consts::OUTPUT_SAMPLE_RATE);
+        let expected_trim = frames_to_trim(source_packet_start, target, consts::OUTPUT_SAMPLE_RATE);
         let expected_frames =
             output_packet_frames - u32::try_from(expected_trim).expect("trim fits in u32");
-        let expected_frame = test_frame(Consts::OUTPUT_SAMPLE_RATE, target);
+        let expected_frame = test_frame(consts::OUTPUT_SAMPLE_RATE, target);
 
         assert_eq!(
             chunk.meta.spec.sample_rate.get(),
-            Consts::OUTPUT_SAMPLE_RATE
+            consts::OUTPUT_SAMPLE_RATE
         );
         assert_eq!(chunk.meta.frame_offset, expected_frame);
         assert_eq!(chunk.meta.timestamp, target);

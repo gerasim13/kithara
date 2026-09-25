@@ -9,10 +9,9 @@ use crate::{
     verdict::NotClean,
 };
 
-struct Consts;
-impl Consts {
-    const CONFIG_PATH: &'static str = ".config/typos.toml";
-    const INSTALL_HINT: &'static str = "cargo install typos-cli";
+mod consts {
+    pub(super) const CONFIG_PATH: &str = ".config/typos.toml";
+    pub(super) const INSTALL_HINT: &str = "cargo install typos-cli";
 }
 
 #[derive(Debug, Args)]
@@ -34,14 +33,14 @@ pub(crate) fn run(args: &TyposArgs, ctx: &Ctx) -> Result<()> {
     check_tool(
         program,
         &["--version"],
-        ctx.config.tools.install_hint("typos", Consts::INSTALL_HINT),
+        ctx.config.tools.install_hint("typos", consts::INSTALL_HINT),
     )?;
     if args.fix {
         ensure_clean_tree(args.allow_dirty, "typos")?;
     }
     let mut cmd = Command::new(program);
     cmd.arg("--config")
-        .arg(Consts::CONFIG_PATH)
+        .arg(consts::CONFIG_PATH)
         .arg("--isolated");
     if args.fix {
         cmd.arg("--write-changes");

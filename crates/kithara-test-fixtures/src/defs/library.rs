@@ -9,19 +9,19 @@ use crate::{
     remote_file::{RemoteFileError, fetch_verified},
 };
 
-enum Library {}
+mod consts {
+    use super::Duration;
 
-impl Library {
-    const BASE: &str = "https://stream.silvercomet.top/fixtures/";
-    const ENV: &str = "KITHARA_REMOTE_FIXTURES";
-    const TIMEOUT: Duration = Duration::from_secs(600);
+    pub(super) const BASE: &str = "https://stream.silvercomet.top/fixtures/";
+    pub(super) const ENV: &str = "KITHARA_REMOTE_FIXTURES";
+    pub(super) const TIMEOUT: Duration = Duration::from_secs(600);
 }
 
 fn enabled() -> Result<(), RemoteFileError> {
-    std::env::var_os(Library::ENV)
+    std::env::var_os(consts::ENV)
         .filter(|value| !value.is_empty())
         .map(|_| ())
-        .ok_or(RemoteFileError::Missing(Library::ENV))
+        .ok_or(RemoteFileError::Missing(consts::ENV))
 }
 
 #[kithara::asset(
@@ -92,9 +92,9 @@ fn library_flac(
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
     enabled()?;
-    let url = Url::parse(Library::BASE)?.join(file)?;
+    let url = Url::parse(consts::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
+        fetch_verified(&url, sha256, length, consts::TIMEOUT).unwrap_or_else(|error| {
             panic!("requested library fixture `{file}` failed verification: {error}")
         }),
     )
@@ -176,9 +176,9 @@ fn library_mp3(
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
     enabled()?;
-    let url = Url::parse(Library::BASE)?.join(file)?;
+    let url = Url::parse(consts::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
+        fetch_verified(&url, sha256, length, consts::TIMEOUT).unwrap_or_else(|error| {
             panic!("requested library fixture `{file}` failed verification: {error}")
         }),
     )

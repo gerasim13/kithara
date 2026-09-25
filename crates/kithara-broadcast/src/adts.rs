@@ -74,10 +74,8 @@ mod tests {
     use super::AdtsPacker;
     use crate::BroadcastError;
 
-    struct Consts;
-
-    impl Consts {
-        const PAYLOAD: usize = 100;
+    mod consts {
+        pub(super) const PAYLOAD: usize = 100;
     }
 
     fn header(sample_rate: u32, channels: u16, payload: usize) -> Vec<u8> {
@@ -93,7 +91,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn stereo_48k_header_matches_the_wire_format() {
         assert_eq!(
-            header(48_000, 2, Consts::PAYLOAD),
+            header(48_000, 2, consts::PAYLOAD),
             [0xFF, 0xF1, 0x4C, 0x80, 0x0D, 0x7F, 0xFC]
         );
     }
@@ -101,7 +99,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn mono_44k1_header_matches_the_wire_format() {
         assert_eq!(
-            header(44_100, 1, Consts::PAYLOAD),
+            header(44_100, 1, consts::PAYLOAD),
             [0xFF, 0xF1, 0x50, 0x40, 0x0D, 0x7F, 0xFC]
         );
     }

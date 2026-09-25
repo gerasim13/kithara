@@ -19,10 +19,9 @@ use crate::{
     verdict::NotClean,
 };
 
-struct Consts;
-impl Consts {
-    const CONFIG_REL: &'static str = ".config/similarity.toml";
-    const INSTALL_HINT: &'static str = "cargo install similarity-rs";
+mod consts {
+    pub(super) const CONFIG_REL: &str = ".config/similarity.toml";
+    pub(super) const INSTALL_HINT: &str = "cargo install similarity-rs";
 }
 
 /// Crate exclusions for similarity scans, loaded from
@@ -95,7 +94,7 @@ pub(crate) enum Direction {
 
 impl SimilarityConfig {
     pub(crate) fn load(workspace_root: &Path) -> Result<Self> {
-        let path = workspace_root.join(Consts::CONFIG_REL);
+        let path = workspace_root.join(consts::CONFIG_REL);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -199,7 +198,7 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
         &["--version"],
         ctx.config
             .tools
-            .install_hint("similarity-rs", Consts::INSTALL_HINT),
+            .install_hint("similarity-rs", consts::INSTALL_HINT),
     )?;
     let mut cmd = Command::new(program);
     cmd.current_dir(&ctx.root);

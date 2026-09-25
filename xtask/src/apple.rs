@@ -16,10 +16,8 @@ use crate::{
     config::{AppleConfig, KitharaExt, ReleaseConfig},
 };
 
-/// Module constants for Apple build protocol details. Grouped per the
-/// `style.multiple-private-module-consts` lint.
-struct Consts;
-impl Consts {
+/// Apple build protocol details.
+mod consts {
     /// `panic=immediate-abort` lowers every panic to a trap, so the
     /// `core::fmt` panic plumbing drops out of each slice; same lane as the
     /// wasm flags in `crates/kithara-ffi/.cargo/config.toml`.
@@ -27,14 +25,15 @@ impl Consts {
     /// No `embed-bitcode=no` here: `relink_slices_with_lto` runs fat LTO over
     /// the slice, and LTO consumes exactly the rlib bitcode that flag
     /// suppresses. rustc rejects the two together for the same reason.
-    const RELEASE_RUSTFLAGS: &[&str] = &["-Z", "unstable-options", "-C", "panic=immediate-abort"];
+    pub(super) const RELEASE_RUSTFLAGS: &[&str] =
+        &["-Z", "unstable-options", "-C", "panic=immediate-abort"];
     /// Target triples behind each `*.xcframework` slice directory. Universal
     /// slices list every arch and are recombined with `lipo -create`.
-    const SLICE_TARGETS: &[(&str, &[&str])] = &[
+    pub(super) const SLICE_TARGETS: &[(&str, &[&str])] = &[
         ("ios-arm64", &["aarch64-apple-ios"]),
-        (Self::IOS_SIMULATOR_SLICE, &["aarch64-apple-ios-sim"]),
+        (IOS_SIMULATOR_SLICE, &["aarch64-apple-ios-sim"]),
         (
-            Self::IOS_SIMULATOR_FAT_SLICE,
+            IOS_SIMULATOR_FAT_SLICE,
             &["aarch64-apple-ios-sim", "x86_64-apple-ios"],
         ),
         (
@@ -48,12 +47,12 @@ impl Consts {
     /// `crates/kithara-ffi/.cargo/config.toml` for every slice. `-Z` CLI
     /// flags must not be added here: the outer cargo consumes them without
     /// forwarding to external subcommands, so they silently do nothing.
-    const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
+    pub(super) const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
     /// Slice subdirectories inside the `*.xcframework` we expect to find.
-    const XCFRAMEWORK_SLICES: &[&str] =
-        &["ios-arm64", Self::IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
-    const IOS_SIMULATOR_FAT_SLICE: &'static str = "ios-arm64_x86_64-simulator";
-    const IOS_SIMULATOR_SLICE: &'static str = "ios-arm64-simulator";
+    pub(super) const XCFRAMEWORK_SLICES: &[&str] =
+        &["ios-arm64", IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
+    pub(super) const IOS_SIMULATOR_FAT_SLICE: &str = "ios-arm64_x86_64-simulator";
+    pub(super) const IOS_SIMULATOR_SLICE: &str = "ios-arm64-simulator";
 }
 
 /// Project-agnostic single-framework packaging config, read from
@@ -324,7 +323,7 @@ fn audit_symbols(xcframework_dir: &FsPath, apple: &AppleConfig, tools: &ToolsCon
     let apple_proof_needles =
         require_apple_needles(&apple.apple_proof_needles, "apple_proof_needles")?;
     let mut errors: Vec<String> = Vec::new();
-    for slice in Consts::XCFRAMEWORK_SLICES {
+    for slice in consts::XCFRAMEWORK_SLICES {
         let lib = xcframework_dir.join(slice).join("libkithara_ffi.a");
         if !lib.is_file() {
             errors.push(format!(
@@ -368,7 +367,7 @@ fn audit_symbols(xcframework_dir: &FsPath, apple: &AppleConfig, tools: &ToolsCon
     }
     println!(
         "==> Apple xcframework symbol audit passed: 0 banned symbols, AppleCodec linked in all {} slices",
-        Consts::XCFRAMEWORK_SLICES.len()
+        consts::XCFRAMEWORK_SLICES.len()
     );
     Ok(())
 }
@@ -426,7 +425,7 @@ fn run_build(
 
     let mut cmd = Command::new("cargo");
     if matches!(profile, crate::BuildProfile::Release) {
-        cmd.args(Consts::RELEASE_CARGO_ARGS);
+        cmd.args(consts::RELEASE_CARGO_ARGS);
     }
     cmd.args(["swift", "package"]);
     if let Some(target) = target {
@@ -572,7 +571,7 @@ fn set_simulator_bindgen_args(cmd: &mut Command, tools: &ToolsConfig) -> Result<
 
 fn set_release_rustflags(cmd: &mut Command) {
     let mut flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
-    for flag in Consts::RELEASE_RUSTFLAGS {
+    for flag in consts::RELEASE_RUSTFLAGS {
         if !flags.is_empty() {
             flags.push('\x1f');
         }
@@ -657,7 +656,7 @@ fn relink_slices_with_lto(
             .file_name()
             .and_then(|name| name.to_str())
             .with_context(|| format!("slice name is not UTF-8: {}", slice_dir.display()))?;
-        let targets = Consts::SLICE_TARGETS
+        let targets = consts::SLICE_TARGETS
             .iter()
             .find_map(|(name, targets)| (*name == slice).then_some(*targets))
             .with_context(|| {
@@ -701,7 +700,7 @@ fn build_slice_staticlib(
     tools: &ToolsConfig,
 ) -> Result<PathBuf> {
     let mut cmd = Command::new("cargo");
-    cmd.args(Consts::RELEASE_CARGO_ARGS);
+    cmd.args(consts::RELEASE_CARGO_ARGS);
     cmd.args([
         "rustc",
         "-p",
@@ -762,8 +761,8 @@ fn strip_xcframework(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
 }
 
 fn keep_arm64_ios_simulator_only(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
-    let fat = xcframework.join(Consts::IOS_SIMULATOR_FAT_SLICE);
-    let thin = xcframework.join(Consts::IOS_SIMULATOR_SLICE);
+    let fat = xcframework.join(consts::IOS_SIMULATOR_FAT_SLICE);
+    let thin = xcframework.join(consts::IOS_SIMULATOR_SLICE);
     if fat.exists() {
         if thin.exists() {
             fs::remove_dir_all(&thin).with_context(|| format!("remove {}", thin.display()))?;
@@ -778,8 +777,8 @@ fn keep_arm64_ios_simulator_only(xcframework: &FsPath, tools: &ToolsConfig) -> R
     } else if !thin.exists() {
         bail!(
             "missing iOS simulator slice: expected {} or {} under {}",
-            Consts::IOS_SIMULATOR_SLICE,
-            Consts::IOS_SIMULATOR_FAT_SLICE,
+            consts::IOS_SIMULATOR_SLICE,
+            consts::IOS_SIMULATOR_FAT_SLICE,
             xcframework.display()
         );
     }
@@ -810,7 +809,7 @@ fn update_ios_simulator_plist(xcframework: &FsPath) -> Result<()> {
         if platform == Some("ios") && variant == Some("simulator") {
             dict.insert(
                 "LibraryIdentifier".into(),
-                PlistValue::String(Consts::IOS_SIMULATOR_SLICE.to_string()),
+                PlistValue::String(consts::IOS_SIMULATOR_SLICE.to_string()),
             );
             dict.insert(
                 "SupportedArchitectures".into(),
@@ -1073,10 +1072,10 @@ fn build_single_xcframework(
     let mm_dev = internal.join("ios-arm64/Headers/KitharaFFIInternal");
     let mm_sim = internal.join(format!(
         "{}/Headers/KitharaFFIInternal",
-        Consts::IOS_SIMULATOR_SLICE
+        consts::IOS_SIMULATOR_SLICE
     ));
     let rust_dev = internal.join("ios-arm64/libkithara_ffi.a");
-    let rust_sim = internal.join(format!("{}/libkithara_ffi.a", Consts::IOS_SIMULATOR_SLICE));
+    let rust_sim = internal.join(format!("{}/libkithara_ffi.a", consts::IOS_SIMULATOR_SLICE));
     require_file(&mm_dev.join("module.modulemap"))?;
     require_file(&mm_sim.join("module.modulemap"))?;
     require_file(&rust_dev)?;

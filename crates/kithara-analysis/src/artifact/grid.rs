@@ -17,10 +17,8 @@ use super::{
 /// guess is not an observation, so the pass publishes the tempo alone instead.
 pub const ORDINAL_TOLERANCE_BEATS: f64 = 0.25;
 
-struct Consts;
-
-impl Consts {
-    const SECONDS_PER_MINUTE: f64 = 60.0;
+mod consts {
+    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
 }
 
 /// Why a pass states no grid a player could follow.
@@ -87,7 +85,7 @@ fn place(
     duration: Option<f64>,
 ) -> Vec<(u64, GridBeat)> {
     let artifact = snapshot.artifact();
-    let period = Consts::SECONDS_PER_MINUTE / bpm;
+    let period = consts::SECONDS_PER_MINUTE / bpm;
     let Some(first) = artifact.beats().first() else {
         return Vec::new();
     };
@@ -186,16 +184,14 @@ mod tests {
     use super::{BeatGridUnavailable, BeatSnapshot, BeatState, TrackAnalysis};
     use crate::{BeatArtifact, artifact::track::AnalysisToken};
 
-    struct Consts;
-
-    impl Consts {
-        const BPM: f64 = 120.0;
+    mod consts {
+        pub(super) const BPM: f64 = 120.0;
         /// Half a second at each rate, so the same music lands on the same
         /// seconds from two different frame counts.
-        const PERIOD_44_1: u64 = 22_050;
-        const PERIOD_48: u64 = 24_000;
-        const RATE_44_1: u32 = 44_100;
-        const RATE_48: u32 = 48_000;
+        pub(super) const PERIOD_44_1: u64 = 22_050;
+        pub(super) const PERIOD_48: u64 = 24_000;
+        pub(super) const RATE_44_1: u32 = 44_100;
+        pub(super) const RATE_48: u32 = 48_000;
     }
 
     fn analysis(
@@ -208,7 +204,7 @@ mod tests {
         artifact_analysis(
             rate,
             BeatArtifact::new(
-                Consts::BPM,
+                consts::BPM,
                 beats.iter().map(|frame| (*frame, Some(1.0))).collect(),
                 downbeats.iter().map(|frame| (*frame, Some(0.9))).collect(),
             ),
@@ -248,12 +244,12 @@ mod tests {
     /// Detected frames become media seconds here and nowhere else.
     #[kithara::test(native, flash(false))]
     fn a_pass_publishes_its_beats_as_media_seconds_on_its_own_grid() {
-        let beats: Vec<u64> = (0..4).map(|beat| beat * Consts::PERIOD_48).collect();
+        let beats: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             &beats,
             &[],
-            Some(4 * Consts::PERIOD_48),
+            Some(4 * consts::PERIOD_48),
             BeatState::Provisional,
         ));
 
@@ -264,7 +260,7 @@ mod tests {
         );
         assert_eq!(model.as_raw().revision, 7);
         assert_eq!(model.as_raw().state, BeatGridState::Provisional);
-        assert_eq!(model.as_raw().bpm, Consts::BPM);
+        assert_eq!(model.as_raw().bpm, consts::BPM);
         assert_eq!(
             model.as_raw().duration,
             Some(2.0),
@@ -277,19 +273,19 @@ mod tests {
     /// must agree once their frames are read against their own rates.
     #[kithara::test(native, flash(false))]
     fn the_same_music_states_the_same_grid_from_either_source_rate() {
-        let at_48: Vec<u64> = (0..4).map(|beat| beat * Consts::PERIOD_48).collect();
-        let at_44_1: Vec<u64> = (0..4).map(|beat| beat * Consts::PERIOD_44_1).collect();
+        let at_48: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_48).collect();
+        let at_44_1: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_44_1).collect();
 
         assert_eq!(
             times(&grid(&analysis(
-                Consts::RATE_48,
+                consts::RATE_48,
                 &at_48,
                 &[],
                 None,
                 BeatState::Final
             ))),
             times(&grid(&analysis(
-                Consts::RATE_44_1,
+                consts::RATE_44_1,
                 &at_44_1,
                 &[],
                 None,
@@ -303,12 +299,12 @@ mod tests {
     fn islands_keep_the_ordinals_the_music_gives_them() {
         let beats = [
             0,
-            Consts::PERIOD_48,
-            60 * Consts::PERIOD_48,
-            61 * Consts::PERIOD_48,
+            consts::PERIOD_48,
+            60 * consts::PERIOD_48,
+            61 * consts::PERIOD_48,
         ];
         let model = grid(&analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             &beats,
             &[],
             None,
@@ -331,8 +327,8 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn an_unknown_length_does_not_withhold_the_grid() {
         let model = grid(&analysis(
-            Consts::RATE_48,
-            &[0, Consts::PERIOD_48],
+            consts::RATE_48,
+            &[0, consts::PERIOD_48],
             &[],
             None,
             BeatState::Provisional,
@@ -344,19 +340,19 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_later_pass_publishes_the_same_grid_as_final() {
-        let beats = [0, Consts::PERIOD_48];
+        let beats = [0, consts::PERIOD_48];
         let provisional = grid(&analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             &beats,
             &[],
-            Some(2 * Consts::PERIOD_48),
+            Some(2 * consts::PERIOD_48),
             BeatState::Provisional,
         ));
         let final_pass = grid(&analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             &beats,
             &[],
-            Some(2 * Consts::PERIOD_48),
+            Some(2 * consts::PERIOD_48),
             BeatState::Final,
         ));
 
@@ -374,9 +370,9 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_degraded_artifact_states_no_grid() {
         let degraded = artifact_analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             BeatArtifact::new(0.0, vec![(0, None), (100, None)], Vec::new()),
-            Some(Consts::PERIOD_48),
+            Some(consts::PERIOD_48),
             BeatState::Final,
         );
 
@@ -391,7 +387,7 @@ mod tests {
         let waveform_only = TrackAnalysis::builder()
             .token(AnalysisToken::from("track-42"))
             .source_sample_rate(
-                NonZeroU32::new(Consts::RATE_48).expect("invariant: a fixture rate is set"),
+                NonZeroU32::new(consts::RATE_48).expect("invariant: a fixture rate is set"),
             )
             .revision(0)
             .build();
@@ -408,14 +404,14 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_marker_that_names_no_beat_is_left_out_of_the_grid() {
         let model = grid(&analysis(
-            Consts::RATE_48,
-            &[0, Consts::PERIOD_48, 40_000, 3 * Consts::PERIOD_48],
+            consts::RATE_48,
+            &[0, consts::PERIOD_48, 40_000, 3 * consts::PERIOD_48],
             &[],
             None,
             BeatState::Provisional,
         ));
 
-        assert_eq!(model.as_raw().bpm, Consts::BPM);
+        assert_eq!(model.as_raw().bpm, consts::BPM);
         assert_eq!(
             model
                 .as_raw()
@@ -430,11 +426,11 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_bar_the_downbeats_keep_becomes_the_meter() {
-        let beats: Vec<u64> = (0..9).map(|beat| beat * Consts::PERIOD_48).collect();
+        let beats: Vec<u64> = (0..9).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             &beats,
-            &[0, 4 * Consts::PERIOD_48, 8 * Consts::PERIOD_48],
+            &[0, 4 * consts::PERIOD_48, 8 * consts::PERIOD_48],
             None,
             BeatState::Final,
         ));
@@ -461,9 +457,9 @@ mod tests {
     /// nothing anchors, so the pass states no bars at all.
     #[kithara::test(native, flash(false))]
     fn a_bar_line_off_the_grid_withdraws_every_bar() {
-        let beats: Vec<u64> = (0..5).map(|beat| beat * Consts::PERIOD_48).collect();
+        let beats: Vec<u64> = (0..5).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             &beats,
             &[0, 30_000],
             None,
@@ -482,12 +478,12 @@ mod tests {
     /// Extrapolation stops where the media does.
     #[kithara::test(native, flash(false))]
     fn a_marker_past_the_stated_length_is_dropped_rather_than_published() {
-        let beats: Vec<u64> = (0..4).map(|beat| beat * Consts::PERIOD_48).collect();
+        let beats: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
-            Consts::RATE_48,
+            consts::RATE_48,
             &beats,
             &[],
-            Some(2 * Consts::PERIOD_48),
+            Some(2 * consts::PERIOD_48),
             BeatState::Final,
         ));
 

@@ -516,10 +516,9 @@ mod tests {
     use super::{channel, error::TrySendError, unbounded_channel};
     use crate::{flash, tokio::task::spawn};
 
-    struct Consts;
-    impl Consts {
-        const PER_PRODUCER: usize = 200;
-        const PRODUCERS: usize = 8;
+    mod consts {
+        pub(super) const PER_PRODUCER: usize = 200;
+        pub(super) const PRODUCERS: usize = 8;
     }
 
     /// Bounded channel under a multi-thread runtime: many producers fan into a
@@ -534,11 +533,11 @@ mod tests {
     async fn bounded_fan_in_no_lost_wakeup() {
         flash::reset();
         let (tx, mut rx) = channel::<usize>(4);
-        for p in 0..Consts::PRODUCERS {
+        for p in 0..consts::PRODUCERS {
             let tx = tx.clone();
             drop(spawn(async move {
-                for i in 0..Consts::PER_PRODUCER {
-                    tx.send(p * Consts::PER_PRODUCER + i)
+                for i in 0..consts::PER_PRODUCER {
+                    tx.send(p * consts::PER_PRODUCER + i)
                         .await
                         .expect("receiver alive");
                 }
@@ -551,8 +550,8 @@ mod tests {
             seen += 1;
             sum += v as u64;
         }
-        assert_eq!(seen, Consts::PRODUCERS * Consts::PER_PRODUCER);
-        let n = (Consts::PRODUCERS * Consts::PER_PRODUCER) as u64;
+        assert_eq!(seen, consts::PRODUCERS * consts::PER_PRODUCER);
+        let n = (consts::PRODUCERS * consts::PER_PRODUCER) as u64;
         assert_eq!(sum, n * (n - 1) / 2);
     }
 
@@ -562,11 +561,11 @@ mod tests {
     async fn unbounded_fan_in_no_lost_wakeup() {
         flash::reset();
         let (tx, mut rx) = unbounded_channel::<usize>();
-        for p in 0..Consts::PRODUCERS {
+        for p in 0..consts::PRODUCERS {
             let tx = tx.clone();
             drop(spawn(async move {
-                for i in 0..Consts::PER_PRODUCER {
-                    tx.send(p * Consts::PER_PRODUCER + i)
+                for i in 0..consts::PER_PRODUCER {
+                    tx.send(p * consts::PER_PRODUCER + i)
                         .expect("receiver alive");
                 }
             }));
@@ -576,7 +575,7 @@ mod tests {
         while (rx.recv().await).is_some() {
             seen += 1;
         }
-        assert_eq!(seen, Consts::PRODUCERS * Consts::PER_PRODUCER);
+        assert_eq!(seen, consts::PRODUCERS * consts::PER_PRODUCER);
     }
 
     /// Sender-side close wakes a blocked-empty consumer: with all senders

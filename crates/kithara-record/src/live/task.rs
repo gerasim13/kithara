@@ -10,7 +10,7 @@ use ringbuf::{
 
 use super::{
     FormatChange, LiveRecordingReport,
-    recorder::{Consts, Control},
+    recorder::{Control, consts},
 };
 use crate::{
     LiveRecordingConfig, LiveRecordingError, PartSinkFactory, RecordingConfig, RecordingCore,
@@ -71,7 +71,7 @@ where
     }
 
     fn apply_format(&mut self, change: FormatChange) -> Result<(), LiveRecordingError> {
-        if change.spec.channels != Consts::CHANNELS {
+        if change.spec.channels != consts::CHANNELS {
             return Err(LiveRecordingError::ChannelCount(change.spec.channels));
         }
         self.finish_part()?;
@@ -83,7 +83,7 @@ where
     fn clear_cut(&self, at: u64) {
         self.control
             .cut_at
-            .compare_exchange(at, Consts::NO_CUT, Ordering::AcqRel, Ordering::Relaxed)
+            .compare_exchange(at, consts::NO_CUT, Ordering::AcqRel, Ordering::Relaxed)
             .ok();
     }
 
@@ -164,10 +164,10 @@ where
             if sample >= samples.len() {
                 break;
             }
-            let available_frames = (samples.len() - sample) / Consts::STEREO;
+            let available_frames = (samples.len() - sample) / consts::STEREO;
             let mut take = u64::try_from(available_frames)
                 .map_err(|_| LiveRecordingError::FrameCountOverflow)?;
-            if cut_at != Consts::NO_CUT {
+            if cut_at != consts::NO_CUT {
                 take = take.min(cut_at - self.frames);
             }
             if let Some(change) = self.next_format() {
@@ -179,7 +179,7 @@ where
             let take = usize::try_from(take).map_err(|_| LiveRecordingError::FrameCountOverflow)?;
             let end = sample
                 .checked_add(
-                    take.checked_mul(Consts::STEREO)
+                    take.checked_mul(consts::STEREO)
                         .ok_or(LiveRecordingError::FrameCountOverflow)?,
                 )
                 .ok_or(LiveRecordingError::FrameCountOverflow)?;
@@ -208,7 +208,7 @@ where
     }
 
     fn push(&mut self, samples: &[f32]) -> Result<(), LiveRecordingError> {
-        let frames = u64::try_from(samples.len() / Consts::STEREO)
+        let frames = u64::try_from(samples.len() / consts::STEREO)
             .map_err(|_| LiveRecordingError::FrameCountOverflow)?;
         self.open_part()?;
         let part = self
@@ -260,7 +260,7 @@ where
             return self.fail(LiveRecordingError::Cancelled);
         };
         let samples = self.pcm.occupied_len().min(scratch.len());
-        let samples = samples - samples % Consts::STEREO;
+        let samples = samples - samples % consts::STEREO;
         let taken = self.pcm.pop_slice(&mut scratch[..samples]);
         let processed = self.process(&scratch[..taken]);
         self.scratch = Some(scratch);

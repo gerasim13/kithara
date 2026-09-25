@@ -1,13 +1,11 @@
 use super::{StreamBackend, StreamEncoder};
 use crate::{EncodeError, EncodedAccessUnit};
 
-struct Consts;
-
-impl Consts {
-    const BIT_RATE: u64 = 128_000;
-    const CHANNELS: u16 = 2;
-    const FRAMES: usize = 4_096;
-    const SAMPLE_RATE: u32 = 48_000;
+mod consts {
+    pub(super) const BIT_RATE: u64 = 128_000;
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const FRAMES: usize = 4_096;
+    pub(super) const SAMPLE_RATE: u32 = 48_000;
 }
 
 fn encode_in_chunks(
@@ -18,14 +16,14 @@ fn encode_in_chunks(
 ) -> Vec<EncodedAccessUnit> {
     let mut encoder = StreamEncoder::builder()
         .backend(backend)
-        .sample_rate(Consts::SAMPLE_RATE)
-        .channels(Consts::CHANNELS)
-        .bit_rate(Consts::BIT_RATE)
+        .sample_rate(consts::SAMPLE_RATE)
+        .channels(consts::CHANNELS)
+        .bit_rate(consts::BIT_RATE)
         .timescale(timescale)
         .build()
         .expect("stream encoder");
     let mut units = Vec::new();
-    for chunk in samples.chunks(chunk_frames * usize::from(Consts::CHANNELS)) {
+    for chunk in samples.chunks(chunk_frames * usize::from(consts::CHANNELS)) {
         units.extend(encoder.push(chunk).expect("push"));
     }
     units.extend(encoder.finish().expect("finish"));
@@ -33,14 +31,14 @@ fn encode_in_chunks(
 }
 
 fn chunking_does_not_change_the_encoded_stream(samples: &[f32], backend: StreamBackend) {
-    let whole = encode_in_chunks(backend, &samples, Consts::FRAMES, Consts::SAMPLE_RATE);
+    let whole = encode_in_chunks(backend, &samples, consts::FRAMES, consts::SAMPLE_RATE);
     let framed = encode_in_chunks(
         backend,
         &samples,
         StreamEncoder::FRAME_SAMPLES,
-        Consts::SAMPLE_RATE,
+        consts::SAMPLE_RATE,
     );
-    let ragged = encode_in_chunks(backend, &samples, 333, Consts::SAMPLE_RATE);
+    let ragged = encode_in_chunks(backend, &samples, 333, consts::SAMPLE_RATE);
 
     assert!(!whole.is_empty(), "encoder produced no access units");
     assert_eq!(whole, framed);
@@ -54,10 +52,10 @@ fn timestamps_start_at_zero_and_advance_by_one_frame(
 ) {
     let frame_samples = u64::try_from(StreamEncoder::FRAME_SAMPLES).expect("frame size fits u64");
     let encoded_frames =
-        u64::try_from(Consts::FRAMES + priming_frames).expect("frame count fits u64");
+        u64::try_from(consts::FRAMES + priming_frames).expect("frame count fits u64");
 
-    for timescale in [Consts::SAMPLE_RATE, 90_000] {
-        let rescale = |frames: u64| frames * u64::from(timescale) / u64::from(Consts::SAMPLE_RATE);
+    for timescale in [consts::SAMPLE_RATE, 90_000] {
+        let rescale = |frames: u64| frames * u64::from(timescale) / u64::from(consts::SAMPLE_RATE);
         let units = encode_in_chunks(backend, &samples, StreamEncoder::FRAME_SAMPLES, timescale);
 
         let mut expected_pts = 0;
@@ -93,8 +91,8 @@ fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
     let mut encoder = StreamEncoder::builder()
         .backend(backend)
         .sample_rate(SOURCE_RATE)
-        .channels(Consts::CHANNELS)
-        .bit_rate(Consts::BIT_RATE)
+        .channels(consts::CHANNELS)
+        .bit_rate(consts::BIT_RATE)
         .timescale(TIMESCALE)
         .build()
         .expect("stream encoder");
@@ -110,7 +108,7 @@ fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
         expected_pts += u64::from(unit.duration);
     }
 
-    let frames = u64::try_from(Consts::FRAMES + priming_frames).expect("fits u64");
+    let frames = u64::try_from(consts::FRAMES + priming_frames).expect("fits u64");
     let ticks = frames * u64::from(TIMESCALE);
     assert_eq!(
         expected_pts,
@@ -123,10 +121,10 @@ fn new_rejects_a_channel_count_the_encoder_cannot_carry(backend: StreamBackend) 
     assert!(
         StreamEncoder::builder()
             .backend(backend)
-            .sample_rate(Consts::SAMPLE_RATE)
+            .sample_rate(consts::SAMPLE_RATE)
             .channels(9)
-            .bit_rate(Consts::BIT_RATE)
-            .timescale(Consts::SAMPLE_RATE)
+            .bit_rate(consts::BIT_RATE)
+            .timescale(consts::SAMPLE_RATE)
             .build()
             .is_err(),
         "AAC-LC carries no 9-channel layout"
@@ -136,10 +134,10 @@ fn new_rejects_a_channel_count_the_encoder_cannot_carry(backend: StreamBackend) 
 fn push_rejects_a_partial_frame(samples: &[f32], backend: StreamBackend) {
     let mut encoder = StreamEncoder::builder()
         .backend(backend)
-        .sample_rate(Consts::SAMPLE_RATE)
-        .channels(Consts::CHANNELS)
-        .bit_rate(Consts::BIT_RATE)
-        .timescale(Consts::SAMPLE_RATE)
+        .sample_rate(consts::SAMPLE_RATE)
+        .channels(consts::CHANNELS)
+        .bit_rate(consts::BIT_RATE)
+        .timescale(consts::SAMPLE_RATE)
         .build()
         .expect("stream encoder");
 
@@ -150,15 +148,15 @@ fn push_rejects_a_partial_frame(samples: &[f32], backend: StreamBackend) {
 
 fn new_rejects_audio_no_backend_can_carry(backend: StreamBackend) {
     for (sample_rate, channels, timescale) in [
-        (0, Consts::CHANNELS, Consts::SAMPLE_RATE),
-        (Consts::SAMPLE_RATE, 0, Consts::SAMPLE_RATE),
-        (Consts::SAMPLE_RATE, Consts::CHANNELS, 0),
+        (0, consts::CHANNELS, consts::SAMPLE_RATE),
+        (consts::SAMPLE_RATE, 0, consts::SAMPLE_RATE),
+        (consts::SAMPLE_RATE, consts::CHANNELS, 0),
     ] {
         let error = StreamEncoder::builder()
             .backend(backend)
             .sample_rate(sample_rate)
             .channels(channels)
-            .bit_rate(Consts::BIT_RATE)
+            .bit_rate(consts::BIT_RATE)
             .timescale(timescale)
             .build()
             .map(|_| ())

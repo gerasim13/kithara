@@ -6,20 +6,20 @@ use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_worker::Worker;
 
-struct Consts;
+mod consts {
+    use super::{Duration, NonZeroU32, NonZeroUsize};
 
-impl Consts {
-    const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
-    const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
-    const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
+    pub(super) const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
+    pub(super) const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
+    pub(super) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
         Some(value) => value,
         None => unreachable!(),
     };
-    const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
+    pub(super) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
         Some(value) => value,
         None => unreachable!(),
     };
-    const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
+    pub(super) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
         Some(value) => value,
         None => unreachable!(),
     };
@@ -36,7 +36,7 @@ pub struct PlayWorkerConfig<S> {
     #[patch(skip)]
     pub(crate) pools: PoolRegion<S>,
     /// Poll interval for RT-safe deferred wakes while the final ring is full.
-    #[builder(default = Consts::BACKPRESSURE_POLL_INTERVAL)]
+    #[builder(default = consts::BACKPRESSURE_POLL_INTERVAL)]
     #[field(get, copy)]
     #[patch(humantime)]
     pub(crate) backpressure_poll_interval: Duration,
@@ -51,20 +51,20 @@ pub struct PlayWorkerConfig<S> {
     #[patch(humantime)]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while live playback tasks are waiting.
-    #[builder(default = Consts::ACTIVE_WAIT_TIMEOUT)]
+    #[builder(default = consts::ACTIVE_WAIT_TIMEOUT)]
     #[field(get, copy)]
     #[patch(humantime)]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
-    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
+    #[builder(default = consts::FAIRNESS_YIELD_INTERVAL)]
     #[field(get, copy)]
     pub(crate) fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive ticks for one track visit.
-    #[builder(default = Consts::TASK_BURST)]
+    #[builder(default = consts::TASK_BURST)]
     #[field(get, copy)]
     pub(crate) task_burst: NonZeroU32,
     /// Maximum number of simultaneously registered track render chains.
-    #[builder(default = Consts::CAPACITY)]
+    #[builder(default = consts::CAPACITY)]
     #[field(get, copy)]
     pub(crate) capacity: NonZeroUsize,
     /// Parent cancellation token for this playback dispatcher lifetime. Not a

@@ -12,17 +12,15 @@ use crate::{
     traits::AudioObserver,
 };
 
-struct Consts;
-
-impl Consts {
+mod consts {
     /// Output ring depth. wasm needs a deeper ring because its worker is
     /// scheduled coarsely.
     #[cfg(not(target_arch = "wasm32"))]
-    const AUDIO_BUFFER_CHUNKS: usize = 10;
+    pub(super) const AUDIO_BUFFER_CHUNKS: usize = 10;
     #[cfg(target_arch = "wasm32")]
-    const AUDIO_BUFFER_CHUNKS: usize = 32;
+    pub(super) const AUDIO_BUFFER_CHUNKS: usize = 32;
     /// Chunks buffered before preload readiness is signalled.
-    const PRELOAD_CHUNKS: usize = 3;
+    pub(super) const PRELOAD_CHUNKS: usize = 3;
 }
 
 /// The consumer's thread capability: how it wakes the decode worker after
@@ -68,7 +66,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
     #[field(get, copy)]
-    #[builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
+    #[builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
     pub preload_chunks: NonZeroUsize,
     /// Target sample rate of the audio host (for resampling). Not a document
     /// key: this is the rate the audio host actually opened, and the
@@ -89,7 +87,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
     /// wasm32.
     #[field(get, copy)]
-    #[builder(default = Consts::AUDIO_BUFFER_CHUNKS)]
+    #[builder(default = consts::AUDIO_BUFFER_CHUNKS)]
     pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.

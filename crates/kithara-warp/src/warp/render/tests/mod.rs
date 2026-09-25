@@ -8,7 +8,7 @@ mod timeline;
 use std::num::NonZero;
 
 use fixtures::{
-    Consts, WarpRenderer, chunk, dominant_bin, expected_bin, f64_of, flush_serviced,
+    WarpRenderer, chunk, consts, dominant_bin, expected_bin, f64_of, flush_serviced,
     render_serviced, renderer, spec,
 };
 use kithara_platform::sync::Arc;

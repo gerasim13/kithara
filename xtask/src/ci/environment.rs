@@ -20,19 +20,19 @@ use super::{
     run::CacheGroup,
 };
 
-struct Consts;
+mod consts {
+    use super::Duration;
 
-impl Consts {
     /// The integration suite opens far more files across its cache and segment
     /// fixtures than the 256 descriptor soft limit a macOS session starts
     /// with. The lane raises its own ceiling so every executor gets the same
     /// budget.
     #[cfg(unix)]
-    const OPEN_FILES: u64 = 65536;
+    pub(super) const OPEN_FILES: u64 = 65536;
     /// How often the gate re-asks a volume it is waiting on. What it waits for
     /// is a neighbouring job ending, so it re-asks on the scale a job finishes
     /// on rather than the scale a compiler writes files on.
-    const JOB_ROOM_POLL: Duration = Duration::from_secs(15);
+    pub(super) const JOB_ROOM_POLL: Duration = Duration::from_secs(15);
 }
 
 struct SccacheSlot {
@@ -489,7 +489,7 @@ fn raise_open_file_limit() -> Result<()> {
 
     let (soft, hard) =
         getrlimit(Resource::RLIMIT_NOFILE).context("reading the file descriptor limit")?;
-    let target = hard.min(Consts::OPEN_FILES);
+    let target = hard.min(consts::OPEN_FILES);
     if soft >= target {
         return Ok(());
     }
@@ -723,7 +723,7 @@ fn ensure_room_for_a_job(config: &CiConfig, shared_root: &FsPath) -> Result<()> 
             seconds_left = left.as_secs(),
             "waiting for the CI volume to give the job room"
         );
-        thread::sleep(Consts::JOB_ROOM_POLL.min(left));
+        thread::sleep(consts::JOB_ROOM_POLL.min(left));
     }
 }
 
@@ -863,14 +863,11 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    struct ChildEnv;
-
-    #[cfg(unix)]
-    impl ChildEnv {
-        const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
-        const FAILED_PREPARE: &str = "KITHARA_TEST_FAILED_ENV_CHILD";
-        const LANE_PREPARED: &str = "KITHARA_TEST_LANE_PREPARED_ENV_CHILD";
-        const PREPARED: &str = "KITHARA_TEST_PREPARED_ENV_CHILD";
+    mod child_env {
+        pub(super) const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
+        pub(super) const FAILED_PREPARE: &str = "KITHARA_TEST_FAILED_ENV_CHILD";
+        pub(super) const LANE_PREPARED: &str = "KITHARA_TEST_LANE_PREPARED_ENV_CHILD";
+        pub(super) const PREPARED: &str = "KITHARA_TEST_PREPARED_ENV_CHILD";
     }
 
     fn reclaim(root: &FsPath) -> usize {
@@ -1026,8 +1023,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn gitlab_shell_environment_holds_a_host_slot_and_job_lease() {
-        if env::var_os(ChildEnv::PREPARED).is_some() {
-            let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
+        if env::var_os(child_env::PREPARED).is_some() {
+            let root = PathBuf::from(env::var_os(child_env::CACHE_ROOT).unwrap());
             let project = root.join("project");
             fs::create_dir_all(&project).unwrap();
             let ctx = Ctx::new(project.clone(), ProjectConfig::default());
@@ -1115,8 +1112,8 @@ mod tests {
         let output = Command::new(env::current_exe().unwrap())
             .arg("gitlab_shell_environment_holds_a_host_slot_and_job_lease")
             .arg("--nocapture")
-            .env(ChildEnv::PREPARED, "1")
-            .env(ChildEnv::CACHE_ROOT, directory.path())
+            .env(child_env::PREPARED, "1")
+            .env(child_env::CACHE_ROOT, directory.path())
             .env("KITHARA_CI_CACHE_ROOT", directory.path())
             .env("KITHARA_CACHE_TRUST", "review")
             .env("GITLAB_CI", "true")
@@ -1143,8 +1140,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_gitlab_lane_owns_its_build_directory_across_runner_slots() {
-        if env::var_os(ChildEnv::LANE_PREPARED).is_some() {
-            let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
+        if env::var_os(child_env::LANE_PREPARED).is_some() {
+            let root = PathBuf::from(env::var_os(child_env::CACHE_ROOT).unwrap());
             let project = root.join("project");
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
@@ -1198,8 +1195,8 @@ mod tests {
         let output = Command::new(env::current_exe().unwrap())
             .arg("a_gitlab_lane_owns_its_build_directory_across_runner_slots")
             .arg("--nocapture")
-            .env(ChildEnv::LANE_PREPARED, "1")
-            .env(ChildEnv::CACHE_ROOT, directory.path())
+            .env(child_env::LANE_PREPARED, "1")
+            .env(child_env::CACHE_ROOT, directory.path())
             .env("KITHARA_CI_CACHE_ROOT", directory.path())
             .env("KITHARA_CACHE_TRUST", "review")
             .env("GITLAB_CI", "true")
@@ -1226,8 +1223,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_prepare_never_publishes_a_cache_lease() {
-        if env::var_os(ChildEnv::FAILED_PREPARE).is_some() {
-            let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
+        if env::var_os(child_env::FAILED_PREPARE).is_some() {
+            let root = PathBuf::from(env::var_os(child_env::CACHE_ROOT).unwrap());
             let project = root.join("project");
             fs::create_dir_all(&project).unwrap();
             let ctx = Ctx::new(project, ProjectConfig::default());
@@ -1249,8 +1246,8 @@ mod tests {
         let output = Command::new(env::current_exe().unwrap())
             .arg("failed_prepare_never_publishes_a_cache_lease")
             .arg("--nocapture")
-            .env(ChildEnv::FAILED_PREPARE, "1")
-            .env(ChildEnv::CACHE_ROOT, directory.path())
+            .env(child_env::FAILED_PREPARE, "1")
+            .env(child_env::CACHE_ROOT, directory.path())
             .env("KITHARA_CI_CACHE_ROOT", directory.path())
             .env("KITHARA_CACHE_TRUST", "review")
             .env("GITLAB_CI", "true")

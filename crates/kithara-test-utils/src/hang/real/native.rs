@@ -62,23 +62,22 @@ pub(crate) fn sanitize_label(label: &str) -> String {
     }
 }
 
-struct Consts;
-impl Consts {
-    const ENV_DUMP_DIR: &str = "KITHARA_HANG_DUMP_DIR";
-    const ENV_PREKILL_SECS: &str = "KITHARA_HANG_PREKILL_SECS";
-    const ENV_TIMEOUT_SECS: &str = "KITHARA_HANG_TIMEOUT_SECS";
-    const NEXTEST_ATTEMPT: &str = "NEXTEST_ATTEMPT";
-    const NEXTEST_ATTEMPT_ID: &str = "NEXTEST_ATTEMPT_ID";
-    const NEXTEST_BINARY_ID: &str = "NEXTEST_BINARY_ID";
-    const NEXTEST_RUN_ID: &str = "NEXTEST_RUN_ID";
-    const NEXTEST_STRESS_CURRENT: &str = "NEXTEST_STRESS_CURRENT";
-    const NEXTEST_STRESS_TOTAL: &str = "NEXTEST_STRESS_TOTAL";
-    const NEXTEST_TEST_GLOBAL_SLOT: &str = "NEXTEST_TEST_GLOBAL_SLOT";
-    const NEXTEST_TEST_GROUP: &str = "NEXTEST_TEST_GROUP";
-    const NEXTEST_TEST_GROUP_SLOT: &str = "NEXTEST_TEST_GROUP_SLOT";
-    const NEXTEST_TEST_NAME: &str = "NEXTEST_TEST_NAME";
-    const NEXTEST_TEST_THREADS: &str = "NEXTEST_TEST_THREADS";
-    const NEXTEST_TOTAL_ATTEMPTS: &str = "NEXTEST_TOTAL_ATTEMPTS";
+mod consts {
+    pub(super) const ENV_DUMP_DIR: &str = "KITHARA_HANG_DUMP_DIR";
+    pub(super) const ENV_PREKILL_SECS: &str = "KITHARA_HANG_PREKILL_SECS";
+    pub(super) const ENV_TIMEOUT_SECS: &str = "KITHARA_HANG_TIMEOUT_SECS";
+    pub(super) const NEXTEST_ATTEMPT: &str = "NEXTEST_ATTEMPT";
+    pub(super) const NEXTEST_ATTEMPT_ID: &str = "NEXTEST_ATTEMPT_ID";
+    pub(super) const NEXTEST_BINARY_ID: &str = "NEXTEST_BINARY_ID";
+    pub(super) const NEXTEST_RUN_ID: &str = "NEXTEST_RUN_ID";
+    pub(super) const NEXTEST_STRESS_CURRENT: &str = "NEXTEST_STRESS_CURRENT";
+    pub(super) const NEXTEST_STRESS_TOTAL: &str = "NEXTEST_STRESS_TOTAL";
+    pub(super) const NEXTEST_TEST_GLOBAL_SLOT: &str = "NEXTEST_TEST_GLOBAL_SLOT";
+    pub(super) const NEXTEST_TEST_GROUP: &str = "NEXTEST_TEST_GROUP";
+    pub(super) const NEXTEST_TEST_GROUP_SLOT: &str = "NEXTEST_TEST_GROUP_SLOT";
+    pub(super) const NEXTEST_TEST_NAME: &str = "NEXTEST_TEST_NAME";
+    pub(super) const NEXTEST_TEST_THREADS: &str = "NEXTEST_TEST_THREADS";
+    pub(super) const NEXTEST_TOTAL_ATTEMPTS: &str = "NEXTEST_TOTAL_ATTEMPTS";
 }
 
 #[derive(Debug, Serialize)]
@@ -109,18 +108,18 @@ impl NextestContext {
                 .map(|value| bounded_owned(value, MAX_NEXTEST_FIELD_BYTES))
         };
         Self {
-            run_id: read(Consts::NEXTEST_RUN_ID),
-            binary_id: read(Consts::NEXTEST_BINARY_ID),
-            attempt_id: read(Consts::NEXTEST_ATTEMPT_ID),
-            attempt: read(Consts::NEXTEST_ATTEMPT),
-            total_attempts: read(Consts::NEXTEST_TOTAL_ATTEMPTS),
-            test_name: read(Consts::NEXTEST_TEST_NAME),
-            stress_current: read(Consts::NEXTEST_STRESS_CURRENT),
-            stress_total: read(Consts::NEXTEST_STRESS_TOTAL),
-            test_group: read(Consts::NEXTEST_TEST_GROUP),
-            test_global_slot: read(Consts::NEXTEST_TEST_GLOBAL_SLOT),
-            test_group_slot: read(Consts::NEXTEST_TEST_GROUP_SLOT),
-            test_threads: read(Consts::NEXTEST_TEST_THREADS),
+            run_id: read(consts::NEXTEST_RUN_ID),
+            binary_id: read(consts::NEXTEST_BINARY_ID),
+            attempt_id: read(consts::NEXTEST_ATTEMPT_ID),
+            attempt: read(consts::NEXTEST_ATTEMPT),
+            total_attempts: read(consts::NEXTEST_TOTAL_ATTEMPTS),
+            test_name: read(consts::NEXTEST_TEST_NAME),
+            stress_current: read(consts::NEXTEST_STRESS_CURRENT),
+            stress_total: read(consts::NEXTEST_STRESS_TOTAL),
+            test_group: read(consts::NEXTEST_TEST_GROUP),
+            test_global_slot: read(consts::NEXTEST_TEST_GLOBAL_SLOT),
+            test_group_slot: read(consts::NEXTEST_TEST_GROUP_SLOT),
+            test_threads: read(consts::NEXTEST_TEST_THREADS),
         }
     }
 }
@@ -267,7 +266,7 @@ impl PreKillGuard {
     /// Start the pre-kill evidence timer when `KITHARA_HANG_PREKILL_SECS` is a
     /// positive integer. The timer is inert otherwise.
     pub fn new(test_name: &str) -> Self {
-        let Some(timeout) = env::var(Consts::ENV_PREKILL_SECS)
+        let Some(timeout) = env::var(consts::ENV_PREKILL_SECS)
             .ok()
             .and_then(|value| parse_timeout_secs(&value))
         else {
@@ -327,7 +326,7 @@ pub(crate) fn resolve_dump_dir(explicit: Option<&Path>) -> PathBuf {
     if let Some(p) = explicit {
         return p.to_path_buf();
     }
-    if let Some(env) = env::var_os(Consts::ENV_DUMP_DIR) {
+    if let Some(env) = env::var_os(consts::ENV_DUMP_DIR) {
         return PathBuf::from(env);
     }
     env::temp_dir()
@@ -417,7 +416,7 @@ pub fn record_test_hang(label: &str, diagnostic: &str) {
 pub(crate) fn env_timeout() -> Option<Duration> {
     static CACHED: OnceLock<Option<Duration>> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        let value = env::var(Consts::ENV_TIMEOUT_SECS).ok()?;
+        let value = env::var(consts::ENV_TIMEOUT_SECS).ok()?;
         parse_timeout_secs(&value)
     })
 }
@@ -435,15 +434,15 @@ mod tests {
     #[test]
     fn nextest_context_captures_attempt_correlation() {
         let nextest = NextestContext::from_lookup(|key| match key {
-            Consts::NEXTEST_RUN_ID => Some("run-id".to_owned()),
-            Consts::NEXTEST_BINARY_ID => Some("binary".to_owned()),
-            Consts::NEXTEST_ATTEMPT_ID => Some("run-id:binary@stress-7$module::test#2".to_owned()),
-            Consts::NEXTEST_ATTEMPT => Some("2".to_owned()),
-            Consts::NEXTEST_TOTAL_ATTEMPTS => Some("3".to_owned()),
-            Consts::NEXTEST_TEST_NAME => Some("module::test".to_owned()),
-            Consts::NEXTEST_STRESS_CURRENT => Some("7".to_owned()),
-            Consts::NEXTEST_STRESS_TOTAL => Some("100".to_owned()),
-            Consts::NEXTEST_TEST_THREADS => Some("12".to_owned()),
+            consts::NEXTEST_RUN_ID => Some("run-id".to_owned()),
+            consts::NEXTEST_BINARY_ID => Some("binary".to_owned()),
+            consts::NEXTEST_ATTEMPT_ID => Some("run-id:binary@stress-7$module::test#2".to_owned()),
+            consts::NEXTEST_ATTEMPT => Some("2".to_owned()),
+            consts::NEXTEST_TOTAL_ATTEMPTS => Some("3".to_owned()),
+            consts::NEXTEST_TEST_NAME => Some("module::test".to_owned()),
+            consts::NEXTEST_STRESS_CURRENT => Some("7".to_owned()),
+            consts::NEXTEST_STRESS_TOTAL => Some("100".to_owned()),
+            consts::NEXTEST_TEST_THREADS => Some("12".to_owned()),
             _ => None,
         });
 
@@ -475,7 +474,7 @@ mod tests {
     fn oversized_nextest_metadata_is_visibly_bounded() {
         let raw = format!("run-head{}run-tail", "x".repeat(MAX_NEXTEST_FIELD_BYTES));
         let nextest =
-            NextestContext::from_lookup(|key| (key == Consts::NEXTEST_RUN_ID).then(|| raw.clone()));
+            NextestContext::from_lookup(|key| (key == consts::NEXTEST_RUN_ID).then(|| raw.clone()));
         let run_id = nextest.run_id.expect("captured run id");
 
         assert!(run_id.len() <= MAX_NEXTEST_FIELD_BYTES);
@@ -620,7 +619,7 @@ mod tests {
             timestamp_ms: 1,
             pid: 2,
             nextest: NextestContext::from_lookup(|key| {
-                (key == Consts::NEXTEST_ATTEMPT_ID).then(|| attempt_id.to_owned())
+                (key == consts::NEXTEST_ATTEMPT_ID).then(|| attempt_id.to_owned())
             }),
             context: Value::Null,
             flight_events: vec!["evicted by the size fallback".to_owned()],

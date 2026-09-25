@@ -28,11 +28,9 @@ use crate::{
 /// Marker type for file streaming.
 pub struct File<S>(PhantomData<fn() -> S>);
 
-struct Consts;
-
-impl Consts {
-    const DEFAULT_EXTENSION: &'static str = "bin";
-    const MAX_EXTENSION_LEN: usize = 16;
+mod consts {
+    pub(super) const DEFAULT_EXTENSION: &str = "bin";
+    pub(super) const MAX_EXTENSION_LEN: usize = 16;
 }
 
 struct RemoteFileOpen {
@@ -110,7 +108,7 @@ fn publish_open_error(bus: Option<&EventBus>, error: &SourceError) {
 fn valid_extension(extension: &str) -> Option<String> {
     let extension = extension.strip_prefix('.').unwrap_or(extension);
     (!extension.is_empty()
-        && extension.len() <= Consts::MAX_EXTENSION_LEN
+        && extension.len() <= consts::MAX_EXTENSION_LEN
         && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
     .then(|| extension.to_ascii_lowercase())
 }
@@ -124,7 +122,7 @@ fn source_extension(url: &Url, hint: Option<&str>) -> String {
                 .filter(|(stem, _)| !stem.is_empty())
                 .and_then(|(_, extension)| valid_extension(extension))
         })
-        .unwrap_or_else(|| Consts::DEFAULT_EXTENSION.to_string())
+        .unwrap_or_else(|| consts::DEFAULT_EXTENSION.to_string())
 }
 
 fn remote_key<S>(

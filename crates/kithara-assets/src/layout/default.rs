@@ -8,10 +8,9 @@ use super::{
     },
 };
 
-struct Consts;
-impl Consts {
-    const DEFAULT_EXTENSION: &'static str = "bin";
-    const MAX_EXTENSION_LEN: usize = 16;
+mod consts {
+    pub(super) const DEFAULT_EXTENSION: &str = "bin";
+    pub(super) const MAX_EXTENSION_LEN: usize = 16;
 }
 
 /// Default portable cache layout shared by file, HLS, and named artifacts.
@@ -61,13 +60,13 @@ fn authority_component(url: &Url) -> String {
 
 fn source_path(extension: &str) -> String {
     let extension = if !extension.is_empty()
-        && extension.len() <= Consts::MAX_EXTENSION_LEN
+        && extension.len() <= consts::MAX_EXTENSION_LEN
         && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
         && !extension.eq_ignore_ascii_case("tmp")
     {
         extension.to_ascii_lowercase()
     } else {
-        Consts::DEFAULT_EXTENSION.to_string()
+        consts::DEFAULT_EXTENSION.to_string()
     };
     let leaf = encode_component(&format!("track.{extension}"));
     format!("track/{leaf}")

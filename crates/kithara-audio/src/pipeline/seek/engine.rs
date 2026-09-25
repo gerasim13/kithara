@@ -78,10 +78,8 @@ pub(crate) enum SeekTransition {
     },
 }
 
-struct Consts;
-
-impl Consts {
-    const ANCHOR_RESOLUTION: &str = "seek anchor resolution failed";
+mod consts {
+    pub(super) const ANCHOR_RESOLUTION: &str = "seek anchor resolution failed";
 }
 
 impl SeekEngine {
@@ -261,7 +259,7 @@ impl SeekEngine {
                 return SeekTransition::Failed {
                     request,
                     error: DecodeError::SeekFailed {
-                        detail: Consts::ANCHOR_RESOLUTION,
+                        detail: consts::ANCHOR_RESOLUTION,
                     },
                     context: "seek anchor resolution failed",
                 };

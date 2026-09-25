@@ -17,12 +17,10 @@ use super::{
 };
 use crate::{common::project::StressEvidenceConfig, test::ConfiguredLane};
 
-struct Consts;
-
-impl Consts {
-    const MANIFEST_READ_LIMIT: u64 = 1_048_577;
-    const MANIFEST_SCHEMA: u32 = 4;
-    const MAX_MANIFEST_BYTES: usize = 1_048_576;
+mod consts {
+    pub(super) const MANIFEST_READ_LIMIT: u64 = 1_048_577;
+    pub(super) const MANIFEST_SCHEMA: u32 = 4;
+    pub(super) const MAX_MANIFEST_BYTES: usize = 1_048_576;
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -216,7 +214,7 @@ impl Manifest {
         let file =
             File::open(path).with_context(|| format!("open stress manifest {}", path.display()))?;
         let mut contents = Vec::new();
-        file.take(Consts::MANIFEST_READ_LIMIT)
+        file.take(consts::MANIFEST_READ_LIMIT)
             .read_to_end(&mut contents)
             .with_context(|| format!("read stress manifest {}", path.display()))?;
         ensure!(
@@ -225,18 +223,18 @@ impl Manifest {
             path.display()
         );
         ensure!(
-            contents.len() <= Consts::MAX_MANIFEST_BYTES,
+            contents.len() <= consts::MAX_MANIFEST_BYTES,
             "stress manifest exceeds {} bytes: {}",
-            Consts::MAX_MANIFEST_BYTES,
+            consts::MAX_MANIFEST_BYTES,
             path.display()
         );
         let manifest: Self = serde_json::from_slice(&contents)
             .with_context(|| format!("parse stress manifest {}", path.display()))?;
         ensure!(
-            manifest.schema == Consts::MANIFEST_SCHEMA,
+            manifest.schema == consts::MANIFEST_SCHEMA,
             "stress manifest schema is {}, expected {}",
             manifest.schema,
-            Consts::MANIFEST_SCHEMA,
+            consts::MANIFEST_SCHEMA,
         );
         manifest.validate_invariants()?;
         Ok(manifest)
@@ -246,7 +244,7 @@ impl Manifest {
         let started_at = format_timestamp(SystemTime::now())?;
         let manifest = Self {
             system,
-            schema: Consts::MANIFEST_SCHEMA,
+            schema: consts::MANIFEST_SCHEMA,
             mode: spec.mode,
             build: spec.build,
             config: spec.config,
@@ -310,11 +308,11 @@ impl Manifest {
         expected: &ExpectedProvenance,
         mismatches: &mut Vec<ProvenanceMismatch>,
     ) {
-        if self.schema != Consts::MANIFEST_SCHEMA {
+        if self.schema != consts::MANIFEST_SCHEMA {
             mismatches.push(ProvenanceMismatch::new(
                 "schema",
                 self.schema.to_string(),
-                Consts::MANIFEST_SCHEMA.to_string(),
+                consts::MANIFEST_SCHEMA.to_string(),
             ));
         }
         compare_sha(
@@ -525,10 +523,10 @@ impl Manifest {
         let mut contents = serde_json::to_vec_pretty(self).context("serialize stress manifest")?;
         contents.push(b'\n');
         ensure!(
-            contents.len() <= Consts::MAX_MANIFEST_BYTES,
+            contents.len() <= consts::MAX_MANIFEST_BYTES,
             "stress manifest is {} bytes; maximum is {}",
             contents.len(),
-            Consts::MAX_MANIFEST_BYTES,
+            consts::MAX_MANIFEST_BYTES,
         );
         if let Some(parent) = path
             .parent()
@@ -870,7 +868,7 @@ mod tests {
         assert_eq!(parsed.validate_provenance(&expected()), Vec::new());
         let json: serde_json::Value =
             serde_json::from_slice(&fs::read(path).expect("read JSON")).expect("parse JSON");
-        assert_eq!(json["schema"], Consts::MANIFEST_SCHEMA);
+        assert_eq!(json["schema"], consts::MANIFEST_SCHEMA);
         assert_eq!(json["selection"]["count"], 50);
         assert_eq!(json["pressure"]["sampler_healthy"], true);
     }
@@ -976,7 +974,7 @@ mod tests {
     fn bounded_reader_rejects_an_oversized_manifest() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("manifest.json");
-        fs::write(&path, vec![b' '; Consts::MAX_MANIFEST_BYTES + 1])
+        fs::write(&path, vec![b' '; consts::MAX_MANIFEST_BYTES + 1])
             .expect("write oversized fixture");
 
         let error = Manifest::read(&path).expect_err("oversized manifest must fail");
@@ -1037,7 +1035,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("manifest.json");
         let mut spec = spec();
-        spec.selection.filter = "x".repeat(Consts::MAX_MANIFEST_BYTES);
+        spec.selection.filter = "x".repeat(consts::MAX_MANIFEST_BYTES);
         let manifest = Manifest::start(spec, system()).expect("start manifest");
 
         let error = manifest
@@ -1054,7 +1052,7 @@ mod tests {
         let path = temp.path().join("manifest.json");
         let manifest = Manifest::start(spec(), system()).expect("start manifest");
         let mut json = serde_json::to_value(manifest).expect("serialize manifest");
-        json["schema"] = serde_json::json!(Consts::MANIFEST_SCHEMA + 1);
+        json["schema"] = serde_json::json!(consts::MANIFEST_SCHEMA + 1);
         fs::write(&path, serde_json::to_vec(&json).expect("encode fixture"))
             .expect("write fixture");
 

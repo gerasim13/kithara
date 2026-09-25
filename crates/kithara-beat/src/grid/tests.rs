@@ -7,19 +7,17 @@ use super::{
     SCHEMA_VERSION,
 };
 
-struct Consts;
-
-impl Consts {
-    const BPM: f64 = 120.0;
+mod consts {
+    pub(super) const BPM: f64 = 120.0;
     /// Where the fixture puts beat zero, so a head that reaches back before it
     /// still lands on the media timeline.
-    const ORIGIN: f64 = 2.0;
-    const PERIOD: f64 = 0.5;
+    pub(super) const ORIGIN: f64 = 2.0;
+    pub(super) const PERIOD: f64 = 0.5;
 }
 
 fn beat(ordinal: i16) -> GridBeat {
     GridBeat {
-        at: Consts::ORIGIN + f64::from(ordinal) * Consts::PERIOD,
+        at: consts::ORIGIN + f64::from(ordinal) * consts::PERIOD,
         ordinal: i64::from(ordinal),
         confidence: None,
     }
@@ -42,7 +40,7 @@ fn raw(beats: Vec<GridBeat>, downbeats: Vec<GridDownbeat>) -> RawBeatGrid {
         revision: 1,
         state: BeatGridState::Provisional,
         duration: Some(60.0),
-        bpm: Consts::BPM,
+        bpm: consts::BPM,
         meter: None,
     }
 }
@@ -79,7 +77,7 @@ fn the_documented_example_parses_into_the_grid_it_shows() {
     assert_eq!(model.as_raw().revision, 1);
     assert_eq!(model.as_raw().state, BeatGridState::Provisional);
     assert_eq!(model.as_raw().duration, Some(60.0));
-    assert_eq!(model.as_raw().bpm, Consts::BPM);
+    assert_eq!(model.as_raw().bpm, consts::BPM);
     assert_eq!(
         model
             .as_raw()
@@ -152,7 +150,7 @@ fn a_tempo_with_no_markers_is_a_grid() {
 
     let model = BeatGridModel::try_from(document).expect("a tempo is a claim on its own");
 
-    assert_eq!(model.as_raw().bpm, Consts::BPM);
+    assert_eq!(model.as_raw().bpm, consts::BPM);
     assert!(model.as_raw().beats.is_empty());
 }
 

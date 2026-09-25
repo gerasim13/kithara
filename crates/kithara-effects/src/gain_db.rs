@@ -1,10 +1,8 @@
 use kithara_derive::Ranged;
 
-struct Consts;
-
-impl Consts {
-    const DB_DIVISOR: f32 = 20.0;
-    const DB_LOG_BASE: f32 = 10.0;
+mod consts {
+    pub(super) const DB_DIVISOR: f32 = 20.0;
+    pub(super) const DB_LOG_BASE: f32 = 10.0;
 }
 
 /// Gain of one EQ band, in dB. `0.0` is unity and [`GainDb::MIN`] kills the
@@ -47,7 +45,7 @@ impl GainDb {
         if self == Self::MIN {
             return 0.0;
         }
-        Consts::DB_LOG_BASE.powf(f32::from(self) / Consts::DB_DIVISOR)
+        consts::DB_LOG_BASE.powf(f32::from(self) / consts::DB_DIVISOR)
     }
 }
 

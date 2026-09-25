@@ -16,13 +16,13 @@ use crate::ci::image::linux_build_args;
 pub(super) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
 
 /// The throwaway VM the macOS lane clones for every job.
-pub(super) struct JobVm;
+pub(super) mod job_vm {
+    use super::Duration;
 
-impl JobVm {
-    pub(super) const NAME: &'static str = "kithara-ci-job";
-    const BOOT_ATTEMPTS: u32 = 40;
-    const BOOT_POLL: Duration = Duration::from_secs(5);
-    const WAIT_SECONDS: u32 = 7200;
+    pub(crate) const NAME: &str = "kithara-ci-job";
+    pub(super) const BOOT_ATTEMPTS: u32 = 40;
+    pub(super) const BOOT_POLL: Duration = Duration::from_secs(5);
+    pub(super) const WAIT_SECONDS: u32 = 7200;
     /// How many jobs a guest serves before it is thrown away. The build
     /// directory is kept between jobs, so it only ever grows, and the guest's
     /// own disk is what runs out first.
@@ -38,7 +38,7 @@ impl JobVm {
     /// transient a universal link needs. It costs one extra cold build per
     /// nightly. Raising it again means giving the guest a larger disk, and
     /// that needs room on the CI volume the quota does not currently allow.
-    const MAX_BUILDS: u32 = 6;
+    pub(super) const MAX_BUILDS: u32 = 6;
 }
 
 impl RunnerManager<'_> {
@@ -304,7 +304,7 @@ impl RunnerManager<'_> {
             self.destroy_job_vm(&tart);
             self.process.run(
                 &tart,
-                &["clone", self.base_vm_name()?, JobVm::NAME],
+                &["clone", self.base_vm_name()?, job_vm::NAME],
                 "clone CI macOS VM",
             )?;
             let outcome = self
@@ -354,15 +354,15 @@ impl RunnerManager<'_> {
             // jobs never play audible sound, so nothing is lost.
             .args(["run", "--no-graphics", "--no-audio"])
             .args(self.job_vm_mounts())
-            .arg(JobVm::NAME)
+            .arg(job_vm::NAME)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         command.spawn().context("starting CI macOS VM")?;
-        for _ in 0..JobVm::BOOT_ATTEMPTS {
-            thread::sleep(JobVm::BOOT_POLL);
+        for _ in 0..job_vm::BOOT_ATTEMPTS {
+            thread::sleep(job_vm::BOOT_POLL);
             if let Ok(address) =
                 self.process
-                    .capture(tart, &["ip", JobVm::NAME], "CI macOS VM address")
+                    .capture(tart, &["ip", job_vm::NAME], "CI macOS VM address")
                 && !address.trim().is_empty()
             {
                 return Ok(address.trim().to_string());
@@ -455,8 +455,8 @@ impl RunnerManager<'_> {
                  --max-builds {} --wait-timeout {}",
                 guest_developer_dir(),
                 self.config.host.gitlab_origin(),
-                JobVm::MAX_BUILDS,
-                JobVm::WAIT_SECONDS,
+                job_vm::MAX_BUILDS,
+                job_vm::WAIT_SECONDS,
             ),
             "serve GitLab jobs",
             Some(&tokens.macos),
@@ -512,9 +512,9 @@ impl RunnerManager<'_> {
 
     fn destroy_job_vm(&self, tart: &str) {
         self.process
-            .best_effort(tart, &["stop", JobVm::NAME], "stop CI macOS VM");
+            .best_effort(tart, &["stop", job_vm::NAME], "stop CI macOS VM");
         self.process
-            .best_effort(tart, &["delete", JobVm::NAME], "delete CI macOS VM");
+            .best_effort(tart, &["delete", job_vm::NAME], "delete CI macOS VM");
     }
 
     pub(super) fn linux_image_digest(&self, home: &Path) -> Result<String> {

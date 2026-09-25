@@ -23,21 +23,21 @@ use crate::{
     handle::AbrHandle,
 };
 
-struct Defaults;
+mod defaults {
+    use super::Duration;
 
-impl Defaults {
-    const BANDWIDTH_EMIT_MIN_DELTA_RATIO: f64 = 0.10;
-    const BANDWIDTH_EMIT_MIN_INTERVAL: Duration = Duration::from_secs(1);
-    const BUFFER_EMIT_MIN_DELTA: Duration = Duration::from_millis(500);
-    const BUFFER_EMIT_MIN_INTERVAL: Duration = Duration::from_millis(500);
-    const DOWN_HYSTERESIS_RATIO: f64 = 0.8;
-    const INITIAL_THROUGHPUT_BPS: u64 = 2_000_000;
-    const MIN_BUFFER_FOR_UP_SWITCH: Duration = Duration::from_secs(10);
-    const MIN_SWITCH_INTERVAL: Duration = Duration::from_secs(30);
-    const THROUGHPUT_SAFETY_FACTOR: f64 = 1.5;
-    const THROUGHPUT_SAMPLE_MIN_INTERVAL: Duration = Duration::from_millis(200);
-    const UP_HYSTERESIS_RATIO: f64 = 1.3;
-    const URGENT_DOWNSWITCH_BUFFER: Duration = Duration::from_secs(5);
+    pub(super) const BANDWIDTH_EMIT_MIN_DELTA_RATIO: f64 = 0.10;
+    pub(super) const BANDWIDTH_EMIT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+    pub(super) const BUFFER_EMIT_MIN_DELTA: Duration = Duration::from_millis(500);
+    pub(super) const BUFFER_EMIT_MIN_INTERVAL: Duration = Duration::from_millis(500);
+    pub(super) const DOWN_HYSTERESIS_RATIO: f64 = 0.8;
+    pub(super) const INITIAL_THROUGHPUT_BPS: u64 = 2_000_000;
+    pub(super) const MIN_BUFFER_FOR_UP_SWITCH: Duration = Duration::from_secs(10);
+    pub(super) const MIN_SWITCH_INTERVAL: Duration = Duration::from_secs(30);
+    pub(super) const THROUGHPUT_SAFETY_FACTOR: f64 = 1.5;
+    pub(super) const THROUGHPUT_SAMPLE_MIN_INTERVAL: Duration = Duration::from_millis(200);
+    pub(super) const UP_HYSTERESIS_RATIO: f64 = 1.3;
+    pub(super) const URGENT_DOWNSWITCH_BUFFER: Duration = Duration::from_secs(5);
 }
 
 /// Opaque peer identifier assigned by the ABR controller on `register`.
@@ -60,33 +60,33 @@ impl AbrPeerId {
 #[derive(kithara_derive::BuiltDefault)]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
-    #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
+    #[builder(default = defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
     #[patch(humantime)]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
-    #[builder(default = Defaults::BUFFER_EMIT_MIN_DELTA)]
+    #[builder(default = defaults::BUFFER_EMIT_MIN_DELTA)]
     #[patch(humantime)]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
-    #[builder(default = Defaults::BUFFER_EMIT_MIN_INTERVAL)]
+    #[builder(default = defaults::BUFFER_EMIT_MIN_INTERVAL)]
     #[patch(humantime)]
     pub buffer_emit_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
-    #[builder(default = Defaults::MIN_BUFFER_FOR_UP_SWITCH)]
+    #[builder(default = defaults::MIN_BUFFER_FOR_UP_SWITCH)]
     #[patch(humantime)]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
-    #[builder(default = Defaults::MIN_SWITCH_INTERVAL)]
+    #[builder(default = defaults::MIN_SWITCH_INTERVAL)]
     #[patch(humantime)]
     pub min_switch_interval: Duration,
     /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
     /// sample still reaches the estimator; this bounds only how often the
     /// raw per-fetch rate is published to the bus.
-    #[builder(default = Defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
+    #[builder(default = defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
     #[patch(humantime)]
     pub throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
-    #[builder(default = Defaults::URGENT_DOWNSWITCH_BUFFER)]
+    #[builder(default = defaults::URGENT_DOWNSWITCH_BUFFER)]
     #[patch(humantime)]
     pub urgent_downswitch_buffer: Duration,
     /// Optional parent cancellation token for the controller scope.
@@ -96,21 +96,21 @@ pub struct AbrSettings {
     #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
-    #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
+    #[builder(required, default = Some(defaults::INITIAL_THROUGHPUT_BPS))]
     pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
-    #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_DELTA_RATIO)]
+    #[builder(default = defaults::BANDWIDTH_EMIT_MIN_DELTA_RATIO)]
     pub bandwidth_emit_min_delta_ratio: f64,
     /// Hysteresis ratio for down-switch.
-    #[builder(default = Defaults::DOWN_HYSTERESIS_RATIO)]
+    #[builder(default = defaults::DOWN_HYSTERESIS_RATIO)]
     pub down_hysteresis_ratio: f64,
     /// Safety factor applied to the throughput estimate before comparing.
-    #[builder(default = Defaults::THROUGHPUT_SAFETY_FACTOR)]
+    #[builder(default = defaults::THROUGHPUT_SAFETY_FACTOR)]
     pub throughput_safety_factor: f64,
     /// Hysteresis ratio for up-switch.
-    #[builder(default = Defaults::UP_HYSTERESIS_RATIO)]
+    #[builder(default = defaults::UP_HYSTERESIS_RATIO)]
     pub up_hysteresis_ratio: f64,
 }
 

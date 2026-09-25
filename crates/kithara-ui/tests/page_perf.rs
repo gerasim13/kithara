@@ -89,7 +89,7 @@ use masonry::vello::{
 };
 use num_traits::cast::AsPrimitive as _;
 
-use self::{demo::DemoReads, fixture::Consts};
+use self::{demo::DemoReads, fixture::consts};
 
 /// The format each host rasterises into. The retained one matches the gallery's
 /// own capture; iced's engine is built for a surface format, which is the sRGB
@@ -815,7 +815,7 @@ impl Immediate {
     fn draw(&mut self) -> Census {
         let before = self.ui.draw_pool_stats();
         self.app.tick();
-        let bounds = Size::new(Consts::WIDTH, Consts::HEIGHT);
+        let bounds = Size::new(consts::WIDTH, consts::HEIGHT);
         let element = measure_block!(
             "iced.view",
             self.app.reads(|reads| tree::render(
@@ -1015,7 +1015,7 @@ impl<'a> Retained<'a> {
         let before = self.ui.draw_pool_stats();
         measure_block!(
             "vello.frame",
-            self.ui.frame(Duration::from_millis(Consts::STRESS_TICK_MS))
+            self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS))
         );
         self.scheduled = self.ui.needs_frame();
         let frame = measure_block!(
@@ -1399,11 +1399,11 @@ fn drain_vello(device: &vello_wgpu::Device) {
 /// The page every run is laid out and rasterised at: the gallery's own window
 /// size at 1x, so a page measured here is the page the application shows.
 fn width() -> u32 {
-    Consts::WIDTH.as_()
+    consts::WIDTH.as_()
 }
 
 fn height() -> u32 {
-    Consts::HEIGHT.as_()
+    consts::HEIGHT.as_()
 }
 
 fn unpadded_row() -> u32 {

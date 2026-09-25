@@ -8,15 +8,15 @@ use kithara_beat::{Tempo, TempoPatch, TempoPatchError};
 use kithara_derive::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
-struct Consts;
+mod consts {
+    use super::ResamplerQuality;
 
-impl Consts {
-    const DEFAULT_BEAT_BLOCK_FRAMES: usize = 1024;
-    const DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS: u32 = 10;
-    const DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS: u32 = 2;
-    const DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS: u32 = 30;
-    const DEFAULT_BEAT_RESAMPLER_QUALITY: ResamplerQuality = ResamplerQuality::High;
-    const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
+    pub(super) const DEFAULT_BEAT_BLOCK_FRAMES: usize = 1024;
+    pub(super) const DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS: u32 = 10;
+    pub(super) const DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS: u32 = 2;
+    pub(super) const DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS: u32 = 30;
+    pub(super) const DEFAULT_BEAT_RESAMPLER_QUALITY: ResamplerQuality = ResamplerQuality::High;
+    pub(super) const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
 }
 
 /// Beat-analysis tunables used by [`super::AnalyzerBuilder`], beside the
@@ -34,18 +34,18 @@ impl Consts {
 pub struct BeatAnalysisConfig<B> {
     #[patch(skip)]
     resampler_backend: B,
-    #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
+    #[builder(default = consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     #[field(get(copy))]
     pub resampler_quality: ResamplerQuality,
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS)]
+    #[builder(default = consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS)]
     pub detector_min_window_seconds: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
+    #[builder(default = consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
     pub detector_overlap_seconds: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
+    #[builder(default = consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
     pub detector_window_seconds: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]
+    #[builder(default = consts::DEFAULT_BEAT_TARGET_RATE)]
     pub target_rate: u32,
-    #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
+    #[builder(default = consts::DEFAULT_BEAT_BLOCK_FRAMES)]
     pub block_frames: usize,
     /// Reaches the detector's peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.

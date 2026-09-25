@@ -15,11 +15,10 @@ use kithara_platform::time::Duration;
 ))]
 use kithara_signal::AudioSpec;
 
-struct Consts;
-impl Consts {
-    const MPEG_HEADER_LEN: usize = 4;
-    const SYNC_MASK: u32 = 0xFFE0_0000;
-    const SYNC_VALUE: u32 = 0xFFE0_0000;
+mod consts {
+    pub(super) const MPEG_HEADER_LEN: usize = 4;
+    pub(super) const SYNC_MASK: u32 = 0xFFE0_0000;
+    pub(super) const SYNC_VALUE: u32 = 0xFFE0_0000;
 }
 
 /// Raw fields read from the LAME extension of a Xing/Info tag.
@@ -122,11 +121,11 @@ pub(crate) fn read_cbr_duration(data: &[u8], base: u64, total_bytes: u64) -> Opt
 ))]
 fn frame_header_at(data: &[u8], offset: usize) -> Option<FrameHeader> {
     let word = u32::from_be_bytes(
-        data.get(offset..offset.checked_add(Consts::MPEG_HEADER_LEN)?)?
+        data.get(offset..offset.checked_add(consts::MPEG_HEADER_LEN)?)?
             .try_into()
             .ok()?,
     );
-    if word & Consts::SYNC_MASK != Consts::SYNC_VALUE {
+    if word & consts::SYNC_MASK != consts::SYNC_VALUE {
         return None;
     }
     parse_header(word)
@@ -164,7 +163,7 @@ struct XingTag<'a> {
 fn read_xing_tag(data: &[u8]) -> Option<XingTag<'_>> {
     let frame_start = find_frame_start(data)?;
     let frame_bytes = data.get(frame_start..)?;
-    if frame_bytes.len() < Consts::MPEG_HEADER_LEN {
+    if frame_bytes.len() < consts::MPEG_HEADER_LEN {
         return None;
     }
     let header_word = u32::from_be_bytes([
@@ -175,7 +174,7 @@ fn read_xing_tag(data: &[u8]) -> Option<XingTag<'_>> {
     ]);
     let header = parse_header(header_word)?;
     let side_info = side_info_len(header);
-    let tag_offset = Consts::MPEG_HEADER_LEN + side_info;
+    let tag_offset = consts::MPEG_HEADER_LEN + side_info;
     let tag = frame_bytes.get(tag_offset..)?;
     if tag.len() < 8 {
         return None;
@@ -215,9 +214,9 @@ fn xing_lame_cursor(flags: u32) -> Option<usize> {
 
 fn find_frame_start(data: &[u8]) -> Option<usize> {
     let mut idx = skip_id3v2(data);
-    while idx + Consts::MPEG_HEADER_LEN <= data.len() {
+    while idx + consts::MPEG_HEADER_LEN <= data.len() {
         let word = u32::from_be_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
-        if word & Consts::SYNC_MASK == Consts::SYNC_VALUE && parse_header(word).is_some() {
+        if word & consts::SYNC_MASK == consts::SYNC_VALUE && parse_header(word).is_some() {
             return Some(idx);
         }
         idx += 1;

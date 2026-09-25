@@ -2,14 +2,12 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_decode::BlenderProfile;
 use kithara_signal::{AudioChunk, AudioSpec};
 
-struct Consts;
-
-impl Consts {
+mod consts {
     /// The AAC decoder's post-seek onset transient outlasts 20 ms; 40 ms keeps that measured
     /// transition inside the existing linear generation join.
-    const JOIN_MICROS: u32 = 40_000;
-    const MICROS_PER_SEC: u32 = 1_000_000;
-    const MIN_JOIN_FRAMES: u16 = 2;
+    pub(super) const JOIN_MICROS: u32 = 40_000;
+    pub(super) const MICROS_PER_SEC: u32 = 1_000_000;
+    pub(super) const MIN_JOIN_FRAMES: u16 = 2;
 }
 
 enum JoinState {
@@ -139,11 +137,11 @@ impl GaplessBlender {
 fn join_frames(spec: AudioSpec) -> u16 {
     u16::try_from(
         u64::from(spec.sample_rate.get())
-            .saturating_mul(u64::from(Consts::JOIN_MICROS))
-            .div_ceil(u64::from(Consts::MICROS_PER_SEC)),
+            .saturating_mul(u64::from(consts::JOIN_MICROS))
+            .div_ceil(u64::from(consts::MICROS_PER_SEC)),
     )
     .unwrap_or(u16::MAX)
-    .max(Consts::MIN_JOIN_FRAMES)
+    .max(consts::MIN_JOIN_FRAMES)
 }
 
 fn join_samples(spec: AudioSpec) -> usize {

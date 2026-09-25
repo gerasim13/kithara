@@ -7,10 +7,9 @@ use crate::{AssetsError, AssetsResult};
 
 pub(crate) const MAX_COMPONENT_LEN: usize = 96;
 
-struct Consts;
-impl Consts {
-    const HASH_PREFIX_BYTES: usize = 16;
-    const MAX_EXTENSION_LEN: usize = 16;
+mod consts {
+    pub(super) const HASH_PREFIX_BYTES: usize = 16;
+    pub(super) const MAX_EXTENSION_LEN: usize = 16;
 }
 
 pub(crate) fn append_component_suffix(component: &str, suffix: &str, identity: &[u8]) -> String {
@@ -66,7 +65,7 @@ pub(crate) fn encode_url_leaf(leaf: &str, query: Option<&str>) -> String {
 #[must_use]
 pub(crate) fn fingerprint(value: &[u8]) -> String {
     let digest = Sha256::digest(value);
-    hex::encode(&digest[..Consts::HASH_PREFIX_BYTES])
+    hex::encode(&digest[..consts::HASH_PREFIX_BYTES])
 }
 
 fn fingerprint_url_leaf(leaf: &str, query: Option<&str>) -> String {
@@ -77,7 +76,7 @@ fn fingerprint_url_leaf(leaf: &str, query: Option<&str>) -> String {
         digest.update(query.as_bytes());
     }
     let digest = digest.finalize();
-    hex::encode(&digest[..Consts::HASH_PREFIX_BYTES])
+    hex::encode(&digest[..consts::HASH_PREFIX_BYTES])
 }
 
 pub(crate) fn validate_path(path: &str) -> AssetsResult<()> {
@@ -220,7 +219,7 @@ fn usable_extension(leaf: &str) -> Option<(&str, &str)> {
     let (stem, extension) = leaf.rsplit_once('.')?;
     (!stem.is_empty()
         && !extension.is_empty()
-        && extension.len() <= Consts::MAX_EXTENSION_LEN
+        && extension.len() <= consts::MAX_EXTENSION_LEN
         && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
     .then_some((stem, extension))
 }

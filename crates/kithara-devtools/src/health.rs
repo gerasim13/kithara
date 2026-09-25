@@ -13,13 +13,12 @@ use clap::Args;
 
 use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
 
-struct Consts;
-impl Consts {
+mod consts {
     /// Substrings that mark an environment-level failure rather than a real
     /// regression — typically a missing tool or unpublished baseline.
     /// When any of these appear in the stage log on non-zero exit the stage
     /// is reported as SKIP instead of FAIL.
-    const ENV_SKIP_MARKERS: &'static [&'static str] = &[
+    pub(super) const ENV_SKIP_MARKERS: &[&str] = &[
         "no such command:",
         "command not found",
         "not found in registry",
@@ -542,7 +541,7 @@ fn crate_bug_summary(line: &str) -> Option<(&str, u64)> {
 
 fn scan_env_skip_marker(path: &Path) -> Option<&'static str> {
     let content = fs::read_to_string(path).ok()?;
-    Consts::ENV_SKIP_MARKERS
+    consts::ENV_SKIP_MARKERS
         .iter()
         .copied()
         .find(|m| content.contains(m))

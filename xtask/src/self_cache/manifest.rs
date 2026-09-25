@@ -14,12 +14,10 @@ use super::{
 };
 use crate::config::XtaskCacheConfig;
 
-struct Consts;
-
-impl Consts {
-    const BUILD_RECIPE: u32 = 1;
-    const CACHE_SCHEMA: u32 = 1;
-    const MANIFEST_LIMIT: usize = 1024 * 1024;
+mod consts {
+    pub(super) const BUILD_RECIPE: u32 = 1;
+    pub(super) const CACHE_SCHEMA: u32 = 1;
+    pub(super) const MANIFEST_LIMIT: usize = 1024 * 1024;
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -53,7 +51,7 @@ impl CacheManifest {
     }
 
     pub(super) fn read(path: &Path) -> Result<Self> {
-        let bytes = layout::read_bounded(path, "self-cache manifest", Consts::MANIFEST_LIMIT)?;
+        let bytes = layout::read_bounded(path, "self-cache manifest", consts::MANIFEST_LIMIT)?;
         serde_json::from_slice(&bytes)
             .with_context(|| format!("parse self-cache manifest {}", path.display()))
     }
@@ -62,9 +60,9 @@ impl CacheManifest {
         let mut bytes = serde_json::to_vec_pretty(self).context("serialize self-cache manifest")?;
         bytes.push(b'\n');
         ensure!(
-            bytes.len() <= Consts::MANIFEST_LIMIT,
+            bytes.len() <= consts::MANIFEST_LIMIT,
             "self-cache manifest exceeds {} bytes",
-            Consts::MANIFEST_LIMIT
+            consts::MANIFEST_LIMIT
         );
         Ok(bytes)
     }
@@ -75,11 +73,11 @@ impl CacheManifest {
 
     pub(super) fn validate(&self, root: &Path, cache: &Path) -> Result<()> {
         ensure!(
-            self.cache_schema == Consts::CACHE_SCHEMA,
+            self.cache_schema == consts::CACHE_SCHEMA,
             "unsupported self-cache schema"
         );
         ensure!(
-            self.build_recipe == Consts::BUILD_RECIPE,
+            self.build_recipe == consts::BUILD_RECIPE,
             "unsupported self-cache build recipe"
         );
         ensure!(
@@ -187,9 +185,9 @@ impl CacheManifest {
         Ok(Self {
             architecture: env::consts::ARCH.to_owned(),
             build_profile: build_profile().to_owned(),
-            build_recipe: Consts::BUILD_RECIPE,
+            build_recipe: consts::BUILD_RECIPE,
             cache_config_digest: normalized.digest,
-            cache_schema: Consts::CACHE_SCHEMA,
+            cache_schema: consts::CACHE_SCHEMA,
             extra_inputs: normalized.extra_inputs,
             generation_grace_secs: config.generation_grace_secs,
             git_dir,
@@ -251,12 +249,12 @@ fn source_stamp(
     digest.add_bytes(
         b"protocol",
         Path::new("cache-schema"),
-        &Consts::CACHE_SCHEMA.to_be_bytes(),
+        &consts::CACHE_SCHEMA.to_be_bytes(),
     );
     digest.add_bytes(
         b"protocol",
         Path::new("build-recipe"),
-        &Consts::BUILD_RECIPE.to_be_bytes(),
+        &consts::BUILD_RECIPE.to_be_bytes(),
     );
     digest.add_bytes(b"platform", Path::new("os"), env::consts::OS.as_bytes());
     digest.add_bytes(
@@ -532,7 +530,7 @@ handler = "format-edited-paths"
     fn oversized_manifest_is_rejected_before_deserialization() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let path = temp.path().join("manifest.json");
-        fs::write(&path, vec![b' '; super::Consts::MANIFEST_LIMIT + 1])?;
+        fs::write(&path, vec![b' '; super::consts::MANIFEST_LIMIT + 1])?;
 
         assert!(CacheManifest::read(&path).is_err());
         Ok(())

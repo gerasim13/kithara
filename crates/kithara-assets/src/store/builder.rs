@@ -33,11 +33,12 @@ use crate::{
     layout::{AssetLayoutRegistry, ResourceKey},
 };
 
-/// Private module-level defaults, grouped per ast-grep style rule.
-struct Consts;
-impl Consts {
+/// Store builder defaults.
+mod consts {
+    use super::NonZeroUsize;
+
     /// Default in-memory LRU cache capacity (init + 2-3 media segments).
-    const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
+    pub(super) const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
 }
 
 /// Storage backend selection: where committed resource bytes live.
@@ -281,7 +282,7 @@ where
                 pins: pins.clone(),
             },
         ));
-        let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
+        let capacity = cache_capacity.unwrap_or(consts::DEFAULT_CACHE_CAPACITY);
         let processing_assets = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
             pools,
@@ -410,7 +411,7 @@ where
         processing_chunk_size,
         processing_gate_poll_interval,
     ));
-    let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
+    let capacity = cache_capacity.unwrap_or(consts::DEFAULT_CACHE_CAPACITY);
     let cached = Arc::new(CachedAssets::new(processing_assets, capacity, None, false));
     let byte_recorder: Option<Arc<dyn ByteRecorder>> =
         Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
