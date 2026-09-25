@@ -1,7 +1,7 @@
 //! Browser/wasm bindings for the kithara player.
 //!
-//! Single structural cfg boundary lives on `pub mod web;` in
-//! [`crate::lib`]. Inside this module all sources are unconditionally
+//! Single structural cfg boundary lives on `pub mod web;` in the
+//! [crate root](crate). Inside this module all sources are unconditionally
 //! wasm-only and require no per-item gating.
 
 pub(crate) mod analysis;

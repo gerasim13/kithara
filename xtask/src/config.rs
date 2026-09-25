@@ -597,7 +597,8 @@ pub(crate) struct WasmConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ReleaseConfig {
-    /// Swift package manifest stamped and read during release prepare/publish.
+    /// Swift package manifest the tag step stamps with the version and the
+    /// built framework's checksum, and the publish steps read at the tag.
     pub(crate) manifest: String,
     /// Product name used in generated release titles.
     pub(crate) title: String,
@@ -622,18 +623,20 @@ pub(crate) struct ReleaseConfig {
     /// frameworks, such as Android AARs.
     pub(crate) platform_assets: Vec<String>,
     /// Documentation channels, keyed by the platform that renders them. Each
-    /// names the directory a `doc` recipe writes and the zip it is published
-    /// as. An empty map disables the docs channel.
+    /// names the directory a `doc` recipe writes, the zip it is published as,
+    /// and where the Pages site serves it.
     pub(crate) docs: BTreeMap<String, DocsChannel>,
-    /// WebAssembly channel: zip name for the trunk `dist` bundle deployed to
-    /// GitHub Pages classic. Empty disables the wasm channel.
+    /// WebAssembly channel: zip name for the trunk `dist` bundle the Pages site
+    /// serves at its root, with the release section added to the player page.
     pub(crate) wasm_asset: String,
     /// Workspace-relative trunk `dist` dir zipped into [`Self::wasm_asset`]
     /// (the `just platform wasm build` output).
     pub(crate) wasm_dist: String,
     /// Branch GitHub Pages classic serves from (force-orphan deploy of the
-    /// wasm bundle). Empty disables the pages deploy.
+    /// site).
     pub(crate) pages_branch: String,
+    /// How `CHANGELOG.md` is rendered from commit subjects.
+    pub(crate) changelog: ChangelogConfig,
     /// Seconds before `GitLab` API curl requests time out.
     pub(crate) http_timeout_secs: Option<u64>,
     /// Seconds before `GitLab` package upload curl requests time out.
@@ -665,6 +668,20 @@ impl ReleaseConfig {
             .filter(|name| !name.is_empty())
     }
 
+    /// Every artifact the release build jobs hand to the publish job, in the
+    /// order a release lists them.
+    pub(crate) fn assets(&self) -> impl Iterator<Item = &str> {
+        [
+            self.core_asset.as_str(),
+            self.merged_asset.as_str(),
+            self.wasm_asset.as_str(),
+        ]
+        .into_iter()
+        .chain(self.platform_assets.iter().map(String::as_str))
+        .chain(self.docs_assets())
+        .filter(|name| !name.is_empty())
+    }
+
     pub(crate) fn channel(&self, name: &str) -> Result<&ChannelProfile> {
         self.channels
             .get(name)
@@ -680,8 +697,8 @@ impl ReleaseConfig {
     }
 }
 
-/// One rendered documentation set: the directory a `doc` recipe writes and the
-/// zip that directory is published as.
+/// One rendered documentation set: the directory a `doc` recipe writes, the
+/// zip that directory is published as, and where the Pages site serves it.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct DocsChannel {
@@ -689,6 +706,25 @@ pub(crate) struct DocsChannel {
     pub(crate) asset: String,
     /// Workspace-relative directory zipped into [`Self::asset`].
     pub(crate) archive: String,
+    /// Name the Pages site lists the documentation under.
+    pub(crate) label: String,
+    /// Pages site path the archive's contents are served under.
+    pub(crate) pages_path: String,
+    /// Page inside [`Self::pages_path`] a reader lands on.
+    pub(crate) entry: String,
+}
+
+/// The git-cliff render of `CHANGELOG.md`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ChangelogConfig {
+    /// Workspace-relative git-cliff configuration.
+    pub(crate) config: String,
+    /// Workspace-relative file the render is written to.
+    pub(crate) output: String,
+    /// Release tag the rendered history starts after; everything before it is
+    /// hand-written in the configuration's footer.
+    pub(crate) base: String,
 }
 
 /// One packaged artifact, named by what it carries rather than by file.
@@ -715,6 +751,7 @@ pub(crate) struct PackageProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PublishStep {
+    Tag,
     Retained,
     NightlyRetained,
     Pages,
@@ -725,8 +762,8 @@ pub(crate) enum PublishStep {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ChannelProfile {
-    /// Whether `KITHARA_RELEASE_VERSION` must be set and agree with the
-    /// manifest at the published commit.
+    /// Whether `KITHARA_RELEASE_VERSION` must be set and agree with every
+    /// published crate's version at the built commit.
     pub(crate) requires_version: bool,
     /// Whether every retained asset must be present, or only those that are.
     pub(crate) require_all_assets: bool,
@@ -741,6 +778,11 @@ pub(crate) struct PublishConfig {
     pub(crate) workspace_hack_crate: String,
     /// Delay in seconds between crate uploads when `--delay` is omitted.
     pub(crate) delay_secs: Option<u64>,
+    /// New crates crates.io registers for one uploader at once.
+    pub(crate) new_crate_burst: Option<usize>,
+    /// Seconds crates.io makes one uploader wait between new crates once the
+    /// burst is spent.
+    pub(crate) new_crate_interval_secs: Option<u64>,
     /// Seconds before crates.io availability checks time out.
     pub(crate) http_timeout_secs: Option<u64>,
     /// User-agent sent to the registry when checking crate availability.
@@ -856,14 +898,14 @@ assets = ["merged"]
     }
 
     #[test]
-    fn the_release_channel_resolves_to_todays_hard_coded_behaviour() {
+    fn a_release_channel_tags_before_it_publishes() {
         let ctx = ctx_from_config(
             r#"
 [ext.release.channels.release]
 requires_version = true
 require_all_assets = true
 tokens = ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
-steps = ["retained", "pages", "crates"]
+steps = ["tag", "retained", "pages", "crates"]
 
 [ext.release.channels.nightly]
 requires_version = false
@@ -885,6 +927,7 @@ steps = ["nightly_retained"]
         assert_eq!(
             release.steps,
             vec![
+                PublishStep::Tag,
                 PublishStep::Retained,
                 PublishStep::Pages,
                 PublishStep::Crates

@@ -1,17 +1,18 @@
 use std::{
-    env, fs, io,
+    env, fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::{Ctx, common::tools::ToolsConfig};
-use sha2::{Digest, Sha256};
 
 use super::{process::Process, run::PipelineKind};
 use crate::{
     android,
-    config::{KitharaExt, PublishStep, ReleaseConfig},
-    publish, release,
+    config::{KitharaExt, PublishStep},
+    publish,
+    release::{self, sha256},
+    wasm,
 };
 
 /// The retained framework, the documentation archive, and the WASM bundle are
@@ -28,8 +29,10 @@ pub(crate) fn xcframework(
 ) -> Result<()> {
     process.require_os(&["macos"], "Apple release")?;
     let profile = ext.release.package(package)?;
-    let version = version_variable(kind).map(required_env).transpose()?;
-    let expected = expected_checksum(version.as_deref(), &ctx.root.join(&ext.release.manifest))?;
+    // Every crate has to carry the version before hours go into building it.
+    if let Some(version) = version_variable(kind).map(required_env).transpose()? {
+        publish::release_crates(&version)?;
+    }
 
     process.run(
         ctx.config.tools.program("just"),
@@ -44,18 +47,6 @@ pub(crate) fn xcframework(
         .collect();
     for name in &names {
         copy_required(&temp.join(name), &ctx.root.join(name))?;
-    }
-
-    if let Some(manifest_checksum) = expected {
-        let primary = ctx.root.join(&ext.release.core_asset);
-        let actual_checksum = swift_checksum(process, &ctx.config.tools, &primary)?;
-        if actual_checksum != manifest_checksum {
-            bail!(
-                "{} checksum does not match the retained XCFramework: expected \
-                 {manifest_checksum}, found {actual_checksum}",
-                ext.release.manifest
-            );
-        }
     }
 
     for name in &names {
@@ -115,8 +106,8 @@ fn write_provenance(
 }
 
 /// The variable naming the version this pipeline publishes, or `None` when it
-/// publishes none. A release is a version: someone names it, and the framework
-/// built here has to match what the Swift manifest records for that version.
+/// publishes none. A release is a version: someone names it, every crate
+/// carries it, and the tag step stamps the Swift manifest with it.
 /// The rolling nightly channel names no version by design, and neither does
 /// the door that asks only whether the build lanes still work - one job builds
 /// for all three, so a gate the job carries unconditionally fails the two that
@@ -126,27 +117,6 @@ const fn version_variable(kind: PipelineKind) -> Option<&'static str> {
         PipelineKind::Release => Some("KITHARA_RELEASE_VERSION"),
         _ => None,
     }
-}
-
-/// The checksum the built framework has to match, or `None` when no version is
-/// being published. The manifest pins what a released version resolves to, so
-/// the two must agree before that version is published; packaging a commit for
-/// someone to install by hand answers a different question and names no
-/// version to check against.
-fn expected_checksum(version: Option<&str>, manifest_path: &Path) -> Result<Option<String>> {
-    let Some(version) = version else {
-        return Ok(None);
-    };
-    let manifest = fs::read_to_string(manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let manifest_version = manifest_field(&manifest, "version")?;
-    if manifest_version != version {
-        bail!(
-            "{} version is {manifest_version}, requested {version}",
-            manifest_path.display()
-        );
-    }
-    Ok(Some(manifest_field(&manifest, "checksum")?))
 }
 
 pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
@@ -160,9 +130,11 @@ pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
         &["platform", "apple", "xcframework", "--profile", "debug"],
         "Apple XCFramework",
     )?;
+    // DocC writes its links for the path the site serves the archive under.
+    let hosting = release::hosting_base(&ext.release, "apple")?;
     process.run(
         ctx.config.tools.program("just"),
-        &["platform", "apple", "doc"],
+        &["platform", "apple", "doc", &hosting],
         "Apple documentation",
     )?;
     package_docs(process, ctx, ext, "apple")
@@ -194,7 +166,9 @@ pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
         &ctx.root.join(&ext.release.wasm_dist),
         &ctx.root.join(&ext.release.wasm_asset),
     )?;
-    write_checksum(&ctx.root.join(&ext.release.wasm_asset))
+    write_checksum(&ctx.root.join(&ext.release.wasm_asset))?;
+    wasm::render_docs(&ctx.root.join(&ext.release.docs_channel("web")?.archive))?;
+    package_docs(process, ctx, ext, "web")
 }
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
@@ -216,63 +190,87 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     }
     // Dokka reads the Kotlin the archive above generated, so the documentation
     // is rendered here rather than in a job that would have to build it again.
-    android::render_docs()?;
+    android::render_docs(process)?;
     package_docs(process, ctx, ext, "android")
 }
 
 pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -> Result<()> {
+    let profile = ext.release.channel(channel)?;
     // The jobs this one waits for take hours, and these tools are reached deep
     // inside the publish steps. Ask for them first, so a host that lacks one
     // says so before a release is built rather than after.
-    process.require_tools(&["cargo", "gh", "git", ctx.config.tools.program("unzip")])?;
-    let profile = ext.release.channel(channel)?;
+    let tools = &ctx.config.tools;
+    let mut required = vec!["cargo", "gh", "git", "curl", tools.program("unzip")];
+    if profile.steps.contains(&PublishStep::Tag) {
+        required.push(tools.program("git-cliff"));
+    }
+    process.require_tools(&required)?;
     for variable in &profile.tokens {
         required_env(variable)?;
     }
-    let source_sha = required_env("CI_COMMIT_SHA")?;
-
-    if profile.requires_version {
-        let version = required_env("KITHARA_RELEASE_VERSION")?;
-        let manifest = git_show(ctx, &source_sha, &ext.release.manifest)?;
-        let manifest_version = manifest_field(&manifest, "version")?;
-        if manifest_version != version {
-            bail!("source manifest version is {manifest_version}, requested {version}");
-        }
-    }
+    let source = required_env("CI_COMMIT_SHA")?;
+    let version = profile
+        .requires_version
+        .then(|| required_env("KITHARA_RELEASE_VERSION"))
+        .transpose()?;
+    let crates = version
+        .as_deref()
+        .map(publish::release_crates)
+        .transpose()?
+        .unwrap_or_default();
 
     // A channel that carries no version replaces one rolling tag with whatever
     // the branch built today, so an asset it never built is absent rather than
     // wrong.
-    for name in retained_assets(&ext.release) {
+    for name in ext.release.assets() {
         let path = ctx.root.join(name);
         if profile.require_all_assets || path.is_file() {
             verify_checksum(&path)?;
         }
     }
 
+    let mut tagged = None;
     for step in &profile.steps {
         match step {
-            PublishStep::Retained => release::publish_retained(ctx, &source_sha, &ctx.root)?,
-            PublishStep::NightlyRetained => {
-                release::publish_nightly_retained(ctx, &source_sha, &ctx.root)?;
+            PublishStep::Tag => {
+                tagged = Some(release::tag_release(
+                    ctx,
+                    &source,
+                    versioned(version.as_deref(), *step)?,
+                    &ctx.root,
+                )?);
             }
-            PublishStep::Pages => release::publish_pages_retained(ctx, &source_sha, &ctx.root)?,
+            PublishStep::Retained => {
+                let commit = tagged
+                    .as_deref()
+                    .context("the retained step publishes the commit the tag step tagged")?;
+                release::publish_release(
+                    ctx,
+                    commit,
+                    versioned(version.as_deref(), *step)?,
+                    &ctx.root,
+                )?;
+            }
+            PublishStep::NightlyRetained => release::publish_nightly(ctx, &source, &ctx.root)?,
+            PublishStep::Pages => {
+                release::publish_pages(
+                    ctx,
+                    versioned(version.as_deref(), *step)?,
+                    &crates,
+                    &ctx.root,
+                )?;
+            }
             PublishStep::Crates => publish::publish_release(ctx)?,
         }
     }
     Ok(())
 }
 
-fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {
-    [
-        config.core_asset.as_str(),
-        config.merged_asset.as_str(),
-        config.wasm_asset.as_str(),
-    ]
-    .into_iter()
-    .chain(config.docs_assets())
-    .chain(config.platform_assets.iter().map(String::as_str))
-    .filter(|name| !name.is_empty())
+/// The version a step publishes: only a channel that names one runs it.
+fn versioned(version: Option<&str>, step: PublishStep) -> Result<&str> {
+    version.with_context(|| {
+        format!("the {step:?} step publishes a version, and this channel names none")
+    })
 }
 
 fn zip_directory(
@@ -317,24 +315,6 @@ fn copy_required(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn swift_checksum(process: &Process, tools: &ToolsConfig, path: &Path) -> Result<String> {
-    let output = process
-        .command(tools.program("swift"))
-        .args(["package", "compute-checksum"])
-        .arg(path)
-        .output()
-        .context("running swift package compute-checksum")?;
-    if !output.status.success() {
-        bail!(
-            "swift package compute-checksum failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    String::from_utf8(output.stdout)
-        .context("swift checksum was not UTF-8")
-        .map(|value| value.trim().to_string())
-}
-
 fn write_checksum(path: &Path) -> Result<()> {
     let checksum = sha256(path)?;
     let name = path
@@ -372,53 +352,6 @@ fn checksum_path(path: &Path) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(".sha256");
     PathBuf::from(value)
-}
-
-fn sha256(path: &Path) -> Result<String> {
-    let mut file = fs::File::open(path)
-        .with_context(|| format!("opening retained artifact {}", path.display()))?;
-    let mut digest = Sha256::new();
-    io::copy(&mut file, &mut DigestWriter(&mut digest))
-        .with_context(|| format!("hashing retained artifact {}", path.display()))?;
-    Ok(hex::encode(digest.finalize()))
-}
-
-struct DigestWriter<'a, D>(&'a mut D);
-
-impl<D: Digest> io::Write for DigestWriter<'_, D> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn manifest_field(manifest: &str, key: &str) -> Result<String> {
-    let prefix = format!("let {key} = \"");
-    manifest
-        .lines()
-        .find_map(|line| line.strip_prefix(&prefix))
-        .and_then(|rest| rest.strip_suffix('"'))
-        .map(str::to_string)
-        .with_context(|| format!("`let {key} = \"...\"` not found in release manifest"))
-}
-
-fn git_show(ctx: &Ctx, revision: &str, path: &str) -> Result<String> {
-    let output = std::process::Command::new("git")
-        .current_dir(&ctx.root)
-        .args(["show", &format!("{revision}:{path}")])
-        .output()
-        .context("reading release manifest from Git")?;
-    if !output.status.success() {
-        bail!(
-            "git show failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    String::from_utf8(output.stdout).context("release manifest from Git was not UTF-8")
 }
 
 fn required_env(name: &str) -> Result<String> {
@@ -493,14 +426,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pipeline_without_a_version_reads_no_manifest() {
-        let expected = expected_checksum(None, Path::new("Package.swift"))
-            .expect("no version reads no manifest");
-
-        assert!(expected.is_none());
-    }
-
-    #[test]
     fn checksum_round_trip_detects_changed_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let artifact = directory.path().join("artifact.zip");
@@ -509,12 +434,5 @@ mod tests {
         verify_checksum(&artifact).unwrap();
         fs::write(&artifact, b"second").unwrap();
         assert!(verify_checksum(&artifact).is_err());
-    }
-
-    #[test]
-    fn manifest_field_requires_exact_release_declaration() {
-        let manifest = "let version = \"1.2.3\"\nlet checksum = \"abc\"\n";
-        assert_eq!(manifest_field(manifest, "version").unwrap(), "1.2.3");
-        assert!(manifest_field("let other = \"1.2.3\"\n", "version").is_err());
     }
 }

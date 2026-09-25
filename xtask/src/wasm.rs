@@ -2,7 +2,11 @@ use std::{env, fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_devtools::{Ctx, common::tools::ToolsConfig, util::check_tool};
+use kithara_devtools::{
+    Ctx,
+    common::tools::ToolsConfig,
+    util::{check_tool, nightly_toolchain},
+};
 use regex::Regex;
 
 use crate::config::{KitharaExt, WasmConfig};
@@ -21,6 +25,9 @@ pub(crate) enum WasmCommand {
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
         profile: crate::BuildProfile,
     },
+    /// Render the API documentation of the wasm build into the web docs
+    /// archive the release publishes.
+    Doc,
     /// Trunk post-build hook: patch generated files for COEP compatibility.
     Postbuild {
         /// Trunk staging directory (defaults to `TRUNK_STAGING_DIR` env).
@@ -35,6 +42,7 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     match cmd {
         WasmCommand::Build { profile } => run_build(profile, tools),
         WasmCommand::SizeCheck { profile } => run_size_check(profile, tools),
+        WasmCommand::Doc => render_docs(&ctx.root.join(&ext.release.docs_channel("web")?.archive)),
         WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir, &ext.wasm),
     }
 }
@@ -42,10 +50,6 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
 /// Which nightly builds the wasm bundle. The repository pins one, and CI
 /// installs that exact name — asking for a toolchain called `nightly` there
 /// fails, and `rustup` reports it the same way it reports its own absence.
-fn nightly_toolchain() -> String {
-    env::var("KITHARA_NIGHTLY_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string())
-}
-
 fn check_rust_target_nightly(target: &str) -> Result<bool> {
     let output = Command::new("rustup")
         .args(["target", "list", "--installed", "--toolchain"])
@@ -122,6 +126,56 @@ fn run_build(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
     }
 
     println!("==> Done! Output in {}/dist/", wasm_dir.display());
+    Ok(())
+}
+
+/// Render the rustdoc of `kithara-ffi` as the browser build compiles it, and
+/// put it at `archive`. Cargo runs from the package, as Trunk runs it, so the
+/// package's own configuration rebuilds the standard library the same way.
+pub(crate) fn render_docs(archive: &Path) -> Result<()> {
+    check_rust_component_nightly("rust-src")?;
+    let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
+    let package = metadata
+        .workspace_root
+        .as_std_path()
+        .join("crates/kithara-ffi");
+
+    println!("==> Rendering the wasm API documentation");
+    let status = Command::new("cargo")
+        .args([
+            "doc",
+            "-p",
+            "kithara-ffi",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--no-default-features",
+            "--features",
+            "wasm",
+            "--no-deps",
+        ])
+        .env("RUSTUP_TOOLCHAIN", nightly_toolchain())
+        .current_dir(&package)
+        .status()
+        .context("failed to run cargo doc")?;
+    if !status.success() {
+        bail!("cargo doc for the wasm build failed");
+    }
+
+    let docs = metadata
+        .target_directory
+        .as_std_path()
+        .join("wasm32-unknown-unknown/doc");
+    if !docs.join("kithara_ffi/index.html").is_file() {
+        bail!(
+            "expected documentation was not produced: {}",
+            docs.display()
+        );
+    }
+    if archive.exists() {
+        fs::remove_dir_all(archive).with_context(|| format!("removing {}", archive.display()))?;
+    }
+    crate::apple::copy_dir_all(&docs, archive)?;
+    println!("==> Documentation: {}", archive.display());
     Ok(())
 }
 

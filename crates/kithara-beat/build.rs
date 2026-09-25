@@ -10,22 +10,60 @@ use sha2::{Digest, Sha256};
 const CACHE_ENV: &str = "KITHARA_BEAT_MODEL_CACHE";
 const FULL_FILE: &str = "beat_this_full.onnx";
 
+/// A model the build names to the compiler through `env`. `source` is the URL
+/// it is fetched from and the SHA-256 it has to hash to; a model without one
+/// has to be in the cache already.
+struct Model {
+    env: &'static str,
+    file: &'static str,
+    source: Option<(&'static str, &'static str)>,
+}
+
 fn main() {
-    const FULL_URL: &str =
-        "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx";
+    const MEL: Model = Model {
+        env: "KITHARA_MEL_MODEL",
+        file: "mel_spectrogram.onnx",
+        source: Some((
+            "https://raw.githubusercontent.com/danigb/beat-this-rs/089b509247e6fdcec666511c0dcf0d5f39c21e73/models/mel_spectrogram.onnx",
+            "fdd59e65c515331308e4c8841edf99972deca646bdf6197744c2a5b7755e3de9",
+        )),
+    };
+    const SMALL: Model = Model {
+        env: "KITHARA_BEAT_MODEL",
+        file: "beat_this_small.onnx",
+        source: Some((
+            "https://raw.githubusercontent.com/danigb/beat-this-rs/089b509247e6fdcec666511c0dcf0d5f39c21e73/models/beat_this_small.onnx",
+            "a5f8d39d989f31859454ba27afe61c5317ca95e4d9373e6853e5361b8937172f",
+        )),
+    };
+    const FULL: Model = Model {
+        env: "KITHARA_BEAT_MODEL",
+        file: FULL_FILE,
+        source: Some((
+            "https://github.com/danigb/beat-this-rs/releases/download/model-large/beat_this.onnx",
+            "5f810debe53459b559127fb55bbad40035bb47cc567b20e501670f968c770f02",
+        )),
+    };
+    const INT8: Model = Model {
+        env: "KITHARA_BEAT_MODEL",
+        file: "beat_this_full_int8.onnx",
+        source: None,
+    };
 
-    const FULL_SHA256: &str = "5f810debe53459b559127fb55bbad40035bb47cc567b20e501670f968c770f02";
-    const INT8_FILE: &str = "beat_this_full_int8.onnx";
-
-    println!("cargo::rerun-if-changed=models");
     println!("cargo::rerun-if-env-changed={CACHE_ENV}");
-
-    let cache = cache_dir();
-    if env::var_os("CARGO_FEATURE_EMBED_FULL_MODEL").is_some() {
-        resolve(&cache, FULL_FILE, Some((FULL_URL, FULL_SHA256)));
+    if env::var_os("CARGO_FEATURE_EMBED_MODEL").is_none() {
+        return;
     }
-    if env::var_os("CARGO_FEATURE_EMBED_FULL_INT8_MODEL").is_some() {
-        resolve(&cache, INT8_FILE, None);
+    let cache = cache_dir();
+    resolve(&cache, &MEL);
+    for (feature, model) in [
+        ("CARGO_FEATURE_EMBED_SMALL_MODEL", &SMALL),
+        ("CARGO_FEATURE_EMBED_FULL_MODEL", &FULL),
+        ("CARGO_FEATURE_EMBED_FULL_INT8_MODEL", &INT8),
+    ] {
+        if env::var_os(feature).is_some() {
+            resolve(&cache, model);
+        }
     }
 }
 
@@ -36,14 +74,15 @@ fn cache_dir() -> PathBuf {
     )
 }
 
-/// Puts the model in the cache and names it to the compiler. A model the
-/// release publishes is fetched and checked; one that is quantized locally can
-/// only be reported missing.
-fn resolve(cache: &Path, file: &str, source: Option<(&str, &str)>) {
+/// Puts the model in the cache and names it to the compiler. A model upstream
+/// publishes is fetched and checked; one that is quantized locally can only be
+/// reported missing.
+fn resolve(cache: &Path, model: &Model) {
+    let file = model.file;
     let path = cache.join(file);
     println!("cargo::rerun-if-changed={}", path.display());
     if !path.exists() {
-        let Some((url, sha256)) = source else {
+        let Some((url, sha256)) = model.source else {
             println!(
                 "cargo::error={file} is missing from {}; quantize it with \
                  `uv run --with onnx --with onnxruntime \
@@ -55,23 +94,21 @@ fn resolve(cache: &Path, file: &str, source: Option<(&str, &str)>) {
             );
             return;
         };
-        if !fetch(cache, &path, url) {
-            return;
-        }
-        if !verify(&path, sha256) {
-            let _ = fs::remove_file(&path);
+        if !fetch(cache, &path, url, sha256) {
             return;
         }
     }
-    println!("cargo::rustc-env=KITHARA_BEAT_MODEL={}", path.display());
+    println!("cargo::rustc-env={}={}", model.env, path.display());
 }
 
-fn fetch(cache: &Path, path: &Path, url: &str) -> bool {
+/// Fetches into a file only this process writes and moves it into place once
+/// it checks out, so builds sharing one cache never read a partial download.
+fn fetch(cache: &Path, path: &Path, url: &str, sha256: &str) -> bool {
     if let Err(err) = fs::create_dir_all(cache) {
         println!("cargo::error=cannot create {}: {err}", cache.display());
         return false;
     }
-    let partial = path.with_extension("onnx.part");
+    let partial = path.with_extension(format!("onnx.{}.part", std::process::id()));
     let status = Command::new("curl")
         .args(["-fL", "--retry", "3", "-o"])
         .arg(&partial)
@@ -81,12 +118,17 @@ fn fetch(cache: &Path, path: &Path, url: &str) -> bool {
         Ok(status) if status.success() => {}
         Ok(status) => {
             println!("cargo::error=curl {url} exited with {status}");
+            let _ = fs::remove_file(&partial);
             return false;
         }
         Err(err) => {
             println!("cargo::error=cannot run curl to fetch {url}: {err}");
             return false;
         }
+    }
+    if !verify(&partial, sha256) {
+        let _ = fs::remove_file(&partial);
+        return false;
     }
     if let Err(err) = fs::rename(&partial, path) {
         println!("cargo::error=cannot place {}: {err}", path.display());

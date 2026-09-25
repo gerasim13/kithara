@@ -212,6 +212,7 @@ async fn background_completion_does_not_cut_the_current_track_audio(
 async fn outgoing_eof_does_not_advance_the_promoted_successor() {
     let (harness, queue) = offline_queue_fixture_with_options(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,

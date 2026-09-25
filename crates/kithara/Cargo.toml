@@ -258,6 +258,14 @@ stretch-bungee = [
     "kithara-stretch/stretch-bungee",
     "kithara-warp?/stretch-bungee",
 ]
+stretch-glide = [
+    "stretch",
+    "kithara-host?/stretch-glide",
+    "kithara-play?/stretch-glide",
+    "kithara-queue?/stretch-glide",
+    "kithara-stretch/stretch-glide",
+    "kithara-warp?/stretch-glide",
+]
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.
 beat-nn = ["analysis", "beat", "kithara-analysis/beat-nn"]
@@ -413,7 +421,7 @@ kithara-waveform = { workspace = true, optional = true, default-features = false
 kithara-worker = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack", optional = true }
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack", optional = true }
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false }

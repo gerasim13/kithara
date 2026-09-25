@@ -60,8 +60,11 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 
 - `embed-small-model`, `embed-full-model`, `embed-full-int8-model` — exactly one
   of these exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES` / `BEAT_MODEL_TAG`, so
-  FFI/mobile builds need no asset plumbing. Off by default; the build fetches
-  what the tree does not carry.
+  FFI/mobile builds need no asset plumbing. Off by default. The build script
+  fetches the selected model and the mel model into `KITHARA_BEAT_MODEL_CACHE`
+  (default `$TMPDIR/kithara-beat-models`) and checks each against a pinned
+  SHA-256, so the first build with a cold cache needs network. The int8 model
+  is quantized locally and has to be placed in the cache by hand.
 
   | feature | size | mean octave-folded error over 40 tracks |
   |---|---|---|

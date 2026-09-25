@@ -832,6 +832,54 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
     }
 }
 
+/// A run names platforms, or a release version, in the variables it is started
+/// with, and only the trigger hands those to the child. A dispatcher that
+/// spells one as a job variable naming itself hands down the literal `$NAME`
+/// on every run that does not set it, and a rule reads that as a value: a
+/// release run naming no platform started the platform matrix beside the
+/// release.
+#[test]
+fn a_run_variable_reaches_the_child_only_through_the_trigger() {
+    let document = yaml(workspace_root().join(".gitlab-ci.yml"));
+    for (name, definition) in mapping(&document, "the dispatch pipeline") {
+        let name = name.as_str().expect("a dispatch name is a string");
+        let variables = if name == "variables" {
+            Some(definition)
+        } else {
+            definition.get("variables")
+        };
+        for (key, value) in variables.and_then(Value::as_mapping).into_iter().flatten() {
+            let key = key.as_str().expect("a variable name is a string");
+            let value = value
+                .as_str()
+                .or_else(|| value.get("value").and_then(Value::as_str))
+                .unwrap_or_default();
+            assert!(
+                !value.contains(&format!("${key}")) && !value.contains(&format!("${{{key}}}")),
+                "`{name}` hands `{key}` down as a reference to itself"
+            );
+        }
+    }
+
+    let config = GitlabConfig {
+        documents: vec![document.clone()],
+    };
+    for (name, definition) in mapping(&document, "the dispatch pipeline") {
+        let name = name.as_str().expect("a dispatch name is a string");
+        if name.starts_with('.') || !definition.is_mapping() {
+            continue;
+        }
+        let Some(trigger) = config.effective_value(name, "trigger") else {
+            continue;
+        };
+        assert_eq!(
+            trigger["forward"]["pipeline_variables"].as_bool(),
+            Some(true),
+            "`{name}` does not hand the run's variables to its child"
+        );
+    }
+}
+
 #[test]
 fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
     let root = workspace_root();
@@ -919,7 +967,7 @@ fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
 /// workflow, one dispatcher turns it into a kind, and that kind carries the
 /// roll-out and nothing else. The rules once named `main`, `nightly` and
 /// `release`, but the workflow admitted no run that could ask, and a variable
-/// the run was started with never reaches the child, so the job could not be
+/// the run was started with did not reach the child, so the job could not be
 /// started at all.
 #[test]
 fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {

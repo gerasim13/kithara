@@ -463,23 +463,19 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_interrupted_batch_keeps_completed_verdicts_and_fails_its_running_test() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempfile::tempdir().unwrap();
         let adb = dir.path().join("adb");
         let trace = dir.path().join("commands");
         let log = dir.path().join("remote.log");
         fs::write(&log, INTERRUPTED).unwrap();
-        fs::write(
+        crate::testing::install_script(
             &adb,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf '%s\\n' \"$4\" >> {}\ncase \"$4\" in *\"'cat'\"*) {};; esac\n",
                 shell_command(&[trace.to_str().unwrap()]),
                 shell_command(&["cat", log.to_str().unwrap()]),
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&adb, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let session = Session {
             adb,
             serial: "test-device".into(),

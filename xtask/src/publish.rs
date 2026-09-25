@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -32,9 +32,8 @@ pub(crate) struct PublishArgs {
     #[arg(long, requires = "dry_run")]
     verify_registry: bool,
 
-    /// Delay in seconds between publishes.
-    /// Skipped during dry-run. For first-time publishing of new crates,
-    /// use 610 (crates.io allows 5 new crates burst, then 1 per 10 min).
+    /// Delay in seconds between publishes. Skipped during dry-run. New crates
+    /// additionally keep to the registry's pace from `[ext.publish]`.
     #[arg(long)]
     delay: Option<u64>,
 
@@ -94,6 +93,32 @@ pub(crate) fn publish_release(ctx: &Ctx) -> Result<()> {
         },
         ctx,
     )
+}
+
+/// Every crate a release publishes, by name, once each of them is at
+/// `version`. A release names one version, and a crate left behind at another
+/// would reach the registry under a number nobody released.
+pub(crate) fn release_crates(version: &str) -> Result<Vec<String>> {
+    let order = resolve_publish_order()?;
+    crates_at_version(locate_versions(&order)?, version)
+}
+
+fn crates_at_version(versions: HashMap<String, String>, version: &str) -> Result<Vec<String>> {
+    let mut behind: Vec<_> = versions
+        .iter()
+        .filter(|(_, found)| found.as_str() != version)
+        .map(|(name, found)| format!("{name} {found}"))
+        .collect();
+    if !behind.is_empty() {
+        behind.sort();
+        bail!(
+            "the release names {version}, but these crates carry another version: {}",
+            behind.join(", ")
+        );
+    }
+    let mut names: Vec<_> = versions.into_keys().collect();
+    names.sort();
+    Ok(names)
 }
 
 /// Dry-run: disable hakari, validate packaging for each crate, re-enable hakari.
@@ -159,6 +184,7 @@ fn run_publish(
     let manifests = locate_manifests(order)?;
     let versions = locate_versions(order)?;
     let http_timeout_secs = resolve_http_timeout_secs(publish)?;
+    let mut pace = NewCratePace::from_config(publish)?;
 
     let mut published_count = 0usize;
     let mut last_action_was_publish = false;
@@ -168,15 +194,27 @@ fn run_publish(
         let total = order.len();
         let version = &versions[name];
 
-        if registry_has(name, version, &publish.user_agent, http_timeout_secs)? {
+        if registry_has(name, Some(version), &publish.user_agent, http_timeout_secs)? {
             println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
             last_action_was_publish = false;
             continue;
         }
 
+        let new_crate = !registry_has(name, None, &publish.user_agent, http_timeout_secs)?;
+
         if last_action_was_publish && delay > 0 {
             println!("  Waiting {delay}s before next publish...");
             thread::sleep(Duration::from_secs(delay));
+        }
+        if new_crate {
+            let wait = pace.wait(Instant::now());
+            if !wait.is_zero() {
+                println!(
+                    "  {name} is a new crate; waiting {}s for crates.io to accept another...",
+                    wait.as_secs()
+                );
+                thread::sleep(wait);
+            }
         }
 
         println!("[{pos}/{total}] Publishing {name} v{version}...");
@@ -188,6 +226,9 @@ fn run_publish(
             PublishMode::Upload,
             no_verify,
         )?;
+        if new_crate {
+            pace.record(Instant::now());
+        }
         published_count += 1;
         last_action_was_publish = true;
     }
@@ -214,7 +255,7 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
         let total = order.len();
         let version = &versions[name];
 
-        if registry_has(name, version, &publish.user_agent, http_timeout_secs)? {
+        if registry_has(name, Some(version), &publish.user_agent, http_timeout_secs)? {
             println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
             continue;
         }
@@ -226,7 +267,12 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
             .iter()
             .filter_map(|dep| {
                 let dep_version = &versions[dep];
-                match registry_has(dep, dep_version, &publish.user_agent, http_timeout_secs) {
+                match registry_has(
+                    dep,
+                    Some(dep_version),
+                    &publish.user_agent,
+                    http_timeout_secs,
+                ) {
                     Ok(true) => None,
                     Ok(false) => Some(Ok(format!("{dep} v{dep_version}"))),
                     Err(err) => Some(Err(err)),
@@ -254,6 +300,49 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
     }
 
     Ok(())
+}
+
+/// The pace crates.io keeps one uploader to for new crates: a burst accepted at
+/// once, then one each interval. Versions of registered crates are limited
+/// separately and far more loosely, so they do not advance it.
+#[derive(Debug)]
+struct NewCratePace {
+    burst: usize,
+    interval: Duration,
+    registered: usize,
+    last: Option<Instant>,
+}
+
+impl NewCratePace {
+    fn from_config(publish: &PublishConfig) -> Result<Self> {
+        let burst = publish.new_crate_burst.context(
+            "ext.publish.new_crate_burst is not set; fill in the [ext.publish] section of .config/xtask.toml",
+        )?;
+        let interval = publish.new_crate_interval_secs.context(
+            "ext.publish.new_crate_interval_secs is not set; fill in the [ext.publish] section of .config/xtask.toml",
+        )?;
+        Ok(Self {
+            burst,
+            interval: Duration::from_secs(interval),
+            registered: 0,
+            last: None,
+        })
+    }
+
+    /// How long a new crate has to wait at `now` before crates.io takes it.
+    fn wait(&self, now: Instant) -> Duration {
+        match self.last {
+            Some(last) if self.registered >= self.burst => {
+                (last + self.interval).saturating_duration_since(now)
+            }
+            _ => Duration::ZERO,
+        }
+    }
+
+    fn record(&mut self, at: Instant) {
+        self.registered += 1;
+        self.last = Some(at);
+    }
 }
 
 fn resolve_delay_secs(args: &PublishArgs, publish: &PublishConfig) -> Result<u64> {
@@ -288,17 +377,19 @@ fn locate_versions(order: &[String]) -> Result<HashMap<String, String>> {
     Ok(out)
 }
 
-/// HEAD-equivalent check via curl: GET .../api/v1/crates/<name>/<version>.
-/// Returns true if status is 200. Any non-2xx/non-404 is reported as an
-/// error so transient failures don't silently lead to duplicate-publish
+/// HEAD-equivalent check via curl: GET .../api/v1/crates/<name>/<version>,
+/// or .../api/v1/crates/<name> for the crate at any version when `version` is
+/// `None`. Returns true if status is 200. Any non-2xx/non-404 is reported as
+/// an error so transient failures don't silently lead to duplicate-publish
 /// attempts.
 fn registry_has(
     name: &str,
-    version: &str,
+    version: Option<&str>,
     configured_agent: &str,
     http_timeout_secs: u64,
 ) -> Result<bool> {
-    let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
+    let path = version.map_or_else(|| name.to_string(), |version| format!("{name}/{version}"));
+    let url = format!("https://crates.io/api/v1/crates/{path}");
     let user_agent = if configured_agent.is_empty() {
         Consts::DEFAULT_USER_AGENT
     } else {
@@ -319,10 +410,10 @@ fn registry_has(
             &url,
         ])
         .output()
-        .with_context(|| format!("curl crates.io for {name} {version}"))?;
+        .with_context(|| format!("curl crates.io for {path}"))?;
     if !output.status.success() {
         bail!(
-            "curl failed for {name} {version}: {}",
+            "curl failed for {path}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -331,7 +422,7 @@ fn registry_has(
         "200" => Ok(true),
         "404" => Ok(false),
         other => bail!(
-            "unexpected HTTP {other} from crates.io for {name} {version} \
+            "unexpected HTTP {other} from crates.io for {path} \
              (refusing to proceed; check network and retry)"
         ),
     }
@@ -658,6 +749,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_release_refuses_a_crate_at_another_version() {
+        let versions = HashMap::from([
+            ("kithara".to_string(), "0.0.2".to_string()),
+            ("kithara-net".to_string(), "0.0.1".to_string()),
+        ]);
+
+        let error = crates_at_version(versions, "0.0.2").unwrap_err();
+
+        assert!(error.to_string().contains("kithara-net 0.0.1"), "{error}");
+    }
+
+    #[test]
+    fn a_release_lists_its_crates_by_name() {
+        let versions = HashMap::from([
+            ("kithara-net".to_string(), "0.0.2".to_string()),
+            ("kithara".to_string(), "0.0.2".to_string()),
+        ]);
+
+        let names = crates_at_version(versions, "0.0.2").unwrap();
+
+        assert_eq!(names, ["kithara", "kithara-net"]);
+    }
+
+    #[test]
     fn publish_order_is_resolved() {
         let order = resolve_publish_order().unwrap();
         assert!(!order.is_empty(), "should find publishable crates");
@@ -767,6 +882,7 @@ bar = { workspace = true }
             delay_secs: Some(20),
             http_timeout_secs: Some(20),
             user_agent: String::new(),
+            ..PublishConfig::default()
         };
 
         assert_eq!(resolve_delay_secs(&args, &publish).unwrap(), 20);
@@ -785,6 +901,7 @@ bar = { workspace = true }
             delay_secs: Some(20),
             http_timeout_secs: Some(20),
             user_agent: String::new(),
+            ..PublishConfig::default()
         };
 
         assert_eq!(resolve_delay_secs(&args, &publish).unwrap(), 610);
@@ -803,6 +920,7 @@ bar = { workspace = true }
             delay_secs: None,
             http_timeout_secs: Some(20),
             user_agent: String::new(),
+            ..PublishConfig::default()
         };
 
         let error = resolve_delay_secs(&args, &publish).unwrap_err();
@@ -816,6 +934,7 @@ bar = { workspace = true }
             delay_secs: Some(20),
             http_timeout_secs: Some(20),
             user_agent: String::new(),
+            ..PublishConfig::default()
         };
 
         assert_eq!(resolve_http_timeout_secs(&publish).unwrap(), 20);
@@ -828,6 +947,7 @@ bar = { workspace = true }
             delay_secs: Some(20),
             http_timeout_secs: None,
             user_agent: String::new(),
+            ..PublishConfig::default()
         };
 
         let error = resolve_http_timeout_secs(&publish).unwrap_err();
@@ -844,5 +964,36 @@ bar = { workspace = true }
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("Cyclic dependency"), "{msg}");
+    }
+
+    /// Once the burst is spent, each new crate waits out the interval from the
+    /// last one registered, however long the run spent in between.
+    #[test]
+    fn new_crates_past_the_burst_keep_the_registry_pace() {
+        let publish = PublishConfig {
+            new_crate_burst: Some(2),
+            new_crate_interval_secs: Some(600),
+            ..PublishConfig::default()
+        };
+        let mut pace = NewCratePace::from_config(&publish).unwrap();
+        let start = Instant::now();
+        let at = |secs| start + Duration::from_secs(secs);
+
+        assert_eq!(pace.wait(start), Duration::ZERO);
+        pace.record(start);
+        assert_eq!(pace.wait(at(5)), Duration::ZERO);
+        pace.record(at(10));
+
+        assert_eq!(pace.wait(at(10)), Duration::from_secs(600));
+        assert_eq!(pace.wait(at(400)), Duration::from_secs(210));
+        assert_eq!(pace.wait(at(610)), Duration::ZERO);
+        pace.record(at(700));
+        assert_eq!(pace.wait(at(700)), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn new_crate_pace_requires_config() {
+        let error = NewCratePace::from_config(&PublishConfig::default()).unwrap_err();
+        assert!(error.to_string().contains("new_crate_burst"), "{error}");
     }
 }

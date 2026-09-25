@@ -33,6 +33,7 @@ Feature flags select the compiled backends:
 
 - `stretch-signalsmith` enables `signalsmith-stretch` and is the default.
 - `stretch-bungee` enables the private `bungee-sys` adapter as an opt-in backend.
+- `stretch-glide` enables the pure-Rust Glide varispeed backend, including on Wasm.
 
 Keylock-off rendering uses `build_varispeed_engine` with the existing Glide
 resampler: exact source/output spans change both duration and pitch. Keylock-on
@@ -40,5 +41,6 @@ uses the selected native engine. All engines share `ElasticEngine`; physical
 input admission and the source advance represented by audible output are
 explicit frame counts on `ElasticRequest`.
 
-The two keylock backends are native-only. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-stretch) for the
-backend contract, wasm notes, and the future pure-Rust backend recipe.
+The two keylock backends are native-only. `BackendCapabilities` reports rate and
+keylock support for each compiled backend. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-stretch)
+for the backend contract and wasm notes.

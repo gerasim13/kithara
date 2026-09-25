@@ -118,7 +118,7 @@ fn load_spec(metadata: &cargo_metadata::Metadata) -> Result<SingleFrameworkSpec>
 }
 
 /// Recursively copy `src` directory to `dst`.
-fn copy_dir_all(src: &FsPath, dst: &FsPath) -> Result<()> {
+pub(crate) fn copy_dir_all(src: &FsPath, dst: &FsPath) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src).with_context(|| format!("read_dir {}", src.display()))? {
         let entry = entry?;

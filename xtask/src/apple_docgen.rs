@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use kithara_devtools::util::nightly_toolchain;
 use regex::Regex;
 use rustdoc_types::{Crate, ItemEnum};
 
@@ -109,9 +110,11 @@ fn build_rustdoc_json(root: &FsPath, docgen: &DocgenConfig) -> Result<()> {
         "json".to_string(),
     ]);
 
+    // The JSON format moves with the compiler, and `rustdoc-types` reads one
+    // version of it: the one the pinned nightly writes.
     let status = Command::new("cargo")
         .args(&args)
-        .env("RUSTC_BOOTSTRAP", "1")
+        .env("RUSTUP_TOOLCHAIN", nightly_toolchain())
         .current_dir(root)
         .status()
         .with_context(|| format!("failed to run cargo rustdoc for {}", docgen.package))?;

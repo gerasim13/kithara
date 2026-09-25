@@ -233,19 +233,28 @@ coverage:
     #!/usr/bin/env bash
     set -uo pipefail
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"
-    # The bar stands at 80 while the workspace holds 76.5% of lines. The gap is
-    # the UI surface — kithara-ui widgets and kithara-app/src/gui, several files
-    # of it at zero — and it closes by covering that surface, not by moving the
-    # number. The number lives only here: the CI lane inherits it, because a
-    # second copy is one edit away from gating a local run and CI at different
-    # bars.
+    # The floor the report is failed under. The number lives only here: the CI
+    # lane inherits it, because a second copy is one edit away from gating a
+    # local run and CI at different bars.
     COVERAGE_MIN="${COVERAGE_MIN:-80}"
     IGNORE_REGEX='(tests/|examples/|benches/|xtask/)'
     COBERTURA="$OUTPUT_DIR/cobertura.xml"
     LCOV="$OUTPUT_DIR/lcov.info"
+    # `llvm-cov report` sums the coverage map of every object file left in the
+    # build directory, and one built at another commit carries no counters: the
+    # file it names enters the denominator a second time with every line
+    # missed, and a file that commit still had enters as a whole missed row. A
+    # build directory shared across runs therefore measures its own history —
+    # the `#431` module-file renames alone added 43769 lines, 43248 of them
+    # missed, and dropped the reported figure from 84.41% to 64.25% overnight.
+    # Reporting from a directory holding only this run keeps the answer about
+    # this commit, and keeps the instrumented build out of the caller's
+    # ordinary one.
+    COVERAGE_TARGET="${CARGO_TARGET_DIR:-target}/llvm-cov-run"
+    rm -rf "$COVERAGE_TARGET"
+    export CARGO_TARGET_DIR="$COVERAGE_TARGET"
     mkdir -p "$OUTPUT_DIR"
     rm -f "$COBERTURA" "$LCOV"
-    cargo llvm-cov clean --workspace
     test_rc=0
     cargo llvm-cov nextest --no-report \
       --workspace --exclude kithara-fuzz \

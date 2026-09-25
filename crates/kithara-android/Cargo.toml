@@ -9,6 +9,12 @@ description = "Android platform ABI and safe wrappers shared by Kithara crates."
 keywords = ["android", "audio", "mediacodec", "jni"]
 categories = ["multimedia::audio", "os::android-apis"]
 
+# The media bindings and the HTTP transport exist only on Android; the Linux
+# default docs.rs picks would leave nothing but the runtime handle.
+[package.metadata.docs.rs]
+default-target = "aarch64-linux-android"
+targets = ["aarch64-linux-android"]
+
 [dependencies]
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
@@ -17,7 +23,7 @@ ndk-context = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 # The host application's HTTP transport, run as the `client-host` backend.
 [target.'cfg(target_os = "android")'.dependencies]
