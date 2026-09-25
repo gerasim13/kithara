@@ -648,6 +648,10 @@ fn resolve_frontier(
 
 /// The join PCM would have to come from past the final decode head, which does not exist, so this
 /// cuts at the frontier instead of demanding PCM the outgoing can never produce.
+/// A generation that will stage no more can never grow the blend tail, so a switch that would
+/// otherwise be abandoned degrades to a splice at the cut. The outgoing side already takes that
+/// trade below; both ends of one track run out on the same frame, and which decoder reports it
+/// first is a race the listener's click must survive.
 fn same_spec_join(
     active: &DecoderGeneration,
     blender: &GaplessBlender,
@@ -659,6 +663,15 @@ fn same_spec_join(
 ) -> Result<PromotionJoin, PromotionReadiness> {
     let frames = blender.join_frame_count();
     if !generation.staged_covers(spec, incoming_next, frames) {
+        if generation.is_finished() {
+            debug!(
+                frames,
+                incoming_next,
+                outgoing_first,
+                "incoming finished without join PCM: hard cut at the frontier"
+            );
+            return Ok(PromotionJoin::HardCut);
+        }
         trace!(
             frames,
             incoming_next,

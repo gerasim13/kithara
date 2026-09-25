@@ -23,6 +23,7 @@ mod advance_boundary_provenance;
 mod app_fixture_ticks;
 mod architecture_flow;
 mod auto_advance;
+mod clear_then_replay;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;
 mod duplicate_src_in_queue;
