@@ -5755,6 +5755,7 @@ dependencies = [
  "fs4",
  "hotpath",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-storage",
