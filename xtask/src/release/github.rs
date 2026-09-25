@@ -119,6 +119,18 @@ pub(super) fn replace_nightly(
     Ok(())
 }
 
+/// Take down the release under `tag`, assets and all, leaving the tag.
+pub(super) fn retract(repo: &str, tag: &str) -> Result<()> {
+    if view(repo, tag)? {
+        println!("[github] removing release {tag}...");
+        run_step(
+            gh().args(["release", "delete", tag, "--repo", repo, "--yes"]),
+            "gh release delete",
+        )?;
+    }
+    Ok(())
+}
+
 /// Whether a release exists under `tag`. Only an answer that the release is
 /// missing counts as a no: an authentication failure stops the run.
 fn view(repo: &str, tag: &str) -> Result<bool> {

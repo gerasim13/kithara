@@ -6,7 +6,6 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Live HLS packaging: ADTS framing, segment rotation, and playlist window"
-publish = false
 
 [package.metadata.cargo-machete]
 # `serde` is reached only through `#[derive(Patch)]`, whose expansion names
