@@ -16,6 +16,11 @@ language: Rust
 files:
   - tests/**/*.rs
   - crates/*/tests/**/*.rs
+  # Test files a `#[cfg(test)] mod` declaration pulls in under `src`; inline
+  # test modules are `arch.test-modules-use-shared-primitives`.
+  - crates/*/src/**/tests.rs
+  - crates/*/src/**/*_tests.rs
+  - crates/*/src/**/tests/**/*.rs
 ignores:
   # The owners of the shared primitives.
   - tests/src/**
@@ -24,13 +29,16 @@ ignores:
   - crates/kithara-test-macros/**
   # Lint fixtures and the lint engine's own tests.
   - crates/kithara-devtools/**
+  # Beneath `kithara-test-utils`: its unit tests reach the primitives through a
+  # second copy of the crate, not the one under test.
+  - crates/kithara-platform/src/**
 rule:
   any:
     - all:
         - kind: call_expression
         - has:
             field: function
-            regex: '(?:^|::)TcpListener::bind$'
+            regex: 'TcpListener::bind$'
         - has:
             field: arguments
             regex: '"127\.0\.0\.1:0"'

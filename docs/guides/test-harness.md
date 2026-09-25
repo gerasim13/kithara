@@ -57,9 +57,10 @@ helper; if it lacks a knob, extend it in its owner.
 | Signal level, tone, phase | `signal::{rms, peak, goertzel_magnitude, ...}` | `kithara-test-fixtures` |
 | Phase and output continuity oracles | `phase_continuity`, `output_continuity` | `tests/src` |
 
-`arch.tests-use-shared-primitives` rejects local copies in test directories:
-raw `TcpListener::bind("127.0.0.1:0")`, direct `tracing_subscriber` setup, and
-items named like the primitives above.
+`arch.tests-use-shared-primitives` rejects local copies in test directories and
+test files, and `arch.test-modules-use-shared-primitives` in `#[cfg(test)]`
+modules under `src`: raw `TcpListener::bind("127.0.0.1:0")`, direct
+`tracing_subscriber` setup, and items named like the primitives above.
 
 - Do not hard-code ports or random global paths.
 - Wait for observable conditions, events, or bounded predicates. Do not sleep

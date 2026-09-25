@@ -3531,6 +3531,7 @@ scan_all_rules = [
   "arch.no-direct-thread-wait",
   "arch.no-flash-time-hacks",
   "arch.no-raw-test",
+  "arch.test-modules-use-shared-primitives",
   "arch.tests-use-shared-primitives",
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",

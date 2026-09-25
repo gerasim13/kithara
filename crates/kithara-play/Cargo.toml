@@ -158,8 +158,8 @@ bytes = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-platform = { workspace = true, features = ["tokio-net"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
 
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }

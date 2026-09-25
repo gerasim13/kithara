@@ -101,7 +101,7 @@ unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-platform = { workspace = true, features = ["tokio-net", "tokio-rt-multi-thread"] }
+kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
 
 axum = { workspace = true }
