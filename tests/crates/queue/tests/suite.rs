@@ -12,6 +12,7 @@ use kithara_test_dylib as _;
 mod append_while_playing;
 mod architecture_flow;
 mod auto_advance;
+mod clear_then_replay;
 mod duplicate_src_in_queue;
 mod early_seek_size_withheld_advance;
 mod file_replay_from_warm_cache;
