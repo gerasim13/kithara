@@ -2,7 +2,11 @@ use std::{env, fs, path::Path, process::Command, sync::LazyLock};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
-use kithara_devtools::{Ctx, common::tools::ToolsConfig, util::check_tool};
+use kithara_devtools::{
+    Ctx,
+    common::tools::ToolsConfig,
+    util::{check_tool, nightly_toolchain},
+};
 use regex::Regex;
 
 use crate::config::{KitharaExt, WasmConfig};
@@ -46,10 +50,6 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
 /// Which nightly builds the wasm bundle. The repository pins one, and CI
 /// installs that exact name — asking for a toolchain called `nightly` there
 /// fails, and `rustup` reports it the same way it reports its own absence.
-fn nightly_toolchain() -> String {
-    env::var("KITHARA_NIGHTLY_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string())
-}
-
 fn check_rust_target_nightly(target: &str) -> Result<bool> {
     let output = Command::new("rustup")
         .args(["target", "list", "--installed", "--toolchain"])

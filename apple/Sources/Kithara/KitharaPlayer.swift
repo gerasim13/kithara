@@ -334,10 +334,16 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         public var keyRules: [KeyRule]
         /// Shared Rust-owned asset store used by this player.
         public var store: AssetStore
+        /// Auth token sent on every player HTTP request; empty sends none.
         public var authToken: String
+        /// Initial ``KitharaPlayer/playingRate``. Default: `1.0`.
         public var playingRate: Float
+        /// Initial ``KitharaPlayer/playbackOrder``. Default: sequential.
         public var playbackOrder: PlaybackOrder
+        /// Initial ``KitharaPlayer/actionAtItemEnd``. Default: advance.
         public var actionAtItemEnd: ActionAtItemEnd
+        /// Initial ``KitharaPlayer/crossfadeSettings``. Default:
+        /// ``CrossfadeSettings/default``.
         public var crossfadeSettings: CrossfadeSettings
 
         /// Construct a player config. All parameters have sensible
@@ -768,26 +774,38 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         }
     }
 
+    /// How the current item fades into the next.
     public var crossfadeSettings: CrossfadeSettings {
         CrossfadeSettings(ffi: _inner.crossfadeSettings())
     }
 
+    /// The order the queue moves through its items.
     public var playbackOrder: PlaybackOrder {
         PlaybackOrder(ffi: _inner.playbackOrder())
     }
 
+    /// What the player does when the current item ends or fails to load.
     public var actionAtItemEnd: ActionAtItemEnd {
         ActionAtItemEnd(ffi: _inner.actionAtItemEnd())
     }
 
+    /// Replace ``crossfadeSettings``.
+    ///
+    /// - Throws: The FFI error the player reports when it rejects the settings.
     public func setCrossfadeSettings(_ settings: CrossfadeSettings) throws {
         try _inner.setCrossfadeSettings(settings: settings.ffi)
     }
 
+    /// Replace ``playbackOrder``.
+    ///
+    /// - Throws: The FFI error the queue reports when it rejects the order.
     public func setPlaybackOrder(_ order: PlaybackOrder) throws {
         try _inner.setPlaybackOrder(order: order.ffi)
     }
 
+    /// Replace ``actionAtItemEnd``.
+    ///
+    /// - Throws: The FFI error the queue reports when it rejects the action.
     public func setActionAtItemEnd(_ action: ActionAtItemEnd) throws {
         try _inner.setActionAtItemEnd(action: action.ffi)
     }
@@ -814,6 +832,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         try _inner.advanceToNextItem()
     }
 
+    /// Return to the item played before the current one.
+    ///
+    /// - Throws: The FFI error the queue reports when navigation fails.
     public func previous() throws {
         try _inner.returnToPreviousItem()
     }

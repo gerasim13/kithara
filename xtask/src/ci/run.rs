@@ -837,7 +837,7 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
-        super::super::host::mac::testing::install_double(&bin, "sccache");
+        crate::testing::install_double(&bin, "sccache");
         let trace = directory.path().join("trace");
 
         for (scenario, uses_sccache, expected_trace) in [

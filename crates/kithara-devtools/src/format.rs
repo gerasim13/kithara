@@ -13,7 +13,7 @@ use crate::{
     common::tools::ToolsConfig,
     manifest,
     manifest::{DependencyOrderArgs, ManifestArgs, ManifestCommand},
-    util::{check_tool, ensure_clean_tree},
+    util::{check_tool, ensure_clean_tree, nightly_toolchain},
     verdict::ChildFailure,
 };
 
@@ -248,16 +248,6 @@ impl FormatTarget {
             Self::Markdown => "markdown",
         }
     }
-}
-
-/// The nightly channel the repository pins. CI exports it from
-/// `.config/ci-pins.toml`; a plain `nightly` is the local-development default.
-fn nightly_toolchain() -> String {
-    std::env::var("KITHARA_NIGHTLY_TOOLCHAIN")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "nightly".to_owned())
 }
 
 fn run_rustfmt(check: bool) -> Result<()> {
