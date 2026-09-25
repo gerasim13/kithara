@@ -17,11 +17,10 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
-        time::Duration,
+        time::{Duration, sleep},
         tokio::{
             runtime::Handle,
             sync::{mpsc, oneshot, watch},
-            task,
         },
     },
     play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
@@ -377,6 +376,11 @@ pub(crate) async fn next_subscribe(
     }
 }
 
+/// Polls and cadence of [`wait_for_revision`]: two virtual seconds, which is
+/// a pipeline statement rather than a host budget.
+const REVISION_POLLS: usize = 2_000;
+const REVISION_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
 pub(crate) async fn answer_subscribe(
     requests: &mut mpsc::Receiver<Request>,
     expected: TrackId,
@@ -388,8 +392,15 @@ pub(crate) async fn answer_subscribe(
     tx
 }
 
+/// Wait until the deck has taken a publication at or past `revision`.
+///
+/// The poll sleeps rather than yielding. A bare yield leaves this task ready
+/// for ever, so the engine never sees every participant idle and never moves
+/// the virtual clock; a deck parked on a timer then waits on a clock this loop
+/// is holding still, and the budget expires on a publication that was only
+/// ever one clock step away.
 pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
-    for _ in 0..2_000 {
+    for _ in 0..REVISION_POLLS {
         if state
             .lock()
             .analysis
@@ -400,7 +411,7 @@ pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
         {
             return;
         }
-        task::yield_now().await;
+        sleep(REVISION_POLL_INTERVAL).await;
     }
     panic!("revision {revision} never reached the deck");
 }

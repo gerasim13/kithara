@@ -41,7 +41,7 @@ use crate::{
     common::test_defaults::Consts as Shared,
     continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
-        render_offline_window,
+        render_offline_window, render_until_audible,
     },
 };
 
@@ -949,9 +949,8 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     )
     .await;
     player.load_and_fadein(resource).await;
-    let _warmup = render_offline_window(
+    render_until_audible(
         &mut player,
-        24,
         "packaged warmup",
         CONTINUITY_BLOCK_FRAMES,
         CONTINUITY_SAMPLE_RATE,
