@@ -718,7 +718,12 @@ mod tests {
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
         let settings = config.assets_store();
 
-        assert_eq!(settings.cache_capacity.map(NonZeroUsize::get), Some(32));
+        assert_eq!(
+            settings
+                .cache_capacity
+                .map(|value| value.map(NonZeroUsize::get)),
+            Some(Some(32))
+        );
         assert!(
             settings.max_bytes.is_none(),
             "a knob the document does not name reaches the app empty"
@@ -734,7 +739,7 @@ mod tests {
 
         assert_eq!(
             config.assets_store().backend,
-            Some(StorageBackend::default()),
+            Some(Some(StorageBackend::default())),
             "an unnamed backend must resolve to the stable default root, not \
              to the fresh per-launch temp directory `AssetStore::open` falls \
              back to on its own"
@@ -752,7 +757,10 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
-        assert_eq!(config.assets_store().backend, Some(StorageBackend::Memory));
+        assert_eq!(
+            config.assets_store().backend,
+            Some(Some(StorageBackend::Memory))
+        );
     }
 
     /// The Host owns the output rate -- it refuses a player whose rate
@@ -770,7 +778,7 @@ mod tests {
 
         let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
         let host = HostConfig::<AppPools>::builder()
-            .maybe_sample_rate_hint(document.app().sample_rate)
+            .maybe_sample_rate_hint(document.app().sample_rate.flatten())
             .build();
 
         assert_eq!(host.sample_rate().get(), 48_000);
