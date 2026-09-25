@@ -115,6 +115,29 @@ fn the_namespace_uses_the_explicit_cache_revision() {
     assert_eq!(fingerprint, store::CACHE_VERSION.trim());
 }
 
+/// Cargo treats an absent `rerun-if-changed` path as always changed, so one
+/// such declaration reruns the build script, and rebuilds every crate that
+/// depends on the fixtures, on each build.
+#[kithara::test(native, flash(false))]
+fn every_path_the_build_watches_exists() {
+    let output = Path::new(env!("OUT_DIR"))
+        .parent()
+        .expect("the build script's out dir has a parent")
+        .join("output");
+    let output = std::fs::read_to_string(&output)
+        .unwrap_or_else(|error| panic!("read {}: {error}", output.display()));
+    let absent: Vec<_> = output
+        .lines()
+        .filter_map(|line| line.strip_prefix("cargo:rerun-if-changed="))
+        .filter(|path| !Path::new(path).exists())
+        .collect();
+
+    assert!(
+        absent.is_empty(),
+        "the build watches absent paths: {absent:?}"
+    );
+}
+
 #[kithara::test(native, flash(false))]
 fn an_embed_marked_asset_has_a_native_store_path() {
     let asset = assets::marked_sine_wav_a440_6s();
