@@ -111,7 +111,9 @@ impl Config {
     #[must_use]
     pub fn assets_store(&self) -> AssetStoreConfigPatch {
         let mut store = self.document.assets_store.clone();
-        store.backend.get_or_insert_with(StorageBackend::default);
+        store
+            .backend
+            .get_or_insert_with(|| Some(StorageBackend::default()));
         store
     }
 
