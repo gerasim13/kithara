@@ -8,6 +8,7 @@ use num_traits::cast::ToPrimitive;
 use thiserror::Error;
 
 use super::{
+    meter::voted_bar,
     snapshot::{BeatSnapshot, BeatState},
     track::TrackAnalysis,
 };
@@ -54,8 +55,7 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
         let rate = f64::from(analysis.source_sample_rate().get());
         let duration = analysis.extent().map(|extent| seconds(extent, rate));
         let placed = place(snapshot, rate, bpm, duration);
-        let downbeats = bars(snapshot, &placed, rate, duration);
-        let meter = meter(&downbeats);
+        let (downbeats, meter) = bars(snapshot, &placed, rate, duration);
         Ok(Self::try_from(RawBeatGrid {
             duration,
             bpm,
@@ -124,50 +124,62 @@ fn place(
         .collect()
 }
 
-/// The bar lines, each named by the beat it falls on.
+/// The bar lines the detected ones agree on, each named by the beat it falls
+/// on, and the meter they keep.
 ///
-/// All of them or none: a bar line whose beat this grid does not carry would
-/// leave the remaining ones stating a phase nothing anchors.
+/// Only a detected bar line on a placed beat votes; the bar and phase the
+/// votes agree on then name every placed beat of that phase a bar line, so a
+/// bar the detector skipped is stated without a confidence of its own and a
+/// bar line on the wrong beat is left out. Votes that agree on nothing state
+/// no bars at all.
 fn bars(
     snapshot: &BeatSnapshot,
     placed: &[(u64, GridBeat)],
     rate: f64,
     duration: Option<f64>,
-) -> Vec<GridDownbeat> {
+) -> (Vec<GridDownbeat>, Option<Meter>) {
     let artifact = snapshot.artifact();
-    artifact
+    let heard: Vec<(usize, Option<f32>)> = artifact
         .downbeats()
         .iter()
         .zip(artifact.downbeat_confidence().iter())
         .filter(|(frame, _)| duration.is_none_or(|duration| seconds(**frame, rate) <= duration))
-        .map(|(frame, confidence)| {
-            placed
+        .filter_map(|(frame, confidence)| {
+            let index = placed
                 .binary_search_by_key(frame, |(placed, _)| *placed)
-                .ok()
-                .map(|index| GridDownbeat {
-                    at: placed[index].1.at,
-                    beat_ordinal: placed[index].1.ordinal,
-                    confidence: *confidence,
-                })
+                .ok()?;
+            Some((index, *confidence))
         })
-        .collect::<Option<Vec<_>>>()
-        .unwrap_or_default()
-}
-
-/// The bar the downbeats prove, and nothing more: one spacing they all keep,
-/// or no claim at all.
-fn meter(downbeats: &[GridDownbeat]) -> Option<Meter> {
-    let mut steps = downbeats
-        .windows(2)
-        .map(|pair| pair[1].beat_ordinal.saturating_sub(pair[0].beat_ordinal));
-    let bar = steps.next()?;
-    if !steps.all(|step| step == bar) {
-        return None;
-    }
-    Some(Meter {
-        beats_per_bar: NonZeroU16::new(bar.to_u16()?)?,
-        origin_beat_ordinal: downbeats.first()?.beat_ordinal,
-    })
+        .collect();
+    let votes = heard
+        .iter()
+        .filter(|(_, confidence)| confidence.is_some())
+        .map(|(index, _)| placed[*index].1.ordinal);
+    let Some((bar, phase)) = voted_bar(votes) else {
+        return (Vec::new(), None);
+    };
+    let downbeats: Vec<GridDownbeat> = placed
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, beat))| beat.ordinal.rem_euclid(bar) == phase)
+        .map(|(index, (_, beat))| GridDownbeat {
+            at: beat.at,
+            beat_ordinal: beat.ordinal,
+            confidence: heard
+                .binary_search_by_key(&index, |(heard, _)| *heard)
+                .ok()
+                .and_then(|found| heard[found].1),
+        })
+        .collect();
+    let meter = bar
+        .to_u16()
+        .and_then(NonZeroU16::new)
+        .zip(downbeats.first())
+        .map(|(beats_per_bar, first)| Meter {
+            beats_per_bar,
+            origin_beat_ordinal: first.beat_ordinal,
+        });
+    (downbeats, meter)
 }
 
 /// A frame the timeline cannot represent becomes a position the contract
@@ -457,10 +469,10 @@ mod tests {
         );
     }
 
-    /// One bar line the grid cannot place leaves the others stating a phase
-    /// nothing anchors, so the pass states no bars at all.
+    /// A bar line off every beat casts no vote, and the one left measures no
+    /// bar: the pass states no bars rather than a phase nothing repeats.
     #[kithara::test(native, flash(false))]
-    fn a_bar_line_off_the_grid_withdraws_every_bar() {
+    fn one_placed_bar_line_measures_no_bar() {
         let beats: Vec<u64> = (0..5).map(|beat| beat * Consts::PERIOD_48).collect();
         let model = grid(&analysis(
             Consts::RATE_48,
@@ -477,6 +489,79 @@ mod tests {
             5,
             "the beats themselves still stand"
         );
+    }
+
+    fn downbeat_ordinals(model: &BeatGridModel) -> Vec<i64> {
+        model
+            .as_raw()
+            .downbeats
+            .iter()
+            .map(|downbeat| downbeat.beat_ordinal)
+            .collect()
+    }
+
+    /// A detector hears a bar line on the wrong beat now and then; the bars
+    /// around it outvote it instead of withdrawing the whole grid.
+    #[kithara::test(native, flash(false))]
+    fn a_bar_line_on_the_wrong_beat_is_outvoted() {
+        let beats: Vec<u64> = (0..21).map(|beat| beat * Consts::PERIOD_48).collect();
+        let model = grid(&analysis(
+            Consts::RATE_48,
+            &beats,
+            &[0, 4, 8, 10, 12, 16, 20].map(|beat| beat * Consts::PERIOD_48),
+            None,
+            BeatState::Final,
+        ));
+
+        assert_eq!(downbeat_ordinals(&model), [0, 4, 8, 12, 16, 20]);
+        assert_eq!(
+            model
+                .as_raw()
+                .meter
+                .map(|meter| (meter.beats_per_bar.get(), meter.origin_beat_ordinal)),
+            Some((4, 0))
+        );
+    }
+
+    /// A bar the detector skipped is still a bar: the phase the others agree
+    /// on states it, claiming no confidence of its own.
+    #[kithara::test(native, flash(false))]
+    fn a_bar_the_detector_skipped_is_stated_on_the_agreed_phase() {
+        let beats: Vec<u64> = (0..17).map(|beat| beat * Consts::PERIOD_48).collect();
+        let model = grid(&analysis(
+            Consts::RATE_48,
+            &beats,
+            &[0, 4, 12, 16].map(|beat| beat * Consts::PERIOD_48),
+            None,
+            BeatState::Final,
+        ));
+
+        assert_eq!(downbeat_ordinals(&model), [0, 4, 8, 12, 16]);
+        assert_eq!(
+            model
+                .as_raw()
+                .downbeats
+                .iter()
+                .map(|downbeat| downbeat.confidence)
+                .collect::<Vec<_>>(),
+            [Some(0.9), Some(0.9), None, Some(0.9), Some(0.9)]
+        );
+    }
+
+    /// Bar lines split evenly between two phases prove neither.
+    #[kithara::test(native, flash(false))]
+    fn bar_lines_split_between_two_phases_state_no_bar() {
+        let beats: Vec<u64> = (0..15).map(|beat| beat * Consts::PERIOD_48).collect();
+        let model = grid(&analysis(
+            Consts::RATE_48,
+            &beats,
+            &[0, 4, 10, 14].map(|beat| beat * Consts::PERIOD_48),
+            None,
+            BeatState::Final,
+        ));
+
+        assert!(model.as_raw().downbeats.is_empty());
+        assert_eq!(model.as_raw().meter, None);
     }
 
     /// Extrapolation stops where the media does.
