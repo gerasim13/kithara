@@ -1035,6 +1035,32 @@ pub(super) async fn route_signal_source_with_gapless_eof(
     .await
 }
 
+/// Both sides of a transition run out of source, on the same media length.
+///
+/// Two variants of one track end together, so an incoming that lands at the container origin
+/// stages to the very frame the outgoing frontier stops at. Which decoder reports its exhaustion
+/// first is then a race, and this fixture pins the order the race can take.
+pub(super) async fn route_signal_source_with_finite_sides(
+    route_pcm: &RoutePcm,
+    initial_host_rate: u32,
+    chunks_before_eof: usize,
+    incoming_chunks_before_eof: usize,
+) -> RouteFixture {
+    route_source(
+        route_pcm,
+        RouteParams {
+            initial_host_rate,
+            chunks_before_eof: Some(chunks_before_eof),
+            gapless: None,
+            incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            segmented: false,
+        },
+    )
+    .await
+}
+
 pub(super) async fn route_signal_source_with_finite_incoming(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
