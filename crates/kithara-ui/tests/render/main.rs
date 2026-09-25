@@ -8,6 +8,8 @@ mod address;
 mod common;
 #[cfg(feature = "iced")]
 mod fonts;
+mod picture_library;
 mod picture_sprite;
 mod scope;
 mod skin_custom;
+mod skin_override;
