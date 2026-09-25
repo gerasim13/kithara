@@ -4841,6 +4841,7 @@ dependencies = [
  "kithara-android",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-mp4",
