@@ -8,8 +8,6 @@ use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry")]
 use super::masonry::{TableSource, TableState, TreeSource, TreeState};
-#[cfg(all(test, feature = "masonry"))]
-use crate::interact::Gestures;
 use crate::{
     atoms::{
         bar::context::Context,
@@ -303,15 +301,6 @@ impl HostedControlPlan {
         let mut descriptors = Vec::with_capacity(self.descriptor_count());
         self.append_descriptors(&mut descriptors);
         descriptors
-    }
-
-    #[cfg(all(test, feature = "masonry"))]
-    pub(crate) fn gestures(&self) -> Gestures {
-        self.descriptors()
-            .iter()
-            .fold(Gestures::empty(), |gestures, descriptor| {
-                gestures.union(descriptor.gestures())
-            })
     }
 
     /// A hero wave showing a deck at `progress`, for a test that mounts one

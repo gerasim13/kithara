@@ -88,16 +88,6 @@ impl ScalarState {
 }
 
 impl Scalar {
-    #[cfg(all(test, feature = "masonry"))]
-    pub(crate) const fn accepts_double_click(&self) -> bool {
-        self.reset.is_some()
-    }
-
-    #[cfg(all(test, feature = "masonry"))]
-    pub(crate) const fn accepts_wheel(&self) -> bool {
-        self.wheel.is_some()
-    }
-
     pub(crate) fn cursor(&self, state: &ScalarState, hit: &Hit) -> CursorShape {
         self.hover.cursor(state.active, hit)
     }

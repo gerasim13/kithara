@@ -1,35 +1,5 @@
-#[cfg(all(test, feature = "masonry"))]
-use bitflags::bitflags;
-
 use super::{modifiers::Modifiers, pointer::PointerInput};
 use crate::draw::{Pt, Rect};
-
-#[cfg(all(test, feature = "masonry"))]
-bitflags! {
-    /// The input vocabulary observed from a mounted control.
-    ///
-    /// The gesture census keeps this test-only: production truth remains in the
-    /// recognizers, and both host adapters report what they actually constructed.
-    ///
-    /// `DRAG` carries `PRESS`, because a control that answers a drag answers the
-    /// press that starts it and no control in the census separates them.
-    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-    pub(crate) struct Gestures: u8 {
-        const DOUBLE_CLICK = 1 << 0;
-        const KEYBOARD = 1 << 1;
-        const PRESS = 1 << 2;
-        const WHEEL = 1 << 3;
-        const DRAG = (1 << 4) | Self::PRESS.bits();
-    }
-}
-
-#[cfg(all(test, feature = "masonry"))]
-impl Gestures {
-    /// This set plus one gesture, when the control accepts that gesture.
-    pub(crate) const fn with(self, gesture: Self, accepted: bool) -> Self {
-        if accepted { self.union(gesture) } else { self }
-    }
-}
 
 /// Toolkit-neutral input delivered to a custom component.
 #[derive(Clone, Copy, Debug, PartialEq)]

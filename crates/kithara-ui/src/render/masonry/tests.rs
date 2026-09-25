@@ -2868,16 +2868,16 @@ fn a_mounted_extension_is_drawn_in_what_the_skin_dresses_its_kind_in() {
 /// get one. Those are pinned as a gesture played to both hosts, in
 /// `render::parity::hand`.
 mod gesture_census {
-    use std::rc::Rc;
-
+    use iced::keyboard::key::{Code, Named as IcedKey};
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
 
     use super::{
-        super::controls::Retained, CENSUS_SOURCES, CONTROL_CENSUS, FixtureReads, FixtureRegistry,
-        Handled, LATE_TABLE_ROWS, MasonryHost, MasonryRoot, MasonryState, PointerEvent, Pt,
-        ScrollDelta, fixture_registry, fixture_ui_with_sources, masonry_root, pointer_down,
-        pointer_move, pointer_scroll, pointer_up,
+        CENSUS_SOURCES, CONTROL_CENSUS, FixtureReads, FixtureRegistry, Handled, Key,
+        LATE_TABLE_ROWS, MasonryHost, MasonryRoot, MasonryState, NamedKey, PointerEvent, Pt,
+        ScrollDelta, TextEvent, fixture_registry, fixture_ui_with_sources, masonry_root,
+        pointer_down, pointer_down_with_count, pointer_move, pointer_scroll, pointer_up,
+        pointer_up_with_count,
     };
     use crate::{
         app::App,
@@ -2886,15 +2886,9 @@ mod gesture_census {
         draw::Rect,
         expand::{Binding, ControlSpec, ExpandedNode},
         ids::{InternId, SourceUri},
-        interact::Gestures,
-        mount,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            Clock, ReadValue, Reads, Skin, UiEvent,
-            controls::{Draws, Gesture, Paint, Reading},
-            document::{self, Ctx},
-            hosted::hosted_control_plan,
-            masonry::{HostAction, Painted},
+            Clock, ReadValue, Reads, Skin, UiEvent, document,
             parity::{
                 immediate::Immediate,
                 shared::{renderer, snapped},
@@ -2904,6 +2898,23 @@ mod gesture_census {
         shaping::FontPolicy,
         view,
     };
+
+    bitflags::bitflags! {
+        /// What a control promises to answer, which the drivers below push at
+        /// it on both hosts.
+        ///
+        /// `DRAG` carries `PRESS`, because a control that answers a drag
+        /// answers the press that starts it and no control in the census
+        /// separates them.
+        #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+        struct Gestures: u8 {
+            const DOUBLE_CLICK = 1 << 0;
+            const KEYBOARD = 1 << 1;
+            const PRESS = 1 << 2;
+            const WHEEL = 1 << 3;
+            const DRAG = (1 << 4) | Self::PRESS.bits();
+        }
+    }
 
     #[derive(Clone, Copy)]
     struct Row {
@@ -3093,135 +3104,6 @@ mod gesture_census {
         },
     ];
 
-    #[derive(Clone, Copy, Default)]
-    struct Observed {
-        immediate: Gestures,
-        retained: Gestures,
-        special: Gestures,
-    }
-
-    struct Probe<'a> {
-        skin: &'a Skin,
-        reading: Reading<'a>,
-    }
-
-    trait ProbeControl {
-        fn observe(&self, probe: Probe<'_>) -> Observed;
-    }
-
-    impl<Control> ProbeControl for Control
-    where
-        Control: Draws,
-        Control::Painter: Retained + 'static,
-    {
-        fn observe(&self, probe: Probe<'_>) -> Observed {
-            let immediate = self.data(probe.reading).map_or(Gestures::empty(), |data| {
-                let grip = self.grip(probe.skin, &data);
-                Gesture::with_grip(
-                    "control",
-                    Paint::new(self.painter(probe.skin), data, probe.skin),
-                    grip,
-                    self.index_event(),
-                )
-                .map_or_else(|_| Gestures::empty(), |gesture| gesture.gestures())
-            });
-            let retained = self.data(probe.reading).map_or(Gestures::empty(), |data| {
-                let grip = self.grip(probe.skin, &data);
-                Painted::new(self.painter(probe.skin), data, probe.skin)
-                    .interactive(
-                        grip,
-                        "control".to_owned(),
-                        Rc::new(HostAction::new),
-                        self.index_event(),
-                    )
-                    .gestures()
-            });
-            Observed {
-                immediate,
-                retained,
-                special: Gestures::empty(),
-            }
-        }
-    }
-
-    macro_rules! passive {
-        ($($control:ty),+ $(,)?) => {
-            $(impl ProbeControl for $control {
-                fn observe(&self, _probe: Probe<'_>) -> Observed {
-                    Observed::default()
-                }
-            })+
-        };
-    }
-
-    passive!(
-        mount::TitleBar,
-        mount::Text<'_>,
-        mount::Custom,
-        mount::Shader<'_>,
-        mount::Vis,
-        mount::Table<'_>,
-        mount::Tree<'_>,
-    );
-
-    impl ProbeControl for mount::Drag {
-        fn observe(&self, _probe: Probe<'_>) -> Observed {
-            Observed {
-                special: Gestures::DRAG,
-                ..Observed::default()
-            }
-        }
-    }
-
-    impl ProbeControl for mount::Controls {
-        fn observe(&self, _probe: Probe<'_>) -> Observed {
-            Observed {
-                special: Gestures::PRESS,
-                ..Observed::default()
-            }
-        }
-    }
-
-    struct Apply<'a> {
-        probe: Probe<'a>,
-    }
-
-    impl Apply<'_> {
-        fn apply<Control: ProbeControl>(self, control: &Control) -> Observed {
-            control.observe(self.probe)
-        }
-    }
-
-    fn mounted(
-        path: InternId,
-        spec: &ControlSpec,
-        read: Option<&Binding>,
-        ctx: Ctx<'_, '_>,
-        skin: &Skin,
-    ) -> (Gestures, Gestures) {
-        let value = read.and_then(|binding| ctx.read(binding));
-        let leaf = mount::controls!(
-            spec,
-            Apply {
-                probe: Probe {
-                    reading: Reading {
-                        ctx,
-                        scope: ctx.scope(read),
-                        skin,
-                        value: value.as_ref(),
-                    },
-                    skin,
-                },
-            }
-        );
-        let engine = hosted_control_plan(path, spec, read, ctx, skin)
-            .map_or(Gestures::empty(), |plan| plan.gestures());
-        (
-            leaf.immediate.union(engine).union(leaf.special),
-            leaf.retained.union(engine).union(leaf.special),
-        )
-    }
-
     fn find_control(node: &ExpandedNode) -> Option<(InternId, &ControlSpec, Option<&Binding>)> {
         match node {
             ExpandedNode::Control {
@@ -3280,8 +3162,10 @@ mod gesture_census {
         );
     }
 
+    /// Each gesture row stands beside the paint row of the same control, and
+    /// that row's fixture mounts the control both rows name.
     #[kithara::test]
-    fn every_control_names_the_same_mounted_gestures_in_both_hosts() {
+    fn every_gesture_row_mounts_the_control_it_names() {
         let painted = CONTROL_CENSUS
             .iter()
             .map(|(name, _, _)| *name)
@@ -3293,9 +3177,6 @@ mod gesture_census {
         );
 
         let registry = census_registry();
-        let reads = FixtureReads;
-        let skin = census_skin();
-
         for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
             let ui = fixture_ui_with_sources(
                 "gesture-census",
@@ -3305,22 +3186,11 @@ mod gesture_census {
                 &registry,
                 CENSUS_SOURCES,
             );
-            let (path, spec, read) = compiled_control(&ui);
+            let (_, spec, _) = compiled_control(&ui);
             assert_eq!(
                 spec.kind(),
                 row.name,
                 "the census row for {} mounts a different control than it names",
-                row.name
-            );
-            let (immediate, retained) = mounted(path, spec, read, super::ctx(&ui, &reads), &skin);
-            assert_eq!(
-                immediate, row.gestures,
-                "{} changed its iced gesture contract",
-                row.name
-            );
-            assert_eq!(
-                retained, row.gestures,
-                "{} changed its Masonry gesture contract",
                 row.name
             );
         }
@@ -3376,19 +3246,71 @@ mod gesture_census {
     /// A drag takes two moves, not one: `ItemDrag` spends the first fixing the
     /// point the travel is measured from, so a single move is below every
     /// threshold by construction and would measure the sequence, not the host.
+    ///
+    /// A double click is answered only by what its second press publishes
+    /// that a lone press does not: a control that takes every press takes both
+    /// halves of a double click, and that is not answering one. A keyboard
+    /// promise is driven after a press that gives the control focus, and is
+    /// kept by any key taken or anything published.
     #[derive(Clone, Copy, Debug)]
     enum Named {
         Press,
         Drag,
         Wheel,
+        DoubleClick,
+        Keyboard,
     }
 
     impl Named {
+        const ALL: [Self; 5] = [
+            Self::Press,
+            Self::Drag,
+            Self::Wheel,
+            Self::DoubleClick,
+            Self::Keyboard,
+        ];
+
         fn declared_by(self, gestures: Gestures) -> bool {
             match self {
                 Self::Press => gestures.contains(Gestures::PRESS),
                 Self::Drag => gestures.contains(Gestures::DRAG),
                 Self::Wheel => gestures.contains(Gestures::WHEEL),
+                Self::DoubleClick => gestures.contains(Gestures::DOUBLE_CLICK),
+                Self::Keyboard => gestures.contains(Gestures::KEYBOARD),
+            }
+        }
+    }
+
+    /// The keys a keyboard promise is driven with: a step through what the
+    /// control holds, the key that commits it, and a character typed into it.
+    const KEYS: [(Stroke, Code); 3] = [
+        (
+            Stroke::Named(NamedKey::ArrowDown, IcedKey::ArrowDown),
+            Code::ArrowDown,
+        ),
+        (Stroke::Named(NamedKey::Enter, IcedKey::Enter), Code::Enter),
+        (Stroke::Typed("a"), Code::KeyA),
+    ];
+
+    /// One key of [`KEYS`], spelled for either host.
+    #[derive(Clone, Copy)]
+    enum Stroke {
+        Named(NamedKey, IcedKey),
+        Typed(&'static str),
+    }
+
+    impl Stroke {
+        fn retained(self) -> Key {
+            match self {
+                Self::Named(key, _) => Key::Named(key),
+                Self::Typed(character) => Key::Character(character.to_owned()),
+            }
+        }
+
+        fn immediate(self) -> iced::keyboard::Key {
+            match self {
+                Self::Named(_, key) => iced::keyboard::Key::Named(key),
+                Self::Typed(character) => iced::keyboard::Key::Character(character.into()),
             }
         }
     }
@@ -3516,6 +3438,16 @@ mod gesture_census {
         answer
     }
 
+    fn typed(root: &mut MasonryRoot<UiEvent>, stroke: Stroke) -> Answer {
+        let handled = root
+            .handle_text_event(TextEvent::key_down(stroke.retained()))
+            .unwrap_or_else(|error| panic!("driven keys must stay typed: {error}"));
+        Answer {
+            acted: !root.take_actions().is_empty(),
+            handled: handled == Handled::Yes,
+        }
+    }
+
     fn at(named: Named, root: &mut MasonryRoot<UiEvent>, x: f64, y: f64) -> Answer {
         match named {
             Named::Press => {
@@ -3532,6 +3464,21 @@ mod gesture_census {
                 root,
                 pointer_scroll(x, y, ScrollDelta::LineDelta(0.0, -2.0)),
             ),
+            Named::DoubleClick => {
+                let first = take(root, pointer_down(x, y)).or(take(root, pointer_up(x, y)));
+                let second = take(root, pointer_down_with_count(x, y, 2))
+                    .or(take(root, pointer_up_with_count(x, y, 2)));
+                Answer {
+                    acted: second.acted && !first.acted,
+                    handled: false,
+                }
+            }
+            Named::Keyboard => {
+                let _focus = take(root, pointer_down(x, y)).or(take(root, pointer_up(x, y)));
+                KEYS.iter().fold(Answer::default(), |answer, (stroke, _)| {
+                    answer.or(typed(root, *stroke))
+                })
+            }
         }
     }
 
@@ -3612,6 +3559,26 @@ mod gesture_census {
                     acted: !host.app().published.is_empty(),
                 }
             }
+            Named::DoubleClick => {
+                host.click_at(at);
+                let single = host.app().published.len();
+                host.click_at(at);
+                Answer {
+                    acted: single == 0 && host.app().published.len() > single,
+                    handled: false,
+                }
+            }
+            Named::Keyboard => {
+                host.click_at(at);
+                let focused = host.app().published.len();
+                let handled = KEYS.iter().fold(false, |took, (stroke, code)| {
+                    host.key_at(at, stroke.immediate(), *code) || took
+                });
+                Answer {
+                    handled,
+                    acted: host.app().published.len() > focused,
+                }
+            }
         }
     }
 
@@ -3672,7 +3639,7 @@ mod gesture_census {
         let mut observed = Vec::new();
         let mut expected = Vec::new();
         for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
-            for named in [Named::Press, Named::Drag, Named::Wheel] {
+            for named in Named::ALL {
                 if !named.declared_by(row.gestures) {
                     continue;
                 }
@@ -3708,7 +3675,7 @@ mod gesture_census {
         let mut observed = Vec::new();
         let mut expected = Vec::new();
         for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
-            for named in [Named::Press, Named::Drag, Named::Wheel] {
+            for named in Named::ALL {
                 if !named.declared_by(row.gestures) {
                     continue;
                 }

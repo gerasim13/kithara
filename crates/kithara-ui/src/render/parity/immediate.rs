@@ -12,6 +12,10 @@ use iced::{
     Event, Point, Size,
     advanced::{clipboard, graphics::text::font_system, mouse::Cursor},
     event,
+    keyboard::{
+        self, Location, Modifiers,
+        key::{Code, Physical},
+    },
     mouse::{self, Button, Interaction, ScrollDelta},
 };
 use iced_runtime::{
@@ -132,6 +136,36 @@ impl<'a, A: App> Immediate<'a, A> {
         let cursor = Point::new(at.x, at.y);
         let moved = Event::Mouse(mouse::Event::CursorMoved { position: cursor });
         self.play(cursor, &moved)
+    }
+
+    /// One key pressed and let go, the pointer resting at one point of
+    /// the window: a keyboard reaches whatever the last press there focused.
+    pub(in crate::render) fn key_at(&mut self, at: Pt, key: keyboard::Key, code: Code) -> bool {
+        let cursor = Point::new(at.x, at.y);
+        let text = match &key {
+            keyboard::Key::Character(character) => Some(character.clone()),
+            keyboard::Key::Named(_) | keyboard::Key::Unidentified => None,
+        };
+        [
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: key.clone(),
+                modified_key: key.clone(),
+                physical_key: Physical::Code(code),
+                location: Location::Standard,
+                modifiers: Modifiers::empty(),
+                text,
+                repeat: false,
+            }),
+            Event::Keyboard(keyboard::Event::KeyReleased {
+                modified_key: key.clone(),
+                key,
+                physical_key: Physical::Code(code),
+                location: Location::Standard,
+                modifiers: Modifiers::empty(),
+            }),
+        ]
+        .into_iter()
+        .fold(false, |took, event| self.play(cursor, &event) || took)
     }
 
     /// Mounts the document, registering the toolkit's own faces with the font

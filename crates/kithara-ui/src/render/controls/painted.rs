@@ -19,8 +19,6 @@ use iced::{
 use kithara_platform::time::Instant;
 use kithara_test_macros as kithara;
 
-#[cfg(all(test, feature = "masonry"))]
-use crate::interact::Gestures;
 use crate::{
     atoms::{
         button::VisualState,
@@ -588,15 +586,6 @@ where
                 recognizer: drag.recognizer(),
                 spec: drag,
             })),
-        }
-    }
-
-    #[cfg(all(test, feature = "masonry"))]
-    pub(crate) fn gestures(&self) -> Gestures {
-        match &self.recognize {
-            Recognize::Press | Recognize::Command(_) | Recognize::Index { .. } => Gestures::PRESS,
-            Recognize::Drag(drag) => drag.spec.gestures(),
-            Recognize::Span(_) => Gestures::DRAG,
         }
     }
 

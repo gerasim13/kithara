@@ -7,8 +7,6 @@ use super::{
     controls::{MasonryControl, Retained},
     custom::{HostAction, Repaint},
 };
-#[cfg(test)]
-use crate::interact::Gestures;
 use crate::{
     draw::{DrawBuffers, DrawList, DrawListBuilder, Rect, Transform},
     interact::{
@@ -168,22 +166,6 @@ where
             refresh: None,
             repaint: false,
             text: TextContext::from(skin.text_resources()),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn gestures(&self) -> Gestures {
-        match self
-            .interaction
-            .as_ref()
-            .map(|interaction| &interaction.recognize)
-        {
-            None => Gestures::empty(),
-            Some(Recognize::Press | Recognize::Command(_) | Recognize::Index { .. }) => {
-                Gestures::PRESS
-            }
-            Some(Recognize::Drag(drag)) => drag.spec.gestures(),
-            Some(Recognize::Span(_)) => Gestures::DRAG,
         }
     }
 
