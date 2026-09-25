@@ -16,7 +16,6 @@ playback = [
     "dep:kithara-integration-tests",
     "dep:serde",
     "dep:serde_json",
-    "dep:tracing",
 ]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith", "kithara-stretch/stretch-signalsmith"]
 flash = [
@@ -51,7 +50,6 @@ kithara-warp = { workspace = true, features = ["render"] }
 num-traits = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
 kithara-stretch = { workspace = true, default-features = false, features = ["stretch-bungee"] }

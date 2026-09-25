@@ -5121,7 +5121,6 @@ dependencies = [
  "kithara-app",
  "kithara-integration-tests",
  "kithara-test-dylib",
- "kithara-test-fixtures",
  "kithara-test-utils",
  "serial_test",
  "tracing",
@@ -5211,7 +5210,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bytes",
  "gloo-timers",
- "hex",
  "kithara",
  "kithara-integration-tests",
  "kithara-test-dylib",
@@ -5278,7 +5276,6 @@ dependencies = [
  "aes",
  "anyhow",
  "assert_no_alloc",
- "async-trait",
  "axum",
  "base64",
  "bon",
@@ -5297,9 +5294,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-app",
- "kithara-derive",
  "kithara-devtools",
- "kithara-encode",
  "kithara-events",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5514,8 +5509,6 @@ dependencies = [
  "kithara-test-utils",
  "num-traits",
  "reqwest",
- "ringbuf",
- "serde",
  "serial_test",
  "tracing",
  "url",
@@ -5764,7 +5757,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "delegate",
  "futures",
- "hex",
  "kithara",
  "kithara-app",
  "kithara-integration-tests",
@@ -5959,7 +5951,6 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_json",
- "tracing",
 ]
 
 [[package]]
