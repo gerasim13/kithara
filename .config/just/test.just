@@ -67,7 +67,8 @@ wasm BROWSER="chrome" SUITE="all":
           -Z build-std-features=optimize_for_size \
           -p kithara-ffi-web-tests -p kithara-integration-tests --no-default-features \
           --features kithara-integration-tests/wasm \
-          --test ffi_web -- stress::stress_seek_to_zero_after_pressure || { fails=$((fails + 1)); break; }
+          --test ffi_web -- stress::stress_seek_to_zero_after_pressure || fails=$((fails + 1))
+        if [ "$fails" -ge 4 ]; then break; fi
       done
       echo "=== PROBE failed attempts: $fails after $attempt"
       exit 1
