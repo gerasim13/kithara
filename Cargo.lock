@@ -4798,6 +4798,7 @@ dependencies = [
  "fieldwork",
  "kithara-derive",
  "kithara-test-utils",
+ "portable-atomic",
  "serde",
 ]
 
@@ -5519,6 +5520,7 @@ dependencies = [
  "kithara-audio",
  "kithara-beat",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-download",
@@ -5793,6 +5795,7 @@ dependencies = [
  "fieldwork",
  "hotpath",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-resampler",
@@ -5991,6 +5994,7 @@ dependencies = [
  "firewheel-core",
  "kithara-beat",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",
