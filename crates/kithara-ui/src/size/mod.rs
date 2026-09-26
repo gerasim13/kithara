@@ -2,8 +2,6 @@ mod spec;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) use self::spec::SnapshotFixture;
 pub(crate) use self::spec::{
     BlockNode, Cell, Cells, DEFAULTS, NOTHING, Snapshot, at_least, axis_dim, axis_min, branch,
     combine_horizontal, combine_vertical, compiled_node_size_with_hidden, compute_size,

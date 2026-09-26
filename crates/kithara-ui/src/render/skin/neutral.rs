@@ -373,4 +373,18 @@ mod tests {
             );
         }
     }
+
+    #[kithara::test]
+    fn active_tone_takes_the_active_role_only_while_the_flag_is_set() {
+        let pair =
+            |active| active_tone(Some(ColorRole::LineInner), Some(ColorRole::Accent), active);
+
+        assert_eq!(pair(true), Some(ColorRole::Accent));
+        assert_eq!(pair(false), Some(ColorRole::LineInner));
+        assert_eq!(
+            active_tone(Some(ColorRole::LineHi), None, true),
+            Some(ColorRole::LineHi)
+        );
+        assert_eq!(active_tone(None, None, true), None);
+    }
 }

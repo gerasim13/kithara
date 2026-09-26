@@ -575,7 +575,7 @@ mod tests {
     use crate::{
         atoms::{painter::Labelled, tab::TabLarge, toggle::Binary},
         builtin,
-        draw::Rect,
+        draw::{DrawBuffers, Rect},
         module::TextAlign,
         render::masonry::Painted,
         solve::{Limits, Size},
@@ -603,13 +603,14 @@ mod tests {
     #[kithara::test]
     fn a_mounted_tab_measures_its_own_word() {
         let skin = builtin::skin();
-        let mut leaf = Leaf::Control(Box::new(Painted::new(
+        let mut leaf = Leaf::Control(Box::new(Painted::pooled(
             TabLarge::new(skin),
             Labelled {
                 active: true,
                 label: "DECK MICRO".to_owned(),
             },
             skin,
+            &DrawBuffers::default(),
         )));
 
         let measured = leaf.measure(Limits::new(Size::ZERO, Size::new(320.0, 80.0)));
@@ -627,7 +628,12 @@ mod tests {
     #[kithara::test]
     fn a_painter_that_does_not_measure_leaves_the_box_to_the_row() {
         let skin = builtin::skin();
-        let mut leaf = Leaf::Control(Box::new(Painted::new(Binary::toggle(skin), false, skin)));
+        let mut leaf = Leaf::Control(Box::new(Painted::pooled(
+            Binary::toggle(skin),
+            false,
+            skin,
+            &DrawBuffers::default(),
+        )));
 
         assert_eq!(
             leaf.measure(Limits::new(Size::ZERO, Size::new(320.0, 80.0))),

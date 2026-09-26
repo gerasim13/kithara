@@ -4,8 +4,6 @@ use std::{
 };
 
 use super::plan::{HostedControlPlan, Resolving, TablePlan, TreePlan};
-#[cfg(test)]
-use crate::atoms::table::ColumnLayout;
 use crate::{
     atoms::{
         bar::context::Context,
@@ -393,19 +391,6 @@ impl TablePlan {
             .and_then(|projection| projection.project(self))
     }
 
-    #[cfg(test)]
-    pub(crate) fn fixture(
-        path: &str,
-        rows: Vec<TableRowData>,
-        columns: Vec<ColumnLayout>,
-        skin: &Skin,
-    ) -> Self {
-        let declared = columns.iter().map(|column| column.column.clone()).collect();
-        let plan = Self::new(path, rows, columns, skin);
-        plan.bind_source(TableSource::new(declared, None, None));
-        plan
-    }
-
     pub(crate) fn picture(&self) -> Ref<'_, TableFace> {
         self.picture.borrow()
     }
@@ -660,7 +645,7 @@ mod tests {
                 width: 180.0,
             },
         ];
-        let plan = TablePlan::fixture("tracks", table_rows(8), columns, skin);
+        let plan = table_plan("tracks", table_rows(8), columns, skin);
         let bounds = Rect {
             x: 0.0,
             y: 0.0,
@@ -714,12 +699,8 @@ mod tests {
                 width: 180.0,
             },
         ];
-        let plan = HostedControlPlan::Table(Box::new(TablePlan::fixture(
-            "tracks",
-            table_rows(8),
-            columns,
-            skin,
-        )));
+        let plan =
+            HostedControlPlan::Table(Box::new(table_plan("tracks", table_rows(8), columns, skin)));
         let narrow = Rect {
             x: 0.0,
             y: 0.0,
@@ -769,16 +750,27 @@ mod tests {
         assert_eq!(engine.scroll_offset("tracks/scroll-x"), None);
     }
 
+    /// A table plan over fixed columns, bound to a source that declares them.
+    fn table_plan(
+        path: &str,
+        rows: Vec<TableRowData>,
+        columns: Vec<ColumnLayout>,
+        skin: &Skin,
+    ) -> TablePlan {
+        let declared = columns.iter().map(|column| column.column.clone()).collect();
+        let plan = TablePlan::new(path, rows, columns, skin);
+        plan.bind_source(TableSource::new(declared, None, None));
+        plan
+    }
+
     fn table_rows(count: usize) -> Vec<TableRowData> {
         (0..count)
             .map(|index| {
-                TableRowData::new(
-                    vec![(
-                        "name".to_owned(),
-                        crate::atoms::table::TableCell::Text(format!("Row {index}")),
-                    )],
+                let name = format!("Row {index}");
+                TableRowData::from(&crate::render::TableRow::new(
+                    vec![crate::render::TableCell::text("name", &name)],
                     false,
-                )
+                ))
             })
             .collect()
     }

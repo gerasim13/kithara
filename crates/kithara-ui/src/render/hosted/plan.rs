@@ -124,22 +124,6 @@ pub(crate) struct HeroWindow {
 }
 
 impl HeroWindow {
-    /// The window a deck at `progress` shows at `zoom`, without a document to
-    /// read it from.
-    #[cfg(test)]
-    fn at(progress: f32, zoom: f32) -> Self {
-        let scale = Zoom::from(zoom);
-        let visible = window_bounds(progress, scale);
-        Self {
-            scale,
-            progress,
-            start: visible.start,
-            end: visible.end,
-            wheel_positive: zoom_for_wheel(scale, 1.0).into(),
-            wheel_non_positive: zoom_for_wheel(scale, 0.0).into(),
-        }
-    }
-
     /// What the deck at `scope` is showing this frame.
     fn read(scope: &str, zoom: Option<&Binding>, ctx: Ctx<'_, '_>) -> Self {
         let progress = match ctx.get(&derived("deck.playback.position_normalized", scope)) {
@@ -301,18 +285,6 @@ impl HostedControlPlan {
         let mut descriptors = Vec::with_capacity(self.descriptor_count());
         self.append_descriptors(&mut descriptors);
         descriptors
-    }
-
-    /// A hero wave showing a deck at `progress`, for a test that mounts one
-    /// without a document behind it.
-    #[cfg(test)]
-    pub(crate) fn hero_wave_at(path: &str, progress: f32, zoom: f32) -> Self {
-        Self::HeroWave {
-            path: path.to_owned(),
-            scope: String::new(),
-            zoom: None,
-            window: Cell::new(HeroWindow::at(progress, zoom)),
-        }
     }
 
     pub(in crate::render) fn path(&self) -> &str {

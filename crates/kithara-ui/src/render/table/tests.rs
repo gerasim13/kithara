@@ -24,8 +24,7 @@ use super::{
 };
 use crate::{
     atoms::table::{
-        ColumnLayout, TableCell, TableRowData, face::Drawn, table_body, table_dividers,
-        table_row_rect,
+        ColumnLayout, TableRowData, face::Drawn, table_body, table_dividers, table_row_rect,
     },
     builtin,
     draw::{DrawCmd, DrawList, Geom, Rect, Rgba},
@@ -42,14 +41,15 @@ use crate::{
 fn rows() -> Vec<TableRowData> {
     (0..5)
         .map(|index| {
-            TableRowData::new(
+            let (number, title) = ((index + 1).to_string(), format!("Row {index}"));
+            TableRowData::from(&crate::render::TableRow::new(
                 vec![
-                    ("index".to_owned(), TableCell::Text((index + 1).to_string())),
-                    ("title".to_owned(), TableCell::Text(format!("Row {index}"))),
-                    ("artist".to_owned(), TableCell::Text("Detail".to_owned())),
+                    crate::render::TableCell::text("index", &number),
+                    crate::render::TableCell::text("title", &title),
+                    crate::render::TableCell::text("artist", "Detail"),
                 ],
                 index == 1,
-            )
+            ))
         })
         .collect()
 }

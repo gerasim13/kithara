@@ -156,40 +156,6 @@ pub(crate) trait Snapshot {
     fn measure(&self, measure: &Binding) -> Option<f32>;
 }
 
-#[cfg(test)]
-pub(crate) struct SnapshotFixture {
-    measured: Option<f32>,
-    hidden: bool,
-}
-
-#[cfg(test)]
-impl SnapshotFixture {
-    pub(crate) const fn all_hidden() -> Self {
-        Self {
-            hidden: true,
-            measured: None,
-        }
-    }
-
-    pub(crate) const fn measured(measured: Option<f32>) -> Self {
-        Self {
-            measured,
-            hidden: false,
-        }
-    }
-}
-
-#[cfg(test)]
-impl Snapshot for SnapshotFixture {
-    fn hidden(&self, _: &BlockSpec) -> bool {
-        self.hidden
-    }
-
-    fn measure(&self, _: &Binding) -> Option<f32> {
-        self.measured
-    }
-}
-
 struct Unanswered;
 
 impl Snapshot for Unanswered {

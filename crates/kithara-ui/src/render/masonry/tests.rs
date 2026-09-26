@@ -46,6 +46,7 @@ use crate::{
         document,
         document::{Clock, Ctx},
         picker_hits,
+        vis::{VisDeclaration, VisFrame},
     },
     shaping::{FontPolicy, TextContext},
     source::{MemResolver, UiConfig},
@@ -2503,19 +2504,22 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
             .any(|signal| matches!(signal, RenderRootSignal::RequestAnimFrame)),
         "a retained Vis leaf must request continuous animation frames"
     );
-    let declarations = root.vis_declarations();
-    assert_eq!(declarations.len(), 2);
+    let first = VisFrame::read(reads.get("vis.first"), &reads).expect("a valid first preset");
+    let second = VisFrame::read(reads.get("vis.second"), &reads).expect("a valid second preset");
+    assert_eq!((first.preset(), second.preset()), (0, 2));
+    assert!((first.level() - 0.6).abs() < f32::EPSILON);
+    assert_eq!(first.time(), 1.25);
     assert_eq!(
-        declarations
-            .iter()
-            .map(|vis| vis.rect())
-            .collect::<Vec<_>>(),
-        vec![[0.0, 0.0, 40.0, 20.0], [40.0, 0.0, 80.0, 20.0]]
+        root.vis_declarations(),
+        [
+            VisDeclaration::logical(first, [0.0, 0.0, 40.0, 20.0]),
+            VisDeclaration::logical(second, [40.0, 0.0, 80.0, 20.0]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+        "each leaf declares its own box and the frame its reads project to"
     );
-    assert_eq!(declarations[0].frame().preset(), 0);
-    assert_eq!(declarations[1].frame().preset(), 2);
-    assert!((declarations[0].frame().level() - 0.6).abs() < f32::EPSILON);
-    assert_eq!(declarations[0].frame().time(), 1.25);
     assert_eq!(
         root.handle_pointer_event(pointer_down(20.0, 10.0))
             .unwrap_or_else(|error| panic!("Vis pointer routing must remain typed: {error}")),
@@ -2531,11 +2535,22 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     root.refresh(ctx(&ui, &reads));
     root.redraw()
         .unwrap_or_else(|error| panic!("Vis refresh must not remount the tree: {error}"));
-    let refreshed = root.vis_declarations();
-    assert_eq!(refreshed.len(), 2);
-    assert_eq!(refreshed[0].frame().preset(), 1);
-    assert!((refreshed[0].frame().level() - 0.25).abs() < f32::EPSILON);
-    assert_eq!(refreshed[0].frame().time(), 9.0);
+    let first = VisFrame::read(reads.get("vis.first"), &reads).expect("a valid first preset");
+    let second = VisFrame::read(reads.get("vis.second"), &reads).expect("a valid second preset");
+    assert_eq!(first.preset(), 1);
+    assert!((first.level() - 0.25).abs() < f32::EPSILON);
+    assert_eq!(first.time(), 9.0);
+    assert_eq!(
+        root.vis_declarations(),
+        [
+            VisDeclaration::logical(first, [0.0, 0.0, 40.0, 20.0]),
+            VisDeclaration::logical(second, [40.0, 0.0, 80.0, 20.0]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+        "a refresh re-reads both frames without remounting"
+    );
 
     reads.first.set(f64::NAN);
     root.refresh(ctx(&ui, &reads));
