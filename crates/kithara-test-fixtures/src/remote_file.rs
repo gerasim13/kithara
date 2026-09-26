@@ -42,9 +42,9 @@ pub(crate) enum RemoteFileError {
 
 /// Downloads one public file and verifies its size and SHA-256 digest.
 ///
-/// A transfer silent for `stall` is resumed from the byte it reached: a CDN
-/// edge can hold a response open without sending anything, and one such stall
-/// must not spend the whole `timeout`.
+/// A request or transfer silent for `stall` is asked again from the byte it
+/// reached: a CDN edge can hold a request or a response open without sending
+/// anything, and one such stall must not spend the whole `timeout`.
 pub(crate) fn fetch_verified(
     url: &Url,
     sha256_hex: &str,
@@ -65,7 +65,9 @@ pub(crate) fn fetch_verified(
     let deadline = Deadline::new(timeout);
     let mut bytes = Vec::new();
     loop {
-        let mut response = request(&client, url, bytes.len() as u64, deadline)?;
+        let Some(mut response) = request(&client, url, bytes.len() as u64, deadline)? else {
+            continue;
+        };
         // An interrupted body keeps what arrived: the next request resumes
         // after it.
         if response.read_to_end(&mut bytes).is_ok() {
@@ -92,22 +94,30 @@ pub(crate) fn fetch_verified(
 }
 
 /// Requests `url` from byte `offset` on, refusing an answer that restarts or
-/// skips the body instead of continuing it.
+/// skips the body instead of continuing it; `None` when the request went
+/// unanswered for the client's stall timeout.
 fn request(
     client: &Client,
     url: &Url,
     offset: u64,
     deadline: Deadline,
-) -> Result<Response, RemoteFileError> {
+) -> Result<Option<Response>, RemoteFileError> {
     deadline.remaining(url)?;
     let mut request = client.get(url.clone());
     if offset > 0 {
         request = request.header(RANGE, format!("bytes={offset}-"));
     }
-    let response = request.send().map_err(|source| HydrateError::Request {
-        url: RedactedUrl::new(url),
-        source: source.without_url(),
-    })?;
+    let response = match request.send() {
+        Ok(response) => response,
+        Err(source) if source.is_timeout() => return Ok(None),
+        Err(source) => {
+            return Err(HydrateError::Request {
+                url: RedactedUrl::new(url),
+                source: source.without_url(),
+            }
+            .into());
+        }
+    };
     let status = response.status();
     if !status.is_success() {
         return Err(HydrateError::Status {
@@ -128,5 +138,5 @@ fn request(
             status,
         });
     }
-    Ok(response)
+    Ok(Some(response))
 }

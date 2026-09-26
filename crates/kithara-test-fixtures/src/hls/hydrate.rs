@@ -596,6 +596,43 @@ mod tests {
         assert!(head.contains("range: bytes=3-"), "{head}");
     }
 
+    /// An edge can also stay silent before it answers at all: the download
+    /// asks again instead of failing on the first silent request.
+    #[kithara::test(native, flash(false))]
+    fn remote_file_asks_again_when_a_request_goes_unanswered() {
+        let digest = "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721";
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let url = Url::parse(&format!(
+            "http://{}/track",
+            listener.local_addr().expect("server address")
+        ))
+        .expect("fixture URL");
+        let server = thread::spawn(move || {
+            let (mut silent, _) = listener.accept().expect("first request");
+            request_head(&mut silent);
+            let (mut answered, _) = listener.accept().expect("second request");
+            let head = request_head(&mut answered);
+            answered
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef")
+                .expect("whole body");
+            drop(silent);
+            head
+        });
+
+        let bytes = fetch_verified(
+            &url,
+            digest,
+            6,
+            Duration::from_secs(10),
+            Duration::from_millis(200),
+        )
+        .expect("answered bytes");
+
+        assert_eq!(bytes, b"abcdef");
+        let head = server.join().expect("server thread").to_ascii_lowercase();
+        assert!(!head.contains("range:"), "{head}");
+    }
+
     #[kithara::test(native, flash(false))]
     fn missing_remote_configuration_names_the_required_input() {
         let error = RemoteFileError::Missing("KITHARA_REMOTE_FIXTURES");
