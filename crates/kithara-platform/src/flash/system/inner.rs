@@ -258,6 +258,16 @@ pub(in crate::flash) struct Scheduler {
 /// cooperative yielders (`yield_releases`), real transit held it back
 /// (`paced_wait`), or it did move and the run simply needs more rounds
 /// (`advances`).
+#[derive(derive_more::Display)]
+#[display(
+    "advances={} advance_blocked={} advance_no_deadline={} advance_yield_releases={} \
+     advance_paced_wait={}",
+    advances,
+    blocked,
+    no_deadline,
+    yield_releases,
+    paced_wait
+)]
 pub(in crate::flash) struct AdvanceCounts {
     /// A participant was still running, so quiescence was never reached.
     pub(super) blocked: u64,

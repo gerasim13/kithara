@@ -2,24 +2,9 @@ use std::fmt;
 
 use super::{
     FlashInner, Registry,
-    inner::AdvanceCounts,
     sched::{Entry, WaitKind},
     wake::Wake,
 };
-
-/// One line of the hang-dump header: how the engine's attempts to move the
-/// clock ended. Reading a wedge starts here — it says whether the clock was
-/// refused, had nowhere to go, or moved and was simply outpaced.
-impl fmt::Display for AdvanceCounts {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "advances={} advance_blocked={} advance_no_deadline={} \
-             advance_yield_releases={} advance_paced_wait={}",
-            self.advances, self.blocked, self.no_deadline, self.yield_releases, self.paced_wait,
-        )
-    }
-}
 
 /// Append the diagnostic detail of one parked waiter to `f`: the real async
 /// primitive behind a `Condvar(CvId)` waiter (kind + creation site, recorded by
