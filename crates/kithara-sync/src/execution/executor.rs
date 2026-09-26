@@ -142,6 +142,17 @@ impl<P: StagePort> SyncExecutor<P> {
         self.0.drain(drain);
     }
 
+    /// The loaded media that can currently open a prepared lane.
+    #[must_use]
+    pub fn stageable_media(&self) -> Option<P::Media> {
+        self.0
+            .state
+            .lock()
+            .loaded
+            .as_ref()
+            .and_then(|loaded| loaded.port.as_ref().map(|_| loaded.media))
+    }
+
     /// The member holds no media any more, or is closing.
     pub fn unload(&self) {
         let mut state = self.0.state.lock();
