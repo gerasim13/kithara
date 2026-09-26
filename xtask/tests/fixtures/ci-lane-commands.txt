@@ -397,6 +397,7 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / platforms
   <require os> macos
@@ -405,6 +406,7 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / merge-request
   <require os> macos
@@ -413,6 +415,7 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / quarantine
   <require os> macos
@@ -421,6 +424,7 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / main
   <require os> macos
@@ -429,6 +433,7 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / nightly
   <require os> macos
@@ -437,6 +442,7 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
@@ -447,6 +453,7 @@
   just test run --flash=on --no-block=on --profile ci
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / branch
   <require os> macos
@@ -456,6 +463,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / platforms
   <require os> macos
@@ -465,6 +473,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / merge-request
   <require os> macos
@@ -474,6 +483,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / quarantine
   <require os> macos
@@ -483,6 +493,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / main
   <require os> macos
@@ -492,6 +503,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / nightly
   <require os> macos
@@ -501,6 +513,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / weekly
   <require os> macos
@@ -510,6 +523,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / release
   <require os> macos
@@ -519,6 +533,7 @@
     CARGO_BUILD_FINGERPRINT=content
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-xcframework / branch
   <require os> macos
@@ -2150,6 +2165,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / platforms
   <require os> linux
@@ -2157,6 +2173,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / merge-request
   <require os> linux
@@ -2164,6 +2181,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / quarantine
   <require os> linux
@@ -2171,6 +2189,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / main
   <require os> linux
@@ -2178,6 +2197,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / nightly
   <require os> linux
@@ -2185,6 +2205,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / weekly
   <require os> linux
@@ -2192,6 +2213,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / release
   <require os> linux
@@ -2199,6 +2221,7 @@
   just test run --touched --lane=tooling --lane=harness --lane=fixtures
     CARGO_BUILD_FINGERPRINT=content
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / branch
   <require os> linux
@@ -2208,6 +2231,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / platforms
   <require os> linux
@@ -2217,6 +2241,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / merge-request
   <require os> linux
@@ -2226,6 +2251,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / quarantine
   <require os> linux
@@ -2235,6 +2261,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / main
   <require os> linux
@@ -2244,6 +2271,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / nightly
   <require os> linux
@@ -2253,6 +2281,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / weekly
   <require os> linux
@@ -2262,6 +2291,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / release
   <require os> linux
@@ -2271,6 +2301,7 @@
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / branch
   <require os> linux
@@ -2280,6 +2311,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / platforms
   <require os> linux
@@ -2289,6 +2321,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / merge-request
   <require os> linux
@@ -2298,6 +2331,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / quarantine
   <require os> linux
@@ -2307,6 +2341,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / main
   <require os> linux
@@ -2316,6 +2351,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / nightly
   <require os> linux
@@ -2325,6 +2361,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / weekly
   <require os> linux
@@ -2334,6 +2371,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / release
   <require os> linux
@@ -2343,6 +2381,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_REMOTE_FIXTURES=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / branch
   <require os> linux
@@ -3104,6 +3143,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / platforms
   <require os> windows
@@ -3113,6 +3153,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / merge-request
   <require os> windows
@@ -3122,6 +3163,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / quarantine
   <require os> windows
@@ -3131,6 +3173,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / main
   <require os> windows
@@ -3140,6 +3183,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / nightly
   <require os> windows
@@ -3149,6 +3193,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / weekly
   <require os> windows
@@ -3158,6 +3203,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / release
   <require os> windows
@@ -3167,6 +3213,7 @@
     CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / branch
   <require os> windows
@@ -3174,6 +3221,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / platforms
   <require os> windows
@@ -3181,6 +3229,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / merge-request
   <require os> windows
@@ -3188,6 +3237,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / quarantine
   <require os> windows
@@ -3195,6 +3245,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / main
   <require os> windows
@@ -3202,6 +3253,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / nightly
   <require os> windows
@@ -3209,6 +3261,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / weekly
   <require os> windows
@@ -3216,6 +3269,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / release
   <require os> windows
@@ -3223,6 +3277,7 @@
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
+    KITHARA_REMOTE_FIXTURES=1
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / branch
   <require os> windows
