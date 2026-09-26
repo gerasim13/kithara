@@ -162,7 +162,15 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
                   }
                 }
                 const url = ${JSON.stringify(shimUrl)} + "?worker=" + Math.random();
+                const strip = (n) => n.replace(/^https?:\\/\\/[^/]+/, "");
+                const wd = setTimeout(() => {
+                  stage("stuck res=" + JSON.stringify(performance.getEntriesByType("resource").map((r) => strip(r.name) + "@" + Math.round(r.responseEnd))));
+                  const side = ${JSON.stringify(shimUrl)} + "?side=" + Math.random();
+                  fetch(side).then((r) => r.text().then((t) => stage("sidefetch " + r.status + " len=" + t.length)), (err) => stage("sidefetch err " + err));
+                  import(side).then(() => stage("sideimport ok"), (err) => stage("sideimport err " + err));
+                }, 3000);
                 const shim = await import(url);
+                clearTimeout(wd);
                 stage("imported");
                 shim.initSync({ module, memory, thread_stack_size: 1048576 });
                 stage("inited");
@@ -434,6 +442,17 @@ async fn read_with_yield_limit(
             .ok()
             .and_then(|v| v.as_string());
             if dump.is_some() {
+                use kithara::platform::probe_counters as c;
+                warn!(
+                    dl_spawn = c::read(&c::DL_SPAWN_CALLED),
+                    dl_worker = c::read(&c::DL_WORKER_ENTERED),
+                    dl_run = c::read(&c::DL_RUN_ENTERED),
+                    peer_sent = c::read(&c::PEER_CMD_SENT),
+                    peer_resp = c::read(&c::PEER_RESP_RECEIVED),
+                    net_start = c::read(&c::NET_SEND_STARTED),
+                    net_done = c::read(&c::NET_SEND_DONE),
+                    "PROBE counters at read wedge"
+                );
                 warn!(dump = ?dump, "PROBE worker journal at read wedge");
             }
             return Some(0);
