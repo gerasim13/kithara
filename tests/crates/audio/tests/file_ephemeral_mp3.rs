@@ -262,11 +262,12 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
 /// them ends the track near 35 s, and a seek to 45 s would land on that false
 /// end instead of the audio the file holds.
 #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(30)))]
+#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
-#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
     #[case] backend: DecoderBackend,
 ) {
