@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunkInfo;
@@ -23,16 +25,21 @@ pub(super) struct ProjectionState {
     pub(super) retired: Option<Arc<WarpPlan>>,
     pub(super) selected: Option<Arc<WarpPlan>>,
     pub(super) output_frames: usize,
+    /// The plan was entered at its activation before any output reached it,
+    /// so decoded audio before the activation source is history, not output.
+    pub(super) entering: bool,
 }
 
 impl ProjectionState {
     pub(super) fn new(config: &crate::WarpConfig) -> Self {
         let selected = config.plan().load();
+        let entering = config.enters_plan();
         Self {
             active: selected
                 .clone()
-                .filter(|plan| plan.activation().output() == SessionFrame::new(0)),
+                .filter(|plan| entering || plan.activation().output() == SessionFrame::new(0)),
             selected,
+            entering,
             ..Self::default()
         }
     }
@@ -43,6 +50,9 @@ pub(super) enum ProjectionPreparation {
     Service,
     Manual(usize),
     Projected(PreparedQuantum),
+    /// Decoded audio before an entered activation: the caller admits exactly
+    /// this many frames as history and renders none of them.
+    Preroll(NonZeroUsize),
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
@@ -76,6 +86,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                     .load()
                     .map(|snapshot| snapshot.frontier().output())
             });
+        if self.projection.entering
+            && same
+            && self.projection.cursor.is_none()
+            && let Some(entry) = self.entry_boundary(activation, meta)?
+        {
+            return Ok(entry);
+        }
         let reached = output.map_or_else(
             || activation.output() == SessionFrame::new(0),
             |output| output >= activation.output(),
@@ -307,10 +324,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
         let mut output_frames = self
             .render_quantum_frames
-            .map_or_else(
-                || capabilities.max_output_frames(),
-                std::num::NonZeroUsize::get,
-            )
+            .map_or_else(|| capabilities.max_output_frames(), NonZeroUsize::get)
             .min(capabilities.max_output_frames());
         let session_per_engine =
             f64::from(output_axis.sample_rate().get()) / f64::from(self.spec.sample_rate.get());

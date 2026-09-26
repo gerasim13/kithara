@@ -12,7 +12,7 @@ use kithara_stream::{PlayheadWrite, SeekObserve};
 use kithara_test_utils::kithara;
 use kithara_worker::{Task, TickResult};
 
-use super::super::EngineLoad;
+use super::super::{EngineLoad, ReadinessProbe};
 
 /// Per-tick state of a [`DecoderNode`].
 #[derive(Default)]
@@ -35,6 +35,8 @@ pub(crate) struct DecoderNode<S> {
     runtime: DecoderRuntime,
     engine_load: Option<Arc<EngineLoad>>,
     port: ProducerPort,
+    /// Proof a staged lane owes its preparation; `None` for a playing lane.
+    readiness: Option<ReadinessProbe>,
     source: S,
     preload_chunks: usize,
 }
@@ -170,12 +172,17 @@ where
     pub(in crate::worker) fn new(
         lane: PreparedAudioLane<S>,
         engine_load: Option<Arc<EngineLoad>>,
+        mut readiness: Option<ReadinessProbe>,
     ) -> Self {
         let seek_obs = lane.source.seek_observe();
         let seek_epoch = seek_obs.epoch();
+        if let Some(probe) = readiness.as_mut() {
+            probe.bind(seek_epoch);
+        }
         Self {
             seek_obs,
             engine_load,
+            readiness,
             source: lane.source,
             port: lane.port,
             playhead: lane.playhead,
@@ -196,6 +203,9 @@ where
 {
     fn on_cancel(&mut self) {
         self.complete_preload();
+        if let Some(probe) = self.readiness.as_mut() {
+            probe.abandon();
+        }
     }
 
     fn recycle(&mut self) {
@@ -203,6 +213,9 @@ where
         let _ = self.source.prepare_deferred();
         self.source.finish_deferred();
         self.port.flush_wake();
+        if let Some(probe) = self.readiness.as_mut() {
+            probe.publish();
+        }
     }
 
     #[kithara::measure(label = "play.decoder.tick")]
@@ -223,24 +236,27 @@ where
             TrackStep::Produced(fetch) => {
                 self.record_load(start.elapsed(), &fetch);
                 self.runtime.eof_sent = false;
-                let (decoded_frontier, source_end) = match &fetch {
+                let (admitted, source_end) = match &fetch {
                     Fetch::Data {
                         data,
                         epoch,
                         source_end,
                     } => (
-                        Some(data.meta.end_timestamp),
+                        Some((data.meta, *epoch)),
                         source_end.map(|source_end| (source_end, *epoch)),
                     ),
                     _ => (None, None),
                 };
                 self.port.push_direct(fetch);
+                if let (Some(probe), Some((meta, epoch))) = (self.readiness.as_mut(), admitted) {
+                    probe.admit(&meta, epoch, self.preload_chunks);
+                }
                 kithara::probe_event!(chunk_admitted, epoch = self.runtime.seek_epoch);
                 if let Some((source_end, epoch)) = source_end {
                     self.source.commit_source_end(source_end, epoch);
                 }
-                if let Some(frontier) = decoded_frontier {
-                    self.playhead.set_decoded_frontier(frontier);
+                if let Some((meta, _)) = admitted {
+                    self.playhead.set_decoded_frontier(meta.end_timestamp);
                 }
                 self.mark_preload_progress();
                 TickResult::Progress
@@ -266,6 +282,9 @@ where
                 let marker = Fetch::eof(epoch);
                 self.port.push_direct(marker);
                 self.complete_preload();
+                if let Some(probe) = self.readiness.as_mut() {
+                    probe.fail();
+                }
                 self.emit
                     .enqueue(AudioEvent::EndOfStream { seek_epoch: epoch });
                 self.runtime.eof_sent = true;
@@ -277,6 +296,9 @@ where
                 let marker = Fetch::failure(epoch);
                 self.port.push_direct(marker);
                 self.complete_preload();
+                if let Some(probe) = self.readiness.as_mut() {
+                    probe.fail();
+                }
                 TickResult::Done
             }
         };

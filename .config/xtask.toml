@@ -1027,7 +1027,8 @@ owns = [
   "tests/crates/harness/tests/timeout_guard.rs",
 ]
 default_backend = "none"
-default_features = ["harness"]
+# `analysis` compiles the beat-grid helper, whose unit tests live nowhere else.
+default_features = ["harness", "kithara-integration-tests/analysis"]
 prefix_args = [
   "nextest",
   "run",

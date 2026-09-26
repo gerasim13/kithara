@@ -11,7 +11,7 @@ use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
 };
-use kithara_play::{SessionSampleRate, StreamShape, player::PlayerMember};
+use kithara_play::{SessionSampleRate, StreamShape};
 use kithara_sync::GroupState;
 use tracing::{debug, warn};
 
@@ -23,7 +23,7 @@ use super::{
     },
     state::{RootView, SessionState},
 };
-use crate::error::PlayError;
+use crate::{PlayerMember, error::PlayError};
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,

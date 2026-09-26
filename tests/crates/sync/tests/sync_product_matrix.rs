@@ -1,8 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
 #[cfg(not(target_os = "android"))]
 use std::{env, io};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
+};
 
 #[cfg(not(target_os = "android"))]
 use kithara::{
@@ -15,6 +18,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara::{
+    beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
     hls::AbrMode,
     host::{HostConfig, HostOwned},
     platform::{
@@ -22,20 +26,26 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
+        ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        ResourceSrc, Tempo,
     },
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
     sync::{AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncOperation},
-    warp::{AssetFrame, PresentationFrontier},
+    warp::{
+        AssetFrame, Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition,
+        PresentationFrontier,
+    },
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     cochlea::{marked_synchronization_failures, synchronization_failures},
     fixture_protocol::EncryptionRequest,
+    grid::{Start, analysed_grid},
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
@@ -55,6 +65,41 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 pub(super) const CHANNELS: u16 = 2;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const START_BPM: f64 = 120.0;
+/// A deadline of ~85 ms at 48 kHz: many times what one player's ring holds
+/// at the bounded render quantum.
+const LOOSE_RESPONSE_BUDGET: usize = 4_096;
+/// The synthetic rhythm fixtures: 12 seconds at `START_BPM`, first beat on
+/// frame 0.
+const SYNTHETIC_BEATS: u32 = 24;
+const SECONDS_PER_MINUTE: f64 = 60.0;
+/// A start well inside every track, off its downbeat, for a case that needs
+/// no musical entry.
+pub(super) const CUE: Start = Start::Seconds(5.25);
+
+/// The beat grid every synthetic rhythm fixture was rendered on.
+fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
+    let spacing = SECONDS_PER_MINUTE / START_BPM;
+    let beats = (0..SYNTHETIC_BEATS)
+        .map(|ordinal| GridBeat {
+            at: f64::from(ordinal) * spacing,
+            ordinal: i64::from(ordinal),
+            confidence: Some(1.0),
+        })
+        .collect();
+    let model = BeatGridModel::try_from(RawBeatGrid {
+        schema_version: SCHEMA_VERSION,
+        model_id: "synthetic-rhythm".to_owned(),
+        revision: 1,
+        state: BeatGridState::Final,
+        duration: None,
+        bpm: START_BPM,
+        beats,
+        downbeats: Vec::new(),
+        meter: None,
+    })
+    .expect("synthetic rhythm beats form a valid grid");
+    ArtifactSource::Value(Arc::new(model))
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -133,6 +178,12 @@ pub(super) struct SyncCase {
     paused: bool,
     ride: TempoRide,
     updates_hz: u32,
+    /// Lanes the shared playback worker admits; `None` keeps its default.
+    capacity: Option<NonZeroUsize>,
+    /// Each deck's track carries its beat grid, so a group can prepare it.
+    gridded: bool,
+    /// Each player's control-to-audio deadline; `None` keeps it unbounded.
+    response_budget: Option<NonZeroUsize>,
 }
 
 impl SyncCase {
@@ -150,7 +201,25 @@ impl SyncCase {
             paused: false,
             ride: TempoRide::Triangle,
             updates_hz: 60,
+            capacity: None,
+            gridded: false,
+            response_budget: None,
         }
+    }
+
+    const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
+        self.response_budget = Some(frames);
+        self
+    }
+
+    const fn gridded(mut self) -> Self {
+        self.gridded = true;
+        self
+    }
+
+    const fn capacity(mut self, lanes: NonZeroUsize) -> Self {
+        self.capacity = Some(lanes);
+        self
     }
 
     const fn paused(mut self) -> Self {
@@ -227,6 +296,65 @@ const TEMPO_DOWN_30: SyncCase =
         .ride(TempoRide::Down, 30);
 pub(super) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
+/// A paused deck on a host whose rate differs from the fixtures' 48 kHz.
+pub(super) const STAGED_CUE: SyncCase =
+    SyncCase::running("staged-cue", 1, 44_100, OperationOrder::SyncPlaySeek)
+        .paused()
+        .hold(120.0)
+        .gridded();
+/// [`STAGED_CUE`] beside a second paused deck that keeps the session
+/// running: unloading the first deck then leaves the session's grid alone,
+/// where a session left with no started deck shuts down and withdraws the
+/// preparation itself, racing the executor's own cancellation.
+pub(super) const STAGED_CUE_BESIDE_A_DECK: SyncCase = SyncCase::running(
+    "staged-cue-beside-a-deck",
+    2,
+    44_100,
+    OperationOrder::SyncPlaySeek,
+)
+.paused()
+.hold(120.0)
+.gridded();
+/// A staged cue under a response deadline far looser than the lane's ring.
+pub(super) const STAGED_UNDER_LOOSE_DEADLINE: SyncCase = SyncCase::running(
+    "staged-under-loose-deadline",
+    1,
+    44_100,
+    OperationOrder::SyncPlaySeek,
+)
+.paused()
+.hold(120.0)
+.gridded()
+.response_budget(NonZeroUsize::new(LOOSE_RESPONSE_BUDGET).expect("loose budget is not zero"));
+/// A deck that keeps sounding while a lane is staged beside it.
+pub(super) const STAGED_BESIDE_PLAYBACK: SyncCase = SyncCase::running(
+    "staged-beside-playback",
+    1,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(120.0)
+.gridded();
+/// [`STAGED_BESIDE_PLAYBACK`] with nothing staged: the PCM the sounding deck
+/// must keep.
+pub(super) const STAGED_BESIDE_PLAYBACK_CONTROL: SyncCase = SyncCase::running(
+    "staged-beside-playback-control",
+    1,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(120.0)
+.gridded();
+/// A sounding deck whose worker has no slot left for a staged lane.
+pub(super) const STAGED_WITHOUT_CAPACITY: SyncCase = SyncCase::running(
+    "staged-without-capacity",
+    1,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(120.0)
+.capacity(NonZeroUsize::MIN)
+.gridded();
 pub(super) const SHARED_DEADLINE: SyncCase = SyncCase::running(
     "shared-worker-deadline",
     4,
@@ -241,6 +369,23 @@ pub(super) const SHARED_DEADLINE_CONTROL: SyncCase = SyncCase::running(
     OperationOrder::PlaySyncSeek,
 )
 .ride(TempoRide::Up, 120);
+
+/// Two decks of one real track synced one after the other onto the Host grid.
+pub(super) const REAL_TRACK_SYNC: SyncCase = SyncCase::running(
+    "real-track-sequential-sync",
+    2,
+    48_000,
+    OperationOrder::SequentialSync,
+)
+.gridded();
+/// Four decks of one real track, staggered, synced one after the other.
+pub(super) const REAL_TRACK_FOUR_DECK_SYNC: SyncCase = SyncCase::running(
+    "real-track-four-deck-sequential-sync",
+    4,
+    48_000,
+    OperationOrder::SequentialSync,
+)
+.gridded();
 
 pub(super) const AMBIENT_TRIP_HOP_SYNC: SyncCase = SyncCase::running(
     "ambient-dub-62-to-trip-hop-74",
@@ -290,6 +435,16 @@ const CROSS_STYLE: &[&str] = &[
     "rhythm_wav_breakbeat_140_aligned",
 ];
 pub(super) const LIBRARY: &[&str] = &["library_flac_song2", "library_flac_slowtechno"];
+/// Richie Hawtin - The Tunnel, a straight-kick track with a steady grid.
+pub(super) const TUNNEL: &[&str] = &["library_mp3_zvuk_27390231"];
+/// A straight 48 kHz techno track, the Tunnel's counterpart at the session rate.
+pub(super) const NEWTECHNO: &[&str] = &["library_flac_newtechno"];
+/// Newtechno's grid states no bars: its detected downbeats disagree on the
+/// bar phase. Its second phrase, where the full groove enters, opens on
+/// analysed beat 64.
+pub(super) const NEWTECHNO_PHRASE: Start = Start::Beat(64);
+/// The Tunnel's fifth bar: a cue well inside the track, on its kick.
+pub(super) const TUNNEL_CUE: Start = Start::bar(4);
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
@@ -315,6 +470,8 @@ impl Provider {
         Self::HlsSame(HlsProtection::Plain),
         Self::HlsSame(HlsProtection::Drm),
         Self::Library(LIBRARY),
+        Self::Library(TUNNEL),
+        Self::Library(NEWTECHNO),
         Self::Mp3Same,
         Self::Mp3Distinct,
         Self::HlsMp3(HlsProtection::Plain),
@@ -324,6 +481,71 @@ impl Provider {
 
     const fn has_score_markers(self) -> bool {
         matches!(self, Self::Rhythm(_))
+    }
+
+    /// The beat grid deck `deck`'s track was rendered or analysed on.
+    fn beat_grid(self, deck: usize) -> ArtifactSource<BeatGridModel> {
+        match self {
+            Self::Synthetic => synthetic_grid(),
+            Self::Library(names) => {
+                ArtifactSource::Value(Arc::new(analysed_grid(names[deck % names.len()])))
+            }
+            other => panic!("{other:?} declares no beat grid for a gridded case"),
+        }
+    }
+
+    /// The second deck `deck`'s track opens at for `start`.
+    fn start_seconds(self, deck: usize, start: Start) -> f64 {
+        let grid = match self {
+            Self::Library(names) => Some(analysed_grid(names[deck % names.len()])),
+            _ => None,
+        };
+        start.seconds(grid.as_ref())
+    }
+}
+
+/// Marks every beat the Host session grid places inside `frames` on the
+/// artifact's metronome. Output frames are session frames: the harness
+/// renders its session from frame 0.
+fn mark_host_beats(tap: &mut AudioArtifactTap, grid: &BeatGridSnapshot, frames: Range<u64>) {
+    let at = |frame: u64| {
+        grid.beat_at(MapPoint::new(
+            grid.stamp(),
+            MapPosition::Session(SessionFrame::new(i64::try_from(frame).unwrap_or(i64::MAX))),
+        ))
+    };
+    let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) =
+        (at(frames.start), at(frames.end))
+    else {
+        return;
+    };
+    let first = f64::from(*first.value().value()).ceil() as i64;
+    let last = f64::from(*last.value().value()).floor() as i64;
+    for ordinal in first..=last {
+        let Ok(beat) = Beat::try_from(BeatOrdinal::new(ordinal)) else {
+            continue;
+        };
+        let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), beat))
+        else {
+            continue;
+        };
+        let MapPosition::Session(frame) = *position.value().value() else {
+            continue;
+        };
+        let Ok(frame) = u64::try_from(i64::from(frame)) else {
+            continue;
+        };
+        if !frames.contains(&frame) {
+            continue;
+        }
+        let downbeat = matches!(
+            grid.meter_at(MapPoint::new(grid.stamp(), beat)),
+            BeatGridQuery::Resolved(meter)
+                if (ordinal - i64::from(meter.value().downbeat()))
+                    .rem_euclid(i64::from(meter.value().beats_per_bar()))
+                    == 0
+        );
+        tap.host_beat(frame, downbeat);
     }
 }
 
@@ -342,6 +564,11 @@ pub(super) struct ProductHarness {
     _trace: usdt_trace::Scope,
     output_frames: u64,
     paced: bool,
+    provider: Provider,
+    /// The second each deck's start opens it at, before its stagger.
+    cues: Vec<f64>,
+    /// Every rendered block with the Host metronome, when artifacts are on.
+    tap: Option<AudioArtifactTap>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -419,28 +646,73 @@ pub(super) async fn prepared_sources(provider: Provider) -> PreparedSources {
     (provider, server, paths)
 }
 
+/// Which decks a harness run hears.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Audible {
+    /// One deck solo; every other deck is muted.
+    Deck(usize),
+    /// Every deck.
+    Mix,
+}
+
+impl Audible {
+    const fn hears(self, deck: usize) -> bool {
+        match self {
+            Self::Deck(solo) => solo == deck,
+            Self::Mix => true,
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Deck(deck) => format!("deck-{deck}"),
+            Self::Mix => "mix".to_owned(),
+        }
+    }
+}
+
+/// The artifact of one harness run, named by the running test, the case and
+/// the decks it hears.
+fn open_tap(case: SyncCase, provider: Provider, audible: Audible) -> Option<AudioArtifactTap> {
+    let mut tap = AudioArtifactTap::from_env(
+        &format!("{}-{}-{}", artifact_label(), case.id, audible.label()),
+        case.sample_rate,
+        CHANNELS,
+    )
+    .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id))?;
+    tap.evidence(
+        "provider",
+        serde_json::Value::String(format!("{provider:?}")),
+    );
+    Some(tap)
+}
+
 impl ProductHarness {
+    /// A harness whose decks seek to `start` when the case seeks.
     pub(super) async fn new(
         case: SyncCase,
         prepared: &PreparedSources,
-        audible_deck: usize,
+        start: Start,
+        audible: Audible,
     ) -> Self {
-        Self::build(case, prepared, audible_deck, BLOCK_FRAMES, false).await
+        Self::build(case, prepared, start, audible, BLOCK_FRAMES, false).await
     }
 
     pub(super) async fn new_for_block(
         case: SyncCase,
         prepared: &PreparedSources,
-        audible_deck: usize,
+        start: Start,
+        audible: Audible,
         block_frames: usize,
     ) -> Self {
-        Self::build(case, prepared, audible_deck, block_frames, true).await
+        Self::build(case, prepared, start, audible, block_frames, true).await
     }
 
     async fn build(
         case: SyncCase,
         prepared: &PreparedSources,
-        audible_deck: usize,
+        start: Start,
+        audible: Audible,
         block_frames: usize,
         paced: bool,
     ) -> Self {
@@ -453,7 +725,11 @@ impl ProductHarness {
             .cloned()
             .collect();
         let pools = pools();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools.clone())
+                .maybe_capacity(case.capacity)
+                .build(),
+        );
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
         let render_block_frames = NonZeroU32::new(
             u32::try_from(block_frames).expect("offline render block count fits u32"),
@@ -475,10 +751,11 @@ impl ProductHarness {
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
                     .crossfade_duration(0.0)
+                    .maybe_response_budget_frames(case.response_budget)
                     .build(),
             );
             let queue = Queue::new(QueueConfig::builder().player(player).build());
-            queue.set_muted(index != audible_deck);
+            queue.set_muted(!audible.hears(index));
             let deck = host
                 .insert(queue)
                 .await
@@ -490,6 +767,7 @@ impl ProductHarness {
             .store(memory_asset_store())
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
+            .maybe_beat_grid(case.gridded.then(|| provider.beat_grid(index)))
             .build();
             let control = deck.control().clone();
             let id = host
@@ -506,6 +784,11 @@ impl ProductHarness {
             host,
             output_frames: 0,
             paced,
+            provider,
+            cues: (0..case.decks)
+                .map(|deck| provider.start_seconds(deck, start))
+                .collect(),
+            tap: open_tap(case, provider, audible),
             _trace: trace,
         };
         harness.wait_loaded(case, &ids).await;
@@ -601,6 +884,11 @@ impl ProductHarness {
         assert_eq!(self.host.position(), end);
         self.tick_all(case).await;
         self.output_frames = end;
+        if let Some(tap) = self.tap.as_mut() {
+            let grid = self.host.session_grid().await;
+            mark_host_beats(tap, &grid, start..end);
+            tap.push(&samples);
+        }
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())
@@ -609,6 +897,13 @@ impl ProductHarness {
         };
         time::sleep(delay).await;
         samples
+    }
+
+    /// Stamps a control marker on the artifact, when artifacts are on.
+    pub(super) fn mark(&mut self, label: &str) {
+        if let Some(tap) = self.tap.as_mut() {
+            tap.mark(label);
+        }
     }
 
     pub(super) async fn settle(&mut self, case: SyncCase, blocks: usize) {
@@ -645,10 +940,15 @@ impl ProductHarness {
         self.settle(case, 2).await;
     }
 
-    async fn seek_staggered(&mut self, case: SyncCase) {
+    /// The second deck `deck`'s track opens at for `start`.
+    pub(super) fn start_seconds(&self, deck: usize, start: Start) -> f64 {
+        self.provider.start_seconds(deck, start)
+    }
+
+    pub(super) async fn seek_staggered(&mut self, case: SyncCase) {
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
         for (index, deck) in self.decks.iter().enumerate() {
-            deck.seek(5.25 + index as f64 * stagger_seconds)
+            deck.seek(self.cues[index] + index as f64 * stagger_seconds)
                 .unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
         }
         self.settle(case, 96).await;
@@ -687,6 +987,7 @@ impl ProductHarness {
     }
 
     pub(super) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncIntent) {
+        self.mark(&format!("sync {intent:?}"));
         let transport = self.transport_revision(case).await;
         for index in 0..self.decks.len() {
             {
@@ -1052,7 +1353,7 @@ async fn hls(
         .to_string()
 }
 
-async fn run(case: SyncCase, prepared: PreparedSources) {
+async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     let provider = prepared.0;
     let expected_samples = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
         .round() as usize
@@ -1060,7 +1361,8 @@ async fn run(case: SyncCase, prepared: PreparedSources) {
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
-        let mut harness = ProductHarness::new(case, &prepared, audible_deck).await;
+        let mut harness =
+            ProductHarness::new(case, &prepared, start, Audible::Deck(audible_deck)).await;
         harness.run_operations(case).await;
         harness.ride_tempo(case).await;
         let pcm = harness.capture(case).await;
@@ -1113,7 +1415,7 @@ async fn run(case: SyncCase, prepared: PreparedSources) {
 #[case::drm(source_hls_same_drm().await)]
 async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: PreparedSources) {
     let provider = prepared.0;
-    let mut harness = ProductHarness::new(ONE_DECK, &prepared, 0).await;
+    let mut harness = ProductHarness::new(ONE_DECK, &prepared, CUE, Audible::Deck(0)).await;
     let pcm = harness.capture(ONE_DECK).await;
     let mut failures = synchronization_failures(
         &format!("encoded rhythmic control {provider:?}"),
@@ -1158,7 +1460,7 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     #[case] case: SyncCase,
     #[case] provider: PreparedSources,
 ) {
-    run(case, provider).await;
+    run(case, provider, CUE).await;
 }
 
 #[kithara::test(
@@ -1240,7 +1542,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     #[case] provider: PreparedSources,
     #[case] case: SyncCase,
 ) {
-    run(case, provider).await;
+    run(case, provider, CUE).await;
 }
 
 #[kithara::test(
@@ -1251,23 +1553,35 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: requires product Warp alignment, 2026-09-07"]
-#[case::play_sync_seek(PLAY_SYNC_SEEK)]
-#[case::play_seek_sync(PLAY_SEEK_SYNC)]
-#[case::seek_play_sync(SEEK_PLAY_SYNC)]
-#[case::seek_sync_play(SEEK_SYNC_PLAY)]
-#[case::sync_play_seek(SYNC_PLAY_SEEK)]
-#[case::sync_seek_play(SYNC_SEEK_PLAY)]
-#[case::sequential_sync(SEQUENTIAL_SYNC)]
-#[case::paused_sync_then_play(PAUSED_SYNC)]
-#[case::four_deck_sequential_sync(FOUR_DECK_SYNC)]
-#[case::tempo_up_120hz(TEMPO_UP_120)]
-#[case::tempo_down_30hz(TEMPO_DOWN_30)]
-async fn opt_in_library_product_rows_reach_the_pcm_oracle(
+#[ignore = "ignored-red: product Warp alignment is not implemented"]
+#[case::tunnel_play_sync_seek(tunnel_sources().await, TUNNEL_CUE, PLAY_SYNC_SEEK.gridded())]
+#[case::tunnel_play_seek_sync(tunnel_sources().await, TUNNEL_CUE, PLAY_SEEK_SYNC.gridded())]
+#[case::tunnel_seek_play_sync(tunnel_sources().await, TUNNEL_CUE, SEEK_PLAY_SYNC.gridded())]
+#[case::tunnel_seek_sync_play(tunnel_sources().await, TUNNEL_CUE, SEEK_SYNC_PLAY.gridded())]
+#[case::tunnel_sync_play_seek(tunnel_sources().await, TUNNEL_CUE, SYNC_PLAY_SEEK.gridded())]
+#[case::tunnel_sync_seek_play(tunnel_sources().await, TUNNEL_CUE, SYNC_SEEK_PLAY.gridded())]
+#[case::tunnel_sequential_sync(tunnel_sources().await, TUNNEL_CUE, SEQUENTIAL_SYNC.gridded())]
+#[case::tunnel_paused_sync_then_play(tunnel_sources().await, TUNNEL_CUE, PAUSED_SYNC.gridded())]
+#[case::tunnel_four_deck_sequential_sync(tunnel_sources().await, TUNNEL_CUE, FOUR_DECK_SYNC.gridded())]
+#[case::tunnel_tempo_up_120hz(tunnel_sources().await, TUNNEL_CUE, TEMPO_UP_120.gridded())]
+#[case::tunnel_tempo_down_30hz(tunnel_sources().await, TUNNEL_CUE, TEMPO_DOWN_30.gridded())]
+#[case::newtechno_play_sync_seek(newtechno_sources().await, NEWTECHNO_PHRASE, PLAY_SYNC_SEEK.gridded())]
+#[case::newtechno_play_seek_sync(newtechno_sources().await, NEWTECHNO_PHRASE, PLAY_SEEK_SYNC.gridded())]
+#[case::newtechno_seek_play_sync(newtechno_sources().await, NEWTECHNO_PHRASE, SEEK_PLAY_SYNC.gridded())]
+#[case::newtechno_seek_sync_play(newtechno_sources().await, NEWTECHNO_PHRASE, SEEK_SYNC_PLAY.gridded())]
+#[case::newtechno_sync_play_seek(newtechno_sources().await, NEWTECHNO_PHRASE, SYNC_PLAY_SEEK.gridded())]
+#[case::newtechno_sync_seek_play(newtechno_sources().await, NEWTECHNO_PHRASE, SYNC_SEEK_PLAY.gridded())]
+#[case::newtechno_sequential_sync(newtechno_sources().await, NEWTECHNO_PHRASE, SEQUENTIAL_SYNC.gridded())]
+#[case::newtechno_paused_sync_then_play(newtechno_sources().await, NEWTECHNO_PHRASE, PAUSED_SYNC.gridded())]
+#[case::newtechno_four_deck_sequential_sync(newtechno_sources().await, NEWTECHNO_PHRASE, FOUR_DECK_SYNC.gridded())]
+#[case::newtechno_tempo_up_120hz(newtechno_sources().await, NEWTECHNO_PHRASE, TEMPO_UP_120.gridded())]
+#[case::newtechno_tempo_down_30hz(newtechno_sources().await, NEWTECHNO_PHRASE, TEMPO_DOWN_30.gridded())]
+async fn real_track_product_rows_reach_the_pcm_oracle(
+    #[case] provider: PreparedSources,
+    #[case] start: Start,
     #[case] case: SyncCase,
-    #[future(awt)] library_sources: PreparedSources,
 ) {
-    run(case, library_sources).await;
+    run(case, provider, start).await;
 }
 
 #[kithara::fixture]
@@ -1281,11 +1595,6 @@ pub(super) async fn sweep_sources() -> PreparedSources {
 #[kithara::fixture]
 pub(super) async fn mixed_sources() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
-}
-#[kithara::fixture]
-#[cfg(not(target_os = "android"))]
-pub(super) async fn listening_sources() -> PreparedSources {
-    prepared_sources(DOWNTEMPO_HOUSE_PROVIDER).await
 }
 
 #[kithara::fixture]
@@ -1344,6 +1653,11 @@ async fn source_hls_mp3_drm() -> PreparedSources {
 }
 
 #[kithara::fixture]
-async fn library_sources() -> PreparedSources {
-    prepared_sources(Provider::Library(LIBRARY)).await
+pub(super) async fn tunnel_sources() -> PreparedSources {
+    prepared_sources(Provider::Library(TUNNEL)).await
+}
+
+#[kithara::fixture]
+pub(super) async fn newtechno_sources() -> PreparedSources {
+    prepared_sources(Provider::Library(NEWTECHNO)).await
 }

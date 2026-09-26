@@ -211,6 +211,9 @@ where
             Ok(ProjectionPreparation::Pending) => {
                 return Err(crate::WarpRenderError::PendingActivation);
             }
+            Ok(ProjectionPreparation::Preroll(frames)) => {
+                return Err(crate::WarpRenderError::Preroll { frames });
+            }
             Ok(ProjectionPreparation::Manual(remaining)) => remaining,
             Err(error) => {
                 return Err(error.into());

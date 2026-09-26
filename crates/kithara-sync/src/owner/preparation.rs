@@ -9,7 +9,7 @@ use kithara_warp::{
 use super::{
     descent::Takeover,
     lifecycle::Applied,
-    placement::{Missing, carry, continue_on, place, project},
+    placement::{Missing, Placement, carry, continue_on, place, project},
     state::GroupState,
     timeline::Timeline,
     transaction::take_operation,
@@ -45,6 +45,9 @@ pub(super) enum Entry {
     Launch(Range<SessionFrame>),
     /// A sounding member leaves its applied map.
     Replace,
+    /// A sounding member moves to an exact cue while its applied map keeps
+    /// sounding; a new group grid withdraws it rather than carrying it.
+    Relocate,
 }
 
 /// How far the executor carried a preparation out.
@@ -81,6 +84,16 @@ impl Pending {
         }
     }
 
+    const fn relocates(&self) -> bool {
+        matches!(
+            self,
+            Self::Prepared {
+                entry: Entry::Relocate,
+                ..
+            }
+        )
+    }
+
     const fn armed(&self) -> bool {
         matches!(
             self,
@@ -99,6 +112,15 @@ pub(super) struct PrepareRequest {
     pub(super) transport: TransportRevision,
     pub(super) source: AlignmentSource,
     pub(super) window: Range<SessionFrame>,
+}
+
+/// One admitted decision before it spends an operation identity.
+pub(super) struct Decision {
+    pub(super) member: BeatGridSnapshot,
+    pub(super) load: LoadGeneration,
+    pub(super) transport: TransportRevision,
+    pub(super) entry: Entry,
+    pub(super) replaces: Option<WarpMapRevision>,
 }
 
 /// Every direct member's decisions on a successor group grid, computed
@@ -141,23 +163,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             source,
             window,
         } = request;
-        if matches!(self.timeline, Timeline::Off) {
-            return Err(SyncError::CapabilityUnavailable {
-                capability: SyncCapability::Alignment,
-            });
-        }
-        let member = self
-            .direct_grid(target)
-            .ok_or_else(|| SyncError::MemberNotFound {
-                group_id: self.grid.id(),
-                member_id: target,
-            })?;
-        if let Some(held) = self.pending_of(target).filter(|held| held.armed()) {
-            return Err(SyncError::ArmedOperation {
-                member_id: target,
-                operation: held.operation(),
-            });
-        }
+        let member = self.admissible_member(target)?;
         let lane = self.applied_of(target);
         let replaces = lane.map(Applied::map);
         let (entry, placement) = match (source, lane) {
@@ -190,6 +196,59 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 place(&self.grid, &member, source, &window),
             ),
         };
+        self.admit(
+            Decision {
+                member,
+                load,
+                transport,
+                entry,
+                replaces,
+            },
+            placement,
+        )
+    }
+
+    /// The frozen grid of the direct grid member `target`, if this group has
+    /// a timeline to prepare it on and holds no armed preparation for it.
+    pub(super) fn admissible_member(
+        &self,
+        target: BeatGridId,
+    ) -> Result<BeatGridSnapshot, SyncError> {
+        if matches!(self.timeline, Timeline::Off) {
+            return Err(SyncError::CapabilityUnavailable {
+                capability: SyncCapability::Alignment,
+            });
+        }
+        let member = self
+            .direct_grid(target)
+            .ok_or_else(|| SyncError::MemberNotFound {
+                group_id: self.grid.id(),
+                member_id: target,
+            })?;
+        if let Some(held) = self.pending_of(target).filter(|held| held.armed()) {
+            return Err(SyncError::ArmedOperation {
+                member_id: target,
+                operation: held.operation(),
+            });
+        }
+        Ok(member)
+    }
+
+    /// Projects one placed decision and makes it the member's pending one,
+    /// replacing what the member held.
+    pub(super) fn admit(
+        &mut self,
+        decision: Decision,
+        placement: Result<Placement, Missing>,
+    ) -> Result<SyncAdmission, SyncError> {
+        let Decision {
+            member,
+            load,
+            transport,
+            entry,
+            replaces,
+        } = decision;
+        let target = member.id();
         let mut next_map = self.next_map;
         let planned = placement.and_then(|placement| {
             project(
@@ -237,7 +296,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// and the beats that sound together and gets a new map on the new grid;
     /// one whose activation leaves its window, or whose member grid changed
     /// since, is withdrawn. A sounding member is retargeted from the commit
-    /// frame on, continuing the recording its applied map plays there. A
+    /// frame on, continuing the recording its applied map plays there; a
+    /// relocation it held is withdrawn, and the retarget is a new operation. A
     /// timeline without geometry withdraws every decision but a handoff, and
     /// a new axis withdraws everything, applied maps too.
     pub(super) fn refreshed(
@@ -282,8 +342,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         continue;
                     };
                     let operation = match held {
-                        Some(held) => held.operation(),
-                        None => take_operation(self.grid.id(), &mut next_operation)?,
+                        Some(held) if !held.relocates() => held.operation(),
+                        Some(_) | None => take_operation(self.grid.id(), &mut next_operation)?,
                     };
                     let activation = commit.max(lane.applied().frontier().output());
                     let planned =
@@ -442,8 +502,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
 }
 
 /// The preparations `next` issues and withdraws compared with `held`: each
-/// one a member did not hold before is issued, and each one whose member
-/// holds no preparation afterwards is withdrawn.
+/// one a member did not hold before is issued, and each one whose operation
+/// no preparation of its member carries on afterwards is withdrawn.
 pub(super) fn transition(held: &[Pending], next: &[Pending]) -> SyncTransition {
     let issued = next
         .iter()
@@ -460,9 +520,12 @@ pub(super) fn transition(held: &[Pending], next: &[Pending]) -> SyncTransition {
         .filter_map(Pending::preparation)
         .filter(|preparation| {
             let member = preparation.stamp().member().grid_id();
-            !next
-                .iter()
-                .any(|new| new.preparation().is_some() && new.member() == member)
+            let operation = preparation.stamp().operation();
+            !next.iter().any(|new| {
+                new.preparation().is_some()
+                    && new.member() == member
+                    && new.operation() == operation
+            })
         })
         .map(SyncPreparation::stamp)
         .collect();

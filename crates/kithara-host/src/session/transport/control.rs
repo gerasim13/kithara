@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_signal::SessionFrame;
-use kithara_sync::ParentGridUpdate;
+use kithara_sync::{ParentGridUpdate, SyncError};
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
@@ -428,6 +428,49 @@ fn refresh_observation<T, S>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
+    publish_committed(state, &observation)?;
+    if matches!(
+        state.transport.phase,
+        TransportPhase::Aborting {
+            delivery: AbortDelivery::Pending,
+            ..
+        }
+    ) {
+        deliver_abort(state)?;
+    }
+    if state.transport.ledger_mut().rejected.take().is_some() {
+        return Err(SessionError::TransportCommitRejected);
+    }
+    Ok(observation)
+}
+
+/// Brings the root group up to what the render graph has committed, before a
+/// synchronization command reads it.
+///
+/// Nothing is committed while no graph runs or a route restart holds the
+/// session grid. Delivering a pending abort and reporting a rejected commit
+/// stay with the next transport command.
+///
+/// # Errors
+///
+/// Returns the root group's refusal of the committed session grid.
+pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) -> Result<(), SyncError> {
+    if state.reserved_session_grid.is_some() {
+        return Ok(());
+    }
+    let Some(control) = state.transport_control.as_mut() else {
+        return Ok(());
+    };
+    let observation = control.observation();
+    publish_committed(state, &observation)
+}
+
+/// Publishes the committed session grid on the root group and records the
+/// commit completion the graph reported; both are idempotent.
+fn publish_committed<T, S>(
+    state: &mut SessionState<T, S>,
+    observation: &TransportObservation,
+) -> Result<(), SyncError> {
     if let Some(snapshot) = observation.snapshot()
         && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
     {
@@ -442,19 +485,7 @@ fn refresh_observation<T, S>(
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
     }
-    if matches!(
-        state.transport.phase,
-        TransportPhase::Aborting {
-            delivery: AbortDelivery::Pending,
-            ..
-        }
-    ) {
-        deliver_abort(state)?;
-    }
-    if state.transport.ledger_mut().rejected.take().is_some() {
-        return Err(SessionError::TransportCommitRejected);
-    }
-    Ok(observation)
+    Ok(())
 }
 
 /// Treats the graph's reported pending revision as authoritative for whether an abort happened,

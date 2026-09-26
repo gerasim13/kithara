@@ -356,7 +356,12 @@ fn main() {
         store::root_from_env().unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
     let namespace = store::namespace(&root, fingerprint);
     let unavailable = materialize(&namespace, &resolved, &refreshed(&resolved));
-    for (_, id, def) in &resolved {
+    // Cargo reads an absent watched path as changed on every build, so an
+    // unavailable entry is not watched: its hydration env reruns this script.
+    for (_, id, def) in resolved
+        .iter()
+        .filter(|(name, _, _)| !unavailable.contains_key(name))
+    {
         println!(
             "cargo:rerun-if-changed={}",
             store::entry_path(&namespace, id, def.ext).display()

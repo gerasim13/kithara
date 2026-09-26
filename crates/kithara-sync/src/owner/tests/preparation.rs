@@ -87,12 +87,12 @@ pub(super) fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatG
     asset_grid_with_meter(id, frames, beat_frames, None)
 }
 
-fn observed(meter: Meter) -> Option<MeterFacts> {
+pub(super) fn observed(meter: Meter) -> Option<MeterFacts> {
     let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
     Some(MeterFacts::new(meter, BeatEvidence::Observed, exact))
 }
 
-fn four_four() -> Meter {
+pub(super) fn four_four() -> Meter {
     Meter::new(4).expect("fixture meter is valid")
 }
 
