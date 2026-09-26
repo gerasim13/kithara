@@ -1,4 +1,5 @@
 mod backend;
+mod entry;
 mod fixtures;
 mod playback;
 mod projection;

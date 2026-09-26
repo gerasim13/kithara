@@ -9,12 +9,6 @@ pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100)
 pub(crate) const GRAPH_BLOCK_FRAMES: usize = 128;
 
 #[cfg(test)]
-pub(crate) const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(rate) => rate,
-    None => unreachable!(),
-};
-
-#[cfg(test)]
 pub(crate) const STEREO_CHANNELS: usize = 2;
 
 #[cfg(test)]

@@ -103,6 +103,11 @@ pub(crate) const TOL_20MS: u64 = 882;
 #[cfg(test)]
 pub(crate) const EXTEND_RATE: u32 = 44_100;
 
+/// Half a second at [`EXTEND_RATE`].
+#[cfg(feature = "analysis-beat")]
+#[cfg(test)]
+pub(crate) const EXTEND_BEAT: u64 = 22_050;
+
 pub(crate) const ANALYSIS_PROGRESS_BYTES_VERSION: u32 = 0x4b41_5001;
 pub(crate) const TRACK_ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0007;
 

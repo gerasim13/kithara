@@ -47,8 +47,6 @@ use tracing::info;
 use url::Url;
 
 mod consts {
-    use super::Duration;
-
     pub(super) const WARMUP_CHUNK_BUDGET: usize = 2048;
     pub(super) const RANDOM_SEEK_OPS: usize = 100;
     pub(super) const CHUNKS_PER_RANDOM_SEEK: usize = 2;

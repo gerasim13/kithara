@@ -203,12 +203,12 @@ mod tests {
             .expect("beat NN has a cache tag");
 
         assert!(
-            tag.contains(":grid_bpm_from_beats_v4:"),
+            tag.contains(":grid_bpm_from_beats_v5:"),
             "grid semantics must participate in durable-cache identity"
         );
         assert!(
-            !tag.contains(":grid_bpm_from_beats_v3:"),
-            "a grid at the level the detector reports is not the grid v3 cached"
+            !tag.contains(":grid_bpm_from_beats_v4:"),
+            "bar lines counted on the beat grid are not the ones v4 cached"
         );
         assert!(
             tag.contains(":detector_audio_seamless_v2:"),

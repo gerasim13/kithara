@@ -85,14 +85,14 @@ fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
     })
 }
 
-#[kithara::asset(ext = "mp4", content_type = "audio/mp4")]
+#[kithara::asset(ext = "mp4", content_type = "audio/mp4", fragment)]
 #[case::deck_a_120bpm_48k(0, 220.0)]
 #[case::deck_b_120bpm_48k(1, 880.0)]
 fn rhythm_fmp4_init(index: usize, carrier_hz: f64) -> Vec<u8> {
     rhythm_fmp4(index, carrier_hz).init_segment.clone()
 }
 
-#[kithara::asset(ext = "m4s", content_type = "audio/mp4")]
+#[kithara::asset(ext = "m4s", content_type = "audio/mp4", fragment)]
 #[case::deck_a_120bpm_48k(0, 220.0)]
 #[case::deck_b_120bpm_48k(1, 880.0)]
 fn rhythm_fmp4_media(index: usize, carrier_hz: f64) -> Vec<u8> {
@@ -101,6 +101,20 @@ fn rhythm_fmp4_media(index: usize, carrier_hz: f64) -> Vec<u8> {
         .first()
         .cloned()
         .expect("rhythmic fMP4 has one media segment")
+}
+
+/// The deck the init and media halves play as, analysed as one track.
+#[cfg(feature = "rhythm")]
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    format = super::rhythm::analysed_format,
+    depends_on = ["rhythm_fmp4_init_{case}", "rhythm_fmp4_media_{case}"]
+)]
+#[case::deck_a_120bpm_48k()]
+#[case::deck_b_120bpm_48k()]
+fn analysis_rhythm_fmp4(inputs: &[&[u8]]) -> Vec<u8> {
+    super::rhythm::analysed(&[&inputs.concat()], "mp4")
 }
 
 fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {

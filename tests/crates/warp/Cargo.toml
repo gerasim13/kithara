@@ -35,12 +35,12 @@ usdt = [
 [dependencies]
 kithara = { workspace = true, optional = true, features = ["offline", "queue", "stretch-signalsmith", "tokio-rt-multi-thread"] }
 kithara-beat = { workspace = true }
-kithara-integration-tests = { workspace = true, optional = true, features = ["all"] }
+kithara-integration-tests = { workspace = true, optional = true, features = ["all", "analysis"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-stretch = { workspace = true, default-features = false }
+kithara-stretch = { workspace = true, default-features = false, features = ["stretch-glide"] }
 kithara-test-utils = { workspace = true }
-kithara-warp = { workspace = true, features = ["render"] }
+kithara-warp = { workspace = true, features = ["render", "stretch-glide"] }
 num-traits = { workspace = true }
 serde_json = { workspace = true, optional = true }
 

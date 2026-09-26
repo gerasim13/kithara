@@ -1,4 +1,7 @@
-use std::{num::NonZeroUsize, ops::Deref};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::Deref,
+};
 
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
@@ -8,9 +11,7 @@ use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
 };
-use kithara_signal::SessionEpoch;
-use kithara_sync::SyncMember;
-use kithara_warp::WarpConfigPatch;
+use kithara_warp::{BeatGridId, WarpConfigPatch};
 
 use super::{
     core::{PlayerCore, PlayerRuntime},
@@ -21,7 +22,7 @@ use crate::{
     error::PlayError,
     player::{
         PlayerConfig, PlayerControl,
-        protocol::PlayerSync,
+        staging::SyncStaging,
         state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
     },
     worker::EngineLoad,
@@ -30,7 +31,9 @@ use crate::{
 /// Concrete Player implementation managing items queue.
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
-    pub(crate) sync: PlayerSync,
+    /// Identity of the synchronization group the player's owner builds.
+    pub(super) grid_id: BeatGridId,
+    pub(super) sample_rate: NonZeroU32,
 }
 
 impl<S> Deref for PlayerImpl<S> {
@@ -41,7 +44,7 @@ impl<S> Deref for PlayerImpl<S> {
     }
 }
 
-impl<S> PlayerImpl<S> {
+impl<S: Send + Sync + 'static> PlayerImpl<S> {
     /// Create a new player with the given configuration.
     ///
     /// The player owns one persistent track-geometry grid for its whole life: loading, replacing,
@@ -56,15 +59,6 @@ impl<S> PlayerImpl<S> {
         }
         let pools = config.worker.pools().clone();
         let track_grid = TrackGrid::new(config.track_grid_id, config.sample_rate);
-        let sync = PlayerSync::owning(
-            config.grid_id,
-            config.sample_rate,
-            SessionEpoch::new(0),
-            SyncMember::Grid {
-                alignment: None,
-                grid: Box::new(track_grid.clone()),
-            },
-        );
 
         let bus = config
             .bus
@@ -86,6 +80,14 @@ impl<S> PlayerImpl<S> {
             .cancel(cancel.clone())
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
+        // A web session is not `Send`, so it cannot take receipts from the
+        // staging runtime: a web player stages nothing.
+        #[cfg(not(target_arch = "wasm32"))]
+        let owner: Option<Arc<dyn kithara_sync::ReceiptSink>> =
+            Some(Arc::new(engine.session().clone()));
+        #[cfg(target_arch = "wasm32")]
+        let owner = None;
+        let staging = SyncStaging::new(config.track_grid_id, owner, cancel.clone());
         if config.abr.is_none() {
             let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
             config.abr = Some(AbrController::new(abr_settings));
@@ -96,6 +98,7 @@ impl<S> PlayerImpl<S> {
         let core = PlayerCore {
             engine,
             params,
+            staging,
             track_grid,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),
@@ -108,7 +111,8 @@ impl<S> PlayerImpl<S> {
             items: ItemQueue::new(bus),
         };
         Self {
-            sync,
+            grid_id: config.grid_id,
+            sample_rate: config.sample_rate,
             runtime: Arc::new(PlayerRuntime {
                 core,
                 lifecycle: PlayerLifecycle::open(),

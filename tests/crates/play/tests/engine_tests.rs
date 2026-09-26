@@ -10,7 +10,7 @@ use kithara::{
         Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
         PlayerImpl, Reply, SessionBinding, SessionDispatcher, SlotId,
     },
-    warp::{BeatGrid, BeatGridId},
+    warp::BeatGridId,
 };
 use kithara_integration_tests::test_defaults::consts as shared;
 
@@ -53,13 +53,14 @@ fn make_engine() -> EngineImpl<TestPools> {
 }
 
 fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>> {
+    let instance_id = BeatGridId::allocate().expect("fixture grid id");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .grid_id(instance_id)
             .sample_rate(host.requested_sample_rate())
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );
-    let instance_id = player.id();
     let owner = host.insert(player).expect("insert fixture player instance");
     assert_eq!(owner.id(), instance_id);
     owner

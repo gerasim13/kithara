@@ -34,7 +34,7 @@ pub(crate) mod consts {
     pub(super) const STABLE_WINDOW_BARS: usize = 16;
 
     #[cfg(feature = "beat-backend")]
-    pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v4";
+    pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v5";
 }
 
 #[derive(Builder, Debug, Clone, PartialEq, kithara_derive::BuiltDefault)]

@@ -9,8 +9,9 @@ use kithara_integration_tests::{
 };
 
 use super::sync_product_matrix::{
-    BLOCK_FRAMES, CHANNELS, ONE_DECK, PreparedSources, ProductHarness, SHARED_DEADLINE,
-    SHARED_DEADLINE_CONTROL, SyncCase, mixed_sources, sweep_sources, synthetic_sources,
+    Audible, BLOCK_FRAMES, CHANNELS, CUE, ONE_DECK, PreparedSources, ProductHarness,
+    SHARED_DEADLINE, SHARED_DEADLINE_CONTROL, SyncCase, mixed_sources, sweep_sources,
+    synthetic_sources,
 };
 
 const TWENTY_MS_FRAMES: usize = 960;
@@ -33,7 +34,9 @@ async fn tempo_retarget_run(
     retarget: bool,
     prepared: &PreparedSources,
 ) -> CommandRun {
-    let mut harness = ProductHarness::new_for_block(ONE_DECK, prepared, 0, block_frames).await;
+    let mut harness =
+        ProductHarness::new_for_block(ONE_DECK, prepared, CUE, Audible::Deck(0), block_frames)
+            .await;
     harness.request_sync(ONE_DECK).await;
     let warm_frames = warm_blocks * BLOCK_FRAMES;
     for _ in 0..warm_frames.div_ceil(block_frames) {
@@ -63,7 +66,9 @@ async fn running_sync_run(
     issue_sync: bool,
     prepared: &PreparedSources,
 ) -> CommandRun {
-    let mut harness = ProductHarness::new_for_block(ONE_DECK, prepared, 0, block_frames).await;
+    let mut harness =
+        ProductHarness::new_for_block(ONE_DECK, prepared, CUE, Audible::Deck(0), block_frames)
+            .await;
     let pre_frames = ONE_DECK.sample_rate as usize;
     let settled_frames = BLOCK_FRAMES * 96;
     let command_at_seconds = 8.0;
@@ -309,7 +314,7 @@ async fn running_sync_command_changes_audible_pcm_within_one_block(
 }
 
 async fn capture_intent_sequence(intents: &[SyncIntent], prepared: &PreparedSources) -> CommandRun {
-    let mut harness = ProductHarness::new(ONE_DECK, prepared, 0).await;
+    let mut harness = ProductHarness::new(ONE_DECK, prepared, CUE, Audible::Deck(0)).await;
     harness.decks[0]
         .seek(5.25)
         .unwrap_or_else(|error| panic!("latest-target fixture seek failed: {error}"));
@@ -416,7 +421,7 @@ async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: Prepared
 }
 
 async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> CommandRun {
-    let mut harness = ProductHarness::new(case, prepared, 0).await;
+    let mut harness = ProductHarness::new(case, prepared, CUE, Audible::Deck(0)).await;
     harness.run_operations(case).await;
     harness.ride_tempo(case).await;
     if harness

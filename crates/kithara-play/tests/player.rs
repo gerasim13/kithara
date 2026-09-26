@@ -15,7 +15,7 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
 };
-use kithara_warp::WarpConfig;
+use kithara_warp::{BeatGridId, WarpConfig};
 
 fn worker() -> PlayWorker<TestPools> {
     PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
@@ -321,6 +321,29 @@ fn auto_advance_disabled_via_config() {
             .build(),
     );
     assert!(!player.auto_advance_enabled());
+}
+
+#[kithara::test]
+fn a_player_hands_its_sync_attachment_only_to_the_first_session_it_binds() {
+    let grid_id = BeatGridId::allocate().expect("fixture grid id");
+    let mut player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .grid_id(grid_id)
+            .sample_rate(mock::SAMPLE_RATE)
+            .worker(worker())
+            .build(),
+    );
+
+    let attachment = PlayerControlSource::attach_session(&mut player, mock::session())
+        .expect("the first session binds the player");
+    assert_eq!(attachment.id(), grid_id);
+    assert!(
+        matches!(
+            PlayerControlSource::attach_session(&mut player, mock::session()),
+            Err(PlayError::SessionAlreadyBound)
+        ),
+        "no second owner can take the player's synchronization group"
+    );
 }
 
 #[kithara::test]

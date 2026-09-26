@@ -574,44 +574,22 @@ impl WasmPlayerSelenium {
         let _ = self.driver.screenshot(Path::new(path)).await;
     }
 
+    /// One navigation, as a first-time visitor makes it: the page has to
+    /// reach cross-origin isolation through its service worker on its own.
     async fn open_player_page(&self) -> Result<(), String> {
-        for attempt in 0..3 {
-            self.driver
-                .goto(self.endpoints.page_url())
-                .await
-                .map_err(|err| format!("failed to open page: {err}"))?;
-            self.install_console_capture().await;
-
-            let ready = self
-                .wait_for(
-                    "player bootstrap",
-                    self.config.wait_timeout,
-                    consts::CHECK_INTERVAL,
-                    |snap| snap.playlist.len() >= 2 && snap.status.contains("Ready"),
-                )
-                .await;
-            if ready.is_ok() {
-                return Ok(());
-            }
-
-            let status = self.status_text().await;
-            if status.contains("cross-origin isolation") && attempt < 2 {
-                time::sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-
-            return ready.map(|_| ());
-        }
-
-        Err("failed to bootstrap page after retries".to_string())
-    }
-
-    async fn status_text(&self) -> String {
-        let script = "return document.getElementById('status')?.textContent ?? '';";
-        match self.driver.execute(script, Vec::<Value>::new()).await {
-            Ok(ret) => ret.convert::<String>().unwrap_or_default(),
-            Err(_) => String::new(),
-        }
+        self.driver
+            .goto(self.endpoints.page_url())
+            .await
+            .map_err(|err| format!("failed to open page: {err}"))?;
+        self.install_console_capture().await;
+        self.wait_for(
+            "player bootstrap",
+            self.config.wait_timeout,
+            consts::CHECK_INTERVAL,
+            |snap| snap.playlist.len() >= 2 && snap.status.contains("Ready"),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Best-effort same-origin install, run right after `goto()`. Covers

@@ -15,7 +15,7 @@ pub mod wasm;
 
 pub use api::{CrossfaderBus, HostLevel, crossfader_gain};
 pub use error::PlayError;
-pub use host::{Host, HostConfig, HostOwned};
+pub use host::{Host, HostConfig, HostOwned, PlayerMember};
 pub use kithara_play::SessionSampleRate;
 pub use session::TransportEvent;
 mod consts;

@@ -1,7 +1,6 @@
-#[cfg(feature = "library")]
-use std::io::Cursor;
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    io::Cursor,
+    num::NonZeroUsize,
     sync::{Mutex, OnceLock, PoisonError},
 };
 
@@ -13,48 +12,45 @@ use kithara_analysis::{
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
 };
-use kithara_decode::TrackMetadata;
-#[cfg(feature = "library")]
-use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory};
+use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{thread, time::Duration};
-#[cfg(feature = "library")]
-use kithara_resampler::NoResamplerBackend;
-use kithara_resampler::rubato::RubatoBackend;
+use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 
+use super::assets::analysis_file;
+
 mod consts {
-    pub(super) const BITS_PER_SAMPLE: u16 = 16;
-    pub(super) const BITS_PER_SAMPLE_OFFSET: usize = 34;
-    pub(super) const CHANNELS_OFFSET: usize = 22;
     pub(super) const CHUNK_FRAMES: usize = 4_096;
-    pub(super) const DATA_BYTES_OFFSET: usize = 40;
-    pub(super) const HEADER_BYTES: usize = 44;
-    pub(super) const PCM_FORMAT: u16 = 1;
-    pub(super) const PCM_FORMAT_OFFSET: usize = 20;
-    pub(super) const SAMPLE_BYTES: usize = 2;
-    pub(super) const SAMPLE_RATE_OFFSET: usize = 24;
-    pub(super) const SAMPLE_SCALE: f32 = 32_768.0;
 }
 
-pub(super) fn beat(wav: &[u8]) -> BeatArtifact {
-    let reader = PcmReader::parse_wav(wav).unwrap_or_else(|error| panic!("rhythm WAV: {error}"));
-    analyze(reader).0
-}
-
-#[cfg(feature = "library")]
-pub(in crate::defs) fn beat_encoded(bytes: &[u8], hint: &str) -> (BeatArtifact, u64) {
-    let reader =
-        PcmReader::decode(bytes, hint).unwrap_or_else(|error| panic!("library {hint}: {error}"));
-    analyze(reader)
+/// The analysis file a whole audio track carries: the production beat pass
+/// over the track decoded from `inputs[0]`, read against the rate the track
+/// was decoded at.
+///
+/// # Panics
+///
+/// When the track does not decode: a fixture that is no whole track is
+/// declared a `fragment` and never reaches here.
+pub(in crate::defs) fn analysed(inputs: &[&[u8]], hint: &str) -> Vec<u8> {
+    let track = inputs
+        .first()
+        .expect("invariant: an analysis depends on the track it analyses");
+    let reader = PcmReader::decode(track, hint)
+        .unwrap_or_else(|error| panic!("analysed {hint} track: {error}"));
+    let rate = reader.spec.sample_rate;
+    let (artifact, frames) = analyze(reader);
+    analysis_file(artifact, frames, rate)
 }
 
 /// One analysis at a time: a session keeps the whole mono track and its
 /// detection buffers in the worker's shared pool region, and `build.rs`
-/// materialises every library sidecar in one batch, so eleven concurrent
-/// sessions exceeded the region budget and settled without a beat grid.
-fn analyze(reader: PcmReader) -> (BeatArtifact, u64) {
+/// materialises analyses in parallel batches, so concurrent sessions exceeded
+/// the region budget and settled without a beat grid.
+///
+/// A track the pass hears no beat in carries no beat artifact.
+fn analyze(reader: PcmReader) -> (Option<BeatArtifact>, u64) {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let rate = reader.spec.sample_rate;
@@ -80,11 +76,7 @@ fn analyze(reader: PcmReader) -> (BeatArtifact, u64) {
     let frames = analysis
         .extent()
         .expect("settled rhythm analysis has a source extent");
-    let artifact = analysis
-        .beat()
-        .expect("production rhythm analysis produced no beat artifact")
-        .artifact()
-        .clone();
+    let artifact = analysis.beat().map(|beat| beat.artifact().clone());
     (artifact, frames)
 }
 
@@ -111,7 +103,6 @@ struct PcmReader {
 }
 
 impl PcmReader {
-    #[cfg(feature = "library")]
     fn decode(bytes: &[u8], hint: &str) -> Result<Self, String> {
         let config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
             .pools(pools())
@@ -141,48 +132,6 @@ impl PcmReader {
             bus: EventBus::default(),
             cursor: 0,
             pools: pools(),
-        })
-    }
-
-    fn parse_wav(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.get(..4) != Some(b"RIFF")
-            || bytes.get(8..12) != Some(b"WAVE")
-            || bytes.get(36..40) != Some(b"data")
-        {
-            return Err("expected a canonical RIFF/WAVE PCM file".to_owned());
-        }
-        let format = u16_field(bytes, consts::PCM_FORMAT_OFFSET)?;
-        let bits = u16_field(bytes, consts::BITS_PER_SAMPLE_OFFSET)?;
-        let channels = u16_field(bytes, consts::CHANNELS_OFFSET)?;
-        let sample_rate = NonZeroU32::new(u32_field(bytes, consts::SAMPLE_RATE_OFFSET)?)
-            .ok_or_else(|| "sample rate is zero".to_owned())?;
-        if format != consts::PCM_FORMAT || bits != consts::BITS_PER_SAMPLE || channels == 0 {
-            return Err(format!(
-                "unsupported WAV format={format}, bits={bits}, channels={channels}"
-            ));
-        }
-        let data_bytes = usize::try_from(u32_field(bytes, consts::DATA_BYTES_OFFSET)?)
-            .map_err(|error| format!("WAV data size: {error}"))?;
-        let payload = bytes
-            .get(consts::HEADER_BYTES..consts::HEADER_BYTES.saturating_add(data_bytes))
-            .ok_or_else(|| "WAV data chunk is truncated".to_owned())?;
-        if !payload
-            .len()
-            .is_multiple_of(usize::from(channels) * consts::SAMPLE_BYTES)
-        {
-            return Err("WAV data does not contain complete frames".to_owned());
-        }
-        let samples = payload
-            .chunks_exact(consts::SAMPLE_BYTES)
-            .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / consts::SAMPLE_SCALE)
-            .collect();
-        Ok(Self {
-            samples,
-            bus: EventBus::default(),
-            cursor: 0,
-            metadata: TrackMetadata::default(),
-            pools: pools(),
-            spec: AudioSpec::new(channels, sample_rate),
         })
     }
 
@@ -289,18 +238,4 @@ impl AudioControl for PcmReader {
             landed_at: self.position_at(self.cursor),
         })
     }
-}
-
-fn u16_field(bytes: &[u8], offset: usize) -> Result<u16, String> {
-    let bytes = bytes
-        .get(offset..offset.saturating_add(2))
-        .ok_or_else(|| format!("WAV u16 field at {offset} is truncated"))?;
-    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-}
-
-fn u32_field(bytes: &[u8], offset: usize) -> Result<u32, String> {
-    let bytes = bytes
-        .get(offset..offset.saturating_add(4))
-        .ok_or_else(|| format!("WAV u32 field at {offset} is truncated"))?;
-    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }

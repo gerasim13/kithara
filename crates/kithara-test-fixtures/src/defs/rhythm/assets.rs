@@ -2,13 +2,17 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_analysis::{
     AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate, AnalysisFingerprint, AnalysisProgress,
-    AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, RangeSet, TrackAnalysis,
+    AnalysisToken, BeatAnalysisConfig, BeatArtifact, BeatSnapshot, BeatState, RangeSet,
+    TrackAnalysis,
 };
+use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_macros as kithara;
 
 use super::score::{self, ChannelLayout, Control, Origin, Style};
 
 mod consts {
+    /// The rate the score renders every rhythm track at.
+    pub(super) const RATE: u32 = 48_000;
     pub(super) const RHYTHM_FRAMES: u64 = 48_000 * 12;
     pub(super) const RHYTHM_LISTENING_FRAMES: u64 = 48_000 * 45;
     pub(super) const RHYTHM_LISTENING_LONG_FRAMES: u64 = 48_000 * 55;
@@ -164,8 +168,9 @@ fn rhythm_wav_scenario_1_origin_zero_pickup_long(style: Style) -> Vec<u8> {
 #[case::breakbeat_140_missing_beat(Style::Breakbeat, Control::MissingBeat)]
 fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth(style, control)),
+        Some(BeatArtifact::from(score::truth(style, control))),
         consts::RHYTHM_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -180,8 +185,9 @@ fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -
 #[case::house_124_right_only(Style::House)]
 fn rhythm_expected_analysis_scenario_1(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth(style, Control::Aligned)),
+        Some(BeatArtifact::from(score::truth(style, Control::Aligned))),
         consts::RHYTHM_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -194,8 +200,12 @@ fn rhythm_expected_analysis_scenario_1(_inputs: &[&[u8]], style: Style) -> Vec<u
 #[case::house_124_right_only_pickup(Style::House)]
 fn rhythm_expected_analysis_scenario_2(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth(style, Control::OneBeatBarLate)),
+        Some(BeatArtifact::from(score::truth(
+            style,
+            Control::OneBeatBarLate,
+        ))),
         consts::RHYTHM_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -209,12 +219,13 @@ fn rhythm_expected_analysis_scenario_2(_inputs: &[&[u8]], style: Style) -> Vec<u
 #[case::downtempo_96_left_only(Style::Downtempo)]
 fn rhythm_expected_analysis_scenario_1_origin_zero(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth_at_origin(
+        Some(BeatArtifact::from(score::truth_at_origin(
             style,
             Control::Aligned,
             Origin::Zero,
-        )),
+        ))),
         consts::RHYTHM_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -231,13 +242,14 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_long(
     style: Style,
 ) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth_at_origin_for_frames(
+        Some(BeatArtifact::from(score::truth_at_origin_for_frames(
             style,
             Control::Aligned,
             Origin::Zero,
             consts::RHYTHM_LONG_FRAMES,
-        )),
+        ))),
         consts::RHYTHM_LONG_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -253,13 +265,14 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_listening(
     style: Style,
 ) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth_at_origin_for_frames(
+        Some(BeatArtifact::from(score::truth_at_origin_for_frames(
             style,
             Control::Aligned,
             Origin::Zero,
             consts::RHYTHM_LISTENING_FRAMES,
-        )),
+        ))),
         consts::RHYTHM_LISTENING_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -275,13 +288,14 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_listening_long(
     style: Style,
 ) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth_at_origin_for_frames(
+        Some(BeatArtifact::from(score::truth_at_origin_for_frames(
             style,
             Control::Aligned,
             Origin::Zero,
             consts::RHYTHM_LISTENING_LONG_FRAMES,
-        )),
+        ))),
         consts::RHYTHM_LISTENING_LONG_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -297,13 +311,14 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_pickup_listening(
     style: Style,
 ) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth_at_origin_for_frames(
+        Some(BeatArtifact::from(score::truth_at_origin_for_frames(
             style,
             Control::OneBeatBarLate,
             Origin::Zero,
             consts::RHYTHM_LISTENING_FRAMES,
-        )),
+        ))),
         consts::RHYTHM_LISTENING_FRAMES,
+        truth_rate(),
     )
 }
 
@@ -320,70 +335,57 @@ fn rhythm_expected_analysis_scenario_1_origin_zero_pickup_long(
     style: Style,
 ) -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth_at_origin_for_frames(
+        Some(BeatArtifact::from(score::truth_at_origin_for_frames(
             style,
             Control::OneBeatBarLate,
             Origin::Zero,
             consts::RHYTHM_LONG_FRAMES,
-        )),
+        ))),
         consts::RHYTHM_LONG_FRAMES,
-    )
-}
-
-#[kithara::asset(
-    ext = "analysis",
-    content_type = "application/x-kithara-analysis",
-    format = analysis_format,
-    depends_on = ["rhythm_wav_{case}"]
-)]
-#[case::ambient_dub_62_aligned()]
-#[case::ambient_dub_62_one_frame_late()]
-#[case::ambient_dub_62_one_beat_bar_late()]
-#[case::ambient_dub_62_missing_beat()]
-#[case::trip_hop_74_aligned()]
-#[case::trip_hop_74_one_frame_late()]
-#[case::trip_hop_74_one_beat_bar_late()]
-#[case::trip_hop_74_missing_beat()]
-#[case::downtempo_96_aligned()]
-#[case::downtempo_96_one_frame_late()]
-#[case::downtempo_96_one_beat_bar_late()]
-#[case::downtempo_96_missing_beat()]
-#[case::house_124_aligned()]
-#[case::house_124_one_frame_late()]
-#[case::house_124_one_beat_bar_late()]
-#[case::house_124_missing_beat()]
-#[case::techno_132_aligned()]
-#[case::techno_132_one_frame_late()]
-#[case::techno_132_one_beat_bar_late()]
-#[case::techno_132_missing_beat()]
-#[case::breakbeat_140_aligned()]
-#[case::breakbeat_140_one_frame_late()]
-#[case::breakbeat_140_one_beat_bar_late()]
-#[case::breakbeat_140_missing_beat()]
-fn rhythm_analyzed_analysis(inputs: &[&[u8]]) -> Vec<u8> {
-    analysis_file(
-        super::analyze::beat(
-            inputs
-                .first()
-                .expect("invariant: the declared rhythm WAV dependency is present"),
-        ),
-        consts::RHYTHM_FRAMES,
+        truth_rate(),
     )
 }
 
 /// One analysis file in the format every analysis fixture is written in.
 pub(in crate::defs) fn analysis_format() -> Vec<u8> {
     analysis_file(
-        BeatArtifact::from(score::truth(Style::House, Control::Aligned)),
+        Some(BeatArtifact::from(score::truth(
+            Style::House,
+            Control::Aligned,
+        ))),
         consts::RHYTHM_FRAMES,
+        truth_rate(),
     )
 }
 
-pub(in crate::defs) fn analysis_file(artifact: BeatArtifact, frames: u64) -> Vec<u8> {
+/// The format of an analysis the beat pass produced, followed by what the
+/// pass was built under: a new detector or grid keys every analysed fixture
+/// afresh instead of serving the grid an older pass stored.
+pub(in crate::defs) fn analysed_format() -> Vec<u8> {
+    let mut format = analysis_format();
+    format.extend_from_slice(
+        BeatAnalysisConfig::<RubatoBackend>::default()
+            .cache_tag()
+            .expect("the fixture build runs the beat pass")
+            .as_bytes(),
+    );
+    format
+}
+
+fn truth_rate() -> NonZeroU32 {
+    NonZeroU32::new(consts::RATE).expect("invariant: the score renders at a non-zero rate")
+}
+
+/// An analysis file stating `artifact` over `frames` source frames at
+/// `sample_rate`, the rate the frames count in.
+pub(in crate::defs) fn analysis_file(
+    artifact: Option<BeatArtifact>,
+    frames: u64,
+    sample_rate: NonZeroU32,
+) -> Vec<u8> {
     const CHUNK_SECONDS: u64 = 16;
     const FINGERPRINT: &str = "rhythm-fixture:v1";
 
-    let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate");
     let mut coverage = RangeSet::new();
     coverage.insert(0..frames);
     let analysis = TrackAnalysis::builder()
@@ -395,7 +397,9 @@ pub(in crate::defs) fn analysis_file(artifact: BeatArtifact, frames: u64) -> Vec
         .fingerprint(AnalysisFingerprint::new(Some(FINGERPRINT), None))
         .settled(true)
         .maybe_waveform(None)
-        .beat(BeatSnapshot::new(artifact, BeatState::Final, Vec::new()))
+        .maybe_beat(
+            artifact.map(|artifact| BeatSnapshot::new(artifact, BeatState::Final, Vec::new())),
+        )
         .build();
     let progress = AnalysisProgress::try_from(analysis)
         .expect("settled fixture analysis forms final progress");
