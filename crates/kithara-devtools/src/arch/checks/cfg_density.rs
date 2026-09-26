@@ -13,30 +13,30 @@ pub(crate) mod consts {
     pub(crate) const ID: &str = "cfg_density";
 
     pub(super) const EXPLANATION: &str = "\
-    Summary: Too many `#[cfg(...)]` gates scattered across individual items.
+Summary: Too many `#[cfg(...)]` gates scattered across individual items.
 
-    Why: Repeated cfg attributes are noisy, error-prone (easy to forget one
-    branch), and make the file hard to read. Grouping gated code into
-    dedicated modules with a single `#[cfg]` on the `mod` declaration is
-    cleaner and more maintainable.
+Why: Repeated cfg attributes are noisy, error-prone (easy to forget one
+branch), and make the file hard to read. Grouping gated code into
+dedicated modules with a single `#[cfg]` on the `mod` declaration is
+cleaner and more maintainable.
 
-    Bad:
-        #[cfg(not(target_arch = \"wasm32\"))]
-        use std::env;
-        #[cfg(not(target_arch = \"wasm32\"))]
-        fn native_only() { ... }
-        #[cfg(target_arch = \"wasm32\")]
-        fn wasm_only() { ... }
+Bad:
+    #[cfg(not(target_arch = \"wasm32\"))]
+    use std::env;
+    #[cfg(not(target_arch = \"wasm32\"))]
+    fn native_only() { ... }
+    #[cfg(target_arch = \"wasm32\")]
+    fn wasm_only() { ... }
 
-    Good:
-        #[cfg(not(target_arch = \"wasm32\"))]
-        mod native;
-        #[cfg(target_arch = \"wasm32\")]
-        mod wasm;
+Good:
+    #[cfg(not(target_arch = \"wasm32\"))]
+    mod native;
+    #[cfg(target_arch = \"wasm32\")]
+    mod wasm;
 
-    Resolve: move gated production items into dedicated platform or feature
-    modules and gate each module once. Test-only item ranges are excluded
-    automatically.";
+Resolve: move gated production items into dedicated platform or feature
+modules and gate each module once. Test-only item ranges are excluded
+automatically.";
 }
 
 pub(crate) struct CfgDensity;

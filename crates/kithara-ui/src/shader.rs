@@ -195,11 +195,11 @@ mod tests {
 
     mod consts {
         pub(super) const FRAGMENT: &str = r#"
-        @fragment
-        fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-        return vec4<f32>(position.xy / kithara.viewport.xy, kithara.level.x, 1.0);
-        }
-        "#;
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(position.xy / kithara.viewport.xy, kithara.level.x, 1.0);
+}
+"#;
     }
 
     #[kithara::test]

@@ -17,31 +17,31 @@ pub(crate) mod consts {
     pub(crate) const ID: &str = "loop_allocation";
 
     pub(super) const EXPLANATION: &str = "\
-    Detected a heap-allocating expression inside a loop body that runs once \
-    per iteration.
+Detected a heap-allocating expression inside a loop body that runs once \
+per iteration.
 
-    Why it matters. `format!()`, `String::with_capacity()`, `Vec::with_capacity()`, `Box::new(...)`, \
-    `.to_string()`, `.to_owned()` — each one allocates from the global allocator. \
-    Inside a loop that runs N times, this is N allocations, N drops, N free-list \
-    churn rounds. For audio/render hot paths (process callback, decoder loop, \
-    HLS scheduler tick) even small per-iteration allocations destroy cache \
-    locality and add jitter to latency-critical code.
+Why it matters. `format!()`, `String::with_capacity()`, `Vec::with_capacity()`, `Box::new(...)`, \
+`.to_string()`, `.to_owned()` — each one allocates from the global allocator. \
+Inside a loop that runs N times, this is N allocations, N drops, N free-list \
+churn rounds. For audio/render hot paths (process callback, decoder loop, \
+HLS scheduler tick) even small per-iteration allocations destroy cache \
+locality and add jitter to latency-critical code.
 
-    The fix is usually one of:
-    - Hoist the allocation out of the loop.
-    - Reuse structural storage (`Vec::clear()` + `extend(...)` or `write!(&mut buf, ...)`).
-    - For bytes or decoded samples, acquire once from the injected `PoolRegion<S>`
-      with `get::<u8>()` or `get::<f32>()`, then use checked `ensure_len` or
-      `try_extend_from_slice` outside the loop.
-    - Pre-size once with `Vec::with_capacity(N)` outside the loop so growth is amortised.
+The fix is usually one of:
+- Hoist the allocation out of the loop.
+- Reuse structural storage (`Vec::clear()` + `extend(...)` or `write!(&mut buf, ...)`).
+- For bytes or decoded samples, acquire once from the injected `PoolRegion<S>`
+  with `get::<u8>()` or `get::<f32>()`, then use checked `ensure_len` or
+  `try_extend_from_slice` outside the loop.
+- Pre-size once with `Vec::with_capacity(N)` outside the loop so growth is amortised.
 
-    ❌  for sample in chunk.frames() { let label = format!(\"frame-{}\", sample.id); log_debug(&label); }
-    ✅  let mut label = String::new(); for sample in chunk.frames() { label.clear(); write!(&mut label, \"frame-{}\", sample.id).unwrap(); log_debug(&label); }
+❌  for sample in chunk.frames() { let label = format!(\"frame-{}\", sample.id); log_debug(&label); }
+✅  let mut label = String::new(); for sample in chunk.frames() { label.clear(); write!(&mut label, \"frame-{}\", sample.id).unwrap(); log_debug(&label); }
 
-    Suppress with `// xtask-lint-ignore: loop_allocation` when the allocation \
-    is unavoidable (each iteration produces a distinct owned output that \
-    escapes the loop) or when the loop is cold and the allocation isn't a \
-    performance concern (initialization, error formatting).";
+Suppress with `// xtask-lint-ignore: loop_allocation` when the allocation \
+is unavoidable (each iteration produces a distinct owned output that \
+escapes the loop) or when the loop is cold and the allocation isn't a \
+performance concern (initialization, error formatting).";
 }
 
 pub(crate) struct LoopAllocation;

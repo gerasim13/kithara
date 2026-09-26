@@ -19,34 +19,34 @@ pub(crate) mod consts {
     pub(crate) const ID: &str = "retry_fallback";
 
     pub(super) const EXPLANATION: &str = "\
-    Detected a retry/attempt counter or try-then-fallback chain. Both \
-    patterns paper over a broken primary path: if the first call may fail, \
-    fix the contract — don't hide the bug behind N attempts or a chain of \
-    alternative implementations.
+Detected a retry/attempt counter or try-then-fallback chain. Both \
+patterns paper over a broken primary path: if the first call may fail, \
+fix the contract — don't hide the bug behind N attempts or a chain of \
+alternative implementations.
 
-    Why it matters. `attempt`, `retries`, `max_retries`, and `fallback` \
-    fields turn a single algorithmic failure into a per-call lottery. The \
-    test that fails 1-in-10 with a retry-3 wrapper hides a real race; the \
-    production path that 'falls back to B if A fails' double-encodes the \
-    problem (A is wrong, B is also wrong, the contract is wrong). They \
-    also accumulate: each new attempt grows the surface for new races, \
-    each fallback hides another underlying failure mode.
+Why it matters. `attempt`, `retries`, `max_retries`, and `fallback` \
+fields turn a single algorithmic failure into a per-call lottery. The \
+test that fails 1-in-10 with a retry-3 wrapper hides a real race; the \
+production path that 'falls back to B if A fails' double-encodes the \
+problem (A is wrong, B is also wrong, the contract is wrong). They \
+also accumulate: each new attempt grows the surface for new races, \
+each fallback hides another underlying failure mode.
 
-    ❌  if request.attempt == 0 { try_seek() } else if request.attempt < MAX { retry() }
-    ✅  fix `try_seek` so it always lands or returns a typed error the caller \
-       handles deterministically.
+❌  if request.attempt == 0 { try_seek() } else if request.attempt < MAX { retry() }
+✅  fix `try_seek` so it always lands or returns a typed error the caller \
+   handles deterministically.
 
-    ❌  fn read_or_fallback(...) -> Bytes { read_primary().unwrap_or_else(read_secondary) }
-    ✅  pick one source (or model the choice as user-facing config), don't \
-       chain implementations.
+❌  fn read_or_fallback(...) -> Bytes { read_primary().unwrap_or_else(read_secondary) }
+✅  pick one source (or model the choice as user-facing config), don't \
+   chain implementations.
 
-    Exact identifiers listed in `retry_fallback.allowed_idents` are excluded from \
-    this lexical check.
+Exact identifiers listed in `retry_fallback.allowed_idents` are excluded from \
+this lexical check.
 
-    Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for legitimate \
-    user-facing defaults (e.g. a config field literally named `fallback_url` \
-    where the user opted in to two endpoints). Suppression for control flow \
-    is a code smell that should be discussed and fixed, not silenced.";
+Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for legitimate \
+user-facing defaults (e.g. a config field literally named `fallback_url` \
+where the user opted in to two endpoints). Suppression for control flow \
+is a code smell that should be discussed and fixed, not silenced.";
 }
 
 pub(crate) struct RetryFallback;

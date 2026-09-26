@@ -31,14 +31,14 @@ mod consts {
     /// menu row covers, which is the arrangement both shipped menus - the burger
     /// and the quality picker - stand in.
     pub(super) const OVER_THE_PAGE: &str = r#"Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-        Popover(id: "menu", open: View(id: "menu"), align: Start,
-            anchor: Pressable(id: "burger", press: View(id: "menu"),
-                child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
-            content: Pressable(id: "item", press: Command(id: "fixture.pick"),
-                child: Spacer(id: "item-face", size: Some((w: Fixed(100.0), h: Fixed(26.0)))))),
-        Pressable(id: "page", press: Command(id: "fixture.page"),
-            child: Spacer(id: "page-face", size: Some((w: Fill, h: Fill)))),
-    ])"#;
+    Popover(id: "menu", open: View(id: "menu"), align: Start,
+        anchor: Pressable(id: "burger", press: View(id: "menu"),
+            child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+        content: Pressable(id: "item", press: Command(id: "fixture.pick"),
+            child: Spacer(id: "item-face", size: Some((w: Fixed(100.0), h: Fixed(26.0)))))),
+    Pressable(id: "page", press: Command(id: "fixture.page"),
+        child: Spacer(id: "page-face", size: Some((w: Fill, h: Fill)))),
+])"#;
 
     /// The window both hosts open the document in.
     pub(super) const WINDOW: (u32, u32) = (240, 160);

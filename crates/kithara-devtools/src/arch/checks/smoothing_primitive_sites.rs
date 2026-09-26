@@ -7,9 +7,9 @@ pub(crate) mod consts {
     pub(crate) const ID: &str = "smoothing_primitive_sites";
 
     pub(super) const EXPLANATION: &str = "\
-    Runtime parameters use firewheel `SmoothedParam`, composed as `MixDSP` for
-    A-to-B transitions. `SmoothingFilter` is sanctioned only for the equalizer's
-    biquad gain bank; move parameter smoothing to the owning config and primitive.";
+Runtime parameters use firewheel `SmoothedParam`, composed as `MixDSP` for
+A-to-B transitions. `SmoothingFilter` is sanctioned only for the equalizer's
+biquad gain bank; move parameter smoothing to the owning config and primitive.";
 }
 
 pub(crate) struct SmoothingPrimitiveSites;

@@ -185,22 +185,22 @@ use kithara_devtools::{CoreCommand, Ctx};
 #[derive(Debug, Parser)]
 #[command(name = "xtask")]
 struct Cli {
-#[command(subcommand)]
-command: Command,
+    #[command(subcommand)]
+    command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-#[command(flatten)]
-Core(CoreCommand),
+    #[command(flatten)]
+    Core(CoreCommand),
 }
 
 fn main() -> anyhow::Result<()> {
-let cli = Cli::parse();
-let ctx = Ctx::load()?;
-match cli.command {
-    Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
-}
+    let cli = Cli::parse();
+    let ctx = Ctx::load()?;
+    match cli.command {
+        Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
+    }
 }
 "#;
 
@@ -210,12 +210,12 @@ pub(crate) const MAX_CASE_OUTPUT_BYTES: usize = 8 * 1_024 * 1_024;
 #[cfg(test)]
 pub(crate) const XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="2" failures="1">
-<testsuite name="demo-tests::suite_light" tests="2" failures="1">
-<testcase name="offline::gapless" classname="demo-tests::suite_light" time="1.532"/>
-<testcase name="offline::seek" classname="demo-tests::suite_light" time="0.201">
-  <failure type="test failure">boom</failure>
-</testcase>
-</testsuite>
+  <testsuite name="demo-tests::suite_light" tests="2" failures="1">
+    <testcase name="offline::gapless" classname="demo-tests::suite_light" time="1.532"/>
+    <testcase name="offline::seek" classname="demo-tests::suite_light" time="0.201">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
 </testsuites>"#;
 
 /// What nextest writes for a test that failed an attempt and passed a later
@@ -225,16 +225,16 @@ pub(crate) const XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 #[cfg(test)]
 pub(crate) const RETRIED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="1" failures="0">
-<testsuite name="demo-tests::suite_stress" tests="1" failures="0">
-<testcase name="abr::switch" classname="demo-tests::suite_stress" time="2.100">
-  <flakyFailure type="test failure" message="boom">panicked at abr.rs:7
-    <system-out>red stdout</system-out>
-    <system-err>red stderr</system-err>
-  </flakyFailure>
-  <system-out>green stdout</system-out>
-  <system-err></system-err>
-</testcase>
-</testsuite>
+  <testsuite name="demo-tests::suite_stress" tests="1" failures="0">
+    <testcase name="abr::switch" classname="demo-tests::suite_stress" time="2.100">
+      <flakyFailure type="test failure" message="boom">panicked at abr.rs:7
+        <system-out>red stdout</system-out>
+        <system-err>red stderr</system-err>
+      </flakyFailure>
+      <system-out>green stdout</system-out>
+      <system-err></system-err>
+    </testcase>
+  </testsuite>
 </testsuites>"#;
 
 /// What nextest writes for a failed `assert_eq!`: the panic header is
@@ -242,16 +242,16 @@ pub(crate) const RETRIED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 #[cfg(test)]
 pub(crate) const PANIC: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="1" failures="1">
-<testsuite name="demo-tests::suite_light" tests="1" failures="1">
-<testcase name="audio::warms_pool" classname="demo-tests::suite_light" time="0.536">
-  <failure message="thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5" type="test failure with exit code 101">thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5:
+  <testsuite name="demo-tests::suite_light" tests="1" failures="1">
+    <testcase name="audio::warms_pool" classname="demo-tests::suite_light" time="0.536">
+      <failure message="thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5" type="test failure with exit code 101">thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5:
 assertion `left == right` failed: a warmed pool must serve decode-sized buffers without allocating
-left: 0
-right: 1
+  left: 0
+ right: 1
 stack backtrace:
-0: __rustc::rust_begin_unwind</failure>
-</testcase>
-</testsuite>
+   0: __rustc::rust_begin_unwind</failure>
+    </testcase>
+  </testsuite>
 </testsuites>"#;
 
 pub(crate) const SWEEP_INSTALL_HINT: &str = "cargo install cargo-modules";
@@ -352,11 +352,11 @@ path = \"junit.xml\"
 pub(crate) const RETRIED_PASS: &str = "\
 <?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <testsuites name=\"nextest-run\" tests=\"1\" failures=\"0\" errors=\"0\" uuid=\"1\" timestamp=\"t\" time=\"0.049\">
-<testsuite name=\"kithara_queue\" tests=\"1\" disabled=\"0\" errors=\"0\" failures=\"0\">
-    <testcase name=\"delayed_target\" classname=\"kithara_queue\" time=\"0.019\">
-        <flakyFailure message=\"panicked at delayed.rs:9\" type=\"test failure with exit code 101\">assertion failed</flakyFailure>
-    </testcase>
-</testsuite>
+    <testsuite name=\"kithara_queue\" tests=\"1\" disabled=\"0\" errors=\"0\" failures=\"0\">
+        <testcase name=\"delayed_target\" classname=\"kithara_queue\" time=\"0.019\">
+            <flakyFailure message=\"panicked at delayed.rs:9\" type=\"test failure with exit code 101\">assertion failed</flakyFailure>
+        </testcase>
+    </testsuite>
 </testsuites>
 ";
 
@@ -398,8 +398,8 @@ pub(crate) const REPEATS_ENV: &str = "KITHARA_STRESS_REPEATS";
 pub(crate) const VIOLATION: &str = "\
 ==2534==ERROR: RealtimeSanitizer: unsafe-library-call
 Intercepted call to real-time unsafe function `malloc` in real-time context!
-#0 0x5628d3a1b2c0 in malloc (/opt/bin/suite_stress+0x1042c0)
-#1 0x5628d3c11f30 in kithara_audio::renderer::mix crates/kithara-audio/src/renderer/mix.rs:214:23
+    #0 0x5628d3a1b2c0 in malloc (/opt/bin/suite_stress+0x1042c0)
+    #1 0x5628d3c11f30 in kithara_audio::renderer::mix crates/kithara-audio/src/renderer/mix.rs:214:23
 ";
 
 /// Where a launched lane records what repeat count it was handed.
@@ -518,9 +518,9 @@ pub(crate) const ATTEMPT_MARKER: &str = "[kithara_stress] attempt ";
 pub(crate) const UNSAFE_CALL: &str = "\
 ==2534==ERROR: RealtimeSanitizer: unsafe-library-call
 Intercepted call to real-time unsafe function `malloc` in real-time context!
-#0 0x5628d3a1b2c0 in malloc (/opt/bin/suite_light+0x1042c0)
-#1 0x5628d3b0e1a4 in alloc::alloc::alloc /rustc/abc/library/alloc/src/alloc.rs:100:9
-#2 0x5628d3c11f30 in kithara_audio::renderer::mix crates/kithara-audio/src/renderer/mix.rs:214:23
+    #0 0x5628d3a1b2c0 in malloc (/opt/bin/suite_light+0x1042c0)
+    #1 0x5628d3b0e1a4 in alloc::alloc::alloc /rustc/abc/library/alloc/src/alloc.rs:100:9
+    #2 0x5628d3c11f30 in kithara_audio::renderer::mix crates/kithara-audio/src/renderer/mix.rs:214:23
 
 test kithara_play::rt_metrics::a_healthy_track_reports_no_trouble ... ok
 ";
@@ -529,8 +529,8 @@ test kithara_play::rt_metrics::a_healthy_track_reports_no_trouble ... ok
 pub(crate) const BLOCKING_CALL: &str = "\
 ==2534==ERROR: RealtimeSanitizer: blocking-call
 Call to blocking function `pthread_mutex_lock` in real-time context!
-#0 0x5628d3a1b2c0 in pthread_mutex_lock (/opt/bin/suite_light+0x1042c0)
-#1 0x5628d3c11f30 in kithara_audio::renderer::slot crates/kithara-audio/src/renderer/slot.rs:88:9
+    #0 0x5628d3a1b2c0 in pthread_mutex_lock (/opt/bin/suite_light+0x1042c0)
+    #1 0x5628d3c11f30 in kithara_audio::renderer::slot crates/kithara-audio/src/renderer/slot.rs:88:9
 ";
 
 pub(crate) const PERCENT_SCALE: usize = 100;
@@ -543,9 +543,9 @@ pub(crate) const MAX_LANE_LOG_BYTES: u64 = 512 * 1_024 * 1_024;
 
 #[cfg(test)]
 pub(crate) const PASSED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
-<testsuite name="demo::tests@stress-0">
-<testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z"/>
-</testsuite>
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z"/>
+  </testsuite>
 </testsuites>"#;
 
 pub(crate) const FLASH_TOGGLE: &str = "flash";

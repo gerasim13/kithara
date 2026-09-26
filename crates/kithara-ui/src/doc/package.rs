@@ -140,15 +140,15 @@ mod tests {
 
     mod consts {
         pub(super) const MANIFEST: &str = r#"(
-            schema: "kithara.package",
-            version: 1,
-            id: "kithara-default",
-            contract: 1,
-            screens: {
-                "player": "player.klayout.ron",
-                "player-single": "player-single.klayout.ron",
-            },
-        )"#;
+        schema: "kithara.package",
+        version: 1,
+        id: "kithara-default",
+        contract: 1,
+        screens: {
+            "player": "player.klayout.ron",
+            "player-single": "player-single.klayout.ron",
+        },
+    )"#;
     }
 
     fn layout(id: &str) -> String {

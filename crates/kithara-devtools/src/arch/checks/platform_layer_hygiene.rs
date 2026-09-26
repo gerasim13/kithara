@@ -17,31 +17,31 @@ pub(crate) mod consts {
     pub(crate) const ID: &str = "platform_layer_hygiene";
 
     pub(super) const EXPLANATION: &str = "\
-    Summary: a raw `parking_lot` / `web_time` / `std::sync::{Mutex,RwLock,Condvar}`
-    import sits in the platform's backend-agnostic layer (`flash`/`common`, outside
-    the primitive-implementation sub-trees). These modules must route sync and time
-    through the platform's own abstractions so the flash virtual clock and the
-    system/loom/wasm backends can be swapped wholesale.
+Summary: a raw `parking_lot` / `web_time` / `std::sync::{Mutex,RwLock,Condvar}`
+import sits in the platform's backend-agnostic layer (`flash`/`common`, outside
+the primitive-implementation sub-trees). These modules must route sync and time
+through the platform's own abstractions so the flash virtual clock and the
+system/loom/wasm backends can be swapped wholesale.
 
-    Why: the cross-backend flash control surface and the shared `common` modules
-    are the platform's public face. A raw lock or wall clock here is a second,
-    un-virtualizable primitive that the engine cannot observe — exactly the kind of
-    leak that lets a flash test diverge from its real-time twin.
+Why: the cross-backend flash control surface and the shared `common` modules
+are the platform's public face. A raw lock or wall clock here is a second,
+un-virtualizable primitive that the engine cannot observe — exactly the kind of
+leak that lets a flash test diverge from its real-time twin.
 
-    This lock/time check does not classify atomics, refcount handles, once-init
-    primitives, or `thread::panicking()`. Their routing is enforced separately;
-    in particular, every consumer imports `Arc` from `kithara_platform::sync`.
+This lock/time check does not classify atomics, refcount handles, once-init
+primitives, or `thread::panicking()`. Their routing is enforced separately;
+in particular, every consumer imports `Arc` from `kithara_platform::sync`.
 
-    Legitimate wrapping sites (NOT in scope): `system/`, `loom/`, `wasm/`, `flash/sync/`,
-    `flash/tokio/`, `flash/system/`, `common/cancel/`, `common/time.rs` — these
-    BUILD the primitives by wrapping raw `parking_lot`/`std`/`web_time` and are the
-    platform's equivalent of a backend impl.
+Legitimate wrapping sites (NOT in scope): `system/`, `loom/`, `wasm/`, `flash/sync/`,
+`flash/tokio/`, `flash/system/`, `common/cancel/`, `common/time.rs` — these
+BUILD the primitives by wrapping raw `parking_lot`/`std`/`web_time` and are the
+platform's equivalent of a backend impl.
 
-    Fix: import the platform's own `sync::{Mutex,RwLock,Condvar}` / `time::Instant`,
-    or move the primitive-owning code into one of the implementation sub-trees if it
-    genuinely belongs there.
+Fix: import the platform's own `sync::{Mutex,RwLock,Condvar}` / `time::Instant`,
+or move the primitive-owning code into one of the implementation sub-trees if it
+genuinely belongs there.
 
-    See `crates/kithara-platform/README.md` and `AGENTS.md`.";
+See `crates/kithara-platform/README.md` and `AGENTS.md`.";
 }
 
 pub(crate) struct PlatformLayerHygiene;

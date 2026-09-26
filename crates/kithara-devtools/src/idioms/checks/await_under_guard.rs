@@ -17,40 +17,40 @@ pub(crate) mod consts {
     pub(crate) const ID: &str = "await_under_guard";
 
     pub(super) const EXPLANATION: &str = "\
-    Detected an `.await` point inside a scope that still holds a `MutexGuard` \
-    / `RwLockReadGuard` / `RwLockWriteGuard`.
+Detected an `.await` point inside a scope that still holds a `MutexGuard` \
+/ `RwLockReadGuard` / `RwLockWriteGuard`.
 
-    Why it matters. Holding a sync mutex across `.await` is one of the most \
-    pernicious bugs in async Rust:
+Why it matters. Holding a sync mutex across `.await` is one of the most \
+pernicious bugs in async Rust:
 
-    1. Deadlock under contention. The task suspends with the lock held. The \
-       runtime moves the task to a different worker. Another task on the same \
-       worker tries to acquire the same lock — workers can't make progress, \
-       the original task can't be resumed because all workers are blocked. \
-       Under sufficient load this stalls the whole runtime.
-    2. Send-bound issues. `MutexGuard` is `!Send` for `std::sync::Mutex` and \
-       most `parking_lot` variants. Holding it across `.await` makes the \
-       future `!Send`, breaking `tokio::spawn` (multi-thread runtime).
-    3. Latency tail. Even when no deadlock occurs, the lock is held for the \
-       duration of the `.await` operation (potentially milliseconds for I/O), \
-       turning a microsecond critical section into a millisecond stall for \
-       every contender.
+1. Deadlock under contention. The task suspends with the lock held. The \
+   runtime moves the task to a different worker. Another task on the same \
+   worker tries to acquire the same lock — workers can't make progress, \
+   the original task can't be resumed because all workers are blocked. \
+   Under sufficient load this stalls the whole runtime.
+2. Send-bound issues. `MutexGuard` is `!Send` for `std::sync::Mutex` and \
+   most `parking_lot` variants. Holding it across `.await` makes the \
+   future `!Send`, breaking `tokio::spawn` (multi-thread runtime).
+3. Latency tail. Even when no deadlock occurs, the lock is held for the \
+   duration of the `.await` operation (potentially milliseconds for I/O), \
+   turning a microsecond critical section into a millisecond stall for \
+   every contender.
 
-    The fix is one of:
-    - Drop before await: `let result = { let g = mutex.lock_sync(); compute(&*g) }; do_async(result).await;`
-    - Use async-aware lock: `tokio::sync::Mutex` or `kithara_platform`'s \
-      `lock_async` is designed to span `.await`.
-    - Move data out: clone the value under the guard, drop the guard, then await.
+The fix is one of:
+- Drop before await: `let result = { let g = mutex.lock_sync(); compute(&*g) }; do_async(result).await;`
+- Use async-aware lock: `tokio::sync::Mutex` or `kithara_platform`'s \
+  `lock_async` is designed to span `.await`.
+- Move data out: clone the value under the guard, drop the guard, then await.
 
-    ❌  let g = self.state.lock_sync(); let result = fetch(&g.url).await; g.record(result);
-    ✅  let url = { let g = self.state.lock_sync(); g.url.clone() }; let result = fetch(&url).await;
+❌  let g = self.state.lock_sync(); let result = fetch(&g.url).await; g.record(result);
+✅  let url = { let g = self.state.lock_sync(); g.url.clone() }; let result = fetch(&url).await;
 
-    Suppress with `// xtask-lint-ignore: await_under_guard` only when (1) the \
-    lock is `tokio::sync::Mutex` / kithara_platform `AsyncMutex` (designed to \
-    span `.await`), (2) the awaited future provably doesn't re-enter the same \
-    lock and isn't on a single-threaded runtime, (3) explicit `drop(guard)` \
-    precedes `.await` but the heuristic missed it. Document why it's safe — \
-    deadlocks are silent.";
+Suppress with `// xtask-lint-ignore: await_under_guard` only when (1) the \
+lock is `tokio::sync::Mutex` / kithara_platform `AsyncMutex` (designed to \
+span `.await`), (2) the awaited future provably doesn't re-enter the same \
+lock and isn't on a single-threaded runtime, (3) explicit `drop(guard)` \
+precedes `.await` but the heuristic missed it. Document why it's safe — \
+deadlocks are silent.";
 }
 
 pub(crate) struct AwaitUnderGuard;
