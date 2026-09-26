@@ -11,6 +11,7 @@ pub mod config;
 pub mod crossfade;
 pub mod deck;
 pub mod document;
+pub mod logging;
 pub mod memory;
 pub mod mix;
 pub mod pools;
@@ -19,7 +20,6 @@ pub mod sources;
 #[cfg(feature = "gui")]
 pub mod state;
 pub mod theme;
-pub mod tracing_init;
 #[cfg(feature = "gui")]
 mod wave_cache;
 pub mod waveform;

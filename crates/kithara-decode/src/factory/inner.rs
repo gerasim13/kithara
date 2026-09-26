@@ -1302,7 +1302,7 @@ mod apple_factory_tests {
 /// never moves the stream's byte cursor. On device the slider snapped back and
 /// playback continued from the pre-seek offset.
 ///
-/// The duration itself is pinned at the demuxer in `apple::audio_file_demuxer`
+/// The duration itself is pinned at the demuxer in `apple::demuxer`
 /// and the arithmetic in `gapless::mp3`. What only the factory owns is handing
 /// the resource length from `config.byte_len_handle` to the startup probe, so
 /// that is all this test asserts.

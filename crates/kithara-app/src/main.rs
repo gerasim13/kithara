@@ -18,9 +18,9 @@ use kithara_app::{
     deck::{Deck, DeckId, DeckSet},
     document::Config,
     gui::{self, GuiFrontend},
+    logging::init_tracing,
     memory,
     pools::{self, AppHost, AppStore, AppWorker},
-    tracing_init::init_tracing,
 };
 
 /// Kithara — audio player application.

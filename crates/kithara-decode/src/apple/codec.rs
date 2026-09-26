@@ -357,7 +357,7 @@ impl FrameCodec for AppleCodec {
 
     fn prepare_output(&self, out: &mut SampleBuffer) -> DecodeResult<()> {
         let input_frames = if let Some(packets) =
-            super::audio_file_demuxer::AppleAudioFileDemuxer::CBR_BATCH_TARGET_BYTES
+            super::demuxer::AppleAudioFileDemuxer::CBR_BATCH_TARGET_BYTES
                 .checked_div(self.input_bytes_per_packet)
         {
             packets

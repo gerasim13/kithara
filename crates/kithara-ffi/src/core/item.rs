@@ -10,7 +10,7 @@ use kithara::{
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::native::item_bridge::ItemEventBridge;
+use crate::native::ItemEventBridge;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::FfiAbrMode;
 use crate::{

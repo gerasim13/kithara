@@ -36,9 +36,9 @@ fn player_timestretch() -> Arc<StretchControls> {
 }
 
 use crate::{
+    EventBridge,
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
-    event_bridge::EventBridge,
     item::AudioPlayerItem,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
