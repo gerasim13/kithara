@@ -124,6 +124,31 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let t0 = Date::now();
     warn!("PROBE open start");
+    let _ = js_sys::Function::new_no_args(
+        r#"
+        if (!globalThis.__probeWorkers) {
+          globalThis.__probeWorkers = [];
+          const W = globalThis.Worker;
+          const t0 = performance.now();
+          const log = (m) => globalThis.__probeWorkers.push(Math.round(performance.now() - t0) + "ms " + m);
+          globalThis.Worker = function (url, opts) {
+            const name = opts && opts.name;
+            log("new " + name);
+            const w = new W(url, opts);
+            w.addEventListener("error", (e) => log("error " + name + ": " + e.message + " @" + e.filename + ":" + e.lineno));
+            w.addEventListener("messageerror", () => log("messageerror " + name));
+            w.addEventListener("message", (e) => {
+              const d = e.data;
+              if (d && d.__wasm_safe_thread_error) log("wst_error " + name + ": " + d.__wasm_safe_thread_error);
+              if (d && d.__wasm_safe_thread_exit) log("exit " + name);
+              if (d && d.__wst_relay_spawn) log("relay from " + name);
+            });
+            return w;
+          };
+        }
+        "#,
+    )
+    .call0(&wasm_bindgen::JsValue::UNDEFINED);
     let opened =
         kithara::platform::time::timeout(Duration::from_secs(8), worker.open(config)).await;
     let mut audio = match opened {
@@ -141,6 +166,16 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
                 net_done = c::read(&c::NET_SEND_DONE),
                 "PROBE open still pending"
             );
+            let dump = js_sys::Function::new_no_args(
+                r#"return JSON.stringify({
+                  workers: globalThis.__probeWorkers || null,
+                  resources: performance.getEntriesByType("resource").map((r) => r.name),
+                });"#,
+            )
+            .call0(&wasm_bindgen::JsValue::UNDEFINED)
+            .ok()
+            .and_then(|v| v.as_string());
+            warn!(dump = ?dump, "PROBE worker journal");
             panic!("PROBE open wedged");
         }
     };
