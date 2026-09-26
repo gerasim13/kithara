@@ -5,6 +5,7 @@ mod flow;
 mod lifecycle;
 mod player_impl;
 mod protocol;
+mod staging;
 mod state;
 mod view;
 
@@ -16,5 +17,5 @@ pub use config::{
 pub use control::PlayerControl;
 pub use flow::SelectTransition;
 pub use player_impl::PlayerImpl;
-pub use protocol::{Player, PlayerControlSource, PlayerMember};
+pub use protocol::{Player, PlayerControlSource};
 pub use view::PlaybackView;

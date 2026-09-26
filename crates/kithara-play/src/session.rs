@@ -8,7 +8,7 @@ mod wire {
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
-    use kithara_sync::SyncError;
+    use kithara_sync::{SyncError, SyncReceipt};
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
@@ -156,6 +156,11 @@ mod wire {
         QuerySampleRate,
         QueryStreamShape,
         Tick,
+        /// Reports one executor outcome to the group that issued the
+        /// preparation; answered with the owner's own acknowledgement result.
+        AcknowledgeSync {
+            receipt: SyncReceipt,
+        },
     }
 
     /// One player's session-input level in a batch update. `level` is a linear
@@ -243,6 +248,7 @@ mod handle {
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
+    use kithara_sync::SyncReceipt;
     use kithara_warp::BeatGridId;
 
     use super::wire::{
@@ -560,6 +566,16 @@ mod handle {
 
         pub fn tick(&self) -> Result<(), PlayError> {
             self.exec_ok(Cmd::Tick).map(|_| ())
+        }
+
+        /// Delivers one executor receipt to the session's group owner.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`PlayError::SessionUnbound`] before the player joins a
+        /// session, and the owner's refusal of a stale or unknown receipt.
+        pub fn acknowledge_sync(&self, receipt: SyncReceipt) -> Result<(), PlayError> {
+            self.exec_ok(Cmd::AcknowledgeSync { receipt }).map(|_| ())
         }
 
         pub fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {

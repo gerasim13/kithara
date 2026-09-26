@@ -15,7 +15,7 @@ fn mock_packet(bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
-#[kithara::asset(ext = "mp3", content_type = "audio/mpeg", embed)]
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg", embed, fragment)]
 #[case::four(&[0x11, 0x22, 0x33, 0x44])]
 #[case::eight(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88])]
 fn mpeg_frames(fills: &[u8]) -> Vec<u8> {

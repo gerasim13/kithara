@@ -33,6 +33,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
         .as_ref()
         .map_or_else(|| quote! { None }, |format| quote! { Some(#format) });
     let optional = args.optional;
+    let analysed = args.analysed();
 
     let submissions = names.iter().zip(&cases).map(|(case_literal, case)| {
         let dependencies = case_dependencies(&args.depends_on, case_literal);
@@ -55,7 +56,31 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             quote! { crate::registry::AssetBuild::Ready(#call) }
         };
+        let accessor = format!("{fn_name_literal}_{case_literal}");
+        // The analysis joins the registry only where the beat pass is built.
+        let analysis = analysed.then(|| {
+            quote! {
+                #[cfg(feature = "rhythm")]
+                ::inventory::submit! {
+                    crate::registry::AssetDef {
+                        build: |_, __inputs| crate::registry::AssetBuild::Ready(
+                            crate::defs::rhythm::analysed(__inputs, #ext),
+                        ),
+                        case: #accessor,
+                        content_type: "application/x-kithara-analysis",
+                        dependencies: &[#accessor],
+                        embed: false,
+                        env: &[#(#env),*],
+                        ext: "analysis",
+                        format: Some(crate::defs::rhythm::analysed_format),
+                        func: "analysis",
+                        optional: #optional,
+                    }
+                }
+            }
+        });
         quote! {
+            #analysis
             ::inventory::submit! {
                 crate::registry::AssetDef {
                     build: |__context, __inputs| { #build },

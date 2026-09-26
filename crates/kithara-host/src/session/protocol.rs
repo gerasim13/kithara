@@ -1,17 +1,17 @@
 use firewheel::FirewheelContext;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
+use kithara_play::PlayError;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
     SessionSampleRate,
 };
-use kithara_play::{PlayError, player::PlayerMember};
 use kithara_sync::{
     SyncAdmission, SyncError, SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
 };
 
-use crate::api::HostLevel;
+use crate::{PlayerMember, api::HostLevel};
 
 /// Opens the audio stream a session runs on and hands back the object that
 /// owns it. Firewheel no longer holds the backend, so the session keeps the

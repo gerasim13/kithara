@@ -66,6 +66,7 @@ where
         emit: lane.emit,
         preload_chunks: lane.preload_chunks,
         engine_load: None,
+        readiness: None,
         runtime: DecoderRuntime::default(),
     };
     (node, audio)

@@ -3,17 +3,15 @@ use std::{collections::HashMap, mem, num::NonZeroU32};
 use kithara_bufpool::HasPool;
 use kithara_effects::LimiterConfig;
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_play::{
-    PlayError,
-    player::{PlayerControlSource, PlayerMember},
-};
+use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{
     GroupState, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
 };
 use kithara_warp::BeatGridId;
 
-use super::super::{Host, HostOwned, owner::SessionRuntime};
+use super::super::{HeldPlayer, Host, HostOwned, owner::SessionRuntime};
 use crate::{
+    PlayerMember,
     session::{HostDispatcher, RootView, web::WebSessionState},
     wasm::HostRoute,
 };
@@ -176,9 +174,12 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         self.session.platform().require_remote()?;
-        let (grid_id, control) = self.bind_player(&mut player)?;
-        let member = player.take_host_member()?;
-        self.attach_member(member)?;
+        let (attachment, control) = self.bind_player(&mut player)?;
+        let grid_id = attachment.id();
+        self.attach_member(PlayerMember::new(
+            attachment,
+            HeldPlayer::new(player.host_level()),
+        ))?;
         let resident: Resident = Box::new(move || player.close());
         if let Some(replaced) = self
             .session

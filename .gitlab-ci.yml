@@ -134,12 +134,6 @@ dispatch:weekly:
 dispatch:release:
   extends: .dispatch
   interruptible: false
-  # The version is a variable the run was started with, and a child sees
-  # those only when the trigger forwards them. Without it every release job
-  # stopped on a missing `KITHARA_RELEASE_VERSION`.
-  trigger:
-    forward:
-      pipeline_variables: true
   variables:
     KITHARA_CACHE_TRUST: trusted
     KITHARA_PIPELINE_KIND: release

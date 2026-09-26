@@ -3,18 +3,18 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::HasPool;
 use kithara_effects::LimiterConfig;
 use kithara_platform::sync::Arc;
-use kithara_play::{
-    PlayError,
-    player::{PlayerControlSource, PlayerMember},
-};
+use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
 use kithara_warp::BeatGridId;
 
 use super::{
-    super::{Host, HostOwned},
+    super::{HeldPlayer, Host, HostOwned},
     PlatformResult,
 };
-use crate::session::{HostDispatcher, RootView};
+use crate::{
+    PlayerMember,
+    session::{HostDispatcher, RootView},
+};
 
 type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
 
@@ -91,8 +91,9 @@ where
     where
         P: PlayerControlSource<Schema = S>,
     {
-        let (grid_id, control) = self.bind_player(&mut player)?;
-        self.attach_member(PlayerMember::new(player))?;
+        let (attachment, control) = self.bind_player(&mut player)?;
+        let grid_id = attachment.id();
+        self.attach_member(PlayerMember::new(attachment, HeldPlayer::new(player)))?;
         let owned = self.owned::<P>(grid_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;
