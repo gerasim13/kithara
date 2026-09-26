@@ -949,7 +949,7 @@ pub(super) async fn sources(
             .map(|name| {
                 let asset = by_name(name).unwrap_or_else(|| {
                     panic!(
-                        "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build with KITHARA_REMOTE_FIXTURES=1"
+                        "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build without KITHARA_DISABLE_REMOTE_FIXTURES"
                     )
                 });
                 asset
@@ -1251,7 +1251,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     flash(false),
     timeout(Duration::from_secs(600))
 )]
-#[ignore = "ignored-red: requires KITHARA_REMOTE_FIXTURES at build time and product Warp alignment, 2026-09-07"]
+#[ignore = "ignored-red: requires product Warp alignment, 2026-09-07"]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC)]

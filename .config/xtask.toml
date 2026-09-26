@@ -2191,13 +2191,13 @@ steps = [
     "test",
     "run",
     "--lane=fixtures",
-  ], label = "Linux fixtures lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
   { args = [
     "test",
     "run",
     "-E",
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
-  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", KITHARA_REMOTE_FIXTURES = "1", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
 ]
 role = "gate"
 kinds = ["weekly"]

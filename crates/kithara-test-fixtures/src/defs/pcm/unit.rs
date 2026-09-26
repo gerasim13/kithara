@@ -186,7 +186,7 @@ fn resampled_wav(frames: usize) -> Vec<u8> {
     wav
 }
 
-#[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]
+#[kithara::asset(ext = "wav", content_type = "audio/wav", embed, fragment)]
 #[case::data()]
 fn poisoned_float_wav() -> Vec<u8> {
     const BYTES_PER_SAMPLE: u16 = 4;

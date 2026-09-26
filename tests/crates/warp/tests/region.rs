@@ -641,7 +641,7 @@ fn record_tunnel_previews() {
         resampler::NoResamplerBackend,
     };
     use kithara_test_fixtures::assets::{
-        library_mp3_analysis_zvuk_27390231, library_mp3_zvuk_27390231,
+        analysis_library_mp3_zvuk_27390231, library_mp3_zvuk_27390231,
     };
     use num_traits::ToPrimitive;
 
@@ -651,7 +651,7 @@ fn record_tunnel_previews() {
         return;
     }
     let file = AnalysisFile::parse(
-        library_mp3_analysis_zvuk_27390231().bytes(),
+        analysis_library_mp3_zvuk_27390231().bytes(),
         &AnalysisFingerprint::new(Some(FINGERPRINT), None),
     )
     .expect("parse Tunnel beat analysis");

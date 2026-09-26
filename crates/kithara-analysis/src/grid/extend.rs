@@ -1,14 +1,16 @@
 use num_traits::cast::ToPrimitive;
 
-use crate::{BeatArtifact, artifact::MarkedBeat};
+use crate::{
+    BeatArtifact,
+    artifact::{MarkedBeat, voted_bar},
+};
 
 pub(crate) fn extend_over(grid: BeatArtifact, extent: u64, source_rate: u32) -> BeatArtifact {
     let Some(beat) = beat_period(grid.bpm(), source_rate) else {
         return grid;
     };
     let beats = spread(grid.beats(), grid.beat_confidence(), beat, extent);
-    let bar = bar_period(grid.downbeats(), beat);
-    let downbeats = spread(grid.downbeats(), grid.downbeat_confidence(), bar, extent);
+    let downbeats = bar_lines(&beats, grid.downbeats(), grid.downbeat_confidence());
 
     BeatArtifact::with_regions(grid.bpm(), beats, downbeats, grid.regions().to_vec())
 }
@@ -20,16 +22,49 @@ fn beat_period(bpm: f64, source_rate: u32) -> Option<f64> {
     Some(60.0 / bpm * f64::from(source_rate))
 }
 
-fn bar_period(downbeats: &[u64], beat: f64) -> f64 {
-    let observed = downbeats
-        .windows(2)
-        .filter_map(|pair| pair[1].checked_sub(pair[0]))
-        .filter_map(|gap| gap.to_f64())
-        .find(|gap| *gap > 0.0);
-    let Some(gap) = observed else {
-        return beat;
+/// Every spread beat on the bar the detected bar lines agree on, keeping what
+/// the detector said about the ones it heard.
+///
+/// A bar line is a beat, so it is counted in beats of the spread grid rather
+/// than spread at a period of its own. Bar lines that agree on no bar, or sit
+/// on no beat because the detector named too few, are left as heard: nothing
+/// proves where the ones between them fall.
+fn bar_lines(beats: &[MarkedBeat], marks: &[u64], confidence: &[Option<f32>]) -> Vec<MarkedBeat> {
+    let heard: Vec<(usize, Option<f32>)> = marks
+        .iter()
+        .zip(confidence)
+        .filter_map(|(frame, confidence)| {
+            let index = beats.binary_search_by_key(frame, |(beat, _)| *beat).ok()?;
+            Some((index, *confidence))
+        })
+        .collect();
+    let votes = heard
+        .iter()
+        .filter(|(_, confidence)| confidence.is_some())
+        .filter_map(|(index, _)| index.to_i64());
+    let Some((bar, phase)) = voted_bar(votes) else {
+        return marks
+            .iter()
+            .copied()
+            .zip(confidence.iter().copied())
+            .collect();
     };
-    (gap / beat).round().max(1.0) * beat
+    beats
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            index
+                .to_i64()
+                .is_some_and(|index| index.rem_euclid(bar) == phase)
+        })
+        .map(|(index, (frame, _))| {
+            let confidence = heard
+                .binary_search_by_key(&index, |(heard, _)| *heard)
+                .ok()
+                .and_then(|found| heard[found].1);
+            (*frame, confidence)
+        })
+        .collect()
 }
 
 fn spread(marks: &[u64], confidence: &[Option<f32>], period: f64, extent: u64) -> Vec<MarkedBeat> {
@@ -114,7 +149,12 @@ mod tests {
     use super::extend_over;
     use crate::BeatArtifact;
 
-    const RATE: u32 = 44_100;
+    mod consts {
+        pub(super) const RATE: u32 = 44_100;
+        /// Half a second at [`RATE`].
+        pub(super) const BEAT: u64 = 22_050;
+    }
+    use consts::{BEAT, RATE};
 
     fn grid(beats: Vec<u64>) -> BeatArtifact {
         let downbeats = beats.iter().step_by(4).map(detected).collect();
@@ -196,6 +236,39 @@ mod tests {
             out.beats(),
             &[0, 22_050, 44_100, 66_150, 88_200, 110_250, 132_300],
             "the gap must be divided at the observed period"
+        );
+    }
+
+    /// Bar lines are beats: the spread ones land on spread beats at the bar
+    /// the detected ones agree on, not at whatever spacing the first two
+    /// happened to leave.
+    #[kithara::test]
+    fn spread_bar_lines_sit_on_beats_at_the_agreed_bar() {
+        let beats: Vec<u64> = (0..24).map(|beat| beat * BEAT).collect();
+        let heard = [0, 8, 12, 16, 20];
+        let out = extend_over(
+            BeatArtifact::new(
+                120.0,
+                beats.iter().map(detected).collect(),
+                heard.iter().map(|beat| detected(&(beat * BEAT))).collect(),
+            ),
+            24 * BEAT,
+            RATE,
+        );
+
+        assert_eq!(
+            out.downbeats(),
+            (0..6).map(|bar| bar * 4 * BEAT).collect::<Vec<_>>(),
+            "every fourth beat is a bar line, the skipped one included"
+        );
+        assert!(
+            out.downbeats().iter().all(|bar| out.beats().contains(bar)),
+            "a bar line is always a beat"
+        );
+        assert_eq!(
+            out.downbeat_confidence(),
+            [Some(0.9), None, Some(0.9), Some(0.9), Some(0.9), Some(0.9)],
+            "the bar nothing detected claims no confidence"
         );
     }
 
