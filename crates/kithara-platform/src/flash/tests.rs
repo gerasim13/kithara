@@ -357,6 +357,31 @@ fn a_spawned_holder_is_named_by_its_spawn_site_not_the_platform_shim() {
     );
 }
 
+/// The holder line's age is the dump's only measure of how long the engine has
+/// been pinned, and it used to be read off the VIRTUAL clock — the clock that
+/// holder is stopping. It therefore printed 0 in exactly the case it exists
+/// for: every wedge dump of the 2026-09-26 stress run said the pin was 0 ns
+/// old after minutes of real time. It is aged on the real clock instead.
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn a_pinning_holder_is_aged_on_the_real_clock_not_the_virtual_one_it_stops() {
+    let flash = FlashInner::new_arc();
+    flash.sync_holder_running(Location::caller());
+    flash.clock.advance(5 * NANOS_PER_SEC);
+
+    let dump = flash.to_string();
+    let age: u64 = dump
+        .split("held_for_real_ns=")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .expect("the dump must age its active holder");
+    assert!(
+        age < NANOS_PER_SEC,
+        "the pin's age must not follow the virtual clock it stops: {age} ns\n{dump}"
+    );
+}
+
 /// A dump lists EVERY parked waiter and says nothing about which one the clock
 /// is waiting on: the four hangs of run #11 each had one deadline-less
 /// waiter holding it, and the pin had to be re-derived by hand from the

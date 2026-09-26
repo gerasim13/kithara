@@ -97,9 +97,11 @@ impl fmt::Display for FlashInner {
         for (key, holder) in &s.registry.active_sync_holders {
             writeln!(
                 f,
-                "  active holder thread={key:?} name={} running_for_ns={} resumed_from={}",
+                "  active holder thread={key:?} name={} held_for_real_ns={} resumed_from={}",
                 holder.name.as_deref().unwrap_or("<unnamed>"),
-                now.saturating_sub(holder.resumed_at_ns),
+                self.clock
+                    .real_now_nanos()
+                    .saturating_sub(holder.resumed_at_real_ns),
                 holder.resumed_from,
             )?;
         }

@@ -447,13 +447,13 @@ impl FlashInner {
     pub(in crate::flash) fn sync_holder_running(&self, resumed_from: &'static Location<'static>) {
         let key = current_thread_key();
         let name = current_thread_name();
-        let resumed_at_ns = self.clock.now_nanos();
+        let resumed_at_real_ns = self.clock.real_now_nanos();
         self.core.lock().registry.active_sync_holders.insert(
             key,
             SyncHolder {
                 resumed_from,
                 name,
-                resumed_at_ns,
+                resumed_at_real_ns,
             },
         );
     }

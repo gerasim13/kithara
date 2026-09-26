@@ -176,10 +176,12 @@ pub(in crate::flash) struct SyncHolder {
     pub(super) resumed_from: &'static Location<'static>,
     /// The OS thread name, if it was named (`spawn_named` pacers always are).
     pub(super) name: Option<String>,
-    /// Virtual time at that resume. Against `virtual_now` it gives how long
-    /// the pin has lasted, which separates "busy right now" from "stuck since
-    /// the clock last moved".
-    pub(super) resumed_at_ns: u64,
+    /// REAL time at that resume. Deliberately not the virtual clock: a holder
+    /// that pins quiescence is exactly a holder the virtual clock cannot move
+    /// past, so a virtual age reads 0 in the one case the dump exists for. The
+    /// real age is what separates "claimed microseconds before the dump" from
+    /// "has held the engine for ten minutes".
+    pub(super) resumed_at_real_ns: u64,
 }
 
 /// Provenance of one engine-backed primitive, keyed by its [`CvId`] in
