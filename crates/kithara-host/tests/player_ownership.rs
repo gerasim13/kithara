@@ -2,22 +2,24 @@
 //! player, and dropping the host closes every player it still owns.
 
 use kithara_host::{Host, HostConfig, HostOwned};
-use kithara_play::{BeatGrid, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
+use kithara_play::{PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
 #[cfg(target_os = "android")]
 use kithara_test_dylib as _;
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
 };
+use kithara_warp::BeatGridId;
 
 fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>> {
+    let instance_id = BeatGridId::allocate().expect("fixture grid id");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .grid_id(instance_id)
             .sample_rate(host.requested_sample_rate())
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );
-    let instance_id = player.id();
     let owner = host.insert(player).expect("insert fixture player instance");
     assert_eq!(owner.id(), instance_id);
     owner

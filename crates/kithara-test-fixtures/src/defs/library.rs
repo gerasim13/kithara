@@ -13,23 +13,11 @@ enum Library {}
 
 impl Library {
     const BASE: &str = "https://stream.silvercomet.top/fixtures/";
-    const ENV: &str = "KITHARA_REMOTE_FIXTURES";
+    const STALL: Duration = Duration::from_secs(20);
     const TIMEOUT: Duration = Duration::from_secs(600);
 }
 
-fn enabled() -> Result<(), RemoteFileError> {
-    std::env::var_os(Library::ENV)
-        .filter(|value| !value.is_empty())
-        .map(|_| ())
-        .ok_or(RemoteFileError::Missing(Library::ENV))
-}
-
-#[kithara::asset(
-    ext = "flac",
-    content_type = "audio/flac",
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
+#[kithara::asset(ext = "flac", content_type = "audio/flac", optional)]
 #[case::newtechno(
     "newtechno.flac",
     "7ee0e157a3dd1ea44554c9e22f81a72ed1100942a2f17982e90043f40801f1b2",
@@ -91,54 +79,17 @@ fn library_flac(
     sha256: &str,
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
     let url = Url::parse(Library::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
-            panic!("requested library fixture `{file}` failed verification: {error}")
-        }),
+        fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
+            |error| panic!("requested library fixture `{file}` failed verification: {error}"),
+        ),
     )
-}
-
-#[kithara::asset(
-    ext = "analysis",
-    content_type = "application/x-kithara-analysis",
-    format = super::rhythm::analysis_format,
-    depends_on = ["library_flac_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
-#[case::newtechno()]
-#[case::ryabina()]
-#[case::song1()]
-#[case::dragoncoda()]
-#[case::newtriphop()]
-#[case::slowtechno()]
-#[case::song2()]
-#[case::track05()]
-#[case::c343()]
-#[case::e101()]
-#[case::g242()]
-fn library_analysis(
-    _context: &BuildContext<'_>,
-    inputs: &[&[u8]],
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let flac = inputs
-        .first()
-        .ok_or(RemoteFileError::Missing("library_flac dependency"))?;
-    let (artifact, frames) = super::rhythm::beat_encoded(flac, "flac");
-    Ok(super::rhythm::analysis_file(artifact, frames))
 }
 
 /// Playlist tracks the application is exercised with, published as delivered
 /// by the Zvuk CDN: 320 kbit/s MP3, no re-encoding.
-#[kithara::asset(
-    ext = "mp3",
-    content_type = "audio/mpeg",
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg", optional)]
 #[case::zvuk_27390231(
     "zvuk_27390231.mp3",
     "91e3657174821e9a570744d3f3c6b2b7fe09c161d285d08751480554884bb5a4",
@@ -175,37 +126,10 @@ fn library_mp3(
     sha256: &str,
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
     let url = Url::parse(Library::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
-            panic!("requested library fixture `{file}` failed verification: {error}")
-        }),
+        fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
+            |error| panic!("requested library fixture `{file}` failed verification: {error}"),
+        ),
     )
-}
-
-#[kithara::asset(
-    ext = "analysis",
-    content_type = "application/x-kithara-analysis",
-    format = super::rhythm::analysis_format,
-    depends_on = ["library_mp3_{case}"],
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
-#[case::zvuk_27390231()]
-#[case::zvuk_151585912()]
-#[case::zvuk_125475417()]
-#[case::zvuk_138535169()]
-#[case::zvuk_130432502()]
-#[case::zvuk_132017169()]
-fn library_mp3_analysis(
-    _context: &BuildContext<'_>,
-    inputs: &[&[u8]],
-) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
-    let mp3 = inputs
-        .first()
-        .ok_or(RemoteFileError::Missing("library_mp3 dependency"))?;
-    let (artifact, frames) = super::rhythm::beat_encoded(mp3, "mp3");
-    Ok(super::rhythm::analysis_file(artifact, frames))
 }
