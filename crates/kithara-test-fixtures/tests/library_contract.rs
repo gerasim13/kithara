@@ -34,9 +34,7 @@ fn analysis_of(track: &str) -> AnalysisFile {
 #[kithara::test(native, flash(false))]
 fn every_library_track_is_analysed_at_the_rate_it_decodes_at() {
     let tracks = assets::MANIFEST.iter().filter(|entry| {
-        entry.name.starts_with("library_")
-            && entry.content_type.starts_with("audio/")
-            && entry.unavailable.is_none()
+        entry.name.starts_with("library_") && entry.content_type.starts_with("audio/")
     });
     for entry in tracks {
         let track = by_name(entry.name).unwrap_or_else(|| panic!("`{}` is registered", entry.name));

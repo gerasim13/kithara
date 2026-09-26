@@ -14,6 +14,7 @@ enum Library {}
 impl Library {
     const BASE: &str = "https://stream.silvercomet.top/fixtures/";
     const ENV: &str = "KITHARA_REMOTE_FIXTURES";
+    const STALL: Duration = Duration::from_secs(20);
     const TIMEOUT: Duration = Duration::from_secs(600);
 }
 
@@ -94,9 +95,9 @@ fn library_flac(
     enabled()?;
     let url = Url::parse(Library::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
-            panic!("requested library fixture `{file}` failed verification: {error}")
-        }),
+        fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
+            |error| panic!("requested library fixture `{file}` failed verification: {error}"),
+        ),
     )
 }
 
@@ -147,8 +148,8 @@ fn library_mp3(
     enabled()?;
     let url = Url::parse(Library::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT).unwrap_or_else(|error| {
-            panic!("requested library fixture `{file}` failed verification: {error}")
-        }),
+        fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
+            |error| panic!("requested library fixture `{file}` failed verification: {error}"),
+        ),
     )
 }
