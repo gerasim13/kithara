@@ -1,24 +1,41 @@
 use std::num::NonZeroU32;
 
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
     AssetAxis, AssetExtent, AssetFrame, BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision,
     BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis, MapPoint, MapPosition,
-    SessionAnchor, SessionAxis, SessionBeat,
+    PresentationFrontier, SessionAnchor, SessionAxis, SessionBeat,
 };
 
-use super::{Accept, TestGrid, TestGroup, session_grid};
+use super::{Accept, TestGrid, TestGroup, preparation::asset_grid, session_grid};
 use crate::{
     AlignmentSource, GroupState, LoadGeneration, ParentGridUpdate, SessionAxisUpdate,
-    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMemberKind,
-    SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation, owner::descent::Parent,
+    SyncAdmission, SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncGroup,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt,
+    SyncStatusSnapshot, TopologyOperation, owner::descent::Parent,
 };
 
 /// Time constant the tempo fixtures approach a new target with.
 const SMOOTHING_SECONDS: f64 = 0.005;
 
 pub(super) type Group = GroupState<TestGroup>;
+
+struct PublishedGrid {
+    id: BeatGridId,
+    current: Arc<Mutex<BeatGridSnapshot>>,
+}
+
+impl BeatGrid for PublishedGrid {
+    fn id(&self) -> BeatGridId {
+        self.id
+    }
+
+    fn snapshot(&self) -> BeatGridSnapshot {
+        self.current.lock().clone()
+    }
+}
 
 pub(super) fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).expect("invariant: fixture sample rate is non-zero")
@@ -52,6 +69,29 @@ fn live_deck_at(bpm: f64) -> Group {
         ),
         SyncMemberKind::Grid,
     )
+}
+
+/// An Off deck with one gridded track and a live Host parent.
+pub(super) fn owning_deck_with_parent() -> (Group, BeatGridId, BeatGridId) {
+    let deck = BeatGridId::allocate().expect("deck id");
+    let track = BeatGridId::allocate().expect("track id");
+    let parent = parent_id();
+    let mut group: Group = GroupState::owning(
+        deck,
+        rate(48_000),
+        SessionEpoch::new(0),
+        SyncMember::Grid {
+            alignment: None,
+            grid: Box::new(TestGrid(asset_grid(track, 480_000, 24_000))),
+        },
+    );
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("host beat grid");
+    (group, track, parent)
 }
 
 /// A deck owning a local 120 BPM timeline latched from its live grid.
@@ -304,6 +344,358 @@ fn enabling_without_a_parent_withdraws_local_geometry() {
         ))
         .expect("parent geometry becomes available");
     assert_eq!(group.snapshot().state(), BeatGridState::Live);
+}
+
+#[kithara::test]
+fn public_enable_prepares_its_owned_track_without_a_second_command() {
+    let (mut group, track, _) = owning_deck_with_parent();
+    let deck = group.id();
+
+    let admission = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("public Enable is accepted");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("Enable must change the group mode: {admission:?}");
+    };
+    assert_eq!(
+        transition.issued().len(),
+        1,
+        "Enable must issue its own preparation"
+    );
+    assert_eq!(transition.issued()[0].stamp().member().grid_id(), track);
+}
+
+#[kithara::test]
+fn audible_public_enable_survives_parent_publication_before_installation() {
+    let (mut group, track, parent) = owning_deck_with_parent();
+    let deck = group.id();
+    let admission = group
+        .transact(SyncOperation::Sync {
+            target: deck,
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .source(5_000)
+                    .output(SessionFrame::new(0))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(2_048),
+            intent: SyncIntent::Enable,
+        })
+        .expect("public ON while manual PCM plays");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("Enable must change the group mode: {admission:?}");
+    };
+    let [first] = transition.issued() else {
+        panic!("one audible deck needs one preparation");
+    };
+    assert_eq!(first.stamp().member().grid_id(), track);
+    assert_eq!(first.activation().1, SessionFrame::new(24_000));
+
+    let same_tempo = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 2),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("a later parent revision preserves an unarmed entry");
+    let [carried] = same_tempo.issued() else {
+        panic!("same-tempo parent revision replans the audible entry");
+    };
+    assert_eq!(carried.activation().1, first.activation().1);
+    let slower = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 3),
+            anchor_at_rate(1.0, 48_000),
+        ))
+        .expect("a slower parent revision replans the audible source");
+    let [replanned] = slower.issued() else {
+        panic!("the audible entry stays pending on the slower Host grid");
+    };
+    let SyncEffect::Projection {
+        plan, alignment, ..
+    } = replanned.effect()
+    else {
+        panic!("the audible entry remains a projection");
+    };
+    let live_source = 5_000 + u64::try_from(i64::from(plan.activation().output())).expect("frame");
+    assert!(plan.activation().source() >= live_source);
+    assert_eq!(f64::from(*alignment.source().value()).fract(), 0.0);
+    assert_eq!(f64::from(*alignment.target().value()).fract(), 0.0);
+    assert!(
+        matches!(group.status(), SyncStatusSnapshot::Prepared { .. }),
+        "the accepted audible entry must remain prepared after a parent revision"
+    );
+}
+
+#[kithara::test]
+fn enable_without_track_geometry_rejects_before_changing_mode_and_can_retry() {
+    let deck = BeatGridId::allocate().expect("deck id");
+    let track = BeatGridId::allocate().expect("track id");
+    let published = Arc::new(Mutex::new(BeatGridSnapshot::unavailable(
+        track,
+        BeatGridRevision::first(),
+        MapAxis::Asset(AssetAxis::new(rate(48_000), AssetExtent::Bounded(480_000))),
+    )));
+    let mut group: Group = GroupState::owning(
+        deck,
+        rate(48_000),
+        SessionEpoch::new(0),
+        SyncMember::Grid {
+            alignment: None,
+            grid: Box::new(PublishedGrid {
+                id: track,
+                current: Arc::clone(&published),
+            }),
+        },
+    );
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent_id(), 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("host beat grid");
+    let before_operation = group.next_operation;
+
+    let rejected = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect_err("ON cannot retain a request with missing geometry");
+    assert!(matches!(
+        rejected.error(),
+        SyncError::GridCoverageUnavailable { .. }
+    ));
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert_eq!(group.next_operation, before_operation);
+
+    *published.lock() = asset_grid(track, 480_000, 24_000);
+    let admission = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("retry after geometry publication");
+    assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
+}
+
+#[kithara::test]
+fn disable_before_enable_claim_restores_the_unmapped_mode() {
+    let (mut group, _, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let enabled = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("initial preparation");
+    let SyncAdmission::StateChanged { transition, .. } = enabled else {
+        panic!("ON changes the timeline: {enabled:?}");
+    };
+    let [pending] = transition.issued() else {
+        panic!("ON issues one entry");
+    };
+    let pending = pending.stamp();
+
+    let disabled = group
+        .transact(sync_at(deck, SyncIntent::Disable, SessionFrame::new(4_096)))
+        .expect("OFF before claim cancels ON");
+    let SyncAdmission::StateChanged { transition, .. } = disabled else {
+        panic!("OFF restores the prior timeline: {disabled:?}");
+    };
+    assert_eq!(transition.withdrawn(), [pending]);
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert_eq!(group.tempo(), None);
+    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+}
+
+#[kithara::test]
+fn disable_before_enable_claim_restores_the_previous_local_timeline() {
+    let mut group = synced_deck_at(108.0);
+    let track = BeatGridId::allocate().expect("track id");
+    let _ = super::preparation::attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
+    let parent = parent_id();
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 1),
+            anchor_at_rate(2.0, 48_000),
+        ))
+        .expect("Host geometry");
+    let deck = group.id();
+    let before = (group.tempo(), grid_beat_at(&group, 48_000));
+    let admission = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("ON prepares one Host entry");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("ON must prepare the track: {admission:?}");
+    };
+    let [entry] = transition.issued() else {
+        panic!("one Host entry");
+    };
+
+    let disabled = group
+        .transact(sync_at(deck, SyncIntent::Disable, SessionFrame::new(4_096)))
+        .expect("OFF cancels an unclaimed Host entry");
+    let SyncAdmission::StateChanged { transition, .. } = disabled else {
+        panic!("OFF restores LocalSync: {disabled:?}");
+    };
+    assert_eq!(transition.withdrawn(), [entry.stamp()]);
+    assert!(
+        transition.issued().is_empty(),
+        "the Host entry must not carry"
+    );
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+    assert_eq!((group.tempo(), grid_beat_at(&group, 48_000)), before);
+    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+}
+
+#[kithara::test]
+fn a_parent_shift_beyond_the_first_entry_window_restores_the_sounding_mode() {
+    let (mut group, _, parent) = owning_deck_with_parent();
+    let deck = group.id();
+    let admission = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("ON prepares the first entry");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("ON changes the timeline: {admission:?}");
+    };
+    let [entry] = transition.issued() else {
+        panic!("one first entry");
+    };
+
+    let shifted = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 2),
+            anchor_at_rate(0.2, 48_000),
+        ))
+        .expect("later parent moves the boundary beyond its window");
+    assert_eq!(shifted.withdrawn(), [entry.stamp()]);
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert_eq!(group.tempo(), None);
+    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+    assert!(
+        group.before_entry.is_none(),
+        "terminal withdrawal clears custody"
+    );
+}
+
+#[kithara::test]
+fn a_new_axis_clears_unpresented_entry_custody() {
+    let (mut group, _, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let admission = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("ON prepares the first entry");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("ON changes the timeline: {admission:?}");
+    };
+    let [entry] = transition.issued() else {
+        panic!("one first entry");
+    };
+    let axis = SessionAxis::new(rate(44_100), SessionEpoch::new(1));
+    let changed = group
+        .accept_axis(SessionAxisUpdate::new(axis))
+        .expect("a new epoch replaces the old one");
+    assert_eq!(changed.withdrawn(), [entry.stamp()]);
+    assert!(group.before_entry.is_none());
+    assert!(matches!(
+        group.transact(sync_at(deck, SyncIntent::Disable, SessionFrame::new(4_096))),
+        Ok(SyncAdmission::Deferred { .. })
+    ));
+    assert_eq!(group.mode(), SyncMode::HostSync);
+}
+
+#[kithara::test]
+fn topology_replacement_withdraws_an_unclaimed_entry_and_restores_manual_mode() {
+    let (mut group, track, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let admission = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("ON prepares the first entry");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("ON changes the timeline: {admission:?}");
+    };
+    let [entry] = transition.issued() else {
+        panic!("one first entry");
+    };
+    let base = group.topology().expect("topology").stamp();
+    let changed = group
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Replace {
+                member: track,
+                replacement: SyncMember::Grid {
+                    alignment: None,
+                    grid: Box::new(TestGrid(asset_grid(track, 480_000, 24_000))),
+                },
+            }]),
+        })
+        .expect("topology replacement fences the old entry");
+    let SyncAdmission::TopologyChanged { transition, .. } = changed else {
+        panic!("topology changed: {changed:?}");
+    };
+    assert_eq!(transition.withdrawn(), [entry.stamp()]);
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert_eq!(group.tempo(), None);
+    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+    assert!(group.before_entry.is_none());
+}
+
+#[kithara::test]
+fn align_now_replaces_an_unarmed_public_enable_with_a_fresh_target() {
+    let (mut group, _, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let enabled = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("first public ON");
+    let SyncAdmission::StateChanged { transition, .. } = enabled else {
+        panic!("ON must issue a preparation: {enabled:?}");
+    };
+    let [first] = transition.issued() else {
+        panic!("one initial preparation");
+    };
+    let first = first.stamp();
+
+    let aligned = group
+        .transact(SyncOperation::Sync {
+            target: deck,
+            load: LoadGeneration::first(),
+            transport: TransportRevision::first(),
+            source: AlignmentSource::Prepared(AssetFrame::new(24_000.0).expect("cue frame")),
+            activation: SessionFrame::new(4_096),
+            intent: SyncIntent::AlignNow,
+        })
+        .expect("AlignNow replaces the pending target");
+    let SyncAdmission::StateChanged { transition, .. } = aligned else {
+        panic!("same-mode AlignNow must issue a new target: {aligned:?}");
+    };
+    assert_eq!(transition.withdrawn(), [first]);
+    let [latest] = transition.issued() else {
+        panic!("one latest preparation");
+    };
+    assert_ne!(latest.stamp().operation(), first.operation());
+    assert_eq!(group.mode(), SyncMode::HostSync);
+}
+
+#[kithara::test]
+fn rejected_public_enable_restores_the_still_sounding_manual_mode() {
+    let (mut group, _, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let admission = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)))
+        .expect("public ON");
+    let SyncAdmission::StateChanged { transition, .. } = admission else {
+        panic!("ON must issue a preparation: {admission:?}");
+    };
+    let [preparation] = transition.issued() else {
+        panic!("one preparation");
+    };
+    let _ = group
+        .acknowledge(SyncReceipt::Rejected {
+            stamp: preparation.stamp(),
+            reason: SyncExecutionReject::Capacity,
+        })
+        .expect("owner accepts a pre-claim rejection");
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert_eq!(group.tempo(), None);
+    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+    let retry = group
+        .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(4_096)))
+        .expect("ON can retry from the actual manual mode");
+    assert!(matches!(retry, SyncAdmission::StateChanged { .. }));
 }
 
 #[kithara::test]

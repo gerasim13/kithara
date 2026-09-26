@@ -180,19 +180,23 @@ impl<P: StagePort> Execute for Shared<P> {
         if !self.sink.as_ref().is_some_and(|sink| sink.is_bound()) {
             return Err(SyncError::OwnerUnavailable);
         }
-        let unstageable = self
+        let unstageable = !self
             .state
             .lock()
             .loaded
             .as_ref()
-            .is_some_and(|loaded| loaded.port.is_none());
+            .is_some_and(|loaded| loaded.port.is_some());
         if unstageable {
             return Err(unsupported);
         }
         Ok(())
     }
 
-    fn follow(self: Arc<Self>, preparation: &SyncPreparation, relocation: bool) {
+    fn admit_own_member(&self) -> Result<(), SyncError> {
+        self.admit(self.member)
+    }
+
+    fn follow(self: Arc<Self>, preparation: &SyncPreparation) {
         let stamp = preparation.stamp();
         if stamp.member().grid_id() != self.member {
             return;
@@ -202,16 +206,12 @@ impl<P: StagePort> Execute for Shared<P> {
             return;
         }
         let superseded = state.held.take();
-        let plan = match preparation.effect() {
-            SyncEffect::Projection { plan, replaces, .. } if replaces.is_none() || relocation => {
-                plan.clone()
-            }
-            _ => {
-                drop(state);
-                cancel_silently(superseded);
-                return;
-            }
+        let SyncEffect::Projection { plan, .. } = preparation.effect() else {
+            drop(state);
+            cancel_silently(superseded);
+            return;
         };
+        let plan = plan.clone();
         let Some((media, port)) = state.loaded.as_ref().and_then(|loaded| {
             let port = loaded.port.clone()?;
             Some((loaded.media, port))
