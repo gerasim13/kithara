@@ -302,6 +302,19 @@ pub(super) const STAGED_CUE: SyncCase =
         .paused()
         .hold(120.0)
         .gridded();
+/// [`STAGED_CUE`] beside a second paused deck that keeps the session
+/// running: unloading the first deck then leaves the session's grid alone,
+/// where a session left with no started deck shuts down and withdraws the
+/// preparation itself, racing the executor's own cancellation.
+pub(super) const STAGED_CUE_BESIDE_A_DECK: SyncCase = SyncCase::running(
+    "staged-cue-beside-a-deck",
+    2,
+    44_100,
+    OperationOrder::SyncPlaySeek,
+)
+.paused()
+.hold(120.0)
+.gridded();
 /// A staged cue under a response deadline far looser than the lane's ring.
 pub(super) const STAGED_UNDER_LOOSE_DEADLINE: SyncCase = SyncCase::running(
     "staged-under-loose-deadline",

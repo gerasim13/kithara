@@ -14,8 +14,8 @@ use super::{
     sync_product_matrix::{
         Audible, BLOCK_FRAMES, CHANNELS, NEWTECHNO_PHRASE, PreparedSources, ProductHarness,
         STAGED_BESIDE_PLAYBACK, STAGED_BESIDE_PLAYBACK_CONTROL, STAGED_CUE,
-        STAGED_UNDER_LOOSE_DEADLINE, STAGED_WITHOUT_CAPACITY, SyncCase, TUNNEL_CUE,
-        newtechno_sources, tunnel_sources,
+        STAGED_CUE_BESIDE_A_DECK, STAGED_UNDER_LOOSE_DEADLINE, STAGED_WITHOUT_CAPACITY, SyncCase,
+        TUNNEL_CUE, newtechno_sources, tunnel_sources,
     },
 };
 
@@ -202,7 +202,7 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     #[case] rate: f64,
     #[case] cue: Start,
 ) {
-    let case = STAGED_CUE;
+    let case = STAGED_CUE_BESIDE_A_DECK;
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
     let operation = prepare_cue(&mut harness, case, rate, cue).await;
     let _ = render_until(&mut harness, case, operation, INSTALLED).await;
