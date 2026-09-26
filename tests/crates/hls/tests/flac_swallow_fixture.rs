@@ -16,8 +16,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
-    fixture_protocol::{DelayRule, EncryptionRequest},
+    fixture_protocol::DelayRule,
     hls_fixture::create_test_downloader,
+    hls_server::aes128_encryption,
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
     usdt_trace,
@@ -27,11 +28,6 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
 };
 use url::Url;
-
-/// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the
-/// repo's DRM fixtures.
-const AES_KEY_HEX: &str = "30313233343536373839616263646566";
-const AES_IV_HEX: &str = "00000000000000000000000000000000";
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -86,10 +82,7 @@ fn build_fixture() -> HlsFixtureBuilder {
             segment_gte: Some(DELAY_FROM_SEG),
             delay_ms: SEGMENT_DELAY_MS,
         }])
-        .encryption(EncryptionRequest {
-            key_hex: AES_KEY_HEX.to_owned(),
-            iv_hex: Some(AES_IV_HEX.to_owned()),
-        })
+        .encryption(aes128_encryption())
 }
 
 async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f64) {

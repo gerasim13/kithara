@@ -1,8 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::fmt::Write;
-
 use kithara::{
     abr::AbrMode,
     events::TrackId,
@@ -14,11 +12,8 @@ use kithara::{
     queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper,
-    event::TestEvent,
-    fixture_protocol::{DelayRule, EncryptionRequest},
-    kithara,
-    offline::DiskQueue,
+    HlsFixtureBuilder, TestServerHelper, event::TestEvent, fixture_protocol::DelayRule,
+    hls_server::aes128_encryption, kithara, offline::DiskQueue,
 };
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::temp_dir;
@@ -55,25 +50,12 @@ impl Consts {
     /// the bug is observed as a budget-exhaustion failure inside the
     /// loader long before this fires.
     const LOAD_DEADLINE: Duration = Duration::from_secs(20);
-    /// AES-128 key/IV used by the encrypted variant. Matches the
-    /// "0123456789abcdef" + zero-IV pair already used elsewhere in the
-    /// integration suite (see `local_track_plays.rs`).
-    const AES_KEY: &'static [u8] = b"0123456789abcdef";
-    const AES_IV: [u8; 16] = [0u8; 16];
 }
 
 #[derive(Clone, Copy, Debug)]
 enum FixtureMode {
     Plain,
     Aes128,
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        write!(&mut s, "{b:02x}").expect("hex write");
-    }
-    s
 }
 
 async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
@@ -89,10 +71,7 @@ async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
             delay_ms: Consts::SEGMENT_DELAY_MS,
         }]);
     if matches!(mode, FixtureMode::Aes128) {
-        builder = builder.encryption(EncryptionRequest {
-            key_hex: hex_encode(Consts::AES_KEY),
-            iv_hex: Some(hex_encode(&Consts::AES_IV)),
-        });
+        builder = builder.encryption(aes128_encryption());
     }
     helper
         .create_hls(builder)

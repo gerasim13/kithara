@@ -15,7 +15,8 @@ use kithara_integration_tests::auto;
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    fixture_protocol::{EncryptionRequest, PackagedSignal},
+    fixture_protocol::PackagedSignal,
+    hls_server::aes128_encryption,
     phase_continuity::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan},
 };
 use kithara_test_utils::TestTempDir;
@@ -28,13 +29,6 @@ const VARIANT_COUNT: usize = 3;
 /// on the top variant above the AAC ladder; [`Fixture::AacWithFlacTop`]
 /// mirrors that and `Manual(TOP_VARIANT)` selects it.
 const TOP_VARIANT: usize = VARIANT_COUNT - 1;
-
-/// AES-128 key/IV for the encrypted (DRM) fixtures. The test server encrypts
-/// segments with this key and serves it at the `#EXT-X-KEY` URI, so the value
-/// only needs to be a valid 16-byte key — the client fetches and decrypts with
-/// the same bytes. `30313233…` = ASCII `b"0123456789abcdef"`.
-const AES_KEY_HEX: &str = "30313233343536373839616263646566";
-const AES_IV_HEX: &str = "00000000000000000000000000000000";
 
 #[derive(Debug, Clone, Copy)]
 enum Codec {
@@ -117,10 +111,7 @@ fn build_fixture(fixture: Fixture, bit_rate: Option<u64>, drm: bool) -> HlsFixtu
     };
     let b = b.packaged_audio_bit_rate(bit_rate);
     if drm {
-        b.encryption(EncryptionRequest {
-            key_hex: AES_KEY_HEX.to_owned(),
-            iv_hex: Some(AES_IV_HEX.to_owned()),
-        })
+        b.encryption(aes128_encryption())
     } else {
         b
     }

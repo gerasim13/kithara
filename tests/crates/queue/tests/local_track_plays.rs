@@ -16,7 +16,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
-    fixture_protocol::EncryptionRequest,
+    hls_server::aes128_encryption,
     kithara,
     offline::{DiskQueue, RenderPacing, assert_playhead_tracks_renderer},
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
@@ -32,15 +32,6 @@ enum LocalSource {
     Mp3,
     HlsAac,
     HlsAacAes128,
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        use std::fmt::Write;
-        write!(&mut s, "{b:02x}").expect("hex write");
-    }
-    s
 }
 
 async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url {
@@ -59,17 +50,12 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
                 .master_url()
         }
         LocalSource::HlsAacAes128 => {
-            let key: &[u8] = b"0123456789abcdef";
-            let iv: [u8; 16] = [0u8; 16];
             let builder = HlsFixtureBuilder::new()
                 .variant_count(1)
                 .segments_per_variant(16)
                 .segment_duration_secs(4.0)
                 .packaged_audio_aac_lc(44_100, 2)
-                .encryption(EncryptionRequest {
-                    key_hex: hex_encode(key),
-                    iv_hex: Some(hex_encode(&iv)),
-                });
+                .encryption(aes128_encryption());
             helper
                 .create_hls(builder)
                 .await

@@ -22,7 +22,8 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
-    fixture_protocol::{DelayRule, EncryptionRequest},
+    fixture_protocol::DelayRule,
+    hls_server::aes128_encryption,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
 };
@@ -444,15 +445,6 @@ async fn seek_drag_into_cold_range_does_not_fail(
 
 #[kithara::fixture]
 async fn scrub_source() -> (TestServerHelper, String) {
-    // AES-128 key + IV matching `packaged_encrypted_builder` in
-    // `tests/src/hls_server.rs` — every kithara fixture uses these
-    // same constants so the integration helpers can verify
-    // decryption end-to-end.
-    const AES128_KEY: [u8; 16] = *b"0123456789abcdef";
-    const AES128_IV: [u8; 16] = [0u8; 16];
-    let key_hex: String = AES128_KEY.iter().map(|b| format!("{b:02x}")).collect();
-    let iv_hex: String = AES128_IV.iter().map(|b| format!("{b:02x}")).collect();
-
     let helper = TestServerHelper::new().await;
     // Mirror prod zvuk DRM shape: 4 variants (slq / smq / shq /
     // slossless analogue), AES-128 CBC, ABR=Auto, per-segment
@@ -475,10 +467,7 @@ async fn scrub_source() -> (TestServerHelper, String) {
             // the reproducer must use the same codec the bug
             // surfaces on in production.
             .packaged_audio_aac_he_v2(44_100, 2)
-            .encryption(EncryptionRequest {
-                key_hex,
-                iv_hex: Some(iv_hex),
-            })
+            .encryption(aes128_encryption())
             .push_delay_rule(DelayRule {
                 variant: Some(0),
                 delay_ms: 300,
