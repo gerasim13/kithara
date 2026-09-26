@@ -98,6 +98,21 @@ pub(crate) fn release_crates(version: &str) -> Result<Vec<String>> {
     crates_at_version(locate_versions(&order)?, version)
 }
 
+/// The crates among `crates` that crates.io already holds at `version`. The
+/// registry never takes a version back, so a release any of them reached is
+/// final.
+pub(crate) fn registered(ctx: &Ctx, crates: &[String], version: &str) -> Result<Vec<String>> {
+    let publish = KitharaExt::from_ctx(ctx)?.publish;
+    let http_timeout_secs = resolve_http_timeout_secs(&publish)?;
+    let mut held = Vec::new();
+    for name in crates {
+        if registry_has(name, Some(version), &publish.user_agent, http_timeout_secs)? {
+            held.push(name.clone());
+        }
+    }
+    Ok(held)
+}
+
 fn crates_at_version(versions: HashMap<String, String>, version: &str) -> Result<Vec<String>> {
     let mut behind: Vec<_> = versions
         .iter()
@@ -176,7 +191,7 @@ fn run_publish(
     no_verify: bool,
     publish: &PublishConfig,
 ) -> Result<()> {
-    let manifests = locate_manifests(order)?;
+    let inputs = locate_publish_inputs(order)?;
     let versions = locate_versions(order)?;
     let http_timeout_secs = resolve_http_timeout_secs(publish)?;
     let mut pace = NewCratePace::from_config(publish)?;
@@ -213,10 +228,9 @@ fn run_publish(
         }
 
         println!("[{pos}/{total}] Publishing {name} v{version}...");
-        let manifest = &manifests[name];
         publish_one(
             name,
-            manifest,
+            &inputs[name],
             &publish.workspace_hack_crate,
             PublishMode::Upload,
             no_verify,
@@ -237,7 +251,7 @@ fn run_publish(
 }
 
 fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()> {
-    let manifests = locate_manifests(order)?;
+    let inputs = locate_publish_inputs(order)?;
     let versions = locate_versions(order)?;
     let deps = locate_publishable_workspace_deps(order)?;
     let http_timeout_secs = resolve_http_timeout_secs(publish)?;
@@ -287,7 +301,7 @@ fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()>
         println!("[{pos}/{total}] Registry dry-run for {name} v{version}...");
         publish_one(
             name,
-            &manifests[name],
+            &inputs[name],
             &publish.workspace_hack_crate,
             PublishMode::DryRun,
             false,
@@ -423,7 +437,14 @@ fn registry_has(
     }
 }
 
-fn locate_manifests(order: &[String]) -> Result<HashMap<String, PathBuf>> {
+/// What `cargo publish` of one crate needs beyond its name: the manifest to
+/// rewrite and the manifest keys of its workspace dev-dependencies.
+struct PublishInput {
+    manifest: PathBuf,
+    workspace_dev_deps: Vec<String>,
+}
+
+fn locate_publish_inputs(order: &[String]) -> Result<HashMap<String, PublishInput>> {
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to run cargo metadata")?;
@@ -439,9 +460,18 @@ fn locate_manifests(order: &[String]) -> Result<HashMap<String, PathBuf>> {
         if !wanted.contains(pkg.name.as_str()) {
             continue;
         }
+        let workspace_dev_deps: BTreeSet<String> = pkg
+            .dependencies
+            .iter()
+            .filter(|dep| dep.path.is_some() && dep.kind == DependencyKind::Development)
+            .map(|dep| dep.rename.clone().unwrap_or_else(|| dep.name.clone()))
+            .collect();
         out.insert(
             pkg.name.to_string(),
-            PathBuf::from(pkg.manifest_path.as_str()),
+            PublishInput {
+                manifest: PathBuf::from(pkg.manifest_path.as_str()),
+                workspace_dev_deps: workspace_dev_deps.into_iter().collect(),
+            },
         );
     }
 
@@ -510,21 +540,23 @@ impl PublishMode {
 
 fn publish_one(
     name: &str,
-    manifest: &Path,
+    input: &PublishInput,
     hack_crate: &str,
     mode: PublishMode,
     no_verify: bool,
 ) -> Result<()> {
+    let manifest = &input.manifest;
     let original = fs::read_to_string(manifest)
         .with_context(|| format!("read {} for {name}", manifest.display()))?;
-    let stripped = strip_workspace_hack(&original, hack_crate);
-    let did_strip = stripped != original;
+    let stripped = publish_manifest(&original, hack_crate, &input.workspace_dev_deps)
+        .with_context(|| format!("rewrite {} for {name}", manifest.display()))?;
+    let did_strip = stripped.is_some();
     let lockfile = PublishLockfile::snapshot()?;
 
-    if did_strip {
-        fs::write(manifest, &stripped)
+    if let Some(stripped) = &stripped {
+        fs::write(manifest, stripped)
             .with_context(|| format!("write stripped manifest {}", manifest.display()))?;
-        println!("  Temporarily removed {hack_crate} dependency.");
+        println!("  Temporarily removed {hack_crate} and workspace dev-dependencies.");
     }
 
     let args = mode.cargo_args(name, no_verify);
@@ -597,21 +629,77 @@ impl PublishLockfile {
 /// Remove every `kithara-workspace-hack = { ... }` dependency line, regardless
 /// of whether it lives under `[dependencies]` or a `[target.<cfg>.dependencies]`
 /// section. Preserves all other content byte-for-byte.
-fn strip_workspace_hack(manifest: &str, hack_crate: &str) -> String {
-    if hack_crate.is_empty() {
-        return manifest.to_owned();
-    }
-    let mut out = String::with_capacity(manifest.len());
-    for line in manifest.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with(hack_crate)
-            && trimmed[hack_crate.len()..].trim_start().starts_with('=')
-        {
-            continue;
+/// The manifest `cargo publish` sees, or `None` when it needs no change.
+///
+/// `cargo hakari publish` only strips the workspace-hack from the default
+/// `[dependencies]` table, and kithara places it under a target table, so it is
+/// removed from every dependency table here. Workspace dev-dependencies carry a
+/// version, so cargo would resolve each against crates.io before its turn in
+/// the publish order; they are removed as cargo removes version-less path
+/// dev-dependencies, which keeps the order free of dev-dependency cycles.
+fn publish_manifest(
+    manifest: &str,
+    hack_crate: &str,
+    workspace_dev_deps: &[String],
+) -> Result<Option<String>> {
+    let mut table: toml::Table = manifest.parse().context("parse manifest")?;
+    let mut removed = strip_dependency_tables(&mut table, hack_crate, workspace_dev_deps);
+    if let Some(toml::Value::Table(targets)) = table.get_mut("target") {
+        for (_, target) in targets.iter_mut() {
+            if let toml::Value::Table(target) = target {
+                removed |= strip_dependency_tables(target, hack_crate, workspace_dev_deps);
+            }
         }
-        out.push_str(line);
     }
-    out
+    if let Some(toml::Value::Table(features)) = table.get_mut("features") {
+        removed |= strip_feature_references(features, hack_crate);
+    }
+    if !removed {
+        return Ok(None);
+    }
+    toml::to_string(&table)
+        .map(Some)
+        .context("serialize publish manifest")
+}
+
+fn strip_dependency_tables(
+    table: &mut toml::Table,
+    hack_crate: &str,
+    workspace_dev_deps: &[String],
+) -> bool {
+    let mut removed = false;
+    for (section, names) in [
+        ("dependencies", std::slice::from_ref(&hack_crate.to_owned())),
+        ("dev-dependencies", workspace_dev_deps),
+    ] {
+        if let Some(toml::Value::Table(deps)) = table.get_mut(section) {
+            for name in names {
+                removed |= deps.remove(name).is_some();
+            }
+        }
+    }
+    removed
+}
+
+/// Cargo rejects a manifest whose feature names a dependency it does not list,
+/// so a feature that enabled the removed workspace-hack keeps its name and
+/// loses that entry.
+fn strip_feature_references(features: &mut toml::Table, dependency: &str) -> bool {
+    let names_dependency = |entry: &str| {
+        let entry = entry.strip_prefix("dep:").unwrap_or(entry);
+        entry
+            .strip_prefix(dependency)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with("?/"))
+    };
+    let mut removed = false;
+    for (_, enabled) in features.iter_mut() {
+        if let toml::Value::Array(enabled) = enabled {
+            let before = enabled.len();
+            enabled.retain(|entry| entry.as_str().is_none_or(|entry| !names_dependency(entry)));
+            removed |= enabled.len() != before;
+        }
+    }
+    removed
 }
 
 fn run_cargo(args: &[&str], description: &str) -> Result<()> {
@@ -841,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn strip_workspace_hack_removes_from_default_and_target_sections() {
+    fn publish_manifest_strips_the_hack_and_workspace_dev_deps_from_every_table() {
         let input = "\
 [dependencies]
 foo = { workspace = true }
@@ -850,18 +938,180 @@ kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-works
 [target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]
 kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-workspace-hack\" }
 bar = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+serde = { workspace = true }
+
+[target.'cfg(target_os = \"android\")'.dev-dependencies]
+kithara-test-dylib = { path = \"../dylib\", features = [
+    \"a\",
+] }
 ";
-        let out = strip_workspace_hack(input, "kithara-workspace-hack");
-        assert!(!out.contains("kithara-workspace-hack"), "{out}");
-        assert!(out.contains("foo = { workspace = true }"));
-        assert!(out.contains("bar = { workspace = true }"));
-        assert!(out.contains("[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]"));
+        let dev_deps = [
+            "kithara-test-dylib".to_owned(),
+            "kithara-test-utils".to_owned(),
+        ];
+
+        let out = publish_manifest(input, "kithara-workspace-hack", &dev_deps)
+            .unwrap()
+            .unwrap();
+
+        let table: toml::Table = out.parse().unwrap();
+        let text = table.to_string();
+        for gone in [
+            "kithara-workspace-hack",
+            "kithara-test-utils",
+            "kithara-test-dylib",
+        ] {
+            assert!(!text.contains(gone), "{gone} survived:\n{text}");
+        }
+        assert!(table["dependencies"].get("foo").is_some(), "{text}");
+        assert!(table["dev-dependencies"].get("serde").is_some(), "{text}");
+        assert!(
+            table["target"]["cfg(not(target_arch = \"wasm32\"))"]["dependencies"]
+                .get("bar")
+                .is_some(),
+            "{text}"
+        );
     }
 
     #[test]
-    fn strip_workspace_hack_keeps_unrelated_lines() {
-        let input = "no_hack_here = true\n";
-        assert_eq!(strip_workspace_hack(input, "kithara-workspace-hack"), input);
+    fn publish_manifest_leaves_a_manifest_without_workspace_deps_alone() {
+        let input = "[dependencies]\nserde = \"1\"\n";
+        assert_eq!(
+            publish_manifest(input, "kithara-workspace-hack", &[]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn every_published_manifest_names_only_workspace_crates_published_before_it() {
+        let metadata = MetadataCommand::new().exec().unwrap();
+        let members: HashSet<_> = metadata.workspace_members.iter().collect();
+        let workspace: HashSet<String> = metadata
+            .packages
+            .iter()
+            .filter(|pkg| members.contains(&pkg.id))
+            .map(|pkg| pkg.name.to_string())
+            .collect();
+        let order = resolve_publish_order().unwrap();
+        let position: HashMap<&str, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.as_str(), i))
+            .collect();
+        let inputs = locate_publish_inputs(&order).unwrap();
+
+        for name in &order {
+            let input = &inputs[name];
+            let original = fs::read_to_string(&input.manifest).unwrap();
+            let published = publish_manifest(
+                &original,
+                "kithara-workspace-hack",
+                &input.workspace_dev_deps,
+            )
+            .unwrap()
+            .unwrap_or(original);
+            let table: toml::Table = published.parse().unwrap();
+
+            for dep in workspace_deps_named_in(&table, &workspace) {
+                let Some(&at) = position.get(dep.as_str()) else {
+                    panic!("{name} publishes naming unpublished workspace crate {dep}");
+                };
+                assert!(
+                    at < position[name.as_str()],
+                    "{name} publishes naming {dep}, which is published after it"
+                );
+            }
+            for missing in features_naming_absent_deps(&table) {
+                panic!("{name} publishes a feature naming {missing}, which it does not depend on");
+            }
+        }
+    }
+
+    #[test]
+    fn publish_manifest_keeps_a_feature_that_enabled_the_hack() {
+        let input = "\
+[features]
+workspace-hack = [\"dep:kithara-workspace-hack\"]
+full = [\"workspace-hack\", \"kithara-workspace-hack?/std\", \"foo/std\"]
+
+[dependencies]
+foo = { workspace = true }
+
+[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]
+kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-workspace-hack\", optional = true }
+";
+        let out = publish_manifest(input, "kithara-workspace-hack", &[])
+            .unwrap()
+            .unwrap();
+
+        let table: toml::Table = out.parse().unwrap();
+        assert_eq!(
+            table["features"]["workspace-hack"],
+            toml::Value::Array(vec![])
+        );
+        assert_eq!(
+            table["features"]["full"],
+            toml::Value::Array(vec!["workspace-hack".into(), "foo/std".into()])
+        );
+        assert_eq!(features_naming_absent_deps(&table), Vec::<String>::new());
+    }
+
+    /// The dependencies feature entries name that the manifest does not list,
+    /// which cargo refuses to parse.
+    fn features_naming_absent_deps(table: &toml::Table) -> Vec<String> {
+        let mut tables = vec![table];
+        if let Some(toml::Value::Table(targets)) = table.get("target") {
+            tables.extend(targets.values().filter_map(toml::Value::as_table));
+        }
+        let listed: HashSet<&str> = tables
+            .iter()
+            .filter_map(|table| table.get("dependencies").and_then(toml::Value::as_table))
+            .flat_map(|deps| deps.keys().map(String::as_str))
+            .collect();
+        let Some(features) = table.get("features").and_then(toml::Value::as_table) else {
+            return Vec::new();
+        };
+        features
+            .values()
+            .filter_map(toml::Value::as_array)
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .filter_map(|entry| {
+                let named = match entry.strip_prefix("dep:") {
+                    Some(dep) => dep,
+                    None => entry.split_once('/')?.0.trim_end_matches('?'),
+                };
+                (!listed.contains(named)).then(|| named.to_owned())
+            })
+            .collect()
+    }
+
+    fn workspace_deps_named_in(table: &toml::Table, workspace: &HashSet<String>) -> Vec<String> {
+        let mut tables = vec![table];
+        if let Some(toml::Value::Table(targets)) = table.get("target") {
+            tables.extend(targets.values().filter_map(toml::Value::as_table));
+        }
+        let mut named = Vec::new();
+        for table in tables {
+            for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                let Some(toml::Value::Table(deps)) = table.get(section) else {
+                    continue;
+                };
+                for (key, spec) in deps {
+                    let package = spec
+                        .get("package")
+                        .and_then(toml::Value::as_str)
+                        .unwrap_or(key);
+                    if workspace.contains(package) {
+                        named.push(package.to_owned());
+                    }
+                }
+            }
+        }
+        named
     }
 
     #[test]
