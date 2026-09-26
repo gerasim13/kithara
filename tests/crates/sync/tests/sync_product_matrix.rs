@@ -1250,7 +1250,7 @@ pub(super) async fn sources(
             .map(|name| {
                 let asset = by_name(name).unwrap_or_else(|| {
                     panic!(
-                        "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build with KITHARA_REMOTE_FIXTURES=1"
+                        "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build without KITHARA_DISABLE_REMOTE_FIXTURES"
                     )
                 });
                 asset

@@ -14,8 +14,6 @@ use crate::hls_hydrate::{Deadline, HydrateError, RedactedUrl};
 
 #[derive(Debug, Error)]
 pub(crate) enum RemoteFileError {
-    #[error("repository variable {0} is missing")]
-    Missing(&'static str),
     #[error(transparent)]
     Fetch(#[from] HydrateError),
     #[error("invalid remote fixture URL")]

@@ -633,15 +633,6 @@ mod tests {
         assert!(!head.contains("range:"), "{head}");
     }
 
-    #[kithara::test(native, flash(false))]
-    fn missing_remote_configuration_names_the_required_input() {
-        let error = RemoteFileError::Missing("KITHARA_REMOTE_FIXTURES");
-        assert_eq!(
-            error.to_string(),
-            "repository variable KITHARA_REMOTE_FIXTURES is missing"
-        );
-    }
-
     fn request_head(stream: &mut TcpStream) -> String {
         let mut head = Vec::new();
         let mut byte = [0; 1];

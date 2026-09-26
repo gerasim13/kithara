@@ -13,24 +13,11 @@ enum Library {}
 
 impl Library {
     const BASE: &str = "https://stream.silvercomet.top/fixtures/";
-    const ENV: &str = "KITHARA_REMOTE_FIXTURES";
     const STALL: Duration = Duration::from_secs(20);
     const TIMEOUT: Duration = Duration::from_secs(600);
 }
 
-fn enabled() -> Result<(), RemoteFileError> {
-    std::env::var_os(Library::ENV)
-        .filter(|value| !value.is_empty())
-        .map(|_| ())
-        .ok_or(RemoteFileError::Missing(Library::ENV))
-}
-
-#[kithara::asset(
-    ext = "flac",
-    content_type = "audio/flac",
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
+#[kithara::asset(ext = "flac", content_type = "audio/flac", optional)]
 #[case::newtechno(
     "newtechno.flac",
     "7ee0e157a3dd1ea44554c9e22f81a72ed1100942a2f17982e90043f40801f1b2",
@@ -92,7 +79,6 @@ fn library_flac(
     sha256: &str,
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
     let url = Url::parse(Library::BASE)?.join(file)?;
     Ok(
         fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
@@ -103,12 +89,7 @@ fn library_flac(
 
 /// Playlist tracks the application is exercised with, published as delivered
 /// by the Zvuk CDN: 320 kbit/s MP3, no re-encoding.
-#[kithara::asset(
-    ext = "mp3",
-    content_type = "audio/mpeg",
-    env = ["KITHARA_REMOTE_FIXTURES"],
-    optional
-)]
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg", optional)]
 #[case::zvuk_27390231(
     "zvuk_27390231.mp3",
     "91e3657174821e9a570744d3f3c6b2b7fe09c161d285d08751480554884bb5a4",
@@ -145,7 +126,6 @@ fn library_mp3(
     sha256: &str,
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
-    enabled()?;
     let url = Url::parse(Library::BASE)?.join(file)?;
     Ok(
         fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
