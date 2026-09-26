@@ -63,7 +63,7 @@ fn bracketed_on<F: FnOnce()>(flash: &FlashInner, body: F) {
     // slot on the parent BEFORE the child runs, and `mark_dedicated()` claims it
     // `Running` on the child. The test has no spawn bracket, so it does both here.
     flash.pre_count_dedicated();
-    credit::mark_dedicated();
+    credit::mark_dedicated(Location::caller());
     body();
     flash.on_participant_exit();
 }
@@ -326,6 +326,35 @@ fn the_dump_header_names_every_way_an_advance_can_end() {
     ] {
         assert!(dump.contains(key), "missing {key} in {dump}");
     }
+}
+
+/// The holder line is the dump's only lead on a wedged engine, and a spawned
+/// job claims its credit on the CHILD thread: a `#[track_caller]` claim there
+/// names the platform shim, so every blocking job in the process reads the
+/// same and the dump cannot tell a decoder rebuild from a probe. The site is
+/// therefore taken on the PARENT at spawn and carried in the reservation.
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn a_spawned_holder_is_named_by_its_spawn_site_not_the_platform_shim() {
+    let _g = guard();
+    reset();
+
+    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let holder = crate::thread::spawn_named("dump-holder", move || {
+        claimed_tx.send(()).expect("announce the claim");
+        release_rx.recv().expect("await release");
+    });
+    claimed_rx.recv().expect("the holder must claim its credit");
+
+    let dump = forward::dump();
+    release_tx.send(()).expect("release the holder");
+    holder.join().expect("holder panicked");
+
+    assert!(
+        dump.contains(&format!("resumed_from={}:", file!())),
+        "the holder must be named by its spawn site, not by the shim\n{dump}"
+    );
 }
 
 /// A dump lists EVERY parked waiter and says nothing about which one the clock
