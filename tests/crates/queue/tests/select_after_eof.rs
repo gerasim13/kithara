@@ -183,15 +183,20 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
         .expect("switch back to track A");
     let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
+    // The selection an amplitude verdict is about: a switch-back that never
+    // moved the queue and one that moved it while B kept sounding are
+    // different defects, and the amplitudes alone do not tell them apart.
+    let index_back = queue.current_index();
     assert!(
         mean_back > 0.005,
-        "track A must be audible after the switch-back: mean={mean_back}"
+        "track A must be audible after the switch-back: mean={mean_back}, current_index={index_back:?}"
     );
     assert!(
         mean_back < mean_b / 4.0,
-        "track B must stop sounding after the switch-back: mean_b={mean_b}, mean_back={mean_back}"
+        "track B must stop sounding after the switch-back: mean_a={mean_a}, mean_b={mean_b}, \
+         mean_back={mean_back}, current_index={index_back:?}"
     );
-    assert_eq!(queue.current_index(), Some(0));
+    assert_eq!(index_back, Some(0));
     drop(queue);
     harness.close().await;
 }
