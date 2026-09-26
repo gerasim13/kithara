@@ -57,6 +57,16 @@ wasm BROWSER="chrome" SUITE="all":
     # file or directory".
     cargo build -p kithara-integration-tests --features all --bin test_server
     if [[ "$browser" == "firefox" ]]; then
+      echo "=== PROBE system firefox: $(firefox --version 2>&1)"
+      ffdir="$(mktemp -d)"
+      case "$(uname -m)" in
+        aarch64) ffos=linux64-aarch64 ;;
+        *) ffos=linux64 ;;
+      esac
+      curl -fsSL --retry 5 -o "$ffdir/ff.tar.xz" "https://download.mozilla.org/?product=firefox-latest-ssl&os=$ffos&lang=en-US"
+      tar -xJf "$ffdir/ff.tar.xz" -C "$ffdir"
+      export PATH="$ffdir/firefox:$PATH"
+      echo "=== PROBE release firefox: $(firefox --version 2>&1) at $(command -v firefox)"
       fails=0
       for attempt in $(seq 1 150); do
         echo "=== PROBE attempt $attempt"
