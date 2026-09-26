@@ -126,70 +126,106 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
     warn!("PROBE open start");
     let _ = js_sys::Function::new_no_args(
         r#"
-        if (!globalThis.__probeWorkers) {
-          globalThis.__probeWorkers = [];
-          const W = globalThis.Worker;
+        if (!globalThis.__probe) {
           const t0 = performance.now();
-          const log = (m) => globalThis.__probeWorkers.push(Math.round(performance.now() - t0) + "ms " + m);
+          const P = (globalThis.__probe = { first: [], last: {}, counts: {} });
+          const note = (who, what) => {
+            const at = Math.round(performance.now() - t0);
+            P.last[who] = at + "ms " + what;
+            P.counts[who] = (P.counts[who] || 0) + 1;
+            if (P.first.length < 40) P.first.push(at + "ms " + who + ": " + what);
+          };
+          const bc = new BroadcastChannel("kithara-probe");
+          bc.onmessage = (e) => note(e.data.who, e.data.what);
+          globalThis.__probeDump = () =>
+            JSON.stringify({ waitAsync: typeof Atomics.waitAsync, first: P.first, last: P.last, counts: P.counts });
+          const W = globalThis.Worker;
+          const shimUrl = self.location.origin + "/wasm-bindgen-test.js";
+          let others = 0;
+          const wstSrc = (who) => `
+            const bc = new BroadcastChannel("kithara-probe");
+            const stage = (what) => bc.postMessage({ who: ${JSON.stringify(who)}, what });
+            stage("eval");
+            let __wstWorkerId = "unbound";
+            let __wstWorkerName = "";
+            let __wstExitStatePtr = 0;
+            self.onmessage = async (e) => {
+              try {
+                stage("onmessage");
+                const [module, memory, work, meta] = e.data;
+                if (meta && typeof meta === "object") {
+                  __wstWorkerId = meta.__wst_id || __wstWorkerId;
+                  __wstWorkerName = meta.__wst_name || __wstWorkerName;
+                  __wstExitStatePtr = meta.__wst_exit_state_ptr || __wstExitStatePtr;
+                  if (meta.__wst_parent_managed === true) {
+                    globalThis.__wst_can_relay_to_parent = true;
+                  }
+                }
+                const url = ${JSON.stringify(shimUrl)} + "?worker=" + Math.random();
+                const shim = await import(url);
+                stage("imported");
+                shim.initSync({ module, memory, thread_stack_size: 1048576 });
+                stage("inited");
+                shim.wasm_safe_thread_entry_point(work);
+                stage("entered");
+                while (true) {
+                  const pending = shim.wasm_safe_thread_pending_tasks();
+                  if (pending === 0) break;
+                  await new Promise((resolve) => setTimeout(resolve, 1));
+                }
+                stage("exiting");
+                self.postMessage({ __wasm_safe_thread_exit: true, __wst_id: __wstWorkerId, __wst_name: __wstWorkerName, __wst_exit_state_ptr: __wstExitStatePtr });
+                close();
+              } catch (err) {
+                stage("threw " + ((err && err.message) || String(err)));
+                self.postMessage({ __wasm_safe_thread_error: err.message || String(err), __wst_id: __wstWorkerId, __wst_name: __wstWorkerName, __wst_exit_state_ptr: __wstExitStatePtr });
+                throw err;
+              }
+            };
+          `;
+          const otherSrc = (who, url) => `
+            const bc = new BroadcastChannel("kithara-probe");
+            const stage = (what) => bc.postMessage({ who: ${JSON.stringify(who)}, what });
+            stage("eval");
+            importScripts(${JSON.stringify(url)});
+            stage("imported");
+            const inner = self.onmessage;
+            self.onmessage = function (ev) {
+              stage("msg");
+              const out = inner.call(this, ev);
+              stage("handled");
+              return out;
+            };
+          `;
           globalThis.Worker = function (url, opts) {
             const name = opts && opts.name;
-            log("new " + name);
-            const shimUrl = self.location.origin + "/wasm-bindgen-test.js";
-            const src = `
-              const stage = (s) => self.postMessage({ __probe_stage: s });
-              stage("eval");
-              let __wstWorkerId = "unbound";
-              let __wstWorkerName = "";
-              let __wstExitStatePtr = 0;
-              self.onmessage = async (e) => {
-                try {
-                  stage("onmessage");
-                  const [module, memory, work, meta] = e.data;
-                  if (meta && typeof meta === "object") {
-                    __wstWorkerId = meta.__wst_id || __wstWorkerId;
-                    __wstWorkerName = meta.__wst_name || __wstWorkerName;
-                    __wstExitStatePtr = meta.__wst_exit_state_ptr || __wstExitStatePtr;
-                    if (meta.__wst_parent_managed === true) {
-                      globalThis.__wst_can_relay_to_parent = true;
-                    }
-                  }
-                  const url = ${JSON.stringify(shimUrl)} + "?worker=" + Math.random();
-                  const shim = await import(url);
-                  stage("imported");
-                  shim.initSync({ module, memory, thread_stack_size: 1048576 });
-                  stage("inited");
-                  shim.wasm_safe_thread_entry_point(work);
-                  stage("entered");
-                  while (true) {
-                    const pending = shim.wasm_safe_thread_pending_tasks();
-                    if (pending === 0) break;
-                    await new Promise((resolve) => setTimeout(resolve, 1));
-                  }
-                  self.postMessage({ __wasm_safe_thread_exit: true, __wst_id: __wstWorkerId, __wst_name: __wstWorkerName, __wst_exit_state_ptr: __wstExitStatePtr });
-                  close();
-                } catch (err) {
-                  stage("threw " + (err && err.message || String(err)));
-                  self.postMessage({ __wasm_safe_thread_error: err.message || String(err), __wst_id: __wstWorkerId, __wst_name: __wstWorkerName, __wst_exit_state_ptr: __wstExitStatePtr });
-                  throw err;
-                }
-              };
-            `;
-            let w;
+            const module = opts && opts.type === "module";
+            let who;
+            let src = null;
             if (typeof name === "string" && name.startsWith("wasm_safe_thread")) {
+              who = name;
+              src = wstSrc(who);
+            } else {
+              others += 1;
+              who = "other " + others + (module ? " module" : "") + " " + String(url).slice(-40);
+              if (!module) src = otherSrc(who, new URL(String(url), self.location.href).href);
+            }
+            note(who, "new");
+            let w;
+            if (src !== null) {
               const own = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
               w = new W(own, opts);
               URL.revokeObjectURL(own);
             } else {
               w = new W(url, opts);
             }
-            w.addEventListener("error", (e) => log("error " + name + ": " + e.message + " @" + e.filename + ":" + e.lineno));
-            w.addEventListener("messageerror", () => log("messageerror " + name));
+            w.addEventListener("error", (e) => note(who, "error " + e.message + " @" + e.filename + ":" + e.lineno));
+            w.addEventListener("messageerror", () => note(who, "messageerror"));
             w.addEventListener("message", (e) => {
               const d = e.data;
-              if (d && d.__wasm_safe_thread_error) log("wst_error " + name + ": " + d.__wasm_safe_thread_error);
-              if (d && d.__wasm_safe_thread_exit) log("exit " + name);
-              if (d && d.__wst_relay_spawn) log("relay from " + name);
-              if (d && d.__probe_stage) log("stage " + name + ": " + d.__probe_stage);
+              if (d && d.__wasm_safe_thread_error) note(who, "wst_error " + d.__wasm_safe_thread_error);
+              if (d && d.__wasm_safe_thread_exit) note(who, "exit");
+              if (d && d.__wst_relay_spawn) note(who, "relay");
             });
             return w;
           };
@@ -215,10 +251,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
                 "PROBE open still pending"
             );
             let dump = js_sys::Function::new_no_args(
-                r#"return JSON.stringify({
-                  workers: globalThis.__probeWorkers || null,
-                  resources: performance.getEntriesByType("resource").map((r) => r.name),
-                });"#,
+                r#"return globalThis.__probeDump ? globalThis.__probeDump() : null;"#,
             )
             .call0(&wasm_bindgen::JsValue::UNDEFINED)
             .ok()
@@ -395,7 +428,7 @@ async fn read_with_yield_limit(
             let dump = js_sys::Function::new_no_args(
                 r#"if (globalThis.__probeDumped) return null;
                 globalThis.__probeDumped = true;
-                return JSON.stringify(globalThis.__probeWorkers || null);"#,
+                return globalThis.__probeDump ? globalThis.__probeDump() : null;"#,
             )
             .call0(&wasm_bindgen::JsValue::UNDEFINED)
             .ok()
