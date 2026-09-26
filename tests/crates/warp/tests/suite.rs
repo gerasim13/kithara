@@ -11,7 +11,7 @@ use kithara_warp::{
     StretchControls, Warp, WarpConfig, WarpMap, WarpMapRevision, WarpPlan,
 };
 
-#[cfg(all(feature = "playback", not(target_os = "android")))]
+#[cfg(feature = "playback")]
 mod real_track;
 mod region;
 #[path = "grids.rs"]

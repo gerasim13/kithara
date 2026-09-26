@@ -109,8 +109,6 @@ pub mod server_url;
 #[cfg(all(any(feature = "all", feature = "wasm"), not(target_arch = "wasm32")))]
 pub mod smoothing;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
-pub mod start;
-#[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod storage_ext;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod swallow_detector;

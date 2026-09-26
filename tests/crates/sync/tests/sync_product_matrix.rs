@@ -39,18 +39,16 @@ use kithara::{
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
-#[cfg(not(target_os = "android"))]
-use kithara_integration_tests::grid::analysed_grid;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     cochlea::{marked_synchronization_failures, synchronization_failures},
     fixture_protocol::EncryptionRequest,
+    grid::{Start, analysed_grid},
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
     offline::OfflineHostHarness,
-    start::Start,
     usdt_trace,
 };
 use kithara_test_fixtures::{
@@ -444,10 +442,8 @@ pub(super) const NEWTECHNO: &[&str] = &["library_flac_newtechno"];
 /// Newtechno's grid states no bars: its detected downbeats disagree on the
 /// bar phase. Its second phrase, where the full groove enters, opens on
 /// analysed beat 64.
-#[cfg(not(target_os = "android"))]
 pub(super) const NEWTECHNO_PHRASE: Start = Start::Beat(64);
 /// The Tunnel's fifth bar: a cue well inside the track, on its kick.
-#[cfg(not(target_os = "android"))]
 pub(super) const TUNNEL_CUE: Start = Start::bar(4);
 
 #[derive(Clone, Copy, Debug)]
@@ -491,7 +487,6 @@ impl Provider {
     fn beat_grid(self, deck: usize) -> ArtifactSource<BeatGridModel> {
         match self {
             Self::Synthetic => synthetic_grid(),
-            #[cfg(not(target_os = "android"))]
             Self::Library(names) => {
                 ArtifactSource::Value(Arc::new(analysed_grid(names[deck % names.len()])))
             }
@@ -502,7 +497,6 @@ impl Provider {
     /// The second deck `deck`'s track opens at for `start`.
     fn start_seconds(self, deck: usize, start: Start) -> f64 {
         let grid = match self {
-            #[cfg(not(target_os = "android"))]
             Self::Library(names) => Some(analysed_grid(names[deck % names.len()])),
             _ => None,
         };
@@ -1551,7 +1545,6 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[cfg(not(target_os = "android"))]
 #[kithara::test(
     native,
     tokio,
@@ -1659,13 +1652,11 @@ async fn source_hls_mp3_drm() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Drm)).await
 }
 
-#[cfg(not(target_os = "android"))]
 #[kithara::fixture]
 pub(super) async fn tunnel_sources() -> PreparedSources {
     prepared_sources(Provider::Library(TUNNEL)).await
 }
 
-#[cfg(not(target_os = "android"))]
 #[kithara::fixture]
 pub(super) async fn newtechno_sources() -> PreparedSources {
     prepared_sources(Provider::Library(NEWTECHNO)).await

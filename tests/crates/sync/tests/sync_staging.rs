@@ -7,7 +7,7 @@ use kithara::{
     sync::{AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation},
     warp::AssetFrame,
 };
-use kithara_integration_tests::{kithara, start::Start, usdt_trace};
+use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
 
 use super::{
     sync_listening::render_frames,
