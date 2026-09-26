@@ -183,6 +183,10 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
                 stage("imported");
                 shim.initSync({ module, memory, thread_stack_size: 1048576 });
                 stage("inited");
+                if (${JSON.stringify(who)} === "wasm_safe_thread 0") {
+                  await new Promise((resolve) => setTimeout(resolve, 1000));
+                  stage("held");
+                }
                 shim.wasm_safe_thread_entry_point(work);
                 stage("entered");
                 while (true) {

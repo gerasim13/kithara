@@ -18,8 +18,6 @@
       "-headless"
     ],
     "prefs": {
-      "browser.cache.disk.enable": false,
-      "browser.cache.memory.enable": false,
       "media.autoplay.block-event.enabled": false,
       "media.autoplay.block-webaudio": false,
       "media.autoplay.blocking_policy": 0,
