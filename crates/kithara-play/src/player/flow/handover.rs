@@ -362,4 +362,43 @@ mod tests {
         assert_eq!(player.duration_seconds(), Some(162.0));
         assert_eq!(player.position_seconds(), Some(0.0));
     }
+
+    /// A `FadeIn` the full command queue rejects never reaches the audio
+    /// thread, so the player must keep reporting the item the audio thread
+    /// plays instead of waiting on a handover that will not happen.
+    #[kithara::test]
+    fn a_rejected_fade_in_leaves_the_playhead_on_the_playing_item() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(mock::session())
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+        if let Some(pending_slot) = player.phase.lock().pending_mut() {
+            *pending_slot = Some(PendingNext {
+                item_id: TrackId::allocate(),
+                src: Arc::from("next.mp3"),
+                state: PendingNextState::Armed,
+                index: 1,
+                duration_seconds: 162.0,
+            });
+        }
+        let playback = player
+            .slot()
+            .and_then(|slot| player.core.engine.slot_playback(slot))
+            .expect("the slot must carry playback state");
+        playback.position.store(62.3, Ordering::Relaxed);
+        playback.duration.store(64.295, Ordering::Relaxed);
+        while player.send_to_slot(PlayerCmd::SetPaused(false)).is_ok() {}
+
+        player.commit_next(1).expect("commit_next must succeed");
+
+        assert_eq!(player.duration_seconds(), Some(64.295));
+        assert_eq!(player.position_seconds(), Some(62.3));
+    }
 }

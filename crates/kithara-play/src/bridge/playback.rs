@@ -70,6 +70,8 @@ pub struct PlaybackShared {
     pub seek_epoch: AtomicU64,
     /// Effective media seconds consumed per output second; `0.0` while paused.
     pub(crate) rate: AtomicF32,
+    /// Last epoch handed to a `FadeIn`, accepted or not.
+    issued_epoch: AtomicU64,
     /// Epoch of the last item the control side made leading.
     leading_epoch: AtomicU64,
     /// Duration the control side declared for that item.
@@ -93,17 +95,26 @@ impl PlaybackShared {
             .wrapping_add(1)
     }
 
-    /// Make a new item leading, ahead of the `FadeIn` that carries the returned epoch to the
-    /// audio thread.
+    /// Make a new item leading once `send` has handed the audio thread the `FadeIn` carrying
+    /// the epoch it is given.
     ///
     /// Until the audio thread adopts that epoch, a snapshot describes the new item at its head
     /// with `duration`: the blocks rendered meanwhile still publish the item they were leading.
-    pub(crate) fn lead(&self, duration: f64) -> u64 {
+    /// A rejected send publishes nothing, since no `FadeIn` would ever adopt the epoch.
+    pub(crate) fn lead<E>(
+        &self,
+        duration: f64,
+        send: impl FnOnce(u64) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let epoch = self
+            .issued_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        send(epoch)?;
         self.leading_duration
             .store(duration.max(0.0), Ordering::Relaxed);
-        self.leading_epoch
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1)
+        self.leading_epoch.fetch_max(epoch, Ordering::AcqRel);
+        Ok(())
     }
 
     /// Audio thread: take on the item `epoch` made leading, publishing its playhead with it.
@@ -121,7 +132,7 @@ impl PlaybackShared {
         let rate = self.rate.load(Ordering::Relaxed);
         let sample_rate = self.sample_rate.load(Ordering::Relaxed);
         let playing = self.playing.load(Ordering::Relaxed);
-        if self.adopted_epoch.load(Ordering::Acquire) != leading {
+        if self.adopted_epoch.load(Ordering::Acquire) < leading {
             return PlaybackSnapshot {
                 playing,
                 rate,
@@ -226,6 +237,26 @@ mod tests {
         assert!((snap.duration - 180.0).abs() < f64::EPSILON);
         assert!((snap.rate - 1.25).abs() < f32::EPSILON);
         assert_eq!(snap.sample_rate, 48_000);
+    }
+
+    /// The audio thread can take a `FadeIn` on before the control side has
+    /// published the epoch it carries; from then on the snapshot is its
+    /// playhead, not the head of an item it already plays.
+    #[kithara::test]
+    fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
+        let playback = PlaybackShared::default();
+        let mut during_send = None;
+        playback
+            .lead(162.0, |epoch| {
+                playback.adopt(epoch, 1.5, 162.0);
+                during_send = Some(playback.snapshot());
+                Ok::<(), ()>(())
+            })
+            .expect("the send is accepted");
+
+        let during_send = during_send.expect("the send ran");
+        assert!((during_send.position - 1.5).abs() < f64::EPSILON);
+        assert!((during_send.duration - 162.0).abs() < f64::EPSILON);
     }
 
     #[kithara::test]

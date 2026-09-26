@@ -275,8 +275,8 @@ where
         );
     }
 
-    /// Make `item_id` leading: the playhead reads describe it from here on, not only once the
-    /// audio thread has taken it on.
+    /// Make `item_id` leading: once the processor accepts its `FadeIn`, the playhead reads
+    /// describe it, not only once the audio thread has taken it on.
     fn start_playback_with(
         &self,
         item_id: TrackId,
@@ -289,11 +289,12 @@ where
         else {
             return;
         };
-        let epoch = playback.lead(duration_seconds);
-        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
-            item_id,
-            settings,
-            epoch,
-        }));
+        let _ = playback.lead(duration_seconds, |epoch| {
+            self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id,
+                settings,
+                epoch,
+            }))
+        });
     }
 }
