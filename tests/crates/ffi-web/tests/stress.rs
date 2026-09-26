@@ -387,6 +387,17 @@ async fn read_with_yield_limit(
                 pos_ms = audio.position().as_millis(),
                 "PROBE read pending for whole budget"
             );
+            let dump = js_sys::Function::new_no_args(
+                r#"if (globalThis.__probeDumped) return null;
+                globalThis.__probeDumped = true;
+                return JSON.stringify(globalThis.__probeWorkers || null);"#,
+            )
+            .call0(&wasm_bindgen::JsValue::UNDEFINED)
+            .ok()
+            .and_then(|v| v.as_string());
+            if dump.is_some() {
+                warn!(dump = ?dump, "PROBE worker journal at read wedge");
+            }
             return Some(0);
         }
         yield_macrotask().await;
