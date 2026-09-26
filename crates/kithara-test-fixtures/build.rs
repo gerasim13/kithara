@@ -60,7 +60,7 @@ use registry::{AssetBuild, AssetDef};
 use self::context::BuildContext;
 
 #[cfg(feature = "native-fixtures")]
-const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
+const DISABLE_REMOTE_FIXTURES_ENV: &str = "KITHARA_DISABLE_REMOTE_FIXTURES";
 
 /// Rejects two cases that would produce one accessor, before either is written.
 #[cfg(feature = "native-fixtures")]
@@ -192,7 +192,8 @@ fn materialize_one(
     let fetches = def.optional && def.dependencies.is_empty();
     // A fetching family cannot be produced again without hydration, so a
     // refresh never reaches one: the store keeps what it already holds.
-    let hydration_off = fetches && std::env::var_os(REMOTE_FIXTURES_ENV).is_none();
+    let hydration_off = fetches
+        && std::env::var_os(DISABLE_REMOTE_FIXTURES_ENV).is_some_and(|value| !value.is_empty());
     let reuse = hydration_off || !refresh.contains(name);
     if reuse && store::has_entry(namespace, id, def.ext) {
         return None;
@@ -200,7 +201,7 @@ fn materialize_one(
     if hydration_off {
         return Some((
             name.clone(),
-            format!("remote hydration disabled; set {REMOTE_FIXTURES_ENV}"),
+            format!("remote hydration disabled by {DISABLE_REMOTE_FIXTURES_ENV}"),
         ));
     }
     let _lock = store::lock_entry(namespace, id)
@@ -336,7 +337,7 @@ fn codegen(
 #[cfg(feature = "native-fixtures")]
 fn main() {
     println!("cargo:rerun-if-env-changed={}", store::STORE_ENV);
-    println!("cargo:rerun-if-env-changed={REMOTE_FIXTURES_ENV}");
+    println!("cargo:rerun-if-env-changed={DISABLE_REMOTE_FIXTURES_ENV}");
     println!("cargo:rerun-if-env-changed={}", store::REFRESH_ENV);
 
     let defs: Vec<&AssetDef> = inventory::iter::<AssetDef>.into_iter().collect();
