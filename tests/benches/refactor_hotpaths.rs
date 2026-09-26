@@ -3,7 +3,7 @@
 use std::{
     fs,
     hint::black_box,
-    io::{Read, Seek, SeekFrom},
+    io::{Cursor, Read, Seek, SeekFrom},
     num::{NonZeroU32, NonZeroUsize},
 };
 
@@ -20,6 +20,7 @@ use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_m
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead},
+    decode::{Decoder, DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig},
     download::{Downloader, DownloaderConfig},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
@@ -34,13 +35,14 @@ use kithara::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
-    stream::Stream,
+    signal::{AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     TestHttpServer, auto,
     bufpool_ext::{TestPools, pools},
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::assets::{audio_wav_frames_1323000, signal_mp3_track_sine440_187s};
 use tempfile::TempDir;
 use url::Url;
 
@@ -52,6 +54,11 @@ impl Consts {
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
 }
+
+/// Frames per planar layout pass: one large device block.
+const LAYOUT_FRAMES: usize = 4096;
+/// Output rate of the layout benches and the resampled WAV decode.
+const LAYOUT_RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
 /// The generated full-length MPEG clip the benchmark server and decoders read.
 fn test_mp3_bytes() -> &'static [u8] {
@@ -440,10 +447,87 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
     group.finish();
 }
 
+/// Planar ↔ interleaved layout in `kithara-signal` and the resampled WAV
+/// decode that deinterleaves and sanitizes every chunk.
+fn bench_layout(c: &mut Criterion) {
+    let mut group = c.benchmark_group("refactor_layout");
+    let pools = pools();
+    let frames = FrameCount::new(LAYOUT_FRAMES);
+    for channels in [2_u16, 6] {
+        let spec = AudioSpec::new(channels, LAYOUT_RATE);
+        let width = usize::from(channels);
+        let planar = PlanarBuffer::new(&pools, spec, frames)
+            .unwrap_or_else(|err| panic!("bench planar storage: {err}"));
+        let mut interleaved = vec![0.0_f32; LAYOUT_FRAMES * width];
+        group.bench_function(format!("interleave_{channels}ch"), |b| {
+            b.iter(|| {
+                planar
+                    .view()
+                    .interleave_into(black_box(&mut interleaved))
+                    .is_ok()
+            });
+        });
+        let source = vec![0.25_f32; LAYOUT_FRAMES * width];
+        let view = InterleavedView::new(&source, spec, frames)
+            .unwrap_or_else(|err| panic!("bench interleaved view: {err}"));
+        let mut planes = vec![vec![0.0_f32; LAYOUT_FRAMES]; width];
+        let mut destinations: Vec<&mut [f32]> = planes.iter_mut().map(Vec::as_mut_slice).collect();
+        group.bench_function(format!("deinterleave_{channels}ch"), |b| {
+            b.iter(|| {
+                view.deinterleave_channels_into_at(black_box(&mut destinations), 0)
+                    .is_ok()
+            });
+        });
+    }
+    group.bench_function("decode_wav_resampled_48k", |b| {
+        b.iter_batched(wav_decoder, drain, BatchSize::LargeInput);
+    });
+    group.finish();
+}
+
+/// A 30 s 44.1 kHz stereo WAV decoder resampling to [`LAYOUT_RATE`].
+fn wav_decoder() -> Box<dyn Decoder> {
+    let media_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
+    let config = DecoderConfig::builder()
+        .pools(pools())
+        .resampler(
+            DecoderResamplerConfig::builder()
+                .target_sample_rate(LAYOUT_RATE)
+                .backend(RubatoBackend::new())
+                .build(),
+        )
+        .build();
+    DecoderFactory::create_from_media_info(
+        Cursor::new(audio_wav_frames_1323000().bytes()),
+        &media_info,
+        config,
+    )
+    .unwrap_or_else(|err| panic!("bench wav decoder: {err}"))
+}
+
+/// Decodes to the end and returns the frame count.
+fn drain(mut decoder: Box<dyn Decoder>) -> usize {
+    let mut frames = 0;
+    loop {
+        match decoder
+            .next_chunk()
+            .unwrap_or_else(|err| panic!("bench decode: {err}"))
+        {
+            DecoderChunkOutcome::Chunk(chunk) => frames += chunk.frames(),
+            DecoderChunkOutcome::Pending(_) => {}
+            DecoderChunkOutcome::Eof => return frames,
+        }
+    }
+}
+
 criterion_group!(
     benches,
     bench_resampler_process,
     bench_audio_file_new_and_read,
-    bench_hls_stream_seek_read
+    bench_hls_stream_seek_read,
+    bench_layout
 );
 criterion_main!(benches);
