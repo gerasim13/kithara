@@ -133,7 +133,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
             const at = Math.round(performance.now() - t0);
             P.last[who] = at + "ms " + what;
             P.counts[who] = (P.counts[who] || 0) + 1;
-            if (P.first.length < 40) P.first.push(at + "ms " + who + ": " + what);
+            if (P.first.length < 80) P.first.push(at + "ms " + who + ": " + what);
           };
           const bc = new BroadcastChannel("kithara-probe");
           bc.onmessage = (e) => note(e.data.who, e.data.what);
@@ -166,8 +166,18 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
                 const wd = setTimeout(() => {
                   stage("stuck res=" + JSON.stringify(performance.getEntriesByType("resource").map((r) => strip(r.name) + "@" + Math.round(r.responseEnd))));
                   const side = ${JSON.stringify(shimUrl)} + "?side=" + Math.random();
-                  fetch(side).then((r) => r.text().then((t) => stage("sidefetch " + r.status + " len=" + t.length)), (err) => stage("sidefetch err " + err));
-                  import(side).then(() => stage("sideimport ok"), (err) => stage("sideimport err " + err));
+                  const seen = new Set(performance.getEntriesByType("resource").map((r) => strip(r.name)));
+                  fetch(side).then((r) => r.text()).then((t) => {
+                    const specs = [...t.matchAll(/from ['"]([.][/]snippets[/][^'"]+)['"]/g)].map((m) => new URL(m[1], url).href);
+                    const missing = specs.filter((u) => !seen.has(strip(u)));
+                    stage("snippets total=" + specs.length + " missing=" + JSON.stringify(missing.map(strip)));
+                    for (const u of missing) {
+                      const n = strip(u);
+                      fetch(u).then((r) => r.text().then((b) => stage("same " + n + " " + r.status + " len=" + b.length)), (err) => stage("same " + n + " err " + err));
+                      fetch(u, { cache: "no-store" }).then((r) => r.text().then((b) => stage("nostore " + n + " " + r.status + " len=" + b.length)), (err) => stage("nostore " + n + " err " + err));
+                      fetch(u + "?b=" + Math.random()).then((r) => r.text().then((b) => stage("bust " + n + " " + r.status + " len=" + b.length)), (err) => stage("bust " + n + " err " + err));
+                    }
+                  }, (err) => stage("sidefetch err " + err));
                 }, 3000);
                 const shim = await import(url);
                 clearTimeout(wd);
