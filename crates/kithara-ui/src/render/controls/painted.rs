@@ -849,7 +849,7 @@ mod tests {
             ReadValue, Reads, StereoLevels,
             controls::{Draws, Grip},
             document::probe,
-            masonry::{HostAction, MasonryControl, Painted},
+            masonry::{MasonryControl, Painted, custom::HostAction},
         },
         skin::ColorRole,
     };

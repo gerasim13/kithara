@@ -362,13 +362,6 @@ where
         std::mem::take(&mut self.platform)
     }
 
-    #[cfg(all(test, feature = "capture"))]
-    pub(crate) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
-        self.engines
-            .iter()
-            .find_map(|engine| engine.tree_picture(path))
-    }
-
     pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
         self.native
             .iter()

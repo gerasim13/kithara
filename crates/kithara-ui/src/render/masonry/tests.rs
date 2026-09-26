@@ -6,10 +6,15 @@ use std::{
 };
 
 use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    kithara,
+    test::usdt::{self, ProbeEvent},
+};
 use masonry::{
     app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy},
-    core::{CursorIcon, Handled, Ime, PointerEvent, TextEvent, WindowEvent},
+    core::{
+        CursorIcon, Handled, Ime, PointerEvent, TextEvent, Widget, WidgetId, WidgetRef, WindowEvent,
+    },
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::{Point, Size as MasonrySize},
     theme::default_property_set,
@@ -26,14 +31,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     CustomWidget, MasonryHost, MasonryNode, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
-    TextMeasurer, built::RootParts, leaf::DragProgram, node::Node,
+    TextMeasurer, built::RootParts, leaf::DragProgram,
 };
 use crate::{
     atoms::bar::context::Context,
     builtin,
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Pt, Rect, Rgba},
-    geom::Transform,
     ids::{EndpointId, SourceUri},
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     module::IconName,
@@ -679,25 +683,13 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
         .unwrap_or_else(|error| panic!("builtin layout must compile: {error}"));
         for (width, height) in [(1280, 720), (960, 600), (320, 240)] {
             let expected = fixture_section(fixture, preset, width, height);
-            let output = document::render(
-                &ui.root,
-                ctx(&ui, &reads),
-                MasonryHost::new(ctx(&ui, &reads), &skin),
-            );
-            let ids = output.document_ids().to_vec();
-            assert_eq!(
-                ids.len(),
-                expected.len(),
-                "{preset} @ {width}x{height} did not retain exactly one real Masonry node per fixture path"
-            );
-            let mut raw_ids = ids.iter().map(|id| id.to_raw()).collect::<Vec<_>>();
-            raw_ids.sort_unstable();
-            raw_ids.dedup();
-            assert_eq!(
-                raw_ids.len(),
-                ids.len(),
-                "{preset} @ {width}x{height} reused a Masonry WidgetId"
-            );
+            let (output, built) = DocumentNodes::built(|| {
+                document::render(
+                    &ui.root,
+                    ctx(&ui, &reads),
+                    MasonryHost::new(ctx(&ui, &reads), &skin),
+                )
+            });
             let root = MasonryRoot::new(
                 output,
                 RenderRootOptions {
@@ -711,6 +703,12 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
             )
             .unwrap_or_else(|error| panic!("Masonry root must retain typed actions: {error}"));
             let root = root.root();
+            let ids = built.in_tree(root);
+            assert_eq!(
+                ids.len(),
+                expected.len(),
+                "{preset} @ {width}x{height} did not retain exactly one real Masonry node per fixture path"
+            );
 
             for (id, expected) in ids.into_iter().zip(expected) {
                 let widget = root.get_widget(id).unwrap_or_else(|| {
@@ -769,16 +767,15 @@ fn revealed_cell_is_hidden(width: u32) -> bool {
     let registry = fixture_registry();
     let reads = FixtureReads;
     let ui = fixture_ui("revealing-bar", REVEALING_BAR, &registry);
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let wide = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("the fixture must retain the revealed cell"));
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let mut root = masonry_root(output, width, 60);
+    let wide = built.last_in(root.root());
     root.redraw()
         .unwrap_or_else(|error| panic!("the revealing bar must compose: {error}"));
     root.root()
@@ -810,16 +807,15 @@ fn a_cell_comes_back_when_the_room_grows_to_reach_it() {
     let registry = fixture_registry();
     let reads = FixtureReads;
     let ui = fixture_ui("revealing-bar-resized", REVEALING_BAR, &registry);
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let wide = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("the fixture must retain the revealed cell"));
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let mut root = masonry_root(output, 120, 60);
+    let wide = built.last_in(root.root());
     root.redraw()
         .unwrap_or_else(|error| panic!("the narrow bar must compose: {error}"));
     root.handle_window_event(WindowEvent::Resize(PhysicalSize::new(240, 60)))
@@ -2019,12 +2015,10 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
         );
         let host =
             MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
-        let output = document::render(&ui.root, ctx(&ui, &reads), host);
-        let control_id = *output
-            .document_ids()
-            .last()
-            .unwrap_or_else(|| panic!("{module_id} picker must have a real control node"));
+        let (output, built) =
+            DocumentNodes::built(|| document::render(&ui.root, ctx(&ui, &reads), host));
         let mut root = masonry_root(output, 200, 120);
+        let control_id = built.last_in(root.root());
         root.redraw()
             .unwrap_or_else(|error| panic!("{module_id} picker must compose: {error}"));
 
@@ -2212,12 +2206,10 @@ fn scope_strip_root() -> (MasonryRoot<TestAction>, (f32, f32)) {
     let reads = FixtureReads;
     let ui = fixture_ui("leaf-fixture", SCOPE_STRIP, &registry);
     let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
-    let output = document::render(&ui.root, ctx(&ui, &reads), host);
-    let control_id = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("the scope strip must have a real control node"));
+    let (output, built) =
+        DocumentNodes::built(|| document::render(&ui.root, ctx(&ui, &reads), host));
     let mut root = masonry_root(output, 200, 120);
+    let control_id = built.last_in(root.root());
     root.redraw()
         .unwrap_or_else(|error| panic!("the scope strip must compose: {error}"));
     let bounds = root
@@ -2567,48 +2559,49 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     );
 }
 
+/// A continuous Vis in a cell the flow stashes once the window is too narrow
+/// to reach it.
 #[kithara::test]
 fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
     let registry = fixture_registry();
     let reads = FixtureReads;
     let ui = fixture_ui(
         "vis-stashing-fixture",
-        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-            Vis(id: "continuous", read: Model(id: "vis.preset")),
+        r#"Row(id: "bar", measure: Width, size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Reveal(from: 200.0, child: Vis(id: "continuous", read: Model(id: "vis.preset"))),
         ])"#,
         &registry,
     );
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let [_, parent, vis] = output.document_ids() else {
-        panic!("the fixture must retain exactly the document root, one parent, and one Vis leaf")
-    };
-    let parent = *parent;
-    let vis = *vis;
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let (base, _, _, _, _, _, _, _, _): RootParts = output.into();
     let signals = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&signals);
     let mut root = RenderRoot::new(
         base,
         move |signal| sink.borrow_mut().push(signal),
-        render_root_options(80, 20),
+        render_root_options(240, 20),
     );
+    let vis = built.last_in(&root);
+    let resize = |root: &mut RenderRoot, width| {
+        root.handle_window_event(WindowEvent::Resize(PhysicalSize::new(width, 20)));
+        root.redraw();
+    };
 
     assert!(
         take_animation_request(&signals),
         "WidgetAdded must start a continuous Vis"
     );
-    root.edit_widget(parent, |mut widget| {
-        let mut node = widget.downcast::<Node>();
-        Node::set_child_stashed(&mut node, 0, true);
-    });
+    resize(&mut root, 120);
     assert!(
         root.get_widget(vis)
             .is_some_and(|widget| widget.ctx().is_stashed()),
-        "the test must exercise Masonry's real stashed state"
+        "a window too narrow for the cell must stash the Vis leaf"
     );
     signals.borrow_mut().clear();
 
@@ -2618,10 +2611,7 @@ fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
         "the already-requested callback for a stashed continuous Vis must not request another frame"
     );
 
-    root.edit_widget(parent, |mut widget| {
-        let mut node = widget.downcast::<Node>();
-        Node::set_child_stashed(&mut node, 0, false);
-    });
+    resize(&mut root, 240);
     assert!(
         root.get_widget(vis)
             .is_some_and(|widget| !widget.ctx().is_stashed()),
@@ -2719,16 +2709,15 @@ fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
         ])"#,
         &registry,
     );
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let id = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("PresetSelector must retain one leaf"));
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let mut root = masonry_root(output, 126, 42);
+    let id = built.last_in(root.root());
     let (micro, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("MICRO PresetSelector must draw: {error}"));
@@ -2775,16 +2764,22 @@ fn driven_root(
     (ui, state, root)
 }
 
-fn placed_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Transform {
+/// Whether a refresh of `root` moved the object mounted at `path`.
+fn refresh_moves(
+    root: &mut MasonryRoot<UiEvent>,
+    state: &MasonryState,
+    path: &str,
+    refresh: impl FnOnce(&mut MasonryRoot<UiEvent>),
+) -> bool {
     let id = state
         .widget_id(path)
         .unwrap_or_else(|| panic!("`{path}` must stay addressable"));
-    root.root()
-        .get_widget(id)
-        .unwrap_or_else(|| panic!("`{path}` must stay mounted"))
-        .downcast::<Node>()
-        .unwrap_or_else(|| panic!("`{path}` must be a document node"))
-        .transform()
+    let _trace = usdt::scope();
+    let before = usdt::events_of("masonry_object_moved").len();
+    refresh(root);
+    usdt::events_of("masonry_object_moved")[before..]
+        .iter()
+        .any(|moved| moved.field("widget") == Some(id.to_raw()))
 }
 
 const DRIVEN: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
@@ -2809,12 +2804,11 @@ fn a_driven_object_moves_when_the_retained_host_refreshes() {
         along: Cell::new(0.0),
     };
     let (ui, state, mut root) = driven_root(DRIVEN, &reads);
-    let start = placed_at(&root, &state, "demo/carried");
 
     reads.along.set(1.0);
-    root.refresh(ctx(&ui, &reads));
-
-    assert_ne!(placed_at(&root, &state, "demo/carried"), start);
+    assert!(refresh_moves(&mut root, &state, "demo/carried", |root| {
+        root.refresh(ctx(&ui, &reads));
+    }));
 }
 
 /// And an object nobody drives holds still across the same refresh, which is
@@ -2834,12 +2828,11 @@ fn an_object_nobody_drives_keeps_its_pose_across_a_refresh() {
         along: Cell::new(0.0),
     };
     let (ui, state, mut root) = driven_root(STILL, &reads);
-    let start = placed_at(&root, &state, "demo/carried");
 
     reads.along.set(1.0);
-    root.refresh(ctx(&ui, &reads));
-
-    assert_eq!(placed_at(&root, &state, "demo/carried"), start);
+    assert!(!refresh_moves(&mut root, &state, "demo/carried", |root| {
+        root.refresh(ctx(&ui, &reads));
+    }));
 }
 
 #[kithara::test]
@@ -2995,21 +2988,21 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
         MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
+    let _trace = usdt::scope();
+    let refreshed = || {
+        usdt::last("masonry_tree_refreshed")
+            .map(|tree| (tree.field("rows"), tree.field("query_chars")))
+    };
     let (before, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("empty Tree must draw its frame: {error}"));
     let before_draw_data = before.encoding().draw_data.clone();
-    assert_eq!(
-        root.tree_picture("demo/browser"),
-        Some((0, String::new())),
-        "the mounted Tree must retain the initially empty rows and query"
-    );
 
     reads.rows_loaded.set(true);
     root.refresh(ctx(&ui, &reads));
     assert_eq!(
-        root.tree_picture("demo/browser"),
-        Some((TREE_ROWS.len(), String::new())),
+        refreshed(),
+        Some((Some(TREE_ROWS.len().as_()), Some(0))),
         "row refresh must not change the independently empty query"
     );
     let (with_rows, _) = root
@@ -3024,8 +3017,11 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
     reads.query_loaded.set(true);
     root.refresh(ctx(&ui, &reads));
     assert_eq!(
-        root.tree_picture("demo/browser"),
-        Some((TREE_ROWS.len(), "Late".to_owned())),
+        refreshed(),
+        Some((
+            Some(TREE_ROWS.len().as_()),
+            Some("Late".chars().count().as_())
+        )),
         "query refresh must retain the independently loaded rows"
     );
     let (with_query, _) = root
@@ -3299,6 +3295,54 @@ fn fixture_ui_with_options(
         &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("Masonry contract fixture must compile: {error}"))
+}
+
+/// The Masonry nodes one render announced as document nodes.
+///
+/// The host announces each node that stands for a document node as it builds
+/// it, with whether the nodes it holds stand for document nodes of their own.
+/// Walking the retained tree down from its root through the nodes that do gives
+/// them in document order.
+struct DocumentNodes(Vec<ProbeEvent>);
+
+impl DocumentNodes {
+    const PROBE: &str = "masonry_document_node";
+
+    /// The output `render` builds, with the document nodes it announced.
+    fn built<Action>(render: impl FnOnce() -> MasonryNode<Action>) -> (MasonryNode<Action>, Self) {
+        let _trace = usdt::scope();
+        let before = usdt::events_of(Self::PROBE).len();
+        let output = render();
+        let mut announced = usdt::events_of(Self::PROBE);
+        (output, Self(announced.split_off(before)))
+    }
+
+    /// Every announced node in `root`'s tree, in document order.
+    fn in_tree(&self, root: &RenderRoot) -> Vec<WidgetId> {
+        let mut ids = Vec::new();
+        self.collect(root.get_layer_root(0), &mut ids);
+        ids
+    }
+
+    /// The document's last node, where a fixture's one control stands.
+    fn last_in(&self, root: &RenderRoot) -> WidgetId {
+        self.in_tree(root)
+            .pop()
+            .unwrap_or_else(|| panic!("the fixture must retain a document node"))
+    }
+
+    fn collect(&self, widget: WidgetRef<'_, dyn Widget>, ids: &mut Vec<WidgetId>) {
+        let raw = widget.id().to_raw();
+        let Some(node) = self.0.iter().find(|node| node.field("widget") == Some(raw)) else {
+            return;
+        };
+        ids.push(widget.id());
+        if node.field("exposes_children") == Some(1) {
+            for child in widget.children() {
+                self.collect(child, ids);
+            }
+        }
+    }
 }
 
 fn masonry_root<Action>(output: MasonryNode<Action>, width: u32, height: u32) -> MasonryRoot<Action>

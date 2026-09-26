@@ -30,6 +30,7 @@ capture = [
 ]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "kithara-ui-input/masonry", "vello"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
+usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
 # Hand the no-block gate the platform layer the toolkit draws through, so a
 # lane that runs this package under the gate detects a blocking call made
 # from a paint pass.
@@ -57,6 +58,7 @@ vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:tracing", "dep:vel
 kithara-derive = { workspace = true, features = ["built-default", "control", "control-painter", "enum-str", "mirror", "node-control", "patch", "ranged", "retained", "skin-walk", "variants", "view-control"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true, optional = true }
 kithara-ui-capture = { workspace = true, optional = true }
 kithara-ui-draw = { workspace = true }
 kithara-ui-input = { workspace = true, optional = true }
@@ -112,6 +114,7 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
     "client-reqwest",
     "tls-rustls",
 ] }
+kithara-ui = { path = ".", default-features = false, features = ["usdt"] }
 
 bitflags = { workspace = true }
 clap = { workspace = true }

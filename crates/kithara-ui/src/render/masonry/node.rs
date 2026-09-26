@@ -600,12 +600,6 @@ impl Node {
     pub(crate) fn spot_at(&self) -> Option<Pt> {
         self.spot.as_ref().map(Spot::at)
     }
-
-    /// Where this node draws, relative to the box the layout gave it.
-    #[cfg(all(test, feature = "capture"))]
-    pub(super) const fn transform(&self) -> Transform {
-        self.transform
-    }
 }
 
 impl AllowRawMut for Node {}
@@ -855,18 +849,6 @@ impl Widget for Node {
         {
             engine.clear_focus();
         }
-    }
-}
-
-#[cfg(all(test, feature = "capture"))]
-impl Node {
-    pub(crate) fn set_child_stashed(
-        this: &mut masonry::core::WidgetMut<'_, Self>,
-        child: usize,
-        stashed: bool,
-    ) {
-        this.ctx
-            .set_stashed(&mut this.widget.children[child], stashed);
     }
 }
 

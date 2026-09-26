@@ -3,7 +3,7 @@ mod built;
 #[path = "../masonry_tree/chrome.rs"]
 mod chrome;
 pub(crate) mod controls;
-mod custom;
+pub(crate) mod custom;
 mod flex;
 mod host;
 mod leaf;
@@ -29,8 +29,6 @@ mod vis;
 
 pub use built::MasonryNode;
 pub(crate) use controls::{MasonryControl, Painted};
-#[cfg(test)]
-pub(crate) use custom::HostAction;
 pub use host::{MasonryHost, MasonryState};
 pub use root::{MasonryRoot, MasonryRootError};
 

@@ -3,6 +3,8 @@ use std::{
     rc::{Rc, Weak},
 };
 
+use kithara_test_macros as kithara;
+
 use super::plan::{HostedControlPlan, Resolving, TablePlan, TreePlan};
 use crate::{
     atoms::{
@@ -238,6 +240,11 @@ impl TreePlan {
         if *self.picture.borrow() == next {
             return false;
         }
+        kithara::probe_event!(
+            masonry_tree_refreshed,
+            rows = next.row_count(),
+            query_chars = next.query().chars().count()
+        );
         *self.picture.borrow_mut() = next;
         if let Some(projection) = self.projection() {
             projection.reconcile();

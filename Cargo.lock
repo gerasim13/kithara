@@ -5942,6 +5942,7 @@ dependencies = [
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
+ "kithara-ui",
  "kithara-ui-capture",
  "kithara-ui-draw",
  "kithara-ui-input",
