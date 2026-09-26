@@ -782,7 +782,7 @@ impl<'a> HostStorage<'a> {
 
     /// Delete the macOS job VM once no runner is serving from it.
     ///
-    /// The macOS lane clones [`JOB_VM_NAME`] from the base bundle and destroys
+    /// The macOS lane clones [`JOB_VM_NAME`](consts::JOB_VM_NAME) from the base bundle and destroys
     /// it at both ends of every runner loop, so the clone is disposable by
     /// construction: a runner that finds it missing makes another. When the
     /// runner dies between those ends the clone outlives it, and nothing ever

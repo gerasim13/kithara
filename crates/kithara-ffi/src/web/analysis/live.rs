@@ -167,7 +167,7 @@ mod runs {
     use super::encode::encode;
     use crate::{
         pools::{FfiPools, FfiQueueControl, FfiResourceConfig, Pools},
-        web::{interop::send_reply, observer::source::EVENT_CHANNEL},
+        web::{interop::send_reply, observer::source::consts::EVENT_CHANNEL},
     };
 
     mod consts {

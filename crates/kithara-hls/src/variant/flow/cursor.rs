@@ -11,7 +11,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Record the cursor byte at which the front-of-queue segment enters the
-    /// look-ahead window, or [`NO_PREFETCH_DEFERRAL`] when nothing is
+    /// look-ahead window, or [`NO_PREFETCH_DEFERRAL`](consts::NO_PREFETCH_DEFERRAL) when nothing is
     /// deferred. Written by [`HlsVariant::dispatch`] on every pass, so it
     /// always describes the decision the peer last took.
     pub(super) fn defer_prefetch_until(&self, byte: u64) {

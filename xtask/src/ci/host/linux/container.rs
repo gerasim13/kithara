@@ -116,7 +116,7 @@ impl Container<'_> {
     /// `sccache` keys on the inputs of a compilation instead, which is what
     /// makes sharing it across runners sound rather than merely concurrent.
     ///
-    /// The linker entries come from [`LINUX_LINKER_ENV`], which the GitLab lane
+    /// The linker entries come from [`LINUX_LINKER_ENV`](consts::LINUX_LINKER_ENV), which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
     pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {

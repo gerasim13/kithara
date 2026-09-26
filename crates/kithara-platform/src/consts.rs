@@ -1,6 +1,6 @@
 #[cfg(all(target_arch = "wasm32", test))]
 use core::time::Duration;
-#[cfg(all(feature = "no-block", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "no-block", not(target_arch = "wasm32"), test))]
 use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
@@ -43,40 +43,6 @@ pub(crate) const NANOS_PER_SEC: u64 = 1_000_000_000;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 #[cfg(test)]
 pub(crate) const NO_BLOCK_ENGINE_WAIT_MS: u64 = 30;
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(not(test))]
-pub(crate) const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(not(test))]
-pub(crate) const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(not(test))]
-pub(crate) const ENV_MODE: &str = "KITHARA_NO_BLOCK";
-
-/// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(not(test))]
-pub(crate) const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(test)]
-pub(crate) const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(test)]
-pub(crate) const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(test)]
-pub(crate) const ENV_MODE: &str = "KITHARA_NO_BLOCK";
-
-/// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
-#[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
-#[cfg(test)]
-pub(crate) const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
 #[cfg(test)]

@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 
 use crate::{child, consts};
 
-/// Whether the Android loader binds [`TRANSPORT_INSTALL`] for an image loaded
+/// Whether the Android loader binds [`TRANSPORT_INSTALL`](consts::TRANSPORT_INSTALL) for an image loaded
 /// out of the staged library directory: the image or a staged library in its
 /// dependency tree defines it.
 pub(super) struct Binding<'a> {

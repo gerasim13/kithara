@@ -25,7 +25,7 @@ pub(crate) mod consts {
 
 /// Subscribe to the queue's event bus inside the worker and forward every
 /// translated [`FfiPlayerEvent`] to the main thread over
-/// [`EVENT_CHANNEL`]. Spawned from
+/// [`EVENT_CHANNEL`](consts::EVENT_CHANNEL). Spawned from
 /// [`worker_main`](crate::web::worker::worker_main).
 pub(crate) fn spawn(queue: &FfiQueueControl) {
     let rx = queue.subscribe::<QueueBusEvent>();

@@ -300,22 +300,22 @@ mod tests {
             "[nextest run_id=run%0A:id%5D] "
         );
 
-        let oversized_run = "x".repeat(consts::MAX_RUN_ID_BYTES + 1);
+        let oversized_run = "x".repeat(super::consts::MAX_RUN_ID_BYTES + 1);
         let prefix = nextest_prefix_from(Some(&oversized_run), None, None, None, None);
         let value = prefix
             .strip_prefix("[nextest run_id=")
             .and_then(|value| value.strip_suffix("] "))
             .expect("run prefix shape");
-        assert_eq!(value.len(), consts::MAX_RUN_ID_BYTES);
+        assert_eq!(value.len(), super::consts::MAX_RUN_ID_BYTES);
         assert!(value.ends_with('~'));
 
-        let oversized = "x".repeat(consts::MAX_ATTEMPT_ID_BYTES + 1);
+        let oversized = "x".repeat(super::consts::MAX_ATTEMPT_ID_BYTES + 1);
         let prefix = nextest_prefix_from(None, Some(&oversized), None, None, None);
         let value = prefix
             .strip_prefix("[nextest attempt_id=")
             .and_then(|value| value.strip_suffix("] "))
             .expect("attempt prefix shape");
-        assert_eq!(value.len(), consts::MAX_ATTEMPT_ID_BYTES);
+        assert_eq!(value.len(), super::consts::MAX_ATTEMPT_ID_BYTES);
         assert!(value.ends_with('~'));
     }
 }

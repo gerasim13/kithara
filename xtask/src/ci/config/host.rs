@@ -439,7 +439,7 @@ fn default_removable_roots() -> Vec<String> {
 /// slot.
 ///
 /// The two code-owned names are spelled once, in
-/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`] and [`TARGET_SLOT_CACHE_NAMESPACE`], so a
+/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`](consts::SCCACHE_SLOT_CONTROL_NAMESPACE) and [`TARGET_SLOT_CACHE_NAMESPACE`](consts::TARGET_SLOT_CACHE_NAMESPACE), so a
 /// profile that never overrides this key cannot spell either a second way.
 fn default_cache_namespaces() -> Vec<String> {
     [

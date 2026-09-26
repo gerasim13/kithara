@@ -9,6 +9,16 @@ use std::{
     time::Duration,
 };
 
+mod consts {
+    use super::Duration;
+
+    pub(super) const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
+    pub(super) const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
+    pub(super) const ENV_MODE: &str = "KITHARA_NO_BLOCK";
+    /// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
+    pub(super) const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Off,
