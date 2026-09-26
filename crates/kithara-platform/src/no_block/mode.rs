@@ -16,7 +16,7 @@ mod consts {
     pub(super) const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
     pub(super) const ENV_MODE: &str = "KITHARA_NO_BLOCK";
     /// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
-    pub(super) const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
+    pub(super) const DEFAULT_BLANKET_BUDGET: Duration = Duration::from_millis(3_000);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -100,7 +100,7 @@ pub(super) fn blanket_budget() -> Duration {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|ms| *ms > 0)
-            .map_or(consts::FALLBACK_BLANKET, Duration::from_millis)
+            .map_or(consts::DEFAULT_BLANKET_BUDGET, Duration::from_millis)
     })
 }
 
