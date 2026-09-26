@@ -122,10 +122,14 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         .media_info(wav_info)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let t0 = Date::now();
+    warn!("PROBE open start");
     let mut audio = worker.open(config).await.unwrap();
+    warn!(ms = Date::now() - t0, "PROBE open done");
     audio
         .preload()
         .expect("start preloading the stress fixture");
+    warn!(ms = Date::now() - t0, "PROBE preload started");
     audio
 }
 
@@ -250,10 +254,12 @@ async fn warm_up(
     buf: &mut [f32],
 ) -> usize {
     let mut produced = 0usize;
-    for _ in 0..20 {
+    let t0 = Date::now();
+    for i in 0..20 {
         let Some(count) = read_with_yield(audio, buf).await else {
             break;
         };
+        warn!(i, count, ms = Date::now() - t0, "PROBE warmup read");
         produced += count;
     }
     produced
@@ -302,7 +308,12 @@ async fn yield_macrotask() {
         .port2()
         .post_message(&JsValue::NULL)
         .expect("posting to an owned port cannot fail");
+    let t0 = Date::now();
     let _ = JsFuture::from(turn).await;
+    let took = Date::now() - t0;
+    if took > 200.0 {
+        warn!(took, "PROBE slow macrotask turn");
+    }
 }
 
 /// Yield to event loop so async I/O and Web Workers can progress.
@@ -716,7 +727,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     wasm,
     serial,
     tracing(
-        "warn,ffi_web=info,kithara_audio=info,kithara_hls=info,kithara_stream=info,kithara_play=info"
+        "warn,ffi_web=info,kithara_audio::audio=debug,kithara_hls=debug,kithara_stream=debug,kithara_assets=debug,kithara_net=debug"
     ),
     timeout(Duration::from_secs(10)),
     hang_timeout_secs(1)

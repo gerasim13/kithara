@@ -58,7 +58,7 @@ wasm BROWSER="chrome" SUITE="all":
     cargo build -p kithara-integration-tests --features all --bin test_server
     if [[ "$browser" == "firefox" ]]; then
       fails=0
-      for attempt in $(seq 1 100); do
+      for attempt in $(seq 1 150); do
         echo "=== PROBE attempt $attempt"
         WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
           cargo "+$toolchain" test --profile test-release \
@@ -67,7 +67,7 @@ wasm BROWSER="chrome" SUITE="all":
           -Z build-std-features=optimize_for_size \
           -p kithara-ffi-web-tests -p kithara-integration-tests --no-default-features \
           --features kithara-integration-tests/wasm \
-          --test ffi_web -- stress:: || { fails=$((fails + 1)); break; }
+          --test ffi_web -- stress::stress_seek_to_zero_after_pressure || { fails=$((fails + 1)); break; }
       done
       echo "=== PROBE failed attempts: $fails after $attempt"
       exit 1
