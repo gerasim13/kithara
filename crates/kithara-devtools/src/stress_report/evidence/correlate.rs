@@ -172,7 +172,7 @@ pub(in crate::stress_report) fn append_correlated_evidence(
         out,
         "Wait-graph signatures",
         &waits,
-        "Repeated holders, waiters, or quiescence pins are causal candidates. Task IDs and timing counters are removed. An optional backtrace belongs to the snapshot caller, not necessarily to a holder or waiter.",
+        "Repeated holders, waiters, or quiescence pins are causal candidates. Task IDs and timing counters are removed, and so is the termination that ended the attempt — one wedge clusters here whether the harness timeout or the outer pre-kill reached it first. An optional backtrace belongs to the snapshot caller, not necessarily to a holder or waiter.",
         budgets,
     );
     render_clusters(
@@ -462,19 +462,10 @@ pub(super) fn wait_signatures(
     budgets: &StressRenderBudgets,
 ) -> Vec<String> {
     let mut signatures = BTreeSet::new();
-    let mut context = "wait graph".to_owned();
     let mut primitive = None::<String>;
     let mut holder = None::<String>;
     for line in clean_lines(output) {
         let trimmed = line.trim();
-        if let Some(value) = evidence
-            .dump_marker
-            .as_deref()
-            .and_then(|marker| trimmed.split(marker).nth(1))
-        {
-            context = normalize_signature(value, budgets);
-            continue;
-        }
         if trimmed.starts_with('#')
             && evidence
                 .primitive_marker
@@ -498,17 +489,12 @@ pub(super) fn wait_signatures(
             .as_deref()
             .is_some_and(|marker| trimmed.contains(marker))
         {
-            let edge = [
-                Some(context.as_str()),
-                primitive.as_deref(),
-                holder.as_deref(),
-                Some(trimmed),
-            ]
-            .into_iter()
-            .flatten()
-            .map(|edge| normalize_wait(edge, budgets))
-            .collect::<Vec<_>>()
-            .join(" | ");
+            let edge = [primitive.as_deref(), holder.as_deref(), Some(trimmed)]
+                .into_iter()
+                .flatten()
+                .map(|edge| normalize_wait(edge, budgets))
+                .collect::<Vec<_>>()
+                .join(" | ");
             signatures.insert(edge);
             continue;
         }
@@ -517,11 +503,7 @@ pub(super) fn wait_signatures(
             .iter()
             .any(|needle| trimmed.contains(needle))
         {
-            signatures.insert(format!(
-                "{} | {}",
-                context,
-                normalize_wait(trimmed, budgets)
-            ));
+            signatures.insert(normalize_wait(trimmed, budgets));
         }
     }
     signatures.into_iter().collect()
@@ -778,7 +760,6 @@ mod tests {
             envelope_schema: Some("demo.hang.v1".to_owned()),
             envelope_marker: Some("[hang]".to_owned()),
             envelope_suffix_markers: vec![" payload=".to_owned(), " \u{2014} ".to_owned()],
-            dump_marker: Some("[wait dump]".to_owned()),
             primitive_marker: Some("created_at=".to_owned()),
             holder_marker: Some("held by".to_owned()),
             wait_marker: Some("WAITING:".to_owned()),
@@ -917,6 +898,33 @@ mod tests {
 
     /// The first line the flash engine writes into a hang dump.
     const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0 advances=812 advance_blocked=419033 advance_no_deadline=0 advance_yield_releases=7 advance_paced_wait=0";
+
+    /// One wedge shows up under whichever termination happened to fire first:
+    /// the harness's own wall-timeout on a test that declares one, the outer
+    /// pre-kill on a test that does not. Prefixing the wait signature with the
+    /// dump's label split a single shape into one cluster per trigger — on the
+    /// 2026-09-26 run, `3` and `1` occurrences of the same pinned holder read
+    /// as two unrelated flakes. The trigger is already reported by the symptom
+    /// and attempt-envelope sections; the wait graph clusters on shape alone.
+    #[test]
+    fn one_pinned_shape_clusters_across_the_triggers_that_ended_it() {
+        let mut evidence = evidence();
+        evidence.direct_markers.push("pace_anchor=".to_owned());
+        let budgets = StressRenderBudgets::default();
+
+        let prekill = wait_signatures(
+            &format!("[wait dump] pre-kill\n{ENGINE_COUNTERS}\n"),
+            &evidence,
+            &budgets,
+        );
+        let wall = wait_signatures(
+            &format!("[wait dump] wall-timeout\n{ENGINE_COUNTERS}\n"),
+            &evidence,
+            &budgets,
+        );
+
+        assert_eq!(prekill, wall, "the trigger must not shape the cluster");
+    }
 
     /// The engine's counter line is neither a primitive, a holder, nor a
     /// waiter, so `direct_markers` is the only route that carries it into a
