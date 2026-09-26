@@ -3,7 +3,7 @@ use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
 use delegate::delegate;
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::Arc;
-use kithara_play::{PlayError, SessionDispatcher, player::PlayerMember};
+use kithara_play::{PlayError, SessionDispatcher};
 use kithara_sync::{
     GroupState, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
 };
@@ -12,6 +12,7 @@ use kithara_warp::BeatGridId;
 
 use super::{Host, Platform, Resident, SessionRuntime};
 use crate::{
+    PlayerMember,
     host::owner::SessionRoot,
     session::{
         HostCmd, HostDispatcher, HostReply, Reply,

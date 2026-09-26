@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 use super::{
     PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
+    staging::SyncStaging,
     state::{ItemQueue, PlayerPhase, TrackGrid},
 };
 use crate::{
@@ -60,6 +61,8 @@ pub(crate) struct PlayerCore<S> {
     /// Set by a seek that arrives before the player holds a slot, consumed
     /// by the load that starts playback.
     pub(crate) start_position: Mutex<Option<Duration>>,
+    /// Executor of the preparations the player's group issues for its track.
+    pub(crate) staging: SyncStaging,
     /// Geometry this player publishes for the track it holds.
     pub(crate) track_grid: TrackGrid,
 }
@@ -122,6 +125,7 @@ impl<S> PlayerRuntime<S> {
             return Ok(None);
         };
         self.phase.lock().set_abr_handle(item.abr_handle);
+        self.core.staging.load(item.item_id, item.staging);
         let rate = self.core.engine.master_sample_rate();
         if let Some(sample_rate) = NonZeroU32::new(rate) {
             self.core.track_grid.load(
@@ -149,6 +153,7 @@ impl<S> PlayerRuntime<S> {
     /// an admitted operation rather than to queue behind one. `close` still
     /// takes the gate, so the orderly path keeps its ordering.
     pub(super) fn invalidate(&self) {
+        self.core.staging.unload();
         self.finish_close();
         self.core.engine.cancel();
     }
@@ -162,6 +167,7 @@ impl<S> PlayerRuntime<S> {
         S: HasPool<f32>,
     {
         self.unarm_next();
+        self.core.staging.unload();
         self.core.track_grid.release();
         self.core.items.clear_all();
         self.set_status(PlayerStatus::Unknown);
@@ -290,9 +296,7 @@ mod tests {
     use kithara_config::Config as _;
     use kithara_decode::GaplessMode;
     use kithara_platform::{CancelToken, time::Duration};
-    use kithara_sync::SyncGroup;
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGridState, MapAxis};
 
     use super::{super::PlayerImpl, *};
     use crate::{
@@ -504,37 +508,6 @@ mod tests {
             lifecycle.begin_close(),
             Ok(CloseAdmission::AlreadyClosed)
         ));
-    }
-
-    /// The player's group carries its track geometry as a member from birth:
-    /// that is the publication a session reads, and it exists before any
-    /// track is loaded so no load has to change the topology.
-    #[kithara::test]
-    fn a_player_publishes_its_track_geometry_as_its_own_member() {
-        let player = player();
-
-        let topology = SyncGroup::topology(&player).expect("a fresh player has a topology");
-
-        let [member] = topology.members().as_ref() else {
-            panic!("a player owns exactly its own track grid");
-        };
-        assert!(
-            member.group_topology().is_none(),
-            "a track grid is an ordinary member, not a nested group"
-        );
-        assert_ne!(
-            member.grid().id(),
-            topology.group_grid().id(),
-            "the geometry a player holds is a grid of its own"
-        );
-        assert!(
-            matches!(member.grid().axis(), MapAxis::Asset(_)),
-            "a track grid is asset-native: it states the recording, not the session"
-        );
-        assert!(
-            matches!(member.grid().state(), BeatGridState::Unavailable(_)),
-            "a player holding no track states no geometry"
-        );
     }
 
     #[kithara::test]

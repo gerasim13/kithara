@@ -75,6 +75,24 @@ where
             .ok_or(WarpRenderError::EmptySource)
     }
 
+    /// This target renders no projection, so it enters none.
+    #[must_use]
+    pub const fn entry_source(&self) -> Option<u64> {
+        None
+    }
+
+    /// This target renders no projection and admits no history for one.
+    ///
+    /// # Errors
+    /// Always refuses: projections are unavailable on this target.
+    pub const fn admit_preroll(
+        &mut self,
+        _meta: AudioChunkInfo,
+        _samples: &[f32],
+    ) -> Result<(), WarpRenderError> {
+        Err(WarpRenderError::UnsupportedProjection)
+    }
+
     /// Shrink a prepared source span at true EOF.
     pub fn prepare_terminal_quantum(
         &mut self,

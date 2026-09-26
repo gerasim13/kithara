@@ -17,7 +17,9 @@ use kithara_warp::{
 };
 use tracing::warn;
 
-use super::super::{ArtifactFetch, ArtifactSource, PreparedGrid, ResourceConfig, SourceType};
+use super::super::{
+    ArtifactFetch, ArtifactSource, PreparedGrid, ResourceConfig, SourceType, StagingRecipe,
+};
 use crate::{
     PlayWorker, TrackConfig,
     worker::{ServiceClass, TrackPriority},
@@ -118,6 +120,9 @@ pub struct Resource {
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
+    /// How to open a staged lane of this recording; `None` for a reader
+    /// handed over whole, or where no renderer can enter a plan.
+    staging: Option<StagingRecipe>,
     reader: ReaderOwner,
 }
 
@@ -201,6 +206,10 @@ impl Resource {
         self.playback_rate.apply(rate)
     }
 
+    pub(crate) fn staging(&self) -> Option<StagingRecipe> {
+        self.staging.clone()
+    }
+
     pub(crate) fn clear_render(&self) {
         if let Some(publisher) = &self.render_publisher {
             publisher.clear();
@@ -230,6 +239,7 @@ impl Resource {
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
             render_publisher: None,
+            staging: None,
             beat_grid: Arc::default(),
         };
         if preload && let Err(error) = resource.reader.1.preload() {
@@ -305,6 +315,7 @@ impl Resource {
         let warp = config.warp.clone();
         let engine_load = config.engine_load.clone();
         let cancel = config.cancel.clone();
+        let staging = StagingRecipe::new(&config, &worker);
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.build_file_config(&worker, observer);
@@ -325,6 +336,7 @@ impl Resource {
         };
         resource.reader.0 = CancelGuard(cancel);
         resource.beat_grid = beat_grid;
+        resource.staging = staging;
         Ok(resource)
     }
 

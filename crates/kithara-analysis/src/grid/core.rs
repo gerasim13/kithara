@@ -16,7 +16,7 @@ use super::{
 use crate::{BeatArtifact, artifact::MarkedBeat};
 
 #[cfg(feature = "beat-backend")]
-pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v4";
+pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v5";
 
 struct Consts;
 

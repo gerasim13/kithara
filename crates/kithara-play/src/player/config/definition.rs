@@ -1,12 +1,13 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
+use kithara_abr::AbrController;
 use kithara_config::{LiveBool, LiveF32};
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
 use crate::{PlayWorker, session::SessionBinding};
@@ -154,6 +155,10 @@ pub struct PlayerConfig<S> {
         patch(skip)
     )]
     pub(crate) track_grid_id: BeatGridId,
+    /// Shared ABR controller. When absent, the player creates its default.
+    #[debug(skip)]
+    #[config(skip = "injected ABR controller", patch(skip))]
+    pub(crate) abr: Option<Arc<AbrController>>,
     /// Optional application deadline for control-to-presented-audio response, in output frames.
     /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
     #[config(value, field(get, copy))]

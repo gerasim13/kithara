@@ -6,10 +6,10 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_effects::LimiterConfig;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
-use kithara_play::player::PlayerControlSource;
+use kithara_play::player::Player;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    player::PlayerMember,
+    player::PlayerControlSource,
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
@@ -25,6 +25,7 @@ use super::super::{
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
+use crate::{PlayerMember, host::HeldPlayer};
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
@@ -79,11 +80,6 @@ where
         }
     }
 }
-
-const FIXTURE_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(rate) => rate,
-    None => unreachable!(),
-};
 
 pub(crate) struct FixtureSession;
 
@@ -147,15 +143,12 @@ fn attach_player_with_id<T, S>(
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let sample_rate = state.root_view.grid().axis().sample_rate();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(grid_id)
-            .sample_rate(state.root_view.grid().axis().sample_rate())
+            .sample_rate(sample_rate)
             .worker(worker)
-            .session(SessionBinding::new(
-                Arc::new(FixtureSession),
-                FIXTURE_SAMPLE_RATE,
-            ))
             .build(),
     );
     let base = state
@@ -170,7 +163,7 @@ fn attach_player_with_id<T, S>(
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
-                    group: Box::new(target_member(player)),
+                    group: Box::new(target_member(player, sample_rate)),
                 },
             }]),
         })
@@ -187,29 +180,23 @@ pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> Pl
             .grid_id(grid_id)
             .sample_rate(sample_rate)
             .worker(worker)
-            .session(SessionBinding::new(
-                Arc::new(FixtureSession),
-                FIXTURE_SAMPLE_RATE,
-            ))
             .build(),
     );
-    target_member(player)
+    target_member(player, sample_rate)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn target_member<S>(player: PlayerImpl<S>) -> PlayerMember
+/// The member the Host builds for `player` once it binds to a session at
+/// `sample_rate`.
+fn target_member<S>(mut player: PlayerImpl<S>, sample_rate: NonZeroU32) -> PlayerMember
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    PlayerMember::new(player)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn target_member<S>(mut player: PlayerImpl<S>) -> PlayerMember
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    player
-        .take_host_member()
-        .expect("fixture player synchronization member")
+    let attachment = player
+        .attach_session(SessionBinding::new(Arc::new(FixtureSession), sample_rate))
+        .expect("fixture player binds its session");
+    #[cfg(not(target_arch = "wasm32"))]
+    let held = HeldPlayer::new(player);
+    #[cfg(target_arch = "wasm32")]
+    let held = HeldPlayer::new(player.host_level());
+    PlayerMember::new(attachment, held)
 }

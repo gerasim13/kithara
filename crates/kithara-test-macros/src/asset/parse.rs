@@ -57,6 +57,16 @@ pub(crate) struct AssetArgs {
     pub(crate) embed: bool,
     /// Keep the build green when this producer reports an unavailable asset.
     pub(crate) optional: bool,
+    /// Audio bytes that are no whole track: a segment, a header, or data
+    /// malformed on purpose. No analysis is derived from them.
+    pub(crate) fragment: bool,
+}
+
+impl AssetArgs {
+    /// Every whole audio track carries a build-time analysis beside it.
+    pub(crate) fn analysed(&self) -> bool {
+        self.content_type.value().starts_with("audio/") && !self.fragment
+    }
 }
 
 impl Parse for AssetArgs {
@@ -68,6 +78,7 @@ impl Parse for AssetArgs {
         let mut env: Option<Vec<LitStr>> = None;
         let mut ext: Option<LitStr> = None;
         let mut format: Option<Path> = None;
+        let mut fragment = false;
         let mut optional = false;
 
         while !input.is_empty() {
@@ -76,6 +87,8 @@ impl Parse for AssetArgs {
                 Some(&mut context)
             } else if key == "embed" {
                 Some(&mut embed)
+            } else if key == "fragment" {
+                Some(&mut fragment)
             } else if key == "optional" {
                 Some(&mut optional)
             } else {
@@ -132,7 +145,7 @@ impl Parse for AssetArgs {
                         key.span(),
                         format!(
                             "unknown asset key `{other}`; expected `ext`, `content_type`, \
-                             `depends_on`, `env`, `format`, `context`, `embed`, or `optional`"
+                             `depends_on`, `env`, `format`, `context`, `embed`, `fragment`, or `optional`"
                         ),
                     ));
                 }
@@ -167,6 +180,7 @@ impl Parse for AssetArgs {
             embed,
             ext,
             format,
+            fragment,
             optional,
             depends_on: depends_on.unwrap_or_default(),
             env: env.unwrap_or_default(),
@@ -248,6 +262,15 @@ mod tests {
             syn::parse_str::<AssetArgs>(r#"ext = "wav", ext = "mp3", content_type = "audio/wav""#)
                 .is_err(),
         );
+    }
+
+    #[test]
+    fn a_whole_audio_track_is_analysed_and_a_fragment_is_not() {
+        let parse = |input: &str| syn::parse_str::<AssetArgs>(input).expect("valid attribute");
+
+        assert!(parse(r#"ext = "mp3", content_type = "audio/mpeg""#).analysed());
+        assert!(!parse(r#"ext = "m4s", content_type = "audio/mp4", fragment"#).analysed());
+        assert!(!parse(r#"ext = "toml", content_type = "application/toml""#).analysed());
     }
 
     #[test]
