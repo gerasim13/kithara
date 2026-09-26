@@ -155,7 +155,7 @@ impl Deadline {
         }
     }
 
-    fn remaining(self, url: &Url) -> Result<Duration, HydrateError> {
+    pub(crate) fn remaining(self, url: &Url) -> Result<Duration, HydrateError> {
         let remaining = self.end.saturating_duration_since(Instant::now());
         (!remaining.is_zero())
             .then_some(remaining)
@@ -169,7 +169,7 @@ fn refresh_names(names: &[&str]) -> String {
     names.join(", ")
 }
 
-pub(crate) fn fetch(
+fn fetch(
     client: &Client,
     url: &Url,
     headers: &HeaderMap,
@@ -495,6 +495,8 @@ pub(crate) fn hydrate(
 mod tests {
     use std::{
         collections::HashMap,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
         thread::{self, JoinHandle},
     };
 
@@ -526,7 +528,13 @@ mod tests {
         );
         let fetch = |path| {
             let url = server.url.join(path).expect("fixture URL");
-            fetch_verified(&url, digest, 3, Duration::from_secs(2))
+            fetch_verified(
+                &url,
+                digest,
+                3,
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+            )
         };
         assert_eq!(fetch("valid").expect("verified bytes"), b"abc");
         assert!(matches!(
@@ -545,6 +553,49 @@ mod tests {
         assert_eq!(server.finish().values().sum::<usize>(), 4);
     }
 
+    /// A CDN edge can hold a response open and send nothing more: the download
+    /// asks again for the bytes it lacks instead of waiting out its budget.
+    #[kithara::test(native, flash(false))]
+    fn remote_file_resumes_a_stalled_transfer_from_the_byte_it_reached() {
+        let digest = "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721";
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let url = Url::parse(&format!(
+            "http://{}/track",
+            listener.local_addr().expect("server address")
+        ))
+        .expect("fixture URL");
+        let server = thread::spawn(move || {
+            let (mut stalled, _) = listener.accept().expect("first request");
+            request_head(&mut stalled);
+            stalled
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
+                .expect("first half");
+            let (mut resumed, _) = listener.accept().expect("resumed request");
+            let head = request_head(&mut resumed);
+            resumed
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\n\
+                      Content-Range: bytes 3-5/6\r\n\r\ndef",
+                )
+                .expect("second half");
+            drop(stalled);
+            head
+        });
+
+        let bytes = fetch_verified(
+            &url,
+            digest,
+            6,
+            Duration::from_secs(10),
+            Duration::from_millis(200),
+        )
+        .expect("resumed bytes");
+
+        assert_eq!(bytes, b"abcdef");
+        let head = server.join().expect("server thread").to_ascii_lowercase();
+        assert!(head.contains("range: bytes=3-"), "{head}");
+    }
+
     #[kithara::test(native, flash(false))]
     fn missing_remote_configuration_names_the_required_input() {
         let error = RemoteFileError::Missing("KITHARA_REMOTE_FIXTURES");
@@ -552,6 +603,16 @@ mod tests {
             error.to_string(),
             "repository variable KITHARA_REMOTE_FIXTURES is missing"
         );
+    }
+
+    fn request_head(stream: &mut TcpStream) -> String {
+        let mut head = Vec::new();
+        let mut byte = [0; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).expect("request head");
+            head.push(byte[0]);
+        }
+        String::from_utf8(head).expect("ASCII request head")
     }
 
     struct TestServer {
