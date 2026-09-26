@@ -121,7 +121,6 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let t0 = Date::now();
     warn!("PROBE open start");
     let _ = js_sys::Function::new_no_args(
@@ -251,6 +250,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         "#,
     )
     .call0(&wasm_bindgen::JsValue::UNDEFINED);
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let opened =
         kithara::platform::time::timeout(Duration::from_secs(8), worker.open(config)).await;
     let mut audio = match opened {
