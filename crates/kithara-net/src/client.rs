@@ -279,10 +279,10 @@ impl RawHttp {
     /// time, and never fires for a fast healthy fetch.
     #[kithara::flash(io)]
     async fn send_idle_bounded(&self, req: RequestBuilder) -> Result<Response, NetError> {
-        timeout(self.options.inactivity_timeout, req.send())
-            .await
-            .map_err(|_| NetError::Timeout)?
-            .map_err(NetError::from)
+        kithara_platform::probe_counters::bump(&kithara_platform::probe_counters::NET_SEND_STARTED);
+        let sent = timeout(self.options.inactivity_timeout, req.send()).await;
+        kithara_platform::probe_counters::bump(&kithara_platform::probe_counters::NET_SEND_DONE);
+        sent.map_err(|_| NetError::Timeout)?.map_err(NetError::from)
     }
 
     /// Wrap a freshly-established body in the self-healing stream: on a stall

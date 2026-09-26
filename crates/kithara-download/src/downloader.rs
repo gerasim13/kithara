@@ -210,6 +210,7 @@ impl Downloader {
     ///   stalls across the timeout window → panic.
     #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
+        kithara_platform::probe_counters::bump(&kithara_platform::probe_counters::DL_RUN_ENTERED);
         let mut registry = Registry::default();
 
         loop {
@@ -258,7 +259,11 @@ impl Downloader {
         this: Self,
         rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
     ) {
+        kithara_platform::probe_counters::bump(&kithara_platform::probe_counters::DL_SPAWN_CALLED);
         spawn(move || {
+            kithara_platform::probe_counters::bump(
+                &kithara_platform::probe_counters::DL_WORKER_ENTERED,
+            );
             keep_worker_alive();
             drop(task::spawn(async move {
                 this.run(rx).await;

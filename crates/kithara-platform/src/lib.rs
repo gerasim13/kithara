@@ -36,6 +36,9 @@ pub use backend::{logging, maybe_send, sync, thread, time, tokio};
 #[doc(hidden)]
 pub mod __private;
 
+#[doc(hidden)]
+pub mod probe_counters;
+
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 #[cfg(target_arch = "wasm32")]

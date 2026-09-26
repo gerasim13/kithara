@@ -239,9 +239,12 @@ impl PeerHandle {
             .send(internal)
             .await
             .map_err(|_| NetError::Cancelled)?;
-        resp_rx
-            .await
-            .map_err(|_| NetError::Cancelled)?
+        kithara_platform::probe_counters::bump(&kithara_platform::probe_counters::PEER_CMD_SENT);
+        let resp = resp_rx.await;
+        kithara_platform::probe_counters::bump(
+            &kithara_platform::probe_counters::PEER_RESP_RECEIVED,
+        );
+        resp.map_err(|_| NetError::Cancelled)?
             .map(collected_into_response)
     }
 

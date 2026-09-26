@@ -124,7 +124,30 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let t0 = Date::now();
     warn!("PROBE open start");
+    let open_done = std::rc::Rc::new(std::cell::Cell::new(false));
+    let watch = std::rc::Rc::clone(&open_done);
+    wasm_bindgen_futures::spawn_local(async move {
+        for tick in 1..=4 {
+            TimeoutFuture::new(2000).await;
+            if watch.get() {
+                return;
+            }
+            use kithara::platform::probe_counters as c;
+            warn!(
+                tick,
+                dl_spawn = c::read(&c::DL_SPAWN_CALLED),
+                dl_worker = c::read(&c::DL_WORKER_ENTERED),
+                dl_run = c::read(&c::DL_RUN_ENTERED),
+                peer_sent = c::read(&c::PEER_CMD_SENT),
+                peer_resp = c::read(&c::PEER_RESP_RECEIVED),
+                net_start = c::read(&c::NET_SEND_STARTED),
+                net_done = c::read(&c::NET_SEND_DONE),
+                "PROBE open still pending"
+            );
+        }
+    });
     let mut audio = worker.open(config).await.unwrap();
+    open_done.set(true);
     warn!(ms = Date::now() - t0, "PROBE open done");
     audio
         .preload()
