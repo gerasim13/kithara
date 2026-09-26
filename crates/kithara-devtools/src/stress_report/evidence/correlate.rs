@@ -606,8 +606,10 @@ pub(in crate::stress_report) fn strip_ansi(text: &str) -> String {
 
 pub(super) fn normalize_signature(text: &str, budgets: &StressRenderBudgets) -> String {
     static VOLATILE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump|polls)=[^\s,;]+")
-            .expect("volatile diagnostic regex")
+        Regex::new(
+            r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump|polls|advances|advance_[a-z_]+)=[^\s,;]+",
+        )
+        .expect("volatile diagnostic regex")
     });
     /// A Rust panic header names the thread and its id before the location.
     /// The id changes on every attempt, which made each failure its own
@@ -914,7 +916,7 @@ mod tests {
     }
 
     /// The first line the flash engine writes into a hang dump.
-    const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0";
+    const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0 advances=812 advance_blocked=419033 advance_no_deadline=0 advance_yield_releases=7 advance_paced_wait=0";
 
     /// The engine's counter line is neither a primitive, a holder, nor a
     /// waiter, so `direct_markers` is the only route that carries it into a
@@ -954,6 +956,21 @@ mod tests {
         let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("pace_anchor=none"), "{normalized}");
+    }
+
+    /// The engine's attempt counters run into the hundreds of thousands and
+    /// land on a different value every attempt. Kept, they would give each
+    /// hang a cluster of its own, which is the one thing this section exists
+    /// to prevent; the dump itself carries the actual counts.
+    #[test]
+    fn a_pacing_signature_drops_the_advance_counters() {
+        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+
+        assert!(normalized.contains("advances=<volatile>"), "{normalized}");
+        assert!(
+            normalized.contains("advance_blocked=<volatile>"),
+            "{normalized}"
+        );
     }
 
     /// The virtual clock reads differently on every attempt; kept, it would
