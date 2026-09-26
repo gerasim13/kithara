@@ -35,12 +35,12 @@ usdt = [
 [dependencies]
 kithara = { workspace = true, optional = true, features = ["offline", "queue", "stretch-signalsmith", "tokio-rt-multi-thread"] }
 kithara-beat = { workspace = true }
-kithara-integration-tests = { workspace = true, optional = true, features = ["all", "analysis"] }
+kithara-integration-tests = { workspace = true, optional = true, features = ["all"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-stretch = { workspace = true, default-features = false, features = ["stretch-glide"] }
+kithara-stretch = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
-kithara-warp = { workspace = true, features = ["render", "stretch-glide"] }
+kithara-warp = { workspace = true, features = ["render"] }
 num-traits = { workspace = true }
 serde_json = { workspace = true, optional = true }
 
@@ -50,6 +50,13 @@ kithara-warp = { workspace = true, features = ["stretch-bungee"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["library", "native-fixtures"] }
+
+# The real-track suite: analysed grids and the Glide backend, neither of
+# which the Android artifact ships.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+kithara-integration-tests = { workspace = true, optional = true, features = ["analysis"] }
+kithara-stretch = { workspace = true, default-features = false, features = ["stretch-glide"] }
+kithara-warp = { workspace = true, features = ["stretch-glide"] }
 
 [lints]
 workspace = true

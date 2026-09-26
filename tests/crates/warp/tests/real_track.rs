@@ -6,11 +6,12 @@ use std::{io::Cursor, num::NonZero};
 
 use kithara_integration_tests::{
     audio_artifact::AudioArtifactTap,
-    grid::{Start, analysed_grid},
+    grid::analysed_grid,
     kithara::{
         decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
         resampler::NoResamplerBackend,
     },
+    start::Start,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;

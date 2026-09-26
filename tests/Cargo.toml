@@ -49,6 +49,7 @@ audio = [
     "kithara/abr",
     "kithara/assets",
     "kithara/audio",
+    "kithara/beat",
     "kithara/offline",
     "kithara/bufpool",
     "kithara/decode",

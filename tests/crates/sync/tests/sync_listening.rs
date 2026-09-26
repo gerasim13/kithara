@@ -4,8 +4,8 @@
 use kithara::platform::time::Duration;
 use kithara_integration_tests::{
     cochlea::{CochleaReport, mix_loudness_failures},
-    grid::Start,
     kithara,
+    start::Start,
 };
 
 use super::sync_product_matrix::{
