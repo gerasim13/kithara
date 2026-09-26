@@ -306,6 +306,28 @@ fn a_pinning_task_reports_the_polls_it_entered() {
     assert!(dump.contains("polls=1"), "{dump}");
 }
 
+/// The stress report reads a wedge from these five names: it masks their
+/// values as per-attempt noise so hangs cluster by shape, and what is left is
+/// the shape itself. A rename here would silently shatter every hang into its
+/// own cluster, so the header's vocabulary is pinned on this side of the
+/// crate boundary.
+#[kithara::test(native, flash(false))]
+fn the_dump_header_names_every_way_an_advance_can_end() {
+    let _g = guard();
+    reset();
+
+    let dump = forward::dump();
+    for key in [
+        "advances=",
+        "advance_blocked=",
+        "advance_no_deadline=",
+        "advance_yield_releases=",
+        "advance_paced_wait=",
+    ] {
+        assert!(dump.contains(key), "missing {key} in {dump}");
+    }
+}
+
 /// A dump lists EVERY parked waiter and says nothing about which one the clock
 /// is waiting on: the four hangs of run #11 each had one deadline-less
 /// waiter holding it, and the pin had to be re-derived by hand from the
