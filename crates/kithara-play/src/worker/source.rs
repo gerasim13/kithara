@@ -131,6 +131,12 @@ where
         let frames = match self.warp.prepare_quantum(meta, remaining) {
             Ok(frames) => frames,
             Err(WarpRenderError::PendingActivation) => return,
+            Err(WarpRenderError::Preroll { frames }) => {
+                if self.admit_preroll(frames.get().min(remaining)) {
+                    self.prepare_staging();
+                }
+                return;
+            }
             Err(WarpRenderError::NeedsService) => {
                 if self.warp.transition_pending() {
                     self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
@@ -166,12 +172,47 @@ where
         self.prepared_frames = Some(frames);
     }
 
+    /// Hands the next `frames` of pending input to an entered renderer as
+    /// history before its activation. Returns whether input remains to stage.
+    fn admit_preroll(&mut self, frames: usize) -> bool {
+        let channels = usize::from(self.spec.channels.max(1));
+        let Some(pending) = self.pending_input.as_mut() else {
+            return false;
+        };
+        let start = pending.consumed_frames.saturating_mul(channels);
+        let end = start.saturating_add(frames.saturating_mul(channels));
+        let span = Self::span_meta(pending.chunk.meta, pending.consumed_frames, frames);
+        let admitted = match (span, pending.chunk.samples.get(start..end)) {
+            (Some(span), Some(samples)) => self.warp.admit_preroll(span, samples).is_ok(),
+            _ => false,
+        };
+        if !admitted {
+            self.quantum_failed = true;
+            return false;
+        }
+        pending.consumed_frames = pending.consumed_frames.saturating_add(frames);
+        if pending.consumed_frames < pending.chunk.frames() {
+            return true;
+        }
+        if let Some(pending) = self.pending_input.take() {
+            self.source.retire_chunk(pending.chunk);
+        }
+        false
+    }
+
     fn retire_pending_input(&mut self) {
         let Some(pending) = self.pending_input.take() else {
             return;
         };
         debug_assert!(self.retired_input.is_none());
         self.retired_input = Some(pending.chunk);
+    }
+
+    /// Where a lane entering its plan must start decoding: the renderer's
+    /// entry source as a position in the source's own timeline.
+    pub(crate) fn entry_position(&self) -> Option<kithara_platform::time::Duration> {
+        let entry = self.warp.entry_source()?;
+        self.spec.duration_for(entry).ok()
     }
 
     fn span_meta(original: AudioChunkInfo, offset: usize, frames: usize) -> Option<AudioChunkInfo> {

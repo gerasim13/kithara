@@ -14,7 +14,8 @@ pub struct SyncTransition {
     /// Preparations issued, each superseding its member's previous one.
     #[field(get)]
     issued: Vec<SyncPreparation>,
-    /// Preparations dropped without a successor.
+    /// Preparations whose operation ended without a successor carrying it
+    /// on.
     #[field(get)]
     withdrawn: Vec<SyncExecutionStamp>,
 }

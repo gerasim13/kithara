@@ -5285,6 +5285,7 @@ dependencies = [
  "kithara-warp",
  "kithara-worker",
  "kithara-workspace-hack",
+ "portable-atomic",
  "ringbuf",
  "thiserror 2.0.18",
  "tracing",
@@ -5811,6 +5812,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

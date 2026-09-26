@@ -14,9 +14,7 @@ use kithara_effects::{GainDb, LimiterConfig, eq::EqBandConfig};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{
-    SessionSampleRate, StreamShape, player::PlayerMember, session::RegisteredPlayer,
-};
+use kithara_play::{SessionSampleRate, StreamShape, session::RegisteredPlayer};
 use kithara_sync::{GroupState, SyncError, SyncGroup, SyncGroupSnapshot, SyncStatusSnapshot};
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
 use tracing::{debug, warn};
@@ -28,6 +26,7 @@ use super::{
     transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
 };
 use crate::{
+    PlayerMember,
     api::{SessionDuckingMode, SlotId},
     bridge::SharedEq,
     rt::{LimiterNode, MasterEqNode},

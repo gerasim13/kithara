@@ -432,29 +432,23 @@ mod probed {
         let _id = register(&handle, node);
 
         receive_chunks(&trace, &handle, &mut pop, 2).await;
-        let mut seen = trace.events().len();
+        let seen = trace.events().len();
+        pass_after(&trace, &handle, seen, |pass| {
+            pass_field(pass, "backpressured") >= 1
+        })
+        .await;
+        let seen = trace.events().len();
         let epoch = seek.begin(Duration::from_secs(10));
-        // A seek leaves the pre-seek chunks in the ring for the consumer to
-        // discard once it adopts the new epoch; the decoder clears only its own
-        // runtime. A waiter that stops popping is a consumer the product does
-        // not have, and the producer fills the 32 slots before the seek lands
-        // often enough to wedge: 1/50 on run 36202693446, where the port
-        // reported `backpressured` for 995 consecutive passes. Draining belongs
-        // between the waits, as in `receive_chunks`, and never inside a
-        // `wait_for` predicate: that runs holding the recorder's lock, which
-        // `pop` re-enters through probes of its own.
-        loop {
-            while pop().is_some() {}
-            let events = trace.events();
-            if events[seen..]
-                .iter()
-                .any(|e| is(e, "chunk_admitted") && e.field("epoch") == Some(epoch))
-            {
-                break;
-            }
-            seen = events.len();
-            admitted_after(&trace, &handle, seen).await;
-        }
+        handle.wake_handle().wake();
+        // The consumer must observe the seek and retire the full pre-seek ring.
+        let _ = pop();
+        trace
+            .wait_for(|events| {
+                events[seen..]
+                    .iter()
+                    .any(|e| is(e, "chunk_admitted") && e.field("epoch") == Some(epoch))
+            })
+            .await;
         receive_chunks(&trace, &handle, &mut pop, 1).await;
     }
 

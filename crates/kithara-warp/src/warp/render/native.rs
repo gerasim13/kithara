@@ -2,6 +2,8 @@
 mod renderer;
 #[path = "renderer_activation.rs"]
 mod renderer_activation;
+#[path = "renderer_entry.rs"]
+mod renderer_entry;
 #[path = "renderer_lifecycle.rs"]
 mod renderer_lifecycle;
 #[path = "renderer_projection.rs"]

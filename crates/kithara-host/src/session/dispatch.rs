@@ -5,9 +5,10 @@ use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
-use kithara_play::{PlayError, StreamShape, player::PlayerMember};
+use kithara_play::{PlayError, StreamShape};
 use kithara_sync::{
-    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncRejected, TopologyOperation,
+    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncReceipt, SyncRejected,
+    SyncStatusSnapshot, TopologyOperation,
 };
 use tracing::{debug, trace, warn};
 
@@ -23,7 +24,7 @@ use super::{
     transport,
     transport::RouteRestartStatus,
 };
-use crate::api::HostLevel;
+use crate::{PlayerMember, api::HostLevel};
 
 pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
@@ -43,23 +44,23 @@ where
 
 fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply {
     let operation = match cmd {
-        SyncCmd::Transact(operation) => operation,
+        SyncCmd::Transact(operation) => match transport::observe_commits(state) {
+            Ok(()) => operation,
+            Err(error) => return HostReply::Admission(Err(SyncRejected::new(error, operation))),
+        },
         SyncCmd::TransactCurrent(operations) => {
-            let topology = match state.root.topology() {
-                Ok(topology) => topology,
-                Err(error) => return HostReply::Err(SessionError::from(error).into()),
-            };
+            let topology =
+                match transport::observe_commits(state).and_then(|()| state.root.topology()) {
+                    Ok(topology) => topology,
+                    Err(error) => return HostReply::Err(SessionError::from(error).into()),
+                };
             SyncOperation::Topology {
                 operations,
                 base: topology.stamp(),
             }
         }
         SyncCmd::Acknowledge(receipt) => {
-            let result = state.root.acknowledge(receipt);
-            if result.is_ok() {
-                state.publish_root();
-            }
-            return HostReply::Acknowledged(result);
+            return HostReply::Acknowledged(acknowledge_root(state, receipt));
         }
     };
     let result = transact_root(state, operation);
@@ -67,6 +68,20 @@ fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply
         state.publish_root();
     }
     HostReply::Admission(result)
+}
+
+/// Records one executor receipt on the root group and publishes the state it
+/// leaves; a refused receipt changes nothing and publishes nothing.
+fn acknowledge_root<T, S>(
+    state: &mut SessionState<T, S>,
+    receipt: SyncReceipt,
+) -> Result<SyncStatusSnapshot, SyncError> {
+    transport::observe_commits(state)?;
+    let result = state.root.acknowledge(receipt);
+    if result.is_ok() {
+        state.publish_root();
+    }
+    result
 }
 
 fn transact_root<T, S>(
@@ -229,6 +244,10 @@ where
         }
         Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
         Cmd::Tick => tick_session(state),
+        Cmd::AcknowledgeSync { receipt } => match acknowledge_root(state, receipt) {
+            Ok(_) => Reply::Ok,
+            Err(error) => Reply::Err(SessionError::Sync(error)),
+        },
     }
 }
 

@@ -521,7 +521,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             audible_end,
         );
         let prime = self.resident_prime(plan, audible_start, delayed_start, latency)?;
-        self.prepare_resident_request(
+        let audible = projection.end.source() > audible_start;
+        let mut prepared = self.prepare_resident_request(
             ResidentRequest {
                 source_end,
                 prime,
@@ -531,7 +532,17 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             },
             meta,
             remaining,
-        )
+        )?;
+        // A short chunk can project to an output span whose whole-frame
+        // endpoints advance no audible source; its source is only retained, and
+        // the next chunk projects the span afresh.
+        if !audible && let Some(projection) = prepared.projection.as_mut() {
+            projection.output_frames = 0;
+            if let Some(resident) = self.residency.as_mut() {
+                resident.prepared = None;
+            }
+        }
+        Ok(prepared)
     }
 
     fn prepare_resident_request(

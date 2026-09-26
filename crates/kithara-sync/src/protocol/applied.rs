@@ -45,6 +45,15 @@ pub enum SyncExecutionReject {
     Geometry,
     /// The activation passed before the executor could arm it.
     Late,
+    /// The executor holds no free worker, pool, or output capacity for
+    /// another prepared lane.
+    Capacity,
+    /// The executor dropped the preparation before it was ready, such as when
+    /// its track was unloaded or its session closed.
+    Cancelled,
+    /// The recording could not be opened, positioned, or decoded for the
+    /// preparation.
+    Media,
 }
 
 /// The fact that one preparation's activation became audible.

@@ -40,8 +40,8 @@ hls = ["dep:aes", "dep:cbc", "dep:rayon", "packaged"]
 # the catalog packages its variants from the `packaged` pools.
 hls-inputs = ["hls"]
 # The verified download and the playlist hydrator are one transport module, so
-# the two fetching families ship together. `library_analysis` then runs the beat
-# analysis over each downloaded track.
+# the two fetching families ship together. `rhythm` then analyses each
+# downloaded track, as it does every whole audio track.
 library = ["remote", "rhythm"]
 packaged = ["dep:kithara-bufpool", "wav"]
 # Everything that reaches the network at build time: the HTTP client, the
@@ -106,7 +106,7 @@ serde_json = { workspace = true, optional = true }
 kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"], optional = true }
 kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
 kithara-bufpool = { workspace = true, optional = true }
-kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
+kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "tls-rustls"], optional = true }
 kithara-drm = { workspace = true, optional = true }
 kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"], optional = true }
 kithara-events = { workspace = true, optional = true }
@@ -158,6 +158,8 @@ url = { workspace = true }
 
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 kithara-analysis = { workspace = true, features = ["symphonia"] }
+kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
+kithara-resampler = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }
@@ -168,6 +170,10 @@ workspace = true
 [[test]]
 name = "rhythm_contract"
 required-features = ["rhythm"]
+
+[[test]]
+name = "library_contract"
+required-features = ["library"]
 
 [[test]]
 name = "store_contract"

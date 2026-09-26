@@ -60,7 +60,7 @@ use registry::{AssetBuild, AssetDef};
 use self::context::BuildContext;
 
 #[cfg(feature = "native-fixtures")]
-const REMOTE_FIXTURES_ENV: &str = "KITHARA_REMOTE_FIXTURES";
+const DISABLE_REMOTE_FIXTURES_ENV: &str = "KITHARA_DISABLE_REMOTE_FIXTURES";
 
 /// Rejects two cases that would produce one accessor, before either is written.
 #[cfg(feature = "native-fixtures")]
@@ -186,17 +186,22 @@ fn materialize_one(
     refresh: &HashSet<String>,
 ) -> Option<(String, String)> {
     let (name, id, def) = &resolved[index];
+    // Only an optional source fetches. An optional asset built from
+    // dependencies derives its bytes locally, so it is produced whenever its
+    // dependencies are: every fetched track reaches its analysis at build time.
+    let fetches = def.optional && def.dependencies.is_empty();
     // A fetching family cannot be produced again without hydration, so a
     // refresh never reaches one: the store keeps what it already holds.
-    let hydration_off = def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none();
+    let hydration_off = fetches
+        && std::env::var_os(DISABLE_REMOTE_FIXTURES_ENV).is_some_and(|value| !value.is_empty());
     let reuse = hydration_off || !refresh.contains(name);
     if reuse && store::has_entry(namespace, id, def.ext) {
         return None;
     }
-    if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
+    if hydration_off {
         return Some((
             name.clone(),
-            format!("remote hydration disabled; set {REMOTE_FIXTURES_ENV}"),
+            format!("remote hydration disabled by {DISABLE_REMOTE_FIXTURES_ENV}"),
         ));
     }
     let _lock = store::lock_entry(namespace, id)
@@ -332,7 +337,7 @@ fn codegen(
 #[cfg(feature = "native-fixtures")]
 fn main() {
     println!("cargo:rerun-if-env-changed={}", store::STORE_ENV);
-    println!("cargo:rerun-if-env-changed={REMOTE_FIXTURES_ENV}");
+    println!("cargo:rerun-if-env-changed={DISABLE_REMOTE_FIXTURES_ENV}");
     println!("cargo:rerun-if-env-changed={}", store::REFRESH_ENV);
 
     let defs: Vec<&AssetDef> = inventory::iter::<AssetDef>.into_iter().collect();
@@ -351,7 +356,12 @@ fn main() {
         store::root_from_env().unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
     let namespace = store::namespace(&root, fingerprint);
     let unavailable = materialize(&namespace, &resolved, &refreshed(&resolved));
-    for (_, id, def) in &resolved {
+    // Cargo reads an absent watched path as changed on every build, so an
+    // unavailable entry is not watched: its hydration env reruns this script.
+    for (_, id, def) in resolved
+        .iter()
+        .filter(|(name, _, _)| !unavailable.contains_key(name))
+    {
         println!(
             "cargo:rerun-if-changed={}",
             store::entry_path(&namespace, id, def.ext).display()

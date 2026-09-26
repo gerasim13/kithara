@@ -6,11 +6,13 @@ use super::{
         preview_topology, routed_group, validate_topology_candidate,
     },
     preparation::PrepareRequest,
+    relocation::RelocateRequest,
     state::GroupState,
 };
 use crate::{
     ParentFact, SessionAxisUpdate, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMember,
     SyncOperation, SyncOperationId, SyncRejected, SyncStaged, TopologyOperation, TopologyStamp,
+    TransportOperation,
 };
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
@@ -87,7 +89,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 smoothing,
                 ..
             } => self.transact_tempo(*tempo, *commit, *smoothing),
-            SyncOperation::Transport { .. } | SyncOperation::Prepare { .. } => {
+            SyncOperation::Transport { .. }
+            | SyncOperation::Prepare { .. }
+            | SyncOperation::Relocate { .. } => {
                 return self.transact_member(operation);
             }
         };
@@ -101,6 +105,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         operation: SyncOperation<G>,
     ) -> Result<SyncAdmission, SyncRejected<G>> {
         let result = match &operation {
+            SyncOperation::Transport {
+                target,
+                operation: TransportOperation::Seek { .. } | TransportOperation::PrepareStart { .. },
+                ..
+            } if self.applied_of(*target).is_some() => {
+                Err(SyncError::RelocationRequired { member_id: *target })
+            }
             SyncOperation::Transport {
                 load, transport, ..
             } => {
@@ -126,6 +137,21 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 load: *load,
                 transport: *transport,
                 source: *source,
+                window: window.clone(),
+            }),
+            SyncOperation::Relocate {
+                target,
+                load,
+                transport,
+                cue,
+                frontier,
+                window,
+            } => self.transact_relocate(RelocateRequest {
+                target: *target,
+                load: *load,
+                transport: *transport,
+                cue: *cue,
+                frontier: *frontier,
                 window: window.clone(),
             }),
             SyncOperation::Topology { .. }

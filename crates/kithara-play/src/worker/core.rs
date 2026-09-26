@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_audio::{Audio, AudioSource, PreparedAudio, ResamplerBackend};
+use kithara_audio::{Audio, ResamplerBackend};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_effects::EffectDrain;
@@ -11,11 +11,11 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
-use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, Worker, WorkerConfig};
+use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskError, Worker, WorkerConfig};
 
 use super::{
-    DecoderNode, EngineLoad, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
-    WarpSource,
+    DecoderNode, PlayWorkerConfig, ReadinessProbe, RegisteredAudio, StagedSlot, TrackConfig,
+    TrackLease, WarpSource,
     scheduler::{PlaybackObserver, ServiceClass, Wake},
 };
 
@@ -106,12 +106,53 @@ where
         B: Default + ResamplerBackend,
         C: Into<TrackConfig<T, B>>,
     {
+        self.open_lane(config.into(), None).await
+    }
+
+    /// Holds a worker slot for one staged lane before anything is opened.
+    pub(crate) fn reserve_staged(&self, cancel: CancelToken) -> Result<StagedSlot, TaskError> {
+        self.0
+            .dispatcher
+            .reserve(Self::task_config(Some(cancel)))
+            .map(StagedSlot)
+    }
+
+    /// Opens a lane whose configuration enters a plan, positions it at the
+    /// renderer's entry source, and starts it in the held `slot` with a
+    /// probe that proves its prepared PCM.
+    ///
+    /// # Errors
+    ///
+    /// Returns decode/setup errors, a configuration that enters no plan, or
+    /// a start refused by cancellation or dispatcher shutdown.
+    pub(crate) async fn open_staged<T, B>(
+        &self,
+        config: TrackConfig<T, B>,
+        slot: StagedSlot,
+        probe: ReadinessProbe,
+    ) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
+    where
+        T: StreamType<Events = EventBus>,
+        B: Default + ResamplerBackend,
+    {
+        self.open_lane(config, Some((slot, probe))).await
+    }
+
+    async fn open_lane<T, B>(
+        &self,
+        config: TrackConfig<T, B>,
+        staged: Option<(StagedSlot, ReadinessProbe)>,
+    ) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
+    where
+        T: StreamType<Events = EventBus>,
+        B: Default + ResamplerBackend,
+    {
         let TrackConfig {
             audio,
             effects,
             engine_load,
             warp,
-        } = config.into();
+        } = config;
         let task_cancel = audio.cancel().cloned();
         let wake = Wake::new(self.0.dispatcher.wake_handle());
         let prepared =
@@ -130,32 +171,42 @@ where
             );
             (warp, source)
         });
-        self.register(prepared, engine_load, task_cancel)
-    }
-
-    fn register<T, P>(
-        &self,
-        prepared: PreparedAudio<Warp<Audio<T>>, P>,
-        engine_load: Option<Arc<EngineLoad>>,
-        cancel: Option<CancelToken>,
-    ) -> DecodeResult<RegisteredAudio<T, S>>
-    where
-        P: AudioSource<Chunk = kithara_signal::AudioChunk>,
-    {
-        let (audio, lane) = prepared.into();
-        let mut task_config = TaskConfig::new().with_priority(ServiceClass::default().into());
-        if let Some(cancel) = cancel {
-            task_config = task_config.with_cancel(CancelGroup::from(cancel));
-        }
-        let task = self
-            .0
-            .dispatcher
-            .register(task_config, |_| DecoderNode::new(lane, engine_load))
-            .map_err(|error| DecodeError::audio_stream("play worker registration", error))?;
+        let (mut audio, lane) = prepared.into();
+        let task = match staged {
+            None => self
+                .0
+                .dispatcher
+                .register(Self::task_config(task_cancel), |_| {
+                    DecoderNode::new(lane, engine_load, None)
+                })
+                .map_err(|error| DecodeError::audio_stream("play worker registration", error))?,
+            Some((slot, probe)) => {
+                let entry =
+                    lane.source
+                        .entry_position()
+                        .ok_or_else(|| DecodeError::InvalidData {
+                            detail: "staged lane enters no plan",
+                        })?;
+                if !entry.is_zero() {
+                    audio.source_mut().seek(entry)?;
+                }
+                slot.0
+                    .start(|_| DecoderNode::new(lane, engine_load, Some(probe)))
+                    .map_err(|error| DecodeError::audio_stream("play worker staging", error))?
+            }
+        };
         Ok(RegisteredAudio::new(
             audio,
             TrackLease::new(self.clone(), task),
         ))
+    }
+
+    fn task_config(cancel: Option<CancelToken>) -> TaskConfig {
+        let config = TaskConfig::new().with_priority(ServiceClass::default().into());
+        match cancel {
+            Some(cancel) => config.with_cancel(CancelGroup::from(cancel)),
+            None => config,
+        }
     }
 }
 
