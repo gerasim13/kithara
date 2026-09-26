@@ -1,16 +1,6 @@
 if (typeof window === "undefined") {
   self.addEventListener("install", () => self.skipWaiting());
   self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
-  self.addEventListener("message", (event) => {
-    if (event.data && event.data.type === "deregister") {
-      self.registration
-        .unregister()
-        .then(() => self.clients.matchAll())
-        .then((clients) => {
-          clients.forEach((client) => client.navigate(client.url));
-        });
-    }
-  });
   self.addEventListener("fetch", (event) => {
     const request = event.request;
     if (request.cache === "only-if-cached" && request.mode !== "same-origin") {
@@ -43,64 +33,47 @@ if (typeof window === "undefined") {
     );
   });
 } else {
-  if (window?.crossOriginIsolated !== false || !window.isSecureContext) {
-    // Already isolated, or not secure context.
+  // Headers apply to a document when it is fetched, so a page the worker only
+  // started controlling after its own load — the first visit, when the worker
+  // claims it, or a hard reload, which bypasses the worker — stays
+  // unisolated until it loads again. This script is the one owner of that
+  // reload, and the session flag keeps it to one per navigation.
+  const storage = window.sessionStorage;
+  const reloadedBySelf = storage.getItem("coiReloadedBySelf") !== null;
+  storage.removeItem("coiReloadedBySelf");
+
+  if (window.crossOriginIsolated !== false || !window.isSecureContext) {
+    // Already isolated, or no service worker can isolate this page.
+  } else if (!("serviceWorker" in window.navigator)) {
+    console.log("COOP/COEP Service Worker is not supported by this browser.");
   } else {
-    const navigatorRef = window.navigator;
-    const documentRef = window.document;
-    const storage = window.sessionStorage;
-    const coi = window.coi = {
-      shouldRegister() {
-        return !navigatorRef.serviceWorker.controller;
-      },
-      shouldDeregister() {
-        return false;
-      },
-      doReload() {
-        window.location.reload();
-      },
-      quiet: false,
-      ...window.coi,
+    const serviceWorker = window.navigator.serviceWorker;
+    let reloading = false;
+    const reloadOnce = () => {
+      if (reloading) {
+        return;
+      }
+      reloading = true;
+      if (reloadedBySelf) {
+        console.log("COOP/COEP Service Worker failed to control page.");
+        return;
+      }
+      console.log("Reloading page to make use of COOP/COEP Service Worker.");
+      storage.setItem("coiReloadedBySelf", "true");
+      window.location.reload();
     };
 
-    const log = coi.quiet
-      ? () => {}
-      : (...args) => console.log(...args);
-
-    if (coi.shouldDeregister()) {
-      navigatorRef.serviceWorker.ready.then((registration) => {
-        registration.active.postMessage({ type: "deregister" });
-      });
-      window.coi = coi;
-    } else if (coi.shouldRegister()) {
-      navigatorRef.serviceWorker
-        .register(documentRef.currentScript.src)
-        .then((registration) => {
-          log("COOP/COEP Service Worker registered", registration.scope);
-          if (registration.active && !navigatorRef.serviceWorker.controller) {
-            if (window.sessionStorage.getItem("coiReloadedBySelf")) {
-              log("COOP/COEP Service Worker failed to control page.");
-              window.sessionStorage.removeItem("coiReloadedBySelf");
-            } else {
-              log("Reloading page to make use of COOP/COEP Service Worker.");
-              window.sessionStorage.setItem("coiReloadedBySelf", "true");
-              coi.doReload();
-            }
-          }
-        })
-        .catch((error) => {
-          log("COOP/COEP Service Worker failed to register:", error);
-        });
-      window.addEventListener("beforeunload", () => {
-        storage.setItem("coiReloadedBySelf", "true");
-      });
-      navigatorRef.serviceWorker.addEventListener("controllerchange", () => {
-        if (storage.getItem("coiReloadedBySelf")) {
-          storage.removeItem("coiReloadedBySelf");
-          coi.doReload();
+    serviceWorker.addEventListener("controllerchange", reloadOnce);
+    serviceWorker
+      .register(window.document.currentScript.src)
+      .then((registration) => {
+        console.log("COOP/COEP Service Worker registered", registration.scope);
+        if (registration.active) {
+          reloadOnce();
         }
+      })
+      .catch((error) => {
+        console.log("COOP/COEP Service Worker failed to register:", error);
       });
-    }
-    window.coi = coi;
   }
 }

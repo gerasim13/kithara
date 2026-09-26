@@ -4,7 +4,5 @@ mod analyze;
 mod assets;
 mod score;
 
-#[cfg(feature = "library")]
-pub(super) use analyze::beat_encoded;
-#[cfg(feature = "library")]
-pub(super) use assets::{analysis_file, analysis_format};
+pub(super) use analyze::analysed;
+pub(super) use assets::analysed_format;

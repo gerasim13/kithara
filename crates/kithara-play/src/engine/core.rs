@@ -39,7 +39,7 @@ pub struct EngineImpl<S> {
     slots: Mutex<SlotTable>,
     #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
-    #[field(get, vis = "pub(super)")]
+    #[field(get, vis = "pub(crate)")]
     pub(super) session: SessionHandle<S>,
 }
 

@@ -4,11 +4,12 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_effects::LimiterConfig;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
-use kithara_play::{SessionSampleRate, StreamShape, player::PlayerMember};
+use kithara_play::{SessionSampleRate, StreamShape};
 use kithara_sync::GroupState;
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
+    PlayerMember,
     error::PlayError,
     session::{
         dispatch::run_host_cmd,
