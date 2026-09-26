@@ -134,7 +134,49 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
           globalThis.Worker = function (url, opts) {
             const name = opts && opts.name;
             log("new " + name);
-            const w = new W(url, opts);
+            const shimUrl = self.location.origin + "/wasm-bindgen-test.js";
+            const src = `
+              const stage = (s) => self.postMessage({ __probe_stage: s });
+              stage("eval");
+              let __wstWorkerId = "unbound";
+              let __wstWorkerName = "";
+              let __wstExitStatePtr = 0;
+              self.onmessage = async (e) => {
+                try {
+                  stage("onmessage");
+                  const [module, memory, work, meta] = e.data;
+                  if (meta && typeof meta === "object") {
+                    __wstWorkerId = meta.__wst_id || __wstWorkerId;
+                    __wstWorkerName = meta.__wst_name || __wstWorkerName;
+                    __wstExitStatePtr = meta.__wst_exit_state_ptr || __wstExitStatePtr;
+                    if (meta.__wst_parent_managed === true) {
+                      globalThis.__wst_can_relay_to_parent = true;
+                    }
+                  }
+                  const url = ${JSON.stringify(shimUrl)} + "?worker=" + Math.random();
+                  const shim = await import(url);
+                  stage("imported");
+                  shim.initSync({ module, memory, thread_stack_size: 1048576 });
+                  stage("inited");
+                  shim.wasm_safe_thread_entry_point(work);
+                  stage("entered");
+                  while (true) {
+                    const pending = shim.wasm_safe_thread_pending_tasks();
+                    if (pending === 0) break;
+                    await new Promise((resolve) => setTimeout(resolve, 1));
+                  }
+                  self.postMessage({ __wasm_safe_thread_exit: true, __wst_id: __wstWorkerId, __wst_name: __wstWorkerName, __wst_exit_state_ptr: __wstExitStatePtr });
+                  close();
+                } catch (err) {
+                  stage("threw " + (err && err.message || String(err)));
+                  self.postMessage({ __wasm_safe_thread_error: err.message || String(err), __wst_id: __wstWorkerId, __wst_name: __wstWorkerName, __wst_exit_state_ptr: __wstExitStatePtr });
+                  throw err;
+                }
+              };
+            `;
+            const own = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+            const w = new W(own, opts);
+            URL.revokeObjectURL(own);
             w.addEventListener("error", (e) => log("error " + name + ": " + e.message + " @" + e.filename + ":" + e.lineno));
             w.addEventListener("messageerror", () => log("messageerror " + name));
             w.addEventListener("message", (e) => {
@@ -142,6 +184,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
               if (d && d.__wasm_safe_thread_error) log("wst_error " + name + ": " + d.__wasm_safe_thread_error);
               if (d && d.__wasm_safe_thread_exit) log("exit " + name);
               if (d && d.__wst_relay_spawn) log("relay from " + name);
+              if (d && d.__probe_stage) log("stage " + name + ": " + d.__probe_stage);
             });
             return w;
           };
