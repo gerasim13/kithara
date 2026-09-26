@@ -174,9 +174,14 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
                 }
               };
             `;
-            const own = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
-            const w = new W(own, opts);
-            URL.revokeObjectURL(own);
+            let w;
+            if (typeof name === "string" && name.startsWith("wasm_safe_thread")) {
+              const own = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+              w = new W(own, opts);
+              URL.revokeObjectURL(own);
+            } else {
+              w = new W(url, opts);
+            }
             w.addEventListener("error", (e) => log("error " + name + ": " + e.message + " @" + e.filename + ":" + e.lineno));
             w.addEventListener("messageerror", () => log("messageerror " + name));
             w.addEventListener("message", (e) => {
