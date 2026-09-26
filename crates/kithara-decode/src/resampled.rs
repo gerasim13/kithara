@@ -1,13 +1,14 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::{Backend, Platform};
 use kithara_platform::time::Duration;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerConfig, ResamplerMode, ResamplerProcess,
     ResamplerSettings, create_resampler,
 };
 use kithara_signal::{
-    AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, PlanarBuffer, sanitize_sample,
+    AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer,
 };
 use kithara_stream::AudioCodec;
 use kithara_test_utils::kithara;
@@ -49,6 +50,7 @@ where
     last_input_meta: Option<AudioChunkInfo>,
     pending_meta: Option<AudioChunkInfo>,
     input: PlanarBuffer,
+    layout: Platform,
     output: PlanarBuffer,
     scratch: PlanarBuffer,
     pools: PoolRegion<S>,
@@ -92,6 +94,7 @@ where
             eof_flushed: false,
             input: PlanarBuffer::new(pools, source_spec, empty)?,
             last_input_meta: None,
+            layout: Platform::default(),
             options: config.options,
             output: PlanarBuffer::new(pools, target_spec, empty)?,
             output_frame_offset: 0,
@@ -134,12 +137,24 @@ where
         let base_len = self.input.frames().get();
         self.input
             .resize_frames(FrameCount::new(base_len.saturating_add(frames)))?;
-        for channel in 0..channels {
-            let destination = self.input.channel_mut(channel)?;
-            for frame in 0..frames {
-                let base = frame.saturating_mul(channels);
-                destination[base_len + frame] = sanitize_sample(chunk.samples[base + channel]);
-            }
+        if frames == 0 {
+            return Ok(());
+        }
+        let source_frames = FrameCount::new(frames);
+        let samples = spec.sample_count(source_frames)?.get();
+        let source = InterleavedView::new(&chunk.samples[..samples], spec, source_frames)?;
+        let stride = self.input.stride().get();
+        let end = base_len + frames;
+        let mut planes: SmallVec<[&mut [f32]; 8]> = self
+            .input
+            .as_samples_mut()
+            .chunks_exact_mut(stride)
+            .take(channels)
+            .map(|plane| &mut plane[..end])
+            .collect();
+        source.deinterleave_channels_into_at(&mut planes, base_len)?;
+        for plane in &mut planes {
+            self.layout.sanitize(&mut plane[base_len..]);
         }
         Ok(())
     }

@@ -1,10 +1,9 @@
 use std::ops::Range;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::{Backend, Platform};
 
 use crate::{AudioSpec, FrameCount, InterleavedView, SignalError};
-
-const FAST_CHANNELS: usize = 8;
 
 /// Pool-backed channel-major samples with independent logical length and stride.
 #[derive(Debug)]
@@ -269,24 +268,20 @@ impl<'a> PlanarView<'a> {
             });
         }
         let output = &mut output[..required];
+        if self.frames.get() == 0 {
+            return InterleavedView::new(output, self.spec, self.frames);
+        }
         let channel_count = self.spec.channel_count()?;
-        let channels = channel_count.get();
-        if channels <= FAST_CHANNELS {
-            let mut input = [&[][..]; FAST_CHANNELS];
-            for (channel, slot) in input.iter_mut().enumerate().take(channels) {
-                *slot = self.channel(channel)?;
-            }
-            fast_interleave::interleave_variable(
-                &input[..channels],
-                0..self.frames.get(),
-                output,
-                channel_count,
-            );
+        let backend = Platform::default();
+        if channel_count.get() == 2 {
+            backend.interleave_pair(self.channel(0)?, self.channel(1)?, output);
         } else {
-            for frame in 0..self.frames.get() {
-                for channel in 0..channels {
-                    output[frame * channels + channel] = self.channel(channel)?[frame];
-                }
+            for channel in 0..channel_count.get() {
+                backend.scatter(
+                    self.channel(channel)?,
+                    &mut output[channel..],
+                    channel_count,
+                );
             }
         }
         InterleavedView::new(output, self.spec, self.frames)

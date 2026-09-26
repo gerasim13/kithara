@@ -2498,12 +2498,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 
 [[package]]
-name = "fast-interleave"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0a5ab837f0983c0a9210d7847931f64e3be67fcb0ab93d625f7845a0132c825"
-
-[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4817,6 +4811,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-mp4",
  "kithara-mpa",
  "kithara-platform",
@@ -5719,12 +5714,12 @@ version = "0.0.1-alpha5"
 dependencies = [
  "delegate",
  "derive_more",
- "fast-interleave",
  "fieldwork",
  "kithara-blob",
  "kithara-bufpool",
  "kithara-core-test-fixtures",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",

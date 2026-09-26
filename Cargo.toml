@@ -380,7 +380,6 @@ dashmap = "6.2.1"
 delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
-fast-interleave = "0.1"
 fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 fearless_simd = "1.0"

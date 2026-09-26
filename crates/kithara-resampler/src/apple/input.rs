@@ -1,9 +1,6 @@
-use kithara_apple::{
-    accelerate,
-    audio_toolbox::{
-        AUDIO_CONVERTER_ERR_NO_DATA_NOW, AudioConverterInput, AudioConverterInputRequest, NO_ERR,
-        OSStatus, PARAM_ERR,
-    },
+use kithara_apple::audio_toolbox::{
+    AUDIO_CONVERTER_ERR_NO_DATA_NOW, AudioConverterInput, AudioConverterInputRequest, NO_ERR,
+    OSStatus, PARAM_ERR,
 };
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use smallvec::SmallVec;
@@ -71,7 +68,7 @@ impl AppleResamplerInputState {
         for (staged, source) in self.staged.iter_mut().zip(input.iter()) {
             staged.clear();
             staged.ensure_len(source.len())?;
-            accelerate::copy_f32(source, &mut staged[..source.len()]);
+            staged[..source.len()].copy_from_slice(source);
         }
         self.frames = frames;
         self.offset = 0;

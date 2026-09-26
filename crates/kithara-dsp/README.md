@@ -52,8 +52,9 @@ assert_eq!(interleaved.map(f32::to_bits), [1.0_f32, -1.0, 2.0, -2.0].map(f32::to
 
 ## Integration
 
-`kithara-signal` and `kithara-decode` call the layout kernels. Owners create a
-backend once and keep it as a field, so the SIMD level is chosen once and never
-on the hot path.
+`kithara-signal` and `kithara-decode` call the layout kernels. The SIMD level is
+detected once per process on x86 and fixed at compile time elsewhere, so
+`Platform::default()` costs one load: `kithara-decode` keeps its backend as a
+field, and `kithara-signal`'s borrowed views build one per call.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-dsp) for detailed contracts, invariants, and internals.
