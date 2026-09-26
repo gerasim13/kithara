@@ -46,6 +46,37 @@ async fn wait_for_eof_advance(events: &mut EventReceiver<QueueEvent>, id: TrackI
     );
 }
 
+/// Drive the queue until it reports `id` as its current item. Selecting a
+/// consumed track spawns a fresh load and applies the stashed select only once
+/// that load lands, so a fixed budget of renders started at `select` measures
+/// the loader's latency instead of the switch. The statement travels from the
+/// player through `tick`, so the wait has to render; subscribe before the
+/// select, because the event is edge-triggered and never repeats.
+async fn wait_for_current_track(
+    queue: &QueueControl<TestPools>,
+    harness: &OfflinePlayerHarness,
+    events: &mut EventReceiver<QueueEvent>,
+    id: TrackId,
+) {
+    let landed = time::timeout(Duration::from_secs(20), async {
+        loop {
+            while let Ok(envelope) = events.try_recv() {
+                if matches!(
+                    envelope.event,
+                    QueueEvent::CurrentTrackChanged { id: Some(seen) } if seen == id
+                ) {
+                    return true;
+                }
+            }
+            let _ = harness.run(queue, |q| q.tick()).await;
+            let _ = harness.render(BLOCK_FRAMES).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(landed, "the switch onto {id:?} must reach the player");
+}
+
 #[derive(Clone, Copy)]
 enum InitialStart {
     Play,
@@ -142,7 +173,9 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 }
 
 /// Switching back to a consumed track must switch the audio, not merely the
-/// selection bookkeeping.
+/// selection bookkeeping. The judging window opens on the queue's own
+/// statement that the switch reached the player, so what it measures is the
+/// audio that follows it and not the reload it waited on.
 #[kithara::test(tokio, flash(false))]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
@@ -177,10 +210,12 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
         "track B must dominate after the switch: mean_a={mean_a}, mean_b={mean_b}"
     );
 
+    let mut switches = queue.subscribe();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("switch back to track A");
+    wait_for_current_track(&queue, &harness, &mut switches, id_a).await;
     let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
     // The selection an amplitude verdict is about: a switch-back that never
