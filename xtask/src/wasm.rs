@@ -299,25 +299,11 @@ export function checkRuntime() {
     const sharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
 
     if (secureContext && sharedArrayBuffer && crossOriginIsolated) {
-        sessionStorage.removeItem('kithara_coi_reloaded');
         return { ok: true };
     }
 
-    const waitingForReload =
-        secureContext && !crossOriginIsolated &&
-        typeof navigator.serviceWorker !== 'undefined' &&
-        !navigator.serviceWorker.controller;
-
-    if (waitingForReload) {
-        navigator.serviceWorker.ready.then(() => {
-            if (navigator.serviceWorker.controller || self.crossOriginIsolated === true) {
-                sessionStorage.removeItem('kithara_coi_reloaded');
-                return;
-            }
-            if (sessionStorage.getItem('kithara_coi_reloaded') === '1') return;
-            sessionStorage.setItem('kithara_coi_reloaded', '1');
-            window.location.reload();
-        }).catch(() => {});
+    // coi-serviceworker.js reloads an unisolated page once its worker controls it.
+    if (secureContext && !crossOriginIsolated && 'serviceWorker' in navigator) {
         return { ok: false, waitingForReload: true, reason: 'Waiting for COI service worker to activate' };
     }
 
