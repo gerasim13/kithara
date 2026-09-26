@@ -656,6 +656,9 @@ fn publish_manifest(
             }
         }
     }
+    if let Some(toml::Value::Table(features)) = table.get_mut("features") {
+        removed |= strip_feature_references(features, hack_crate);
+    }
     if !removed {
         return Ok(None);
     }
@@ -678,6 +681,27 @@ fn strip_dependency_tables(
             for name in names {
                 removed |= deps.remove(name).is_some();
             }
+        }
+    }
+    removed
+}
+
+/// Cargo rejects a manifest whose feature names a dependency it does not list,
+/// so a feature that enabled the removed workspace-hack keeps its name and
+/// loses that entry.
+fn strip_feature_references(features: &mut toml::Table, dependency: &str) -> bool {
+    let names_dependency = |entry: &str| {
+        let entry = entry.strip_prefix("dep:").unwrap_or(entry);
+        entry
+            .strip_prefix(dependency)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with("?/"))
+    };
+    let mut removed = false;
+    for (_, enabled) in features.iter_mut() {
+        if let toml::Value::Array(enabled) = enabled {
+            let before = enabled.len();
+            enabled.retain(|entry| entry.as_str().is_none_or(|entry| !names_dependency(entry)));
+            removed |= enabled.len() != before;
         }
     }
     removed
@@ -1005,7 +1029,69 @@ kithara-test-dylib = { path = \"../dylib\", features = [
                     "{name} publishes naming {dep}, which is published after it"
                 );
             }
+            for missing in features_naming_absent_deps(&table) {
+                panic!("{name} publishes a feature naming {missing}, which it does not depend on");
+            }
         }
+    }
+
+    #[test]
+    fn publish_manifest_keeps_a_feature_that_enabled_the_hack() {
+        let input = "\
+[features]
+workspace-hack = [\"dep:kithara-workspace-hack\"]
+full = [\"workspace-hack\", \"kithara-workspace-hack?/std\", \"foo/std\"]
+
+[dependencies]
+foo = { workspace = true }
+
+[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]
+kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-workspace-hack\", optional = true }
+";
+        let out = publish_manifest(input, "kithara-workspace-hack", &[])
+            .unwrap()
+            .unwrap();
+
+        let table: toml::Table = out.parse().unwrap();
+        assert_eq!(
+            table["features"]["workspace-hack"],
+            toml::Value::Array(vec![])
+        );
+        assert_eq!(
+            table["features"]["full"],
+            toml::Value::Array(vec!["workspace-hack".into(), "foo/std".into()])
+        );
+        assert_eq!(features_naming_absent_deps(&table), Vec::<String>::new());
+    }
+
+    /// The dependencies feature entries name that the manifest does not list,
+    /// which cargo refuses to parse.
+    fn features_naming_absent_deps(table: &toml::Table) -> Vec<String> {
+        let mut tables = vec![table];
+        if let Some(toml::Value::Table(targets)) = table.get("target") {
+            tables.extend(targets.values().filter_map(toml::Value::as_table));
+        }
+        let listed: HashSet<&str> = tables
+            .iter()
+            .filter_map(|table| table.get("dependencies").and_then(toml::Value::as_table))
+            .flat_map(|deps| deps.keys().map(String::as_str))
+            .collect();
+        let Some(features) = table.get("features").and_then(toml::Value::as_table) else {
+            return Vec::new();
+        };
+        features
+            .values()
+            .filter_map(toml::Value::as_array)
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .filter_map(|entry| {
+                let named = match entry.strip_prefix("dep:") {
+                    Some(dep) => dep,
+                    None => entry.split_once('/')?.0.trim_end_matches('?'),
+                };
+                (!listed.contains(named)).then(|| named.to_owned())
+            })
+            .collect()
     }
 
     fn workspace_deps_named_in(table: &toml::Table, workspace: &HashSet<String>) -> Vec<String> {
