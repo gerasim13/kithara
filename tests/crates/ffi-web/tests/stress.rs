@@ -124,17 +124,14 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let t0 = Date::now();
     warn!("PROBE open start");
-    let open_done = std::rc::Rc::new(std::cell::Cell::new(false));
-    let watch = std::rc::Rc::clone(&open_done);
-    wasm_bindgen_futures::spawn_local(async move {
-        for tick in 1..=4 {
-            TimeoutFuture::new(2000).await;
-            if watch.get() {
-                return;
-            }
+    let opened =
+        kithara::platform::time::timeout(Duration::from_secs(8), worker.open(config)).await;
+    let mut audio = match opened {
+        Ok(audio) => audio.unwrap(),
+        Err(_) => {
             use kithara::platform::probe_counters as c;
             warn!(
-                tick,
+                ms = Date::now() - t0,
                 dl_spawn = c::read(&c::DL_SPAWN_CALLED),
                 dl_worker = c::read(&c::DL_WORKER_ENTERED),
                 dl_run = c::read(&c::DL_RUN_ENTERED),
@@ -144,10 +141,9 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
                 net_done = c::read(&c::NET_SEND_DONE),
                 "PROBE open still pending"
             );
+            panic!("PROBE open wedged");
         }
-    });
-    let mut audio = worker.open(config).await.unwrap();
-    open_done.set(true);
+    };
     warn!(ms = Date::now() - t0, "PROBE open done");
     audio
         .preload()
