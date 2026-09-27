@@ -9,7 +9,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_sync::LoadGeneration;
+use kithara_sync::{LoadGeneration, SyncGateBinding};
 use kithara_warp::{RenderReader, RenderSnapshot, WarpMapRevision};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -37,6 +37,10 @@ pub struct NodeInputs {
     pub(crate) trash_tx: HeapProd<PlayerTrack>,
     #[field(with, option_set_some)]
     pub(crate) sync_receipts: Option<SyncReceiptTx>,
+    /// The member cell whose source revision this slot's render evidence
+    /// is stamped with.
+    #[field(with)]
+    pub(crate) sync_gate: Option<SyncGateBinding>,
     pub(crate) sync_rx: HeapCons<SyncTicket>,
     pub(crate) sync_return_tx: HeapProd<SyncReturn>,
 }
@@ -236,6 +240,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         notif_tx,
         trash_tx,
         sync_receipts: None,
+        sync_gate: None,
         sync_rx,
         sync_return_tx,
         playback: Arc::clone(&playback),

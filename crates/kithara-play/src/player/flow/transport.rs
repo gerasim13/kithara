@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
-use kithara_sync::SourceChange;
+use kithara_sync::{LoadGeneration, SourceChange};
 use tracing::{debug, warn};
 
 use super::super::core::PlayerRuntime;
@@ -54,7 +54,7 @@ where
     }
 
     /// Place the freshly-loaded track at the position handed over before it
-    /// existed. Must follow [`Self::start_playback`]: a fade-in re-bases a
+    /// existed. Must follow [`Self::start_resident`]: a fade-in re-bases a
     /// track that is past its head, which would undo the seek.
     fn apply_start_position(&self) {
         let Some(target) = self.core.start_position.lock().take() else {
@@ -106,8 +106,8 @@ where
         else {
             return Ok(false);
         };
-        edit.commit(SourceChange::Discontinuity);
         self.phase.lock().set_resident((item_id, load));
+        edit.commit(SourceChange::Discontinuity);
         self.publish_current_track_snapshot(duration_seconds);
         self.apply_start_position();
         Ok(true)
@@ -289,25 +289,25 @@ where
         Ok(())
     }
 
-    pub(crate) fn start_playback(&self, item_id: TrackId) -> Result<(), PlayError> {
-        self.start_playback_with(
+    /// Fade a loaded track in as the resident. The resident is recorded
+    /// before the change is reported, so evidence rendered on the new source
+    /// never pairs with the track it replaced.
+    pub(crate) fn start_resident(
+        &self,
+        item_id: TrackId,
+        load: LoadGeneration,
+    ) -> Result<(), PlayError> {
+        let edit = self.core.engine.edit_source()?;
+        self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
-            CrossfadeSettings {
+            settings: CrossfadeSettings {
                 duration: self.crossfade_duration(),
                 ..CrossfadeSettings::default()
             },
-        )
-    }
-
-    fn start_playback_with(
-        &self,
-        item_id: TrackId,
-        settings: CrossfadeSettings,
-    ) -> Result<(), PlayError> {
-        self.send_source_change(
-            PlayerCmd::Transition(TrackTransition::FadeIn { item_id, settings }),
-            SourceChange::Discontinuity,
-        )
+        }))?;
+        self.phase.lock().set_resident((item_id, load));
+        edit.commit(SourceChange::Discontinuity);
+        Ok(())
     }
 }
 

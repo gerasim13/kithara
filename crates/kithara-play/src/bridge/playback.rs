@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use kithara_sync::AppliedSource;
 use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
 
 use super::RtMetrics;
@@ -71,6 +72,8 @@ pub struct PlaybackShared {
     /// Sole RT-writer selection of the physically active staged map.
     /// Zero selects ordinary resident bindings.
     pub(crate) active_sync_map: AtomicU64,
+    /// Source revision whose commands the callback applied and rendered.
+    pub(crate) applied_source: AppliedSource,
     /// Effective media seconds consumed per output second; `0.0` while paused.
     pub(crate) rate: AtomicF32,
     metrics: RtMetrics,

@@ -6,7 +6,8 @@ mod gate;
 mod tests;
 
 pub use cell::{
-    ArmPermit, PermitCell, PermitState, SourceReservation, SourceRevision, SyncGateBinding,
+    AppliedSource, ArmPermit, PermitCell, PermitState, SourceReservation, SourceRevision,
+    SyncGateBinding,
 };
 pub use control::{ControlError, ControlGuard, PendingSourceChange, PreparedRevocation};
 pub use gate::{AudioClaim, ClaimError, ControlEnterError, SyncArbiter};

@@ -370,6 +370,17 @@ impl<T, S> SessionState<T, S> {
         Ok(SyncGateBinding::new(Arc::clone(&self.sync_arbiter), cell))
     }
 
+    /// The gate of the member registered under `group`: its source revision
+    /// stamps the render evidence of that deck's slots.
+    pub(super) fn group_gate(&self, group: BeatGridId) -> Option<SyncGateBinding> {
+        self.sync_cells
+            .iter()
+            .find(|entry| entry.group == group)
+            .map(|entry| {
+                SyncGateBinding::new(Arc::clone(&self.sync_arbiter), Arc::clone(&entry.cell))
+            })
+    }
+
     pub(super) fn retire_sync_member(
         &mut self,
         member: BeatGridId,

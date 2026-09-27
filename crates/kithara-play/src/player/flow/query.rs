@@ -14,11 +14,14 @@ use crate::{
 
 impl<S> PlayerRuntime<S> {
     /// The committed deck load and render evidence bound to that exact load.
+    ///
+    /// The applied source is read first: the resident and the evidence read
+    /// after it are at least as new as every change it covers, so a Host that
+    /// still holds that source can rely on both.
     pub(crate) fn resident_sync_observation(&self) -> Option<ResidentLoadObservation> {
-        let phase = self.phase.lock();
-        let slot = phase.slot()?;
-        let (item_id, load) = phase.resident()?;
-        drop(phase);
+        let slot = self.phase.lock().slot()?;
+        let source = self.core.engine.applied_source(slot);
+        let (item_id, load) = self.phase.lock().resident()?;
 
         let render = match self.core.engine.slot_render_binding(slot, item_id) {
             Some((bound_load, _)) if bound_load != load => ResidentRender::Stale { bound_load },
@@ -40,7 +43,7 @@ impl<S> PlayerRuntime<S> {
             load,
             requested_speed: f64::from(self.core.warp.stretch().speed()),
             render,
-            source: self.core.engine.source_revision(),
+            source,
             staging,
         })
     }

@@ -425,6 +425,7 @@ pub(super) mod slots {
         if !deck_at(state, idx)?.started {
             return Err(SessionError::NotRunning(player_id));
         }
+        let gate = state.group_gate(deck_at(state, idx)?.grid_id);
         let master_eq_id = deck_at(state, idx)?.master_eq_node_id;
         let (fw_ctx, master_eq_id) = match (&mut state.ctx, master_eq_id) {
             (None, _) => return Err(SessionError::NoContext),
@@ -438,7 +439,7 @@ pub(super) mod slots {
         let (inputs, control) = slot_channels(shared_eq);
         let (receipt_tx, receipt_rx) = sync_receipts();
         let player_node = PlayerNode::new(
-            inputs.with_sync_receipts(receipt_tx),
+            inputs.with_sync_receipts(receipt_tx).with_sync_gate(gate),
             player.pools.clone(),
             player.gate_smoothing,
         )

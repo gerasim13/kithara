@@ -6,6 +6,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant},
     },
+    play::PlayError,
     signal::SessionFrame,
     sync::{
         AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
@@ -378,6 +379,55 @@ async fn a_seek_withdraws_the_installed_lane_it_made_stale_and_keeps_the_mode(
         "{}: the withdrawn lane is dropped without a rejection",
         case.id()
     );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(60))
+)]
+#[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
+async fn a_sync_request_waits_for_the_audio_thread_to_apply_a_seek(
+    #[case] sources: PreparedSources,
+    #[case] cue: Start,
+) {
+    let case = STAGED_BESIDE_PLAYBACK_CONTROL;
+    let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
+    let control = harness.decks[0].control().clone();
+    let target = harness.start_seconds(0, cue) / 2.0;
+    harness
+        .host
+        .run(move || control.seek(target))
+        .await
+        .unwrap_or_else(|error| panic!("{}: seek the deck: {error}", case.id()));
+
+    let deck = Arc::clone(&harness.decks[0]);
+    let before_render = harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await;
+    assert!(
+        matches!(before_render, Err(PlayError::NotReady)),
+        "{}: render evidence from before the seek stands for no current source: {before_render:?}",
+        case.id()
+    );
+
+    harness.settle(case, 8).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "{}: evidence rendered after the seek is admitted: {error}",
+                case.id()
+            )
+        });
 }
 
 #[kithara::test(

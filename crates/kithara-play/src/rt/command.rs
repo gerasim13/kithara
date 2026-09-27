@@ -106,18 +106,19 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Drain all pending commands from the channel.
-    pub fn drain_commands(&mut self) {
+    /// Drain pending commands from the channel. Returns whether it ran out,
+    /// so that every command queued before the call was applied.
+    pub fn drain_commands(&mut self) -> bool {
         while let Some(queued) = self.cmd_rx.try_peek() {
             if matches!(queued, PlayerCmd::Clear) {
                 if !self.clear_all_tracks() {
-                    break;
+                    return false;
                 }
                 let _ = self.cmd_rx.try_pop();
                 continue;
             }
             if !self.can_run_track_command(queued) {
-                break;
+                return false;
             }
             let Some(cmd) = self.cmd_rx.try_pop() else {
                 unreachable!("sole command consumer lost a peeked command");
@@ -159,6 +160,7 @@ impl PlayerNodeProcessor {
                 }
             }
         }
+        true
     }
 
     fn handle_transition(&mut self, transition: TrackTransition) {

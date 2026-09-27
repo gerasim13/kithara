@@ -7,10 +7,10 @@ mod owner;
 mod protocol;
 
 pub use execution::{
-    ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError, ControlGuard,
-    ExecutedGroup, PendingSourceChange, PermitCell, PermitState, PreparedRevocation, ReceiptSink,
-    SourceReservation, SourceRevision, StagePort, SyncArbiter, SyncAttachment, SyncExecution,
-    SyncExecutor, SyncGateBinding, SyncReceiptAck,
+    AppliedSource, ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError,
+    ControlGuard, ExecutedGroup, PendingSourceChange, PermitCell, PermitState, PreparedRevocation,
+    ReceiptSink, SourceReservation, SourceRevision, StagePort, SyncArbiter, SyncAttachment,
+    SyncExecution, SyncExecutor, SyncGateBinding, SyncReceiptAck,
 };
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{

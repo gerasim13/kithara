@@ -111,6 +111,30 @@ pub enum PermitState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceRevision(pub(super) u64);
 
+/// The newest source revision one audio callback applied and rendered.
+///
+/// The callback reads the member's revision before draining its commands and
+/// publishes it once that block's render evidence is out. A reader loads it
+/// before the evidence, which then reflects every change committed up to it.
+#[derive(Debug, Default)]
+pub struct AppliedSource(AtomicU64);
+
+impl AppliedSource {
+    /// Record `source` as applied by a block whose evidence is published.
+    pub fn publish(&self, source: SourceRevision) {
+        self.0.store(source.0 + 1, Ordering::Release);
+    }
+
+    /// The newest applied revision; `None` before the first rendered block.
+    #[must_use]
+    pub fn load(&self) -> Option<SourceRevision> {
+        self.0
+            .load(Ordering::Acquire)
+            .checked_sub(1)
+            .map(SourceRevision)
+    }
+}
+
 /// A player's exclusive right to change one member's source.
 ///
 /// Publishing reports the committed change and releases the member. Dropping

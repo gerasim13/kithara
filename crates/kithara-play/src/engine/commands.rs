@@ -114,10 +114,10 @@ impl<S> EngineImpl<S> {
             .map_err(|error| SessionError::SyncControl(error).into())
     }
 
-    /// The Host-arbitrated revision of this player's source, if a Host
-    /// session arbitrates it.
-    pub(crate) fn source_revision(&self) -> Option<SourceRevision> {
-        self.session.sync_gate().map(|gate| gate.source_revision())
+    /// The source revision whose commands `slot`'s audio callback applied
+    /// and rendered, if a Host session arbitrates this player's source.
+    pub(crate) fn applied_source(&self, slot: SlotId) -> Option<SourceRevision> {
+        self.slot_playback(slot)?.applied_source.load()
     }
 
     /// Admit the seek before changing any reader. The slots lock owns the sole

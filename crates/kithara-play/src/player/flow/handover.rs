@@ -164,7 +164,7 @@ where
             return Ok(());
         };
 
-        if let Err(error) = self.start_playback(activated.item_id) {
+        if let Err(error) = self.start_resident(activated.item_id, activated.load) {
             if let Some(pending) = self
                 .phase
                 .lock()
@@ -178,9 +178,6 @@ where
             }
             return Err(error);
         }
-        self.phase
-            .lock()
-            .set_resident((activated.item_id, activated.load));
         self.publish_crossfade_started();
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();

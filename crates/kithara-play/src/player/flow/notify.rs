@@ -95,13 +95,14 @@ where
         }
         // The audio thread already stitched the successor in, so the change
         // is reported, not held: nothing is left to abort.
-        match self.core.engine.edit_source() {
-            Ok(edit) => edit.commit(SourceChange::Discontinuity),
-            Err(error) => tracing::warn!(%error, "gapless promotion unreported to sync owner"),
-        }
+        let edit = self.core.engine.edit_source();
         self.phase
             .lock()
             .set_resident((pending.item_id, pending.load));
+        match edit {
+            Ok(edit) => edit.commit(SourceChange::Discontinuity),
+            Err(error) => tracing::warn!(%error, "gapless promotion unreported to sync owner"),
+        }
         let index = pending.index;
         self.publish_current_track_snapshot(pending.duration_seconds);
         self.core.items.set_current(index);

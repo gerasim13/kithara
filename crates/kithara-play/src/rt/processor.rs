@@ -15,7 +15,7 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_sync::{PermitState, SyncExecutionReject};
+use kithara_sync::{PermitState, SyncExecutionReject, SyncGateBinding};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
@@ -67,6 +67,8 @@ pub struct PlayerNodeProcessor {
     trash_tx: HeapProd<PlayerTrack>,
     /// The sole producer stays alive until the callback processor is dropped.
     sync_receipts: Option<SyncReceiptTx>,
+    /// Member cell whose source revision stamps this slot's render evidence.
+    sync_gate: Option<SyncGateBinding>,
     sync_rx: HeapCons<SyncTicket>,
     sync_return_tx: HeapProd<SyncReturn>,
     sync_tail: Option<SyncFadeTail>,
@@ -485,6 +487,7 @@ impl PlayerNodeProcessor {
             notif_tx: inputs.notif_tx,
             trash_tx: inputs.trash_tx,
             sync_receipts: inputs.sync_receipts,
+            sync_gate: inputs.sync_gate,
             sync_rx: inputs.sync_rx,
             sync_return_tx: inputs.sync_return_tx,
             sync_tail: None,
@@ -531,7 +534,13 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
     ) -> ProcessStatus {
         self.playback.process_count.fetch_add(1, Ordering::Relaxed);
 
-        self.drain_commands();
+        // Every command committed up to this revision is already queued, so
+        // a block that drains the queue renders at least this source.
+        let source = self
+            .sync_gate
+            .as_ref()
+            .map(SyncGateBinding::source_revision);
+        let drained = self.drain_commands();
 
         self.maintain_sync_mailboxes();
 
@@ -552,6 +561,9 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         self.update_position_duration(leading_outcome_pos_dur);
         self.refresh_effective_rate();
+        if drained && let Some(source) = source {
+            self.playback.applied_source.publish(source);
+        }
 
         if playback_started {
             ProcessStatus::OutputsModified
