@@ -15,6 +15,7 @@
 )]
 
 mod backend;
+mod consts;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
 /// Biquad cascades over channel planes and the designs that feed them.

@@ -9,21 +9,25 @@ use kithara_dsp::{
 };
 use num_traits::ToPrimitive;
 
-const SIZES: [usize; 6] = [64, 128, 256, 512, 1024, 4096];
-const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
-const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
+mod consts {
+    use super::NonZeroUsize;
+
+    pub(super) const SIZES: [usize; 6] = [64, 128, 256, 512, 1024, 4096];
+    pub(super) const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
+    pub(super) const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
+}
 
 fn kernels(c: &mut Criterion) {
     let mut group = c.benchmark_group("layout");
-    for frames in SIZES {
+    for frames in consts::SIZES {
         group.throughput(Throughput::Elements(
             u64::try_from(frames).expect("frame count fits u64"),
         ));
-        let planes = vec![vec![0.25_f32; frames]; SIX.get()];
+        let planes = vec![vec![0.25_f32; frames]; consts::SIX.get()];
         let planar = planes.concat();
         let stride = NonZeroUsize::new(frames).expect("bench sizes are non-zero");
         let mut restored = planes.clone();
-        for channels in [TWO, SIX] {
+        for channels in [consts::TWO, consts::SIX] {
             let mut interleaved = vec![0.0_f32; channels.get() * frames];
             group.bench_with_input(
                 BenchmarkId::new(format!("fi_interleave_{channels}ch"), frames),
@@ -130,12 +134,12 @@ fn biquad(c: &mut Criterion) {
     group.throughput(Throughput::Elements(
         u64::try_from(FRAMES).expect("frame count fits u64"),
     ));
-    let mut filter = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
+    let mut filter = Biquad::new(consts::TWO, NonZeroUsize::MIN).expect("filter builds");
     filter.retune(0, low_pass).expect("section 0 exists");
     let burst: Vec<f32> = (0..FRAMES)
         .map(|frame| if frame < 64 { 0.5 } else { 0.0 })
         .collect();
-    let template = vec![burst; TWO.get()];
+    let template = vec![burst; consts::TWO.get()];
     let mut planes = template.clone();
     group.bench_function("burst_into_silence_2ch", |b| {
         b.iter(|| {

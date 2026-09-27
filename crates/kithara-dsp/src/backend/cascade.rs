@@ -7,8 +7,10 @@ use fearless_simd::{Level, dispatch, prelude::*};
 
 use crate::filter::FilterError;
 
-/// A section that passes its input through.
-const IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
+mod consts {
+    /// A section that passes its input through.
+    pub(super) const IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
+}
 
 /// Direct form I sections run on every channel, `S::f32s::LEN` channels per
 /// vector. Channel `c`, section `s` keeps `[x1, x2, y1, y2]` at
@@ -27,7 +29,7 @@ impl Cascade {
             .ok_or(FilterError::Shape)?;
         Ok(Self {
             channels,
-            coefficients: vec![IDENTITY; sections.get()].into_boxed_slice(),
+            coefficients: vec![consts::IDENTITY; sections.get()].into_boxed_slice(),
             state: vec![[0.0; 4]; states].into_boxed_slice(),
         })
     }

@@ -1,11 +1,9 @@
 use num_traits::ToPrimitive;
 
-use crate::interp::{InterpError, Interpolation};
-
-mod consts {
-    /// Positions are `f32`: every frame index below `2²⁴` is exact.
-    pub(super) const MAX_WINDOW: u32 = 1 << 24;
-}
+use crate::{
+    consts,
+    interp::{InterpError, Interpolation},
+};
 
 /// `interp::interpolate` in scalar code: the taps of each position are a
 /// gather, and moving them lane by lane into vectors costs more than the

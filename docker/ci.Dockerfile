@@ -255,3 +255,20 @@ RUN printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > /etc/a
 # 50 ms and below measured the same as none, 150 to 500 ms all ended the
 # track within one queue tick.
 ENV PULSE_LATENCY_MSEC=200
+
+# A null sink with no stream renders its two-second maximum ahead and keeps
+# that deadline when a stream arrives, so a new stream's first pull is served
+# and its second waits up to two seconds: a 0.3 s clip took 1.3 to 2.4 s, and
+# a test's own two-second wait ran out behind a stalled device. A silent
+# loopback held at 20 ms keeps the sink's latency short for the daemon's
+# lifetime, and the suspend cycle drops the deadline the sink took before the
+# loopback joined; the same clip then plays in 0.4 s, the first one included.
+RUN mkdir -p /etc/pulse/default.pa.d \
+ && printf '%s\n' \
+      'load-module module-null-sink sink_name=kithara_ci' \
+      'set-default-sink kithara_ci' \
+      'load-module module-null-source source_name=kithara_ci_silence' \
+      'load-module module-loopback source=kithara_ci_silence sink=kithara_ci latency_msec=20' \
+      'suspend-sink kithara_ci 1' \
+      'suspend-sink kithara_ci 0' \
+      > /etc/pulse/default.pa.d/kithara-ci.pa

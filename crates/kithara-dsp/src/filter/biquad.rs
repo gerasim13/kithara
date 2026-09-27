@@ -6,19 +6,7 @@ use std::{
 use num_traits::ToPrimitive;
 
 use super::{Coefficients, FilterError};
-use crate::backend::platform;
-
-mod consts {
-    /// Frames per settle pass; the scratch planes hold this many.
-    pub(super) const SETTLE_CHUNK: usize = 64;
-    /// `log2` of the residue a transient decays to before it counts as settled.
-    pub(super) const SETTLE_FLOOR_LOG2: f64 = -24.0;
-    /// Input and output peaks at or below this reset the state.
-    pub(super) const SILENT_PEAK: f32 = 1.0e-9;
-    /// Frames a section remembers: a quiet call proves the state silent only
-    /// when it covers them.
-    pub(super) const SECTION_MEMORY: usize = 2;
-}
+use crate::{backend::platform, consts};
 
 /// Cascaded biquad sections applied in place to channel planes.
 ///
