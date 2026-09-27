@@ -276,7 +276,7 @@ impl<'a> PlanarView<'a> {
             for (channel, slot) in input.iter_mut().enumerate().take(channels) {
                 *slot = self.channel(channel)?;
             }
-            fast_interleave::interleave_variable(
+            kithara_dsp::interleave_variable(
                 &input[..channels],
                 0..self.frames.get(),
                 output,

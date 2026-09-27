@@ -132,6 +132,7 @@ lockbud_exclude = [
   "kithara-broadcast-tests",
   "kithara-decode-tests",
   "kithara-devtools",
+  "kithara-dsp-tests",
   "kithara-effects-tests",
   "kithara-ffi-web-analysis-tests",
   "kithara-ffi-web-tests",
@@ -766,6 +767,26 @@ prefix_args = [
   "--cargo-profile",
   "test-release",
 ]
+
+[test.lanes.dsp]
+program = "cargo"
+default_backend = "none"
+owns = ["crates/kithara-dsp/", "tests/crates/dsp/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-dsp",
+  "-p",
+  "kithara-dsp-tests",
+  "--cargo-profile",
+  "test-release",
+]
+# kithara-dsp declares no `flash` feature: its kernels never wait on a clock, so
+# the virtual clock has nothing to drive. The poll-blocking detector is the same
+# kind of property, and an unqualified feature no selected package declares fails
+# the whole run, so the lane names both as toggles it cannot carry.
+undeclared_toggles = ["flash", "no-block"]
 
 [test.lanes.effects]
 program = "cargo"

@@ -215,3 +215,39 @@ pub fn current_thread_id() -> u64 {
 pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
     wasm_safe_thread::available_parallelism().ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use kithara_test_utils::kithara;
+
+    use super::spawn;
+    use crate::time::{Duration, sleep};
+
+    mod consts {
+        use super::Duration;
+
+        /// Enough workers bootstrapping at once that a browser losing one of
+        /// several concurrent module loads drops a thread on most runs.
+        pub(super) const WORKERS: usize = 8;
+        pub(super) const TICK: Duration = Duration::from_millis(10);
+    }
+
+    #[kithara::test(wasm, flash(false), timeout(Duration::from_secs(10)))]
+    async fn workers_spawned_together_all_start() {
+        let started = Arc::new(AtomicUsize::new(0));
+        for _ in 0..consts::WORKERS {
+            let started = Arc::clone(&started);
+            drop(spawn(move || {
+                started.fetch_add(1, Ordering::Release);
+            }));
+        }
+        while started.load(Ordering::Acquire) < consts::WORKERS {
+            sleep(consts::TICK).await;
+        }
+    }
+}

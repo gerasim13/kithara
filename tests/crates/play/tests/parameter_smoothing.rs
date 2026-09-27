@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use firewheel::dsp::filter::smoothing_filter::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS};
 use kithara::platform::time::Duration;
+use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS};
 use kithara_integration_tests::{
     kithara,
     smoothing::{

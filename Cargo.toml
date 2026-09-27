@@ -19,6 +19,7 @@ members = [
     "crates/kithara-devtools",
     "crates/kithara-download",
     "crates/kithara-drm",
+    "crates/kithara-dsp",
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
@@ -61,6 +62,7 @@ members = [
     "tests/crates/broadcast",
     "tests/crates/core",
     "tests/crates/decode",
+    "tests/crates/dsp",
     "tests/crates/effects",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
@@ -90,6 +92,7 @@ default-members = [
     "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-drm",
+    "crates/kithara-dsp",
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
@@ -131,6 +134,7 @@ default-members = [
     "tests/crates/broadcast",
     "tests/crates/core",
     "tests/crates/decode",
+    "tests/crates/dsp",
     "tests/crates/effects",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
@@ -283,6 +287,7 @@ kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha5", def
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha5" }
 kithara-download = { path = "crates/kithara-download", version = "0.0.1-alpha5", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha5" }
+kithara-dsp = { path = "crates/kithara-dsp", version = "0.0.1-alpha5" }
 kithara-effects = { path = "crates/kithara-effects", version = "0.0.1-alpha5", default-features = false }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha5", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha5", default-features = false }
@@ -382,6 +387,7 @@ derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "dis
 fast-interleave = "0.1"
 fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
+fearless_simd = "1.0"
 ffmpeg-next = "8.1.0"
 fieldwork = "0.5"
 firewheel = { version = "0.14.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
@@ -567,11 +573,19 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.kithara-decode]
 opt-level = 2
+[profile.dev.package.kithara-dsp]
+opt-level = 2
 [profile.dev.package.kithara-workspace-hack]
 opt-level = 2
 # Time-stretch DSP (FFT/phase-vocoder + C++) is ~10× slower in debug.
 [profile.dev.package.signalsmith-stretch]
 opt-level = 3
+# The mixer's per-block effects chain (limiter, isolator EQ, crossover) is
+# over half of a render block at opt-0, which leaves a debug render of 512
+# frames slower than the 11.6 ms of audio it produces: an offline session
+# ticked on the audio clock then plays slower than real time.
+[profile.dev.package.kithara-effects]
+opt-level = 2
 # Cochlea's YIN pitch track is ~14× slower at opt-0 (4.2s vs 0.3s per 3s
 # buffer); tests that segment a dozen renders burn their whole nextest
 # budget inside the analyzer instead of the pipeline under test.
@@ -647,6 +661,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-decode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-dsp-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-effects-tests]
