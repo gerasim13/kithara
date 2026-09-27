@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
+use kithara_platform::atomic_value::RelaxedAtomicF32;
+use portable_atomic::{AtomicF64, AtomicU32};
 
 use super::RtMetrics;
 
@@ -69,7 +70,7 @@ pub struct PlaybackShared {
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
     /// Effective media seconds consumed per output second; `0.0` while paused.
-    pub(crate) rate: AtomicF32,
+    pub(crate) rate: RelaxedAtomicF32,
     /// Last epoch handed to a `FadeIn`, accepted or not.
     issued_epoch: AtomicU64,
     /// Epoch of the last item the control side made leading.
@@ -129,7 +130,7 @@ impl PlaybackShared {
     #[must_use]
     pub fn snapshot(&self) -> PlaybackSnapshot {
         let leading = self.leading_epoch.load(Ordering::Acquire);
-        let rate = self.rate.load(Ordering::Relaxed);
+        let rate = self.rate.load();
         let sample_rate = self.sample_rate.load(Ordering::Relaxed);
         let playing = self.playing.load(Ordering::Relaxed);
         if self.adopted_epoch.load(Ordering::Acquire) < leading {
@@ -191,7 +192,7 @@ mod tests {
         assert_eq!(playback.seek_epoch.load(Ordering::Relaxed), 0);
         assert_eq!(playback.position.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
-        assert_eq!(playback.rate.load(Ordering::Relaxed), 0.0);
+        assert_eq!(playback.rate.load(), 0.0);
         assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
     }
 
@@ -227,7 +228,7 @@ mod tests {
         playback.position.store(12.0, Ordering::Relaxed);
         playback.frontier.store(20.0, Ordering::Relaxed);
         playback.duration.store(180.0, Ordering::Relaxed);
-        playback.rate.store(1.25, Ordering::Relaxed);
+        playback.rate.store(1.25);
         playback.sample_rate.store(48_000, Ordering::Relaxed);
 
         let snap = playback.snapshot();

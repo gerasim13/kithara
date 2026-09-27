@@ -215,7 +215,7 @@ impl PlayerNodeProcessor {
     }
 
     fn publish_effective_rate(&mut self, rate: f32) {
-        self.playback.rate.store(rate, Ordering::Relaxed);
+        self.playback.rate.store(rate);
         if self.last_notified_rate != rate
             && self
                 .notif_tx
@@ -363,7 +363,7 @@ impl PlayerNodeProcessor {
     where
         S: HasPool<f32>,
     {
-        let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
+        let last_notified_rate = inputs.playback.rate.load();
         Self {
             last_notified_rate,
             context_requirement,
@@ -583,7 +583,7 @@ mod tests {
 
         processor.publish_effective_rate(1.25);
         processor.publish_effective_rate(1.5);
-        assert_eq!(processor.playback.rate.load(Ordering::Relaxed), 1.5);
+        assert_eq!(processor.playback.rate.load(), 1.5);
         assert_eq!(processor.last_notified_rate, 0.0);
 
         assert!(control.notif_rx.try_pop().is_some());

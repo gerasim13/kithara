@@ -328,10 +328,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
     let expected_advance =
         f64::from(block_frames) * f64::from(effective_rate) / f64::from(consts::SAMPLE_RATE);
     assert!((first_advance - expected_advance).abs() < f64::EPSILON);
-    assert_eq!(
-        processor.playback().rate.load(Ordering::Relaxed),
-        effective_rate
-    );
+    assert_eq!(processor.playback().rate.load(), effective_rate);
     let notifications = rate_notifications(&mut control);
     if supports_playback_rate() {
         assert_eq!(notifications, [1.5]);
@@ -361,10 +358,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
     process_block(&mut processor, &mut extra);
 
     assert_eq!(controls.speed(), 1.5);
-    assert_eq!(
-        processor.playback().rate.load(Ordering::Relaxed),
-        effective_rate
-    );
+    assert_eq!(processor.playback().rate.load(), effective_rate);
     assert_eq!(
         processor
             .track(next_id)

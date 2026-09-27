@@ -136,6 +136,12 @@ impl<T: AtomicPrimitive, R: ReadOrder, W: WriteOrder> Clone for AtomicValue<T, R
     }
 }
 
+impl<T: AtomicPrimitive + Default, R: ReadOrder, W: WriteOrder> Default for AtomicValue<T, R, W> {
+    fn default() -> Self {
+        Self::construct(T::default())
+    }
+}
+
 impl<T: AtomicPrimitive + fmt::Debug, R: ReadOrder, W: WriteOrder> fmt::Debug
     for AtomicValue<T, R, W>
 {
