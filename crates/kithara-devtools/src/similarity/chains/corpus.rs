@@ -128,6 +128,7 @@ pub(super) fn cases() -> Vec<Case> {
         entry_dissimilar_roots(),
         inline_arms(),
         fn_table(),
+        match_in_side(),
         neg_cfg(),
         neg_small(),
         neg_diff(),
@@ -986,6 +987,33 @@ impl Table {
     }",
             &chain("tablea", 3),
             &chain("tableb", 3),
+            close,
+        ],
+    )
+}
+
+/// Each arm passes its chain through a `match` inside a function it owns.
+fn match_in_side() -> Case {
+    let close = "\n}\n";
+    case(
+        "match_in_side",
+        ["diskm", "netm"],
+        decision(DecisionKind::If),
+        &[
+            &strukt("Opener", ""),
+            r"
+impl Opener {
+    pub fn open(&mut self, key: u64, disk: bool) -> Option<u64> {
+        if disk { self.pick_disk(key) } else { self.pick_net(key) }
+    }
+    fn pick_disk(&mut self, key: u64) -> Option<u64> {
+        match key % 3 { 0 => None, _ => self.diskm_0(key) }
+    }
+    fn pick_net(&mut self, key: u64) -> Option<u64> {
+        match key % 3 { 0 => None, _ => self.netm_0(key) }
+    }",
+            &chain("diskm", 3),
+            &chain("netm", 3),
             close,
         ],
     )

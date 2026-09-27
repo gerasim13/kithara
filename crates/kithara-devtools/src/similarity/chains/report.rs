@@ -1,9 +1,6 @@
 //! Which chains are long enough to list, and their section of the report.
 
-use std::{
-    cmp::Reverse,
-    collections::{BTreeSet, HashSet},
-};
+use std::{cmp::Reverse, collections::HashSet};
 
 use serde::Serialize;
 
@@ -28,7 +25,7 @@ pub(crate) struct Coverage {
 }
 
 /// Decision rows come before pairs, and the shorter side ranks them. A row
-/// whose member set is already listed is dropped; every row needs enough units
+/// over the functions of a listed row is dropped; every row needs enough units
 /// and lines on each side, and a decision row needs alike sides.
 pub(super) fn long_chains(chains: Vec<Chain>, config: &ChainConfig) -> Vec<Chain> {
     let mut rows: Vec<Chain> = chains
@@ -43,12 +40,7 @@ pub(super) fn long_chains(chains: Vec<Chain>, config: &ChainConfig) -> Vec<Chain
     rows.sort_by_key(|chain| Reverse(shorter(chain)));
     let mut seen = HashSet::new();
     rows.retain(|chain| {
-        let members: BTreeSet<String> = chain
-            .sides
-            .iter()
-            .flat_map(|side| side.members.iter().cloned())
-            .collect();
-        seen.insert(members)
+        seen.insert(chain.fns.clone())
             && chain.sides.iter().map(Side::units).sum::<usize>() >= config.min_units
             && shorter(chain) >= config.min_side_lines
     });

@@ -35,6 +35,10 @@ mod consts {
     ];
     /// Name and trait of the synthetic function that holds a derive's calls.
     pub(super) const DERIVE_FN: &str = "#derive";
+    /// `Deref` and its associated type: a method or field the type lacks is
+    /// looked up on the target.
+    pub(super) const DEREF: &str = "Deref";
+    pub(super) const DEREF_TARGET: &str = "Target";
 }
 
 /// A `use` binding: the name it brings into scope and the path it names. A
@@ -112,6 +116,8 @@ pub(super) struct AliasFact {
 #[derive(Debug, Default)]
 pub(super) struct Facts {
     pub(super) aliases: Vec<AliasFact>,
+    /// `impl Deref for Name { type Target = Ty; }`, in the shape of an alias.
+    pub(super) derefs: Vec<AliasFact>,
     pub(super) enums: Vec<EnumFact>,
     pub(super) fns: Vec<FnFact>,
     pub(super) structs: Vec<StructFact>,
@@ -492,7 +498,6 @@ impl ItemVisitor<'_> {
     /// synthetic function of that type.
     fn add_attr_calls(&mut self, owner: &syn::Ident, attrs: &[Attribute]) {
         let mut body = Body::default();
-        body.bind_receiver();
         for attr in attrs {
             if consts::PLAIN_ATTRIBUTES
                 .iter()
@@ -591,6 +596,23 @@ impl ItemVisitor<'_> {
         self.add_fn(&keep, sig, &block, public, false);
     }
 
+    /// The target of a `Deref` impl, without the impl's own type parameters:
+    /// they name no workspace type.
+    fn add_deref(&mut self, target: &syn::ImplItemType) {
+        let Some(owner) = self.scope.owner.clone() else {
+            return;
+        };
+        let ty = idents_of(&target.ty)
+            .into_iter()
+            .filter(|ident| !self.scope.generics.contains_key(ident))
+            .collect();
+        self.facts.derefs.push(AliasFact {
+            ty,
+            krate: self.krate.clone(),
+            name: owner,
+        });
+    }
+
     fn add_fn(
         &mut self,
         attrs: &[Attribute],
@@ -606,13 +628,8 @@ impl ItemVisitor<'_> {
         generics_map(&sig.generics, &mut generics);
         let mut body = Body::default();
         for input in &sig.inputs {
-            match input {
-                FnArg::Receiver(_) => body.bind_receiver(),
-                FnArg::Typed(typed) => {
-                    if let Pat::Ident(ident) = typed.pat.as_ref() {
-                        body.bind_param(ident.ident.to_string(), idents_of(&typed.ty));
-                    }
-                }
+            if let FnArg::Typed(typed) = input {
+                body.bind_param(&typed.pat, idents_of(&typed.ty));
             }
         }
         body.visit_block(block);
@@ -729,6 +746,12 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
                             .is_some_and(|s| s.ident == "delegate") =>
                     {
                         visitor.add_delegate(&m.mac);
+                    }
+                    ImplItem::Type(target)
+                        if visitor.scope.trait_name.as_deref() == Some(consts::DEREF)
+                            && target.ident == consts::DEREF_TARGET =>
+                    {
+                        visitor.add_deref(target);
                     }
                     _ => {}
                 }

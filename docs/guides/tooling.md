@@ -154,9 +154,11 @@ The same run writes parallel execution chains to `chains.json` and the
   `fallback:<kind>` when one side runs on the other's failure, `dyn` for the
   impls of one trait method, `seq` or `via-callee` under a common caller, and
   `entry` when there is none.
-- Only sides of at least `min_side_lines` lines are listed. Coverage names the
-  private functions no resolved call reaches, such as those called through
-  `macro_rules!`; no chain passes through them.
+- Only sides of at least `min_side_lines` lines are listed. A call resolves
+  from source types and imports, never by name alone, so a call the resolver
+  cannot place links nowhere. Coverage names the private functions no resolved
+  call reaches, such as those called through `macro_rules!`; no chain passes
+  through them.
 - The thresholds are code defaults; a `[chains]` table in
   `.config/similarity.toml` overrides them by field name.
 

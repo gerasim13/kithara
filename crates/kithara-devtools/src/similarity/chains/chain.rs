@@ -1,6 +1,6 @@
 //! One row of the report: two sides that part at a fork.
 
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
 use serde::{Serialize, Serializer};
 
@@ -103,6 +103,9 @@ pub(crate) struct Chain {
     pub(crate) platform: bool,
     pub(crate) containment: f64,
     pub(crate) jaccard: f64,
+    /// The functions of both sides: two rows over the same functions are one.
+    #[serde(skip)]
+    pub(super) fns: BTreeSet<usize>,
 }
 
 impl Chain {
@@ -123,6 +126,7 @@ impl Chain {
             jaccard: minhash::jaccard(&x.shingles, &y.shingles),
             containment: minhash::containment(&x.shingles, &y.shingles),
             built: None,
+            fns: x.fns.union(&y.fns).copied().collect(),
         }
     }
 }

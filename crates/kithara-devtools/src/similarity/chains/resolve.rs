@@ -14,161 +14,14 @@ use super::{
 };
 
 mod consts {
-    /// Method names too common to resolve by name alone.
-    pub(super) const STD: &[&str] = &[
-        "map",
-        "and_then",
-        "ok",
-        "ok_or",
-        "ok_or_else",
-        "filter",
-        "as_ref",
-        "as_deref",
-        "as_mut",
-        "copied",
-        "cloned",
-        "flatten",
-        "then",
-        "then_some",
-        "map_err",
-        "err",
-        "and",
-        "or",
-        "zip",
-        "get",
-        "first",
-        "last",
-        "unwrap_or",
-        "unwrap_or_default",
-        "into",
-        "try_into",
-        "clone",
-        "to_owned",
-        "filter_map",
-        "find",
-        "next",
-        "iter",
-        "into_iter",
-        "lock",
-        "read",
-        "write",
-        "borrow",
-        "unwrap",
-        "expect",
-        "is_some",
-        "is_none",
-        "map_or",
-        "map_or_else",
-        "to_string",
-        "as_str",
-        "parse",
-        "get_mut",
-        "take",
-        "len",
-        "is_empty",
-        "push",
-        "pop",
-        "insert",
-        "remove",
-        "contains",
-        "extend",
-        "drain",
-        "max",
-        "min",
-        "new",
-        "default",
-        "from",
-        "fmt",
-        "eq",
-        "cmp",
-        "hash",
-        "drop",
-        "deref",
-        "deref_mut",
-        "send",
-        "recv",
-        "spawn",
-        "load",
-        "store",
-        "fetch_add",
-        "swap",
-        "iter_mut",
-        "chain",
-        "collect",
-        "sum",
-        "count",
-        "any",
-        "all",
-        "position",
-        "rev",
-        "enumerate",
-        "skip",
-        "step_by",
-        "entry",
-        "or_insert",
-        "or_insert_with",
-        "as_slice",
-        "as_mut_slice",
-        "to_vec",
-        "copy_from_slice",
-        "fill",
-        "resize",
-        "reserve",
-        "clear",
-        "truncate",
-        "split_at",
-        "checked_add",
-        "checked_sub",
-        "saturating_sub",
-        "saturating_add",
-        "wrapping_add",
-        "abs",
-        "floor",
-        "ceil",
-        "round",
-        "sqrt",
-        "powi",
-        "unwrap_or_else",
-        "or_else",
-        "is_ok",
-        "is_err",
-        "with_capacity",
-        "keys",
-        "values",
-        "contains_key",
-        "retain",
-        "sort",
-        "sort_by",
-        "starts_with",
-        "ends_with",
-        "trim",
-        "split",
-        "join",
-        "replace",
-        "push_str",
-        "format",
-        "write_str",
-        "cancel",
-        "is_cancelled",
-        "notify_one",
-        "notify_waiters",
-        "wait",
-        "poll",
-        "poll_next",
-        "as_bytes",
-        "len_bytes",
-        "try_send",
-        "try_recv",
-        "close",
-    ];
     /// Recursion bound for module paths and re-export chains.
     pub(super) const PATH_DEPTH: usize = 4;
     /// Recursion bound for receiver type inference.
     pub(super) const TYPE_DEPTH: usize = 6;
     /// Recursion bound for alias expansion.
     pub(super) const ALIAS_DEPTH: usize = 3;
-    /// More free functions of one name in a crate than this resolve to none.
-    pub(super) const MAX_FREE: usize = 3;
+    /// `Deref` steps a member lookup walks past the type itself.
+    pub(super) const DEREF_DEPTH: usize = 3;
 }
 
 #[derive(Clone, Copy)]
@@ -225,15 +78,16 @@ type Module<'f> = (&'f str, &'f [String]);
 
 pub(super) struct Resolver<'f> {
     facts: &'f Facts,
-    by_name: HashMap<&'f str, Vec<usize>>,
     by_owner: HashMap<(&'f str, &'f str), Vec<usize>>,
-    free: HashMap<&'f str, Vec<usize>>,
+    /// `Deref` targets by the crate and name of the type.
+    derefs: HashMap<(&'f str, &'f str), Vec<&'f AliasFact>>,
     free_mod: HashMap<(Module<'f>, &'f str), Vec<usize>>,
     impl_traits: HashMap<&'f str, BTreeSet<&'f str>>,
     memo: HashMap<(usize, *const Desc), Option<Vec<String>>>,
     trait_impls: HashMap<(&'f str, &'f str), Vec<usize>>,
     types: HashMap<&'f str, Vec<TypeDef<'f>>>,
     uses_mod: HashMap<Module<'f>, Vec<&'f Import>>,
+    crates: HashSet<&'f str>,
     modules: HashSet<Module<'f>>,
     max_dyn: usize,
 }
@@ -245,8 +99,8 @@ impl<'f> Resolver<'f> {
             max_dyn,
             types: HashMap::new(),
             by_owner: HashMap::new(),
-            free: HashMap::new(),
-            by_name: HashMap::new(),
+            crates: HashSet::new(),
+            derefs: HashMap::new(),
             trait_impls: HashMap::new(),
             impl_traits: HashMap::new(),
             free_mod: HashMap::new(),
@@ -263,6 +117,26 @@ impl<'f> Resolver<'f> {
     fn add_module(&mut self, krate: &'f str, module: &'f [String]) {
         let prefixes = (0..=module.len()).filter_map(|len| module.get(..len));
         self.modules.extend(prefixes.map(|prefix| (krate, prefix)));
+    }
+
+    /// What `lookup` finds on `ty`, or else on the first level of `Deref`
+    /// targets where it finds anything: the compiler's autoderef order.
+    fn autoderef<T>(&self, ty: &str, f: &FnFact, lookup: impl Fn(&str) -> Option<T>) -> Vec<T> {
+        let mut level = vec![ty.to_string()];
+        let mut seen = level.clone();
+        for _ in 0..=consts::DEREF_DEPTH {
+            let hits: Vec<T> = level.iter().filter_map(|step| lookup(step)).collect();
+            if !hits.is_empty() {
+                return hits;
+            }
+            level = level
+                .iter()
+                .flat_map(|step| self.deref_targets(step, f))
+                .filter(|target| !seen.contains(target))
+                .collect();
+            seen.extend(level.iter().cloned());
+        }
+        Vec::new()
     }
 
     /// A constructor call names its type; a std wrapper (`Arc::new(x)`,
@@ -306,6 +180,18 @@ impl<'f> Resolver<'f> {
             fns: if hub { Vec::new() } else { found.fns },
             variant: None,
         }
+    }
+
+    /// Workspace types the `Deref` impls of `ty` target, for each definition
+    /// of `ty` the crate of `f` sees.
+    fn deref_targets(&self, ty: &str, f: &FnFact) -> Vec<String> {
+        let mut out = Vec::new();
+        for def in self.type_defs(ty, &f.place.krate) {
+            for target in self.derefs.get(&(def.krate(), ty)).into_iter().flatten() {
+                out.extend(self.known(&target.ty, f, 0));
+            }
+        }
+        dedup(out)
     }
 
     /// Building a value of a type with a `Drop` impl schedules that impl.
@@ -362,23 +248,19 @@ impl<'f> Resolver<'f> {
         out
     }
 
-    /// Free functions of one name: a few in the crate, or else, for a bare
-    /// name, the only one in the workspace.
-    fn free_fns(&self, name: &str, krate: &str, workspace: bool) -> Vec<usize> {
-        let all = self.free.get(name).cloned().unwrap_or_default();
-        let same: Vec<usize> = all
-            .iter()
-            .copied()
-            .filter(|id| self.in_crate(*id, krate))
-            .collect();
-        if same.is_empty() && workspace {
-            return if all.len() == 1 { all } else { Vec::new() };
+    /// Workspace types of `field` on `ty`, when a struct named `ty` declares
+    /// the field.
+    fn field_type(&self, ty: &str, field: &str, f: &FnFact) -> Option<Vec<String>> {
+        let mut declared: Option<Vec<String>> = None;
+        for def in self.type_defs(ty, &f.place.krate) {
+            if let TypeDef::Struct(data) = def
+                && let Some(idents) = data.fields.get(field)
+            {
+                let known = self.known(&Self::field_idents(data, idents, ty, f), f, 0);
+                declared.get_or_insert_default().extend(known);
+            }
         }
-        if same.len() <= consts::MAX_FREE {
-            same
-        } else {
-            Vec::new()
-        }
+        declared
     }
 
     fn in_crate(&self, id: usize, krate: &str) -> bool {
@@ -391,14 +273,12 @@ impl<'f> Resolver<'f> {
             let name = f.name.as_str();
             if let Some(owner) = f.owner.as_deref() {
                 self.by_owner.entry((owner, name)).or_default().push(id);
-                self.by_name.entry(name).or_default().push(id);
                 if let Some(tr) = f.trait_name.as_deref()
                     && tr != owner
                 {
                     self.impl_traits.entry(owner).or_default().insert(tr);
                 }
             } else {
-                self.free.entry(name).or_default().push(id);
                 let key = ((f.place.krate.as_str(), f.place.module.as_slice()), name);
                 self.free_mod.entry(key).or_default().push(id);
             }
@@ -406,6 +286,7 @@ impl<'f> Resolver<'f> {
                 self.trait_impls.entry((tr, name)).or_default().push(id);
             }
             self.add_module(&f.place.krate, &f.place.module);
+            self.crates.insert(&f.place.krate);
         }
     }
 
@@ -435,6 +316,12 @@ impl<'f> Resolver<'f> {
             );
         for (name, def) in defs {
             self.types.entry(name).or_default().push(def);
+        }
+        for fact in &facts.derefs {
+            self.derefs
+                .entry((fact.krate.as_str(), fact.name.as_str()))
+                .or_default()
+                .push(fact);
         }
     }
 
@@ -585,7 +472,7 @@ impl<'f> Resolver<'f> {
             }
             _ => {}
         }
-        if let Some(target) = workspace_crate(head) {
+        if let Some(target) = self.workspace_crate(head) {
             return Some((target, rest.to_vec()));
         }
         let scoped = self
@@ -664,7 +551,8 @@ impl<'f> Resolver<'f> {
     }
 
     /// Every type of the receiver that has the method: `Mutex<Inner>` reaches
-    /// `Inner` through the guard, and a per-cfg alias reaches each target.
+    /// `Inner` through the guard, a per-cfg alias reaches each target, and a
+    /// type without the method reaches its `Deref` target.
     fn resolve_method(
         &mut self,
         method: &str,
@@ -681,29 +569,17 @@ impl<'f> Resolver<'f> {
         let krate = f.place.krate.as_str();
         let mut found = Found::default();
         for ty in &types {
-            let Found { fns, dispatch } = self.methods_of(ty, method, krate);
-            found.dispatch |= dispatch && !fns.is_empty();
-            found.fns.extend(fns);
+            let hits = self.autoderef(ty, f, |step| {
+                let hit = self.methods_of(step, method, krate);
+                (!hit.fns.is_empty()).then_some(hit)
+            });
+            for Found { fns, dispatch } in hits {
+                found.dispatch |= dispatch;
+                found.fns.extend(fns);
+            }
         }
-        if !found.fns.is_empty() {
-            found.fns = dedup(found.fns);
-            return found;
-        }
-        if !types.is_empty() || consts::STD.contains(&method) {
-            return Found::default();
-        }
-        let all = self.by_name.get(method).cloned().unwrap_or_default();
-        let same: Vec<usize> = all
-            .iter()
-            .copied()
-            .filter(|id| self.in_crate(*id, krate))
-            .collect();
-        let fns = match (same.len(), all.len()) {
-            (1, _) => same,
-            (0, 1) => all,
-            _ => Vec::new(),
-        };
-        Found::direct(fns)
+        found.fns = dedup(found.fns);
+        found
     }
 
     fn resolve_path(&self, path: &[String], fid: usize) -> PathFound {
@@ -729,7 +605,6 @@ impl<'f> Resolver<'f> {
         }
         match quals.last() {
             None if is_upper(name) => PathFound::Ctor,
-            None => PathFound::Fns(Found::direct(self.free_fns(name, krate, true))),
             Some(qualifier) if is_upper(qualifier) => {
                 let ty = own(f, qualifier);
                 if is_upper(name) {
@@ -742,13 +617,7 @@ impl<'f> Resolver<'f> {
                     ty.map_or_else(Found::default, |ty| self.methods_of(ty, name, krate)),
                 )
             }
-            Some(_) => {
-                let target = path
-                    .first()
-                    .and_then(|head| workspace_crate(head))
-                    .unwrap_or_else(|| krate.to_string());
-                PathFound::Fns(Found::direct(self.free_fns(name, &target, false)))
-            }
+            None | Some(_) => PathFound::Fns(Found::default()),
         }
     }
 
@@ -783,21 +652,16 @@ impl<'f> Resolver<'f> {
         };
         match desc {
             Desc::SelfValue => f.owner.iter().cloned().collect(),
-            Desc::Var(name) => match f.body.locals.get(name) {
+            Desc::Var(id) => match f.body.locals.get(*id) {
                 Some(Local::Ty(ty)) => self.known(ty, f, 0),
                 Some(Local::From(from)) => self.rtype(from, fid, depth + 1),
-                Some(Local::Unknown) | None => Vec::new(),
+                None => Vec::new(),
             },
             Desc::Field { of, field } => {
                 let mut out = Vec::new();
                 for ty in self.rtype(of, fid, depth + 1) {
-                    for def in self.type_defs(&ty, &f.place.krate) {
-                        if let TypeDef::Struct(data) = def
-                            && let Some(idents) = data.fields.get(field)
-                        {
-                            out.extend(self.known(&Self::field_idents(data, idents, &ty, f), f, 0));
-                        }
-                    }
+                    let hits = self.autoderef(&ty, f, |step| self.field_type(step, field, f));
+                    out.extend(hits.into_iter().flatten());
                 }
                 dedup(out)
             }
@@ -898,6 +762,13 @@ impl<'f> Resolver<'f> {
         };
         self.enum_variant(own(f, ty), variant, &f.place.krate)
     }
+
+    /// The scanned crate an extern path head names: `kithara_hls` is
+    /// `kithara-hls`.
+    fn workspace_crate(&self, head: &str) -> Option<String> {
+        let name = head.replace('_', "-");
+        self.crates.contains(name.as_str()).then_some(name)
+    }
 }
 
 /// The type a name denotes inside `f`: `Self` is the impl's owner.
@@ -907,11 +778,6 @@ pub(super) fn own<'a>(f: &'a FnFact, name: &'a str) -> Option<&'a str> {
     } else {
         Some(name)
     }
-}
-
-/// The workspace crate an extern path head names: `kithara_hls` is `kithara-hls`.
-fn workspace_crate(head: &str) -> Option<String> {
-    head.starts_with("kithara_").then(|| head.replace('_', "-"))
 }
 
 pub(super) fn is_upper(name: &str) -> bool {

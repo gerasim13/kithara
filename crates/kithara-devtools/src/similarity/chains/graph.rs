@@ -289,7 +289,8 @@ impl Graph {
     }
 
     /// Functions only the region calls into: grown from `seeds` while every
-    /// caller of a successor already sits inside. `exclude` never joins.
+    /// caller of a successor already sits inside. A match arm sits inside
+    /// with its function. `exclude` never joins.
     pub(super) fn owned(&self, seeds: &[Node], exclude: Option<usize>) -> BTreeSet<usize> {
         let mut region: HashSet<Node> = seeds.iter().copied().collect();
         let mut frontier = seeds.to_vec();
@@ -300,10 +301,10 @@ impl Graph {
                     if region.contains(&callee) || exclude.map(Node::Fn) == Some(callee) {
                         continue;
                     }
-                    if self
-                        .preds(callee)
-                        .all(|caller| caller == callee || region.contains(&caller))
-                    {
+                    if self.preds(callee).all(|caller| {
+                        let host = Node::Fn(caller.function());
+                        host == callee || region.contains(&host) || region.contains(&caller)
+                    }) {
                         region.insert(callee);
                         next.push(callee);
                     }

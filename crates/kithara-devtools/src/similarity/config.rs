@@ -33,8 +33,8 @@ pub(crate) struct SimilarityConfig {
     #[serde(skip)]
     pub(super) active_dependencies: BTreeSet<String>,
     pub(super) types: TypeConfig,
-    excluded_crates: Vec<String>,
     chains: ChainConfig,
+    excluded_crates: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

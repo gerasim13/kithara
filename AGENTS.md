@@ -70,13 +70,14 @@ Every fact below has one owner. Link to the owner; do not restate it.
 - Do not grow the architecture out of fallback paths. A fallback is a branch
   selected by the failure or absence of another path that produces the same
   result, so one job gets two execution paths; the parallel-chain section of
-  `just lint similarity` lists such pairs. When a case fails, extend the
-  owner's algorithm to cover it instead of adding a path per failure; each such
-  path is one more layer, and they stack. Syntax is not the test: `or_else` or
-  an extra `match` arm is fine when a domain input selects it. A designed
-  fallback (user-facing default, optional config, degraded mode) is part of
-  the owner's contract and is justified in the owning crate wiki page or the
-  task packet; a test that codifies any other fallback protects a symptom.
+  `just lint similarity` lists candidates to check. When a case fails, extend
+  the owner's algorithm to cover it instead of adding a path per failure; each
+  such path is one more layer, and they stack. Syntax is not the test:
+  `or_else` or an extra `match` arm is fine when a domain input selects it. A
+  designed fallback (user-facing default, optional config, degraded mode) is
+  part of the owner's contract and is justified in the owning crate wiki page
+  or the task packet; a test that codifies any other fallback protects a
+  symptom.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.

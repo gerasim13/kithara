@@ -2,8 +2,6 @@
 //! themselves with their line span and inline tokens, and the local bindings
 //! whose types the resolver infers receivers from.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use serde::Serialize;
@@ -116,7 +114,8 @@ impl DecisionKind {
 #[derive(Clone, Debug)]
 pub(super) enum Desc {
     SelfValue,
-    Var(String),
+    /// A local binding: an index into the body's locals.
+    Var(usize),
     Path(Vec<String>),
     Field {
         of: Box<Self>,
@@ -155,7 +154,6 @@ impl Desc {
 pub(super) enum Local {
     Ty(Vec<String>),
     From(Desc),
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,22 +191,25 @@ pub(super) struct Arm {
 
 #[derive(Debug, Default)]
 pub(super) struct BodyFacts {
-    pub(super) locals: BTreeMap<String, Local>,
     pub(super) arms: Vec<Arm>,
+    /// Every binding of the body in source order; a shadowing binding is a
+    /// new one.
+    pub(super) locals: Vec<Local>,
     pub(super) sites: Vec<Site>,
     pub(super) uses: Vec<Import>,
 }
 
 #[derive(Default)]
 pub(super) struct Body {
-    bound: BTreeSet<String>,
     facts: BodyFacts,
+    /// Names in scope, innermost last, with their index into the locals.
+    scope: Vec<(String, usize)>,
     stack: Vec<usize>,
     decisions: u32,
 }
 
 impl Body {
-    fn alternative(&mut self, call: &syn::ExprMethodCall, name: &str) {
+    fn alternative(&mut self, call: &syn::ExprMethodCall, name: &str, recv: &Desc) {
         let decision = self.decision();
         self.push(
             decision,
@@ -230,7 +231,7 @@ impl Body {
                 !primary,
                 lines_of(arg.span()),
             );
-            self.visit_expr(arg);
+            self.visit_arg(arg, recv);
             self.stack.pop();
         }
     }
@@ -244,29 +245,32 @@ impl Body {
         }
     }
 
-    pub(super) fn bind_param(&mut self, name: String, ty: Vec<String>) {
-        self.bound.insert(name.clone());
-        self.facts.locals.insert(name, Local::Ty(ty));
+    fn bind(&mut self, name: String, local: Local) {
+        self.scope.push((name, self.facts.locals.len()));
+        self.facts.locals.push(local);
+    }
+
+    /// A parameter's pattern takes its declared type.
+    pub(super) fn bind_param(&mut self, pat: &Pat, ty: Vec<String>) {
+        match pat {
+            Pat::Ident(ident) => self.bind(ident.ident.to_string(), Local::Ty(ty)),
+            _ => self.bind_pat(pat, &Desc::Ty(ty)),
+        }
     }
 
     /// Every identifier a pattern binds takes its type from the destructured
-    /// value; an earlier binding of the same name wins.
+    /// value.
     fn bind_pat(&mut self, pat: &Pat, from: &Desc) {
         match pat {
             Pat::Ident(ident) => {
                 if let Some((_, sub)) = &ident.subpat {
                     self.bind_pat(sub, from);
                 }
-                self.facts
-                    .locals
-                    .entry(ident.ident.to_string())
-                    .or_insert_with(|| Local::From(from.clone()));
+                self.bind(ident.ident.to_string(), Local::From(from.clone()));
             }
             Pat::Type(typed) => {
                 if let Pat::Ident(ident) = typed.pat.as_ref() {
-                    self.facts
-                        .locals
-                        .insert(ident.ident.to_string(), Local::Ty(idents_of(&typed.ty)));
+                    self.bind(ident.ident.to_string(), Local::Ty(idents_of(&typed.ty)));
                 } else {
                     self.bind_pat(&typed.pat, from);
                 }
@@ -311,8 +315,16 @@ impl Body {
         }
     }
 
-    pub(super) fn bind_receiver(&mut self) {
-        self.bound.insert("self".to_string());
+    /// A closure's parameters bind in its own scope; a closure handed to a
+    /// method takes the receiver's type for them.
+    fn closure(&mut self, closure: &syn::ExprClosure, from: &Desc) {
+        let mark = self.scope.len();
+        for input in &closure.inputs {
+            self.visit_pat(input);
+            self.bind_pat(input, from);
+        }
+        self.visit_expr(&closure.body);
+        self.scope.truncate(mark);
     }
 
     fn decision(&mut self) -> u32 {
@@ -320,11 +332,64 @@ impl Body {
         self.decisions
     }
 
+    fn describe(&self, expr: &Expr) -> Desc {
+        match expr {
+            Expr::Path(path) if path.path.segments.len() == 1 && path.qself.is_none() => {
+                let name = path_segs(&path.path).concat();
+                if name == "self" {
+                    Desc::SelfValue
+                } else {
+                    self.local(&name).map_or(Desc::Unknown, Desc::Var)
+                }
+            }
+            Expr::Path(path) => Desc::Path(path_segs(&path.path)),
+            Expr::Field(field) => Desc::Field {
+                of: Box::new(self.describe(&field.base)),
+                field: member_name(&field.member),
+            },
+            Expr::MethodCall(call) => {
+                let method = call.method.to_string();
+                if consts::TRANSPARENT.contains(&method.as_str()) {
+                    self.describe(&call.receiver)
+                } else {
+                    Desc::Ret {
+                        method,
+                        of: Box::new(self.describe(&call.receiver)),
+                    }
+                }
+            }
+            Expr::Call(call) => match call.func.as_ref() {
+                Expr::Path(path) => Desc::CallRet {
+                    path: path_segs(&path.path),
+                    arg: call.args.first().map(|arg| Box::new(self.describe(arg))),
+                },
+                _ => Desc::Unknown,
+            },
+            Expr::Tuple(tuple) => {
+                Desc::Tuple(tuple.elems.iter().map(|elem| self.describe(elem)).collect())
+            }
+            Expr::Struct(strukt) => Desc::CallRet {
+                path: path_segs(&strukt.path),
+                arg: None,
+            },
+            Expr::Paren(paren) => self.describe(&paren.expr),
+            Expr::Group(group) => self.describe(&group.expr),
+            Expr::Reference(reference) => self.describe(&reference.expr),
+            Expr::Unary(unary) => self.describe(&unary.expr),
+            Expr::Try(tried) => self.describe(&tried.expr),
+            Expr::Await(awaited) => self.describe(&awaited.base),
+            Expr::Index(index) => self.describe(&index.expr),
+            Expr::Cast(cast) => Desc::Ty(idents_of(&cast.ty)),
+            _ => Desc::Unknown,
+        }
+    }
+
     pub(super) fn finish(self) -> BodyFacts {
         self.facts
     }
 
     fn guard(&mut self, ifx: &syn::ExprIf, tail: Tail<'_>) {
+        let mark = self.scope.len();
         self.visit_expr(&ifx.cond);
         let decision = self.decision();
         let fail = failure_text(&ifx.cond.to_token_stream().to_string());
@@ -338,6 +403,7 @@ impl Body {
         self.arm_tokens(arm, ifx.then_branch.to_token_stream());
         self.visit_block(&ifx.then_branch);
         self.stack.pop();
+        self.scope.truncate(mark);
         let arm = self.push(decision, DecisionKind::Guard, "rest", false, tail.lines);
         self.arm_tokens(arm, tail.tokens());
     }
@@ -347,9 +413,10 @@ impl Body {
     }
 
     fn let_else(&mut self, local: &syn::Local, init: &Expr, diverge: &Expr, tail: Tail<'_>) {
+        let from = self.describe(init);
         self.visit_expr(init);
         self.visit_pat(&local.pat);
-        self.bind_pat(&local.pat, &describe(init));
+        self.bind_pat(&local.pat, &from);
         let decision = self.decision();
         let arm = self.push(
             decision,
@@ -363,6 +430,14 @@ impl Body {
         self.stack.pop();
         let arm = self.push(decision, DecisionKind::LetElse, "rest", false, tail.lines);
         self.arm_tokens(arm, tail.tokens());
+    }
+
+    fn local(&self, name: &str) -> Option<usize> {
+        self.scope
+            .iter()
+            .rev()
+            .find(|(bound, _)| bound == name)
+            .map(|(_, id)| *id)
     }
 
     fn push(
@@ -430,12 +505,36 @@ impl Body {
         );
         let after_dot = start > 0 && is_punct(trees.get(start - 1), '.');
         if called && after_dot {
-            let recv = start.checked_sub(2).map(|at| scanned_receiver(trees, at));
+            let recv = start
+                .checked_sub(2)
+                .map(|at| self.scanned_receiver(trees, at));
             self.site(SiteKind::Method, path, recv, line);
         } else if called {
             self.site(SiteKind::Call, path, None, line);
         } else if path.len() >= 2 && path.last().is_some_and(|last| is_upper(last)) {
             self.site(SiteKind::Variant, path, None, line);
+        }
+    }
+
+    /// The receiver in front of `.method(..)` in raw tokens: `self`, `self.field`
+    /// or a variable.
+    fn scanned_receiver(&self, trees: &[TokenTree], at: usize) -> Desc {
+        match trees.get(at) {
+            Some(TokenTree::Ident(recv)) if recv == "self" => Desc::SelfValue,
+            Some(TokenTree::Ident(recv))
+                if at >= 2
+                    && is_punct(trees.get(at - 1), '.')
+                    && matches!(trees.get(at - 2), Some(TokenTree::Ident(s)) if s == "self") =>
+            {
+                Desc::Field {
+                    of: Box::new(Desc::SelfValue),
+                    field: recv.to_string(),
+                }
+            }
+            Some(TokenTree::Ident(recv)) => self
+                .local(&recv.to_string())
+                .map_or(Desc::Unknown, Desc::Var),
+            _ => Desc::Unknown,
         }
     }
 
@@ -470,6 +569,14 @@ impl Body {
             line,
             frames: self.stack.clone(),
         });
+    }
+
+    fn visit_arg(&mut self, arg: &Expr, recv: &Desc) {
+        if let Expr::Closure(closure) = arg {
+            self.closure(closure, recv);
+        } else {
+            self.visit_expr(arg);
+        }
     }
 
     /// `[f, g]` or `vec![f, g]` of plain paths or closures is a strategy
@@ -514,6 +621,7 @@ impl Tail<'_> {
 
 impl<'ast> Visit<'ast> for Body {
     fn visit_block(&mut self, block: &'ast syn::Block) {
+        let mark = self.scope.len();
         let mut open = 0;
         let end = block.span().end().line;
         for (index, stmt) in block.stmts.iter().enumerate() {
@@ -537,6 +645,7 @@ impl<'ast> Visit<'ast> for Body {
         for _ in 0..open {
             self.stack.pop();
         }
+        self.scope.truncate(mark);
     }
 
     fn visit_expr_array(&mut self, array: &'ast syn::ExprArray) {
@@ -590,19 +699,22 @@ impl<'ast> Visit<'ast> for Body {
     }
 
     fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
-        for input in &closure.inputs {
-            self.visit_pat(input);
-        }
-        self.visit_expr(&closure.body);
+        self.closure(closure, &Desc::Unknown);
     }
 
     fn visit_expr_for_loop(&mut self, looped: &'ast syn::ExprForLoop) {
-        self.bind_pat(&looped.pat, &describe(&looped.expr));
-        visit::visit_expr_for_loop(self, looped);
+        let from = self.describe(&looped.expr);
+        self.visit_expr(&looped.expr);
+        let mark = self.scope.len();
+        self.visit_pat(&looped.pat);
+        self.bind_pat(&looped.pat, &from);
+        self.visit_block(&looped.body);
+        self.scope.truncate(mark);
     }
 
     /// An `else if` ladder is one decision with one arm per rung.
     fn visit_expr_if(&mut self, ifx: &'ast syn::ExprIf) {
+        let mark = self.scope.len();
         self.visit_expr(&ifx.cond);
         let decision = self.decision();
         let fail = failure_text(&ifx.cond.to_token_stream().to_string());
@@ -616,6 +728,7 @@ impl<'ast> Visit<'ast> for Body {
         self.arm_tokens(arm, ifx.then_branch.to_token_stream());
         self.visit_block(&ifx.then_branch);
         self.stack.pop();
+        self.scope.truncate(mark);
         let mut next = ifx.else_branch.as_ref().map(|(_, e)| e.as_ref());
         let mut rung = 0;
         while let Some(branch) = next {
@@ -632,6 +745,7 @@ impl<'ast> Visit<'ast> for Body {
                 self.visit_expr(&elif.cond);
                 self.visit_block(&elif.then_branch);
                 self.stack.pop();
+                self.scope.truncate(mark);
                 next = elif.else_branch.as_ref().map(|(_, e)| e.as_ref());
             } else {
                 let arm = self.push(
@@ -650,15 +764,18 @@ impl<'ast> Visit<'ast> for Body {
     }
 
     fn visit_expr_let(&mut self, binding: &'ast syn::ExprLet) {
-        self.bind_pat(&binding.pat, &describe(&binding.expr));
-        visit::visit_expr_let(self, binding);
+        let from = self.describe(&binding.expr);
+        self.visit_expr(&binding.expr);
+        self.visit_pat(&binding.pat);
+        self.bind_pat(&binding.pat, &from);
     }
 
     fn visit_expr_match(&mut self, matched: &'ast syn::ExprMatch) {
         self.visit_expr(&matched.expr);
         let decision = self.decision();
-        let scrutinee = describe(&matched.expr);
+        let scrutinee = self.describe(&matched.expr);
         for (index, arm) in matched.arms.iter().enumerate() {
+            let mark = self.scope.len();
             self.bind_pat(&arm.pat, &scrutinee);
             let mut variants = Vec::new();
             pat_variants(&arm.pat, &mut variants);
@@ -680,27 +797,26 @@ impl<'ast> Visit<'ast> for Body {
             self.visit_pat(&arm.pat);
             self.visit_expr(&arm.body);
             self.stack.pop();
+            self.scope.truncate(mark);
         }
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
-        let recv = describe(&call.receiver);
-        for arg in &call.args {
-            if let Expr::Closure(closure) = arg {
-                for input in &closure.inputs {
-                    self.bind_pat(input, &recv);
-                }
-            }
-        }
+        let recv = self.describe(&call.receiver);
         let line = call.method.span().start().line;
-        self.site(SiteKind::Method, vec![name.clone()], Some(recv), line);
+        self.site(
+            SiteKind::Method,
+            vec![name.clone()],
+            Some(recv.clone()),
+            line,
+        );
         if consts::ALTERNATIVE.contains(&name.as_str()) {
-            self.alternative(call, &name);
+            self.alternative(call, &name, &recv);
         } else {
             self.visit_expr(&call.receiver);
             for arg in &call.args {
-                self.visit_expr(arg);
+                self.visit_arg(arg, &recv);
             }
         }
     }
@@ -711,7 +827,7 @@ impl<'ast> Visit<'ast> for Body {
         let last = segs.last().cloned().unwrap_or_default();
         let upper = is_upper(&last);
         if segs.len() == 1 {
-            if !upper && !self.bound.contains(&last) && last != "self" {
+            if !upper && self.local(&last).is_none() && last != "self" {
                 self.site(SiteKind::Ref, segs, None, line);
             }
         } else if upper {
@@ -744,33 +860,17 @@ impl<'ast> Visit<'ast> for Body {
         }
     }
 
+    /// The initializer still sees the bindings the new one shadows.
     fn visit_local(&mut self, local: &'ast syn::Local) {
-        let named = match &local.pat {
-            Pat::Ident(ident) => Some((ident.ident.to_string(), None)),
-            Pat::Type(typed) => match typed.pat.as_ref() {
-                Pat::Ident(ident) => Some((ident.ident.to_string(), Some(idents_of(&typed.ty)))),
-                _ => None,
-            },
-            _ => None,
-        };
-        match named {
-            Some((name, Some(ty))) => {
-                self.facts.locals.insert(name, Local::Ty(ty));
-            }
-            Some((name, None)) => {
-                let from = local
-                    .init
-                    .as_ref()
-                    .map_or(Local::Unknown, |init| Local::From(describe(&init.expr)));
-                self.facts.locals.insert(name, from);
-            }
-            None => {
-                if let Some(init) = &local.init {
-                    self.bind_pat(&local.pat, &describe(&init.expr));
-                }
-            }
+        let from = local
+            .init
+            .as_ref()
+            .map_or(Desc::Unknown, |init| self.describe(&init.expr));
+        if let Some(init) = &local.init {
+            self.visit_local_init(init);
         }
-        visit::visit_local(self, local);
+        self.visit_pat(&local.pat);
+        self.bind_pat(&local.pat, &from);
     }
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
@@ -795,11 +895,6 @@ impl<'ast> Visit<'ast> for Body {
             self.scan_tokens(mac.tokens.clone(), line);
         }
     }
-
-    fn visit_pat_ident(&mut self, ident: &'ast syn::PatIdent) {
-        self.bound.insert(ident.ident.to_string());
-        visit::visit_pat_ident(self, ident);
-    }
 }
 
 pub(super) fn lines_of(span: Span) -> (usize, usize) {
@@ -818,80 +913,10 @@ fn is_colon(tree: Option<&TokenTree>) -> bool {
     is_punct(tree, ':')
 }
 
-/// The receiver in front of `.method(..)` in raw tokens: `self`, `self.field`
-/// or a variable.
-fn scanned_receiver(trees: &[TokenTree], at: usize) -> Desc {
-    match trees.get(at) {
-        Some(TokenTree::Ident(recv)) if recv == "self" => Desc::SelfValue,
-        Some(TokenTree::Ident(recv))
-            if at >= 2
-                && is_punct(trees.get(at - 1), '.')
-                && matches!(trees.get(at - 2), Some(TokenTree::Ident(s)) if s == "self") =>
-        {
-            Desc::Field {
-                of: Box::new(Desc::SelfValue),
-                field: recv.to_string(),
-            }
-        }
-        Some(TokenTree::Ident(recv)) => Desc::Var(recv.to_string()),
-        _ => Desc::Unknown,
-    }
-}
-
 fn member_name(member: &Member) -> String {
     match member {
         Member::Named(ident) => ident.to_string(),
         Member::Unnamed(index) => index.index.to_string(),
-    }
-}
-
-pub(super) fn describe(expr: &Expr) -> Desc {
-    match expr {
-        Expr::Path(path) if path.path.segments.len() == 1 && path.qself.is_none() => {
-            let name = path_segs(&path.path).concat();
-            if name == "self" {
-                Desc::SelfValue
-            } else {
-                Desc::Var(name)
-            }
-        }
-        Expr::Path(path) => Desc::Path(path_segs(&path.path)),
-        Expr::Field(field) => Desc::Field {
-            of: Box::new(describe(&field.base)),
-            field: member_name(&field.member),
-        },
-        Expr::MethodCall(call) => {
-            let method = call.method.to_string();
-            if consts::TRANSPARENT.contains(&method.as_str()) {
-                describe(&call.receiver)
-            } else {
-                Desc::Ret {
-                    method,
-                    of: Box::new(describe(&call.receiver)),
-                }
-            }
-        }
-        Expr::Call(call) => match call.func.as_ref() {
-            Expr::Path(path) => Desc::CallRet {
-                path: path_segs(&path.path),
-                arg: call.args.first().map(|arg| Box::new(describe(arg))),
-            },
-            _ => Desc::Unknown,
-        },
-        Expr::Tuple(tuple) => Desc::Tuple(tuple.elems.iter().map(describe).collect()),
-        Expr::Struct(strukt) => Desc::CallRet {
-            path: path_segs(&strukt.path),
-            arg: None,
-        },
-        Expr::Paren(paren) => describe(&paren.expr),
-        Expr::Group(group) => describe(&group.expr),
-        Expr::Reference(reference) => describe(&reference.expr),
-        Expr::Unary(unary) => describe(&unary.expr),
-        Expr::Try(tried) => describe(&tried.expr),
-        Expr::Await(awaited) => describe(&awaited.base),
-        Expr::Index(index) => describe(&index.expr),
-        Expr::Cast(cast) => Desc::Ty(idents_of(&cast.ty)),
-        _ => Desc::Unknown,
     }
 }
 

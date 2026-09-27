@@ -30,7 +30,9 @@ pub(crate) struct ChainConfig {
     pub(super) dyn_pair: f64,
     /// Jaccard that pairs two roots, or the regions two roots own.
     pub(super) similarity: f64,
-    /// Bound of every walk over the call graph.
+    /// Calls walked back to the common caller of two roots and forward from
+    /// it to each root, and rounds of passing a cfg from callers to callees.
+    /// A side region is not bounded: it holds every function only it calls.
     pub(super) depth: usize,
     /// A trait-object call with more impls is a hub and links nowhere.
     pub(super) max_dyn_targets: usize,
