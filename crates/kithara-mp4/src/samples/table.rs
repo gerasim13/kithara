@@ -187,7 +187,3 @@ fn seek_to<R: ReadAt>(cursor: &mut ReadAtCursor<'_, R>, offset: u64) -> Result<(
         .map(|_| ())
         .map_err(|_| Mp4Error::new("cannot seek past a box"))
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

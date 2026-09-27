@@ -6,7 +6,7 @@ use axum::{Router, routing::get};
 use bytes::Bytes;
 use kithara_assets::{
     AcquisitionResult, AssetResource, AssetResourceState, AssetScope, AssetSource, AssetStore,
-    StorageBackend, WriteSide,
+    ResourceKey, StorageBackend, WriteSide,
 };
 use kithara_download::{Downloader, DownloaderConfig, Peer};
 use kithara_net::{HttpClient, NetOptions};
@@ -17,8 +17,10 @@ use kithara_platform::{
 };
 use kithara_test_utils::{TestHttpServer, kithara};
 use tempfile::tempdir;
+use url::Url;
 
-use super::*;
+use super::PlaylistCache;
+use crate::HlsError;
 
 const VALID_MASTER: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=128000\naudio.m3u8\n";
 

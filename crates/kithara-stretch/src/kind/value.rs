@@ -27,9 +27,3 @@ pub enum StretchKind {
     #[cfg(feature = "stretch-glide")]
     Glide,
 }
-
-/// UI label = the variant name (`Signalsmith` / `Bungee`), via `Debug`, so
-/// the selector needs no per-variant `cfg` arm.
-#[cfg(test)]
-#[path = "../kind_tests.rs"]
-mod tests;

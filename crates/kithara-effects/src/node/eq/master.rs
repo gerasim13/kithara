@@ -1,7 +1,3 @@
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
-
 use core::{mem, num::NonZeroU32};
 
 use firewheel::{
