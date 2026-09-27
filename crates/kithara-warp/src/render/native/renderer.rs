@@ -17,21 +17,8 @@ use super::{
 };
 use crate::{
     ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
-    WarpCursor, WarpPlanSlot, temporal::RateTarget,
+    WarpCursor, WarpPlanSlot, consts, temporal::RateTarget,
 };
-
-mod consts {
-    /// Span the speed smoother measures its settle threshold against: the range
-    /// a playback speed realistically travels over, from a heavy stretch back to
-    /// unity and a little past it. The smoother reads it as a scale, not a bound,
-    /// so a speed outside it still smooths — it just settles on the same relative
-    /// terms as one inside.
-    pub(super) const SPEED_SMOOTHING_SPAN: f32 = 2.0;
-}
-
-#[cfg(test)]
-#[path = "tests/mod.rs"]
-mod tests;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
@@ -550,5 +537,62 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.projection.active.is_none()
             && self.plan.is_none()
             && (speed - 1.0).abs() <= f32::EPSILON
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+
+    use super::*;
+    use crate::{PresentationFrontier, RenderContext, Warp, WarpMapRevision, test_pools::pools};
+
+    #[kithara::test]
+    fn zero_source_advance_commits_a_render_interval() {
+        let spec = AudioSpec {
+            channels: consts::CH,
+            sample_rate: NonZeroU32::new(consts::SR).expect("fixture rate is non-zero"),
+        };
+        let controls = StretchControls::new(1.0);
+        let config = WarpConfig::builder().stretch(controls).build();
+        let mut warp = Warp::new((), &config);
+        let publisher = warp.take_publisher().expect("test Warp owns its publisher");
+        let renderer = warp.renderer(spec, pools());
+        let revision = WarpMapRevision::first();
+        let source = 41;
+        let output = SessionFrame::new(1_000);
+        let context = RenderContext::new_linear(
+            OutputContext::new(
+                output..SessionFrame::new(2_000),
+                spec.sample_rate,
+                SessionEpoch::new(1),
+                Some(TransportRevision::first()),
+            )
+            .expect("fixture output range is valid"),
+            None,
+        )
+        .expect("fixture context is valid");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(source)
+                .output(output)
+                .warp_map(revision)
+                .build(),
+        );
+        let snapshot = renderer.context.load().expect("published render snapshot");
+        let mut renderer = renderer;
+        renderer.rendered_source_end = Some((source, spec.sample_rate));
+
+        let (committed, output_start, source_start, source_end) = renderer
+            .next_render_snapshot(snapshot, 32, None)
+            .expect("an equal source frontier still commits emitted PCM");
+
+        assert_eq!(output_start, i64::from(output));
+        assert_eq!(source_start, source);
+        assert_eq!(source_end, source);
+        assert_eq!(committed.frontier().source(), source);
+        assert_eq!(committed.frontier().output(), SessionFrame::new(1_032));
+        assert_eq!(committed.frontier().warp_map(), Some(revision));
     }
 }

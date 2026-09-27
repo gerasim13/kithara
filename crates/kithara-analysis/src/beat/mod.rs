@@ -2,7 +2,6 @@ mod analyzer;
 #[cfg(feature = "beat-backend")]
 mod backend;
 mod detector;
-#[path = "../grid/mod.rs"]
 mod grid;
 mod pass;
 mod runs;

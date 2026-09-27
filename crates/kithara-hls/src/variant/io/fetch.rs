@@ -5,10 +5,10 @@ use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
 use url::Url;
 
-use super::HlsVariant;
 use crate::{
     segment::{Downloading, FetchClaim, FetchSlot},
     signal::SizeSignal,
+    variant::HlsVariant,
 };
 
 impl<S> HlsVariant<S>
@@ -20,7 +20,7 @@ where
     /// A concurrent cache commit supplies the authoritative on-disk length. The writer fires
     /// byte-arrival wakes before terminal settle, since stalled-escape reconciliation and the audio
     /// worker have no reader progress to notice otherwise.
-    pub(super) fn build_cmd(
+    pub(in crate::variant) fn build_cmd(
         self: &Arc<Self>,
         url: Url,
         acq: ResourceAcquisition<S>,

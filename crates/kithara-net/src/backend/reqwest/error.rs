@@ -2,26 +2,8 @@ use std::{fmt::Write, num::NonZeroU16};
 
 use url::Url;
 
-pub use crate::client::HttpClient;
+use super::BackendError;
 use crate::error::NetError;
-
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "native/mod.rs"]
-mod native;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use self::native::{
-    BackendError, Client, RequestBuilder, Response, StatusCode, build_client, head_request,
-    post_request,
-};
-
-#[cfg(target_arch = "wasm32")]
-#[path = "wasm.rs"]
-mod wasm;
-#[cfg(target_arch = "wasm32")]
-pub(crate) use self::wasm::{
-    BackendError, Client, RequestBuilder, Response, StatusCode, build_client, head_request,
-    post_request,
-};
 
 impl From<BackendError> for NetError {
     /// Non-status reqwest errors (connect, body-EOF, decode) stay retryable so an early stream

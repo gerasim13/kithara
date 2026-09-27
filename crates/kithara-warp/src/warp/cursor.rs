@@ -17,7 +17,7 @@ pub struct WarpCursor {
 }
 
 impl WarpCursor {
-    pub(super) const fn new(revision: WarpMapRevision, source: u64, output: SessionFrame) -> Self {
+    pub(crate) const fn new(revision: WarpMapRevision, source: u64, output: SessionFrame) -> Self {
         Self {
             output,
             revision,

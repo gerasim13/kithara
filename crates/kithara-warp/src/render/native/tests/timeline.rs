@@ -629,7 +629,7 @@ fn moving_target_renderer() -> WarpRenderer {
     let mut fx = renderer(StretchControls::new(1.0));
     fx.applied_speed = Some(SmoothedParam::new(
         1.0,
-        super::super::consts::SPEED_SMOOTHING_SPAN,
+        consts::SPEED_SMOOTHING_SPAN,
         SmootherConfig::default(),
         spec().sample_rate,
     ));

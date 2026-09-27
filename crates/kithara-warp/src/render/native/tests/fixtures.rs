@@ -4,9 +4,9 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use realfft::RealFftPlanner;
 
-use super::super::{StretchControls, WarpRenderer as GenericWarpRenderer};
+use super::super::WarpRenderer as GenericWarpRenderer;
 use crate::{
-    Warp, WarpConfig, consts,
+    StretchControls, Warp, WarpConfig, consts,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 

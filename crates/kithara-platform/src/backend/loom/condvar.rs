@@ -1,4 +1,4 @@
-use super::MutexGuard;
+use super::mutex::MutexGuard;
 use crate::{common::time::Instant, loom::sync as backend};
 
 #[derive(Default)]

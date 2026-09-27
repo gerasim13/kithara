@@ -12,8 +12,8 @@ use crate::{
     types::{AcceptEncodingPolicy, Headers},
 };
 
-pub(in crate::backend::selected) mod consts {
-    pub(in crate::backend::selected) const HTTP_PARTIAL_CONTENT: u16 = 206;
+pub(in crate::backend::apple) mod consts {
+    pub(in crate::backend::apple) const HTTP_PARTIAL_CONTENT: u16 = 206;
 }
 
 pub(super) type HttpResponseParts = (Option<u16>, Headers);

@@ -5,6 +5,8 @@
 mod anchor;
 mod beat_grid;
 mod coordinate;
+#[cfg(feature = "render")]
+mod render;
 mod segment;
 mod temporal;
 #[cfg(all(test, feature = "render"))]
@@ -25,6 +27,8 @@ pub use coordinate::{
     MapAxis, MapCoordinateError, MapPoint, MapPosition, SessionAxis,
 };
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
+#[cfg(feature = "render")]
+pub use render::{WarpRenderError, WarpRenderer};
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, BeatsPerMinuteError, MapRegion, MapRegionError,
     MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,
@@ -44,6 +48,4 @@ pub use warp::{
     Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap, WarpMapRevision, WarpPlan,
     WarpPlanError, WarpPlanSlot, supports_playback_rate,
 };
-#[cfg(feature = "render")]
-pub use warp::{WarpRenderError, WarpRenderer};
 mod consts;

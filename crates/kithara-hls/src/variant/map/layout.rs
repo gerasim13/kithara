@@ -4,8 +4,7 @@ use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 use tracing::debug;
 
-use super::HlsVariant;
-use crate::segment::PlannedFetch;
+use crate::{segment::PlannedFetch, variant::HlsVariant};
 
 impl<S> HlsVariant<S>
 where
@@ -114,7 +113,7 @@ where
 
     /// Resets under the layout's write lock so the seek tail's freeze retirement and the sizes
     /// parked behind it land atomically with the fresh frame.
-    pub(super) fn reset_layout_to_full_range(&self) {
+    pub(in crate::variant) fn reset_layout_to_full_range(&self) {
         if self.layout_seek_invariant() {
             return;
         }

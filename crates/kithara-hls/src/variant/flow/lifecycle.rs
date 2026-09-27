@@ -3,8 +3,10 @@ use std::sync::atomic::Ordering;
 use kithara_bufpool::HasPool;
 use tracing::debug;
 
-use super::HlsVariant;
-use crate::segment::{FetchClaim, Loaded, PlannedFetch};
+use crate::{
+    segment::{FetchClaim, Loaded, PlannedFetch},
+    variant::HlsVariant,
+};
 
 impl<S> HlsVariant<S>
 where
@@ -33,12 +35,12 @@ where
 
     /// Settle-side size store: shrink the appropriate atom to `final_len`.
     /// The caller runs this inside [`Layout::apply_commit`](
-    /// offsets::Layout::apply_commit)'s write-lock so a reader never
+    /// crate::variant::map::offsets::Layout::apply_commit)'s write-lock so a reader never
     /// observes a new size against a stale offset table.
     ///
     /// Settling a `None` init slot is a no-op: only a `Some(Init)` slot is ever fetched, so a stray
     /// settle cannot resurrect an absent init entry.
-    pub(super) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
+    pub(in crate::variant) fn apply_loaded_size(&self, planned: PlannedFetch, final_len: u64) {
         match planned {
             PlannedFetch::Init => {
                 if let Some(init) = self.segments.init.as_ref() {

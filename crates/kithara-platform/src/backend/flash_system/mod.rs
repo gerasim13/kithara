@@ -1,15 +1,13 @@
-#[path = "../../system/support/logging.rs"]
-pub mod logging;
-#[path = "../../system/support/maybe_send.rs"]
-pub mod maybe_send;
+pub(crate) mod condvar;
 mod model;
+pub(crate) mod mutex;
+pub(crate) mod rwlock;
 pub(crate) mod sync;
 pub(crate) mod thread;
-#[path = "../flash/time.rs"]
-pub(crate) mod time;
-#[path = "../flash/tokio.rs"]
-pub(crate) mod tokio;
 
 pub(crate) use std::thread_local;
 
 pub use model::model;
+
+pub(crate) use super::flash::{time, tokio};
+pub use crate::system::{logging, maybe_send};
