@@ -32,7 +32,7 @@ fn chunking_does_not_change_the_encoded_stream(samples: &[f32], backend: StreamB
     );
     let framed = encode_in_chunks(
         backend,
-        &samples,
+        samples,
         StreamEncoder::FRAME_SAMPLES,
         consts::STREAM_SAMPLE_RATE,
     );
@@ -95,7 +95,7 @@ fn a_fractional_timescale_ratio_keeps_durations_on_the_pts_timeline(
         .timescale(TIMESCALE)
         .build()
         .expect("stream encoder");
-    let mut units = encoder.push(&samples).expect("push");
+    let mut units = encoder.push(samples).expect("push");
     units.extend(encoder.finish().expect("finish"));
 
     let mut expected_pts = 0;
