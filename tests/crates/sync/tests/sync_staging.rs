@@ -326,14 +326,35 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     );
 
     assert_eq!(candidate.len(), control.len());
-    let diverged = candidate
-        .iter()
-        .zip(&control)
-        .position(|(heard, expected)| heard.to_bits() != expected.to_bits());
     assert_eq!(
-        diverged.map(|sample| sample / usize::from(CHANNELS)),
+        divergence(&candidate, &control),
         None,
-        "{}: staging beside the sounding lane changed what it plays from this frame on",
+        "{}: staging beside the sounding lane changed what it plays",
         case.id(),
     );
+}
+
+/// What separates two renders of the same lane, beyond where it starts.
+///
+/// One sample off by a rounding step and a different signal from the first
+/// frame both report as a diverging position, and the buffers do not survive
+/// into a stress report: only the count and the widest gap tell them apart.
+fn divergence(candidate: &[f32], control: &[f32]) -> Option<String> {
+    let mut first = None;
+    let mut differing = 0usize;
+    let mut widest = 0.0f32;
+    for (sample, (heard, expected)) in candidate.iter().zip(control).enumerate() {
+        if heard.to_bits() == expected.to_bits() {
+            continue;
+        }
+        first.get_or_insert((sample, *heard, *expected));
+        differing = differing.saturating_add(1);
+        widest = widest.max((heard - expected).abs());
+    }
+    let (sample, heard, expected) = first?;
+    Some(format!(
+        "from frame {} ({heard} against {expected}); {differing} of {} samples differ, widest {widest}",
+        sample / usize::from(CHANNELS),
+        candidate.len(),
+    ))
 }
