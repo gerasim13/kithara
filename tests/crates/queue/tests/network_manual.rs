@@ -8,9 +8,6 @@
 pub use kithara_integration_tests::bufpool_ext;
 use kithara_test_dylib as _;
 
-#[path = "cold_seek_cpal.rs"]
 mod cold_seek_cpal;
-#[path = "zvuk_drm_trace.rs"]
 mod zvuk_drm_trace;
-#[path = "zvuk_stage_drm_e2e.rs"]
 mod zvuk_stage_drm_e2e;

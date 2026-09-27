@@ -27,7 +27,6 @@ mod offsets;
 mod plan_queue;
 #[path = "flow/probe.rs"]
 mod probe;
-#[path = "profile.rs"]
 mod profile;
 #[path = "flow/queue.rs"]
 mod queue;

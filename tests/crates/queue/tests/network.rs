@@ -8,17 +8,11 @@
 pub use kithara_integration_tests::bufpool_ext;
 use kithara_test_dylib as _;
 
-#[path = "false_eof_rapid_scrub.rs"]
 mod false_eof_rapid_scrub;
-#[path = "real_playlist.rs"]
 mod real_playlist;
-#[path = "zvuk_prod_aac_to_flac_switch.rs"]
 mod zvuk_prod_aac_to_flac_switch;
-#[path = "zvuk_prod_drm_e2e.rs"]
 mod zvuk_prod_drm_e2e;
-#[path = "zvuk_prod_flac_swallow.rs"]
 mod zvuk_prod_flac_swallow;
-#[path = "zvuk_stage_seed_brute_force.rs"]
 mod zvuk_stage_seed_brute_force;
 
 #[path = "user_simulation/prod_network.rs"]
