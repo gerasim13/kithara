@@ -12,7 +12,7 @@ use kithara_platform::{
     tokio::sync::{mpsc, oneshot},
 };
 
-use super::{cmd::FetchCmd, downloader::DownloaderInner, response::FetchResponse};
+use super::{cmd::FetchCmd, downloader::Downloader, response::FetchResponse};
 use crate::RequestPriority;
 
 /// Channel-path payload: a fully buffered response (headers + body bytes).
@@ -129,9 +129,9 @@ pub(super) struct PeerInner {
     /// with the shared `AbrController` until the last `PeerHandle` drops
     /// (the handle's `Drop` calls `controller.unregister`).
     abr: AbrHandle,
-    /// Keeps `DownloaderInner` (`HttpClient`, cancel, runtime) alive
-    /// for this peer's lifetime.
-    _pool: Arc<DownloaderInner>,
+    /// Keeps the downloader, and with it the download loop, alive for this
+    /// peer's lifetime.
+    downloader: Downloader,
     /// Shared with the Registry's `PeerEntry`. Writing through
     /// [`PeerHandle::with_bus`] immediately makes the new bus visible
     /// to both the handle's own imperative path and the Registry's
@@ -258,7 +258,7 @@ impl PeerHandle {
     ) {
         let cancel = CancelGroup::new(vec![self.inner.cancel.token().child()]);
         let (resp_tx, resp_rx) = oneshot::channel();
-        let request_id = self.inner._pool.next_request_id();
+        let request_id = self.inner.downloader.next_request_id();
         let enqueued_at = Instant::now();
         let internal = InternalCmd {
             cmd,
