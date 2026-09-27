@@ -48,10 +48,6 @@ impl SessionStream for OfflineStream {
         self.render(0, 0, &mut [])
             .map_err(|error| SessionError::Graph(error.to_string()))
     }
-
-    fn callback_stall(&self) -> Duration {
-        Duration::ZERO
-    }
 }
 
 impl OfflineStream {

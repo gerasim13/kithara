@@ -10,21 +10,16 @@ use kithara_effects::{
     eq::{EqBandConfig, EqConfig},
 };
 use kithara_output::OutputGroup;
-use kithara_platform::{
-    thread,
-    time::{Duration, WallInstant},
-};
 use kithara_signal::FaderValue;
-use kithara_test_utils::kithara;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
 use super::{
-    dispatch::{drain_after_quiescence, publish_root_transition, with_owner_cut},
+    dispatch::{drain_after_retirement, publish_root_transition, with_owner_cut},
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError, SessionStream},
     state::{
-        Deck, GraphRegistry, MixTap, SessionState, SlotNodes, add_graph_node, ensure_ctx,
-        prepare_eq_layout,
+        Deck, GraphRegistry, MixTap, RetiringSlot, SessionState, SlotNodes, add_graph_node,
+        ensure_ctx, prepare_eq_layout,
     },
     transport::SessionTransportState,
 };
@@ -85,57 +80,21 @@ fn remove_node(fw_ctx: &mut FirewheelContext, id: NodeID) -> Result<(), SessionE
         .map_err(|error| SessionError::Graph(format!("remove audio node {id:?}: {error:?}")))
 }
 
-/// Firewheel's successful update only queues a new schedule. The callback that
-/// polls it hands the old schedule back, and the next update drops the old
-/// player processor with its sole receipt producer. A callback writes its
-/// clock right after polling, so the second clock change seen after queueing
-/// comes from a callback that polled the schedule. A device callback may run
-/// far apart from the graph block size, so the wait follows callbacks rather
-/// than a fixed deadline. It gives up once a polled schedule still left the
-/// producer standing, the context lost its callback, or the callback stayed
-/// silent past the stream's stall. The device callback runs on real time, so
-/// the wait does too.
-#[kithara::flash(false)]
-fn wait_for_slot_processors<T: SessionStream>(
+/// Firewheel's successful update only queues a new schedule; the old
+/// processors return once a callback has accepted it and a later update has
+/// consumed `DropSchedule`. A stream whose callback runs only when the Host
+/// asks hands them back here. A device callback runs on its own schedule, so
+/// its slots stay retiring until an owner drain sees them handed back.
+fn hand_back_processors<T: SessionStream>(
     fw_ctx: &mut FirewheelContext,
-    mut stream: Option<&mut T>,
-    slots: &[SlotNodes],
+    stream: Option<&mut T>,
 ) -> Result<(), SessionError> {
-    let retired = |slots: &[SlotNodes]| slots.iter().all(|slot| slot.sync_receipts.producer_gone());
-    if retired(slots) {
-        return Ok(());
+    if let Some(stream) = stream {
+        stream.drive_control()?;
     }
-    let stall = stream
-        .as_deref()
-        .map_or(Duration::ZERO, SessionStream::callback_stall);
-    let mut clock = fw_ctx.audio_clock().samples;
-    let mut callbacks = 0_u8;
-    let mut silent_until = WallInstant::now() + stall;
-    loop {
-        if let Some(stream) = stream.as_deref_mut() {
-            stream.drive_control()?;
-        }
-        fw_ctx.update().map_err(|error| {
-            SessionError::Graph(format!("audio graph retirement update failed: {error:?}"))
-        })?;
-        if retired(slots) {
-            return Ok(());
-        }
-        if callbacks >= 2 || !fw_ctx.is_active() {
-            return Err(SessionError::CallbackQuiescencePending);
-        }
-        let observed = fw_ctx.audio_clock().samples;
-        if observed == clock {
-            if WallInstant::now() >= silent_until {
-                return Err(SessionError::CallbackQuiescencePending);
-            }
-        } else {
-            clock = observed;
-            callbacks += 1;
-            silent_until = WallInstant::now() + stall;
-        }
-        thread::yield_now();
-    }
+    fw_ctx.update().map_err(|error| {
+        SessionError::Graph(format!("audio graph retirement update failed: {error:?}"))
+    })
 }
 
 pub(super) mod tap {
@@ -300,7 +259,6 @@ pub(super) mod lifecycle {
         state: &mut SessionState<T, S>,
         idx: usize,
     ) -> Result<(), SessionError> {
-        let had_slots = !deck_at_mut(&mut state.graph, idx)?.slots.is_empty();
         {
             let (ctx, stream, graph) = (&mut state.ctx, &mut state.stream, &mut state.graph);
             let player = deck_at_mut(graph, idx)?;
@@ -312,7 +270,7 @@ pub(super) mod lifecycle {
                 fw_ctx.update().map_err(|error| {
                     SessionError::Graph(format!("graph update after player stop failed: {error:?}"))
                 })?;
-                wait_for_slot_processors(fw_ctx, stream.as_mut(), &player.slots)?;
+                hand_back_processors(fw_ctx, stream.as_mut())?;
             }
         }
         if state.ctx.is_none() && state.stream.is_some() {
@@ -320,12 +278,16 @@ pub(super) mod lifecycle {
                 "player stream still owns a callback without a graph context",
             ));
         }
-        let group = had_slots.then_some(deck_at_mut(&mut state.graph, idx)?.grid_id);
-        drain_after_quiescence(state, group)?;
         let player = deck_at_mut(&mut state.graph, idx)?;
+        let group = player.grid_id;
+        let retired = std::mem::take(&mut player.slots);
         clear_player_graph_state(player);
         player.started = false;
+        state
+            .retiring
+            .extend(retired.into_iter().map(|slot| RetiringSlot { group, slot }));
         shutdown_if_idle(state)?;
+        drain_after_retirement(state)?;
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
     }
@@ -514,18 +476,18 @@ pub(super) mod slots {
             .position(|candidate| candidate.slot_id == slot)
             .ok_or(SessionError::SlotNotFound(slot))?;
         let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let last_slot = (player.slots.len() == 1).then_some(player.grid_id);
         remove_slot_graph(fw_ctx, stream.as_mut(), &player.slots[slot_index])?;
-        drain_after_quiescence(state, last_slot)?;
-        let slot_nodes = deck_at_mut(&mut state.graph, idx)?.slots.remove(slot_index);
+        let group = player.grid_id;
+        let slot = player.slots.remove(slot_index);
         debug!(
             player_id,
-            ?slot_nodes.slot_id,
+            ?slot.slot_id,
             "[KITHARA-ROUTE] player slot released"
         );
-        Ok(())
+        state.retiring.push(RetiringSlot { group, slot });
+        drain_after_retirement(state)
     }
-    pub(super) fn remove_slot_graph<T: SessionStream>(
+    fn remove_slot_graph<T: SessionStream>(
         fw_ctx: &mut FirewheelContext,
         stream: Option<&mut T>,
         slot: &SlotNodes,
@@ -535,7 +497,7 @@ pub(super) mod slots {
         fw_ctx.update().map_err(|error| {
             SessionError::Graph(format!("graph update after slot release failed: {error:?}"))
         })?;
-        wait_for_slot_processors(fw_ctx, stream, std::slice::from_ref(slot))
+        hand_back_processors(fw_ctx, stream)
     }
 }
 
@@ -781,11 +743,7 @@ mod tests {
     }
 
     /// The test drives the thread-local device processor itself.
-    impl SessionStream for TestStream {
-        fn callback_stall(&self) -> Duration {
-            Duration::ZERO
-        }
-    }
+    impl SessionStream for TestStream {}
 
     type TestState = SessionState<TestStream, TestPools>;
 

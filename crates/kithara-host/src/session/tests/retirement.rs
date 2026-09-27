@@ -1,5 +1,5 @@
-//! Graph retirement follows the device callback however far apart its
-//! callbacks run, and gives up on a callback that falls silent.
+//! A released slot retires until the device callback hands its processor
+//! back, however long that callback stays silent, and never blocks the Host.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -25,8 +25,8 @@ use kithara_test_utils::{
 
 use super::{
     super::{
-        dispatch::run_cmd,
-        protocol::{Cmd, DeviceStream, PlayerId, Reply, SessionError},
+        dispatch::{idle_tick, run_cmd},
+        protocol::{Cmd, PlayerId, Reply, SessionStream},
         state::SessionState,
     },
     graph::{attach_player, state as test_state},
@@ -35,13 +35,12 @@ use crate::api::SlotId;
 
 const BLOCK_FRAMES: usize = 128;
 
-type TestState = SessionState<DeviceStream<DeviceThread>, TestPools>;
+type TestState = SessionState<DeviceThread, TestPools>;
 
 /// Whether the fixture device lets its callback run.
 #[derive(Clone, Copy)]
 enum Callback {
     Runs,
-    SilentUntil(WallInstant),
     Silent,
 }
 
@@ -50,6 +49,9 @@ struct DeviceThread {
     running: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
+
+/// A platform device runs its own callbacks.
+impl SessionStream for DeviceThread {}
 
 impl Drop for DeviceThread {
     fn drop(&mut self) {
@@ -65,12 +67,10 @@ impl Drop for DeviceThread {
 fn run_device(mut processor: FirewheelProcessor, callback: &Mutex<Callback>, running: &AtomicBool) {
     let mut output = [0.0_f32; BLOCK_FRAMES * 2];
     while running.load(Ordering::Acquire) {
-        let runs = match *callback.lock() {
-            Callback::Runs => true,
-            Callback::SilentUntil(until) => WallInstant::now() >= until,
-            Callback::Silent => false,
-        };
-        if runs {
+        // The gate stays held through the callback, so no callback is in
+        // flight once the test changes it.
+        let gate = callback.lock();
+        if matches!(*gate, Callback::Runs) {
             let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
                 .expect("invariant: an empty input adapter is well formed");
             let mut output = InterleavedSlice::new_mut(&mut output, 2, BLOCK_FRAMES)
@@ -89,6 +89,7 @@ fn run_device(mut processor: FirewheelProcessor, callback: &Mutex<Callback>, run
                 },
             );
         }
+        drop(gate);
         thread::yield_now();
     }
 }
@@ -97,9 +98,7 @@ fn run_device(mut processor: FirewheelProcessor, callback: &Mutex<Callback>, run
 /// device's does, gated by `callback`.
 fn threaded_device(
     callback: &Arc<Mutex<Callback>>,
-    callback_stall: Duration,
-) -> impl FnMut(&mut FirewheelContext, u32) -> Result<DeviceStream<DeviceThread>, String> + Send + 'static
-{
+) -> impl FnMut(&mut FirewheelContext, u32) -> Result<DeviceThread, String> + Send + 'static {
     let callback = Arc::clone(callback);
     move |ctx, sample_rate| {
         let sample_rate = NonZeroU32::new(sample_rate)
@@ -121,13 +120,10 @@ fn threaded_device(
             let callback = Arc::clone(&callback);
             move || run_device(processor, &callback, &running)
         });
-        Ok(DeviceStream::new(
-            DeviceThread {
-                running,
-                thread: Some(thread),
-            },
-            callback_stall,
-        ))
+        Ok(DeviceThread {
+            running,
+            thread: Some(thread),
+        })
     }
 }
 
@@ -169,46 +165,71 @@ fn running_slot(state: &mut TestState) -> (PlayerId, SlotId) {
     }
 }
 
-/// A device may run its callback far apart from the graph block size: a
-/// release waits for that callback instead of a deadline measured in blocks.
-#[kithara::test]
-fn a_release_waits_for_a_device_callback_that_runs_late() {
-    let callback = Arc::new(Mutex::new(Callback::Runs));
-    let mut state = test_state(threaded_device(&callback, Duration::from_secs(1)));
-    let (player_id, slot) = running_slot(&mut state);
-
-    // Two 512-frame blocks at 44.1 kHz last 23 ms; the callback comes later.
-    let late = WallInstant::now() + Duration::from_millis(60);
-    *callback.lock() = Callback::SilentUntil(late);
-    match run_cmd(&mut state, Cmd::ReleaseSlot { player_id, slot }) {
+fn release(state: &mut TestState, player_id: PlayerId, slot: SlotId) {
+    match run_cmd(state, Cmd::ReleaseSlot { player_id, slot }) {
         Reply::Ok => {}
-        Reply::Err(error) => panic!("a late device callback must still retire the slot: {error}"),
+        Reply::Err(error) => panic!("a silent device callback must not fail the release: {error}"),
         _ => panic!("slot release returned an unexpected reply"),
     }
-
-    assert!(
-        WallInstant::now() >= late,
-        "the release completed before the device callback could hand the slot back"
-    );
     assert_eq!(
         state.graph.deck(0).map(|deck| deck.slots.len()),
         Some(0),
-        "the released slot leaves its deck"
+        "the released slot leaves its deck at once"
     );
 }
 
-/// A callback that stays silent never hands the slot back, and the release
-/// reports that instead of blocking the Host.
+/// A released slot stays retiring while the callback is silent, and the
+/// Host reaps it on a tick once the callback has handed its processor back.
 #[kithara::test]
-fn a_release_gives_up_on_a_device_callback_that_stays_silent() {
+fn a_released_slot_retires_until_the_device_callback_hands_it_back() {
     let callback = Arc::new(Mutex::new(Callback::Runs));
-    let mut state = test_state(threaded_device(&callback, Duration::from_millis(50)));
+    let mut state = test_state(threaded_device(&callback));
     let (player_id, slot) = running_slot(&mut state);
 
     *callback.lock() = Callback::Silent;
-    match run_cmd(&mut state, Cmd::ReleaseSlot { player_id, slot }) {
-        Reply::Err(SessionError::CallbackQuiescencePending) => {}
-        Reply::Err(error) => panic!("a silent device callback must fail the release: {error}"),
-        _ => panic!("a silent device callback cannot retire the slot"),
+    release(&mut state, player_id, slot);
+    for _ in 0..3 {
+        idle_tick(&mut state);
     }
+    assert_eq!(
+        state.retiring.len(),
+        1,
+        "a silent callback still holds the slot's processor"
+    );
+
+    *callback.lock() = Callback::Runs;
+    let deadline = WallInstant::now() + Duration::from_secs(5);
+    while !state.retiring.is_empty() {
+        assert!(
+            WallInstant::now() < deadline,
+            "a running callback must hand the retired slot back"
+        );
+        idle_tick(&mut state);
+        thread::yield_now();
+    }
+}
+
+/// An interrupted device never runs its callback again, so neither a release
+/// nor the player stop may wait for it; the stop drops the idle stream,
+/// which hands every retiring processor back.
+#[kithara::test]
+fn a_player_stop_reaps_the_slot_a_silent_callback_never_handed_back() {
+    let callback = Arc::new(Mutex::new(Callback::Runs));
+    let mut state = test_state(threaded_device(&callback));
+    let (player_id, slot) = running_slot(&mut state);
+
+    *callback.lock() = Callback::Silent;
+    release(&mut state, player_id, slot);
+    assert_eq!(state.retiring.len(), 1);
+
+    match run_cmd(&mut state, Cmd::StopPlayer { player_id }) {
+        Reply::Ok => {}
+        Reply::Err(error) => panic!("a silent device callback must not fail the stop: {error}"),
+        _ => panic!("player stop returned an unexpected reply"),
+    }
+    assert!(state.stream.is_none(), "an idle session drops its stream");
+    assert!(
+        state.retiring.is_empty(),
+        "dropping the stream hands the retiring processor back"
+    );
 }

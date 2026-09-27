@@ -17,10 +17,10 @@ use kithara_sync::GroupState;
 use tracing::{debug, warn};
 
 use super::{
-    dispatch::run_host_cmd,
+    dispatch::{idle_tick, run_host_cmd},
     protocol::{
-        Cmd, DeviceStream, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply,
-        Reply, SessionDispatcher, SessionStream,
+        Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
+        SessionDispatcher, SessionStream,
     },
     state::{RootView, SessionState},
 };
@@ -93,18 +93,6 @@ fn complete_shutdown<T, S>(
     drop(state);
     if reply_tx.send(HostReply::Ok).is_err() {
         warn!("[KITHARA-ROUTE] native shutdown reply receiver dropped");
-    }
-}
-
-fn idle_tick<T, S>(state: &mut SessionState<T, S>)
-where
-    T: SessionStream,
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    if let HostReply::Play(Reply::Err(error)) = run_host_cmd(state, HostCmd::Play(Cmd::Tick))
-        && !matches!(error, crate::session::SessionError::SyncControlBusy)
-    {
-        warn!(?error, "native session tick failed");
     }
 }
 
@@ -185,6 +173,9 @@ where
     })
 }
 
+/// The audio device runs the cpal callback on its own thread.
+impl SessionStream for CpalStream {}
+
 fn start_stream_cpal(
     ctx: &mut FirewheelContext,
     sample_rate: u32,
@@ -223,19 +214,15 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     sample_rate: NonZeroU32,
     output_block_frames: Option<NonZeroU32>,
     limiter: LimiterConfig,
-    callback_stall: Duration,
 ) -> Arc<dyn HostDispatcher<S>> {
-    spawn_session_client::<DeviceStream<CpalStream>, S>(
+    spawn_session_client::<CpalStream, S>(
         "kithara-engine",
         root,
         root_view,
         sample_rate,
         output_block_frames,
         limiter,
-        move |ctx, sample_rate| {
-            start_stream_cpal(ctx, sample_rate, output_block_frames)
-                .map(|stream| DeviceStream::new(stream, callback_stall))
-        },
+        move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
     )
 }
 

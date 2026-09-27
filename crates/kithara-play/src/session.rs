@@ -61,8 +61,6 @@ mod wire {
         StreamStart(String),
         #[error("graph edit failed: {0}")]
         Graph(String),
-        #[error("removed audio node is awaiting callback quiescence")]
-        CallbackQuiescencePending,
         #[error("session mix tap already has a consumer")]
         MixTapActive,
         #[error("session transport has not been processed")]

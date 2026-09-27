@@ -184,40 +184,15 @@ pub(super) fn publish_root_transition<T, S>(
     Ok(())
 }
 
-/// Final owner drain after graph retirement and before a slot receiver is
-/// destroyed. A deck whose last processor is gone also withdraws only that
-/// track's remaining decisions. Backend teardown has already completed
-/// outside this short cut.
-pub(super) fn drain_after_quiescence<T, S>(
+/// Owner drain right after graph retirement, so a slot whose processor has
+/// already been handed back is reaped before the command replies. Backend
+/// teardown has already completed outside this short cut.
+pub(super) fn drain_after_retirement<T, S>(
     state: &mut SessionState<T, S>,
-    quiesced_deck: Option<BeatGridId>,
 ) -> Result<(), SessionError> {
     let arbiter = state.sync_arbiter.clone();
     let control = arbiter.enter_host_control().map_err(enter_error)?;
-    drain_owner_inputs(state, &control)?;
-    let Some(group) = quiesced_deck else {
-        return Ok(());
-    };
-    let Some(cell) = state
-        .sync_cells
-        .iter()
-        .find(|entry| entry.group == group)
-        .map(|entry| Arc::clone(&entry.cell))
-    else {
-        return Ok(());
-    };
-    let revocation = control
-        .preflight_revoke(&cell)
-        .map_err(SyncError::ExecutionControl)?;
-    let _admission = state
-        .root
-        .transact(SyncOperation::WithdrawQuiescedMember {
-            target: cell.member(),
-        })
-        .map_err(|rejected| SessionError::Sync(rejected.error().clone()))?;
-    revocation.revoke();
-    state.publish_root();
-    Ok(())
+    drain_owner_inputs(state, &control)
 }
 
 fn control_failure_reply<S>(cmd: HostCmd<S>, failure: ControlEnterError) -> HostReply {
@@ -703,8 +678,20 @@ pub(super) fn drain_host_channel<T, S>(
         msg.reply_tx.send(reply).ok();
     }
 
-    if let Reply::Err(err) = tick_session(state) {
-        warn!(?err, "session tick in host drain failed");
+    idle_tick(state);
+}
+
+/// A tick between commands also brings the owner up to date, since a retiring
+/// slot is reaped only once its callback has handed the processor back.
+pub(super) fn idle_tick<T, S>(state: &mut SessionState<T, S>)
+where
+    T: SessionStream,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    if let HostReply::Play(Reply::Err(error)) = run_host_cmd(state, HostCmd::Play(Cmd::Tick))
+        && !matches!(error, SessionError::SyncControlBusy)
+    {
+        warn!(?error, "session tick failed");
     }
 }
 
@@ -891,12 +878,9 @@ mod tests {
     use firewheel::{ActivateInfo, processor::FirewheelProcessor};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
-    use kithara_platform::{
-        sync::{
-            Arc,
-            atomic::{AtomicU64, AtomicUsize, Ordering},
-        },
-        time::Duration,
+    use kithara_platform::sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_play::DEFAULT_GATE_SMOOTHING;
     use kithara_sync::SyncGroupSnapshot;
@@ -947,11 +931,7 @@ mod tests {
     }
 
     /// These tests never retire a processor that is still rendering.
-    impl SessionStream for RouteLossStream {
-        fn callback_stall(&self) -> Duration {
-            Duration::ZERO
-        }
-    }
+    impl SessionStream for RouteLossStream {}
 
     type TestState = SessionState<RouteLossStream, TestPools>;
 

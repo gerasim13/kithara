@@ -6,8 +6,12 @@ use kithara_sync::{
     ArmPermit, ControlError, ControlGuard, SyncError, SyncExecutionReject, SyncGroup,
     SyncOperation, SyncReceipt, SyncReceiptAck,
 };
+use kithara_warp::BeatGridId;
 
-use super::{protocol::SessionError, state::SessionState};
+use super::{
+    protocol::SessionError,
+    state::{RetiringSlot, SessionState, SlotNodes},
+};
 
 /// A timed-out Installed never reached the owner. The Host retains one
 /// terminal rejection for that member, then applies it on the next Control
@@ -53,14 +57,16 @@ pub(super) fn queue_failed_gate_receipt<T, S>(
 /// Bring the owner up to date before any work under a Control cut: audio
 /// receipts first, so a claimed preparation is presented; then committed
 /// source changes, so a decision placed on a changed source is withdrawn
-/// with its mode kept; then gate failures, which that withdrawal supersedes.
+/// with its mode kept; then gate failures, which that withdrawal supersedes;
+/// then retiring slots the callback has handed back.
 pub(super) fn drain_owner_inputs<T, S>(
     state: &mut SessionState<T, S>,
     control: &ControlGuard<'_>,
 ) -> Result<(), SessionError> {
     drain_audio_receipts(state, control)?;
     reconcile_source_changes(state, control)?;
-    drain_failed_gate_receipts(state)
+    drain_failed_gate_receipts(state)?;
+    reap_retired_slots(state, control)
 }
 
 /// Withdraw what the owner planned against every member source a player has
@@ -112,52 +118,127 @@ fn drain_failed_gate_receipts<T, S>(state: &mut SessionState<T, S>) -> Result<()
     Ok(())
 }
 
-/// Sole consumer of the per-slot callback receipts. A failed owner update
-/// keeps the popped receipt in its fixed slot for a later owner cut.
+/// Sole consumer of the per-slot callback receipts, of live slots and of
+/// retiring slots whose processor the callback may still run.
 fn drain_audio_receipts<T, S>(
     state: &mut SessionState<T, S>,
     control: &ControlGuard<'_>,
 ) -> Result<(), SessionError> {
-    for deck_index in 0..state.graph.len() {
-        let slots = state
-            .graph
-            .deck(deck_index)
-            .map_or(0, |deck| deck.slots.len());
-        for slot_index in 0..slots {
-            loop {
-                let receipt = state
-                    .graph
-                    .deck_mut(deck_index)
-                    .and_then(|deck| deck.slots.get_mut(slot_index))
-                    .and_then(|slot| {
-                        slot.pending_receipt
-                            .take()
-                            .or_else(|| slot.sync_receipts.try_pop())
-                    });
-                let Some(receipt) = receipt else { break };
-                let result = match receipt {
-                    SyncReceipt::Armed(_)
-                    | SyncReceipt::Presented(_)
-                    | SyncReceipt::Rejected { .. } => {
-                        acknowledge_root(state, receipt, control).map(|_| ())
-                    }
-                    _ => Err(SessionError::Graph(
-                        "RT mailbox carried a non-audio sync receipt".into(),
-                    )),
-                };
-                if let Err(error) = result {
-                    if let Some(slot) = state
-                        .graph
-                        .deck_mut(deck_index)
-                        .and_then(|deck| deck.slots.get_mut(slot_index))
-                    {
-                        slot.pending_receipt = Some(receipt);
-                    }
-                    return Err(error);
-                }
-            }
+    for deck in 0..state.graph.len() {
+        let slots = state.graph.deck(deck).map_or(0, |deck| deck.slots.len());
+        for slot in 0..slots {
+            drain_slot_receipts(state, control, SlotAt::Live { deck, slot })?;
         }
     }
+    for index in 0..state.retiring.len() {
+        drain_slot_receipts(state, control, SlotAt::Retiring(index))?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum SlotAt {
+    Live { deck: usize, slot: usize },
+    Retiring(usize),
+}
+
+impl SlotAt {
+    fn get<T, S>(self, state: &mut SessionState<T, S>) -> Option<&mut SlotNodes> {
+        match self {
+            Self::Live { deck, slot } => state
+                .graph
+                .deck_mut(deck)
+                .and_then(|deck| deck.slots.get_mut(slot)),
+            Self::Retiring(index) => state
+                .retiring
+                .get_mut(index)
+                .map(|retiring| &mut retiring.slot),
+        }
+    }
+}
+
+/// A failed owner update keeps the popped receipt in its slot for a later
+/// owner cut.
+fn drain_slot_receipts<T, S>(
+    state: &mut SessionState<T, S>,
+    control: &ControlGuard<'_>,
+    at: SlotAt,
+) -> Result<(), SessionError> {
+    while let Some(receipt) = at.get(state).and_then(SlotNodes::next_receipt) {
+        let result = match receipt {
+            SyncReceipt::Armed(_) | SyncReceipt::Presented(_) | SyncReceipt::Rejected { .. } => {
+                acknowledge_root(state, receipt, control).map(|_| ())
+            }
+            _ => Err(SessionError::Graph(
+                "RT mailbox carried a non-audio sync receipt".into(),
+            )),
+        };
+        if let Err(error) = result {
+            if let Some(slot) = at.get(state) {
+                slot.pending_receipt = Some(receipt);
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+/// Destroy the receiver of every retiring slot whose processor the callback
+/// has handed back. The producer is checked before the final drain, so no
+/// receipt it pushed is lost. A deck whose last processor is gone then
+/// withdraws only that track's remaining decisions.
+fn reap_retired_slots<T, S>(
+    state: &mut SessionState<T, S>,
+    control: &ControlGuard<'_>,
+) -> Result<(), SessionError> {
+    let mut index = 0;
+    while index < state.retiring.len() {
+        if !state.retiring[index].slot.sync_receipts.producer_gone() {
+            index += 1;
+            continue;
+        }
+        drain_slot_receipts(state, control, SlotAt::Retiring(index))?;
+        let RetiringSlot { group, .. } = state.retiring.remove(index);
+        let quiesced = state
+            .retiring
+            .iter()
+            .all(|retiring| retiring.group != group)
+            && state
+                .graph
+                .index_by_grid(group)
+                .and_then(|deck| state.graph.deck(deck))
+                .is_some_and(|deck| deck.slots.is_empty());
+        if quiesced {
+            withdraw_quiesced_member(state, control, group)?;
+        }
+    }
+    Ok(())
+}
+
+fn withdraw_quiesced_member<T, S>(
+    state: &mut SessionState<T, S>,
+    control: &ControlGuard<'_>,
+    group: BeatGridId,
+) -> Result<(), SessionError> {
+    let Some(cell) = state
+        .sync_cells
+        .iter()
+        .find(|entry| entry.group == group)
+        .map(|entry| Arc::clone(&entry.cell))
+    else {
+        return Ok(());
+    };
+    let revocation = control
+        .preflight_revoke(&cell)
+        .map_err(SyncError::ExecutionControl)?;
+    let _admission = state
+        .root
+        .transact(SyncOperation::WithdrawQuiescedMember {
+            target: cell.member(),
+        })
+        .map_err(|rejected| SessionError::Sync(rejected.error().clone()))?;
+    revocation.revoke();
+    state.publish_root();
     Ok(())
 }
 

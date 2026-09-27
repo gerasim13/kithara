@@ -1,10 +1,10 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_effects::LimiterConfig;
-use kithara_platform::time::Duration;
 #[cfg(feature = "offline")]
 use {
     kithara_bufpool::PoolRegion,
+    kithara_platform::time::Duration,
     kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig},
 };
 
@@ -26,10 +26,6 @@ pub enum HostConfig<S> {
         output_block_frames: Option<NonZeroU32>,
         /// Session output limiter policy.
         limiter: LimiterConfig,
-        /// Longest the device callback may stay silent while the Host waits
-        /// for it to hand back a removed player. Past it the removal fails
-        /// instead of blocking the Host on a suspended or lost device.
-        callback_stall: Duration,
         marker: PhantomData<fn() -> S>,
     },
     /// Device-free finite renderer.
@@ -69,13 +65,11 @@ impl<S> HostConfig<S> {
         #[builder(default = DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
         #[builder(default)] limiter: LimiterConfig,
-        #[builder(default = Duration::from_secs(1))] callback_stall: Duration,
     ) -> Self {
         Self::Realtime {
             sample_rate_hint,
             output_block_frames,
             limiter,
-            callback_stall,
             marker: PhantomData,
         }
     }

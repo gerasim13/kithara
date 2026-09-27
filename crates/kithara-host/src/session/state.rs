@@ -44,6 +44,23 @@ pub(super) struct SlotNodes {
     pub(super) pending_receipt: Option<SyncReceipt>,
 }
 
+impl SlotNodes {
+    /// The next callback receipt, the one a failed owner update kept first.
+    pub(super) fn next_receipt(&mut self) -> Option<SyncReceipt> {
+        self.pending_receipt
+            .take()
+            .or_else(|| self.sync_receipts.try_pop())
+    }
+}
+
+/// A slot whose nodes have left the graph while the callback may still hold
+/// its processor. Its receipts reach the owner until the callback hands that
+/// processor back, which a device callback does on its own schedule.
+pub(super) struct RetiringSlot {
+    pub(super) group: BeatGridId,
+    pub(super) slot: SlotNodes,
+}
+
 pub(super) struct Deck<S> {
     pub(super) grid_id: BeatGridId,
     pub(super) bus: EventBus,
@@ -140,6 +157,8 @@ impl<S> GraphRegistry<S> {
             pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut Deck<S>>;
             #[call(iter)]
             pub(super) fn decks(&self) -> impl Iterator<Item = &Deck<S>>;
+            #[call(iter_mut)]
+            pub(super) fn decks_mut(&mut self) -> impl Iterator<Item = &mut Deck<S>>;
             pub(super) fn len(&self) -> usize;
         }
     }
@@ -221,6 +240,7 @@ impl RootView {
 
 pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
+    pub(super) retiring: Vec<RetiringSlot>,
     pub(super) root: GroupState<PlayerMember>,
     pub(super) sync_arbiter: Arc<SyncArbiter>,
     pub(super) sync_cells: Vec<RegisteredSyncCell>,
@@ -256,26 +276,15 @@ impl<T, S> Drop for SessionState<T, S> {
     fn drop(&mut self) {
         self.stream.take();
         self.ctx.take();
-        for deck_index in 0..self.graph.len() {
-            let slot_count = self
-                .graph
-                .deck(deck_index)
-                .map_or(0, |deck| deck.slots.len());
-            for slot_index in 0..slot_count {
-                loop {
-                    let receipt = self
-                        .graph
-                        .deck_mut(deck_index)
-                        .and_then(|deck| deck.slots.get_mut(slot_index))
-                        .and_then(|slot| {
-                            slot.pending_receipt
-                                .take()
-                                .or_else(|| slot.sync_receipts.try_pop())
-                        });
-                    let Some(receipt) = receipt else { break };
-                    if let Err(error) = self.root.acknowledge(receipt) {
-                        warn!(?error, ?receipt, "final sync receipt could not be recorded");
-                    }
+        let live = self
+            .graph
+            .decks_mut()
+            .flat_map(|deck| deck.slots.iter_mut());
+        let retiring = self.retiring.iter_mut().map(|retiring| &mut retiring.slot);
+        for slot in live.chain(retiring) {
+            while let Some(receipt) = slot.next_receipt() {
+                if let Err(error) = self.root.acknowledge(receipt) {
+                    warn!(?error, ?receipt, "final sync receipt could not be recorded");
                 }
             }
         }
@@ -339,6 +348,7 @@ impl<T, S> SessionState<T, S> {
             transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
             graph: GraphRegistry::default(),
+            retiring: Vec::new(),
         };
         state.publish_root();
         state
@@ -381,6 +391,8 @@ impl<T, S> SessionState<T, S> {
             })
     }
 
+    /// The member's end of life: a slot still retiring for it can no longer
+    /// report anything the owner would apply, so its receiver goes too.
     pub(super) fn retire_sync_member(
         &mut self,
         member: BeatGridId,
@@ -394,7 +406,9 @@ impl<T, S> SessionState<T, S> {
             return Ok(());
         };
         control.retire_cell(&self.sync_cells[index].cell)?;
-        self.sync_cells.remove(index);
+        let entry = self.sync_cells.remove(index);
+        self.retiring
+            .retain(|retiring| retiring.group != entry.group);
         Ok(())
     }
 }

@@ -16,10 +16,7 @@ use kithara_test_utils::{
     kithara,
 };
 
-use super::{
-    super::protocol::DeviceStream, engine_session_contract as contract, graph::GraphSession,
-};
-use crate::HostConfig;
+use super::{engine_session_contract as contract, graph::GraphSession};
 
 struct CpalGraphSession {
     cmd_tx: Mutex<mpsc::Sender<CpalMessage>>,
@@ -38,7 +35,7 @@ impl CpalGraphSession {
     fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<CpalMessage>();
         let worker = spawn_named("kithara-engine-cpal-contract", move || {
-            let mut graph = GraphSession::<DeviceStream<CpalStream>, TestPools>::new(start_stream);
+            let mut graph = GraphSession::<CpalStream, TestPools>::new(start_stream);
             while let Ok(message) = cmd_rx.recv() {
                 match message {
                     CpalMessage::Command { cmd, reply_tx } => {
@@ -83,10 +80,7 @@ impl SessionDispatcher<TestPools> for CpalGraphSession {
     }
 }
 
-fn start_stream(
-    ctx: &mut FirewheelContext,
-    sample_rate: u32,
-) -> Result<DeviceStream<CpalStream>, String> {
+fn start_stream(ctx: &mut FirewheelContext, sample_rate: u32) -> Result<CpalStream, String> {
     let config = firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
             desired_sample_rate: Some(sample_rate),
@@ -94,25 +88,19 @@ fn start_stream(
         },
         ..Default::default()
     };
-    let HostConfig::Realtime { callback_stall, .. } = HostConfig::<TestPools>::builder().build()
-    else {
-        panic!("the default Host config is realtime");
-    };
-    CpalStream::new(ctx, config)
-        .map(|stream| DeviceStream::new(stream, callback_stall))
-        .map_err(|error| error.to_string())
+    CpalStream::new(ctx, config).map_err(|error| error.to_string())
 }
 
 fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>)) {
     let session: Arc<dyn SessionDispatcher<TestPools>> = Arc::new(CpalGraphSession::new());
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(GraphSession::<DeviceStream<CpalStream>, TestPools>::DEFAULT_SAMPLE_RATE)
+            .sample_rate(GraphSession::<CpalStream, TestPools>::DEFAULT_SAMPLE_RATE)
             .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(SessionBinding::new(
                 session,
-                GraphSession::<DeviceStream<CpalStream>, TestPools>::DEFAULT_SAMPLE_RATE,
+                GraphSession::<CpalStream, TestPools>::DEFAULT_SAMPLE_RATE,
             ))
             .build(),
     );

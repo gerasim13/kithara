@@ -10,7 +10,7 @@ use crate::{
     bridge::PlaybackShared,
     session::{
         dispatch::drain_host_channel,
-        protocol::{HostCmdMsg, HostReply, Reply},
+        protocol::{HostCmdMsg, HostReply, Reply, SessionStream},
         state::ensure_ctx,
     },
 };
@@ -44,7 +44,7 @@ pub(crate) fn tick_and_poll_remote<S>(
     };
 
     if let Some(stream) = state.stream.as_mut()
-        && AsMut::<WebAudioBackend>::as_mut(stream).poll().is_err()
+        && stream.poll().is_err()
     {
         state.stream = None;
     }
@@ -120,6 +120,9 @@ pub(crate) fn warm_up_audio<S>(
     };
     ensure_ctx(state, state.sample_rate_hint)
 }
+
+/// The browser runs the Web Audio callback on its own audio thread.
+impl SessionStream for WebAudioBackend {}
 
 pub(super) fn start_stream_web_audio(
     ctx: &mut FirewheelContext,

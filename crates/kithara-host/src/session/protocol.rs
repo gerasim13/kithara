@@ -1,6 +1,6 @@
 use firewheel::FirewheelContext;
 use kithara_output::OutputGroup;
-use kithara_platform::{sync::mpsc, time::Duration};
+use kithara_platform::sync::mpsc;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
     SessionSampleRate,
@@ -22,8 +22,8 @@ use crate::{
 pub(crate) type StartStreamFn<T> =
     Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
 
-/// The stream a session runs its audio callback on. Graph retirement waits
-/// until the callback has accepted a new schedule. A device stream runs its
+/// The stream a session runs its audio callback on. A retired slot is reaped
+/// once the callback has accepted a new schedule. A device stream runs its
 /// own callbacks, so it needs no drive; a stream whose callback runs only
 /// when the Host asks overrides [`Self::drive_control`].
 pub(crate) trait SessionStream {
@@ -31,39 +31,6 @@ pub(crate) trait SessionStream {
     /// rendering PCM or moving the stream clock.
     fn drive_control(&mut self) -> Result<(), SessionError> {
         Ok(())
-    }
-
-    /// Longest the callback may stay silent while the Host waits on it. A
-    /// stream whose callback runs only inside [`Self::drive_control`] has no
-    /// silence to wait out.
-    fn callback_stall(&self) -> Duration;
-}
-
-/// A device backend that runs its callback on its own audio thread, held
-/// with the silence the Host waits out before it stops trusting the device.
-pub(crate) struct DeviceStream<B> {
-    backend: B,
-    callback_stall: Duration,
-}
-
-impl<B> DeviceStream<B> {
-    pub(crate) const fn new(backend: B, callback_stall: Duration) -> Self {
-        Self {
-            backend,
-            callback_stall,
-        }
-    }
-}
-
-impl<B> AsMut<B> for DeviceStream<B> {
-    fn as_mut(&mut self) -> &mut B {
-        &mut self.backend
-    }
-}
-
-impl<B> SessionStream for DeviceStream<B> {
-    fn callback_stall(&self) -> Duration {
-        self.callback_stall
     }
 }
 

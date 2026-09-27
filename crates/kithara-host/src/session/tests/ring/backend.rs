@@ -120,11 +120,7 @@ pub(crate) struct RingBackend {
 }
 
 /// A test renders the ring backend block by block itself.
-impl SessionStream for RingBackend {
-    fn callback_stall(&self) -> Duration {
-        Duration::ZERO
-    }
-}
+impl SessionStream for RingBackend {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]

@@ -2,7 +2,7 @@ use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
 use kithara_effects::LimiterConfig;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
 use kithara_warp::BeatGridId;
@@ -54,7 +54,6 @@ impl<S> Platform<S> {
         sample_rate: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
         limiter: LimiterConfig,
-        callback_stall: Duration,
     ) -> StartedPlatform<S>
     where
         S: HasPool<f32> + Send + Sync + 'static,
@@ -65,7 +64,6 @@ impl<S> Platform<S> {
             sample_rate,
             output_block_frames,
             limiter,
-            callback_stall,
         );
         (dispatcher, Self::owner())
     }

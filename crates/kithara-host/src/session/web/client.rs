@@ -1,13 +1,9 @@
 use std::{cell::Cell, num::NonZeroU32};
 
-use firewheel::FirewheelContext;
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_effects::LimiterConfig;
-use kithara_platform::{
-    sync::{Arc, Mutex, mpsc},
-    time::Duration,
-};
+use kithara_platform::sync::{Arc, Mutex, mpsc};
 use kithara_play::{SessionSampleRate, StreamShape};
 use kithara_sync::GroupState;
 
@@ -18,15 +14,15 @@ use crate::{
     session::{
         dispatch::run_host_cmd,
         protocol::{
-            Cmd, DeviceStream, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply,
-            Reply, SessionDispatcher,
+            Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
+            SessionDispatcher,
         },
         state::{RootView, SessionState},
     },
 };
 
 pub(crate) type WebSessionState<S> =
-    Arc<Mutex<Option<SessionState<DeviceStream<firewheel_web_audio::WebAudioBackend>, S>>>>;
+    Arc<Mutex<Option<SessionState<firewheel_web_audio::WebAudioBackend, S>>>>;
 
 enum SessionHost<S> {
     Local { state: WebSessionState<S> },
@@ -126,7 +122,6 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root_view: RootView,
     sample_rate: NonZeroU32,
     limiter: LimiterConfig,
-    callback_stall: Duration,
 ) -> Result<(Arc<dyn HostDispatcher<S>>, WebSessionState<S>), PlayError> {
     WASM_SESSION_ACTIVE.with(|active| {
         if active.replace(true) {
@@ -141,10 +136,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         None,
         None,
         limiter,
-        move |ctx: &mut FirewheelContext, sample_rate| {
-            start_stream_web_audio(ctx, sample_rate)
-                .map(|backend| DeviceStream::new(backend, callback_stall))
-        },
+        start_stream_web_audio,
     ))));
     init_bridge_state();
     let client = Arc::new(SessionClient {
