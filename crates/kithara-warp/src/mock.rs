@@ -1,24 +1,34 @@
-use std::num::NonZeroU32;
+use std::{iter, num::NonZeroU32};
 
+use kithara_signal::{SessionEpoch, SessionFrame};
 use num_traits::ToPrimitive;
 
 use crate::{
     AssetAxis, AssetExtent, AssetFrame, Beat, BeatAlignment, BeatEvidence, BeatGridId,
     BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatMarker, BeatOrdinal, FrameUncertainty,
     MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts, SegmentSet, SessionAnchor,
-    SessionBeat, SessionEpoch, SessionFrame, WarpMap, WarpMapRevision, WarpPlan,
+    SessionBeat, WarpMap, WarpMapRevision, WarpPlan,
 };
+
+mod consts {
+    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
+}
 
 /// Beats a fixture recording is analysed over.
 pub const BEATS: i64 = 400;
-const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// Frames one beat of `bpm` occupies at `sample_rate`.
+#[must_use]
 pub fn beat_frames(bpm: f64, sample_rate: NonZeroU32) -> f64 {
-    f64::from(sample_rate.get()) * SECONDS_PER_MINUTE / bpm
+    f64::from(sample_rate.get()) * consts::SECONDS_PER_MINUTE / bpm
 }
 
 /// One analysed recording at a steady `bpm`, on its own asset axis.
+///
+/// # Panics
+///
+/// Panics when `bpm` does not give finite, increasing beat frames.
+#[must_use]
 pub fn asset_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
     let last = beat_frames(bpm, sample_rate) * BEATS.to_f64().unwrap_or_default();
     let marker = |frame: f64, ordinal: i64| {
@@ -54,11 +64,16 @@ pub fn asset_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
 }
 
 /// One live session grid running at a steady `bpm`.
+///
+/// # Panics
+///
+/// Panics when `bpm` is not a finite, invertible tempo.
+#[must_use]
 pub fn session_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
     let anchor = SessionAnchor::new(
         SessionFrame::new(0),
         SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
-        bpm / SECONDS_PER_MINUTE,
+        bpm / consts::SECONDS_PER_MINUTE,
         sample_rate,
     )
     .expect("invariant: fixture tempo is invertible");
@@ -72,6 +87,11 @@ pub fn session_grid(bpm: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
 }
 
 /// A plan carrying one recording projected onto a host running at `host_bpm`.
+///
+/// # Panics
+///
+/// Panics when either tempo cannot form a grid or the projection does not resolve.
+#[must_use]
 pub fn projected_plan(source_bpm: f64, host_bpm: f64, sample_rate: NonZeroU32) -> WarpPlan {
     let source = asset_grid(source_bpm, sample_rate);
     let target = session_grid(host_bpm, sample_rate);
@@ -85,45 +105,50 @@ pub fn projected_plan(source_bpm: f64, host_bpm: f64, sample_rate: NonZeroU32) -
     WarpPlan::new(map, SessionFrame::new(0)).expect("invariant: initial projection resolves")
 }
 
+/// A recording marked by `(start, frames_per_beat, count)` spans, on an asset axis of
+/// `frames` or just past the last marked beat.
+///
+/// # Panics
+///
+/// Panics when `spans` is empty, adjacent spans do not share their boundary, or the
+/// marked beats do not form a valid model.
+#[must_use]
 pub fn asset_grid_over(
     spans: &[(f64, f64, i64)],
     frames: Option<u64>,
     sample_rate: NonZeroU32,
 ) -> BeatGridSnapshot {
     let rate = f64::from(sample_rate.get());
+    let (first, _, _) = spans.first().expect("fixture has a marked span");
+    let (_, last_spacing, _) = spans.last().expect("fixture has a marked span");
+    let origin = kithara_beat::GridBeat {
+        at: *first / rate,
+        ordinal: 0,
+        confidence: Some(1.0),
+    };
+    let mut end = *first;
     let mut ordinal = 0;
-    let mut end = 0.0;
-    let mut beats = Vec::with_capacity(spans.len() + 1);
-    for (index, (start, frames_per_beat, count)) in spans.iter().enumerate() {
-        if index == 0 {
-            beats.push(kithara::beat::GridBeat {
-                at: *start / rate,
-                ordinal,
-                confidence: Some(1.0),
-            });
-        } else {
-            assert_eq!(*start, end, "fixture marked spans share their boundary");
-        }
+    let span_ends = spans.iter().map(|&(start, frames_per_beat, count)| {
+        assert_eq!(start, end, "fixture marked spans share their boundary");
         end = count
             .to_f64()
             .unwrap_or_default()
-            .mul_add(*frames_per_beat, *start);
+            .mul_add(frames_per_beat, start);
         ordinal += count;
-        beats.push(kithara::beat::GridBeat {
+        kithara_beat::GridBeat {
             at: end / rate,
             ordinal,
             confidence: Some(1.0),
-        });
-    }
-    let (_, last_spacing, _) = spans.last().expect("fixture has a marked span");
-    let model = kithara::beat::BeatGridModel::try_from(kithara::beat::RawBeatGrid {
-        schema_version: kithara::beat::SCHEMA_VERSION,
+        }
+    });
+    let model = kithara_beat::BeatGridModel::try_from(kithara_beat::RawBeatGrid {
+        schema_version: kithara_beat::SCHEMA_VERSION,
         model_id: "warp-spans".to_owned(),
         revision: 1,
-        state: kithara::beat::BeatGridState::Final,
+        state: kithara_beat::BeatGridState::Final,
         duration: None,
-        bpm: rate * SECONDS_PER_MINUTE / last_spacing,
-        beats,
+        bpm: rate * consts::SECONDS_PER_MINUTE / last_spacing,
+        beats: iter::once(origin).chain(span_ends).collect(),
         downbeats: Vec::new(),
         meter: None,
     })
@@ -142,13 +167,24 @@ pub fn asset_grid_over(
 }
 
 /// A live session grid whose beats are spaced by frame count.
+///
+/// # Panics
+///
+/// Panics when the spacing is not a finite, invertible tempo.
+#[must_use]
 pub fn session_grid_spaced(frames_per_beat: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
     session_grid(
-        f64::from(sample_rate.get()) * SECONDS_PER_MINUTE / frames_per_beat,
+        f64::from(sample_rate.get()) * consts::SECONDS_PER_MINUTE / frames_per_beat,
         sample_rate,
     )
 }
 
+/// `source` projected onto `target` with beat zero of each aligned.
+///
+/// # Panics
+///
+/// Panics when the projection does not resolve.
+#[must_use]
 pub fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> WarpPlan {
     let beat = Beat::new(0.0).expect("fixture cue");
     let alignment = BeatAlignment::new(
@@ -160,6 +196,12 @@ pub fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> WarpPlan
     WarpPlan::new(map, SessionFrame::new(0)).expect("fixture activation")
 }
 
+/// Marked `spans` projected onto a session grid spaced by `host_frames_per_beat`.
+///
+/// # Panics
+///
+/// Panics under the conditions of [`asset_grid_over`] and [`plan_over`].
+#[must_use]
 pub fn spaced_plan(
     spans: &[(f64, f64, i64)],
     host_frames_per_beat: f64,
@@ -172,6 +214,11 @@ pub fn spaced_plan(
 }
 
 /// Explicit replacement-map alignment at the already emitted boundary.
+///
+/// # Panics
+///
+/// Panics when either beat is not finite or the projection does not resolve.
+#[must_use]
 pub fn plan_over_at(
     source: BeatGridSnapshot,
     target: BeatGridSnapshot,

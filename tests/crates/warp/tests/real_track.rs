@@ -8,8 +8,13 @@ use kithara::{
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     platform::time::Duration,
     resampler::NoResamplerBackend,
-    signal::AudioSpec,
+    signal::{AudioSpec, SessionEpoch, SessionFrame},
     stretch::StretchKind,
+    warp::{
+        Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint,
+        SessionAnchor, SessionBeat, StretchControls, WarpConfig, WarpMap, WarpMapRevision,
+        WarpPlan,
+    },
 };
 use kithara_integration_tests::{
     audio_artifact::AudioArtifactTap,
@@ -19,9 +24,6 @@ use kithara_test_fixtures::assets::by_name;
 use num_traits::ToPrimitive;
 
 use crate::{
-    Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint, SessionAnchor,
-    SessionBeat, SessionEpoch, SessionFrame, StretchControls, WarpConfig, WarpMap, WarpMapRevision,
-    WarpPlan,
     region::{CH, Presented, render_configured_grid_with_updates},
     test_pools::pools,
 };
@@ -205,9 +207,9 @@ impl Track {
     }
 
     fn source_grid(&self) -> BeatGridSnapshot {
-        let axis = crate::AssetAxis::new(
+        let axis = kithara::warp::AssetAxis::new(
             self.spec.sample_rate,
-            crate::AssetExtent::Bounded(self.frames().to_u64().expect("frames fit u64")),
+            kithara::warp::AssetExtent::Bounded(self.frames().to_u64().expect("frames fit u64")),
         );
         BeatGridSnapshot::model(
             BeatGridId::allocate().expect("grid id"),

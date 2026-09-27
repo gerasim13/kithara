@@ -9,7 +9,7 @@ use kithara_signal::AudioChunk;
 use kithara_stretch::StretchKind;
 
 use super::*;
-use crate::{WarpPlan, WarpRenderError, consts, test_grids};
+use crate::{WarpPlan, WarpRenderError, consts, mock};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -17,10 +17,10 @@ use crate::{WarpPlan, WarpRenderError, consts, test_grids};
     feature = "stretch-glide"
 ))]
 fn entered_plan(host_rate: NonZeroU32) -> WarpPlan {
-    let source = test_grids::asset_grid(120.0, spec().sample_rate);
-    let target = test_grids::session_grid(100.0, host_rate);
-    let output = test_grids::beat_frames(100.0, host_rate) * consts::CUE_BEAT;
-    test_grids::plan_over_at(
+    let source = mock::asset_grid(120.0, spec().sample_rate);
+    let target = mock::session_grid(100.0, host_rate);
+    let output = mock::beat_frames(100.0, host_rate) * consts::CUE_BEAT;
+    mock::plan_over_at(
         source,
         target,
         consts::CUE_BEAT,

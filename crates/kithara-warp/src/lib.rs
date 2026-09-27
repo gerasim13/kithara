@@ -9,9 +9,8 @@ mod segment;
 mod temporal;
 #[cfg(all(test, feature = "render"))]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
-#[cfg(all(test, feature = "render"))]
-#[path = "../../../tests/crates/warp/tests/grids.rs"]
-pub mod test_grids;
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
 mod warp;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat};

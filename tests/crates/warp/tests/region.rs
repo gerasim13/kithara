@@ -2,18 +2,23 @@ use std::num::NonZero;
 
 use kithara::{
     platform::sync::Arc,
-    signal::{AudioChunk, AudioChunkInfo, AudioSpec, OutputContext, TransportRevision},
+    signal::{
+        AudioChunk, AudioChunkInfo, AudioSpec, OutputContext, SessionEpoch, SessionFrame,
+        TransportRevision,
+    },
     stretch::StretchKind,
+    warp::{
+        GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
+        StretchControls, Warp, WarpConfig, WarpPlan,
+        mock::{
+            asset_grid, asset_grid_over, plan_over, plan_over_at, session_grid_spaced, spaced_plan,
+        },
+    },
 };
 use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
 use kithara_test_utils::kithara::hang_watchdog;
 
-use crate::{
-    GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
-    SessionEpoch, SessionFrame, StretchControls, Warp, WarpConfig, WarpPlan,
-    test_grids::{asset_grid_over, plan_over, plan_over_at, session_grid_spaced, spaced_plan},
-    test_pools::{Pools, pools, sample_buffer},
-};
+use crate::test_pools::{Pools, pools, sample_buffer};
 
 const SR: u32 = 44_100;
 pub(crate) const CH: usize = 2;
@@ -384,9 +389,10 @@ fn i64_of(x: usize) -> i64 {
 
 #[kithara::test]
 fn activation_keeps_the_absolute_host_frame_rounding_phase() {
-    use kithara::warp::{BeatGridQuery, MapPosition};
-
-    use crate::{Beat, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint, SessionAnchor};
+    use kithara::warp::{
+        Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, MapPoint, MapPosition,
+        SessionAnchor,
+    };
 
     let sample_rate = NonZero::new(48_000).expect("sample rate");
     let anchor = SessionAnchor::new(
@@ -426,7 +432,7 @@ fn activation_keeps_the_absolute_host_frame_rounding_phase() {
     let remainder = f64::from(position.uncertainty());
     assert!((remainder - 5.0 / 11.0).abs() < 1e-9, "{remainder}");
 
-    let plan = plan_over(crate::test_grids::asset_grid(120.0, sample_rate), target);
+    let plan = plan_over(asset_grid(120.0, sample_rate), target);
     let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(174_545)) else {
         panic!("covered activation");
     };
@@ -460,7 +466,7 @@ fn render_configured_grid(
     source: &[f32],
     session_beats: f64,
     swap: Option<(usize, fn(u64, usize) -> WarpPlan)>,
-    trajectory: Option<crate::SessionAnchor>,
+    trajectory: Option<kithara::warp::SessionAnchor>,
 ) -> Vec<f32> {
     render_configured_grid_with_updates(
         config,
@@ -496,14 +502,14 @@ pub(crate) fn render_configured_grid_with_updates(
     source: &[f32],
     session_beats: f64,
     swap: Option<(usize, fn(u64, usize) -> WarpPlan)>,
-    trajectory: Option<crate::SessionAnchor>,
+    trajectory: Option<kithara::warp::SessionAnchor>,
     output_frames: Option<usize>,
     updates: &mut dyn FnMut(
         u64,
         usize,
     ) -> Option<(
-        crate::SessionAnchor,
-        crate::WarpMapRevision,
+        kithara::warp::SessionAnchor,
+        kithara::warp::WarpMapRevision,
         Option<WarpPlan>,
     )>,
 ) -> Presented {
@@ -675,7 +681,7 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
     #[case] backend: StretchKind,
     warp_nominal_clicks: Vec<f32>,
 ) {
-    use crate::{BeatGridId, BeatGridRevision, BeatGridSnapshot, SessionAnchor};
+    use kithara::warp::{BeatGridId, BeatGridRevision, BeatGridSnapshot, SessionAnchor};
 
     let source_clicks = click_positions(&mono(&warp_nominal_clicks));
     assert_eq!(

@@ -28,7 +28,7 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block", "kithara-integrat
 usdt = ["kithara/usdt", "kithara-test-utils/usdt", "kithara-integration-tests?/usdt"]
 
 [dependencies]
-kithara = { workspace = true, features = ["beat", "platform", "signal", "stretch-glide", "warp"] }
+kithara = { workspace = true, features = ["beat", "mock", "platform", "signal", "stretch-glide", "warp"] }
 kithara-derive = { workspace = true, optional = true }
 kithara-integration-tests = { workspace = true, optional = true, features = ["all", "analysis"] }
 kithara-test-utils = { workspace = true, features = ["temp-dir"] }

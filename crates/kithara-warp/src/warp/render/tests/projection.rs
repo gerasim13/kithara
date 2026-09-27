@@ -5,19 +5,17 @@ use crate::consts;
 
 #[kithara::test]
 fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
-    use crate::test_grids;
+    use crate::mock;
 
     let config = WarpConfig::builder()
         .stretch(StretchControls::new(2.0))
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
-    config
-        .plan()
-        .install(Some(Arc::new(test_grids::projected_plan(
-            120.0,
-            180.0,
-            spec().sample_rate,
-        ))));
+    config.plan().install(Some(Arc::new(mock::projected_plan(
+        120.0,
+        180.0,
+        spec().sample_rate,
+    ))));
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     let meta = AudioChunkInfo {
         spec: spec(),
@@ -49,7 +47,7 @@ fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
 
 #[kithara::test]
 fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
-    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, test_grids};
+    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
 
     let config = WarpConfig::builder()
         .stretch(StretchControls::new(2.0))
@@ -58,8 +56,8 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     let revision = WarpMapRevision::first()
         .checked_next()
         .expect("next revision");
-    let source = test_grids::asset_grid(120.0, spec().sample_rate);
-    let target = test_grids::session_grid(180.0, spec().sample_rate);
+    let source = mock::asset_grid(120.0, spec().sample_rate);
+    let target = mock::session_grid(180.0, spec().sample_rate);
     let beat = Beat::new(0.0).expect("cue");
     let alignment = BeatAlignment::new(
         MapPoint::new(source.stamp(), beat),
@@ -115,16 +113,15 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
 
 #[kithara::test]
 fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
-    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, test_grids};
+    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
 
     let mut frontiers = Vec::new();
     for quantum in [64, 128, 256] {
         let config = WarpConfig::builder()
             .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
             .build();
-        let source = test_grids::asset_grid(120.0, spec().sample_rate);
-        let target =
-            test_grids::session_grid(180.0, NonZero::new(48_000).expect("session sample rate"));
+        let source = mock::asset_grid(120.0, spec().sample_rate);
+        let target = mock::session_grid(180.0, NonZero::new(48_000).expect("session sample rate"));
         let beat = Beat::new(0.0).expect("cue");
         let alignment = BeatAlignment::new(
             MapPoint::new(source.stamp(), beat),
@@ -169,10 +166,10 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
 
 #[kithara::test]
 fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
-    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, test_grids};
+    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
 
-    let source = test_grids::asset_grid(120.0, spec().sample_rate);
-    let target = test_grids::session_grid(120.0, NonZero::new(48_000).expect("session rate"));
+    let source = mock::asset_grid(120.0, spec().sample_rate);
+    let target = mock::session_grid(120.0, NonZero::new(48_000).expect("session rate"));
     let beat = Beat::new(0.0).expect("cue");
     let alignment = BeatAlignment::new(
         MapPoint::new(source.stamp(), beat),
@@ -204,12 +201,12 @@ fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
 
 #[kithara::test]
 fn a_future_projection_retains_the_active_producer_until_activation() {
-    use crate::{WarpPlan, test_grids};
+    use crate::{WarpPlan, mock};
 
     let config = WarpConfig::builder()
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
-    let first = Arc::new(test_grids::projected_plan(120.0, 180.0, spec().sample_rate));
+    let first = Arc::new(mock::projected_plan(120.0, 180.0, spec().sample_rate));
     config.plan().install(Some(Arc::clone(&first)));
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     for source_start in [0, 192, 384] {
@@ -421,7 +418,7 @@ fn adoption_frontier_reports_only_committed_pcm() {
 fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_frames: usize) {
     let controls = StretchControls::new(1.0);
     let (mut renderer, slot) = planned_renderer(controls);
-    let map = crate::test_grids::projected_plan(60.0, 60.0, spec().sample_rate)
+    let map = crate::mock::projected_plan(60.0, 60.0, spec().sample_rate)
         .map()
         .clone();
     let plan = crate::WarpPlan::new(map, SessionFrame::new(16)).expect("activation resolves");
@@ -453,7 +450,7 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     renderer
         .prepare_quantum(input.meta, input.frames())
         .expect("current plan accepts the source quantum");
-    slot.install(Some(Arc::new(crate::test_grids::projected_plan(
+    slot.install(Some(Arc::new(crate::mock::projected_plan(
         60.0,
         60.0,
         spec().sample_rate,
@@ -476,8 +473,8 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let mut renderer = warp.renderer(spec(), pools());
     let revision = crate::WarpMapRevision::from(NonZero::new(3).expect("fixture revision"));
-    let source = crate::test_grids::asset_grid(60.0, spec().sample_rate);
-    let target = crate::test_grids::session_grid(60.0, spec().sample_rate);
+    let source = crate::mock::asset_grid(60.0, spec().sample_rate);
+    let target = crate::mock::session_grid(60.0, spec().sample_rate);
     let beat = crate::Beat::new(0.0).expect("fixture beat");
     let alignment = crate::BeatAlignment::new(
         crate::MapPoint::new(source.stamp(), beat),
@@ -624,7 +621,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
 fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
     let controls = StretchControls::new(1.0);
     let (mut renderer, slot) = planned_renderer(controls);
-    slot.install(Some(Arc::new(crate::test_grids::projected_plan(
+    slot.install(Some(Arc::new(crate::mock::projected_plan(
         120.0,
         180.0,
         spec().sample_rate,
@@ -681,7 +678,7 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(warp_sine: Vec<f32>) 
     let first = render_serviced(&mut renderer, chunk(&pools, &warp_sine[..first_frames * 2]))
         .expect("initial passthrough renders");
     assert_eq!(&first.samples[..], &warp_sine[..first_frames * 2]);
-    slot.install(Some(Arc::new(crate::test_grids::projected_plan(
+    slot.install(Some(Arc::new(crate::mock::projected_plan(
         60.0,
         60.0,
         spec().sample_rate,
@@ -737,9 +734,9 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
         chunk(&pools, &warp_sine[..initial_frames * 2]),
     )
     .expect("initial unity PCM renders");
-    slot.install(Some(Arc::new(crate::test_grids::plan_over_at(
-        crate::test_grids::asset_grid(60.0, spec().sample_rate),
-        crate::test_grids::session_grid(60.0, spec().sample_rate),
+    slot.install(Some(Arc::new(crate::mock::plan_over_at(
+        crate::mock::asset_grid(60.0, spec().sample_rate),
+        crate::mock::session_grid(60.0, spec().sample_rate),
         4_864.0 / f64::from(consts::SR),
         40_128.0 / f64::from(consts::SR),
         SessionFrame::new(40_128),
@@ -781,7 +778,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
     controls.set_keylock(true);
     controls.set_backend(kithara_stretch::StretchKind::Signalsmith);
     let (mut renderer, slot) = planned_renderer(Arc::clone(&controls));
-    slot.install(Some(Arc::new(crate::test_grids::projected_plan(
+    slot.install(Some(Arc::new(crate::mock::projected_plan(
         120.0,
         180.0,
         spec().sample_rate,
@@ -859,7 +856,7 @@ fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
     let input = chunk(&renderer.pools, &[0.25, 0.25]);
     assert!(render_serviced(&mut renderer, input).is_none());
     assert_eq!(renderer.pending_frames(2), 1);
-    slot.install(Some(Arc::new(crate::test_grids::projected_plan(
+    slot.install(Some(Arc::new(crate::mock::projected_plan(
         120.0,
         120.0,
         spec().sample_rate,
@@ -937,8 +934,8 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
             .stretch(controls)
             .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
             .build();
-        let plan = crate::test_grids::plan_over(
-            crate::test_grids::asset_grid_over(&[(0.0, 128.0, 1)], Some(128), spec().sample_rate),
+        let plan = crate::mock::plan_over(
+            crate::mock::asset_grid_over(&[(0.0, 128.0, 1)], Some(128), spec().sample_rate),
             crate::BeatGridSnapshot::session(
                 crate::BeatGridId::allocate().expect("grid id"),
                 crate::BeatGridRevision::first(),
@@ -1041,7 +1038,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
         .build();
     config
         .plan()
-        .install(Some(Arc::new(crate::test_grids::projected_plan(
+        .install(Some(Arc::new(crate::mock::projected_plan(
             120.0,
             180.0,
             spec().sample_rate,

@@ -16,6 +16,8 @@ ignored = ["serde"]
 
 [features]
 default = []
+# Beat-grid and warp-plan fixtures for tests outside this crate.
+mock = []
 perf = ["kithara-stretch?/perf"]
 usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
 render = ["dep:kithara-bufpool"]

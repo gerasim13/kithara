@@ -551,7 +551,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Warp, WarpConfig, test_grids,
+        Warp, WarpConfig, mock,
         test_pools::{TestPools, pools},
     };
 
@@ -572,7 +572,7 @@ mod tests {
     #[kithara::test]
     fn a_short_decoder_suffix_requests_the_next_mapped_source_frame() {
         let (renderer, meta) = renderer();
-        let plan = test_grids::projected_plan(120.0, 240.0, meta.spec.sample_rate);
+        let plan = mock::projected_plan(120.0, 240.0, meta.spec.sample_rate);
         let prepared = renderer
             .projected_span(&plan, SessionFrame::new(0), meta, 1, None, 0)
             .expect("one mapped output frame spans decoder chunks");
@@ -589,7 +589,7 @@ mod tests {
     #[kithara::test]
     fn finite_projection_clips_a_quantum_before_resolving_past_the_recording() {
         let (renderer, mut meta) = renderer();
-        let plan = test_grids::projected_plan(120.0, 120.0, meta.spec.sample_rate);
+        let plan = mock::projected_plan(120.0, 120.0, meta.spec.sample_rate);
         // The existing 400-beat fixture ends at frame 8,820,000 at this rate.
         let start = 8_819_968;
         meta.frame_offset = start;
@@ -613,11 +613,7 @@ mod tests {
     #[kithara::test]
     fn terminal_projection_recomputes_both_endpoints_and_keeps_the_selected_rate() {
         let (mut renderer, meta) = renderer();
-        let plan = Arc::new(test_grids::projected_plan(
-            120.0,
-            180.0,
-            meta.spec.sample_rate,
-        ));
+        let plan = Arc::new(mock::projected_plan(120.0, 180.0, meta.spec.sample_rate));
         let prepared = renderer
             .projected_span(&plan, SessionFrame::new(0), meta, 4096, None, 0)
             .expect("initial quantum resolves");

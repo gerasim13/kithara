@@ -135,8 +135,8 @@ mod tests {
     fn projected_map_uses_absolute_source_endpoints() {
         use std::num::NonZeroU32;
 
-        use crate::{BeatGridQuery, test_grids};
-        let plan = test_grids::projected_plan(120.0, 180.0, NonZeroU32::new(48_000).expect("rate"));
+        use crate::{BeatGridQuery, mock};
+        let plan = mock::projected_plan(120.0, 180.0, NonZeroU32::new(48_000).expect("rate"));
         let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(128)) else {
             panic!("projected source resolves");
         };
@@ -152,10 +152,10 @@ mod tests {
     fn projected_rate_includes_the_source_to_output_sample_rate_relation() {
         use std::num::NonZeroU32;
 
-        use crate::{Beat, test_grids};
+        use crate::{Beat, mock};
 
-        let source = test_grids::asset_grid(120.0, NonZeroU32::new(44_100).expect("source rate"));
-        let target = test_grids::session_grid(180.0, NonZeroU32::new(48_000).expect("output rate"));
+        let source = mock::asset_grid(120.0, NonZeroU32::new(44_100).expect("source rate"));
+        let target = mock::session_grid(180.0, NonZeroU32::new(48_000).expect("output rate"));
         let cue = Beat::new(0.0).expect("finite cue");
         let alignment = BeatAlignment::new(
             MapPoint::new(source.stamp(), cue),

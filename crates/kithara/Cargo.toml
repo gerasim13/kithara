@@ -317,6 +317,7 @@ mock = [
     "kithara-storage?/mock",
     "kithara-stream?/mock",
     "kithara-test-utils/mock",
+    "kithara-warp?/mock",
 ]
 perf = [
     "kithara-audio?/perf",

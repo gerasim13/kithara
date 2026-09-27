@@ -274,7 +274,7 @@ mod tests {
 
         config
             .plan()
-            .install(Some(Arc::new(crate::test_grids::projected_plan(
+            .install(Some(Arc::new(crate::mock::projected_plan(
                 120.0,
                 180.0,
                 spec.sample_rate,
