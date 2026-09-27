@@ -367,7 +367,7 @@ fn a_spawned_holder_is_named_by_its_spawn_site_not_the_platform_shim() {
 fn a_pinning_holder_is_aged_on_the_real_clock_not_the_virtual_one_it_stops() {
     let flash = FlashInner::new_arc();
     flash.sync_holder_running(Location::caller());
-    flash.clock.advance(5 * NANOS_PER_SEC);
+    flash.clock.advance(5 * consts::NANOS_PER_SEC);
 
     let dump = flash.to_string();
     let age: u64 = dump
@@ -377,7 +377,7 @@ fn a_pinning_holder_is_aged_on_the_real_clock_not_the_virtual_one_it_stops() {
         .and_then(|value| value.parse().ok())
         .expect("the dump must age its active holder");
     assert!(
-        age < NANOS_PER_SEC,
+        age < consts::NANOS_PER_SEC,
         "the pin's age must not follow the virtual clock it stops: {age} ns\n{dump}"
     );
 }
