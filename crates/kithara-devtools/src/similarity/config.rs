@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Write as _},
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
     process::Command,
 };
 
@@ -11,7 +11,11 @@ use cargo_metadata::Metadata;
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use super::{analysis, report};
+use super::{
+    analysis,
+    chains::{self, ChainConfig},
+    report,
+};
 use crate::{
     Ctx,
     common::walker::{relative_to, walk_rs_files},
@@ -30,6 +34,7 @@ pub(crate) struct SimilarityConfig {
     pub(super) active_dependencies: BTreeSet<String>,
     pub(super) types: TypeConfig,
     excluded_crates: Vec<String>,
+    chains: ChainConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -174,8 +179,9 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     if roots.is_empty() {
         return Ok(());
     }
-    let files = source_files(&ctx.root, &roots, include_tests)?;
-    let native = analysis::analyze_files(&files, &config, include_tests)?;
+    let sources = source_files(&ctx.root, &roots, include_tests)?;
+    let native = analysis::analyze_sources(&sources, &config, include_tests)?;
+    let chains = chains::detect(&sources, &config.chains)?;
     let revision = revision(&ctx.root);
     let output = ctx.root.join("target/similarity").join(&revision);
     let artifacts = report::write(
@@ -185,6 +191,7 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
         &roots,
         args.include_default_excluded,
         &native,
+        &chains,
     )?;
     writeln!(io::stdout().lock(), "==> {}", artifacts.document.display())?;
 
@@ -220,11 +227,12 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// The `(path, text)` of every Rust source under `roots`.
 fn source_files(
     workspace_root: &Path,
     roots: &[String],
     include_tests: bool,
-) -> Result<Vec<(String, PathBuf)>> {
+) -> Result<Vec<(String, String)>> {
     let mut files = BTreeMap::new();
     for root in roots {
         let path = workspace_root.join(root);
@@ -257,7 +265,14 @@ fn source_files(
             files.insert(relative, candidate);
         }
     }
-    Ok(files.into_iter().collect())
+    files
+        .into_iter()
+        .map(|(relative, path)| {
+            let text = fs::read_to_string(&path)
+                .with_context(|| format!("read Rust source for similarity: {}", path.display()))?;
+            Ok((relative, text))
+        })
+        .collect()
 }
 
 fn is_test_path(path: &Path) -> bool {

@@ -67,11 +67,16 @@ Every fact below has one owner. Link to the owner; do not restate it.
   go back to the second rule.
 - Do not introduce parallel mutable sources of truth. When old and new state
   must coexist, stage the ownership transfer in the task packet or plan.
-- No fallback chains (`try A, else B, else C`) to paper over state-resolution
-  bugs. If the primary path has no correct answer, the state contract is broken:
-  fix the contract. A legitimate fallback (user-facing default, optional config,
-  degraded mode) is justified in the owning crate wiki page or the task
-  packet; a test that codifies one protects a symptom.
+- Do not grow the architecture out of fallback paths. A fallback is a branch
+  selected by the failure or absence of another path that produces the same
+  result, so one job gets two execution paths; the parallel-chain section of
+  `just lint similarity` lists such pairs. When a case fails, extend the
+  owner's algorithm to cover it instead of adding a path per failure; each such
+  path is one more layer, and they stack. Syntax is not the test: `or_else` or
+  an extra `match` arm is fine when a domain input selects it. A designed
+  fallback (user-facing default, optional config, degraded mode) is part of
+  the owner's contract and is justified in the owning crate wiki page or the
+  task packet; a test that codifies any other fallback protects a symptom.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.
@@ -99,7 +104,7 @@ exposes domain modules only, and recipes live under `.config/just/`.
 - Lint: `just lint`; `just lint fast`; `just lint gate`; `just lint full`.
 - Autofix: most ratchets rewrite under `--fix` (`arch` also needs `--apply`).
   Reach for it before hand-editing; `docs/guides/tooling.md` lists them.
-- Duplication report: `just lint similarity [<crate>/src ...]`.
+- Duplication and parallel-chain report: `just lint similarity [<crate>/src ...]`.
 - Test: `just test`; `just test run <args>`; `just test all` adds doc-tests.
 - UI suites: `just test ui`; through a real window, `just test ui-window`.
 - CI: `just ci gate`; `just ci audit <scope>`; `just ci health`;
@@ -120,8 +125,8 @@ Reject a design before coding when it:
 
 - Has no canonical owner for touched state, shared types, or cross-crate
   contracts, or creates multiple mutable sources of truth.
-- Masks state-contract bugs with fallback, retry, sentinel, or workaround
-  branches.
+- Answers a failure with a new fallback, retry, sentinel, or workaround path
+  instead of fixing its cause.
 - Crosses platform, protocol, surface, test, or crate-layer boundaries without
   owning the contract.
 - Widens public API or adds ad-hoc Rust shapes instead of standard traits,

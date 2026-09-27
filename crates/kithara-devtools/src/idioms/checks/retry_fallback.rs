@@ -37,16 +37,18 @@ each fallback hides another underlying failure mode.
    handles deterministically.
 
 ❌  fn read_or_fallback(...) -> Bytes { read_primary().unwrap_or_else(read_secondary) }
-✅  pick one source (or model the choice as user-facing config), don't \
-   chain implementations.
+✅  extend the owner's algorithm so one path covers the case, or model \
+   the choice as user-facing config; don't chain implementations.
 
 Exact identifiers listed in `retry_fallback.allowed_idents` are excluded from \
 this lexical check.
 
-Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for legitimate \
-user-facing defaults (e.g. a config field literally named `fallback_url` \
-where the user opted in to two endpoints). Suppression for control flow \
-is a code smell that should be discussed and fixed, not silenced.";
+Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for a designed \
+fallback the owner's contract names: a user-facing default, optional \
+config, or degraded mode (e.g. a config field literally named \
+`fallback_url` where the user opted in to two endpoints). Suppression \
+for control flow is a code smell that should be discussed and fixed, not \
+silenced.";
 }
 
 pub(crate) struct RetryFallback;

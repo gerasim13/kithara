@@ -145,6 +145,21 @@ it. Native artifacts live under `target/similarity/<revision>/`.
   latency budget, and a high score is a refactoring candidate, never proof of
   behavioral equivalence.
 
+The same run writes parallel execution chains to `chains.json` and the
+`## Parallel chains` section of `report.md`, skipping test code in every profile.
+
+- A chain is a fork whose two sides walk alike chains of the workspace's own
+  functions; a side is what its root alone calls into, plus an arm's own code.
+  `Split` names the fork: a decision kind such as `if` or `match`,
+  `fallback:<kind>` when one side runs on the other's failure, `dyn` for the
+  impls of one trait method, `seq` or `via-callee` under a common caller, and
+  `entry` when there is none.
+- Only sides of at least `min_side_lines` lines are listed. Coverage names the
+  private functions no resolved call reaches, such as those called through
+  `macro_rules!`; no chain passes through them.
+- The thresholds are code defaults; a `[chains]` table in
+  `.config/similarity.toml` overrides them by field name.
+
 ## Dependency Policy
 
 `AGENTS.md` owns the workspace-first rule. Beyond it: a crate reaches a version
