@@ -562,8 +562,9 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         self.update_position_duration(leading_outcome_pos_dur);
         self.refresh_effective_rate();
-        // Evidence stands for a source only while blocks keep rendering it.
-        if !playback_started {
+        // Evidence stands for a source only while blocks keep rendering it,
+        // and a pause fade-out renders a block that is already stopping.
+        if !playback_started || !is_playing {
             self.playback.applied_source.clear();
         } else if drained && let Some(source) = source {
             self.playback.applied_source.publish(source);

@@ -209,6 +209,10 @@ impl PlayerTrack {
             self.state = new_state;
             self.state_dirty = true;
             self.update_service_class(new_state);
+            // A track that no longer renders withdraws what it last sounded.
+            if !new_state.is_playing() {
+                self.resource.clear_render();
+            }
         }
     }
 

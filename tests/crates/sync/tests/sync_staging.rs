@@ -398,7 +398,7 @@ async fn a_sync_request_waits_for_the_audio_thread_to_apply_a_seek(
 ) {
     let case = STAGED_BESIDE_PLAYBACK_CONTROL;
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
-    let before_seek = rendered_frontier(&harness, case);
+    let seek_output = rendered_frontier(&harness, case).output();
     let control = harness.decks[0].control().clone();
     let target = harness.start_seconds(0, cue) / 2.0;
     harness
@@ -431,19 +431,18 @@ async fn a_sync_request_waits_for_the_audio_thread_to_apply_a_seek(
             )
         });
     // Nothing renders between the admission and this read, so it is the
-    // evidence the Host admitted.
-    // Playback alone moves the source about as far as the output, so a
-    // source advance far past it is the seek the evidence rendered.
+    // evidence the Host admitted: it plays from the seek target, no further
+    // on than the output rendered since the seek could carry it.
     let admitted = rendered_frontier(&harness, case);
-    let source_advance = admitted.source().checked_sub(before_seek.source());
-    let output_advance = i64::from(admitted.output()) - i64::from(before_seek.output());
+    let target_frame = (target * f64::from(case.sample_rate)).round() as u64;
+    let played = u64::try_from(i64::from(admitted.output()) - i64::from(seek_output))
+        .unwrap_or_else(|_| panic!("{}: the admitted evidence follows the seek", case.id()));
     assert!(
-        source_advance
-            .and_then(|advance| i64::try_from(advance).ok())
-            .is_some_and(|advance| advance > 2 * output_advance),
-        "{}: the admitted evidence plays from the seek target, source advance \
-         {source_advance:?} across {output_advance} output frames",
-        case.id()
+        (target_frame..=target_frame + 2 * played).contains(&admitted.source()),
+        "{}: the admitted evidence at source {} plays from the seek target {target_frame} \
+         across {played} output frames",
+        case.id(),
+        admitted.source()
     );
 }
 
@@ -465,7 +464,8 @@ async fn a_paused_deck_offers_no_sounding_evidence(
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
     let control = harness.decks[0].control().clone();
     harness.host.run(move || control.pause()).await;
-    harness.settle(case, 8).await;
+    // The first paused block still renders the pause fade-out.
+    harness.settle(case, 1).await;
 
     let deck = Arc::clone(&harness.decks[0]);
     let paused = harness
@@ -474,7 +474,19 @@ async fn a_paused_deck_offers_no_sounding_evidence(
         .await;
     assert!(
         matches!(paused, Err(PlayError::NotReady)),
-        "{}: the last block rendered before the pause is no sounding proof: {paused:?}",
+        "{}: a block that fades the pause out is no sounding proof: {paused:?}",
+        case.id()
+    );
+
+    harness.settle(case, 8).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let settled = harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await;
+    assert!(
+        matches!(settled, Err(PlayError::NotReady)),
+        "{}: the last block rendered before the pause is no sounding proof: {settled:?}",
         case.id()
     );
 }

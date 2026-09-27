@@ -414,19 +414,6 @@ impl PlayerTrack {
             self.handle_failed_end(sink.notifications, fault);
             return TrackReadOutcome::Failed(fault);
         };
-        if self.sync_map.is_none()
-            && let Some(source) = self
-                .resource
-                .presentation_source_end(context.output().sample_rate())
-        {
-            self.resource.publish_render(
-                &context,
-                presentation_frontier(&context, source.frame())
-                    .with_warp_map(source.mapping_revision().map(WarpMapRevision::from)),
-            );
-        } else if self.sync_map.is_none() {
-            self.resource.clear_render();
-        }
         let outcome = self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink);
         let consumed = match &outcome {
             TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } => {
@@ -434,19 +421,28 @@ impl PlayerTrack {
             }
             TrackReadOutcome::Eof | TrackReadOutcome::Failed(_) => 0,
         };
-        if self.sync_map.is_some()
-            && consumed > 0
-            && let Some(source) = self.resource.consumed_source_end()
-            && let Some(actual) = context.for_output_range(0..consumed)
+        // Evidence stands only for PCM this block played while the track goes
+        // on sounding: a block that consumed nothing or ended the track
+        // withdraws it, so it never outlives its sound.
+        let source = if self.sync_map.is_some() {
+            self.resource.consumed_source_end()
+        } else {
+            self.resource
+                .presentation_source_end(context.output().sample_rate())
+        };
+        match source
+            .filter(|_| consumed > 0 && self.state.is_playing())
+            .zip(context.for_output_range(0..consumed))
         {
-            self.resource.publish_render(
+            Some((source, actual)) => self.resource.publish_render(
                 &actual,
                 PresentationFrontier::builder()
                     .source(source.frame())
                     .output(actual.output().output_frames().end)
                     .build()
                     .with_warp_map(source.mapping_revision().map(WarpMapRevision::from)),
-            );
+            ),
+            None => self.resource.clear_render(),
         }
         outcome
     }
@@ -537,43 +533,5 @@ impl SyncFadeTail {
                 .with_warp_map(source.mapping_revision().map(WarpMapRevision::from));
             self.resource.publish_render(&actual, frontier);
         }
-    }
-}
-
-fn presentation_frontier(context: &RenderContext, source: u64) -> PresentationFrontier {
-    PresentationFrontier::builder()
-        .source(source)
-        .output(context.output().output_frames().start)
-        .build()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame};
-    use kithara_test_utils::kithara;
-    use kithara_warp::RenderContext;
-
-    use super::presentation_frontier;
-
-    #[kithara::test]
-    fn publication_uses_the_derived_subrange_start() {
-        let output = OutputContext::new(
-            SessionFrame::new(1_000)..SessionFrame::new(1_200),
-            NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"),
-            SessionEpoch::new(1),
-            None,
-        )
-        .expect("fixture output range is ordered");
-        let context = RenderContext::new(output, None)
-            .expect("fixture context is valid")
-            .for_output_range(40..80)
-            .expect("fixture subrange is valid");
-
-        let frontier = presentation_frontier(&context, 8_000);
-
-        assert_eq!(frontier.source(), 8_000);
-        assert_eq!(frontier.output(), SessionFrame::new(1_040));
     }
 }

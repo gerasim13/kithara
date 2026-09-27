@@ -14,21 +14,29 @@ use firewheel::{
         StreamStatus,
     },
 };
-use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+use kithara_audio::{
+    AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome, SeekOutcome,
+};
 use kithara_bufpool::PoolRegion;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame};
+use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan};
 use kithara_test_fixtures::play_fixtures::half;
 use kithara_test_utils::kithara;
-use kithara_warp::{Warp, WarpConfig};
-use ringbuf::traits::{Consumer, Producer};
+use kithara_warp::{RenderReader, Warp, WarpConfig};
+use ringbuf::{
+    HeapProd, HeapRb,
+    traits::{Consumer, Producer, Split},
+};
 
 use super::*;
 use crate::{
-    bridge::{PlayerCmd, PlayerNotification, SharedEq, TrackTransition, slot_channels},
-    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+    bridge::{PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels},
+    rt::{
+        PlayerNodeProcessor, StreamShape,
+        track::{PlayerResource, PlayerTrack, RtSink},
+    },
     test_pools::{TestPools, pools},
 };
 
@@ -71,6 +79,8 @@ struct EofReader {
     samples: Vec<f32>,
     position_frames: usize,
     total_frames: usize,
+    /// Report a stall rather than the end once the frames run out.
+    starve: bool,
 }
 
 impl Default for EofReader {
@@ -86,12 +96,19 @@ impl Default for EofReader {
             total_frames: 0,
             samples: Vec::new(),
             _drop_probe: None,
+            starve: false,
         }
     }
 }
 
 impl EofReader {
     fn eof(&self) -> ReadOutcome {
+        if self.starve {
+            return ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: self.position_duration(),
+            };
+        }
         ReadOutcome::Eof {
             position: self.position_duration(),
         }
@@ -121,6 +138,19 @@ impl EofReader {
             samples,
             ..Self::default()
         }
+    }
+
+    fn starving(samples: Vec<f32>) -> Self {
+        Self {
+            starve: true,
+            ..Self::with_frames(samples)
+        }
+    }
+
+    fn source_span(&self, frames: NonZeroUsize) -> Option<SourceSpan> {
+        let end = u64::try_from(self.position_frames).expect("test frame count fits u64");
+        let frames = u64::try_from(frames.get()).expect("test frame count fits u64");
+        SourceSpan::new(end - frames, end, self.spec.sample_rate, frames)
     }
 }
 
@@ -173,7 +203,7 @@ impl AudioRead for EofReader {
         Ok(ReadOutcome::Frames {
             count: frames,
             position: self.position_duration(),
-            source_span: None,
+            source_span: self.source_span(frames),
         })
     }
 
@@ -479,4 +509,98 @@ fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
     resource.reset_for_seek();
 
     assert!(reader.load().is_none());
+}
+
+/// A playing track over a reader that serves `frames` once and then stalls,
+/// with the reader of the render evidence it publishes.
+fn starving_track(samples: &[f32], frames: usize) -> (PlayerTrack, RenderReader) {
+    let mut warp = Warp::new((), &WarpConfig::builder().build());
+    let publisher = warp
+        .take_publisher()
+        .expect("fixture Warp owns its publisher");
+    let evidence = publisher.reader();
+    let mut resource =
+        Resource::from_reader(EofReader::starving(samples[..2 * frames].to_vec()), None);
+    resource.render_publisher = Some(publisher);
+    let resource = PlayerResource::new(resource, Arc::from("starving"), &pools())
+        .unwrap_or_else(|error| panic!("test player resource: {error}"));
+    let mut track = PlayerTrack::builder()
+        .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"))
+        .item_id(TrackId::allocate())
+        .load(kithara_sync::LoadGeneration::first())
+        .build(Box::new(resource));
+    track.play();
+    (track, evidence)
+}
+
+/// Render the `block`-th output block of one track on the session axis.
+fn render_track_block(
+    track: &mut PlayerTrack,
+    block: usize,
+    notifications: &mut HeapProd<PlayerNotification>,
+    metrics: &RtMetrics,
+) {
+    let start = i64::try_from(block * Consts::BLOCK_FRAMES).expect("test frame fits i64");
+    let end = start + i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
+    let output = OutputContext::new(
+        SessionFrame::new(start)..SessionFrame::new(end),
+        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture output range is ordered");
+    let context = RenderContext::new(output, None).expect("fixture context is valid");
+    let [mut scratch_left, mut scratch_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
+    let [mut mix_left, mut mix_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
+    let mut scratch = [&mut scratch_left[..], &mut scratch_right[..]];
+    let mut mix = [&mut mix_left[..], &mut mix_right[..]];
+    let mut sink = RtSink::new(notifications, metrics, 0);
+    let _ = track.render(
+        Some(&context),
+        &mut scratch,
+        &mut mix,
+        0..Consts::BLOCK_FRAMES,
+        &mut sink,
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn a_block_that_plays_no_pcm_withdraws_the_render_evidence(half: Vec<f32>) {
+    let (mut track, evidence) = starving_track(&half, Consts::BLOCK_FRAMES);
+    let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
+    let metrics = RtMetrics::default();
+
+    render_track_block(&mut track, 0, &mut notifications, &metrics);
+    let played = evidence
+        .load()
+        .map(|snapshot| snapshot.frontier())
+        .expect("a block that played PCM publishes its evidence");
+    let block = i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
+    assert_eq!(i64::try_from(played.source()), Ok(block));
+    assert_eq!(played.output(), SessionFrame::new(block));
+
+    render_track_block(&mut track, 1, &mut notifications, &metrics);
+    assert!(
+        evidence.load().is_none(),
+        "a starved block played no PCM, so no evidence stands for it"
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn a_stopped_track_withdraws_its_render_evidence(half: Vec<f32>) {
+    let (mut track, evidence) = starving_track(&half, 2 * Consts::BLOCK_FRAMES);
+    let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
+    let metrics = RtMetrics::default();
+
+    render_track_block(&mut track, 0, &mut notifications, &metrics);
+    assert!(
+        evidence.load().is_some(),
+        "the played block publishes its evidence"
+    );
+
+    track.stop();
+    assert!(
+        evidence.load().is_none(),
+        "a stopped track renders no further block for its evidence to stand for"
+    );
 }
