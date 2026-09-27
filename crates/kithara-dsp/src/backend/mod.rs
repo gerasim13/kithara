@@ -1,9 +1,15 @@
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-mod accelerate;
-mod portable;
-mod traits;
+pub(crate) mod accelerate;
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) mod portable;
+mod simd;
+mod strided;
+#[cfg(test)]
+mod tests;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use accelerate::Accelerate;
-pub use portable::Portable;
-pub use traits::{Backend, Platform};
+pub(crate) use accelerate as platform;
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub(crate) use portable as platform;
+pub use simd::sanitize;
+pub(crate) use strided::{gather, scatter};

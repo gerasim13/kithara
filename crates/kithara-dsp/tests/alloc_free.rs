@@ -4,37 +4,28 @@
 use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
-use fearless_simd::Level;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_dsp::Accelerate;
-use kithara_dsp::{Backend, Portable};
 use kithara_test_utils::kithara;
 
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
 
 const FRAMES: usize = 1024;
+const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
 const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
 
-fn run_every_kernel<B: Backend>(backend: &B) {
-    let (left, right) = (vec![0.25_f32; FRAMES], vec![-0.25_f32; FRAMES]);
-    let mut pair = vec![0.0_f32; 2 * FRAMES];
-    let (mut out_left, mut out_right) = (vec![0.0_f32; FRAMES], vec![0.0_f32; FRAMES]);
-    let mut six = vec![0.0_f32; 6 * FRAMES];
-    let mut plane = vec![0.0_f32; FRAMES];
-    assert_no_alloc(|| {
-        backend.interleave_pair(&left, &right, &mut pair);
-        backend.deinterleave_pair(&pair, &mut out_left, &mut out_right);
-        backend.scatter(&left, &mut six[1..], SIX);
-        backend.gather(&six[1..], SIX, &mut plane);
-        backend.sanitize(&mut plane);
-    });
-}
-
 #[kithara::test(native, flash(false))]
-fn layout_kernels_never_allocate() {
-    run_every_kernel(&Portable::default());
-    run_every_kernel(&Portable::new(Level::fallback()));
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    run_every_kernel(&Accelerate);
+fn layout_and_sanitize_never_allocate() {
+    let planes = vec![vec![0.25_f32; FRAMES]; SIX.get()];
+    let mut restored = planes.clone();
+    let mut stereo = vec![0.0_f32; TWO.get() * FRAMES];
+    let mut six = vec![0.0_f32; SIX.get() * FRAMES];
+    assert_no_alloc(|| {
+        kithara_dsp::interleave_variable(&planes[..1], 0..FRAMES, &mut stereo, NonZeroUsize::MIN);
+        kithara_dsp::interleave_variable(&planes, 0..FRAMES, &mut stereo, TWO);
+        kithara_dsp::interleave_variable(&planes, 0..FRAMES, &mut six, SIX);
+        kithara_dsp::deinterleave_variable(&stereo, NonZeroUsize::MIN, &mut restored, 0..FRAMES);
+        kithara_dsp::deinterleave_variable(&stereo, TWO, &mut restored, 0..FRAMES);
+        kithara_dsp::deinterleave_variable(&six, SIX, &mut restored, 0..FRAMES);
+        kithara_dsp::sanitize(&mut six);
+    });
 }

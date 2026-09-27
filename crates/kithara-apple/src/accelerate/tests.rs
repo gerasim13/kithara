@@ -1,16 +1,13 @@
-use std::num::NonZeroUsize;
-
 use kithara_test_fixtures::unit_fixtures::{
     accelerate_clear, accelerate_copy, accelerate_ramp, accelerate_wave,
 };
 use kithara_test_utils::kithara;
 
 use super::{
-    BiquadFilter, clear_f32, copy_f32, deinterleave_pair_f32, gather_f32, interleave_pair_f32,
-    linear_interpolate_f32, ramp_f32, scatter_f32,
+    BiquadFilter, clear_f32, copy_f32, deinterleave_pair_f32, interleave_pair_f32,
+    linear_interpolate_f32, ramp_f32,
 };
 
-const THREE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(2);
 const SPECIALS: [f32; 8] = [
     0.0,
     -0.0,
@@ -116,23 +113,6 @@ fn deinterleave_pair_reads_only_whole_pairs() {
     );
     assert_eq!(bits(left), bits([1.0, 2.0, 9.0, 9.0]));
     assert_eq!(bits(right), bits([-1.0, -2.0, 9.0, 9.0]));
-}
-
-#[kithara::test(native, flash(false))]
-fn scatter_fills_a_trailing_partial_frame() {
-    let mut output = [9.0_f32; 7];
-    assert_eq!(scatter_f32(&[1.0, 2.0, 3.0, 4.0], &mut output, THREE), 3);
-    assert_eq!(bits(output), bits([1.0, 9.0, 9.0, 2.0, 9.0, 9.0, 3.0]));
-}
-
-#[kithara::test(native, flash(false))]
-fn gather_reads_a_trailing_partial_frame() {
-    let mut plane = [9.0_f32; 4];
-    assert_eq!(
-        gather_f32(&[1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0], THREE, &mut plane),
-        3
-    );
-    assert_eq!(bits(plane), bits([1.0, 2.0, 3.0, 9.0]));
 }
 
 #[kithara::test(native, flash(false))]

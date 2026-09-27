@@ -14,35 +14,39 @@
 
 # kithara-dsp
 
-Vector DSP kernels over planar `f32` slices. Apple builds run them on
-Accelerate; every other target runs them on `fearless_simd` at the best SIMD
-level the CPU reports. Each kernel handles the common prefix of its slices,
-returns the frame count it handled, and never allocates.
+Vector DSP kernels over planar `f32` slices. The layout functions mirror
+`fast_interleave` for `f32`: Apple builds run the stereo pair on Accelerate,
+every other target runs it on `fearless_simd` at the best SIMD level the CPU
+reports, and other channel counts take a bit-exact strided copy. No kernel
+allocates or panics.
 
 ## Usage
 
 ```rust
-use kithara_dsp::{Backend, Platform};
+use std::num::NonZeroUsize;
 
-let backend = Platform::default();
+let planes = [[1.0_f32, 2.0], [-1.0, -2.0]];
 let mut interleaved = [0.0_f32; 4];
-assert_eq!(backend.interleave_pair(&[1.0, 2.0], &[-1.0, -2.0], &mut interleaved), 2);
+let stereo = NonZeroUsize::new(2).expect("two channels");
+kithara_dsp::interleave_variable(&planes, 0..2, &mut interleaved, stereo);
 assert_eq!(interleaved.map(f32::to_bits), [1.0_f32, -1.0, 2.0, -2.0].map(f32::to_bits));
+
+let mut samples = [f32::NAN, 0.5];
+kithara_dsp::sanitize(&mut samples);
+assert_eq!(samples, [0.0, 0.5]);
 ```
 
 ## Key Types
 
 <table>
 
-<tr><th>Type</th><th>Role</th></tr>
+<tr><th>Item</th><th>Role</th></tr>
 
-<tr><td><code>Backend</code></td><td>Sealed kernel contract every backend implements</td></tr>
+<tr><td><code>interleave_variable</code></td><td>Planar channels into one interleaved slice; <code>fast_interleave</code>'s signature for <code>f32</code></td></tr>
 
-<tr><td><code>Platform</code></td><td>The backend the build target uses by default</td></tr>
+<tr><td><code>deinterleave_variable</code></td><td>One interleaved slice into planar channels; <code>fast_interleave</code>'s signature for <code>f32</code></td></tr>
 
-<tr><td><code>Portable</code></td><td><code>fearless_simd</code> kernels at a SIMD level fixed at construction</td></tr>
-
-<tr><td><code>Accelerate</code></td><td>vDSP and BLAS kernels through <code>kithara-apple</code>; Apple only</td></tr>
+<tr><td><code>sanitize</code></td><td>Zeroes NaN, ±infinity, subnormals and −0.0 in place</td></tr>
 
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 
@@ -52,9 +56,9 @@ assert_eq!(interleaved.map(f32::to_bits), [1.0_f32, -1.0, 2.0, -2.0].map(f32::to
 
 ## Integration
 
-`kithara-signal` and `kithara-decode` call the layout kernels. The SIMD level is
-detected once per process on x86 and fixed at compile time elsewhere, so
-`Platform::default()` costs one load: `kithara-decode` keeps its backend as a
-field, and `kithara-signal`'s borrowed views build one per call.
+`kithara-signal` interleaves and deinterleaves its buffers through the layout
+functions, and `kithara-decode` sanitizes resampled planes. The build target
+picks the backend at compile time; on x86 the SIMD level is detected once per
+process, so a call costs one load before the kernel runs.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-dsp) for detailed contracts, invariants, and internals.

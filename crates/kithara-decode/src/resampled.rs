@@ -1,7 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_dsp::{Backend, Platform};
 use kithara_platform::time::Duration;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerConfig, ResamplerMode, ResamplerProcess,
@@ -50,7 +49,6 @@ where
     last_input_meta: Option<AudioChunkInfo>,
     pending_meta: Option<AudioChunkInfo>,
     input: PlanarBuffer,
-    layout: Platform,
     output: PlanarBuffer,
     scratch: PlanarBuffer,
     pools: PoolRegion<S>,
@@ -94,7 +92,6 @@ where
             eof_flushed: false,
             input: PlanarBuffer::new(pools, source_spec, empty)?,
             last_input_meta: None,
-            layout: Platform::default(),
             options: config.options,
             output: PlanarBuffer::new(pools, target_spec, empty)?,
             output_frame_offset: 0,
@@ -154,7 +151,7 @@ where
             .collect();
         source.deinterleave_channels_into_at(&mut planes, base_len)?;
         for plane in &mut planes {
-            self.layout.sanitize(&mut plane[base_len..]);
+            kithara_dsp::sanitize(&mut plane[base_len..]);
         }
         Ok(())
     }

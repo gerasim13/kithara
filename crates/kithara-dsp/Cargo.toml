@@ -23,6 +23,8 @@ kithara-apple = { workspace = true, features = ["accelerate"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 
+fast-interleave = { workspace = true }
+
 fearless_simd = { workspace = true, features = ["force_support_fallback"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

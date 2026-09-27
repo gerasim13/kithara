@@ -1,7 +1,5 @@
 use std::ops::Range;
 
-use kithara_dsp::{Backend, Platform};
-
 use crate::{AudioSpec, FrameCount, SignalError};
 
 /// Checked borrowed view over frame-major interleaved samples.
@@ -77,25 +75,7 @@ impl<'a> InterleavedView<'a> {
                 available_samples: available.saturating_mul(channels),
             });
         }
-        if self.frames.get() == 0 {
-            return Ok(());
-        }
-        let backend = Platform::default();
-        if let [left, right] = output {
-            backend.deinterleave_pair(
-                self.samples,
-                &mut left[offset..required],
-                &mut right[offset..required],
-            );
-        } else {
-            for (channel, plane) in output.iter_mut().enumerate() {
-                backend.gather(
-                    &self.samples[channel..],
-                    channel_count,
-                    &mut plane[offset..required],
-                );
-            }
-        }
+        kithara_dsp::deinterleave_variable(self.samples, channel_count, output, offset..required);
         Ok(())
     }
 

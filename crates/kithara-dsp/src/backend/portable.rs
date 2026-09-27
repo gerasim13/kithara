@@ -1,56 +1,17 @@
-use std::num::NonZeroUsize;
-
 use fearless_simd::{Level, dispatch, prelude::*};
 
-use super::traits::{Backend, sealed};
+use super::simd::padded;
 
-/// Kernels on `fearless_simd` at the SIMD level chosen once at construction.
-#[derive(Clone, Copy, Debug)]
-pub struct Portable {
-    level: Level,
+pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => deinterleave_pair_kernel(simd, input, left, right))
 }
 
-impl Portable {
-    /// Runs every kernel at `level`.
-    #[must_use]
-    pub const fn new(level: Level) -> Self {
-        Self { level }
-    }
-}
-
-impl Default for Portable {
-    /// The best level this CPU supports.
-    fn default() -> Self {
-        Self::new(Level::new())
-    }
-}
-
-impl sealed::Sealed for Portable {}
-
-impl Backend for Portable {
-    fn deinterleave_pair(&self, input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
-        dispatch!(self.level, simd => deinterleave_pair_kernel(simd, input, left, right))
-    }
-
-    fn gather(&self, input: &[f32], stride: NonZeroUsize, plane: &mut [f32]) -> usize {
-        gather_kernel(input, stride, plane)
-    }
-
-    fn interleave_pair(&self, left: &[f32], right: &[f32], output: &mut [f32]) -> usize {
-        dispatch!(self.level, simd => interleave_pair_kernel(simd, left, right, output))
-    }
-
-    fn sanitize(&self, samples: &mut [f32]) {
-        dispatch!(self.level, simd => sanitize_kernel(simd, samples));
-    }
-
-    fn scatter(&self, plane: &[f32], output: &mut [f32], stride: NonZeroUsize) -> usize {
-        scatter_kernel(plane, output, stride)
-    }
+pub(crate) fn interleave_pair(left: &[f32], right: &[f32], output: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => interleave_pair_kernel(simd, left, right, output))
 }
 
 #[inline(always)]
-fn interleave_pair_kernel<S: Simd>(
+pub(super) fn interleave_pair_kernel<S: Simd>(
     simd: S,
     left: &[f32],
     right: &[f32],
@@ -87,7 +48,7 @@ fn interleave_pair_kernel<S: Simd>(
 }
 
 #[inline(always)]
-fn deinterleave_pair_kernel<S: Simd>(
+pub(super) fn deinterleave_pair_kernel<S: Simd>(
     simd: S,
     input: &[f32],
     left: &mut [f32],
@@ -121,57 +82,4 @@ fn deinterleave_pair_kernel<S: Simd>(
         *slot = *sample;
     }
     frames
-}
-
-#[inline(always)]
-fn scatter_kernel(plane: &[f32], output: &mut [f32], stride: NonZeroUsize) -> usize {
-    let frames = plane.len().min(output.len().div_ceil(stride.get()));
-    for (slot, sample) in output.iter_mut().step_by(stride.get()).zip(plane) {
-        *slot = *sample;
-    }
-    frames
-}
-
-#[inline(always)]
-fn gather_kernel(input: &[f32], stride: NonZeroUsize, plane: &mut [f32]) -> usize {
-    let frames = plane.len().min(input.len().div_ceil(stride.get()));
-    for (slot, sample) in plane.iter_mut().zip(input.iter().step_by(stride.get())) {
-        *slot = *sample;
-    }
-    frames
-}
-
-#[inline(always)]
-fn sanitize_kernel<S: Simd>(simd: S, samples: &mut [f32]) {
-    let smallest = S::f32s::splat(simd, f32::MIN_POSITIVE);
-    let largest = S::f32s::splat(simd, f32::MAX);
-    let zero = S::f32s::splat(simd, 0.0);
-    let mut blocks = samples.chunks_exact_mut(S::f32s::LEN);
-    for block in &mut blocks {
-        sanitized::<S>(S::f32s::from_slice(simd, block), smallest, largest, zero)
-            .store_slice(block);
-    }
-    let tail = blocks.into_remainder();
-    let cleaned = sanitized::<S>(padded(simd, tail), smallest, largest, zero);
-    for (slot, sample) in tail.iter_mut().zip(cleaned.as_slice()) {
-        *slot = *sample;
-    }
-}
-
-/// `x` where `MIN_POSITIVE <= |x| <= MAX`, `+0.0` elsewhere; `NaN` fails both tests.
-#[inline(always)]
-fn sanitized<S: Simd>(x: S::f32s, smallest: S::f32s, largest: S::f32s, zero: S::f32s) -> S::f32s {
-    let magnitude = x.abs();
-    let normal = magnitude.simd_ge(smallest).select(x, zero);
-    magnitude.simd_le(largest).select(normal, zero)
-}
-
-/// A vector holding `tail` in its first lanes and `+0.0` in the rest.
-#[inline(always)]
-fn padded<S: Simd>(simd: S, tail: &[f32]) -> S::f32s {
-    let mut vector = S::f32s::splat(simd, 0.0);
-    for (slot, sample) in vector.as_mut_slice().iter_mut().zip(tail) {
-        *slot = *sample;
-    }
-    vector
 }
