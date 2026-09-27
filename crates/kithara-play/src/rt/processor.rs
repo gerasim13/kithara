@@ -849,7 +849,19 @@ mod tests {
                 "the tail stays in custody while its fade sounds"
             );
         }
-        assert_eq!(returned.map(Returned::from), Some(Returned::Tail(item_id)));
+        match returned {
+            Some(SyncReturn::Tail(tail)) => {
+                assert!(
+                    tail.settled(),
+                    "the tail returns only once its fade settled"
+                );
+                assert_eq!(tail.item_id, item_id);
+            }
+            other => panic!(
+                "custody returns the tail, got {:?}",
+                other.map(Returned::from)
+            ),
+        }
         assert!(control.sync.next_return().is_none());
         assert!(processor.sync.custody_cleared());
         assert!(receipt_rx.next_receipt().is_none());

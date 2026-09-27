@@ -95,10 +95,17 @@ impl<K: SyncKind> SyncCallback<K> {
         }
     }
 
-    /// Hand the pending ticket back, rejecting it with `reason` while its
-    /// permit is current. A withdrawn permit is the owner's already; a parked
-    /// one is withdrawn by the source change that parked it.
-    pub fn retire_pending(&mut self, reason: SyncExecutionReject) {
+    /// Hand back everything the callback holds once its deck is cleared:
+    /// the tail now, settled or not, then the pending ticket, rejected
+    /// `Cancelled` while its permit is current. A withdrawn permit is the
+    /// owner's already; a parked one is withdrawn by the source change that
+    /// parked it. What does not fit stays for the next call.
+    pub fn retire(&mut self) {
+        if let Some(room) = self.custody.room()
+            && let Some(tail) = self.tail.take()
+        {
+            room.put(SyncReturn::Tail(tail));
+        }
         let Some(room) = self.custody.room() else {
             return;
         };
@@ -110,7 +117,7 @@ impl<K: SyncKind> SyncCallback<K> {
                 return;
             };
             if receipts
-                .publish_rejected(ticket.permit().stamp(), reason)
+                .publish_rejected(ticket.permit().stamp(), SyncExecutionReject::Cancelled)
                 .is_err()
             {
                 return;
@@ -118,15 +125,6 @@ impl<K: SyncKind> SyncCallback<K> {
         }
         if let Some(ticket) = self.pending.try_pop() {
             room.put(SyncReturn::Ticket(ticket.into()));
-        }
-    }
-
-    /// Return the tail now, settled or not.
-    pub fn retire_tail(&mut self) {
-        if let Some(room) = self.custody.room()
-            && let Some(tail) = self.tail.take()
-        {
-            room.put(SyncReturn::Tail(tail));
         }
     }
 

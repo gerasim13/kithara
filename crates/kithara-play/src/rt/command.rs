@@ -73,9 +73,7 @@ impl PlayerNodeProcessor {
         for slot in loaded {
             self.unload_slot(slot);
         }
-        self.sync.retire_tail();
-        self.sync
-            .retire_pending(kithara_sync::SyncExecutionReject::Cancelled);
+        self.sync.retire();
         self.tracks_transitions.clear();
         self.playback.position.store(0.0, Ordering::Relaxed);
         self.playback.frontier.store(0.0, Ordering::Relaxed);
