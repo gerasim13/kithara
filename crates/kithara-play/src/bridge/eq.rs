@@ -2,7 +2,7 @@ use core::fmt;
 
 use arc_swap::ArcSwap;
 use kithara_effects::GainDb;
-use kithara_platform::{atomic_value::RelaxedAtomicF32, sync::Arc};
+use kithara_platform::{atomic::RelaxedAtomicF32, sync::Arc};
 
 use crate::error::PlayError;
 

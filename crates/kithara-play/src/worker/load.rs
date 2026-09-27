@@ -1,4 +1,4 @@
-use kithara_platform::{atomic_value::RelaxedAtomicF32, time::Duration};
+use kithara_platform::{atomic::RelaxedAtomicF32, time::Duration};
 
 use crate::consts;
 

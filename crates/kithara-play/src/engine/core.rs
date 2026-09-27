@@ -6,7 +6,7 @@ use kithara_effects::eq::EqBandConfig;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
-    atomic_value::RelaxedAtomicF32,
+    atomic::RelaxedAtomicF32,
     sync::{Arc, Mutex},
     time::Duration,
 };

@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
@@ -183,7 +181,7 @@ where
         }
 
         if matches!(outcome, SeekOutcome::Landed { .. }) {
-            playback.position.store(target_secs, Ordering::Relaxed);
+            playback.position.store(target_secs);
         }
 
         Ok(outcome)

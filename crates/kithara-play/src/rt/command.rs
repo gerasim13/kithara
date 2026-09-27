@@ -66,10 +66,10 @@ impl PlayerNodeProcessor {
         }
         self.tracks_transitions.clear();
         self.playback.playing.store(false, Ordering::SeqCst);
-        self.playback.position.store(0.0, Ordering::Relaxed);
-        self.playback.frontier.store(0.0, Ordering::Relaxed);
-        self.playback.cached.store(0.0, Ordering::Relaxed);
-        self.playback.duration.store(0.0, Ordering::Relaxed);
+        self.playback.position.store(0.0);
+        self.playback.frontier.store(0.0);
+        self.playback.cached.store(0.0);
+        self.playback.duration.store(0.0);
     }
 
     /// Drain all pending commands from the channel.

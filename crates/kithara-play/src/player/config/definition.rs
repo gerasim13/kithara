@@ -8,7 +8,7 @@ use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 use kithara_platform::{
     CancelToken,
-    atomic_value::{RelaxedAtomicBool, RelaxedAtomicF32},
+    atomic::{RelaxedAtomicBool, RelaxedAtomicF32},
     sync::Arc,
 };
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};

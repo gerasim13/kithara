@@ -1,4 +1,4 @@
-use kithara_platform::atomic_value::RelaxedAtomicF32;
+use kithara_platform::atomic::RelaxedAtomicF32;
 
 /// The part of a player the Host holds: a web player stays on its own thread, so the
 /// Host keeps only its level.

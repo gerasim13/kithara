@@ -1,7 +1,7 @@
 //! Platform-aware primitives with one compile-time-selected backend.
 //! Backends mirror the public sync, thread, time, and Tokio facade.
 
-pub mod atomic_value;
+pub mod atomic;
 mod common;
 
 #[cfg(all(

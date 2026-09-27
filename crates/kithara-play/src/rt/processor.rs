@@ -300,9 +300,7 @@ impl PlayerNodeProcessor {
     fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         let rate_changed = self.sample_rate != sample_rate;
         self.sample_rate = sample_rate;
-        self.playback
-            .sample_rate
-            .store(sample_rate.get(), Ordering::Relaxed);
+        self.playback.sample_rate.store(sample_rate.get());
         if rate_changed {
             self.set_tracks_host_sample_rate(sample_rate);
             self.render.update_sample_rate(sample_rate);
@@ -324,30 +322,22 @@ impl PlayerNodeProcessor {
     fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
-                self.playback
-                    .frontier
-                    .store(track.decoded_frontier(), Ordering::Relaxed);
-                self.playback
-                    .cached
-                    .store(track.cached_span(), Ordering::Relaxed);
+                self.playback.frontier.store(track.decoded_frontier());
+                self.playback.cached.store(track.cached_span());
                 break;
             }
         }
 
         if let Some((position, duration)) = leading_outcome {
-            self.playback.position.store(position, Ordering::Relaxed);
-            self.playback.duration.store(duration, Ordering::Relaxed);
+            self.playback.position.store(position);
+            self.playback.duration.store(duration);
             return;
         }
 
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
-                self.playback
-                    .position
-                    .store(track.position(), Ordering::Relaxed);
-                self.playback
-                    .duration
-                    .store(track.duration(), Ordering::Relaxed);
+                self.playback.position.store(track.position());
+                self.playback.duration.store(track.duration());
                 break;
             }
         }
