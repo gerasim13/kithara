@@ -1,104 +1,176 @@
-use super::{
-    ffi::{VdspBiquadSetup, vDSP_biquad, vDSP_biquad_CreateSetup, vDSP_biquad_DestroySetup},
-    vector::clear_f32,
+use std::{
+    ffi::c_void,
+    num::NonZeroUsize,
+    ops::{DerefMut, Range},
+    ptr::{self, NonNull},
 };
 
-pub struct BiquadFilter {
-    setup: VdspBiquadSetup,
-    delay: [f32; 4],
+use super::ffi::{
+    vDSP_biquadm, vDSP_biquadm_CopyState, vDSP_biquadm_CreateSetup, vDSP_biquadm_DestroySetup,
+    vDSP_biquadm_ResetState, vDSP_biquadm_SetCoefficientsDouble,
+};
+
+mod consts {
+    /// Coefficients per section: `b0, b1, b2, a1, a2`.
+    pub(super) const SECTION: usize = 5;
+    /// A section that passes its input through.
+    pub(super) const IDENTITY: [f64; SECTION] = [1.0, 0.0, 0.0, 0.0, 0.0];
 }
 
-// SAFETY: BiquadFilter owns vDSP setup and delay state.
-// SAFETY: Methods require &mut self, and Drop destroys the setup once.
-unsafe impl Send for BiquadFilter {}
+/// Why a multichannel biquad could not be built or run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BiquadError {
+    #[error("vDSP could not create the biquad setup")]
+    Setup,
+    #[error("buffer shape does not match the biquad setup")]
+    Shape,
+}
 
-impl BiquadFilter {
-    #[must_use]
-    pub fn low_pass(sample_rate: f64, cutoff_hz: f64, q: f64) -> Option<Self> {
-        let coefficients = rbj_low_pass_coefficients(sample_rate, cutoff_hz, q)?;
-        // SAFETY: coefficients points at one [b0,b1,b2,a1,a2] biquad section.
-        let setup = unsafe { vDSP_biquad_CreateSetup(coefficients.as_ptr(), 1) };
-        if setup.is_null() {
-            return None;
-        }
-        Some(Self {
+/// `vDSP_biquadm`: `sections` cascaded sections run in place on each of
+/// `channels` planes. Every section starts as identity; `set_section` gives
+/// one section the same coefficients on every channel:
+/// `H(z) = (b0 + b1 z⁻¹ + b2 z⁻²) / (1 + a1 z⁻¹ + a2 z⁻²)`.
+pub struct MultichannelBiquad {
+    setup: NonNull<c_void>,
+    channels: NonZeroUsize,
+    sections: NonZeroUsize,
+    planes: Box<[*mut f32]>,
+    /// The coefficients the setup was created from and is retuned with:
+    /// section `s` on every channel starts at `s × channels × 5`.
+    table: Box<[f64]>,
+}
+
+// SAFETY: MultichannelBiquad owns its setup; every method takes &mut self or &self without mutation.
+// SAFETY: The plane pointer table is refilled before each call and never read afterwards.
+unsafe impl Send for MultichannelBiquad {}
+
+impl MultichannelBiquad {
+    /// # Errors
+    /// [`BiquadError::Shape`] when `channels × sections × 5` overflows,
+    /// [`BiquadError::Setup`] when vDSP returns no setup.
+    pub fn new(channels: NonZeroUsize, sections: NonZeroUsize) -> Result<Self, BiquadError> {
+        let table_len = channels
+            .get()
+            .checked_mul(sections.get())
+            .and_then(|count| count.checked_mul(consts::SECTION))
+            .ok_or(BiquadError::Shape)?;
+        let table: Box<[f64]> = consts::IDENTITY
+            .iter()
+            .copied()
+            .cycle()
+            .take(table_len)
+            .collect();
+        // SAFETY: table holds sections × channels sections of five coefficients.
+        let setup =
+            unsafe { vDSP_biquadm_CreateSetup(table.as_ptr(), sections.get(), channels.get()) };
+        let setup = NonNull::new(setup).ok_or(BiquadError::Setup)?;
+        Ok(Self {
             setup,
-            delay: [0.0; 4],
+            channels,
+            sections,
+            planes: vec![ptr::null_mut(); channels.get()].into_boxed_slice(),
+            table,
         })
     }
 
-    pub fn process(&mut self, source: &[f32], target: &mut [f32]) -> usize {
-        let frames = source.len().min(target.len());
-        if frames == 0 {
-            return 0;
-        }
-        // SAFETY: setup is live; delay has the 2*M+2 shape for one biquad section.
-        // SAFETY: source and target each hold frames contiguous f32 values.
-        unsafe {
-            vDSP_biquad(
-                self.setup,
-                self.delay.as_mut_ptr(),
-                source.as_ptr(),
-                1,
-                target.as_mut_ptr(),
-                1,
-                frames,
-            );
-        }
-        frames
-    }
-
-    pub fn reset(&mut self) {
-        clear_f32(&mut self.delay);
-    }
-
-    pub fn retune_low_pass(&mut self, sample_rate: f64, cutoff_hz: f64, q: f64) -> bool {
-        let Some(coefficients) = rbj_low_pass_coefficients(sample_rate, cutoff_hz, q) else {
-            return false;
-        };
-        // SAFETY: coefficients points at one [b0,b1,b2,a1,a2] biquad section.
-        let setup = unsafe { vDSP_biquad_CreateSetup(coefficients.as_ptr(), 1) };
-        if setup.is_null() {
-            return false;
-        }
-        // SAFETY: self.setup is live and is replaced exactly once by the new live setup.
-        unsafe {
-            vDSP_biquad_DestroySetup(self.setup);
-        }
-        self.setup = setup;
-        true
-    }
-}
-
-impl Drop for BiquadFilter {
-    fn drop(&mut self) {
-        if !self.setup.is_null() {
-            // SAFETY: setup was returned by vDSP_biquad_CreateSetup and is destroyed exactly once.
-            unsafe {
-                vDSP_biquad_DestroySetup(self.setup);
+    /// Gives `section` the same coefficients on every channel; the state stays.
+    ///
+    /// # Errors
+    /// [`BiquadError::Shape`] when `section` is out of range.
+    pub fn set_section(
+        &mut self,
+        section: usize,
+        coefficients: [f32; consts::SECTION],
+    ) -> Result<(), BiquadError> {
+        let span = self.channels.get().saturating_mul(consts::SECTION);
+        let block = self
+            .table
+            .chunks_exact_mut(span)
+            .nth(section)
+            .ok_or(BiquadError::Shape)?;
+        for slot in block.chunks_exact_mut(consts::SECTION) {
+            for (target, value) in slot.iter_mut().zip(coefficients) {
+                *target = f64::from(value);
             }
         }
+        // SAFETY: setup is live; block holds one section of five coefficients per channel.
+        // SAFETY: section < sections, and the channel span 0..channels matches the setup.
+        unsafe {
+            vDSP_biquadm_SetCoefficientsDouble(
+                self.setup.as_ptr(),
+                block.as_ptr(),
+                section,
+                0,
+                1,
+                self.channels.get(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Filters `range` of every plane in place; an empty range is a no-op.
+    ///
+    /// # Errors
+    /// [`BiquadError::Shape`] when the plane count differs from the channel
+    /// count or a plane does not cover `range`.
+    pub fn process<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        range: Range<usize>,
+    ) -> Result<(), BiquadError> {
+        if planes.len() != self.channels.get()
+            || planes
+                .iter()
+                .any(|plane| plane.get(range.clone()).is_none())
+        {
+            return Err(BiquadError::Shape);
+        }
+        if range.is_empty() {
+            return Ok(());
+        }
+        for (slot, plane) in self.planes.iter_mut().zip(planes.iter_mut()) {
+            *slot = plane[range.clone()].as_mut_ptr();
+        }
+        let table = self.planes.as_mut_ptr();
+        // SAFETY: setup is live and was created for self.channels channels.
+        // SAFETY: table holds one pointer per channel to range.len() writable f32 values.
+        // SAFETY: X and Y name the same table, the in-place form of vDSP_biquadm.
+        unsafe {
+            vDSP_biquadm(
+                self.setup.as_ptr(),
+                table.cast::<*const f32>(),
+                1,
+                table,
+                1,
+                range.len(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Zeroes the state of every section and channel.
+    pub fn reset(&mut self) {
+        // SAFETY: setup is live.
+        unsafe { vDSP_biquadm_ResetState(self.setup.as_ptr()) };
+    }
+
+    /// Takes over the state of `source`.
+    ///
+    /// # Errors
+    /// [`BiquadError::Shape`] when channel or section counts differ.
+    pub fn copy_state_from(&mut self, source: &Self) -> Result<(), BiquadError> {
+        if self.channels != source.channels || self.sections != source.sections {
+            return Err(BiquadError::Shape);
+        }
+        // SAFETY: both setups are live and share channel and section counts.
+        unsafe { vDSP_biquadm_CopyState(self.setup.as_ptr(), source.setup.as_ptr()) };
+        Ok(())
     }
 }
 
-fn rbj_low_pass_coefficients(sample_rate: f64, cutoff_hz: f64, q: f64) -> Option<[f64; 5]> {
-    if !sample_rate.is_finite() || !cutoff_hz.is_finite() || !q.is_finite() {
-        return None;
+impl Drop for MultichannelBiquad {
+    fn drop(&mut self) {
+        // SAFETY: setup came from vDSP_biquadm_CreateSetup and is destroyed exactly once.
+        unsafe { vDSP_biquadm_DestroySetup(self.setup.as_ptr()) };
     }
-    if sample_rate <= 0.0 || cutoff_hz <= 0.0 || q <= 0.0 {
-        return None;
-    }
-    let nyquist = sample_rate * 0.5;
-    let cutoff = cutoff_hz.min(nyquist * 0.999);
-    let omega = std::f64::consts::TAU * cutoff / sample_rate;
-    let sin = omega.sin();
-    let cos = omega.cos();
-    let alpha = sin / (2.0 * q);
-    let b0 = (1.0 - cos) * 0.5;
-    let b1 = 1.0 - cos;
-    let b2 = b0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos;
-    let a2 = 1.0 - alpha;
-    Some([b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0])
 }

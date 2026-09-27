@@ -3,9 +3,8 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_bufpool::HasPool;
 use num_traits::cast::ToPrimitive;
-use smallvec::SmallVec;
 
 use super::{
     GlideConfig,
@@ -23,8 +22,6 @@ pub struct GlideResampler {
     channels: NonZeroUsize,
     mode: ResamplerMode,
     options: ResamplerOptions,
-    previous: SmallVec<[SampleBuffer; 8]>,
-    previous_valid: bool,
     current_ratio: f64,
     cursor: f64,
     input_frames: usize,
@@ -42,20 +39,11 @@ impl GlideResampler {
         let ratio = initial_ratio(settings.mode);
         validate_ratio_bounds(backend, settings.options, ratio)?;
         let glide = initial_glide(backend, settings.mode, settings.options, ratio)?;
-        let previous = previous_buffers(&settings.pools, settings.channels, backend)?;
-        let engine = GlideEngine::new(
-            &settings.pools,
-            settings.channels,
-            settings.options.chunk_size,
-            settings.options.max_ratio_adjustment,
-            backend,
-        )?;
+        let engine = GlideEngine::new(settings, config.interpolation, backend)?;
         Ok(Self {
             config,
             engine,
             glide,
-            previous,
-            previous_valid: false,
             channels: settings.channels,
             current_ratio: ratio,
             input_frames: settings.options.chunk_size,
@@ -68,22 +56,6 @@ impl GlideResampler {
     fn can_passthrough(&self) -> bool {
         self.glide.remaining == 0
             && (self.current_ratio - 1.0).abs() <= self.options.passthrough_tolerance
-    }
-
-    fn consume_frames(&mut self, input: &[&[f32]], input_frames: usize, produced: usize) -> usize {
-        if self.can_passthrough() {
-            self.store_previous(input, produced);
-            return produced;
-        }
-        let consumed = self
-            .cursor
-            .floor()
-            .to_usize()
-            .unwrap_or(usize::MAX)
-            .min(input_frames.saturating_sub(1));
-        self.store_previous(input, consumed);
-        self.cursor -= consumed.to_f64().unwrap_or(0.0);
-        consumed
     }
 
     fn output_ratio(&self) -> f64 {
@@ -127,7 +99,7 @@ impl GlideResampler {
                 detail: "exact Glide span ratio is not representable",
             })?;
         validate_runtime_ratio(self.options, ratio)?;
-        self.seed_previous(input);
+        self.engine.seed(input);
         let positions = self.engine.positions_mut(output_frames)?;
         for (frame, position) in positions.iter_mut().enumerate() {
             *position = frame
@@ -138,20 +110,14 @@ impl GlideResampler {
                     detail: "exact Glide source position is not representable",
                 })?;
         }
+        let within = (ratio - 1.0).abs() <= self.options.passthrough_tolerance;
         self.engine.render(RenderRequest {
             input,
             output,
+            filter_ratio: (self.config.anti_alias && !within).then_some(ratio),
             produced: output_frames,
-            filter_ratio: if (ratio - 1.0).abs() <= self.options.passthrough_tolerance {
-                1.0
-            } else {
-                ratio
-            },
-            previous: &self.previous,
-            config: self.config,
-            mode: self.mode,
+            consumed: input_frames,
         })?;
-        self.store_previous(input, input_frames);
         self.current_ratio = ratio;
         self.glide = GlideState::default();
         self.cursor = 0.0;
@@ -164,69 +130,45 @@ impl GlideResampler {
         output: &mut [&mut [f32]],
         input_frames: usize,
         output_capacity: usize,
-    ) -> Result<usize, ResamplerError> {
+    ) -> Result<(usize, usize), ResamplerError> {
         let position_capacity = self.engine.position_capacity().min(output_capacity);
         let positions = self.engine.positions_mut(position_capacity)?;
         let mut produced = 0;
         let mut cursor = self.cursor;
         let mut current_ratio = self.current_ratio;
         let mut glide = self.glide;
-        let filter_ratio = current_ratio;
+        let mut peak = current_ratio;
 
         while produced < position_capacity && can_sample(cursor, input_frames) {
             positions[produced] = (cursor + 1.0).to_f32().unwrap_or(0.0);
+            peak = peak.max(current_ratio);
             cursor += current_ratio;
             advance_glide_values(&mut current_ratio, &mut glide);
             produced += 1;
         }
 
-        self.cursor = cursor;
-        self.current_ratio = current_ratio;
-        self.glide = glide;
+        let consumed = cursor
+            .floor()
+            .to_usize()
+            .unwrap_or(usize::MAX)
+            .min(input_frames.saturating_sub(1));
         self.engine.render(RenderRequest {
             input,
             output,
+            filter_ratio: self.config.anti_alias.then_some(peak),
             produced,
-            filter_ratio,
-            previous: &self.previous,
-            config: self.config,
-            mode: self.mode,
+            consumed,
         })?;
-        Ok(produced)
+        self.cursor = cursor - consumed.to_f64().unwrap_or(0.0);
+        self.current_ratio = current_ratio;
+        self.glide = glide;
+        Ok((consumed, produced))
     }
 
     fn render_passthrough(&self, input: &[&[f32]], output: &mut [&mut [f32]], frames: usize) {
         for channel in 0..self.channels.get() {
             output[channel][..frames].copy_from_slice(&input[channel][..frames]);
         }
-    }
-
-    fn seed_previous<I: Deref<Target = [f32]>>(&mut self, input: &[I]) {
-        if self.previous_valid {
-            return;
-        }
-        self.previous[..self.channels.get()]
-            .iter_mut()
-            .zip(&input[..self.channels.get()])
-            .for_each(|(previous, input)| {
-                previous[0] = input.deref().first().copied().unwrap_or(0.0);
-            });
-        self.previous_valid = true;
-    }
-
-    fn store_previous<I: Deref<Target = [f32]>>(&mut self, input: &[I], consumed: usize) {
-        if consumed == 0 {
-            return;
-        }
-        let frame = consumed.saturating_sub(1);
-        let channels = self.channels.get();
-        self.previous[..channels]
-            .iter_mut()
-            .zip(&input[..channels])
-            .for_each(|(previous, input)| {
-                previous[0] = input.deref()[frame];
-            });
-        self.previous_valid = true;
     }
 }
 
@@ -282,26 +224,21 @@ impl Resampler for GlideResampler {
         if input_frames == 0 || output_capacity == 0 {
             return Ok(ResamplerProcess::new(0, 0));
         }
-        self.seed_previous(input);
-
-        let produced = if self.can_passthrough() {
+        self.engine.seed(input);
+        let (consumed, produced) = if self.can_passthrough() {
             let frames = input_frames.min(output_capacity);
             self.render_passthrough(input, output, frames);
-            frames
+            self.engine.pass(input, frames);
+            (frames, frames)
         } else {
             self.render_interpolated(input, output, input_frames, output_capacity)?
         };
-        let consumed = self.consume_frames(input, input_frames, produced);
         Ok(ResamplerProcess::new(consumed, produced))
     }
 
     fn reset(&mut self) {
         self.current_ratio = initial_ratio(self.mode);
         self.glide = GlideState::default();
-        for previous in &mut self.previous {
-            previous[0] = 0.0;
-        }
-        self.previous_valid = false;
         self.engine.reset();
         self.cursor = 0.0;
     }
@@ -396,29 +333,6 @@ fn initial_ratio(mode: ResamplerMode) -> f64 {
         } => f64::from(source_sample_rate.get()) / f64::from(target_sample_rate.get()),
         ResamplerMode::VariableRatio { initial_ratio, .. } => initial_ratio,
     }
-}
-
-fn previous_buffers<S>(
-    pools: &PoolRegion<S>,
-    channels: NonZeroUsize,
-    backend: &'static str,
-) -> Result<SmallVec<[SampleBuffer; 8]>, ResamplerBuildError>
-where
-    S: HasPool<f32>,
-{
-    let mut buffers = SmallVec::new();
-    for _ in 0..channels.get() {
-        let mut buffer = pools.get::<f32>();
-        buffer
-            .ensure_len(1)
-            .map_err(|err| ResamplerBuildError::BackendBuild {
-                backend,
-                detail: err.to_string(),
-            })?;
-        buffer[0] = 0.0;
-        buffers.push(buffer);
-    }
-    Ok(buffers)
 }
 
 fn validate_input<I: Deref<Target = [f32]>>(

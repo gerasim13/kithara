@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{hint::black_box, num::NonZeroUsize};
+use std::{f64::consts::FRAC_1_SQRT_2, hint::black_box, num::NonZeroUsize};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use kithara_dsp::filter::{Biquad, rbj};
 
 const SIZES: [usize; 6] = [64, 128, 256, 512, 1024, 4096];
 const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
@@ -86,5 +87,56 @@ fn kernels(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, kernels);
+fn biquad(c: &mut Criterion) {
+    const FRAMES: usize = 1_024;
+    let low_pass = rbj::low_pass(48_000.0, 4_000.0, FRAC_1_SQRT_2).expect("valid low-pass");
+    let mut group = c.benchmark_group("biquad");
+    group.throughput(Throughput::Elements(
+        u64::try_from(FRAMES).expect("frame count fits u64"),
+    ));
+    for channels in [1_usize, 2, 8] {
+        for sections in [1_usize, 4] {
+            let mut filter = Biquad::new(
+                NonZeroUsize::new(channels).expect("bench channels are non-zero"),
+                NonZeroUsize::new(sections).expect("bench sections are non-zero"),
+            )
+            .expect("filter builds");
+            for section in 0..sections {
+                filter.retune(section, low_pass).expect("section in range");
+            }
+            let mut planes = vec![vec![0.25_f32; FRAMES]; channels];
+            group.bench_with_input(
+                BenchmarkId::new(format!("{channels}ch"), sections),
+                &sections,
+                |b, _| {
+                    b.iter(|| filter.process(black_box(&mut planes), 0..FRAMES).is_ok());
+                },
+            );
+        }
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("biquad_decay");
+    group.throughput(Throughput::Elements(
+        u64::try_from(FRAMES).expect("frame count fits u64"),
+    ));
+    let mut filter = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
+    filter.retune(0, low_pass).expect("section 0 exists");
+    let burst: Vec<f32> = (0..FRAMES)
+        .map(|frame| if frame < 64 { 0.5 } else { 0.0 })
+        .collect();
+    let template = vec![burst; TWO.get()];
+    let mut planes = template.clone();
+    group.bench_function("burst_into_silence_2ch", |b| {
+        b.iter(|| {
+            planes.clone_from(&template);
+            for start in (0..FRAMES).step_by(64) {
+                let _ = black_box(filter.process(&mut planes, start..start + 64));
+            }
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, kernels, biquad);
 criterion_main!(benches);

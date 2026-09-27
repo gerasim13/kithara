@@ -1,56 +1,16 @@
 use std::ptr;
 
-use num_traits::cast::ToPrimitive;
+use super::ffi::vDSP_maxmgv;
 
-use super::ffi::{cblas_scopy, vDSP_vclr, vDSP_vramp};
-
-pub fn copy_f32(source: &[f32], target: &mut [f32]) -> usize {
-    let frames = source.len().min(target.len());
-    if frames == 0 {
-        return 0;
+/// The largest `|x|` in `samples`; `0.0` for an empty slice.
+#[must_use]
+pub fn max_magnitude_f32(samples: &[f32]) -> f32 {
+    let mut peak = 0.0;
+    if samples.is_empty() {
+        return peak;
     }
-    let Some(chunk_frames) = i32::MAX.to_usize() else {
-        return 0;
-    };
-    for offset in (0..frames).step_by(chunk_frames) {
-        let len = frames.saturating_sub(offset).min(chunk_frames);
-        let Some(len_i32) = len.to_i32() else {
-            break;
-        };
-        // SAFETY: offset and len are bounded by source and target lengths.
-        // SAFETY: source and target strides are one element.
-        unsafe {
-            cblas_scopy(
-                len_i32,
-                source.as_ptr().add(offset),
-                1,
-                target.as_mut_ptr().add(offset),
-                1,
-            );
-        }
-    }
-    frames
-}
-
-pub fn clear_f32(target: &mut [f32]) {
-    if target.is_empty() {
-        return;
-    }
-    // SAFETY: target points at target.len() contiguous f32 values with stride one.
-    unsafe {
-        vDSP_vclr(target.as_mut_ptr(), 1, target.len());
-    }
-}
-
-pub fn ramp_f32(start: f32, step: f32, target: &mut [f32]) {
-    if target.is_empty() {
-        return;
-    }
-    let start_ptr = ptr::from_ref(&start);
-    let step_ptr = ptr::from_ref(&step);
-    // SAFETY: target points at target.len() contiguous f32 values.
-    // SAFETY: scalar inputs are valid for the synchronous call.
-    unsafe {
-        vDSP_vramp(start_ptr, step_ptr, target.as_mut_ptr(), 1, target.len());
-    }
+    // SAFETY: samples points at samples.len() contiguous f32 values with stride one.
+    // SAFETY: peak is a valid f32 destination for the synchronous call.
+    unsafe { vDSP_maxmgv(samples.as_ptr(), 1, ptr::from_mut(&mut peak), samples.len()) };
+    peak
 }

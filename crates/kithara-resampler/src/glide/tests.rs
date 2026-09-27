@@ -1,7 +1,8 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_test_fixtures::unit_fixtures::{
-    glide_alias, glide_quadratic, glide_transition, glide_unity,
+use kithara_test_fixtures::{
+    signal::Wave,
+    unit_fixtures::{glide_alias, glide_quadratic, glide_transition, glide_unity},
 };
 use kithara_test_utils::kithara;
 
@@ -42,6 +43,54 @@ fn build_glide(source: u32, target: u32) -> GlideResampler {
         .settings(settings(fixed_mode(source, target)))
         .build();
     create_resampler(&config).unwrap_or_else(|err| panic!("glide resampler should build: {err}"))
+}
+
+/// Largest sample difference between two chunkings of one stream.
+const CHUNKING_TOLERANCE: f32 = 1.0e-4;
+/// A constant passes the anti-alias filter as the same constant.
+const CONSTANT_TOLERANCE: f32 = 1.0e-6;
+
+fn two_tones(frames: usize) -> Vec<f32> {
+    let low = Wave::Sine {
+        hz: 1_000.0,
+        peak: i16::MAX / 2,
+    };
+    let high = Wave::Sine {
+        hz: 30_000.0,
+        peak: i16::MAX / 2,
+    };
+    (0..frames)
+        .map(|frame| {
+            (f32::from(low.sample(frame, 96_000)) + f32::from(high.sample(frame, 96_000)))
+                / 32_768.0
+        })
+        .collect()
+}
+
+fn stream_through(chunk: usize, input: &[f32]) -> Vec<f32> {
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(fixed_mode(96_000, 48_000))
+        .options(ResamplerOptions::builder().chunk_size(1_024).build())
+        .pools(pools())
+        .build();
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let mut block = vec![0.0; resampler.output_frames_next()];
+    let mut output = Vec::new();
+    let mut offset = 0;
+    while input.len() - offset >= 2 {
+        let end = (offset + chunk).min(input.len());
+        let process = resampler
+            .process_into_buffer(&[&input[offset..end]], &mut [&mut block])
+            .unwrap_or_else(|err| panic!("stream process should succeed: {err}"));
+        output.extend_from_slice(&block[..process.output_frames]);
+        if process.input_frames == 0 {
+            break;
+        }
+        offset += process.input_frames;
+    }
+    output
 }
 
 #[kithara::test(native, flash(false))]
@@ -328,4 +377,57 @@ fn extra_channel_storage_preserves_the_prepared_channel_shape(
     }
     assert_eq!(rendered, reference);
     assert_eq!(extra, [0.75; 4]);
+}
+
+#[kithara::test(native)]
+fn anti_alias_output_does_not_depend_on_chunking() {
+    let input = two_tones(4_096);
+    let small = stream_through(64, &input);
+    let large = stream_through(1_024, &input);
+    let frames = small.len().min(large.len());
+    assert!(
+        frames > 1_900,
+        "both chunkings render the stream: {} / {}",
+        small.len(),
+        large.len()
+    );
+    let worst = small[..frames]
+        .iter()
+        .zip(&large[..frames])
+        .map(|(small, large)| (small - large).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        worst <= CHUNKING_TOLERANCE,
+        "chunking changed the output by {worst}"
+    );
+}
+
+#[kithara::test(native)]
+fn entering_the_filter_keeps_a_constant_signal_constant() {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = [0.5_f32; 16];
+    let mut output = [0.0_f32; 16];
+    resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("passthrough block should render: {err}"));
+    resampler
+        .set_ratio(2.0)
+        .unwrap_or_else(|err| panic!("ratio 2 is in range: {err}"));
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("filtered block should render: {err}"));
+
+    assert!(process.output_frames > 0);
+    assert!(
+        output[..process.output_frames]
+            .iter()
+            .all(|sample| (sample - 0.5).abs() < CONSTANT_TOLERANCE),
+        "the filter did not start in the steady state: {output:?}"
+    );
 }

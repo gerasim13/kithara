@@ -1,6 +1,8 @@
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod accelerate;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+mod cascade;
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
 mod simd;
 mod strided;

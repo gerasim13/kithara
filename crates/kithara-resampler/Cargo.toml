@@ -12,12 +12,13 @@ categories = ["multimedia::audio"]
 [features]
 default = []
 apple-accelerate = ["kithara-apple/accelerate"]
-resample-glide = []
+resample-glide = ["dep:kithara-dsp"]
 resample-rubato = ["dep:rubato"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default"] }
+kithara-dsp = { workspace = true, optional = true }
 
 bitflags = { workspace = true }
 bon = { workspace = true }

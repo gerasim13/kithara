@@ -10,7 +10,7 @@ mod resampler;
 mod trim;
 mod warp;
 
-pub use accelerate::{accelerate_clear, accelerate_copy, accelerate_ramp, accelerate_wave};
+pub use accelerate::{accelerate_ramp, accelerate_wave};
 pub use audio::{
     RoutePcm, blend_identity, blend_incoming, blend_join_frame, blend_multichannel, blend_outgoing,
     blend_outgoing_constant, blend_signed_frame, cursor_half, decode_negative_quarter,

@@ -1,5 +1,7 @@
 use fearless_simd::{Level, dispatch, prelude::*};
 
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub(crate) use super::cascade::Cascade;
 use super::simd::padded;
 
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
@@ -82,4 +84,19 @@ pub(super) fn deinterleave_pair_kernel<S: Simd>(
         *slot = *sample;
     }
     frames
+}
+
+pub(crate) fn peak(samples: &[f32]) -> f32 {
+    dispatch!(Level::new(), simd => peak_kernel(simd, samples))
+}
+
+#[inline(always)]
+pub(super) fn peak_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
+    let mut blocks = samples.chunks_exact(S::f32s::LEN);
+    let mut peak = S::f32s::splat(simd, 0.0);
+    for block in &mut blocks {
+        peak = peak.max(S::f32s::from_slice(simd, block).abs());
+    }
+    peak.max(padded(simd, blocks.remainder()).abs())
+        .reduce_max()
 }

@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{portable, simd, strided};
+use super::{cascade, portable, simd, strided};
 
 const SIZES: [usize; 15] = [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 63, 64, 1023, 4096];
 const OFFSETS: [usize; 2] = [0, 1];
@@ -319,6 +319,211 @@ mod oracle {
         for sample in samples {
             if !sample.is_finite() || sample.abs() < f32::MIN_POSITIVE {
                 *sample = 0.0;
+            }
+        }
+    }
+}
+
+/// Largest error of a cascade against the `f64` oracle, relative to the
+/// oracle's peak: −100 dB.
+const PARITY: f64 = 1.0e-5;
+const CUTOFFS: [[f64; 4]; 2] = [
+    [1_000.0, 2_000.0, 4_000.0, 8_000.0],
+    [3_000.0, 5_000.0, 7_000.0, 9_000.0],
+];
+/// Peak inputs: specials without `NaN` and subnormals, which `max` orders differently.
+const PEAK_SPECIALS: [f32; 6] = [
+    0.0,
+    -0.0,
+    f32::MIN_POSITIVE,
+    f32::MAX,
+    f32::INFINITY,
+    f32::NEG_INFINITY,
+];
+
+/// Section coefficients per half of the stream: the second half retunes.
+fn halves(sections: usize) -> [Vec<[f32; 5]>; 2] {
+    CUTOFFS.map(|cutoffs| {
+        cutoffs
+            .iter()
+            .take(sections)
+            .map(|cutoff| {
+                crate::filter::rbj::low_pass(
+                    f64::from(RATE),
+                    *cutoff,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                )
+                .expect("valid low-pass")
+                .section()
+            })
+            .collect()
+    })
+}
+
+fn tones(channels: usize) -> Vec<Vec<f32>> {
+    (1..=channels)
+        .map(|harmonic| {
+            let wave = Wave::Sine {
+                hz: 440.0 * f64::from(u32::try_from(harmonic).expect("few channels")),
+                peak: i16::MAX,
+            };
+            (0..4_096)
+                .map(|frame| f32::from(wave.sample(frame, RATE)) / 32_768.0)
+                .collect()
+        })
+        .collect()
+}
+
+/// Direct form I in `f64` over the same `f32` coefficients.
+fn oracle(input: &[Vec<f32>], halves: &[Vec<[f32; 5]>; 2]) -> Vec<Vec<f64>> {
+    input
+        .iter()
+        .map(|plane| {
+            let [first, second] = halves;
+            let mut state = vec![[0.0_f64; 4]; first.len()];
+            let half = plane.len().wrapping_div(2);
+            plane
+                .iter()
+                .enumerate()
+                .map(|(frame, sample)| {
+                    let set = if frame < half { first } else { second };
+                    set.iter().zip(state.iter_mut()).fold(
+                        f64::from(*sample),
+                        |x, (section, delay)| {
+                            let [b0, b1, b2, a1, a2] = section.map(f64::from);
+                            let [x1, x2, y1, y2] = *delay;
+                            let y = b0.mul_add(
+                                x,
+                                b1.mul_add(x1, b2.mul_add(x2, (-a1).mul_add(y1, -a2 * y2))),
+                            );
+                            *delay = [x, x1, y, y1];
+                            y
+                        },
+                    )
+                })
+                .collect()
+        })
+        .collect()
+}
+
+type RunCascade = fn(&mut [Vec<f32>], &[Vec<[f32; 5]>; 2]);
+
+/// Drives a cascade through its whole interface the way glide does: a stale
+/// state cleared by `reset`, then the second half on a twin that took over
+/// the state and retuned.
+macro_rules! handover_run {
+    ($cascade:ty) => {
+        |planes: &mut [Vec<f32>], halves: &[Vec<[f32; 5]>; 2]| {
+            let channels = NonZeroUsize::new(planes.len()).expect("channels");
+            let sections = NonZeroUsize::new(halves[0].len()).expect("sections");
+            let mut cascade = <$cascade>::new(channels, sections).expect("cascade");
+            let mut twin = <$cascade>::new(channels, sections).expect("cascade");
+            let frames = planes.first().map_or(0, Vec::len);
+            let half = frames.wrapping_div(2);
+            for (section, coefficients) in halves[0].iter().enumerate() {
+                cascade
+                    .set_section(section, *coefficients)
+                    .expect("section");
+            }
+            cascade
+                .process(&mut planes.to_vec(), 0..frames)
+                .expect("shape matches");
+            cascade.reset();
+            cascade.process(planes, 0..half).expect("shape matches");
+            twin.copy_state_from(&cascade).expect("same shape");
+            for (section, coefficients) in halves[1].iter().enumerate() {
+                twin.set_section(section, *coefficients).expect("section");
+            }
+            twin.process(planes, half..frames).expect("shape matches");
+        }
+    };
+}
+
+/// Retunes the live state in place through the kernel at `Level::fallback()`.
+fn portable_fallback_run(planes: &mut [Vec<f32>], halves: &[Vec<[f32; 5]>; 2]) {
+    let channels = NonZeroUsize::new(planes.len()).expect("channels");
+    let sections = NonZeroUsize::new(halves[0].len()).expect("sections");
+    let mut cascade = cascade::Cascade::new(channels, sections).expect("cascade");
+    let frames = planes.first().map_or(0, Vec::len);
+    let half = frames.wrapping_div(2);
+    for (range, set) in [(0..half, &halves[0]), (half..frames, &halves[1])] {
+        for (section, coefficients) in set.iter().enumerate() {
+            cascade
+                .set_section(section, *coefficients)
+                .expect("section");
+        }
+        dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, &mut cascade, planes, range));
+    }
+}
+
+#[kithara::test]
+fn every_cascade_backend_tracks_the_f64_oracle_across_a_retune() {
+    let runs: Vec<(&str, RunCascade)> = Vec::from([
+        (
+            "portable-native",
+            handover_run!(cascade::Cascade) as RunCascade,
+        ),
+        ("portable-fallback", portable_fallback_run),
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        ("accelerate", handover_run!(accelerate::Cascade)),
+    ]);
+    for channels in [1_usize, 2, 8] {
+        for sections in [1_usize, 4] {
+            let halves = halves(sections);
+            let input = tones(channels);
+            let expected = oracle(&input, &halves);
+            for (name, run) in &runs {
+                let mut planes = input.clone();
+                run(&mut planes, &halves);
+                for (plane, reference) in planes.iter().zip(&expected) {
+                    let peak = reference.iter().fold(0.0_f64, |peak, y| peak.max(y.abs()));
+                    let worst = plane.iter().zip(reference).fold(0.0_f64, |worst, (y, r)| {
+                        worst.max((f64::from(*y) - r).abs())
+                    });
+                    assert!(
+                        worst <= PARITY * peak,
+                        "{name}: {channels} ch × {sections} sections off by {worst} of {peak}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn fallback_peak(samples: &[f32]) -> f32 {
+    dispatch!(Level::fallback(), simd => portable::peak_kernel(simd, samples))
+}
+
+#[kithara::test]
+fn peak_matches_the_scalar_maximum_on_every_backend() {
+    type Peak = fn(&[f32]) -> f32;
+    let backends: Vec<(&str, Peak)> = Vec::from([
+        ("portable-native", portable::peak as Peak),
+        ("portable-fallback", fallback_peak),
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        ("accelerate", accelerate::peak),
+    ]);
+    for len in SIZES {
+        let sine: Vec<f32> = signal(len.saturating_add(SPECIALS.len()), SINE)
+            .into_iter()
+            .skip(SPECIALS.len())
+            .collect();
+        let with_specials: Vec<f32> = PEAK_SPECIALS
+            .iter()
+            .copied()
+            .chain(sine.iter().copied())
+            .take(len)
+            .collect();
+        for samples in [&sine, &with_specials] {
+            let expected = samples
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            for (name, peak) in &backends {
+                assert_eq!(
+                    peak(samples).to_bits(),
+                    expected.to_bits(),
+                    "{name} at {len}"
+                );
             }
         }
     }

@@ -3,42 +3,47 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_bufpool::{HasPool, SampleBuffer};
+use kithara_dsp::filter::{Biquad, FilterError, rbj};
 use num_traits::cast::ToPrimitive;
 use smallvec::SmallVec;
 
-use self::filter::Filter;
-use super::{GlideConfig, GlideInterpolation};
-use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
+use super::GlideInterpolation;
+use crate::{ResamplerBuildError, ResamplerError, ResamplerMode, ResamplerSettings};
 
 pub(in crate::glide) struct RenderRequest<'a, I, O> {
     pub(in crate::glide) input: &'a [I],
     pub(in crate::glide) output: &'a mut [O],
-    pub(in crate::glide) previous: &'a [SampleBuffer],
-    pub(in crate::glide) config: GlideConfig,
-    pub(in crate::glide) mode: ResamplerMode,
-    pub(in crate::glide) filter_ratio: f64,
+    /// Peak rate of the block when the anti-alias filter runs.
+    pub(in crate::glide) filter_ratio: Option<f64>,
     pub(in crate::glide) produced: usize,
+    pub(in crate::glide) consumed: usize,
 }
 
-struct FilterParams {
-    cutoff_to_nyquist: f64,
-    low_pass_q: f64,
+mod consts {
+    pub(super) const CUTOFF_TO_NYQUIST: f64 = 0.9;
+    pub(super) const LOW_PASS_Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    pub(super) const FILTER_OP: &str = "glide anti-alias filter";
+    pub(super) const INPUT_OP: &str = "glide input";
+    pub(super) const POSITIONS_OP: &str = "glide positions";
 }
 
-const FILTER_PARAMS: FilterParams = FilterParams {
-    cutoff_to_nyquist: 0.9,
-    low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
-};
-
+/// Per channel the window is `[history | input | tail]`: history is the last
+/// consumed frame, the tail repeats the last input frame. With the filter
+/// on, the persistent filter advances over consumed frames only and a
+/// lookahead copy filters the rest, so the output does not depend on how
+/// the stream is chunked.
 #[derive(fieldwork::Fieldwork)]
 pub(in crate::glide) struct GlideEngine {
-    filter_cutoff: Option<f64>,
-    filtered_previous: SampleBuffer,
+    windows: SmallVec<[SampleBuffer; 8]>,
     positions: SampleBuffer,
-    filtered: SmallVec<[SampleBuffer; 8]>,
-    filters: SmallVec<[Option<Filter>; 8]>,
-    padded: SmallVec<[SampleBuffer; 8]>,
+    levels: SampleBuffer,
+    filter: Biquad,
+    lookahead: Biquad,
+    tuned: Option<f64>,
+    seeded: bool,
+    interpolation: GlideInterpolation,
+    sample_rate: f64,
     max_input_frames: usize,
     #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
     max_output_frames: usize,
@@ -46,77 +51,64 @@ pub(in crate::glide) struct GlideEngine {
 
 impl GlideEngine {
     pub(in crate::glide) fn new<S>(
-        pools: &PoolRegion<S>,
-        channels: NonZeroUsize,
-        max_input_frames: usize,
-        max_ratio_adjustment: f64,
+        settings: &ResamplerSettings<S>,
+        interpolation: GlideInterpolation,
         backend: &'static str,
     ) -> Result<Self, ResamplerBuildError>
     where
         S: HasPool<f32>,
     {
-        let max_output_frames = max_output_frames(max_input_frames, max_ratio_adjustment);
+        let pools = &settings.pools;
+        let channels = settings.channels;
+        let max_input_frames = settings.options.chunk_size;
+        let max_output_frames =
+            max_output_frames(max_input_frames, settings.options.max_ratio_adjustment);
         let mut positions = pools.get::<f32>();
         ensure_build_len(&mut positions, max_output_frames, backend)?;
-        let mut filtered_previous = pools.get::<f32>();
-        ensure_build_len(&mut filtered_previous, channels.get(), backend)?;
-        filtered_previous.fill(0.0);
-        let mut padded = SmallVec::new();
-        let mut filtered = SmallVec::new();
-        let mut filters = SmallVec::new();
+        let mut levels = pools.get::<f32>();
+        ensure_build_len(&mut levels, channels.get(), backend)?;
+        let mut windows = SmallVec::new();
         for _ in 0..channels.get() {
-            let mut padded_channel = pools.get::<f32>();
-            ensure_build_len(
-                &mut padded_channel,
-                max_input_frames.saturating_add(2),
-                backend,
-            )?;
-            padded.push(padded_channel);
-
-            let mut filtered_channel = pools.get::<f32>();
-            ensure_build_len(
-                &mut filtered_channel,
-                max_input_frames.saturating_add(2),
-                backend,
-            )?;
-            filtered.push(filtered_channel);
-            filters.push(None);
+            let mut window = pools.get::<f32>();
+            ensure_build_len(&mut window, max_input_frames.saturating_add(2), backend)?;
+            window.fill(0.0);
+            windows.push(window);
         }
         Ok(Self {
+            windows,
             positions,
-            filtered_previous,
-            padded,
-            filtered,
-            filters,
+            levels,
+            filter: low_pass_filter(channels, backend)?,
+            lookahead: low_pass_filter(channels, backend)?,
+            tuned: None,
+            seeded: false,
+            interpolation,
+            sample_rate: sample_rate(settings.mode),
             max_input_frames,
             max_output_frames,
-            filter_cutoff: None,
         })
     }
 
-    fn ensure_filters(&mut self, sample_rate: f64, cutoff: f64) -> Result<(), ResamplerError> {
-        if self
-            .filter_cutoff
-            .is_some_and(|current| (current - cutoff).abs() < 1.0)
-        {
-            return Ok(());
+    /// Starts the history at the first input frame of a fresh stream.
+    pub(in crate::glide) fn seed<I: Deref<Target = [f32]>>(&mut self, input: &[I]) {
+        if self.seeded {
+            return;
         }
-        for filter in &mut self.filters {
-            let ready = if let Some(filter) = filter {
-                filter.retune(sample_rate, cutoff, FILTER_PARAMS.low_pass_q)
-            } else {
-                *filter = Filter::low_pass(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
-                filter.is_some()
-            };
-            if !ready {
-                return Err(ResamplerError::Backend {
-                    op: filter::FILTER_OP,
-                    detail: filter::FILTER_ERROR.into(),
-                });
+        for (window, input) in self.windows.iter_mut().zip(input) {
+            window[0] = input.first().copied().unwrap_or(0.0);
+        }
+        self.seeded = true;
+    }
+
+    /// Keeps the history in step with an unfiltered passthrough block; the
+    /// filter re-enters through `settle`.
+    pub(in crate::glide) fn pass(&mut self, input: &[&[f32]], produced: usize) {
+        if let Some(last) = produced.checked_sub(1) {
+            for (window, input) in self.windows.iter_mut().zip(input) {
+                window[0] = input[last];
             }
         }
-        self.filter_cutoff = Some(cutoff);
-        Ok(())
+        self.tuned = None;
     }
 
     pub(in crate::glide) fn positions_mut(
@@ -125,7 +117,7 @@ impl GlideEngine {
     ) -> Result<&mut [f32], ResamplerError> {
         if frames > self.max_output_frames {
             return Err(ResamplerError::Backend {
-                op: backend::POSITIONS_OP,
+                op: consts::POSITIONS_OP,
                 detail: "output frame request exceeds preallocated position buffer".into(),
             });
         }
@@ -142,69 +134,105 @@ impl GlideEngine {
     {
         let RenderRequest {
             input,
-            previous,
             output,
-            produced,
-            config,
             filter_ratio,
-            mode,
+            produced,
+            consumed,
         } = request;
-        let input_frames = input.first().map_or(0, |channel| channel.deref().len());
-        if input_frames > self.max_input_frames {
+        let frames = input.first().map_or(0, |channel| channel.deref().len());
+        if frames > self.max_input_frames {
             return Err(ResamplerError::Backend {
-                op: backend::INPUT_OP,
+                op: consts::INPUT_OP,
                 detail: "input frame count exceeds preallocated source buffer".into(),
             });
         }
-        let sample_rate = sample_rate(mode);
-        let cutoff = config
-            .anti_alias
-            .then(|| low_pass_cutoff(sample_rate, filter_ratio))
-            .filter(|_| filter_ratio > 1.0);
-        if let Some(cutoff) = cutoff {
-            self.ensure_filters(sample_rate, cutoff)?;
+        let end = frames.saturating_add(1);
+        for (window, source) in self.windows.iter_mut().zip(input) {
+            window[1..end].copy_from_slice(source.deref());
         }
-
-        for (channel_idx, source) in input.iter().take(self.padded.len()).enumerate() {
-            let source = source.deref();
-            let source = if cutoff.is_some() {
-                let filtered = &mut self.filtered[channel_idx];
-                let filter =
-                    self.filters[channel_idx]
-                        .as_mut()
-                        .ok_or_else(|| ResamplerError::Backend {
-                            op: filter::FILTER_OP,
-                            detail: "anti-alias filter was not initialized".into(),
-                        })?;
-                filtered[0] = self.filtered_previous[channel_idx];
-                filter.process(source, &mut filtered[1..input_frames.saturating_add(1)]);
-                self.filtered_previous[channel_idx] = filtered[input_frames];
-                filtered[input_frames.saturating_add(1)] = filtered[input_frames];
-                &filtered[..input_frames.saturating_add(2)]
-            } else {
-                let padded = &mut self.padded[channel_idx];
-                padded[0] = previous[channel_idx][0];
-                backend::copy(source, &mut padded[1..input_frames.saturating_add(1)]);
-                padded[input_frames.saturating_add(1)] = source.last().copied().unwrap_or(0.0);
-                &padded[..input_frames.saturating_add(2)]
-            };
-
+        match filter_ratio {
+            Some(ratio) => self.filter_window(ratio, consumed, end)?,
+            None => self.tuned = None,
+        }
+        for (window, target) in self.windows.iter_mut().zip(output.iter_mut()) {
+            window[end] = window[frames];
             backend::interpolate(
-                config.interpolation,
-                source,
+                self.interpolation,
+                &window[..=end],
                 &self.positions[..produced],
-                &mut output[channel_idx].deref_mut()[..produced],
+                &mut target.deref_mut()[..produced],
             );
+            if consumed > 0 {
+                window[0] = window[consumed];
+            }
         }
         Ok(())
     }
 
     pub(in crate::glide) fn reset(&mut self) {
-        self.filtered_previous.fill(0.0);
-        for filter in self.filters.iter_mut().flatten() {
-            filter.reset();
-        }
+        self.seeded = false;
+        self.tuned = None;
     }
+
+    fn filter_window(
+        &mut self,
+        ratio: f64,
+        consumed: usize,
+        end: usize,
+    ) -> Result<(), ResamplerError> {
+        self.tune(ratio)?;
+        let split = consumed.saturating_add(1);
+        self.filter
+            .process(&mut self.windows[..], 1..split)
+            .map_err(filter_error)?;
+        self.lookahead
+            .copy_state(&self.filter)
+            .map_err(filter_error)?;
+        self.lookahead
+            .process(&mut self.windows[..], split..end)
+            .map_err(filter_error)
+    }
+
+    /// Retunes both filters when the cutoff moves; entering filtering
+    /// settles the persistent filter on the history frame.
+    fn tune(&mut self, ratio: f64) -> Result<(), ResamplerError> {
+        let cutoff = low_pass_cutoff(self.sample_rate, ratio);
+        if self.tuned == Some(cutoff) {
+            return Ok(());
+        }
+        let low_pass =
+            rbj::low_pass(self.sample_rate, cutoff, consts::LOW_PASS_Q).map_err(filter_error)?;
+        self.filter.retune(0, low_pass).map_err(filter_error)?;
+        self.lookahead.retune(0, low_pass).map_err(filter_error)?;
+        if self.tuned.is_none() {
+            let channels = self.windows.len();
+            for (level, window) in self.levels.iter_mut().zip(&self.windows) {
+                *level = window[0];
+            }
+            self.filter
+                .settle(&self.levels[..channels])
+                .map_err(filter_error)?;
+        }
+        self.tuned = Some(cutoff);
+        Ok(())
+    }
+}
+
+fn filter_error(err: FilterError) -> ResamplerError {
+    ResamplerError::Backend {
+        op: consts::FILTER_OP,
+        detail: err.to_string(),
+    }
+}
+
+fn low_pass_filter(
+    channels: NonZeroUsize,
+    backend: &'static str,
+) -> Result<Biquad, ResamplerBuildError> {
+    Biquad::new(channels, NonZeroUsize::MIN).map_err(|err| ResamplerBuildError::BackendBuild {
+        backend,
+        detail: err.to_string(),
+    })
 }
 
 fn ensure_build_len(
@@ -221,7 +249,7 @@ fn ensure_build_len(
 }
 
 fn low_pass_cutoff(sample_rate: f64, ratio: f64) -> f64 {
-    FILTER_PARAMS.cutoff_to_nyquist * sample_rate / (2.0 * ratio.max(1.0))
+    consts::CUTOFF_TO_NYQUIST * sample_rate / (2.0 * ratio.max(1.0))
 }
 
 fn max_output_frames(input_frames: usize, max_ratio_adjustment: f64) -> usize {
@@ -246,16 +274,9 @@ fn sample_rate(mode: ResamplerMode) -> f64 {
     any(target_os = "macos", target_os = "ios")
 ))]
 mod backend {
-    use kithara_apple::accelerate::{copy_f32, linear_interpolate_f32, quadratic_interpolate_f32};
+    use kithara_apple::accelerate::{linear_interpolate_f32, quadratic_interpolate_f32};
 
     use super::GlideInterpolation;
-
-    pub(super) const INPUT_OP: &str = "glide accelerate input";
-    pub(super) const POSITIONS_OP: &str = "glide accelerate positions";
-
-    pub(super) fn copy(source: &[f32], target: &mut [f32]) {
-        copy_f32(source, target);
-    }
 
     pub(super) fn interpolate(
         kind: GlideInterpolation,
@@ -278,12 +299,6 @@ mod backend {
     use num_traits::cast::ToPrimitive;
 
     use super::GlideInterpolation;
-    pub(super) const INPUT_OP: &str = "glide scalar input";
-    pub(super) const POSITIONS_OP: &str = "glide scalar positions";
-
-    pub(super) fn copy(source: &[f32], target: &mut [f32]) {
-        target.copy_from_slice(source);
-    }
 
     pub(super) fn interpolate(
         kind: GlideInterpolation,
@@ -341,77 +356,5 @@ mod backend {
             let frac = position - base.to_f32().unwrap_or(0.0);
             *output = I::sample(source, base, frac);
         }
-    }
-}
-
-mod filter {
-    use num_traits::cast::ToPrimitive;
-
-    pub(super) const FILTER_OP: &str = "glide scalar filter";
-    pub(super) const FILTER_ERROR: &str = "failed to create low-pass filter";
-
-    pub(super) struct Filter {
-        coefficients: [f64; 5],
-        delay: [f64; 4],
-    }
-
-    impl Filter {
-        pub(super) fn low_pass(sample_rate: f64, cutoff_hz: f64, q: f64) -> Option<Self> {
-            Some(Self {
-                coefficients: rbj_low_pass_coefficients(sample_rate, cutoff_hz, q)?,
-                delay: [0.0; 4],
-            })
-        }
-
-        pub(super) fn process(&mut self, source: &[f32], target: &mut [f32]) -> usize {
-            let frames = source.len().min(target.len());
-            let [b0, b1, b2, a1, a2] = self.coefficients;
-            let [mut x1, mut x2, mut y1, mut y2] = self.delay;
-            for (input, output) in source[..frames].iter().zip(target[..frames].iter_mut()) {
-                let x0 = f64::from(*input);
-                let y0 = b0.mul_add(x0, b1.mul_add(x1, b2.mul_add(x2, a1.mul_add(y1, a2 * y2))));
-                *output = y0.to_f32().unwrap_or(0.0);
-                x2 = x1;
-                x1 = x0;
-                y2 = y1;
-                y1 = y0;
-            }
-            self.delay = [x1, x2, y1, y2];
-            frames
-        }
-
-        pub(super) fn reset(&mut self) {
-            self.delay = [0.0; 4];
-        }
-
-        pub(super) fn retune(&mut self, sample_rate: f64, cutoff: f64, q: f64) -> bool {
-            let Some(coefficients) = rbj_low_pass_coefficients(sample_rate, cutoff, q) else {
-                return false;
-            };
-            self.coefficients = coefficients;
-            true
-        }
-    }
-
-    fn rbj_low_pass_coefficients(sample_rate: f64, cutoff_hz: f64, q: f64) -> Option<[f64; 5]> {
-        if !sample_rate.is_finite() || !cutoff_hz.is_finite() || !q.is_finite() {
-            return None;
-        }
-        if sample_rate <= 0.0 || cutoff_hz <= 0.0 || q <= 0.0 {
-            return None;
-        }
-        let nyquist = sample_rate * 0.5;
-        let cutoff = cutoff_hz.min(nyquist * 0.999);
-        let omega = std::f64::consts::TAU * cutoff / sample_rate;
-        let sin = omega.sin();
-        let cos = omega.cos();
-        let alpha = sin / (2.0 * q);
-        let b0 = (1.0 - cos) * 0.5;
-        let b1 = 1.0 - cos;
-        let b2 = b0;
-        let a0 = 1.0 + alpha;
-        let a1 = -2.0 * cos;
-        let a2 = 1.0 - alpha;
-        Some([b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0])
     }
 }
