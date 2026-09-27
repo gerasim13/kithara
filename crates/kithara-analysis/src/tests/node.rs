@@ -250,7 +250,7 @@ fn pending_reader_yields_one_scheduler_tick(analysis_pcm: &'static [f32]) {
         ingest: super::fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked_with_pending(
             builder.pools(),
-            &sine(analysis_pcm, 1024),
+            sine(analysis_pcm, 1024),
             1,
         )),
         cancel: CancelToken::root(),
@@ -279,7 +279,7 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender(analysis_pcm:
         ingest: super::fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked(
             builder.pools(),
-            &sine(analysis_pcm, 1024),
+            sine(analysis_pcm, 1024),
             1,
         )),
         cancel: cancel.clone(),
@@ -320,7 +320,7 @@ fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<Trac
 
     for (at, frames) in ranges {
         assert_eq!(
-            producer.offer(&sine(analysis_pcm, *frames), super::fixtures::spec(), *at),
+            producer.offer(sine(analysis_pcm, *frames), super::fixtures::spec(), *at),
             Ok(()),
             "the transport takes a range on its own axis"
         );
@@ -382,7 +382,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
     let (_idle_jobs, mut idle_node, idle_results, _idle_producer) = open("track-b");
 
     assert_eq!(
-        producer.offer(&sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
+        producer.offer(sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
         Ok(())
     );
     for _ in 0..64 {
@@ -430,11 +430,11 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
     let mut node = NodeHarness::new(waveform_only(), receiver);
 
     assert_eq!(
-        producer.offer(&sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
+        producer.offer(sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
         Ok(())
     );
     assert_eq!(
-        producer.offer(&sine(analysis_pcm, 1024), foreign, 4096),
+        producer.offer(sine(analysis_pcm, 1024), foreign, 4096),
         Err(AudioObserveError::UnsupportedSampleRate {
             expected: rate,
             actual: foreign.sample_rate,
@@ -492,7 +492,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
 
     for block in 0..BLOCKS {
         assert_eq!(
-            producer.offer(&pcm, super::fixtures::spec(), block * BLOCK),
+            producer.offer(pcm, super::fixtures::spec(), block * BLOCK),
             Ok(()),
             "the worker keeps the transport drained"
         );
@@ -582,7 +582,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
 
     let mut at = 0;
     let refused = loop {
-        match producer.offer(&pcm, super::fixtures::spec(), at) {
+        match producer.offer(pcm, super::fixtures::spec(), at) {
             Ok(()) => at = at.saturating_add(BLOCK),
             Err(AudioObserveError::Full) => break at..at + BLOCK,
             Err(other) => panic!("a range on the pass axis is taken or refused, got {other:?}"),
@@ -594,7 +594,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(&pcm, super::fixtures::spec(), refused.start + block * BLOCK),
+            producer.offer(pcm, super::fixtures::spec(), refused.start + block * BLOCK),
             Ok(()),
             "a drained transport takes the next range"
         );
@@ -604,7 +604,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(&pcm, super::fixtures::spec(), refused.start),
+            producer.offer(pcm, super::fixtures::spec(), refused.start),
             Ok(()),
             "the transport has room for the range it refused"
         );
@@ -693,7 +693,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     let mut published: Vec<TrackAnalysis> = Vec::new();
     for block in &order {
         assert_eq!(
-            producer.offer(&pcm, super::fixtures::spec(), block * BLOCK),
+            producer.offer(pcm, super::fixtures::spec(), block * BLOCK),
             Ok(()),
             "the worker keeps the transport drained"
         );
@@ -838,7 +838,7 @@ async fn matches_direct_waveform_analyzer_over_chunked_stream(analysis_pcm: &'st
         .expect("waveform buffers fit the test region");
     let want = direct.snapshot(consts::NODE_BUCKETS, Some(frames));
 
-    let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
+    let reader = Box::new(FakeReader::chunked(&pools, samples, 4));
     let out = stages(reader, builder, &CancelToken::root()).await;
     let [.., before_last, last] = out.as_slice() else {
         panic!("the end of reading publishes, then the settled final: {out:?}");
@@ -867,7 +867,7 @@ async fn cancelled_token_yields_none(analysis_pcm: &'static [f32]) {
     cancel.cancel();
     let reader = Box::new(FakeReader::chunked(
         builder.pools(),
-        &sine(analysis_pcm, 4096),
+        sine(analysis_pcm, 4096),
         2,
     ));
     assert!(stages(reader, builder, &cancel).await.is_empty());
@@ -920,7 +920,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
         "same-track",
         Box::new(FakeReader::chunked(
             builder.pools(),
-            &sine(analysis_pcm, 3 * frames),
+            sine(analysis_pcm, 3 * frames),
             3,
         )),
         CancelToken::root(),
@@ -946,7 +946,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
     let offered_at = 2 * u64::from(consts::FIXTURES_SR);
     assert_eq!(
         producer.offer(
-            &sine(analysis_pcm, frames),
+            sine(analysis_pcm, frames),
             super::fixtures::spec(),
             offered_at
         ),
@@ -1003,7 +1003,7 @@ fn saturation_retries_the_exact_detection_payload_once(analysis_pcm: &'static [f
     let results = enqueue(
         &jobs,
         "saturated-track",
-        Box::new(FakeReader::chunked(builder.pools(), &pcm, 1)),
+        Box::new(FakeReader::chunked(builder.pools(), pcm, 1)),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1090,7 +1090,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
         "same-token",
         Box::new(FakeReader::chunked(
             builder.pools(),
-            &sine(analysis_pcm, frames),
+            sine(analysis_pcm, frames),
             1,
         )),
         cancel_a.clone(),
@@ -1101,7 +1101,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
         "same-token",
         Box::new(FakeReader::chunked(
             builder.pools(),
-            &sine(analysis_pcm, frames),
+            sine(analysis_pcm, frames),
             1,
         )),
         CancelToken::root(),
@@ -1184,7 +1184,7 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
         "trailing-track",
         Box::new(FakeReader::chunked(
             builder.pools(),
-            &sine(analysis_pcm, frames),
+            sine(analysis_pcm, frames),
             1,
         )),
         CancelToken::root(),
@@ -1395,7 +1395,7 @@ async fn pending_is_tolerated_mid_stream(analysis_pcm: &'static [f32]) {
     let samples = sine(analysis_pcm, 8192);
     let reader = Box::new(FakeReader::chunked_with_pending(
         builder.pools(),
-        &samples,
+        samples,
         2,
     ));
     let out = stages(reader, builder, &CancelToken::root()).await;

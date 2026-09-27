@@ -217,6 +217,7 @@ fn selected_targets(args: &FormatArgs) -> Vec<FormatTarget> {
             FormatTarget::Manifest,
             FormatTarget::Toml,
             FormatTarget::Json,
+            FormatTarget::Markdown,
         ]
     } else {
         let mut targets = args.only.clone();
@@ -574,10 +575,31 @@ mod tests {
     use anyhow::Result;
 
     use super::{
-        FileKind, PathFormatTarget, collect_files, format_path, matches_file_kind,
-        nightly_toolchain, path_format_command, select_files, should_skip_dir,
+        FileKind, FormatArgs, FormatTarget, PathFormatTarget, collect_files, format_path,
+        matches_file_kind, nightly_toolchain, path_format_command, select_files, selected_targets,
+        should_skip_dir,
     };
     use crate::common::tools::ToolsConfig;
+
+    #[test]
+    fn an_unscoped_run_formats_every_target_including_markdown() {
+        let args = FormatArgs {
+            only: Vec::new(),
+            allow_dirty: false,
+            check: true,
+        };
+
+        assert_eq!(
+            selected_targets(&args),
+            [
+                FormatTarget::Rust,
+                FormatTarget::Manifest,
+                FormatTarget::Toml,
+                FormatTarget::Json,
+                FormatTarget::Markdown,
+            ]
+        );
+    }
 
     #[test]
     fn a_configured_formatter_reaches_the_path_command() {
