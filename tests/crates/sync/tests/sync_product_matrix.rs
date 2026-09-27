@@ -292,7 +292,7 @@ const TEMPO_DOWN_30: SyncCase =
         .ride(TempoRide::Down, 30);
 pub(super) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
-const PUBLIC_SYNTHETIC_ENABLE: SyncCase = SyncCase::running(
+pub(super) const PUBLIC_SYNTHETIC_ENABLE: SyncCase = SyncCase::running(
     "public-synthetic-enable",
     1,
     48_000,

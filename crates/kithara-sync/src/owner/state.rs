@@ -378,7 +378,9 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
         match latest {
             None => self.rejection.map_or_else(
                 || self.applied_status(topology),
-                |Rejection { operation, reason }| SyncStatusSnapshot::Rejected {
+                |Rejection {
+                     operation, reason, ..
+                 }| SyncStatusSnapshot::Rejected {
                     operation,
                     topology,
                     reason,

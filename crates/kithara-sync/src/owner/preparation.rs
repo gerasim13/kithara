@@ -388,8 +388,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// relocation it held is withdrawn, and the retarget is a new operation.
     /// A Host-to-Local handoff uses the exact latch cut instead of choosing a
     /// later beat, so the Local timeline and replacement map start together.
-    /// A silent member's decision waiting to be planned again keeps waiting
-    /// on the Host timeline; a sounding one's is retargeted like any other.
+    /// A decision waiting to be planned again keeps waiting on the Host
+    /// timeline, sounding or not, so only the Host's fresh observation plans
+    /// it once more.
     /// A timeline without geometry withdraws every decision but a handoff,
     /// and a new axis withdraws everything, applied maps too.
     pub(super) fn refreshed(
@@ -421,6 +422,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             let decided = match (held, self.applied_of(member.id())) {
                 (Some(held), _) if held.armed() => Some(held.clone()),
                 (Some(held), _) if !live => handoff(held).cloned(),
+                (Some(replanning @ Pending::Replanning { .. }), _)
+                    if matches!(timeline, Timeline::Host) =>
+                {
+                    Some(replanning.clone())
+                }
                 (_, Some(lane)) if live => {
                     let replanned = public_on_host(
                         held,
@@ -500,11 +506,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     }
                 }
                 (Some(waiting @ Pending::Waiting { .. }), None) => Some(waiting.clone()),
-                (Some(replanning @ Pending::Replanning { .. }), None)
-                    if live && matches!(timeline, Timeline::Host) =>
-                {
-                    Some(replanning.clone())
-                }
                 (
                     Some(
                         held @ Pending::Prepared {

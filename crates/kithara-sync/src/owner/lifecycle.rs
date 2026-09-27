@@ -31,9 +31,11 @@ pub(super) struct Applied {
     locked_grid: BeatGridStamp,
 }
 
-/// The latest decision of a group that ended without sounding.
+/// The latest decision of a group that ended without sounding, and the
+/// member it was placed on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Rejection {
+    pub(super) member: BeatGridId,
     pub(super) operation: SyncOperationId,
     pub(super) reason: SyncExecutionReject,
 }
@@ -65,6 +67,7 @@ impl Applied {
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Withdraw one member after its last audio processor has left the callback.
+    /// A rejection of the member's last decision goes with it.
     ///
     /// The Host has drained that processor's receipts before calling this. An
     /// Armed preparation therefore signals a broken receipt or quiescence
@@ -116,6 +119,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         self.blocked = None;
         self.pending = remaining;
         self.applied.retain(|lane| lane.member() != member);
+        self.rejection = self
+            .rejection
+            .filter(|rejection| rejection.member != member);
         if let Some((prior, grid)) = restored {
             for lane in &mut self.applied {
                 lane.restore_local_lock(prior.grid(), grid.stamp());
@@ -132,9 +138,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// player committed a change to that source.
     ///
     /// The accepted mode stays. An unpresented entry keeps its prior timeline
-    /// in custody, because that timeline still sounds. A discontinuity also
-    /// ends the applied map's proof of where the member stands; a timing
-    /// change keeps it, because a mapped lane plays its map, not the speed.
+    /// in custody, because that timeline still sounds. A rejection of the
+    /// member's last decision is forgotten with the source it was placed
+    /// against. A discontinuity also ends the applied map's proof of where
+    /// the member stands; a timing change keeps it, because a mapped lane
+    /// plays its map, not the speed.
     /// The Host has drained the member's receipts first, so an Armed
     /// preparation signals a broken receipt contract.
     ///
@@ -172,6 +180,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             self.before_entry = Some((Custodian::Withdrawn(member), prior));
         }
         self.pending = remaining;
+        self.rejection = self
+            .rejection
+            .filter(|rejection| rejection.member != member);
         if change == SourceChange::Discontinuity {
             self.applied.retain(|lane| lane.member() != member);
         }
@@ -188,10 +199,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// to catch up with the refinement. A rejection drops a preparation that
     /// is not armed and leaves the member on the map it already sounds
     /// through. A Host deck's entry or retarget that missed for a transient
-    /// reason, or on a refined member grid, instead waits to be planned once
-    /// more; a second miss ends it. A presentation makes the preparation's
-    /// map the member's applied one, or releases the member for a handoff.
-    /// Nothing changes on a refusal.
+    /// reason, or was cancelled because its member grid was refined, instead
+    /// waits to be planned once more; a second miss ends it, and a media,
+    /// capacity, or geometry refusal ends it at once. A presentation makes
+    /// the preparation's map the member's applied one, or releases the member
+    /// for a handoff. Nothing changes on a refusal.
     pub(super) fn record(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
         let stamp = receipt.stamp();
         let member = stamp.member().grid_id();
@@ -277,11 +289,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 }
             }
             Step::Drop(reason) => {
-                let transient = refined
-                    || matches!(
-                        reason,
-                        SyncExecutionReject::Late | SyncExecutionReject::ControlBusy
-                    );
+                let transient = match reason {
+                    SyncExecutionReject::Late | SyncExecutionReject::ControlBusy => true,
+                    SyncExecutionReject::Cancelled => refined,
+                    SyncExecutionReject::Geometry
+                    | SyncExecutionReject::Capacity
+                    | SyncExecutionReject::Media => false,
+                };
                 if host_deck && replans_a_miss && transient && self.replanned != Some(operation) {
                     if let Some(held) = self.pending.get_mut(index) {
                         *held = Pending::Replanning {
@@ -294,7 +308,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     }
                 } else {
                     self.end_decision(index, operation)?;
-                    self.rejection = Some(Rejection { operation, reason });
+                    self.rejection = Some(Rejection {
+                        member,
+                        operation,
+                        reason,
+                    });
                 }
             }
             Step::Present(applied) => {
@@ -337,16 +355,17 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         &mut self,
         operation: SyncOperationId,
     ) -> Result<SyncAdmission, SyncError> {
-        let (index, missed) = self
+        let (index, member, missed) = self
             .pending
             .iter()
             .enumerate()
             .find_map(|(index, held)| match held {
                 Pending::Replanning {
+                    member,
                     operation: waiting,
                     missed,
                     ..
-                } if *waiting == operation => Some((index, *missed)),
+                } if *waiting == operation => Some((index, *member, *missed)),
                 Pending::Replanning { .. } | Pending::Prepared { .. } | Pending::Waiting { .. } => {
                     None
                 }
@@ -355,7 +374,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         let reserved = self.reserve_operation()?;
         self.end_decision(index, operation)?;
         if let Some(reason) = missed {
-            self.rejection = Some(Rejection { operation, reason });
+            self.rejection = Some(Rejection {
+                member,
+                operation,
+                reason,
+            });
         }
         self.next_operation = reserved.checked_next();
         Ok(SyncAdmission::StateChanged {

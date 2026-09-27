@@ -8,12 +8,15 @@ use super::{
         PublishingGrid, acknowledge, map, pending_public_entry, plan, presented, publish_next,
         raw_successor, sound, source_at, transact, transition,
     },
-    modes::{Group, anchor_at_rate, parent_id, parent_stamp, parent_update, rate, sync_at},
+    modes::{
+        Group, anchor_at_rate, owning_deck_with_parent, parent_id, parent_stamp, parent_update,
+        rate, sync_at,
+    },
     preparation::asset_grid,
 };
 use crate::{
-    AlignmentSource, GroupState, SyncAdmission, SyncError, SyncExecutionReject, SyncGroup,
-    SyncIntent, SyncMember, SyncMode, SyncOperation, SyncPreparation, SyncReceipt,
+    AlignmentSource, GroupState, SourceChange, SyncAdmission, SyncError, SyncExecutionReject,
+    SyncGroup, SyncIntent, SyncMember, SyncMode, SyncOperation, SyncPreparation, SyncReceipt,
     SyncStatusSnapshot, owner::timeline::Custodian,
 };
 
@@ -342,4 +345,134 @@ fn a_track_grid_refined_before_the_claim_replans_the_entry() {
         replan(deck, &entry, activation(&entry) + 1),
     ));
     assert_eq!(next.stamp().member(), refined);
+}
+
+#[kithara::test]
+fn a_refined_track_grid_does_not_make_a_media_refusal_retryable() {
+    let (mut group, live) = publishing_deck_with_parent();
+    let deck = group.id();
+    let entry = replanned(transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)),
+    ));
+    let _ = publish_next(&live);
+
+    let status = acknowledge(
+        &mut group,
+        SyncReceipt::Rejected {
+            stamp: entry.stamp(),
+            reason: SyncExecutionReject::Media,
+        },
+    );
+
+    assert_eq!(
+        status,
+        SyncStatusSnapshot::Rejected {
+            operation: entry.stamp().operation(),
+            topology: entry.stamp().topology(),
+            reason: SyncExecutionReject::Media,
+        }
+    );
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert!(group.pending.is_empty());
+}
+
+#[kithara::test]
+fn a_parent_update_leaves_a_sounding_decks_missed_retarget_to_its_host() {
+    let (mut group, track, parent) = owning_deck_with_parent();
+    let deck = group.id();
+    let entry = replanned(transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)),
+    ));
+    let _ = sound(&mut group, &entry);
+    let moved = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 2),
+            anchor_at_rate(2.2, 48_000),
+        ))
+        .expect("a faster Host grid");
+    let [retarget] = moved.issued() else {
+        panic!("the sounding deck follows its Host, got {moved:?}");
+    };
+    let SyncStatusSnapshot::Replanning { operation, .. } =
+        missed(&mut group, retarget, SyncExecutionReject::Late)
+    else {
+        panic!("a missed retarget waits for its Host");
+    };
+
+    let moved = group
+        .accept_parent(parent_update(
+            parent_stamp(parent, 3),
+            anchor_at_rate(2.4, 48_000),
+        ))
+        .expect("a faster Host grid again");
+
+    assert!(
+        moved.issued().is_empty(),
+        "only the Host plans the waiting retarget once more"
+    );
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Replanning { operation: waiting, .. } if waiting == operation
+    ));
+    let frontier = activation(retarget) + 2_048;
+    let next = replanned(transact(
+        &mut group,
+        SyncOperation::Replan {
+            target: deck,
+            operation,
+            load: entry.stamp().load(),
+            transport: entry.stamp().transport(),
+            source: AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .warp_map(map(&entry))
+                    .source(source_at(plan(&entry), frontier))
+                    .output(SessionFrame::new(frontier))
+                    .build(),
+                speed: 1.0,
+            },
+            activation: SessionFrame::new(frontier + 2_048),
+        },
+    ));
+    assert!(matches!(
+        missed(&mut group, &next, SyncExecutionReject::Late),
+        SyncStatusSnapshot::Rejected {
+            reason: SyncExecutionReject::Late,
+            ..
+        }
+    ));
+    assert!(
+        group.applied_of(track).is_some(),
+        "the entry's map sounds on"
+    );
+}
+
+#[kithara::test]
+fn a_changed_source_forgets_the_rejection_placed_against_it() {
+    let (mut group, track, entry) = pending_public_entry();
+    let _ = missed(&mut group, &entry, SyncExecutionReject::Media);
+
+    let _ = transact(
+        &mut group,
+        SyncOperation::InvalidateSource {
+            target: track,
+            change: SourceChange::Discontinuity,
+        },
+    );
+
+    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+}
+
+#[kithara::test]
+fn a_withdrawn_track_takes_its_rejection_along() {
+    let (mut group, track, entry) = pending_public_entry();
+    let _ = missed(&mut group, &entry, SyncExecutionReject::Media);
+
+    let _ = transact(
+        &mut group,
+        SyncOperation::WithdrawQuiescedMember { target: track },
+    );
+
+    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
 }
