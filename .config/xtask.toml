@@ -545,6 +545,8 @@ prefix_args = [
   "--exclude",
   "kithara-ui",
   "--exclude",
+  "kithara-ui-gallery",
+  "--exclude",
   "kithara-ui-input",
   "--exclude",
   "kithara-ui-shaping",
@@ -937,7 +939,8 @@ prefix_args = [
 #
 # `kithara-ui` is the one exclusion that is product: it needs a GPU adapter and
 # two toolkit features this lane does not turn on, so `test.lanes.ui` below runs
-# it against both hosts instead. `kithara-ui-shaping` goes with it: its system
+# it against both hosts instead, and `kithara-ui-gallery`, whose suites draw its
+# pages, goes there with it. `kithara-ui-shaping` goes with it: its system
 # font policy is only answered on the runner that owns the machine's fonts. So
 # does `kithara-ui-input`: its toolkit adapters are tested only under the iced
 # and masonry features that lane turns on through `kithara-ui`.
@@ -1059,6 +1062,7 @@ prefix_args = [
 program = "cargo"
 owns = [
   "crates/kithara-ui/",
+  "crates/kithara-ui-gallery/",
   "crates/kithara-ui-input/",
   "crates/kithara-ui-shaping/",
   "crates/kithara-app/src/gui/",
@@ -1068,6 +1072,7 @@ default_features = [
   "kithara-ui/capture",
   "kithara-ui/gpu",
   "kithara-ui/masonry",
+  "kithara-ui-gallery/masonry",
   "kithara-app/masonry",
 ]
 # The UI crates carry neither the virtual clock nor the poll-blocking detector:
@@ -1080,6 +1085,8 @@ prefix_args = [
   "-p",
   "kithara-ui",
   "-p",
+  "kithara-ui-gallery",
+  "-p",
   "kithara-ui-input",
   "-p",
   "kithara-ui-shaping",
@@ -1091,19 +1098,27 @@ prefix_args = [
 ]
 suffix_args = [
   "-E",
-  "package(kithara-ui) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))",
+  "package(kithara-ui) | package(kithara-ui-gallery) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))",
 ]
 
 [test.lanes.ui-perf]
 program = "cargo"
 default_backend = "none"
-default_features = ["kithara-ui/gpu", "kithara-ui/masonry", "kithara-ui/perf"]
+default_features = [
+  "kithara-ui/gpu",
+  "kithara-ui/masonry",
+  "kithara-ui/perf",
+  "kithara-ui-gallery/masonry",
+  "kithara-ui-gallery/perf",
+]
 default_flash = false
 prefix_args = [
   "nextest",
   "run",
   "-p",
   "kithara-ui",
+  "-p",
+  "kithara-ui-gallery",
   "--cargo-profile",
   "test-release",
   "--test-threads",
@@ -1451,18 +1466,22 @@ pins = ".config/ci-pins.toml"
 "kithara-ui::roundtrip::module_roundtrip_is_semantically_stable" = "kithara-ui::roundtrip::a_module_roundtrips_buttons"
 "kithara-ui::roundtrip::an_optional_layout_block_roundtrips" = "kithara-ui::roundtrip::a_layout_roundtrips_optional_block"
 "kithara-ui::roundtrip::layout_roundtrip_is_semantically_stable" = "kithara-ui::roundtrip::a_layout_roundtrips_two_module_split"
-"kithara-ui::gallery::tests::the_scrub_fader_moves_the_sprite_beside_it" = "kithara-ui::gallery::tests::the_scrub_fader_moves_its_neighbour_sprite"
-"kithara-ui::gallery::tests::the_scrub_fader_moves_the_artwork_beside_it" = "kithara-ui::gallery::tests::the_scrub_fader_moves_its_neighbour_artwork"
-"kithara-ui::gallery::tests::the_hosted_module_tabs_keep_their_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_module_tabs"
-"kithara-ui::gallery::tests::the_hosted_table_keeps_its_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_table"
-"kithara-ui::gallery::tests::the_hosted_library_keeps_its_exact_descriptor_inventory" = "kithara-ui::gallery::tests::hosted_page_claims_library"
-"kithara-ui::gallery::tests::the_hosted_tree_keeps_its_exact_descriptor_inventory" = "kithara-ui::gallery::tests::hosted_page_claims_tree"
-"kithara-ui::gallery::tests::the_hosted_faders_keep_their_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_faders"
-"kithara-ui::gallery::tests::the_hosted_buttons_keep_their_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_buttons"
-"kithara-ui::gallery::tests::the_hosted_chips_keep_their_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_chips"
-"kithara-ui::gallery::tests::the_hosted_toggles_keep_their_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_toggles"
-"kithara-ui::gallery::tests::the_hosted_knobs_keep_their_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_knobs"
-"kithara-ui::gallery::tests::the_hosted_meters_keep_their_descriptor_backed_controls" = "kithara-ui::gallery::tests::hosted_page_claims_meters"
+"kithara-ui::gallery::" = "kithara-ui-gallery::gallery::"
+"kithara-ui::ui_memory::" = "kithara-ui-gallery::ui_memory::"
+"kithara-ui::ui_buffers::" = "kithara-ui-gallery::ui_buffers::"
+"kithara-ui::page_perf::" = "kithara-ui-gallery::page_perf::"
+"kithara-ui::gallery::tests::the_scrub_fader_moves_the_sprite_beside_it" = "kithara-ui-gallery::gallery::tests::the_scrub_fader_moves_its_neighbour_sprite"
+"kithara-ui::gallery::tests::the_scrub_fader_moves_the_artwork_beside_it" = "kithara-ui-gallery::gallery::tests::the_scrub_fader_moves_its_neighbour_artwork"
+"kithara-ui::gallery::tests::the_hosted_module_tabs_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_module_tabs"
+"kithara-ui::gallery::tests::the_hosted_table_keeps_its_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_table"
+"kithara-ui::gallery::tests::the_hosted_library_keeps_its_exact_descriptor_inventory" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_library"
+"kithara-ui::gallery::tests::the_hosted_tree_keeps_its_exact_descriptor_inventory" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_tree"
+"kithara-ui::gallery::tests::the_hosted_faders_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_faders"
+"kithara-ui::gallery::tests::the_hosted_buttons_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_buttons"
+"kithara-ui::gallery::tests::the_hosted_chips_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_chips"
+"kithara-ui::gallery::tests::the_hosted_toggles_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_toggles"
+"kithara-ui::gallery::tests::the_hosted_knobs_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_knobs"
+"kithara-ui::gallery::tests::the_hosted_meters_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_meters"
 "kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded_high"
 "kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
 "kithara-integration-tests::suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"

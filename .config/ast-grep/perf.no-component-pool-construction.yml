@@ -25,6 +25,7 @@ ignores:
   - crates/kithara-test-fixtures/**
   - crates/kithara-test-macros/**
   - crates/kithara-test-utils/**
+  - crates/kithara-ui-gallery/**
   - crates/kithara-workspace-hack/**
   - crates/kithara-app/src/pools.rs
   - crates/kithara-ffi/src/pools.rs

@@ -559,7 +559,7 @@ pub(crate) const ELEMENT_PATH: &str = "clock-components/title";
 
 /// What a page of the gallery, and a shipped studio page, are allowed to
 /// differ by before the programme ends non-zero.
-pub(crate) const GALLERY_BUDGET: &str = "crates/kithara-ui/examples/gallery/parity-budget.txt";
+pub(crate) const GALLERY_BUDGET: &str = "crates/kithara-ui-gallery/parity-budget.txt";
 
 /// The sets this programme writes, cleared before it starts so a set left
 /// by an earlier run cannot be compared as if this run had taken it.

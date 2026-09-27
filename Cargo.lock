@@ -5974,7 +5974,6 @@ version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
- "clap",
  "criterion",
  "delegate",
  "derive-where",
@@ -6052,6 +6051,34 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-ui-gallery"
+version = "0.0.1-alpha5"
+dependencies = [
+ "clap",
+ "delegate",
+ "derive_more",
+ "fieldwork",
+ "futures-lite",
+ "hotpath",
+ "iced",
+ "iced_renderer",
+ "iced_runtime",
+ "iced_tiny_skia",
+ "iced_wgpu",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui",
+ "kithara-ui-gallery",
+ "kithara-workspace-hack",
+ "kurbo 0.12.0",
+ "masonry",
+ "num-traits",
+ "ron",
+ "serde",
+ "vello",
 ]
 
 [[package]]

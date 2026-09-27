@@ -210,8 +210,8 @@ ui:
     just test run --lane=ui-doc
     just test run --lane=ui-perf
     just test parity --dir "$dir"
-    cargo test -p kithara-ui --test gallery --features kithara-ui/capture --profile test-release
-    cargo test -p kithara-ui --test ui_memory --features kithara-ui/capture,kithara-ui/masonry --profile test-release -- --test-threads=1
+    cargo test -p kithara-ui-gallery --test gallery --profile test-release
+    cargo test -p kithara-ui-gallery --test ui_memory --features kithara-ui-gallery/masonry --profile test-release -- --test-threads=1
 
 # The picture parity programme on its own. `just test ui` runs it after the UI
 # lanes; run it alone to re-check a drawing change without paying for the
@@ -240,7 +240,7 @@ parity *ARGS:
 # set draws what a window draws, so compare it against a set photographed at
 # the geometry this one recorded in `frame.txt`.
 ui-window DIR="target/parity/window":
-    cargo run -p kithara-ui --example gallery --features kithara-ui/capture -- --shoot {{ DIR }} --windowed
+    cargo run -p kithara-ui-gallery --bin gallery -- --shoot {{ DIR }} --windowed
 
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:

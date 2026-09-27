@@ -67,7 +67,7 @@ fn rooted(root: &Path, path: &Path) -> PathBuf {
     }
 }
 
-/// The gallery example built with both hosts in it, which is what photographs
+/// The gallery program built with both hosts in it, which is what photographs
 /// a set through either one and what compares two sets.
 struct Gallery<'root> {
     root: &'root Path,
@@ -79,11 +79,11 @@ impl Gallery<'_> {
         command.current_dir(self.root).args([
             "run",
             "-p",
-            "kithara-ui",
-            "--example",
+            "kithara-ui-gallery",
+            "--bin",
             "gallery",
             "--features",
-            "kithara-ui/capture,kithara-ui/masonry",
+            "kithara-ui-gallery/masonry",
             "--",
         ]);
         command
