@@ -8,6 +8,7 @@ use super::{
     preparation::PrepareRequest,
     relocation::RelocateRequest,
     state::GroupState,
+    timeline::Custodian,
 };
 use crate::{
     ParentFact, SessionAxisUpdate, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMember,
@@ -256,12 +257,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             Ok(joins) => joins,
             Err(error) => return Err(reject(error, operations)),
         };
+        // An unarmed or withdrawn entry never sounded, so the topology change
+        // abandons it and the prior timeline stays.
         let restoration = match self.before_entry {
-            Some((operation, prior))
-                if self
-                    .pending
-                    .iter()
-                    .any(|held| held.operation() == operation && !held.armed()) =>
+            Some((custodian, prior))
+                if matches!(custodian, Custodian::Withdrawn(_))
+                    || self.pending.iter().any(|held| {
+                        custodian == Custodian::Decision(held.operation()) && !held.armed()
+                    }) =>
             {
                 match self.restored_entry_grid(prior) {
                     Ok(grid) => Some((prior, grid)),

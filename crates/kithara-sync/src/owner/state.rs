@@ -11,7 +11,7 @@ use super::{
     lifecycle::Applied,
     mutation::{materialize_topology, routed_group},
     preparation::Pending,
-    timeline::{Blocked, PriorTimeline, Timeline},
+    timeline::{Blocked, Custodian, PriorTimeline, Timeline},
 };
 use crate::{
     ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
@@ -28,7 +28,7 @@ use crate::{
 pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     pub(super) grid: BeatGridSnapshot,
     pub(super) timeline: Timeline,
-    pub(super) before_entry: Option<(SyncOperationId, PriorTimeline)>,
+    pub(super) before_entry: Option<(Custodian, PriorTimeline)>,
     pub(super) parent: Option<Parent>,
     pub(super) next_operation: Option<SyncOperationId>,
     pub(super) blocked: Option<Blocked>,
@@ -236,38 +236,42 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// pending decision on the same physical axis and load still owns it.
     /// A same-load replacement inherits custody; an axis or owner change
     /// severs it before a late rejection can restore an obsolete timeline.
-    /// An entry a source change already withdrew holds custody with no
-    /// decision, because its prior timeline still sounds; the next entry
-    /// inherits it.
+    /// Custody a source change withdrew passes to that member's next entry,
+    /// whatever load and transport the change left it on.
     pub(super) fn reconcile_before_entry(
         &self,
         grid: &BeatGridSnapshot,
         timeline: Timeline,
         pending: &[Pending],
-        custody: Option<(SyncOperationId, PriorTimeline)>,
-    ) -> Option<(SyncOperationId, PriorTimeline)> {
-        let (operation, prior) = custody?;
+        custody: Option<(Custodian, PriorTimeline)>,
+    ) -> Option<(Custodian, PriorTimeline)> {
+        let (custodian, prior) = custody?;
         if grid.axis() != self.grid.axis() || !matches!(timeline, Timeline::Host) {
             return None;
         }
+        let operation = match custodian {
+            Custodian::Decision(operation) => operation,
+            Custodian::Withdrawn(member) => {
+                return Some(
+                    pending
+                        .iter()
+                        .find(|held| held.member() == member && held.enters_map())
+                        .map_or((custodian, prior), |held| {
+                            (Custodian::Decision(held.operation()), prior)
+                        }),
+                );
+            }
+        };
         if pending
             .iter()
             .any(|held| held.operation() == operation && held.enters_map())
         {
-            return Some((operation, prior));
+            return Some((custodian, prior));
         }
-        let Some(previous) = self
+        let previous = self
             .pending
             .iter()
-            .find(|held| held.operation() == operation)
-        else {
-            return Some(
-                pending
-                    .iter()
-                    .find(|held| held.enters_map())
-                    .map_or((operation, prior), |held| (held.operation(), prior)),
-            );
-        };
+            .find(|held| held.operation() == operation)?;
         pending
             .iter()
             .find(|held| {
@@ -281,7 +285,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         })
                     && held.enters_map()
             })
-            .map(|held| (held.operation(), prior))
+            .map(|held| (Custodian::Decision(held.operation()), prior))
     }
 
     /// The state of the latest map a member sounds through: locked while it

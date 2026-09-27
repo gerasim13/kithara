@@ -14,7 +14,7 @@ use super::{
         retarget_boundary,
     },
     state::GroupState,
-    timeline::Timeline,
+    timeline::{Custodian, Timeline},
     transaction::take_operation,
 };
 use crate::{
@@ -404,10 +404,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             planned => planned,
         };
         if matches!(&planned, Err(Missing::Coverage(_)))
-            && self.before_entry.is_some_and(|(entry, _)| {
-                self.pending
-                    .iter()
-                    .any(|held| held.operation() == entry && held.member() == target)
+            && self.before_entry.is_some_and(|(custodian, _)| {
+                self.pending.iter().any(|held| {
+                    custodian == Custodian::Decision(held.operation()) && held.member() == target
+                })
             })
         {
             return Err(SyncError::GridCoverageUnavailable { member_id: target });
@@ -452,7 +452,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         load: LoadGeneration,
         transport: TransportRevision,
     ) -> Result<(), SyncError> {
-        let Some((operation, _)) = self.before_entry else {
+        let Some((Custodian::Decision(operation), _)) = self.before_entry else {
             return Ok(());
         };
         let Some(previous) = self
@@ -532,8 +532,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     )?;
                     let public_missed = matches!(replanned, Some(None));
                     let first_entry = public_missed
-                        && self.before_entry.is_some_and(|(operation, _)| {
-                            held.is_some_and(|pending| pending.operation() == operation)
+                        && self.before_entry.is_some_and(|(custodian, _)| {
+                            held.is_some_and(|pending| {
+                                custodian == Custodian::Decision(pending.operation())
+                            })
                         });
                     if let Some(Some(candidate)) = replanned {
                         Some(candidate)
@@ -544,8 +546,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                             continue;
                         };
                         let returns_from_unclaimed_entry = !matches!(timeline, Timeline::Host)
-                            && self.before_entry.is_some_and(|(entry, _)| {
-                                held.is_some_and(|pending| pending.operation() == entry)
+                            && self.before_entry.is_some_and(|(custodian, _)| {
+                                held.is_some_and(|pending| {
+                                    custodian == Custodian::Decision(pending.operation())
+                                })
                             });
                         let leaves_host_for_local = matches!(self.timeline, Timeline::Host)
                             && matches!(timeline, Timeline::Local(_));

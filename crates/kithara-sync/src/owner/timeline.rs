@@ -1,7 +1,7 @@
 use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_warp::{
-    BeatGridQuery, BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute, MapAxis,
-    MapPoint, MapPosition, MapRegion, MeterFacts, SessionAnchor, SessionBeat, WarpPlan,
+    BeatGridId, BeatGridQuery, BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatsPerMinute,
+    MapAxis, MapPoint, MapPosition, MapRegion, MeterFacts, SessionAnchor, SessionBeat, WarpPlan,
 };
 
 use super::{
@@ -26,6 +26,16 @@ pub(super) enum Timeline {
     Local(Option<LocalTimeline>),
     /// The parent's accepted segment, recorded on the group state.
     Host,
+}
+
+/// What holds an unpresented entry's prior timeline in custody.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Custodian {
+    /// The pending entry decision.
+    Decision(SyncOperationId),
+    /// The member whose committed source change withdrew that decision. The
+    /// prior timeline still sounds, and the member's next entry inherits it.
+    Withdrawn(BeatGridId),
 }
 
 /// The timeline a leaf deck still sounds through before its first Host entry
@@ -467,7 +477,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     }
                 }
                 if !matches!(timeline, Timeline::Host)
-                    && let Some((held, _)) = self.before_entry
+                    && let Some((Custodian::Decision(held), _)) = self.before_entry
                     && let Some(member) = self
                         .pending
                         .iter()
@@ -485,11 +495,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     if let Some(issued) = self.stage_sync_entry(&mut staged, entry)? {
                         staged.before_entry = self
                             .before_entry
-                            .map(|(_, prior)| (issued, prior))
+                            .map(|(_, prior)| (Custodian::Decision(issued), prior))
                             .or_else(|| {
                                 self.timeline
                                     .prior(self.grid.stamp())
-                                    .map(|prior| (issued, prior))
+                                    .map(|prior| (Custodian::Decision(issued), prior))
                             });
                     }
                 } else if !matches!(timeline, Timeline::Host) {
@@ -511,7 +521,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         takeover,
                     )?;
                     if let Some(issued) = self.stage_sync_entry(&mut staged, entry)? {
-                        staged.before_entry = self.before_entry.map(|(_, prior)| (issued, prior));
+                        staged.before_entry = self
+                            .before_entry
+                            .map(|(_, prior)| (Custodian::Decision(issued), prior));
                         (Committed::Changed(self.timeline), Some(staged))
                     } else {
                         (Committed::Unchanged, None)

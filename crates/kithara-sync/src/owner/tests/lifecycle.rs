@@ -25,7 +25,7 @@ use crate::{
     SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup,
     SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
     SyncPreparation, SyncReceipt, SyncStatusSnapshot, SyncTransition, TopologyOperation,
-    TopologyRevision, TopologyStamp,
+    TopologyRevision, TopologyStamp, owner::timeline::Custodian,
 };
 
 /// A deck at 120 BPM holding one track grid.
@@ -350,8 +350,8 @@ fn a_raw_replacement_rejection_restores_the_prior_manual_mode() {
     let successor = raw_successor(&mut group, track);
     assert_ne!(first.stamp().operation(), successor.stamp().operation());
     assert_eq!(
-        group.before_entry.map(|(operation, _)| operation),
-        Some(successor.stamp().operation()),
+        group.before_entry.map(|(custodian, _)| custodian),
+        Some(Custodian::Decision(successor.stamp().operation())),
         "same-load replacement inherits the first entry's custody"
     );
 
@@ -394,8 +394,8 @@ fn an_uncovered_raw_replacement_keeps_the_first_public_entry_addressable() {
     assert_eq!(group.mode(), SyncMode::HostSync);
     assert_eq!(group.next_operation, next_operation);
     assert_eq!(
-        group.before_entry.map(|(operation, _)| operation),
-        Some(first.stamp().operation())
+        group.before_entry.map(|(custodian, _)| custodian),
+        Some(Custodian::Decision(first.stamp().operation()))
     );
     assert!(matches!(
         group.status(),
@@ -430,8 +430,8 @@ fn a_new_load_or_transport_cannot_inherit_unclaimed_entry_custody() {
         ));
         assert_eq!(group.next_operation, next_operation);
         assert_eq!(
-            group.before_entry.map(|(operation, _)| operation),
-            Some(first.stamp().operation())
+            group.before_entry.map(|(custodian, _)| custodian),
+            Some(Custodian::Decision(first.stamp().operation()))
         );
         assert!(matches!(
             group.status(),
@@ -1991,8 +1991,8 @@ fn a_new_entry_after_a_source_change_inherits_the_prior_timeline() {
         panic!("a repeated ON issues one fresh entry");
     };
     assert_eq!(
-        group.before_entry.map(|(operation, _)| operation),
-        Some(fresh.stamp().operation())
+        group.before_entry.map(|(custodian, _)| custodian),
+        Some(Custodian::Decision(fresh.stamp().operation()))
     );
     let status = acknowledge(
         &mut group,
@@ -2003,6 +2003,44 @@ fn a_new_entry_after_a_source_change_inherits_the_prior_timeline() {
     );
     assert_eq!(group.mode(), SyncMode::Off);
     assert!(matches!(status, SyncStatusSnapshot::Off { .. }));
+}
+
+#[kithara::test]
+fn a_quiesced_withdrawal_restores_custody_a_source_change_withdrew() {
+    let (mut group, track, _) = pending_public_entry();
+    let _ = invalidate(&mut group, track, SourceChange::Discontinuity);
+    assert_eq!(
+        group.before_entry.map(|(custodian, _)| custodian),
+        Some(Custodian::Withdrawn(track))
+    );
+
+    let _ = transact(
+        &mut group,
+        SyncOperation::WithdrawQuiescedMember { target: track },
+    );
+    assert_eq!(
+        group.mode(),
+        SyncMode::Off,
+        "the withdrawn entry never sounded"
+    );
+    assert!(group.before_entry.is_none());
+}
+
+#[kithara::test]
+fn a_topology_change_restores_custody_a_source_change_withdrew() {
+    let (mut group, track, _) = pending_public_entry();
+    let _ = invalidate(&mut group, track, SourceChange::Discontinuity);
+
+    let base = group.topology().expect("topology").stamp();
+    let _ = transact(
+        &mut group,
+        SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Detach { member: track }]),
+        },
+    );
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert!(group.before_entry.is_none());
 }
 
 #[kithara::test]

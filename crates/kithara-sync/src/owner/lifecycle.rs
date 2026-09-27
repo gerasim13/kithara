@@ -4,6 +4,7 @@ use num_traits::ToPrimitive;
 use super::{
     preparation::{Pending, Phase, transition},
     state::GroupState,
+    timeline::Custodian,
 };
 use crate::{
     SourceChange, SyncApplied, SyncEffect, SyncError, SyncExecutionStamp, SyncGroup,
@@ -90,15 +91,16 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             });
         }
 
-        let restored = self
-            .before_entry
-            .filter(|(operation, _)| {
-                self.pending
-                    .iter()
-                    .any(|pending| pending.member() == member && pending.operation() == *operation)
-            })
-            .map(|(_, prior)| self.restored_entry_grid(prior).map(|grid| (prior, grid)))
-            .transpose()?;
+        let restored =
+            self.before_entry
+                .filter(|(custodian, _)| match *custodian {
+                    Custodian::Decision(operation) => self.pending.iter().any(|pending| {
+                        pending.member() == member && pending.operation() == operation
+                    }),
+                    Custodian::Withdrawn(held) => held == member,
+                })
+                .map(|(_, prior)| self.restored_entry_grid(prior).map(|grid| (prior, grid)))
+                .transpose()?;
         let mut remaining = self.pending.clone();
         remaining.retain(|pending| pending.member() != member);
         let transition = transition(&self.pending, &remaining);
@@ -153,6 +155,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         let mut remaining = self.pending.clone();
         remaining.retain(|pending| pending.member() != member);
         let transition = transition(&self.pending, &remaining);
+        if let Some((custodian, prior)) = self.before_entry
+            && self.pending.iter().any(|held| {
+                held.member() == member && custodian == Custodian::Decision(held.operation())
+            })
+        {
+            self.before_entry = Some((Custodian::Withdrawn(member), prior));
+        }
         self.pending = remaining;
         if change == SourceChange::Discontinuity {
             self.applied.retain(|lane| lane.member() != member);
@@ -237,7 +246,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             });
         }
         let restoration = match (self.before_entry, &step) {
-            (Some((held, prior)), Step::Drop) if held == operation => {
+            (Some((held, prior)), Step::Drop) if held == Custodian::Decision(operation) => {
                 Some((prior, self.restored_entry_grid(prior)?))
             }
             _ => None,
@@ -265,7 +274,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 self.pending.remove(index);
                 self.applied.retain(|held| held.member() != member);
                 self.applied.extend(lane);
-                if self.before_entry.is_some_and(|(held, _)| held == operation) {
+                if self
+                    .before_entry
+                    .is_some_and(|(held, _)| held == Custodian::Decision(operation))
+                {
                     self.before_entry = None;
                 }
             }

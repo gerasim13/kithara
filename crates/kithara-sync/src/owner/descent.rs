@@ -5,7 +5,7 @@ use super::{
     lifecycle::Applied,
     preparation::{Pending, Refreshed, transition},
     state::{GroupState, Withdrawal, validate_successor},
-    timeline::{PriorTimeline, Timeline},
+    timeline::{Custodian, PriorTimeline, Timeline},
     transaction::take_operation,
 };
 use crate::{
@@ -61,7 +61,7 @@ pub(super) fn output_transport(
 pub(super) struct Staged {
     pub(super) grid: BeatGridSnapshot,
     timeline: Timeline,
-    pub(super) before_entry: Option<(SyncOperationId, PriorTimeline)>,
+    pub(super) before_entry: Option<(Custodian, PriorTimeline)>,
     parent: Option<Parent>,
     pub(super) pending: Vec<Pending>,
     pub(super) applied: Vec<Applied>,
@@ -280,7 +280,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             next_operation,
             children,
         };
-        if let Some((operation, prior)) = self.before_entry
+        if let Some((Custodian::Decision(operation), prior)) = self.before_entry
             && matches!(staged.timeline, Timeline::Host)
             && staged.grid.axis() == self.grid.axis()
             && self
