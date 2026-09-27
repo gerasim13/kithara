@@ -42,8 +42,9 @@ pub(crate) struct PendingLoads {
     /// later leading track replaces them.
     withdrawn: Vec<TrackId>,
     /// Withdrawn successors whose cancel the command ring refused. The
-    /// processor still holds them and may stitch one in at any later track
-    /// end, so a later leading track does not settle them.
+    /// processor holds them until it reports them unloaded and may stitch one
+    /// in at any later track end, so a later leading track does not settle
+    /// them.
     uncancelled: Vec<TrackId>,
 }
 
@@ -61,10 +62,19 @@ impl PendingLoads {
         !(self.withdrawn.is_empty() && self.uncancelled.is_empty())
     }
 
+    /// The processor unloaded `item_id`, so it can no longer stitch that
+    /// withdrawn successor in.
+    pub(crate) fn retire(&mut self, item_id: TrackId) {
+        self.withdrawn.retain(|withdrawn| *withdrawn != item_id);
+        self.uncancelled
+            .retain(|uncancelled| *uncancelled != item_id);
+    }
+
     /// The processor played `item_id`: it reported the track's start or its
-    /// natural end. While a withdrawal is in question that is the stitch that
-    /// settles it, when it names the armed successor or a withdrawn one; the
-    /// armed successor is consumed only when it is the one played.
+    /// natural or failed end. While a withdrawal is in question that is the
+    /// stitch that settles it, when it names the armed successor or a
+    /// withdrawn one; the armed successor is consumed only when it is the one
+    /// played.
     pub(crate) fn settle_played(&mut self, item_id: TrackId) -> bool {
         let armed = self
             .next
