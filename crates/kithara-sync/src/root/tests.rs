@@ -1,11 +1,15 @@
-use std::{cell::Cell, num::NonZeroU32};
+use std::{
+    cell::{Cell, RefCell},
+    num::NonZeroU32,
+};
 
 use kithara_platform::time::Duration;
-use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
+use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
     AssetAxis, AssetExtent, AssetFrame, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot,
-    BeatGridStamp, BeatsPerMinute, MapAxis, PresentationFrontier,
+    BeatGridStamp, BeatsPerMinute, MapAxis, PresentationFrontier, RenderContext, RenderPublisher,
+    RenderSnapshot,
 };
 
 use super::*;
@@ -21,26 +25,35 @@ use crate::{
     sync_receipts,
 };
 
+/// One read an entry made of the Host's audio clock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClockRead {
+    Processed,
+    Boundary,
+}
+
 /// One deck of live slots and the retiring slots of any deck, with every
-/// publication and every read of an audio clock that never processed
-/// anything counted.
+/// publication counted, and an audio clock that reports `processed` and
+/// places `boundary`, recording each read in order.
 #[derive(Default)]
 struct FakePort {
     live: Vec<SyncReceiptInbox>,
     retiring: Vec<(BeatGridId, SyncReceiptInbox)>,
     publishes: Cell<usize>,
-    clock_reads: Cell<usize>,
+    processed: Option<ProcessedTransport>,
+    boundary: Option<SessionFrame>,
+    clock_reads: RefCell<Vec<ClockRead>>,
 }
 
 impl EntryPort for FakePort {
     fn processed(&mut self) -> Option<ProcessedTransport> {
-        self.clock_reads.set(self.clock_reads.get() + 1);
-        None
+        self.clock_reads.get_mut().push(ClockRead::Processed);
+        self.processed
     }
 
     fn commit_boundary(&self) -> Result<SessionFrame, ClockRefusal> {
-        self.clock_reads.set(self.clock_reads.get() + 1);
-        Err(ClockRefusal::Unavailable)
+        self.clock_reads.borrow_mut().push(ClockRead::Boundary);
+        self.boundary.ok_or(ClockRefusal::Unavailable)
     }
 }
 
@@ -150,6 +163,30 @@ fn waiting_root() -> (SyncRoot<TestGroup>, BeatGridId, SyncOperationId) {
 /// A Host that cannot observe any deck's track afresh.
 fn unobserved(_: &TestGroup) -> Option<ResidentLoadObservation<u32>> {
     None
+}
+
+/// Render evidence of one callback that rendered the output up to
+/// `rendered` at `epoch` and `revision`.
+fn rendered(
+    rendered: SessionFrame,
+    epoch: SessionEpoch,
+    revision: TransportRevision,
+) -> RenderSnapshot {
+    let output = OutputContext::new(
+        SessionFrame::new(0)..rendered,
+        rate(),
+        epoch,
+        Some(revision),
+    )
+    .expect("fixture output");
+    let context = RenderContext::new_linear(output, None).expect("fixture context");
+    let frontier = PresentationFrontier::builder()
+        .source(0)
+        .output(rendered)
+        .build();
+    let publisher = RenderPublisher::default();
+    publisher.publish(&context, frontier);
+    publisher.reader().load().expect("a published snapshot")
 }
 
 /// An execution stamp of `member` for an operation the root never prepared.
@@ -468,7 +505,125 @@ fn an_entry_refused_on_its_own_evidence_never_reads_the_host_clock() {
         .expect("the cut drains nothing");
 
     assert_eq!(refusals, [Some(EntryRefusal::NotReady); 5]);
-    assert_eq!(port.clock_reads.get(), 0);
+    assert!(port.clock_reads.borrow().is_empty());
+}
+
+#[kithara::test]
+fn an_entry_reads_the_host_clock_only_as_far_as_its_evidence_holds() {
+    use ClockRead::{Boundary, Processed};
+    let mut root = root(DEFAULT_OWNER_WAIT);
+    let (target, member, stranger) = (id(), id(), id());
+    let gate = root.register(target, member).expect("registration");
+    let (epoch, revision) = (SessionEpoch::new(3), TransportRevision::first());
+    let snapshot = rendered(SessionFrame::new(4_096), epoch, revision);
+    let processed = |epoch| {
+        ProcessedTransport::builder()
+            .revision(revision)
+            .session_epoch(epoch)
+            .sample_rate(rate())
+            .build()
+    };
+    let observed = |staging, source| {
+        ResidentLoadObservation::builder()
+            .item_id(0_u32)
+            .load(LoadGeneration::first())
+            .requested_speed(1.0)
+            .render(ResidentRender::Snapshot(snapshot.clone()))
+            .source(source)
+            .staging(staging)
+            .build()
+    };
+    let current = Some(gate.source_revision());
+    let staged = ResidentStaging::Available;
+    let cases = [
+        (
+            observed(ResidentStaging::Unavailable, current),
+            member,
+            Some(processed(epoch)),
+            None,
+            Err(EntryRefusal::NotReady),
+            &[][..],
+        ),
+        (
+            observed(staged, current),
+            member,
+            None,
+            None,
+            Err(EntryRefusal::TransportNotProcessed),
+            &[Processed][..],
+        ),
+        (
+            observed(staged, current),
+            member,
+            Some(processed(SessionEpoch::new(4))),
+            None,
+            Err(EntryRefusal::NotReady),
+            &[Processed][..],
+        ),
+        (
+            observed(staged, current),
+            stranger,
+            Some(processed(epoch)),
+            None,
+            Err(EntryRefusal::MemberNotRegistered(stranger)),
+            &[Processed][..],
+        ),
+        (
+            observed(staged, None),
+            member,
+            Some(processed(epoch)),
+            None,
+            Err(EntryRefusal::NotReady),
+            &[Processed][..],
+        ),
+        (
+            observed(staged, current),
+            member,
+            Some(processed(epoch)),
+            None,
+            Err(EntryRefusal::Clock(ClockRefusal::Unavailable)),
+            &[Processed, Boundary][..],
+        ),
+        (
+            observed(staged, current),
+            member,
+            Some(processed(epoch)),
+            Some(SessionFrame::new(1_000)),
+            Ok(SessionFrame::new(6_144)),
+            &[Processed, Boundary][..],
+        ),
+        (
+            observed(staged, current),
+            member,
+            Some(processed(epoch)),
+            Some(SessionFrame::new(8_000)),
+            Ok(SessionFrame::new(10_048)),
+            &[Processed, Boundary][..],
+        ),
+    ];
+
+    for (index, (resident, member, processed, boundary, expected, reads)) in
+        cases.into_iter().enumerate()
+    {
+        let mut port = FakePort {
+            processed,
+            boundary,
+            ..FakePort::default()
+        };
+        let entered = root.enter().expect("the owner is free");
+        let entry = entered
+            .run(&mut port, |cut, port| {
+                cut.requested_sync(port, target, member, SyncIntent::Enable, &resident)
+            })
+            .expect("the cut drains nothing")
+            .map(|operation| match operation {
+                SyncOperation::Sync { activation, .. } => activation,
+                _ => panic!("case {index}: an entry plans a deck sync"),
+            });
+
+        assert_eq!(entry, expected, "case {index}");
+        assert_eq!(port.clock_reads.into_inner(), reads, "case {index}");
+    }
 }
 
 #[kithara::test]
@@ -494,7 +649,7 @@ fn a_waiting_deck_with_no_observation_ends_its_decision_and_the_root_publishes_o
     ));
     assert!(root.waiting(unobserved).is_empty());
     assert_eq!(port.publishes.get(), 1);
-    assert_eq!(port.clock_reads.get(), 0);
+    assert!(port.clock_reads.borrow().is_empty());
 }
 
 #[kithara::test]
