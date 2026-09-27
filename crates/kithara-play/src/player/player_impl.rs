@@ -9,7 +9,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelScope,
-    sync::{Arc, Mutex},
+    sync::{Arc, ExclusiveGate, Mutex},
 };
 use kithara_warp::{BeatGridId, WarpConfigPatch};
 
@@ -116,7 +116,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             runtime: Arc::new(PlayerRuntime {
                 core,
                 lifecycle: PlayerLifecycle::open(),
-                operations: Mutex::default(),
+                operations: ExclusiveGate::default(),
                 phase: Mutex::new(PlayerPhase::Idle),
             }),
         }

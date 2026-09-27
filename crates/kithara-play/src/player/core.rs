@@ -4,7 +4,7 @@ use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
-    sync::{Arc, Mutex},
+    sync::{Arc, ExclusiveGate, Mutex},
     time::Duration,
 };
 use kithara_warp::WarpConfig;
@@ -89,7 +89,9 @@ pub(crate) struct PlayerCore<S> {
 pub struct PlayerRuntime<S> {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore<S>,
-    pub(super) operations: Mutex<()>,
+    /// Admits one operation at a time. An operation waits on the session while
+    /// admitted, so a contender parks on the gate instead of blocking a lock.
+    pub(super) operations: ExclusiveGate,
     pub(super) lifecycle: PlayerLifecycle,
 }
 

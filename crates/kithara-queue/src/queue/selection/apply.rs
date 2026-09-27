@@ -30,10 +30,7 @@ where
             return;
         }
 
-        let _apply = self
-            .select_apply
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _apply = self.lock_select_apply();
 
         if self.player.is_closed() {
             return;

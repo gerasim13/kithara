@@ -289,7 +289,7 @@ async fn repeat_one_restarts_the_track_its_own_eof_ended() {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
     let source = assets::constant_wav_three_0_4s();
     let id = append_loaded(&harness, &queue, &source).await;
-    queue.set_repeat(RepeatMode::One);
+    harness.run(&queue, |q| q.set_repeat(RepeatMode::One)).await;
     harness
         .run(&queue, move |q| q.select(id, Transition::None))
         .await
