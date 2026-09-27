@@ -14,9 +14,8 @@ use tracing::warn;
 
 use super::{
     super::{
-        dispatch::{pump_before_work, run_host_cmd},
+        dispatch::{pump_before_work, replan_waiting, run_host_cmd},
         protocol::{HostCmd, HostCmdMsg, HostReply},
-        replan::replan_waiting,
         state::{RootView, SessionState, ensure_ctx},
     },
     OfflineSessionClient,

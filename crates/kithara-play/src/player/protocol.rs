@@ -1,10 +1,11 @@
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
+use kithara_events::TrackId;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
-use kithara_sync::SyncAttachment;
+use kithara_sync::{ResidentLoadObservation, SyncAttachment};
 use kithara_warp::{BeatGrid, BeatGridId};
 
-use super::{PlaybackView, PlayerImpl, PlayerRuntime, ResidentLoadObservation};
+use super::{PlaybackView, PlayerImpl, PlayerRuntime};
 use crate::{PlayError, SessionBinding};
 
 /// Canonical object-safe protocol implemented by a standalone player and its
@@ -35,7 +36,7 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     /// so the player's session owner can read it while a command of this
     /// player waits on that owner. `None` once the player closed or while
     /// nothing is resident.
-    fn resident_observation(&self) -> Option<ResidentLoadObservation>;
+    fn resident_observation(&self) -> Option<ResidentLoadObservation<TrackId>>;
 
     /// Seek within the current item.
     fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
@@ -69,7 +70,7 @@ pub trait PlayerControlSource: Player {
     /// Returns an error when the player command capability is closed.
     fn resident_sync_observation(
         control: &Self::Control,
-    ) -> Result<Option<ResidentLoadObservation>, PlayError>;
+    ) -> Result<Option<ResidentLoadObservation<TrackId>>, PlayError>;
 
     /// Attaches the resident Player to its canonical session exactly once and
     /// hands that owner the player's synchronization attachment: the group
@@ -120,7 +121,7 @@ where
             .unwrap_or_default()
     }
 
-    fn resident_observation(&self) -> Option<ResidentLoadObservation> {
+    fn resident_observation(&self) -> Option<ResidentLoadObservation<TrackId>> {
         if self.runtime.is_closed() {
             return None;
         }
@@ -160,7 +161,7 @@ where
 
     fn resident_sync_observation(
         control: &Self::Control,
-    ) -> Result<Option<ResidentLoadObservation>, PlayError> {
+    ) -> Result<Option<ResidentLoadObservation<TrackId>>, PlayError> {
         control.resident_sync_observation()
     }
 

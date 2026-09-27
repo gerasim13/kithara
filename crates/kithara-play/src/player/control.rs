@@ -4,8 +4,9 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
+use kithara_sync::ResidentLoadObservation;
 
-use super::{PlayerRuntime, ResidentLoadObservation, SelectTransition};
+use super::{PlayerRuntime, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, InterruptionKind, PlayError, PlaybackSnapshot, PlayerStatus,
     Resource, ResourceConfig, SelectionPlayback, SessionDuckingMode, bridge::RtMetricsSnapshot,
@@ -113,7 +114,9 @@ where
     ///
     /// # Errors
     /// Returns `Closed` when the owning player has closed.
-    pub fn resident_sync_observation(&self) -> Result<Option<ResidentLoadObservation>, PlayError> {
+    pub fn resident_sync_observation(
+        &self,
+    ) -> Result<Option<ResidentLoadObservation<TrackId>>, PlayError> {
         self.runtime
             .with_open(PlayerRuntime::resident_sync_observation)
     }

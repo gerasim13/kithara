@@ -6,12 +6,12 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant},
     },
-    play::{PlayError, ResidentRender, player::PlayerControlSource},
+    play::{PlayError, player::PlayerControlSource},
     queue::Queue,
     signal::SessionFrame,
     sync::{
-        AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
-        SyncStatusSnapshot,
+        AlignmentSource, LoadGeneration, ResidentRender, SyncAdmission, SyncGroup, SyncIntent,
+        SyncOperation, SyncStatusSnapshot,
     },
     warp::{AssetFrame, PresentationFrontier},
 };

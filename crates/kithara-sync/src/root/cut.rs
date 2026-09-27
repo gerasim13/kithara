@@ -5,10 +5,9 @@ use kithara_warp::{BeatGrid, BeatGridId, BeatGridStamp, MapAxis};
 
 use super::{RegisteredCell, RootError, RootPort};
 use crate::{
-    ControlError, ControlGuard, GroupState, ObservedEntry, ParentGridUpdate, PermitCell,
-    PreparedRevocation, PublicOperation, SourceRevision, SyncAdmission, SyncCapability, SyncError,
-    SyncGroup, SyncMode, SyncOperation, SyncOperationId, SyncRejected, SyncTransition,
-    TopologyOperation,
+    ControlError, ControlGuard, GroupState, ParentGridUpdate, PermitCell, PreparedRevocation,
+    PublicOperation, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMode, SyncOperation,
+    SyncRejected, SyncTransition, TopologyOperation,
 };
 
 /// An owner cut that holds Control but has not yet heard the audio callback,
@@ -61,34 +60,6 @@ pub struct RootCut<'r, G: SyncGroup<NestedGroup = G>> {
 }
 
 impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
-    /// Ends the decision `operation` the deck `target` holds while it waits
-    /// for its Host, which cannot observe the deck's track afresh.
-    ///
-    /// # Errors
-    ///
-    /// Returns the refusal with its operation; nothing changes then.
-    pub fn abandon_replan(
-        &mut self,
-        target: BeatGridId,
-        operation: SyncOperationId,
-    ) -> Result<SyncAdmission, SyncRejected<G>> {
-        self.verified(SyncOperation::AbandonReplan { operation, target })
-    }
-
-    /// The source revision a decision planned for `member` of the deck
-    /// `group` may rely on, or `None` when no such member is registered.
-    #[must_use]
-    pub fn current_source(
-        &self,
-        group: BeatGridId,
-        member: BeatGridId,
-    ) -> Option<Result<SourceRevision, ControlError>> {
-        self.cells
-            .iter()
-            .find(|entry| entry.member() == member && entry.group == group)
-            .map(|entry| self.control.current_source(&entry.cell))
-    }
-
     /// The root group as this cut has left it so far.
     #[must_use]
     pub fn group(&self) -> &GroupState<G> {
@@ -136,28 +107,6 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
         Ok(())
     }
 
-    /// Plans once more the decision `operation` the deck `target` holds while
-    /// it waits for its Host, from the entry the Host observed afresh.
-    ///
-    /// # Errors
-    ///
-    /// Returns the refusal with its operation; nothing changes then.
-    pub fn replan(
-        &mut self,
-        target: BeatGridId,
-        operation: SyncOperationId,
-        entry: ObservedEntry,
-    ) -> Result<SyncAdmission, SyncRejected<G>> {
-        self.verified(SyncOperation::Replan {
-            operation,
-            target,
-            load: entry.load(),
-            transport: entry.transport(),
-            source: entry.source(),
-            activation: entry.activation(),
-        })
-    }
-
     /// The member's end of life: its cell is retired, so no permit minted
     /// for it claims again. Returns the deck group it played in, whose
     /// retiring slots can no longer report anything the owner would apply,
@@ -202,7 +151,10 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
 
     /// Preflights every affected cell before the owner changes, then revokes
     /// the tickets the admission replaces. A refusal changes nothing.
-    fn verified(&mut self, operation: SyncOperation<G>) -> Result<SyncAdmission, SyncRejected<G>> {
+    pub(super) fn verified(
+        &mut self,
+        operation: SyncOperation<G>,
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
         let affected = affected_cells(self.group, self.cells, &operation);
         let fence = match Fence::prepare(&self.control, affected) {
             Ok(fence) => fence,

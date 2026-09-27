@@ -7,8 +7,8 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 use kithara_sync::{
-    ControlEnterError, EnteredCut, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
-    SyncIntent, SyncOperation, SyncRejected,
+    ControlEnterError, EnteredCut, EntryRefusal, PublicOperation, RootCut, RootError, SyncError,
+    SyncGroup, SyncOperation, SyncRejected,
 };
 use tracing::{debug, trace, warn};
 
@@ -20,7 +20,6 @@ use super::{
     protocol::{
         Cmd, HostCmd, HostReply, PlayerId, PlayerLevel, Reply, SessionError, SessionStream, SyncCmd,
     },
-    replan,
     state::{SessionState, register_player},
     transport,
     transport::RouteRestartStatus,
@@ -96,6 +95,18 @@ pub(super) fn enter_error(error: ControlEnterError) -> SessionError {
     }
 }
 
+/// What a deck entry the root cannot place means to the deck's Player.
+fn entry_refusal(refusal: EntryRefusal) -> PlayError {
+    match refusal {
+        EntryRefusal::NotReady => PlayError::NotReady,
+        EntryRefusal::TransportNotProcessed => SessionError::TransportNotProcessed.into(),
+        EntryRefusal::MemberNotRegistered(member) => {
+            SessionError::SyncMemberNotRegistered(member).into()
+        }
+        EntryRefusal::Clock(refusal) => transport::clock_error(refusal).into(),
+    }
+}
+
 /// What a refusal of the sync root means to the session's callers.
 pub(super) fn root_error(error: RootError) -> SessionError {
     match error {
@@ -124,6 +135,29 @@ pub(super) fn root_error(error: RootError) -> SessionError {
 pub(super) fn pump_before_work<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     with_owner_cut(state, |cut, port| {
         transport::observe_commits(cut, port).map_err(SessionError::from)
+    })
+}
+
+/// Plans once more every deck decision that waits for its Host, without any
+/// caller asking: observes each waiting deck's track outside Control, then,
+/// in one owner cut, replans the decision that still waits from that
+/// observation, or ends it when the track cannot be observed afresh.
+///
+/// # Errors
+/// Returns the first refusal to end a waiting decision; the next tick
+/// retries it.
+pub(super) fn replan_waiting<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let waiting = state.sync.waiting(PlayerMember::resident_observation);
+    if waiting.is_empty() {
+        return Ok(());
+    }
+    with_owner_cut(state, |cut, port| {
+        transport::observe_commits(cut, port)?;
+        cut.replan_waiting(port, waiting)
+            .map_err(SessionError::Sync)
     })
 }
 
@@ -199,24 +233,9 @@ fn run_sync_cmd<S>(
             let Some(resident) = observation else {
                 return HostReply::Err(PlayError::NotReady);
             };
-            let entry = match replan::observed_entry(
-                cut,
-                port,
-                target,
-                member,
-                &resident,
-                matches!(intent, SyncIntent::Enable | SyncIntent::AlignNow),
-            ) {
-                Ok(entry) => entry,
-                Err(error) => return HostReply::Err(error),
-            };
-            SyncOperation::Sync {
-                target,
-                load: entry.load(),
-                transport: entry.transport(),
-                source: entry.source(),
-                activation: entry.activation(),
-                intent,
+            match cut.requested_sync(port, target, member, intent, &resident) {
+                Ok(operation) => operation,
+                Err(refusal) => return HostReply::Err(entry_refusal(refusal)),
             }
         }
         SyncCmd::QueryDeckState { target } => {
@@ -450,7 +469,7 @@ where
     {
         warn!(?error, "session tick failed");
     }
-    if let Err(error) = replan::replan_waiting(state)
+    if let Err(error) = replan_waiting(state)
         && !matches!(error, SessionError::SyncControlBusy)
     {
         warn!(?error, "replanning a waiting deck failed");

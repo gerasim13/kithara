@@ -1,13 +1,15 @@
 use firewheel::FirewheelContext;
+use kithara_events::TrackId;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
+use kithara_play::PlayError;
 pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
     SessionSampleRate,
 };
-use kithara_play::{PlayError, player::ResidentLoadObservation};
 use kithara_sync::{
-    SyncAdmission, SyncError, SyncIntent, SyncOperation, SyncRejected, TopologyOperation,
+    ResidentLoadObservation, SyncAdmission, SyncError, SyncIntent, SyncOperation, SyncRejected,
+    TopologyOperation,
 };
 use kithara_warp::BeatGridId;
 
@@ -52,7 +54,7 @@ pub(crate) enum SyncCmd {
         target: BeatGridId,
         member: BeatGridId,
         intent: SyncIntent,
-        observation: Option<Box<ResidentLoadObservation>>,
+        observation: Option<Box<ResidentLoadObservation<TrackId>>>,
     },
 }
 

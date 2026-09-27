@@ -206,25 +206,6 @@ impl<G: SyncGroup> TryFrom<SyncOperation<G>> for PublicOperation<G> {
     }
 }
 
-/// Where a deck's track enters, as one fresh observation of its audible
-/// source places it.
-#[derive(Clone, Copy, Debug, bon::Builder, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-pub struct ObservedEntry {
-    /// Exact Track load observed.
-    #[field(get, copy)]
-    load: LoadGeneration,
-    /// Exact committed session transport state observed.
-    #[field(get, copy)]
-    transport: TransportRevision,
-    /// Where the track's recording stands.
-    #[field(get, copy)]
-    source: AlignmentSource,
-    /// First output frame the entry may take effect at.
-    #[field(get, copy)]
-    activation: SessionFrame,
-}
-
 /// A committed change to the source one member plays.
 ///
 /// Variants are ordered by strength: coalescing several changes keeps the

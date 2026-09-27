@@ -8,6 +8,10 @@ pub(crate) const OPEN_END: i64 = i64::MAX;
 
 pub(crate) const SECONDS_PER_MINUTE: f64 = 60.0;
 
+/// Output frames between the audio already committed or rendered and an
+/// entry's first admissible activation.
+pub(crate) const ENTRY_LEAD_FRAMES: i64 = 2_048;
+
 /// Receipts one activation writes: `Armed`, then `Presented`. The mailbox
 /// holds exactly one pair, so a pair is reservable only while no receipt of
 /// the slot waits for the owner.

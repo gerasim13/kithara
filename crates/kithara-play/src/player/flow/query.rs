@@ -1,10 +1,8 @@
 use delegate::delegate;
-use kithara_events::{EventBus, EventReceiver, EventSet};
+use kithara_events::{EventBus, EventReceiver, EventSet, TrackId};
+use kithara_sync::{ResidentLoadObservation, ResidentRender, ResidentStaging};
 
-use super::super::{
-    core::PlayerRuntime,
-    view::{ResidentLoadObservation, ResidentRender, ResidentStaging},
-};
+use super::super::core::PlayerRuntime;
 use crate::{
     EngineLoadSnapshot, PlayWorker,
     api::PlayerStatus,
@@ -18,7 +16,7 @@ impl<S> PlayerRuntime<S> {
     /// The applied source is read first: the resident and the evidence read
     /// after it are at least as new as every change it covers, so a Host that
     /// still holds that source can rely on both.
-    pub(crate) fn resident_sync_observation(&self) -> Option<ResidentLoadObservation> {
+    pub(crate) fn resident_sync_observation(&self) -> Option<ResidentLoadObservation<TrackId>> {
         let slot = self.phase.lock().slot()?;
         let source = self.core.engine.applied_source(slot);
         let (item_id, load) = self.phase.lock().resident()?;
@@ -38,14 +36,16 @@ impl<S> PlayerRuntime<S> {
             },
             None => ResidentStaging::Unavailable,
         };
-        Some(ResidentLoadObservation {
-            item_id,
-            load,
-            requested_speed: f64::from(self.core.warp.stretch().speed()),
-            render,
-            source,
-            staging,
-        })
+        Some(
+            ResidentLoadObservation::builder()
+                .item_id(item_id)
+                .load(load)
+                .requested_speed(f64::from(self.core.warp.stretch().speed()))
+                .render(render)
+                .source(source)
+                .staging(staging)
+                .build(),
+        )
     }
 
     /// ABR handle of the currently loaded item, if any.

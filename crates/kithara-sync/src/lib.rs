@@ -16,7 +16,7 @@ pub use execution::{
 };
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{
-    AlignmentSource, LoadGeneration, ObservedEntry, ParentFact, ParentGridUpdate, ParentWithdrawal,
+    AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal,
     PublicOperation, SessionAxisUpdate, SourceChange, SyncAdmission, SyncApplied, SyncCapability,
     SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncGroupSnapshot,
     SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncMode,
@@ -24,7 +24,8 @@ pub use protocol::{
     SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
 };
 pub use root::{
-    DEFAULT_OWNER_WAIT, EnteredCut, InboxAt, RegisteredCell, RootCut, RootError, RootPort,
-    SyncRoot, SyncRootConfig,
+    ClockRefusal, DEFAULT_OWNER_WAIT, EnteredCut, EntryPort, EntryRefusal, InboxAt,
+    ProcessedTransport, ResidentLoadObservation, ResidentRender, ResidentStaging, RootCut,
+    RootError, RootPort, SyncRoot, SyncRootConfig, Waiting,
 };
 mod consts;

@@ -24,7 +24,3 @@ pub(crate) const TRANSPORT_BLOCK_FRAMES: usize = 480;
 
 #[cfg(test)]
 pub(crate) const TRANSPORT_SAMPLE_RATE: u32 = 48_000;
-
-/// Output frames the Host leaves between the audio it has already rendered
-/// and a deck entry's first admissible activation.
-pub(crate) const ENTRY_LEAD_FRAMES: i64 = 2048;

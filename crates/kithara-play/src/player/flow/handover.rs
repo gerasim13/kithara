@@ -457,9 +457,12 @@ mod tests {
         assert_eq!((observation.item_id(), observation.load()), (item_id, load));
         assert!(matches!(
             observation.render(),
-            crate::ResidentRender::Missing
+            kithara_sync::ResidentRender::Missing
         ));
-        assert_eq!(observation.staging(), crate::ResidentStaging::Unavailable);
+        assert_eq!(
+            observation.staging(),
+            kithara_sync::ResidentStaging::Unavailable
+        );
 
         assert!(matches!(
             rx.try_recv(),

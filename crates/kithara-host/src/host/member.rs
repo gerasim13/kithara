@@ -1,10 +1,10 @@
 use std::fmt;
 
-use kithara_play::player::ResidentLoadObservation;
+use kithara_events::TrackId;
 use kithara_sync::{
-    ExecutedGroup, GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
-    SyncStatusSnapshot, SyncTransition,
+    ExecutedGroup, GroupState, ParentFact, ResidentLoadObservation, SyncAdmission, SyncAttachment,
+    SyncError, SyncGroup, SyncGroupSnapshot, SyncMode, SyncOperation, SyncReceipt, SyncRejected,
+    SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 
@@ -38,7 +38,7 @@ impl PlayerMember {
             /// Observes the deck's resident track afresh, outside its player's
             /// command admission.
             #[must_use]
-            pub(crate) fn resident_observation(&self) -> Option<ResidentLoadObservation>;
+            pub(crate) fn resident_observation(&self) -> Option<ResidentLoadObservation<TrackId>>;
         }
     }
 }

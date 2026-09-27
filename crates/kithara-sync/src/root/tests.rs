@@ -15,17 +15,33 @@ use crate::{
     SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
     SyncReceiptInbox, SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
     TransportOperation,
-    owner::tests::fixtures::{TestGrid, TestGroup, deck_with_a_preparation},
+    owner::tests::fixtures::{
+        TestGrid, TestGroup, deck_with_a_preparation, root_with_a_waiting_deck,
+    },
     sync_receipts,
 };
 
 /// One deck of live slots and the retiring slots of any deck, with every
-/// publication counted.
+/// publication and every read of an audio clock that never processed
+/// anything counted.
 #[derive(Default)]
 struct FakePort {
     live: Vec<SyncReceiptInbox>,
     retiring: Vec<(BeatGridId, SyncReceiptInbox)>,
     publishes: Cell<usize>,
+    clock_reads: Cell<usize>,
+}
+
+impl EntryPort for FakePort {
+    fn processed(&mut self) -> Option<ProcessedTransport> {
+        self.clock_reads.set(self.clock_reads.get() + 1);
+        None
+    }
+
+    fn commit_boundary(&self) -> Result<SessionFrame, ClockRefusal> {
+        self.clock_reads.set(self.clock_reads.get() + 1);
+        Err(ClockRefusal::Unavailable)
+    }
 }
 
 impl RootPort<TestGroup> for FakePort {
@@ -120,6 +136,20 @@ fn attach_track(root: &mut SyncRoot<TestGroup>, port: &mut FakePort, track: Beat
         .expect("the cut drains nothing")
         .expect("the root admits a track grid");
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
+}
+
+/// A root over one deck whose decision waits for its Host, with the deck's
+/// track registered; with the deck and the waiting operation.
+fn waiting_root() -> (SyncRoot<TestGroup>, BeatGridId, SyncOperationId) {
+    let (group, deck, track, operation) = root_with_a_waiting_deck();
+    let mut root = SyncRoot::new(group, SyncRootConfig::builder().build());
+    let _ = root.register(deck, track).expect("registration");
+    (root, deck, operation)
+}
+
+/// A Host that cannot observe any deck's track afresh.
+fn unobserved(_: &TestGroup) -> Option<ResidentLoadObservation<u32>> {
+    None
 }
 
 /// An execution stamp of `member` for an operation the root never prepared.
@@ -383,4 +413,109 @@ fn a_public_operation_publishes_only_when_the_root_admits_it() {
         attached,
         "a refusal changes nothing"
     );
+}
+
+#[kithara::test]
+fn an_entry_refused_on_its_own_evidence_never_reads_the_host_clock() {
+    let mut root = root(DEFAULT_OWNER_WAIT);
+    let mut port = FakePort::default();
+    let (target, member) = (id(), id());
+    let observed = |render, staging| {
+        ResidentLoadObservation::builder()
+            .item_id(0_u32)
+            .load(LoadGeneration::first())
+            .requested_speed(1.0)
+            .render(render)
+            .source(None)
+            .staging(staging)
+            .build()
+    };
+    let stale = ResidentRender::Stale {
+        bound_load: LoadGeneration::first(),
+    };
+    let other = ResidentStaging::DifferentLoad {
+        item_id: 1,
+        load: LoadGeneration::first(),
+    };
+    let cases = [
+        (SyncIntent::Enable, observed(stale.clone(), other)),
+        (
+            SyncIntent::AlignNow,
+            observed(stale.clone(), ResidentStaging::Unavailable),
+        ),
+        (
+            SyncIntent::Enable,
+            observed(ResidentRender::Missing, ResidentStaging::Available),
+        ),
+        (
+            SyncIntent::Disable,
+            observed(stale, ResidentStaging::Unavailable),
+        ),
+        (
+            SyncIntent::Free,
+            observed(ResidentRender::Missing, ResidentStaging::Unavailable),
+        ),
+    ];
+
+    let entered = root.enter().expect("the owner is free");
+    let refusals = entered
+        .run(&mut port, |cut, port| {
+            cases.map(|(intent, resident)| {
+                cut.requested_sync(port, target, member, intent, &resident)
+                    .err()
+            })
+        })
+        .expect("the cut drains nothing");
+
+    assert_eq!(refusals, [Some(EntryRefusal::NotReady); 5]);
+    assert_eq!(port.clock_reads.get(), 0);
+}
+
+#[kithara::test]
+fn a_waiting_deck_with_no_observation_ends_its_decision_and_the_root_publishes_once() {
+    let (mut root, deck, operation) = waiting_root();
+    let mut port = FakePort::default();
+    let waiting = root.waiting(unobserved);
+    assert_eq!(waiting.len(), 1, "the deck waits for its Host");
+
+    let entered = root.enter().expect("the owner is free");
+    let settled = entered
+        .run(&mut port, |cut, port| cut.replan_waiting(port, waiting))
+        .expect("the cut drains nothing");
+
+    assert_eq!(settled, Ok(()));
+    assert!(matches!(
+        root.group().with_group(deck, SyncGroup::status),
+        Some(SyncStatusSnapshot::Rejected {
+            operation: ended,
+            reason: SyncExecutionReject::Late,
+            ..
+        }) if ended == operation
+    ));
+    assert!(root.waiting(unobserved).is_empty());
+    assert_eq!(port.publishes.get(), 1);
+    assert_eq!(port.clock_reads.get(), 0);
+}
+
+#[kithara::test]
+fn a_decision_that_stopped_waiting_is_left_alone() {
+    let (mut root, deck, _) = waiting_root();
+    let mut port = FakePort::default();
+    let first = root.waiting(unobserved);
+    let stale = root.waiting(unobserved);
+    let entered = root.enter().expect("the owner is free");
+    let settled = entered
+        .run(&mut port, |cut, port| cut.replan_waiting(port, first))
+        .expect("the cut drains nothing");
+    assert_eq!(settled, Ok(()));
+    let ended = root.group().with_group(deck, SyncGroup::status);
+
+    let entered = root.enter().expect("the owner is free");
+    let settled = entered
+        .run(&mut port, |cut, port| cut.replan_waiting(port, stale))
+        .expect("the cut drains nothing");
+
+    assert_eq!(settled, Ok(()), "an ended decision is not ended again");
+    assert_eq!(root.group().with_group(deck, SyncGroup::status), ended);
+    assert_eq!(port.publishes.get(), 2, "each pass publishes the root once");
 }

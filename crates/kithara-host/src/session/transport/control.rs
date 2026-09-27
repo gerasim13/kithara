@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_signal::SessionFrame;
-use kithara_sync::{ParentGridUpdate, RootCut, SyncError};
+use kithara_sync::{ClockRefusal, ParentGridUpdate, RootCut, SyncError};
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
@@ -372,12 +372,21 @@ fn schedule_commit<T, S>(
     Ok(())
 }
 
-pub(crate) fn commit_boundary(
+fn commit_boundary(
     ctx: Option<&FirewheelContext>,
     transport: &SessionTransportState,
 ) -> Result<(SessionFrame, NonZeroU32), SessionError> {
-    let ctx = ctx.ok_or(SessionError::NoContext)?;
-    let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
+    clock_boundary(ctx, transport).map_err(clock_error)
+}
+
+/// The first output frame a commit made now can take effect at, and the
+/// stream's sample rate.
+pub(crate) fn clock_boundary(
+    ctx: Option<&FirewheelContext>,
+    transport: &SessionTransportState,
+) -> Result<(SessionFrame, NonZeroU32), ClockRefusal> {
+    let ctx = ctx.ok_or(ClockRefusal::Unavailable)?;
+    let stream_info = ctx.stream_info().ok_or(ClockRefusal::Unavailable)?;
     let lead_frames = transport
         .observed()
         .map_or(0, |_| i64::from(stream_info.max_block_frames.get()));
@@ -386,8 +395,16 @@ pub(crate) fn commit_boundary(
         .samples
         .0
         .checked_add(lead_frames)
-        .ok_or(SessionError::TransportFrameExhausted)?;
+        .ok_or(ClockRefusal::FrameExhausted)?;
     Ok((SessionFrame::new(target_frame), stream_info.sample_rate))
+}
+
+/// What the audio clock's refusal means to the session's callers.
+pub(crate) const fn clock_error(refusal: ClockRefusal) -> SessionError {
+    match refusal {
+        ClockRefusal::Unavailable => SessionError::NoContext,
+        ClockRefusal::FrameExhausted => SessionError::TransportFrameExhausted,
+    }
 }
 
 fn queue_stamp<T, S>(
@@ -530,11 +547,12 @@ fn publish_committed<S>(
         )
         .with_output_transport(snapshot.revision());
         if port.stream.ctx.is_some() {
-            let (floor, _) =
-                commit_boundary(port.stream.ctx, port.transport).map_err(|error| match error {
-                    SessionError::TransportFrameExhausted => SyncError::ExecutionFrameExhausted,
-                    _ => SyncError::OwnerUnavailable,
-                })?;
+            let (floor, _) = clock_boundary(port.stream.ctx, port.transport).map_err(
+                |refusal| match refusal {
+                    ClockRefusal::FrameExhausted => SyncError::ExecutionFrameExhausted,
+                    ClockRefusal::Unavailable => SyncError::OwnerUnavailable,
+                },
+            )?;
             update = update.with_execution_floor(floor);
         }
         cut.publish_session(port, update)?;

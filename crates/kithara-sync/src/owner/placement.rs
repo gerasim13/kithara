@@ -8,7 +8,7 @@ use kithara_warp::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{AlignmentSource, SyncError};
+use crate::{AlignmentSource, SyncError, consts};
 
 /// Why a member cannot be placed on the group's beats now.
 #[derive(Debug)]
@@ -264,6 +264,14 @@ pub(super) fn continue_on(
     })
 }
 
+/// The first output frame an entry may take effect at: the lead after the
+/// later of its commit boundary and the audio already rendered.
+pub(crate) fn entry_earliest(commit: SessionFrame, rendered: SessionFrame) -> Option<SessionFrame> {
+    i64::from(commit.max(rendered))
+        .checked_add(consts::ENTRY_LEAD_FRAMES)
+        .map(SessionFrame::new)
+}
+
 /// Gives a sounding replacement its preparation lead and selects the next
 /// owner beat without changing the source motion of its applied map.
 pub(super) fn retarget_boundary(
@@ -271,10 +279,8 @@ pub(super) fn retarget_boundary(
     commit: SessionFrame,
     frontier: SessionFrame,
 ) -> Result<SessionFrame, Missing> {
-    let earliest = i64::from(commit.max(frontier))
-        .checked_add(2_048)
-        .map(SessionFrame::new)
-        .ok_or_else(|| Missing::Refused(outside(owner)))?;
+    let earliest =
+        entry_earliest(commit, frontier).ok_or_else(|| Missing::Refused(outside(owner)))?;
     let at = MapPosition::Session(earliest);
     let under = owner_beat_at(owner, at)?;
     let beat = first_boundary(owner, under, earliest, None, 0.0)?;

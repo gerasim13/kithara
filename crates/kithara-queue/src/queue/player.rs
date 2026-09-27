@@ -1,9 +1,10 @@
 use kithara_bufpool::HasPool;
+use kithara_events::TrackId;
 use kithara_play::{
     BeatGridId, PlayError, SeekOutcome, SessionBinding,
-    player::{PlaybackView, Player, PlayerControlSource, ResidentLoadObservation},
+    player::{PlaybackView, Player, PlayerControlSource},
 };
-use kithara_sync::SyncAttachment;
+use kithara_sync::{ResidentLoadObservation, SyncAttachment};
 
 use super::Queue;
 
@@ -27,7 +28,7 @@ where
         to self.player {
             fn set_host_level(&self, level: f32);
             fn host_level(&self) -> f32;
-            fn resident_observation(&self) -> Option<ResidentLoadObservation>;
+            fn resident_observation(&self) -> Option<ResidentLoadObservation<TrackId>>;
         }
     }
 }
@@ -52,7 +53,7 @@ where
 
     fn resident_sync_observation(
         control: &Self::Control,
-    ) -> Result<Option<ResidentLoadObservation>, PlayError> {
+    ) -> Result<Option<ResidentLoadObservation<TrackId>>, PlayError> {
         control.player.resident_sync_observation()
     }
 

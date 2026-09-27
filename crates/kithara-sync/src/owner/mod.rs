@@ -12,4 +12,5 @@ mod timeline;
 mod transaction;
 
 pub use descent::SyncStaged;
+pub(crate) use placement::entry_earliest;
 pub use state::GroupState;

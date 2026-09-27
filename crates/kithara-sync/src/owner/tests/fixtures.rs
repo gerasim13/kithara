@@ -6,13 +6,15 @@ use kithara_warp::{
 };
 
 use super::{
-    modes::synced_deck,
+    lifecycle::{acknowledge, pending_public_entry},
+    modes::{attach_group, group_in, synced_deck},
     preparation::{asset_grid, attach_grid, cue, prepare},
 };
 use crate::{
     GroupState, ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncPreparation,
-    SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
+    SyncExecutionReject, SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation,
+    SyncOperationId, SyncPreparation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot,
+    SyncTransition,
 };
 
 /// Test-only recursive group that delegates to the real owner state.
@@ -153,4 +155,28 @@ pub(crate) fn deck_with_a_preparation() -> (GroupState<TestGroup>, SyncPreparati
         SyncAdmission::Prepared(preparation) => (deck, preparation),
         admission => panic!("expected a prepared member, got {admission:?}"),
     }
+}
+
+/// A root holding one Host-synced deck whose executor missed the deck's first
+/// entry, so that decision waits for its Host to plan it again; with the
+/// deck, its track and the waiting operation.
+pub(crate) fn root_with_a_waiting_deck() -> (
+    GroupState<TestGroup>,
+    BeatGridId,
+    BeatGridId,
+    SyncOperationId,
+) {
+    let (mut deck, track, entry) = pending_public_entry();
+    let id = deck.id();
+    let _ = acknowledge(&mut deck, SyncReceipt::Installed(entry.stamp()));
+    let _ = acknowledge(
+        &mut deck,
+        SyncReceipt::Rejected {
+            stamp: entry.stamp(),
+            reason: SyncExecutionReject::Late,
+        },
+    );
+    let mut root = group_in(SyncMode::Off, SyncMemberKind::Group);
+    attach_group(&mut root, deck);
+    (root, id, track, entry.stamp().operation())
 }

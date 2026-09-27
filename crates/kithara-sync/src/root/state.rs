@@ -22,7 +22,7 @@ pub struct SyncRootConfig {
 
 /// One attached member's permit cell, and the terminal gate rejection the
 /// owner keeps for it when an install reached a busy owner.
-pub struct RegisteredCell {
+pub(crate) struct RegisteredCell {
     pub(super) group: BeatGridId,
     pub(super) cell: Arc<PermitCell>,
     pub(super) pending_gate_receipt: Option<SyncReceipt>,
@@ -31,13 +31,13 @@ pub struct RegisteredCell {
 impl RegisteredCell {
     /// The deck group the member plays in.
     #[must_use]
-    pub const fn group(&self) -> BeatGridId {
+    pub(crate) const fn group(&self) -> BeatGridId {
         self.group
     }
 
     /// The track member the cell gates.
     #[must_use]
-    pub fn member(&self) -> BeatGridId {
+    pub(crate) fn member(&self) -> BeatGridId {
         self.cell.member()
     }
 }
@@ -72,7 +72,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncRoot<G> {
 
     /// Every registered member cell.
     #[must_use]
-    pub fn cells(&self) -> &[RegisteredCell] {
+    pub(super) fn cells(&self) -> &[RegisteredCell] {
         &self.cells
     }
 
