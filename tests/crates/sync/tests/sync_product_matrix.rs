@@ -26,7 +26,7 @@ use kithara::{
         ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
         ResourceSrc, Tempo,
     },
-    queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
+    queue::{Queue, QueueConfig, QueueError, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
     sync::{
         AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncMode, SyncOperation,
@@ -171,6 +171,7 @@ pub(super) struct SyncCase {
     decks: usize,
     pub(super) sample_rate: u32,
     order: OperationOrder,
+    /// Every deck stays paused after its selection.
     paused: bool,
     ride: TempoRide,
     updates_hz: u32,
@@ -784,6 +785,7 @@ impl ProductHarness {
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
                     .crossfade_duration(0.0)
+                    .block_on_underrun(true)
                     .maybe_response_budget_frames(case.response_budget)
                     .build(),
             );
@@ -830,7 +832,11 @@ impl ProductHarness {
             let control = deck.control().clone();
             harness
                 .host
-                .run(move || control.select(id, Transition::None))
+                .run(move || {
+                    control.select(id, Transition::None)?;
+                    control.pause();
+                    Ok::<_, QueueError>(())
+                })
                 .await
                 .unwrap_or_else(|error| panic!("{}: select deck {index}: {error}", case.id));
         }
@@ -842,21 +848,25 @@ impl ProductHarness {
         harness
     }
 
-    /// The Host reports its transport from the last render it committed, so a
-    /// harness that hands a revision to `request_sync` must have committed one
-    /// first. The warm-up render usually is that commit; on a loaded host it
-    /// can return before the renderer publishes, and one more render is what
-    /// the wait costs.
+    /// A harness hands the Host's processed transport revision to
+    /// `request_sync`, and the Host answers it only once its first commit has
+    /// reached the callback. Every deck stays paused until then, so however
+    /// many renders that takes on a loaded host, no deck has advanced.
     async fn warm_up_transport(&mut self, case: SyncCase) {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         loop {
             let _ = self.render(case, self.block_frames).await;
-            if self.host.transport_revision().await.is_ok() {
+            if self
+                .host
+                .with(|host| host.session_transport())
+                .await
+                .is_ok()
+            {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "{}: no render committed a session transport",
+                "{}: no render processed the session transport",
                 case.id
             );
         }
@@ -1011,10 +1021,15 @@ impl ProductHarness {
         }
     }
 
-    async fn transport_revision(&self, case: SyncCase) -> kithara::signal::TransportRevision {
+    /// The transport revision the Host has processed.
+    pub(super) async fn transport_revision(
+        &self,
+        case: SyncCase,
+    ) -> kithara::signal::TransportRevision {
         self.host
-            .transport_revision()
+            .with(|host| host.session_transport())
             .await
+            .map(|transport| transport.revision())
             .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id))
     }
 

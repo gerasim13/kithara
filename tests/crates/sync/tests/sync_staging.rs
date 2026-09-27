@@ -123,11 +123,7 @@ async fn prepare_cue(
                 .map(|track| track.grid().id())
         })
         .unwrap_or_else(|| panic!("{}: the deck holds no track grid", case.id()));
-    let transport = harness
-        .host
-        .transport_revision()
-        .await
-        .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id()));
+    let transport = harness.transport_revision(case).await;
     let now = i64::try_from(harness.host.position()).unwrap_or(i64::MAX);
     let window_start =
         SessionFrame::new(now.saturating_add(i64::try_from(defer_frames).unwrap_or(i64::MAX)));

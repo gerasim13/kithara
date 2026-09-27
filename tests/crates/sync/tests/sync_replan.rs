@@ -60,11 +60,7 @@ async fn a_late_deck_entry_sounds_on_the_next_beat_the_host_plans_itself() {
     let target = deck.id();
     let heard = deck.playback_view().position.unwrap_or(0.0) * f64::from(case.sample_rate);
     let cue = AssetFrame::new(heard).expect("finite cue");
-    let transport = harness
-        .host
-        .transport_revision()
-        .await
-        .expect("processed Host transport");
+    let transport = harness.transport_revision(case).await;
     harness
         .host
         .with(move |host| {
