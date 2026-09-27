@@ -19,65 +19,33 @@ required-features = ["all"]
 # fixture families it reads; each family turns this on. Enabling it alone
 # registers no asset beyond the synthetic PCM every family builds on.
 native-fixtures = [
-    "dep:bon",
-    "dep:delegate",
-    "dep:derive_more",
-    "dep:fs4",
-    "dep:inventory",
-    "dep:kithara-encode",
+    "dep:kithara-fixture-gen",
     "dep:kithara-platform",
     "dep:kithara-stream",
     "dep:kithara-test-macros",
-    "dep:kithara-test-utils",
     "dep:serde_json",
+    "kithara-fixture-media/native",
 ]
 
-# `rhythm_pcm` and its controls are declared with the WAV family.
-encoded = ["wav"]
-# Packages its own segments from synthetic PCM; it fetches nothing.
-hls = ["dep:aes", "dep:cbc", "dep:rayon", "packaged"]
+# Each family registers the assets `kithara-fixture-gen` declares for it.
+encoded = ["kithara-fixture-gen/encoded", "wav"]
+hls = ["kithara-fixture-gen/hls", "packaged"]
 # The segment inputs and the variant catalog reach consumers through one module;
 # the catalog packages its variants from the `packaged` pools.
-hls-inputs = ["hls"]
-# The verified download and the playlist hydrator are one transport module, so
-# the two fetching families ship together. `rhythm` then analyses each
-# downloaded track, as it does every whole audio track.
-library = ["remote", "rhythm"]
-packaged = ["dep:kithara-bufpool", "wav"]
-# Everything that reaches the network at build time: the HTTP client, the
-# playlist hydrator, and the one build outcome only a fetch can produce.
-remote = [
-    "dep:bytes",
-    "dep:hls_m3u8",
-    "dep:kithara-drm",
-    "dep:rayon",
-    "dep:reqwest",
-    "dep:url",
-    "hls",
-    "native-fixtures",
-]
-rhythm = [
-    "dep:cochlea-render",
-    "dep:cochlea-score",
-    "dep:futures-lite",
-    "dep:kithara-analysis",
-    "dep:kithara-audio",
-    "dep:kithara-decode",
-    "dep:kithara-events",
-    "dep:kithara-resampler",
-    "dep:kithara-signal",
-    "native-fixtures",
-]
-signal = ["native-fixtures"]
-wav = ["native-fixtures"]
+hls-inputs = ["hls", "kithara-fixture-gen/hls-inputs"]
+library = ["kithara-fixture-gen/library", "remote", "rhythm"]
+packaged = ["kithara-fixture-gen/packaged", "wav"]
+remote = ["hls", "kithara-fixture-gen/remote", "native-fixtures"]
+rhythm = ["kithara-fixture-gen/rhythm", "native-fixtures"]
+signal = ["kithara-fixture-gen/signal", "native-fixtures"]
+wav = ["kithara-fixture-gen/wav", "native-fixtures"]
 
 all = ["encoded", "hls", "hls-inputs", "library", "packaged", "remote", "rhythm", "signal", "wav"]
 
 [dependencies]
+kithara-fixture-media = { workspace = true }
 kithara-platform = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true, optional = true }
-
-bon = { workspace = true, optional = true }
 
 hex = { workspace = true }
 num-traits = { workspace = true }
@@ -87,58 +55,18 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-kithara-encode = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
 kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-encode = { workspace = true, default-features = false, optional = true }
 # `AudioCodec` for the fMP4 sample entries.
 kithara-stream = { workspace = true, default-features = false, optional = true }
 
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
-delegate = { workspace = true, optional = true }
-derive_more = { workspace = true, optional = true }
-fs4 = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [build-dependencies]
-kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"], optional = true }
-kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
-kithara-bufpool = { workspace = true, optional = true }
-kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "tls-rustls"], optional = true }
-kithara-drm = { workspace = true, optional = true }
-kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"], optional = true }
-kithara-events = { workspace = true, optional = true }
-kithara-platform = { workspace = true, optional = true }
-kithara-resampler = { workspace = true, features = ["resample-rubato"], optional = true }
-kithara-signal = { workspace = true, optional = true }
-kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
-kithara-test-macros = { workspace = true, optional = true }
-kithara-test-utils = { workspace = true, optional = true }
-
-aes = { workspace = true, optional = true }
-bon = { workspace = true, optional = true }
-
-bytes = { workspace = true, optional = true }
-cbc = { workspace = true, optional = true }
-cochlea-render = { workspace = true, optional = true }
-cochlea-score = { workspace = true, optional = true }
-delegate = { workspace = true, optional = true }
-derive_more = { workspace = true, optional = true }
-fs4 = { workspace = true, optional = true }
-futures-lite = { workspace = true, optional = true }
-hex = { workspace = true }
-hls_m3u8 = { workspace = true, optional = true }
-inventory = { workspace = true, optional = true }
-num-traits = { workspace = true }
-rayon = { workspace = true, optional = true }
-reqwest = { workspace = true, features = ["blocking", "rustls"], optional = true }
-serde = { workspace = true }
-sha2 = { workspace = true }
-thiserror = { workspace = true }
-toml = { workspace = true }
-url = { workspace = true, optional = true }
+kithara-fixture-gen = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
@@ -182,3 +110,7 @@ required-features = ["all"]
 [[test]]
 name = "hls_contract"
 required-features = ["hls"]
+
+[[test]]
+name = "signal_contract"
+required-features = ["native-fixtures"]

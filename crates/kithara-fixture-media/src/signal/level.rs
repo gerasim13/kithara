@@ -66,7 +66,7 @@ pub fn rms(samples: &[f32]) -> f32 {
     (sum_sq / count).sqrt()
 }
 
-#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "native", not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
 

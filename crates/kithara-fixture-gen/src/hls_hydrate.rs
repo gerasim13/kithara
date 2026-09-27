@@ -491,7 +491,7 @@ pub(crate) fn hydrate(
     .into_bytes())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "library"))]
 mod tests {
     use std::{
         collections::HashMap,

@@ -17,9 +17,11 @@ on disk. A test asks for bytes and gets them; nothing is synthesized or
 encoded inside a test's wall-clock deadline.
 
 Source edits, dependency updates and commits do not invalidate prepared assets.
-The explicit `cache-version` file selects the shared cache revision. Change it
+The explicit `cache-version` file of `kithara-fixture-media` selects the shared
+cache revision. Change it
 only when intentionally replacing the cached fixture set; use a new case name
-for an individual replacement. Rebuilds reuse existing entries.
+for an individual replacement. Rebuilds reuse existing entries;
+`kithara-fixture-gen` describes how one build rebuilds a selection instead.
 
 An asset stored in a format another crate owns names a sample of that format
 with `#[kithara::asset(format = sample_fn)]`. The sample's digest joins the
@@ -37,16 +39,6 @@ track — a segment, an init header, data malformed on purpose — are declared
 `fragment` and carry none; a track assembled from fragments declares its
 analysis itself. Generated rhythm tracks keep their generator-truth analyses as
 well, so a test can run on either grid and measure how far the analyser drifts.
-
-`KITHARA_FIXTURE_REFRESH` overrides that reuse for one build: `all` rebuilds the
-whole revision, and a comma-separated list rebuilds only what it names: an
-accessor (`{func}_{case}`), or a producing function (`{func}`), which stands for
-every case it registers. Every asset derived from a selected one is rebuilt with
-it, so the cache never holds a dependent that disagrees with its source. A name no
-enabled family registers is reported as a build warning, not an error: the asset
-set follows the enabled families, so one selection is read by builds that
-register different halves of it. Fetching families are never selected: without
-hydration they cannot be produced again, so the store keeps what it holds.
 
 Set `KITHARA_FIXTURE_CACHE` to an absolute persistent directory before building.
 There is no temporary-directory default. For all local worktrees, configure it
@@ -97,7 +89,7 @@ fn decode_prepared_audio(tone_mp3: &'static [u8]) {
 ```
 
 Fixture providers read already-built assets. Signal generation, including tiny
-PCM inputs, belongs in `src/defs/` and runs through `build.rs`. Async providers
+PCM inputs, belongs in `kithara-fixture-gen` and runs through `build.rs`. Async providers
 may own local servers and return them with the prepared input; test parameters
 use `#[future(awt)]` to receive those resources after preparation.
 
@@ -107,13 +99,8 @@ use `#[future(awt)]` to receive those resources after preparation.
   points it at a persisted directory so a fresh job starts warm.
 - `store::ORIGIN_ENV` — `KITHARA_FIXTURE_ORIGIN`, optional `http://127.0.0.1`
   source. When set, records come from this URL and land in `STORE_ENV`.
-- `store::asset_id` — stable identity of one case.
-- `store::formatted_asset_id` — identity of one case keyed by its format sample.
 - `store::file` — local path of one store-relative record, fetched when an
   origin is configured.
-- `store::read_entry` / `store::write_entry` — a hit-or-miss read and an atomic
-  write; an empty file counts as a miss.
-- `store::lock_entry` — the exclusive producer lock for one entry.
 
 - `signal::Wave` — the waveform vocabulary.
 - `signal::Pcm` — interleaved 16-bit PCM in memory.
@@ -121,16 +108,15 @@ use `#[future(awt)]` to receive those resources after preparation.
 
 ### Layout
 
-- `src/defs/` — generator bodies, one function per asset, each carrying its
-  cases. These compile into the build script only, never into the library.
-- `src/signal/` — waveforms, PCM buffers, and the RIFF writer. The workspace's
-  one waveform implementation for build-time inputs and signal assertions.
-- `src/fmp4/` — the fMP4 mux: an `EncodedTrack` in, init and media segments out.
-  The build script packages both embedded bodies and registered HLS variants.
-- `build.rs` — resolves every declared case against the store, produces what is
-  missing, and writes the accessor module.
-- `src/store/` — identity, namespace, atomic writes, the producer lock, and the
-  optional HTTP origin that ART uses as the one record source.
+- `kithara-fixture-gen` — the asset definitions and the generator: resolves
+  every declared case against the store, produces what is missing, and writes
+  the accessor module. A build dependency only, never part of the library.
+- `kithara-fixture-media` — waveforms, PCM buffers, the RIFF writer, the fMP4
+  mux and the store, shared by the generator and the library and re-exported
+  here as `signal`, `fmp4` and `store`.
+- `build.rs` — calls the generator when `native-fixtures` is on.
+- `src/store/` — the optional HTTP origin that ART uses as the one record
+  source, over the shared store.
 
 An asset declared `#[kithara::asset(..., embed)]` is baked into wasm binaries
 with `include_bytes!`, because wasm has no fixture filesystem. Native targets

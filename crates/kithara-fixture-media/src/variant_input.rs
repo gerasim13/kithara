@@ -92,16 +92,16 @@ impl VariantInput {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct VariantArtifact {
-    pub(crate) init: String,
-    pub(crate) durations: Vec<f64>,
-    pub(crate) media: Vec<String>,
+pub struct VariantArtifact {
+    pub init: String,
+    pub durations: Vec<f64>,
+    pub media: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub(crate) struct VariantCatalog {
-    pub(crate) frame_samples: BTreeMap<String, usize>,
-    pub(crate) variants: BTreeMap<String, VariantArtifact>,
+pub struct VariantCatalog {
+    pub frame_samples: BTreeMap<String, usize>,
+    pub variants: BTreeMap<String, VariantArtifact>,
 }
 
 #[cfg(test)]

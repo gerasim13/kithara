@@ -241,8 +241,9 @@ mod tests {
     }
 
     fn frequency(samples: &[i16]) -> f64 {
-        let seconds = samples.len() as f64 / f64::from(consts::SAMPLE_RATE);
-        zero_crossings(samples) as f64 / (2.0 * seconds)
+        let seconds = cast::<usize, f64>(samples.len()).expect("a length fits f64")
+            / f64::from(consts::SAMPLE_RATE);
+        cast::<usize, f64>(zero_crossings(samples)).expect("a count fits f64") / (2.0 * seconds)
     }
 
     fn window(samples: &[i16], range: Range<usize>) -> &[i16] {

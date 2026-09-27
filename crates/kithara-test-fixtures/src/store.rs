@@ -7,9 +7,8 @@ use std::{
     sync::OnceLock,
 };
 
+pub use kithara_fixture_media::store::*;
 use kithara_platform::time::Duration;
-
-use super::disk;
 
 mod consts {
     use super::Duration;
@@ -21,7 +20,7 @@ mod consts {
 }
 
 /// HTTP origin of store records. When set, [`file`] fetches from this URL and
-/// writes a replica under [`super::STORE_ENV`]; the cache is not a second source.
+/// writes a replica under [`STORE_ENV`]; the cache is not a second source.
 pub const ORIGIN_ENV: &str = "KITHARA_FIXTURE_ORIGIN";
 
 struct Runtime {
@@ -39,7 +38,7 @@ struct Runtime {
 ///
 /// Returns [`io::ErrorKind::InvalidInput`] for a relative path that escapes
 /// the store, a non-loopback origin, or an HTTP origin without
-/// [`super::STORE_ENV`]. Returns [`io::ErrorKind::NotFound`] when the origin
+/// [`STORE_ENV`]. Returns [`io::ErrorKind::NotFound`] when the origin
 /// answers 404. An unreachable origin fails immediately with the origin URL
 /// and the reverse-mapping requirement in the message.
 pub fn file(relative: &Path) -> io::Result<PathBuf> {
@@ -77,9 +76,9 @@ fn runtime() -> io::Result<&'static Runtime> {
         }
     };
     if origin.is_some() {
-        disk::root_from_env()?;
+        root_from_env()?;
     }
-    let root = disk::runtime_root()?.to_owned();
+    let root = runtime_root()?.to_owned();
     Ok(RUNTIME.get_or_init(|| Runtime { origin, root }))
 }
 

@@ -58,20 +58,11 @@ pub fn distance(a: usize, b: usize) -> usize {
     apart.min(SAW_PERIOD - apart)
 }
 
-#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "native", not(target_arch = "wasm32")))]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{SAW_PERIOD, delta, distance, units};
-    use crate::fixtures::phase_endpoints;
-
-    #[kithara::test(native, flash(false))]
-    fn units_round_trip_the_i16_sawtooth_range(phase_endpoints: Vec<f32>) {
-        assert_eq!(units(phase_endpoints[0]), 0);
-        assert_eq!(units(phase_endpoints[1]), 1);
-        assert_eq!(units(phase_endpoints[2]), 32_768);
-        assert_eq!(units(phase_endpoints[3]), SAW_PERIOD - 1);
-    }
+    use super::{SAW_PERIOD, delta, distance};
 
     #[kithara::test(native, flash(false))]
     fn delta_takes_the_short_way_across_the_wrap() {

@@ -19,7 +19,7 @@ mod consts {
 pub const STORE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 
 /// Explicit fixture cache revision, shared by build-time and integration assets.
-pub const CACHE_VERSION: &str = include_str!("../../cache-version");
+pub const CACHE_VERSION: &str = include_str!("../cache-version");
 
 /// Entries this build refuses to reuse, whatever the cache already holds.
 pub const REFRESH_ENV: &str = "KITHARA_FIXTURE_REFRESH";

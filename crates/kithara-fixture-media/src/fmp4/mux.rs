@@ -49,6 +49,22 @@ pub struct Fmp4Package {
     pub segment_durations_secs: Vec<f64>,
 }
 
+impl Fmp4Package {
+    /// A package read back from segments that were muxed earlier.
+    #[must_use]
+    pub fn new(
+        init_segment: Vec<u8>,
+        media_segments: Vec<Vec<u8>>,
+        segment_durations_secs: Vec<f64>,
+    ) -> Self {
+        Self {
+            init_segment,
+            media_segments,
+            segment_durations_secs,
+        }
+    }
+}
+
 /// The init segment followed by every media segment, which is the shape a
 /// decoder reads when it is handed one contiguous fMP4 body. Segment
 /// boundaries and durations are dropped: a contiguous body no longer has any.

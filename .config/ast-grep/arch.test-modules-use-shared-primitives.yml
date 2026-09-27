@@ -13,6 +13,8 @@ files:
 ignores:
   # The owners of the shared primitives.
   - crates/kithara-test-utils/**
+  - crates/kithara-fixture-gen/**
+  - crates/kithara-fixture-media/**
   - crates/kithara-test-fixtures/**
   - crates/kithara-test-macros/**
   # Lint fixtures and the lint engine's own tests.

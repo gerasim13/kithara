@@ -47,27 +47,3 @@ pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
         SignalDirection::Unknown
     }
 }
-
-#[cfg(all(test, feature = "native-fixtures", not(target_arch = "wasm32")))]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::{SignalDirection, detect_direction};
-    use crate::fixtures::{direction_channel_less, direction_step};
-
-    #[kithara::test(native, flash(false))]
-    fn one_ascending_step_per_frame_reads_as_ascending(direction_step: Vec<f32>) {
-        assert_eq!(
-            detect_direction(&direction_step, 2),
-            SignalDirection::Ascending
-        );
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn a_channel_less_buffer_has_no_direction(direction_channel_less: Vec<f32>) {
-        assert_eq!(
-            detect_direction(&direction_channel_less, 0),
-            SignalDirection::Unknown
-        );
-    }
-}

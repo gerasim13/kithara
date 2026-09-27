@@ -5187,6 +5187,67 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-fixture-gen"
+version = "0.0.1-alpha5"
+dependencies = [
+ "aes",
+ "bytes",
+ "cbc",
+ "cochlea-render",
+ "cochlea-score",
+ "delegate",
+ "derive_more",
+ "futures-lite",
+ "hex",
+ "hls_m3u8",
+ "inventory",
+ "kithara-analysis",
+ "kithara-audio",
+ "kithara-bufpool",
+ "kithara-decode",
+ "kithara-drm",
+ "kithara-encode",
+ "kithara-events",
+ "kithara-fixture-gen",
+ "kithara-fixture-media",
+ "kithara-platform",
+ "kithara-resampler",
+ "kithara-signal",
+ "kithara-stream",
+ "kithara-test-macros",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "rayon",
+ "reqwest",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tiny_http",
+ "toml 1.1.2+spec-1.1.0",
+ "url",
+]
+
+[[package]]
+name = "kithara-fixture-media"
+version = "0.0.1-alpha5"
+dependencies = [
+ "bon",
+ "delegate",
+ "fs4",
+ "hex",
+ "kithara-encode",
+ "kithara-stream",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "serde",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kithara-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -5845,29 +5906,15 @@ dependencies = [
 name = "kithara-test-fixtures"
 version = "0.0.1-alpha5"
 dependencies = [
- "aes",
- "bon",
- "bytes",
- "cbc",
- "cochlea-render",
- "cochlea-score",
- "delegate",
- "derive_more",
- "fs4",
- "futures-lite",
  "hex",
  "hls_m3u8",
- "inventory",
  "kithara-analysis",
- "kithara-audio",
- "kithara-bufpool",
  "kithara-decode",
  "kithara-drm",
- "kithara-encode",
- "kithara-events",
+ "kithara-fixture-gen",
+ "kithara-fixture-media",
  "kithara-platform",
  "kithara-resampler",
- "kithara-signal",
  "kithara-stream",
  "kithara-test-dylib",
  "kithara-test-macros",
