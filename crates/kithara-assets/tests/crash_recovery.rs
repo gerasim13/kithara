@@ -33,11 +33,9 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
     w
 }
 
-struct Consts;
-
-impl Consts {
-    const ASSET_ROOT: &'static str = "crash-test";
-    const KEY_NAME: &'static str = "segments/0001.bin";
+mod consts {
+    pub(super) const ASSET_ROOT: &str = "crash-test";
+    pub(super) const KEY_NAME: &str = "segments/0001.bin";
 }
 
 fn pins_bin(root: &Path) -> std::path::PathBuf {
@@ -67,9 +65,9 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path, &TestAssetScope,
     let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk { root: (dir).into() })
         .build();
-    let source = source(Consts::ASSET_ROOT);
+    let source = source(consts::ASSET_ROOT);
     let scope = store.scope::<Test>(&source).expect("scope");
-    let key = scope.key(&resource(Consts::KEY_NAME)).expect("key");
+    let key = scope.key(&resource(consts::KEY_NAME)).expect("key");
     write_commit(
         store.acquire_resource(&key, None).expect("acquire"),
         b"hello-world!",
@@ -92,8 +90,8 @@ fn a_corrupt_pins_bin_is_treated_as_empty(#[case] payload: &[u8]) {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
     let _res = store
         .acquire_resource(&key, None)
         .expect("a corrupt pins.bin must not block rebuild");
@@ -112,8 +110,8 @@ fn garbage_lru_bin_is_treated_as_empty() {
         })
         .build();
 
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
     assert_eq!(scope.store().final_len(&key), Some(12));
     assert!(scope.store().contains_range(&key, 0..12));
 }
@@ -131,8 +129,8 @@ fn garbage_availability_bin_costs_a_refetch() {
         })
         .build();
 
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
     assert_eq!(
         scope.store().final_len(&key),
         None,
@@ -160,8 +158,8 @@ fn segment_deleted_externally_after_checkpoint_is_refetched() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
 
     assert_eq!(
         scope.store().final_len(&key),
@@ -188,8 +186,8 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
         let res = pending(store.acquire_resource(&key, None).unwrap());
         res.write_at(0, b"partial-bytes").unwrap();
         drop(res);
@@ -200,8 +198,8 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
 
     assert!(scope.store().available_ranges(&key).is_empty());
     assert_eq!(scope.store().final_len(&key), None);
@@ -217,8 +215,8 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
         let res = pending(store.acquire_resource(&key, None).unwrap());
         res.write_at(0, b"partial-bytes").unwrap();
         // Force the availability snapshot to disk WHILE the uncommitted writer
@@ -235,8 +233,8 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
 
     assert!(scope.store().available_ranges(&key).is_empty());
     assert_eq!(scope.store().final_len(&key), None);
@@ -252,8 +250,8 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
         write_commit(store.acquire_resource(&key, None).unwrap(), b"durable-data");
     }
 
@@ -262,8 +260,8 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
 
     assert_eq!(scope.store().final_len(&key), Some(12));
     assert!(scope.store().contains_range(&key, 0..12));
@@ -292,14 +290,14 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
             .build();
 
         let scope_a = store_a.scope::<Test>(&source("track-a")).unwrap();
-        let key_a = scope_a.key(&resource(Consts::KEY_NAME)).unwrap();
+        let key_a = scope_a.key(&resource(consts::KEY_NAME)).unwrap();
         write_commit(
             store_a.acquire_resource(&key_a, None).unwrap(),
             b"alpha-data!!",
         );
 
         let scope_b = store_b.scope::<Test>(&source("track-b")).unwrap();
-        let key_b = scope_b.key(&resource(Consts::KEY_NAME)).unwrap();
+        let key_b = scope_b.key(&resource(consts::KEY_NAME)).unwrap();
         write_commit(
             store_b.acquire_resource(&key_b, None).unwrap(),
             b"bravo-data!!",
@@ -320,8 +318,8 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
         .build();
     let scope_a = rebuilt_a.scope::<Test>(&source("track-a")).unwrap();
     let scope_b = rebuilt_b.scope::<Test>(&source("track-b")).unwrap();
-    let key_a = scope_a.key(&resource(Consts::KEY_NAME)).unwrap();
-    let key_b = scope_b.key(&resource(Consts::KEY_NAME)).unwrap();
+    let key_a = scope_a.key(&resource(consts::KEY_NAME)).unwrap();
+    let key_b = scope_b.key(&resource(consts::KEY_NAME)).unwrap();
 
     assert_eq!(rebuilt_a.final_len(&key_a), Some(12));
     assert!(rebuilt_a.contains_range(&key_a, 0..12));
@@ -341,8 +339,8 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
     let res = pending(store.acquire_resource(&key, None).unwrap());
     res.write_at(0, b"partial-bytes").unwrap();
 
@@ -365,8 +363,8 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
                 root: (dir.path()).into(),
             })
             .build();
-        let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-        let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+        let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+        let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
         let res = pending(store.acquire_resource(&key, None).unwrap());
         res.write_at(0, b"partial-bytes-from-killed-writer")
             .unwrap();
@@ -389,8 +387,8 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
     assert_eq!(
         store.final_len(&key),
         None,
@@ -407,8 +405,8 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
     let res = pending(store.acquire_resource(&key, None).unwrap());
     res.write_at(0, payload).unwrap();
 
@@ -444,8 +442,8 @@ fn doubly_corrupted_indexes_do_not_panic_and_the_store_refetches() {
             root: (dir.path()).into(),
         })
         .build();
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
+    let scope = store.scope::<Test>(&source(consts::ASSET_ROOT)).unwrap();
+    let key = scope.key(&resource(consts::KEY_NAME)).unwrap();
 
     assert_eq!(
         scope.store().final_len(&key),

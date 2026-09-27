@@ -11,9 +11,10 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "firewheel_dsp_facade";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "firewheel_dsp_facade";
 
-const EXPLANATION: &str = "\
+    pub(super) const EXPLANATION: &str = "\
 Summary: firewheel's fade curves, A/B mix, smoothing filter and parameter \
 smoother reach the workspace only through the `kithara_dsp` facade.
 
@@ -22,12 +23,13 @@ its own type in one edit, without touching consumers.
 
 Fix: import from `kithara_dsp::fade` or `kithara_dsp::param`. Node, event and \
 buffer APIs stay direct firewheel imports.";
+}
 
 pub(crate) struct FirewheelDspFacade;
 
 impl Check for FirewheelDspFacade {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -47,11 +49,11 @@ impl Check for FirewheelDspFacade {
             for line in facade_bypass_lines(file, &forbidden) {
                 violations.push(
                     Violation::deny(
-                        ID,
+                        consts::ID,
                         format!("{rel}:{line}"),
                         "firewheel DSP item imported past the `kithara_dsp` facade",
                     )
-                    .with_explanation(EXPLANATION),
+                    .with_explanation(consts::EXPLANATION),
                 );
             }
         }

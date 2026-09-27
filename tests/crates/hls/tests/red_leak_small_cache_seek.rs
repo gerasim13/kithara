@@ -23,7 +23,7 @@ use kithara_integration_tests::{
     hls_server::test_pattern_hls,
 };
 
-use crate::common::test_defaults::Consts as Shared;
+use crate::common::test_defaults::consts as shared;
 
 /// Wait until kithara's per-stream background work has quiesced after a stream
 /// drop+cancel — i.e. `active_named_thread_count()` stops decreasing across a
@@ -56,13 +56,14 @@ async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> u
     }
 }
 
-struct Consts;
-impl Consts {
-    const STREAM_ITERATIONS: usize = 4;
-    const SEEKS_PER_STREAM: usize = 8;
-    const PACKAGED_SEGMENT_SIZE: u64 = Shared::SEGMENT_SIZE as u64;
-    const WARMUP_MAX_STREAMS: usize = 8;
-    const WARMUP_STABLE_SAMPLES: usize = 2;
+mod consts {
+    use super::shared;
+
+    pub(super) const STREAM_ITERATIONS: usize = 4;
+    pub(super) const SEEKS_PER_STREAM: usize = 8;
+    pub(super) const PACKAGED_SEGMENT_SIZE: u64 = shared::SEGMENT_SIZE as u64;
+    pub(super) const WARMUP_MAX_STREAMS: usize = 8;
+    pub(super) const WARMUP_STABLE_SAMPLES: usize = 2;
 }
 
 async fn build_small_cache_stream(hls: &CreatedHls, cancel: CancelToken) -> Stream<Hls<TestPools>> {
@@ -87,10 +88,10 @@ fn exercise_stream_blocking(mut stream: Stream<Hls<TestPools>>) {
     let mut buf = vec![0u8; 4096];
     let _ = stream.read(&mut buf[..64]);
 
-    for i in 0..Consts::SEEKS_PER_STREAM {
+    for i in 0..consts::SEEKS_PER_STREAM {
         let seg = (i * 7) % 3;
-        let within = ((i * 53) as u64) % Consts::PACKAGED_SEGMENT_SIZE;
-        let pos = seg as u64 * Consts::PACKAGED_SEGMENT_SIZE + within;
+        let within = ((i * 53) as u64) % consts::PACKAGED_SEGMENT_SIZE;
+        let pos = seg as u64 * consts::PACKAGED_SEGMENT_SIZE + within;
         if stream.seek(SeekFrom::Start(pos)).is_err() {
             continue;
         }
@@ -114,7 +115,7 @@ async fn stable_live_thread_baseline(hls: &CreatedHls) -> usize {
     let mut last = None;
     let mut stable = 0usize;
 
-    for _ in 0..Consts::WARMUP_MAX_STREAMS {
+    for _ in 0..consts::WARMUP_MAX_STREAMS {
         run_small_cache_seek_cycle(hls).await;
         let now = live_thread_count();
         if Some(now) == last {
@@ -123,7 +124,7 @@ async fn stable_live_thread_baseline(hls: &CreatedHls) -> usize {
             stable = 0;
         }
         last = Some(now);
-        if stable >= Consts::WARMUP_STABLE_SAMPLES {
+        if stable >= consts::WARMUP_STABLE_SAMPLES {
             return now;
         }
     }
@@ -139,7 +140,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
 
     let threads_baseline = stable_live_thread_baseline(&hls).await;
 
-    for i in 0..Consts::STREAM_ITERATIONS {
+    for i in 0..consts::STREAM_ITERATIONS {
         // Wait until this iteration's per-stream tasks are reaped (thread count
         // stops dropping) before logging — not a fixed pacing delay.
         let threads = run_small_cache_seek_cycle(&hls).await;
@@ -161,7 +162,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
          this is the same class of leak nextest reports as LEAK on \
          live_ephemeral_small_cache_seek_stress_*.",
         growth,
-        Consts::STREAM_ITERATIONS,
+        consts::STREAM_ITERATIONS,
         threads_baseline,
         threads_after,
     );

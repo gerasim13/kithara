@@ -19,26 +19,27 @@ use kithara_test_utils::temp_dir;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
-    common::test_defaults::Consts as Shared,
+    common::test_defaults::{blocks_for_seconds, consts as shared},
 };
 
-struct Consts;
-impl Consts {
-    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = 512;
-    const PRE_SEEK_RENDER_SECS: f64 = 1.5;
+mod consts {
+    use super::shared;
+
+    pub(super) const SAMPLE_RATE: u32 = shared::SAMPLE_RATE;
+    pub(super) const BLOCK_FRAMES: usize = 512;
+    pub(super) const PRE_SEEK_RENDER_SECS: f64 = 1.5;
     /// Minimum seconds of audio the render loop pumps after the seek
     /// before checking the landing. The loop returns on the actual
     /// position state, not wall time, so the delayed segment fetch is
     /// awaited regardless of `delay_ms`.
-    const POST_SEEK_AUDIO_SECS: f64 = 2.0;
+    pub(super) const POST_SEEK_AUDIO_SECS: f64 = 2.0;
     /// Target inside segment 2 (8–12 s); guarantees a cold fetch
     /// because the warmup only covers segments 0–1.
-    const SEEK_TARGET_SECS: f64 = 9.0;
-    const MIN_POSITION_ADVANCE_POST_SEEK_SECS: f64 = 1.0;
-    const GATED_VARIANT: usize = 0;
-    const GATED_SEGMENT: usize = 2;
-    const GATE_REQUEST_TICKS: u32 = 2_000;
+    pub(super) const SEEK_TARGET_SECS: f64 = 9.0;
+    pub(super) const MIN_POSITION_ADVANCE_POST_SEEK_SECS: f64 = 1.0;
+    pub(super) const GATED_VARIANT: usize = 0;
+    pub(super) const GATED_SEGMENT: usize = 2;
+    pub(super) const GATE_REQUEST_TICKS: u32 = 2_000;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,7 +92,7 @@ async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, unti
     loop {
         let this = min_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
-            let _ = player.render(Consts::BLOCK_FRAMES).await;
+            let _ = player.render(consts::BLOCK_FRAMES).await;
         }
         rendered = rendered.saturating_add(this);
         if player.position() >= until_position && rendered >= min_blocks {
@@ -110,9 +111,9 @@ async fn render_until_gate_requested(
     label: &str,
 ) {
     const BATCH: u32 = 16;
-    for _ in 0..Consts::GATE_REQUEST_TICKS {
+    for _ in 0..consts::GATE_REQUEST_TICKS {
         for _ in 0..BATCH {
-            player.render(Consts::BLOCK_FRAMES).await;
+            player.render(consts::BLOCK_FRAMES).await;
         }
         let position = player.position();
         assert!(
@@ -123,7 +124,7 @@ async fn render_until_gate_requested(
         if gate.requested() > 0 {
             for _ in 0..hold_ticks {
                 for _ in 0..BATCH {
-                    let _ = player.render(Consts::BLOCK_FRAMES).await;
+                    let _ = player.render(consts::BLOCK_FRAMES).await;
                 }
                 let held_position = player.position();
                 assert!(
@@ -139,8 +140,8 @@ async fn render_until_gate_requested(
     }
     panic!(
         "{label}: gated segment v{} s{} was never requested before release",
-        Consts::GATED_VARIANT,
-        Consts::GATED_SEGMENT
+        consts::GATED_VARIANT,
+        consts::GATED_SEGMENT
     );
 }
 
@@ -168,7 +169,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         SeekScenario::RealDelay { delay_ms } => packaged_ladder().delay_rules(vec![DelayRule {
             variant: None,
             segment_eq: None,
-            segment_gte: Some(Consts::GATED_SEGMENT),
+            segment_gte: Some(consts::GATED_SEGMENT),
             delay_ms,
         }]),
         SeekScenario::NoDelay | SeekScenario::Gated { .. } => packaged_ladder(),
@@ -178,7 +179,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         .await
         .expect("create packaged ladder");
     let gate = matches!(scenario, SeekScenario::Gated { .. }).then(|| {
-        helper.register_segment_gate(hls.token(), Consts::GATED_VARIANT, Consts::GATED_SEGMENT)
+        helper.register_segment_gate(hls.token(), consts::GATED_VARIANT, consts::GATED_SEGMENT)
     });
     let delay_ms = scenario.nominal_delay_ms();
     let label = scenario.label();
@@ -197,7 +198,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
                 .store(store);
         if gate.is_some() {
             builder
-                .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
+                .initial_abr_mode(AbrMode::manual(consts::GATED_VARIANT))
                 .build()
         } else {
             builder.build()
@@ -210,16 +211,16 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     )
     .await;
     player.load_and_fadein(resource).await;
 
-    let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
+    let warmup_target = player.position() + consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
         &mut player,
-        Shared::blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
+        blocks_for_seconds(consts::PRE_SEEK_RENDER_SECS, consts::BLOCK_FRAMES),
         warmup_target,
     )
     .await;
@@ -233,13 +234,13 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
          (pos={pos_before_seek:.3}s, delay_ms={delay_ms})"
     );
 
-    player.seek(Consts::SEEK_TARGET_SECS);
+    player.seek(consts::SEEK_TARGET_SECS);
     eprintln!(
         "[{label} delay_ms={delay_ms}] seek issued target={:.1}s epoch=1",
-        Consts::SEEK_TARGET_SECS
+        consts::SEEK_TARGET_SECS
     );
 
-    let post_target = Consts::SEEK_TARGET_SECS + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
+    let post_target = consts::SEEK_TARGET_SECS + consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
     if let Some(gate) = gate.as_ref() {
         let hold_ticks = match scenario {
             SeekScenario::Gated { hold_ticks, .. } => hold_ticks,
@@ -251,23 +252,23 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
 
     render_until_position(
         &mut player,
-        Shared::blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS, Consts::BLOCK_FRAMES),
+        blocks_for_seconds(consts::POST_SEEK_AUDIO_SECS, consts::BLOCK_FRAMES),
         post_target,
     )
     .await;
     let pos_after = player.position();
     eprintln!("[{label} delay_ms={delay_ms}] post-seek position = {pos_after:.3}s");
 
-    let advance = pos_after - Consts::SEEK_TARGET_SECS;
+    let advance = pos_after - consts::SEEK_TARGET_SECS;
     assert!(
-        advance >= Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS,
+        advance >= consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS,
         "seek did not land under simulated slow connection \
          (delay_ms={delay_ms}, pre-seek={pos_before_seek:.3}s, \
          target={:.3}s, post={pos_after:.3}s, \
          advance={advance:.3}s, expected >= {:.2}s) — \
          the player must wait for the delayed segment and land the seek",
-        Consts::SEEK_TARGET_SECS,
-        Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS,
+        consts::SEEK_TARGET_SECS,
+        consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS,
     );
 
     player.close().await;

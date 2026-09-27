@@ -7,6 +7,10 @@ use kithara_test_utils::kithara;
 const FRAMES: [usize; 9] = [0, 1, 3, 4, 5, 8, 16, 17, 1023];
 const STARTS: [usize; 2] = [0, 3];
 const MAX_CHANNELS: usize = 8;
+/// Past eight planes, where a stack array of plane references would spill.
+const MAX_CHANNEL_MAJOR: usize = 12;
+/// Samples after the last whole plane, which a channel-major layout ignores.
+const LEFTOVERS: [usize; 2] = [0, 1];
 const TAIL: usize = 3;
 const UNWRITTEN: f32 = -1.0;
 
@@ -25,38 +29,8 @@ fn bits(values: &[f32]) -> Vec<u32> {
     values.iter().map(|value| value.to_bits()).collect()
 }
 
-#[kithara::test]
-fn interleave_variable_matches_fast_interleave() {
-    for inputs in 1..=MAX_CHANNELS {
-        for outputs in 1..=MAX_CHANNELS {
-            for frames in FRAMES {
-                for start in STARTS {
-                    let planes: Vec<Vec<f32>> = (0..inputs)
-                        .map(|channel| {
-                            (0..start + frames + TAIL)
-                                .map(|frame| sample(channel, frame))
-                                .collect()
-                        })
-                        .collect();
-                    let mut expected = vec![UNWRITTEN; frames * outputs + TAIL];
-                    let mut actual = expected.clone();
-                    let range = start..start + frames;
-                    fast_interleave::interleave_variable(
-                        &planes,
-                        range.clone(),
-                        &mut expected,
-                        count(outputs),
-                    );
-                    kithara_dsp::interleave_variable(&planes, range, &mut actual, count(outputs));
-                    assert_eq!(
-                        bits(&actual),
-                        bits(&expected),
-                        "{inputs} into {outputs} channels, {frames} frames from {start}"
-                    );
-                }
-            }
-        }
-    }
+fn stride(value: usize) -> NonZeroUsize {
+    NonZeroUsize::new(value).expect("strides are non-zero")
 }
 
 #[kithara::test]
@@ -98,22 +72,119 @@ fn deinterleave_variable_matches_fast_interleave() {
 }
 
 #[kithara::test]
-fn a_short_slice_bounds_whole_frames_instead_of_panicking() {
-    const U: f32 = UNWRITTEN;
-    let planes = [vec![1.0_f32, 2.0, 3.0, 4.0], vec![-1.0, -2.0]];
+fn interleave_channel_major_matches_fast_interleave_over_its_planes() {
+    for inputs in 1..=MAX_CHANNEL_MAJOR {
+        for outputs in 1..=MAX_CHANNEL_MAJOR {
+            for frames in FRAMES {
+                for start in STARTS {
+                    for leftover in LEFTOVERS {
+                        let plane = start + frames + TAIL;
+                        let planar: Vec<f32> = (0..inputs * plane + leftover)
+                            .map(|slot| sample(slot / plane, slot % plane))
+                            .collect();
+                        let planes: Vec<&[f32]> = planar.chunks_exact(plane).collect();
+                        let mut expected = vec![UNWRITTEN; frames * outputs + TAIL];
+                        let mut actual = expected.clone();
+                        let range = start..start + frames;
+                        fast_interleave::interleave_variable(
+                            &planes,
+                            range.clone(),
+                            &mut expected,
+                            count(outputs),
+                        );
+                        kithara_dsp::interleave_channel_major(
+                            &planar,
+                            stride(plane),
+                            range,
+                            &mut actual,
+                            count(outputs),
+                        );
+                        assert_eq!(
+                            bits(&actual),
+                            bits(&expected),
+                            "{inputs} into {outputs} channels, {frames} frames from {start}, \
+                             {leftover} leftover"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
 
-    let mut mono = [U; 3];
-    kithara_dsp::interleave_variable(&planes[..1], 0..4, &mut mono, count(1));
-    assert_eq!(bits(&mono), bits(&[1.0, 2.0, 3.0]));
+#[kithara::test]
+fn deinterleave_channel_major_matches_fast_interleave_over_its_planes() {
+    for inputs in 1..=MAX_CHANNEL_MAJOR {
+        for outputs in 1..=MAX_CHANNEL_MAJOR {
+            for frames in FRAMES {
+                for start in STARTS {
+                    for leftover in LEFTOVERS {
+                        let plane = start + frames + TAIL;
+                        let interleaved: Vec<f32> = (0..frames * inputs + TAIL)
+                            .map(|slot| sample(0, slot))
+                            .collect();
+                        let mut expected = vec![UNWRITTEN; outputs * plane + leftover];
+                        let mut actual = expected.clone();
+                        let range = start..start + frames;
+                        let mut planes: Vec<&mut [f32]> =
+                            expected.chunks_exact_mut(plane).collect();
+                        fast_interleave::deinterleave_variable(
+                            &interleaved,
+                            count(inputs),
+                            &mut planes,
+                            range.clone(),
+                        );
+                        kithara_dsp::deinterleave_channel_major(
+                            &interleaved,
+                            count(inputs),
+                            &mut actual,
+                            stride(plane),
+                            range,
+                        );
+                        assert_eq!(
+                            bits(&actual),
+                            bits(&expected),
+                            "{inputs} into {outputs} channels, {frames} frames from {start}, \
+                             {leftover} leftover"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn a_short_plane_bounds_the_channel_major_layout() {
+    const U: f32 = UNWRITTEN;
+    let planar = [1.0_f32, 2.0, 3.0, -1.0, -2.0, -3.0, 9.0];
+
+    let mut mono = [U; 5];
+    kithara_dsp::interleave_channel_major(&planar[..3], stride(3), 0..5, &mut mono, count(1));
+    assert_eq!(bits(&mono), bits(&[1.0, 2.0, 3.0, U, U]));
 
     let mut stereo = [U; 8];
-    kithara_dsp::interleave_variable(&planes, 0..4, &mut stereo, count(2));
-    assert_eq!(bits(&stereo), bits(&[1.0, -1.0, 2.0, -2.0, U, U, U, U]));
+    kithara_dsp::interleave_channel_major(&planar, stride(3), 1..5, &mut stereo, count(2));
+    assert_eq!(bits(&stereo), bits(&[2.0, -2.0, 3.0, -3.0, U, U, U, U]));
 
-    let mut three = [U; 8];
-    kithara_dsp::interleave_variable(&planes[..1], 1..4, &mut three, count(3));
-    assert_eq!(bits(&three), bits(&[2.0, U, U, 3.0, U, U, U, U]));
+    let mut three = [U; 6];
+    kithara_dsp::interleave_channel_major(&planar, stride(3), 0..2, &mut three, count(3));
+    assert_eq!(bits(&three), bits(&[1.0, -1.0, U, 2.0, -2.0, U]));
 
+    let mut planar = [U; 7];
+    kithara_dsp::deinterleave_channel_major(
+        &[1.0, -1.0, 2.0, -2.0, 3.0, -3.0],
+        count(2),
+        &mut planar,
+        stride(3),
+        1..5,
+    );
+    assert_eq!(bits(&planar), bits(&[U, 1.0, 2.0, U, -1.0, -2.0, U]));
+}
+
+#[kithara::test]
+fn a_short_plane_bounds_the_variable_split_instead_of_panicking() {
+    const U: f32 = UNWRITTEN;
     let mut mono = [[U; 3]];
     kithara_dsp::deinterleave_variable(&[1.0, 2.0], count(1), &mut mono, 0..3);
     assert_eq!(bits(&mono[0]), bits(&[1.0, 2.0, U]));

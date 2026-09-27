@@ -17,11 +17,15 @@ use crate::{
     SeekOutcome,
 };
 
-/// Sample rate of the reader [`MockReader::seek_tracking`] builds.
-const SEEK_TRACKING_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(rate) => rate,
-    None => panic!("seek-tracking rate is non-zero"),
-};
+mod consts {
+    use std::num::NonZeroU32;
+
+    /// Sample rate of the reader [`super::MockReader::seek_tracking`] builds.
+    pub(super) const SEEK_TRACKING_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+        Some(rate) => rate,
+        None => panic!("seek-tracking rate is non-zero"),
+    };
+}
 
 /// A reader scripted for one behaviour an owner must handle: recording what
 /// the owner applies, lying about its duration, stalling, failing, or
@@ -105,7 +109,7 @@ impl MockReader {
 
     #[must_use]
     pub fn seek_tracking(seek_log: Arc<Mutex<Vec<u64>>>) -> Self {
-        let spec = AudioSpec::new(2, SEEK_TRACKING_RATE);
+        let spec = AudioSpec::new(2, consts::SEEK_TRACKING_RATE);
         let mut reader = Self::with_behavior(spec, MockBehavior::SeekTracking { seek_log });
         reader.metadata.title = Some("Tracking".to_owned());
         reader

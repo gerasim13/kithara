@@ -8,7 +8,7 @@ use kithara::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
-    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
     warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools_with};
@@ -101,6 +101,34 @@ fn test_pcm_chunk_access_allocation_free(allocation_ramp: Vec<f32>) {
     });
 
     permit_alloc(|| drop(chunk));
+}
+
+#[kithara::test]
+fn planar_append_and_interleave_are_allocation_free_past_eight_channels(allocation_ramp: Vec<f32>) {
+    const CHANNELS: u16 = 12;
+    const FRAMES: usize = 256;
+    let pools = eager_pools(4, 16_384);
+    let spec = AudioSpec::new(CHANNELS, NonZeroU32::new(44_100).expect("test rate"));
+    let samples = FRAMES * usize::from(CHANNELS);
+    let (mut planar, mut output) = permit_alloc(|| {
+        let mut planar = PlanarBuffer::new(&pools, spec, FrameCount::new(2 * FRAMES))
+            .unwrap_or_else(|error| panic!("reserved planar storage: {error}"));
+        planar.clear();
+        (planar, vec![0.0_f32; samples])
+    });
+    let appended = InterleavedView::new(&allocation_ramp[..samples], spec, FrameCount::new(FRAMES))
+        .unwrap_or_else(|error| panic!("fixture shape: {error}"));
+
+    assert_no_alloc(|| {
+        planar
+            .append_interleaved(appended)
+            .unwrap_or_else(|error| panic!("reserved storage holds the frames: {error}"));
+        planar
+            .view()
+            .interleave_into(&mut output)
+            .unwrap_or_else(|error| panic!("output holds the frames: {error}"));
+    });
+    assert_eq!(output, allocation_ramp[..samples]);
 }
 
 fn build_resampler(pools: &Pools, source_rate: u32, target_rate: u32) -> impl Resampler {

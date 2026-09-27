@@ -8,16 +8,16 @@ use kithara::{
     sync::SyncGroup,
     warp::WarpConfig,
 };
-use kithara_integration_tests::{offline::OfflineHostHarness, smoothing::Consts};
+use kithara_integration_tests::{offline::OfflineHostHarness, smoothing::consts};
 use kithara_test_utils::bufpool::pools;
 
 #[kithara::test(tokio)]
 async fn failed_deck_preparation_releases_host_membership() {
     let region = pools();
-    let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
+    let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate");
     let config = HostConfig::offline(region.clone())
         .sample_rate(sample_rate)
-        .max_block_frames(NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size"))
+        .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES as u32).expect("block size"))
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

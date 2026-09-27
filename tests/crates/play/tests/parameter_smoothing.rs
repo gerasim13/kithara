@@ -5,7 +5,7 @@ use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS};
 use kithara_integration_tests::{
     kithara,
     smoothing::{
-        Consts, SmoothingCase, assert_step_is_ramped, last_block_peak, observe, observe_until,
+        SmoothingCase, assert_step_is_ramped, consts, last_block_peak, observe, observe_until,
         sine_queue,
     },
 };
@@ -22,15 +22,15 @@ use kithara_test_fixtures::signal::peak;
 async fn the_observation_window_carries_no_silent_block() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
 
-    let pcm = observe(&harness, Consts::OBSERVE_BLOCKS).await;
+    let pcm = observe(&harness, consts::OBSERVE_BLOCKS).await;
 
-    let block = Consts::BLOCK_FRAMES * Consts::CHANNELS;
+    let block = consts::BLOCK_FRAMES * consts::CHANNELS;
     let quietest = pcm
         .chunks_exact(block)
         .map(peak)
         .fold(f32::INFINITY, f32::min);
     assert!(
-        quietest > Consts::AUDIBLE_PEAK,
+        quietest > consts::AUDIBLE_PEAK,
         "the observation window carried a block at peak {quietest}; the window the step \
          oracles measure carries frames the decoder never produced"
     );
@@ -40,7 +40,7 @@ async fn the_observation_window_carries_no_silent_block() {
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
-    let before = observe(&harness, Consts::OBSERVE_BLOCKS).await;
+    let before = observe(&harness, consts::OBSERVE_BLOCKS).await;
     harness.run(|deck| deck.set_volume(0.0)).await;
     let (after, silent) = observe_until(&harness, |block| peak(block) == 0.0).await;
     assert!(

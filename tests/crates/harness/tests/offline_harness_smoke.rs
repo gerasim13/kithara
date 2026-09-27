@@ -3,7 +3,7 @@
 use kithara::{self, events::TrackId, play::Resource};
 use kithara_integration_tests::{
     offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
-    test_defaults::Consts,
+    test_defaults::consts,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -14,7 +14,7 @@ const MAX_RENDERED_FRAMES: usize = 9_000;
 
 fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
-        Consts::AUDIO_SPEC,
+        consts::AUDIO_SPEC,
         duration_secs,
         constant_half,
     ))
@@ -24,7 +24,7 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
 async fn offline_harness_smoke(constant_half: &'static [u8]) {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder().build(),
-        Consts::SAMPLE_RATE,
+        consts::SAMPLE_RATE,
     )
     .await;
     harness

@@ -24,12 +24,11 @@ use url::Url;
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
+mod consts {
     #[cfg(not(target_arch = "wasm32"))]
-    const SEGMENT_COUNT: usize = 10;
+    pub(super) const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
-    const SEGMENT_COUNT: usize = 4;
+    pub(super) const SEGMENT_COUNT: usize = 4;
 }
 
 /// Result of one instance completing.
@@ -82,7 +81,7 @@ async fn spawn_hls_instance(
         .await
         .create_hls(
             HlsFixtureBuilder::new()
-                .segments_per_variant(Consts::SEGMENT_COUNT)
+                .segments_per_variant(consts::SEGMENT_COUNT)
                 .segment_size(SawWav::DEFAULT.segment_size)
                 .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
                 .custom_data(wav_data),

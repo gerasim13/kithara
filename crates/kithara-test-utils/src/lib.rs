@@ -59,3 +59,4 @@ pub mod kithara {
         test_utils_flash as flash,
     };
 }
+mod consts;

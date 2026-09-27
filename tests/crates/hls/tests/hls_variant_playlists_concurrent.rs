@@ -26,20 +26,21 @@ use kithara_integration_tests::{
 use kithara_test_utils::temp_dir;
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const VARIANT_COUNT: usize = 3;
-    const SEGMENTS_PER_VARIANT: usize = 4;
-    const SEGMENT_DURATION_S: f64 = 4.0;
-    const MAX_CONCURRENT: usize = 3;
-    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
+mod consts {
+    use super::Duration;
+
+    pub(super) const VARIANT_COUNT: usize = 3;
+    pub(super) const SEGMENTS_PER_VARIANT: usize = 4;
+    pub(super) const SEGMENT_DURATION_S: f64 = 4.0;
+    pub(super) const MAX_CONCURRENT: usize = 3;
+    pub(super) const LOAD_DEADLINE: Duration = Duration::from_secs(20);
 }
 
 async fn build_hls(helper: &TestServerHelper) -> Url {
     let builder = HlsFixtureBuilder::new()
-        .variant_count(Consts::VARIANT_COUNT)
-        .segments_per_variant(Consts::SEGMENTS_PER_VARIANT)
-        .segment_duration_secs(Consts::SEGMENT_DURATION_S)
+        .variant_count(consts::VARIANT_COUNT)
+        .segments_per_variant(consts::SEGMENTS_PER_VARIANT)
+        .segment_duration_secs(consts::SEGMENT_DURATION_S)
         .packaged_audio_aac_lc(44_100, 2);
     helper
         .create_hls(builder)
@@ -73,7 +74,7 @@ async fn observe_until_loaded(
 ) -> Result<HashSet<u64>, String> {
     let mut variant_request_ids = HashSet::new();
 
-    timeout(Consts::LOAD_DEADLINE, async {
+    timeout(consts::LOAD_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
@@ -121,7 +122,7 @@ async fn observe_until_loaded(
         format!(
             "track {track_id} did not reach Loaded within {:?} (last status: {:?}); \
              variant_request_ids: {}",
-            Consts::LOAD_DEADLINE,
+            consts::LOAD_DEADLINE,
             queue.track(track_id).map(|entry| entry.status),
             format_variant_request_ids(&variant_request_ids),
         )
@@ -177,7 +178,7 @@ async fn variant_media_playlists_load_concurrently(
         ticker: mut tick_handle,
         ..
     } = DiskQueue::builder(temp.path())
-        .max_concurrent_downloads(Consts::MAX_CONCURRENT)
+        .max_concurrent_downloads(consts::MAX_CONCURRENT)
         .open()
         .await;
 
@@ -221,7 +222,7 @@ async fn variant_media_playlists_load_concurrently(
     assert!(
         variant_request_ids.len() >= 2,
         "expected at least 2 variant media playlists to load (fixture has {}); got {}",
-        Consts::VARIANT_COUNT,
+        consts::VARIANT_COUNT,
         format_variant_request_ids(&variant_request_ids),
     );
 
@@ -231,7 +232,7 @@ async fn variant_media_playlists_load_concurrently(
          (`BatchGroup::process`): largest batch starting at a variant-playlist request = \
          {max_batch:?}, expected >= 2 (serial loading yields 1, concurrent `try_join_all` \
          yields {}). variant_request_ids={}",
-        Consts::VARIANT_COUNT,
+        consts::VARIANT_COUNT,
         format_variant_request_ids(&variant_request_ids),
     );
     queue.close().await;

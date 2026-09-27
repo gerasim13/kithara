@@ -25,24 +25,25 @@ use url::Url;
 
 use crate::bufpool_ext::TestPools;
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::Duration;
+
     /// Background lane width. One permit, so a single hung prefetch
     /// saturates it.
-    const BG_CAP: usize = 1;
+    pub(super) const BG_CAP: usize = 1;
     /// Above the probe buffer (1 `KiB`) so the probe waits for bytes, not EOF.
-    const HUNG_BODY_LEN: usize = 64 * 1024;
-    const HUNG_THROTTLE_CHUNK: usize = 1;
+    pub(super) const HUNG_BODY_LEN: usize = 64 * 1024;
+    pub(super) const HUNG_THROTTLE_CHUNK: usize = 1;
     /// Past the test window and the 30s net `inactivity_timeout`, so the
     /// load stays parked instead of failing.
-    const HUNG_THROTTLE_DELAY_MS: u64 = 600_000;
-    const GATE_DEADLINE: Duration = Duration::from_secs(15);
+    pub(super) const HUNG_THROTTLE_DELAY_MS: u64 = 600_000;
+    pub(super) const GATE_DEADLINE: Duration = Duration::from_secs(15);
     /// Short enough that a miss means starvation, not a slow load.
-    const FAST_DEADLINE: Duration = Duration::from_secs(8);
-    const PLAY_DEADLINE: Duration = Duration::from_secs(10);
-    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+    pub(super) const FAST_DEADLINE: Duration = Duration::from_secs(8);
+    pub(super) const PLAY_DEADLINE: Duration = Duration::from_secs(10);
+    pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(50);
     /// Audible-progress threshold proving the selection actually plays.
-    const PLAY_POSITION_SECS: f64 = 0.3;
+    pub(super) const PLAY_POSITION_SECS: f64 = 0.3;
 }
 
 /// Register the hung background source and reachable foreground MP3 used by
@@ -53,12 +54,12 @@ fn register_sources(
 ) -> (BehaviorHandle, BehaviorHandle) {
     let hung = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(vec![0u8; Consts::HUNG_BODY_LEN]),
+            bytes: Arc::new(vec![0u8; consts::HUNG_BODY_LEN]),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Throttle {
-            chunk: Consts::HUNG_THROTTLE_CHUNK,
-            delay_ms: Consts::HUNG_THROTTLE_DELAY_MS,
+            chunk: consts::HUNG_THROTTLE_CHUNK,
+            delay_ms: consts::HUNG_THROTTLE_DELAY_MS,
         },
     });
     let fast = helper.register_behavior(FixtureBehavior {
@@ -109,7 +110,7 @@ async fn wait_for_status_matching(
                 status_of(queue, id)
             ));
         }
-        sleep(Consts::POLL_INTERVAL).await;
+        sleep(consts::POLL_INTERVAL).await;
     }
 }
 
@@ -129,7 +130,7 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
         ticker: mut tick_handle,
         ..
     } = DiskQueue::builder(temp.path())
-        .max_concurrent_loads(NonZeroUsize::new(Consts::BG_CAP).expect("loader cap is non-zero"))
+        .max_concurrent_loads(NonZeroUsize::new(consts::BG_CAP).expect("loader cap is non-zero"))
         .open()
         .await;
 
@@ -140,7 +141,7 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
         })
         .await
         .expect("append hung track");
-    wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
+    wait_for_status_matching(&queue, hung_id, consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
     })
     .await
@@ -162,13 +163,13 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
         .expect("select fast");
     queue.run(QueueControl::play).await;
 
-    let load_result = wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE).await;
+    let load_result = wait_for_loader_done(&queue, fast_id, consts::FAST_DEADLINE).await;
     assert_hung_still_loading(&queue, hung_id);
     load_result.unwrap_or_else(|e| {
         panic!("selected Pending track stayed parked behind the hung background load: {e}")
     });
 
-    wait_for_position_at_least(&queue, Consts::PLAY_POSITION_SECS, Consts::PLAY_DEADLINE)
+    wait_for_position_at_least(&queue, consts::PLAY_POSITION_SECS, consts::PLAY_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("promoted selection must play: {e}"));
 
@@ -197,7 +198,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
         ticker: mut tick_handle,
         ..
     } = DiskQueue::builder(temp.path())
-        .max_concurrent_loads(NonZeroUsize::new(Consts::BG_CAP).expect("loader cap is non-zero"))
+        .max_concurrent_loads(NonZeroUsize::new(consts::BG_CAP).expect("loader cap is non-zero"))
         .open()
         .await;
     let mut events = queue.subscribe();
@@ -209,7 +210,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
         })
         .await
         .expect("append hung track");
-    wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
+    wait_for_status_matching(&queue, hung_id, consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
     })
     .await
@@ -235,7 +236,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
         .expect("select fast");
     queue.run(QueueControl::play).await;
 
-    wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE)
+    wait_for_loader_done(&queue, fast_id, consts::FAST_DEADLINE)
         .await
         .unwrap_or_else(|e| {
             panic!("selection after a superseded hung selection must still load: {e}")
@@ -243,8 +244,8 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
     wait_for_position_event(
         &mut events,
         &queue,
-        Consts::PLAY_POSITION_SECS,
-        Consts::PLAY_DEADLINE,
+        consts::PLAY_POSITION_SECS,
+        consts::PLAY_DEADLINE,
     )
     .await
     .unwrap_or_else(|e| panic!("follow-up selection must play: {e}"));
