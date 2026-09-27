@@ -343,8 +343,16 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
 /// Each side's level comes too, because once every sample differs the count
 /// has nothing left to say. Two levels that agree while no sample does put
 /// the same audio at a different place in its own timeline; two that disagree
-/// put different audio there, and the two accusations land on opposite halves
-/// of the product.
+/// put different audio there.
+///
+/// Levels alone still cannot name which: a render turned up and a render with
+/// a second lane summed into it both read as louder. The best-fit gain and
+/// what it leaves behind separate them. A residual near zero says the
+/// candidate IS the control at another gain, and the accusation is the
+/// mixer's; a residual near the control's own level says the candidate
+/// carries audio the control never had, and the accusation is that a staged
+/// lane reached the output. These land on opposite halves of the product, so
+/// the report must not have to guess between them.
 fn divergence(candidate: &[f32], control: &[f32]) -> Option<String> {
     let mut first = None;
     let mut differing = 0usize;
@@ -358,14 +366,46 @@ fn divergence(candidate: &[f32], control: &[f32]) -> Option<String> {
         widest = widest.max((heard - expected).abs());
     }
     let (sample, heard, expected) = first?;
+    let (gain, residual) = fit(candidate, control);
     Some(format!(
         "from frame {} ({heard} against {expected}); {differing} of {} samples differ, \
-         widest {widest}; level {} against {}",
+         widest {widest}; level {} against {}; best-fit gain {gain} leaves residual {residual}",
         sample / usize::from(CHANNELS),
         candidate.len(),
         level(candidate),
         level(control),
     ))
+}
+
+/// The gain that best explains `candidate` as `control`, and the level of what
+/// that gain cannot explain.
+///
+/// The gain is the least-squares fit, and the residual is the level of
+/// `candidate - gain * control` measured against the control's own level, so
+/// it reads as a fraction rather than an absolute the reader has to scale by
+/// hand. A silent control leaves nothing to fit against and reports no gain.
+fn fit(candidate: &[f32], control: &[f32]) -> (f32, f32) {
+    let mut energy = 0.0f64;
+    let mut cross = 0.0f64;
+    for (heard, expected) in candidate.iter().zip(control) {
+        energy += f64::from(*expected) * f64::from(*expected);
+        cross += f64::from(*heard) * f64::from(*expected);
+    }
+    if energy == 0.0 {
+        return (f32::NAN, level(candidate));
+    }
+    let gain = cross / energy;
+    let mut left = 0.0f64;
+    for (heard, expected) in candidate.iter().zip(control) {
+        let unexplained = f64::from(*heard) - gain * f64::from(*expected);
+        left += unexplained * unexplained;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "two ratios printed into a panic message, not signal values"
+    )]
+    let fitted = (gain as f32, (left / energy).sqrt() as f32);
+    fitted
 }
 
 /// Root-mean-square of `pcm`, the one summary of a render that survives a
