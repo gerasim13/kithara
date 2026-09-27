@@ -51,26 +51,22 @@ where
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
-    #[config(skip = "injected cancellation resource", patch(skip))]
-    #[debug(skip)]
+    #[config(skip = "injected cancellation resource", patch(skip), debug(skip))]
     pub cancel: Option<CancelToken>,
 
     /// Shared store used for bare URI track sources.
-    #[config(skip = "injected asset store", patch(skip))]
-    #[debug(skip)]
+    #[config(skip = "injected asset store", patch(skip), debug(skip))]
     pub store: Option<AssetStore<S>>,
 
     /// Runtime the queue runs its loads and load completions on. `None`
     /// takes the runtime current where the queue is built; an embedding
     /// that drives the queue from threads without one (FFI hosts) passes
     /// its own.
-    #[config(skip = "injected runtime", patch(skip))]
-    #[debug(skip)]
+    #[config(skip = "injected runtime", patch(skip), debug(skip))]
     pub runtime: Option<RuntimeHandle>,
 
     /// Player owned and decorated by this queue.
-    #[config(skip = "player moves to the queue owner", builder(required, with = |value: PlayerImpl<S>| Some(value)), patch(skip))]
-    #[debug(skip)]
+    #[config(skip = "player moves to the queue owner", builder(required, with = |value: PlayerImpl<S>| Some(value)), patch(skip), debug(skip))]
     pub(crate) player: Option<PlayerImpl<S>>,
 
     /// Lead time in seconds before EOF at which the next queued track is

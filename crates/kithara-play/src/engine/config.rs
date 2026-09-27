@@ -24,8 +24,7 @@ pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
 #[derive(derive_more::Debug)]
 pub struct EngineConfig<S> {
     /// Stable synchronization identity of the owning player.
-    #[config(skip = "player-owned synchronization identity")]
-    #[debug(skip)]
+    #[config(skip = "player-owned synchronization identity", debug(skip))]
     pub(crate) grid_id: BeatGridId,
     /// Initial output sample rate supplied by the owning player session.
     #[config(value)]
@@ -36,16 +35,14 @@ pub struct EngineConfig<S> {
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
-    #[config(skip = "injected cancellation resource")]
-    #[debug(skip)]
+    #[config(skip = "injected cancellation resource", debug(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional resident Warp render quantum supplied by the owning player.
     #[config(value)]
     pub(crate) render_quantum_frames: Option<NonZeroUsize>,
     /// Optional pre-bound session for isolated harnesses. Production engines
     /// receive theirs when the owning Player enters a Host.
-    #[config(skip = "injected session binding")]
-    #[debug(skip)]
+    #[config(skip = "injected session binding", debug(skip))]
     pub(crate) session: Option<SessionBinding<S>>,
     /// Typed pool facade for audio-thread scratch buffers.
     #[config(skip = "injected pooled scratch resource")]
@@ -56,23 +53,20 @@ pub struct EngineConfig<S> {
     /// custom layout through `PlayerImpl::set_eq_layout`.
     #[config(
         value(Vec<EqBandConfig>, self.eq_layout.lock().clone()),
-        builder(default = Mutex::new(generate_log_spaced_bands(10)), with = |layout: Vec<EqBandConfig>| Mutex::new(layout))
+        builder(default = Mutex::new(generate_log_spaced_bands(10)), with = |layout: Vec<EqBandConfig>| Mutex::new(layout)),
+        debug(skip)
     )]
-    #[debug(skip)]
     pub(crate) eq_layout: Mutex<Vec<EqBandConfig>>,
     /// Render-pass slot gate smoothing. Default: 5 ms.
-    #[config(value)]
-    #[builder(default = DEFAULT_GATE_SMOOTHING)]
+    #[config(value, builder(default = DEFAULT_GATE_SMOOTHING))]
     pub(crate) gate_smoothing: SmootherConfig,
     /// Number of output channels. Default: 2 (stereo). Not a document key:
     /// the only reader is a startup log line, so a document value would
     /// change nothing the engine actually does.
-    #[config(value)]
-    #[builder(default = 2)]
+    #[config(value, builder(default = 2))]
     pub(crate) channels: u16,
     /// Maximum number of concurrent player slots. Default: 4.
-    #[config(value)]
-    #[builder(default = 4)]
+    #[config(value, builder(default = 4))]
     pub(crate) max_slots: usize,
 }
 

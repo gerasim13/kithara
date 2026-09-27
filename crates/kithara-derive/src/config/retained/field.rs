@@ -46,6 +46,7 @@ pub(super) fn expand(
             if meta.path.is_ident("builder")
                 || meta.path.is_ident("field")
                 || meta.path.is_ident("patch")
+                || meta.path.is_ident("debug")
             {
                 if forwarded.contains(&meta.path) {
                     return Err(meta.error("duplicate config field attribute group"));

@@ -74,20 +74,20 @@ pub struct PlayerConfig<S> {
     /// EQ band layout handed to the engine this player builds. Not a document
     /// key: every construction site derives it from a generator, and a custom
     /// layout is installed at runtime through `PlayerImpl::set_eq_layout`.
-    #[debug(skip)]
     #[config(
         skip = "layout moves to the live equalizer owner",
         builder(default = generate_log_spaced_bands(Consts::DEFAULT_EQ_BAND_COUNT)),
-        patch(skip)
+        patch(skip),
+        debug(skip)
     )]
     pub eq_layout: Vec<EqBandConfig>,
     /// Built-in auto-advance handler. The queue overwrites this for every queue-driven
     /// player at construction, so it is not a document key.
-    #[debug(skip)]
     #[config(
         value(bool, self.auto_advance_enabled.load()),
         builder(default = LiveBool::new(true), with = |value: bool| LiveBool::new(value)),
-        patch(skip)
+        patch(skip),
+        debug(skip)
     )]
     pub auto_advance_enabled: LiveBool,
     /// Make audio-thread reads block on a producer-ring underrun instead of
@@ -97,11 +97,11 @@ pub struct PlayerConfig<S> {
     /// (`false`): the audio callback can never block. Not a document key:
     /// the shipped binary is a real-time host, and only the offline test
     /// harness sets this, from Rust.
-    #[debug(skip)]
     #[config(
         skip = "offline-only blocking policy is not a product control",
         builder(default),
-        patch(skip)
+        patch(skip),
+        debug(skip)
     )]
     pub block_on_underrun: bool,
     /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
@@ -126,11 +126,11 @@ pub struct PlayerConfig<S> {
     /// Secondary lead time before EOF at which the next queued item is loaded. The
     /// queue overwrites this for every queue-driven player at construction, so it is
     /// not a document key.
-    #[debug(skip)]
     #[config(
         value(f32, self.prefetch_duration.load()),
         builder(default = LiveF32::new(Consts::DEFAULT_PREFETCH_DURATION), with = |value: f32| LiveF32::new(value)),
-        patch(skip)
+        patch(skip),
+        debug(skip)
     )]
     pub prefetch_duration: LiveF32,
     /// Maximum concurrent slots of the engine this player builds.
@@ -138,43 +138,39 @@ pub struct PlayerConfig<S> {
     #[config(value, builder(default = Consts::DEFAULT_MAX_SLOTS))]
     pub max_slots: usize,
     /// Stable synchronization-group identity owned by this player.
-    #[debug(skip)]
     #[config(
         skip = "player-owned synchronization identity",
         builder(default = allocate_grid_id()),
-        patch(skip)
+        patch(skip),
+        debug(skip)
     )]
     pub(crate) grid_id: BeatGridId,
     /// Stable identity of the track grid this player publishes as its own
     /// member. Distinct from [`Self::grid_id`]: the group and the geometry it
     /// holds are two grids, and a member is found by an identity of its own.
-    #[debug(skip)]
     #[config(
         skip = "player-owned track-grid identity",
         builder(default = allocate_grid_id()),
-        patch(skip)
+        patch(skip),
+        debug(skip)
     )]
     pub(crate) track_grid_id: BeatGridId,
     /// Shared ABR controller. When absent, the player creates its default.
-    #[debug(skip)]
-    #[config(skip = "injected ABR controller", patch(skip))]
+    #[config(skip = "injected ABR controller", patch(skip), debug(skip))]
     pub(crate) abr: Option<Arc<AbrController>>,
     /// Optional application deadline for control-to-presented-audio response, in output frames.
     /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
     #[config(value, field(get, copy))]
     pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Root event bus for this player.
-    #[debug(skip)]
-    #[config(skip = "injected event bus", patch(skip))]
+    #[config(skip = "injected event bus", patch(skip), debug(skip))]
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for this player.
-    #[debug(skip)]
-    #[config(skip = "injected cancellation resource", patch(skip))]
+    #[config(skip = "injected cancellation resource", patch(skip), debug(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
-    #[debug(skip)]
-    #[config(skip = "injected session binding", patch(skip))]
+    #[config(skip = "injected session binding", patch(skip), debug(skip))]
     pub(crate) session: Option<SessionBinding<S>>,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
@@ -221,6 +217,16 @@ mod tests {
         assert_eq!(config.event_bus_capacity.get(), 1024);
         assert!((config.prefetch_duration.load() - 3.5).abs() < f32::EPSILON);
         assert_eq!(config.max_slots, 4);
+    }
+
+    #[kithara::test]
+    fn debug_output_excludes_injected_fields() {
+        let config = config();
+        let rendered = format!("{config:#?}");
+
+        assert!(!rendered.contains("    grid_id:"));
+        assert!(!rendered.contains("    cancel:"));
+        assert!(!rendered.contains("    abr:"));
     }
 
     #[kithara::test(native)]
