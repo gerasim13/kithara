@@ -6,6 +6,7 @@ use super::{
     platform::write_dump,
     shared::{HangDump, NoContext},
 };
+use crate::clock;
 
 /// Watchdog that detects loops stuck without progress.
 ///
@@ -83,16 +84,12 @@ impl<C: HangDump> HangDetector<C> {
             .get_or_insert_with(|| Instant::now() + self.timeout)
     }
 
-    /// Whether the real clock spent the budget the deadline just declared
-    /// spent. Worded, not measured in the message, because the diagnostic is
-    /// clustered across attempts and a raw duration makes every firing its own
-    /// cluster.
+    /// What the real clock did while the virtual deadline ran out.
     fn real_clock_verdict(&self) -> &'static str {
-        match self.started_real {
-            Some(started) if started.elapsed() < self.timeout => "real clock leapt the budget",
-            Some(_) => "real clock spent the budget",
-            None => "real clock never started",
-        }
+        self.started_real
+            .map_or("real clock never started", |started| {
+                clock::real_clock_verdict(started, self.timeout)
+            })
     }
 
     /// Human-readable account of the stall: where it stuck, where it last made

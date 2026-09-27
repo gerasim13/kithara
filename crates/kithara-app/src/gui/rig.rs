@@ -6,11 +6,12 @@ use kithara::{
         CancelToken,
         sync::Arc,
         thread,
-        time::{Duration, Instant},
+        time::{Duration, Instant, WallInstant},
         tokio::sync::mpsc::{self, UnboundedReceiver},
     },
     ui::render::{ControlAction, ReadValue, Reads, UiEvent, Walk},
 };
+use kithara_test_utils::clock::real_clock_verdict;
 
 use super::{app::Kithara, message::Message, reads::ReadRoot, test_fixture, update::update};
 use crate::{
@@ -216,6 +217,13 @@ impl Rig {
         }
     }
 
+    /// Drive `step` until `done`, giving up after `within`.
+    ///
+    /// The budget rides the platform clock, which under `flash` the quiescence
+    /// engine advances in one step whenever every participant parks — so it can
+    /// run out with no real time spent. The verdict says which happened, in the
+    /// wording the hang detector uses, so both read as one cluster in a stress
+    /// report.
     pub(crate) fn until(
         &mut self,
         what: &str,
@@ -224,12 +232,17 @@ impl Rig {
         mut done: impl FnMut(&mut Self) -> bool,
     ) {
         let deadline = Instant::now() + within;
+        let started_real = WallInstant::now();
         loop {
             step(self);
             if done(self) {
                 return;
             }
-            assert!(Instant::now() < deadline, "{what}: not within {within:?}");
+            assert!(
+                Instant::now() < deadline,
+                "{what}: not within {within:?} | {}",
+                real_clock_verdict(started_real, within)
+            );
             thread::paced_backoff(Duration::from_millis(5));
         }
     }

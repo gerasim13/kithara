@@ -18,6 +18,7 @@ pub use serial_test;
 pub use tracing;
 
 pub mod bufpool;
+pub mod clock;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flight;
 pub mod hang;
