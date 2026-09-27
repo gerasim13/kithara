@@ -114,7 +114,7 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> CreatedHls {
 
     let segment_duration = SawWav::DEFAULT.segment_size as f64
         / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
-    let server = TestServerHelper::new()
+    TestServerHelper::new()
         .await
         .create_hls(
             HlsFixtureBuilder::new()
@@ -124,9 +124,7 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> CreatedHls {
                 .custom_data(Arc::new(wav_data)),
         )
         .await
-        .expect("create HLS fixture");
-
-    server
+        .expect("create HLS fixture")
 }
 
 #[kithara::test(

@@ -51,7 +51,7 @@ async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> Cr
     let segment_duration = consts::D.segment_size as f64
         / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
 
-    let server = TestServerHelper::new()
+    TestServerHelper::new()
         .await
         .create_hls(
             HlsFixtureBuilder::new()
@@ -71,9 +71,7 @@ async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> Cr
                 }]),
         )
         .await
-        .expect("create HLS fixture");
-
-    server
+        .expect("create HLS fixture")
 }
 
 #[kithara::test(

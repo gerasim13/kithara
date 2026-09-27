@@ -260,7 +260,7 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTe
         .run(move |q| q.select(selected_id, Transition::None))
         .await
         .expect("select");
-    queue.run(move |q| q.play()).await;
+    queue.run(QueueControl::play).await;
 
     let pos_before_seek = wait_for_position_event(&mut rx, &queue, 1.0, Duration::from_secs(15))
         .await
@@ -409,7 +409,7 @@ async fn queue_seek_long_cold_cache_far_segment(
         .run(move |q| q.select(id, Transition::None))
         .await
         .expect("select");
-    queue.run(move |q| q.play()).await;
+    queue.run(QueueControl::play).await;
 
     let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await
@@ -498,7 +498,7 @@ async fn queue_seek_multi_variant_cold_far(
         .run(move |q| q.select(id, Transition::None))
         .await
         .expect("select");
-    queue.run(move |q| q.play()).await;
+    queue.run(QueueControl::play).await;
 
     let pos_before = wait_for_position_event(&mut rx, &queue, 2.0, Duration::from_secs(30))
         .await

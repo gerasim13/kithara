@@ -115,7 +115,7 @@ async fn audio_server(
         "Test data generated"
     );
 
-    let server = TestServerHelper::new()
+    TestServerHelper::new()
         .await
         .create_hls(
             HlsFixtureBuilder::new()
@@ -142,9 +142,7 @@ async fn audio_server(
                 }]),
         )
         .await
-        .expect("create HLS fixture");
-
-    server
+        .expect("create HLS fixture")
 }
 
 #[kithara::test(
