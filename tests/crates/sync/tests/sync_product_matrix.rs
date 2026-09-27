@@ -1867,7 +1867,12 @@ async fn host_drains_the_winning_pair_before_publishing_the_same_block_retarget(
     let operation = replacement.unwrap_or_else(|| {
         panic!("the old Armed/Presented pair must be recorded before parent publication, got {last_status:?}")
     });
-    let processed = harness.transport_revision(case).await;
+    let processed = harness
+        .host
+        .with(|host| host.session_transport())
+        .await
+        .expect("processed session transport")
+        .revision();
     assert!(processed > before);
 
     let mut applied = None;
