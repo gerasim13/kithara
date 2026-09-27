@@ -46,6 +46,10 @@ struct AttemptEnvelope {
     flight_events: Vec<String>,
     #[serde(default)]
     flight_probes: Vec<String>,
+    /// One OS reading per live thread, absent in envelopes written before the
+    /// reading existed and on targets without `/proc`.
+    #[serde(default)]
+    threads: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +178,9 @@ pub(super) fn append(
                 dossier.event_tail =
                     newest_groups(fold_flight_tail(&envelope.flight_events, input.budgets));
             }
+            if dossier.threads.is_empty() {
+                dossier.threads = thread_census(&envelope.threads);
+            }
         }
         add_signature(
             &mut clusters,
@@ -237,6 +244,46 @@ pub(super) fn append(
         );
     }
     invalid == 0 && !files.limit_exceeded && missing.is_empty()
+}
+
+/// Fold a dump's per-thread OS readings into one entry per thread name.
+///
+/// The engine names a quiescence holder by a hashed thread id that nothing
+/// outside the engine can look up, so the reading is joined to it by name.
+/// Per-name state counts answer what the holder line cannot: the name is
+/// missing entirely (its thread exited and the credit leaked), every instance
+/// is parked (`S`/`D`, so nothing is spinning), or one is runnable (`R`).
+/// Thread ids and tick counters are volatile and stay in the raw artifact.
+fn thread_census(lines: &[String]) -> Vec<String> {
+    let mut census: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    for line in lines {
+        let Some((name, state)) = thread_reading(line) else {
+            continue;
+        };
+        let count = census.entry(name).or_default().entry(state).or_default();
+        *count = count.saturating_add(1);
+    }
+    census
+        .into_iter()
+        .map(|(name, states)| {
+            let counts = states
+                .into_iter()
+                .map(|(state, count)| format!("{count} {state}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{name}: {counts}")
+        })
+        .collect()
+}
+
+/// The name and scheduler state of one `tid=... name=... state=...` reading.
+fn thread_reading(line: &str) -> Option<(String, String)> {
+    let field = |key: &str| {
+        line.split_whitespace()
+            .find_map(|part| part.strip_prefix(key))
+            .map(str::to_owned)
+    };
+    Some((field("name=")?, field("state=")?))
 }
 
 /// Cluster the flight-recorder tails of one envelope. Both lanes share the
@@ -453,6 +500,31 @@ fn read_envelope(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_census_counts_scheduler_states_per_thread_name() {
+        let lines = [
+            "name=tokio-rt-worker tid=7 state=S cpu_ticks=3 wchan=futex_wait",
+            "name=tokio-rt-worker tid=8 state=R cpu_ticks=62000 wchan=0",
+            "name=tokio-rt-worker tid=9 state=S cpu_ticks=1 wchan=futex_wait",
+            "name=main tid=1 state=S cpu_ticks=0 wchan=do_wait",
+        ]
+        .map(str::to_owned);
+
+        assert_eq!(
+            thread_census(&lines),
+            vec![
+                "main: 1 S".to_owned(),
+                "tokio-rt-worker: 1 R, 2 S".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reading_without_both_fields_is_not_counted() {
+        let lines = ["tid=7 cpu_ticks=3".to_owned(), "name=lone tid=8".to_owned()];
+        assert!(thread_census(&lines).is_empty());
+    }
 
     fn evidence() -> StressEvidenceConfig {
         StressEvidenceConfig {

@@ -47,6 +47,11 @@ pub(super) struct AttemptDossier {
     /// first. Ordered evidence, not a set: the last firing before the dump is
     /// the verdict, and its `(xN)` count is the starvation streak.
     pub(super) flight_tail: Vec<String>,
+    /// One entry per thread name in the dump's OS reading, with its scheduler
+    /// state counts. The engine names a stall holder by a hashed thread id
+    /// nothing can look up; this is the only column that says whether that
+    /// name is spinning, parked, or gone from the process entirely.
+    pub(super) threads: Vec<String>,
 }
 
 impl SignatureCluster {
@@ -519,12 +524,12 @@ fn render_attempt_dossiers(
         return;
     }
     out.push_str(
-        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. The flight and event tails are ordered, oldest first, with `(xN)` marking consecutive repeats of one line; each group shows its last firing's field values, so the newest group carries the exact state the attempt died in. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | flight tail | event tail | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|---|---|\n",
+        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. The flight and event tails are ordered, oldest first, with `(xN)` marking consecutive repeats of one line; each group shows its last firing's field values, so the newest group carries the exact state the attempt died in. Thread states count the process's own threads by name at dump time, so a name that is absent had no live thread. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | flight tail | event tail | thread states | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for dossier in dossiers.values().take(budgets.failure_rows) {
         let _ = writeln!(
             out,
-            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             markdown_cell(&dossier.display, budgets),
             markdown_cell(&dossier.test, budgets),
             markdown_cell(&dossier.symptom, budgets),
@@ -534,6 +539,7 @@ fn render_attempt_dossiers(
             render_set(&dossier.envelopes, budgets),
             render_ordered(&dossier.flight_tail, budgets),
             render_ordered(&dossier.event_tail, budgets),
+            render_ordered(&dossier.threads, budgets),
             markdown_cell(&dossier.pressure, budgets),
             render_set(&dossier.co_runners, budgets),
         );
