@@ -164,7 +164,13 @@ impl<G: SyncGroup<NestedGroup = G>> SyncRoot<G> {
                 RootError::Enter(_)
                 | RootError::InstallRacedSourceChange
                 | RootError::Sync(SyncError::OwnerUnavailable) => SyncReceiptAck::GateFailed,
-                _ => SyncReceiptAck::Refused,
+                RootError::MemberAlreadyRegistered(_)
+                | RootError::MemberNotRegistered(_)
+                | RootError::NonAudioReceipt
+                | RootError::AudioReceiptFromExecutor
+                | RootError::GateFailurePending
+                | RootError::Control(_)
+                | RootError::Sync(_) => SyncReceiptAck::Refused,
             }
         })
     }

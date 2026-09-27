@@ -8,7 +8,7 @@ use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 use kithara_sync::{
     ControlEnterError, EntryRefusal, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
-    SyncOperation, SyncRejected,
+    SyncOperation, SyncReceiptAck, SyncRejected,
 };
 use tracing::{debug, trace, warn};
 
@@ -398,7 +398,7 @@ where
         }
         Cmd::QueryStreamShape => Reply::StreamShape(state.stream_facts().shape()),
         Cmd::Tick => tick_session(state),
-        Cmd::AcknowledgeSync { .. } => Reply::Err(SessionError::SyncControlBusy),
+        Cmd::AcknowledgeSync { .. } => Reply::SyncAcknowledged(SyncReceiptAck::GateFailed),
     }
 }
 
