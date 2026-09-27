@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::HasPool;
-use kithara_dsp::interp::Interpolation;
+use kithara_dsp::interp::{Interpolation, RateRamp};
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -19,11 +19,10 @@ use crate::{
 pub struct GlideResampler {
     config: GlideConfig,
     engine: GlideEngine,
-    glide: GlideState,
+    ramp: RateRamp,
     channels: NonZeroUsize,
     mode: ResamplerMode,
     options: ResamplerOptions,
-    current_ratio: f64,
     cursor: f64,
     input_frames: usize,
 }
@@ -39,15 +38,14 @@ impl GlideResampler {
     {
         let ratio = initial_ratio(settings.mode);
         validate_ratio_bounds(backend, settings.options, ratio)?;
-        let glide = initial_glide(backend, settings.mode, settings.options, ratio)?;
+        let ramp = initial_ramp(backend, settings.mode, settings.options, ratio)?;
         let input_frames = block_frames(settings.options.chunk_size, config.interpolation);
         let engine = GlideEngine::new(settings, input_frames, config.interpolation, backend)?;
         Ok(Self {
             config,
             engine,
-            glide,
+            ramp,
             channels: settings.channels,
-            current_ratio: ratio,
             input_frames,
             mode: settings.mode,
             options: settings.options,
@@ -56,16 +54,13 @@ impl GlideResampler {
     }
 
     fn can_passthrough(&self) -> bool {
-        self.glide.remaining == 0
-            && (self.current_ratio - 1.0).abs() <= self.options.passthrough_tolerance
+        self.ramp
+            .held()
+            .is_some_and(|ratio| (ratio - 1.0).abs() <= self.options.passthrough_tolerance)
     }
 
     fn output_ratio(&self) -> f64 {
-        if self.glide.remaining > 0 {
-            self.current_ratio.min(self.glide.target)
-        } else {
-            self.current_ratio
-        }
+        self.ramp.current().min(self.ramp.target())
     }
 
     /// Render one exact source/output span without backend buffering.
@@ -103,14 +98,11 @@ impl GlideResampler {
         validate_runtime_ratio(self.options, ratio)?;
         self.engine.seed(input);
         let positions = self.engine.positions_mut(output_frames)?;
-        for (frame, position) in positions.iter_mut().enumerate() {
-            *position = frame
-                .to_f64()
-                .map(|frame| frame.mul_add(ratio, 1.0))
-                .and_then(|position| position.to_f32())
-                .ok_or(ResamplerError::InvalidBuffer {
-                    detail: "exact Glide source position is not representable",
-                })?;
+        let end = input_frames.saturating_add(2).to_f64().unwrap_or(0.0);
+        if RateRamp::hold(ratio).positions(1.0, end, positions) < output_frames {
+            return Err(ResamplerError::InvalidBuffer {
+                detail: "exact Glide source position is not representable",
+            });
         }
         let within = (ratio - 1.0).abs() <= self.options.passthrough_tolerance;
         self.engine.render(RenderRequest {
@@ -120,8 +112,7 @@ impl GlideResampler {
             produced: output_frames,
             consumed: input_frames,
         })?;
-        self.current_ratio = ratio;
-        self.glide = GlideState::default();
+        self.ramp = RateRamp::hold(ratio);
         self.cursor = 0.0;
         Ok(())
     }
@@ -135,21 +126,15 @@ impl GlideResampler {
     ) -> Result<(usize, usize), ResamplerError> {
         let position_capacity = self.engine.position_capacity().min(output_capacity);
         let positions = self.engine.positions_mut(position_capacity)?;
-        let mut produced = 0;
-        let mut cursor = self.cursor;
-        let mut current_ratio = self.current_ratio;
-        let mut glide = self.glide;
-        let mut peak = current_ratio;
         let after = usize::from(self.config.interpolation.padding().1);
-
-        while produced < position_capacity && can_sample(cursor, input_frames, after) {
-            positions[produced] = (cursor + 1.0).to_f32().unwrap_or(0.0);
-            peak = peak.max(current_ratio);
-            cursor += current_ratio;
-            advance_glide_values(&mut current_ratio, &mut glide);
-            produced += 1;
-        }
-
+        let end = input_frames
+            .saturating_add(1)
+            .saturating_sub(after)
+            .to_f64()
+            .unwrap_or(0.0);
+        let ramp = self.ramp;
+        let produced = ramp.positions(self.cursor + 1.0, end, positions);
+        let cursor = self.cursor + ramp.offset(produced);
         let consumed = cursor
             .floor()
             .to_usize()
@@ -158,13 +143,12 @@ impl GlideResampler {
         self.engine.render(RenderRequest {
             input,
             output,
-            filter_ratio: self.config.anti_alias.then_some(peak),
             produced,
             consumed,
+            filter_ratio: self.config.anti_alias.then(|| ramp.peak(produced)),
         })?;
         self.cursor = cursor - consumed.to_f64().unwrap_or(0.0);
-        self.current_ratio = current_ratio;
-        self.glide = glide;
+        self.ramp = ramp.after(produced);
         Ok((consumed, produced))
     }
 
@@ -240,8 +224,7 @@ impl Resampler for GlideResampler {
     }
 
     fn reset(&mut self) {
-        self.current_ratio = initial_ratio(self.mode);
-        self.glide = GlideState::default();
+        self.ramp = RateRamp::hold(initial_ratio(self.mode));
         self.engine.reset();
         self.cursor = 0.0;
     }
@@ -250,39 +233,14 @@ impl Resampler for GlideResampler {
 impl ResamplerControl for GlideResampler {
     fn glide_ratio(&mut self, glide: RatioGlide) -> Result<(), ResamplerError> {
         validate_runtime_ratio(self.options, glide.target_ratio)?;
-        let frames = glide.frames.get();
-        let frames_f64 = f64::from(frames);
-        self.glide = GlideState {
-            remaining: frames,
-            step: (glide.target_ratio - self.current_ratio) / frames_f64,
-            target: glide.target_ratio,
-        };
+        self.ramp = RateRamp::new(self.ramp.current(), glide.target_ratio, glide.frames);
         Ok(())
     }
 
     fn set_ratio(&mut self, ratio: f64) -> Result<(), ResamplerError> {
         validate_runtime_ratio(self.options, ratio)?;
-        self.current_ratio = ratio;
-        self.glide = GlideState::default();
+        self.ramp = RateRamp::hold(ratio);
         Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct GlideState {
-    step: f64,
-    target: f64,
-    remaining: u32,
-}
-
-fn advance_glide_values(current_ratio: &mut f64, glide: &mut GlideState) {
-    if glide.remaining == 0 {
-        return;
-    }
-    *current_ratio += glide.step;
-    glide.remaining = glide.remaining.saturating_sub(1);
-    if glide.remaining == 0 {
-        *current_ratio = glide.target;
     }
 }
 
@@ -291,13 +249,6 @@ fn advance_glide_values(current_ratio: &mut f64, glide: &mut GlideState) {
 /// sample, so the block would never be taken.
 fn block_frames(chunk_size: usize, interpolation: Interpolation) -> usize {
     chunk_size.max(usize::from(interpolation.padding().1).saturating_add(1))
-}
-
-fn can_sample(cursor: f64, input_frames: usize, after: usize) -> bool {
-    cursor
-        .floor()
-        .to_usize()
-        .is_some_and(|base| base.saturating_add(after) < input_frames)
 }
 
 fn frames_for_ratio(input_frames: usize, ratio: f64) -> usize {
@@ -311,25 +262,24 @@ fn frames_for_ratio(input_frames: usize, ratio: f64) -> usize {
     frames.to_usize().unwrap_or(usize::MAX)
 }
 
-fn initial_glide(
+fn initial_ramp(
     backend: &'static str,
     mode: ResamplerMode,
     options: ResamplerOptions,
     initial_ratio: f64,
-) -> Result<GlideState, ResamplerBuildError> {
+) -> Result<RateRamp, ResamplerBuildError> {
     let ResamplerMode::VariableRatio {
         glide: Some(glide), ..
     } = mode
     else {
-        return Ok(GlideState::default());
+        return Ok(RateRamp::hold(initial_ratio));
     };
     validate_ratio_bounds(backend, options, glide.target_ratio)?;
-    let frames = glide.frames.get();
-    Ok(GlideState {
-        remaining: frames,
-        step: (glide.target_ratio - initial_ratio) / f64::from(frames),
-        target: glide.target_ratio,
-    })
+    Ok(RateRamp::new(
+        initial_ratio,
+        glide.target_ratio,
+        glide.frames,
+    ))
 }
 
 fn initial_ratio(mode: ResamplerMode) -> f64 {

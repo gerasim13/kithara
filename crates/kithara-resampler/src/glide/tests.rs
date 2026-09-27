@@ -102,6 +102,19 @@ fn ramp_input(frames: u16) -> Vec<f32> {
     (0..frames).map(f32::from).collect()
 }
 
+/// Largest error of a glide position reading back from a ramp input.
+const POSITION_TOLERANCE: f64 = 1.0e-4;
+
+/// Rate of stream frame `frame` for a glide from `from` to `to` over
+/// `frames` frames: the old per-frame stepping, written out.
+fn glide_rate(frame: u32, from: f64, to: f64, frames: u32) -> f64 {
+    if frame < frames {
+        f64::from(frame).mul_add((to - from) / f64::from(frames), from)
+    } else {
+        to
+    }
+}
+
 #[kithara::test(native, flash(false))]
 fn backend_reports_glide_capabilities() {
     let capabilities = GlideBackend::new().capabilities();
@@ -544,4 +557,91 @@ fn every_interpolation_takes_frames_from_its_next_block_at_a_one_frame_chunk(
         "{interpolation:?} took nothing from a block of {} frames",
         input.len()
     );
+}
+
+/// On a ramp input `output[k]` is the cursor of frame `k`, the running sum
+/// of the rates before it; after the glide the ratio is exactly the target.
+#[kithara::test(native)]
+fn glide_ramp_lands_on_its_target_rate() {
+    const FRAMES: u16 = 256;
+    const GLIDE_FRAMES: u32 = 24;
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: Some(RatioGlide {
+            frames: rate(GLIDE_FRAMES),
+            target_ratio: 1.5,
+        }),
+    };
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(mode)
+        .options(
+            ResamplerOptions::builder()
+                .chunk_size(usize::from(FRAMES))
+                .build(),
+        )
+        .pools(pools())
+        .build();
+    let config = GlideConfig::builder()
+        .interpolation(Interpolation::Linear)
+        .anti_alias(false)
+        .build();
+    let mut resampler = GlideResampler::new("glide", config, &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = ramp_input(FRAMES);
+    let mut output = vec![0.0; usize::from(FRAMES)];
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("glide process should succeed: {err}"));
+
+    assert!(
+        process.output_frames > 24,
+        "the glide did not finish inside one block: {} frames",
+        process.output_frames
+    );
+    let mut cursor = 0.0_f64;
+    for (sample, frame) in output[..process.output_frames].iter().zip(0_u32..) {
+        assert!(
+            (f64::from(*sample) - cursor).abs() < POSITION_TOLERANCE,
+            "frame {frame}: {sample} against {cursor}"
+        );
+        cursor += glide_rate(frame, 1.0, 1.5, GLIDE_FRAMES);
+    }
+    assert_eq!(resampler.output_frames_for_input(3), 2);
+}
+
+/// `output[k]` reads the ramp at `k·n/m`; the last interval `[n − 1, n)`
+/// and beyond hold the last input frame.
+#[kithara::test(native)]
+#[case::downsample(16, 12)]
+#[case::upsample(15, 20)]
+#[case::sixfold(16, 96)]
+fn exact_span_lands_on_the_last_frame(#[case] source: u16, #[case] target: u16) {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let config = GlideConfig::builder()
+        .interpolation(Interpolation::Linear)
+        .anti_alias(false)
+        .build();
+    let mut resampler = GlideResampler::new("glide", config, &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = ramp_input(source);
+    let mut output = vec![0.0; usize::from(target)];
+
+    resampler
+        .process_exact_span(&[input.as_slice()], &mut [output.as_mut_slice()])
+        .unwrap_or_else(|err| panic!("exact span should render: {err}"));
+
+    let last = f64::from(source) - 1.0;
+    for (sample, frame) in output.iter().zip(0_u16..) {
+        let expected = (f64::from(frame) * f64::from(source) / f64::from(target)).min(last);
+        assert!(
+            (f64::from(*sample) - expected).abs() < 1.0e-5,
+            "{source}→{target} frame {frame}: {sample} against {expected}"
+        );
+    }
 }
