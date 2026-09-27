@@ -741,7 +741,7 @@ fn a_passed_configuration_reaches_the_compiled_document() {
 /// document's. The fixture document names `ghost-kind`; `settings` claims
 /// that kind is known while `kinds` registers nothing at all. If `Ui::new`
 /// validated against the passed value instead, the document would compile --
-/// see `mount::Custom::leaf` in `render::masonry_tree::mount`, which mounts
+/// see `mount::Custom::leaf` in `render::masonry_widgets::mount`, which mounts
 /// an empty box and only logs when a kind is not actually registered, rather
 /// than refusing anything. Asserting the document is refused, and refused
 /// for the fixture's own kind name, is what tells the two sources apart.

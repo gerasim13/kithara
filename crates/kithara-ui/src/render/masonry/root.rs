@@ -1,24 +1,16 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
+use kithara_test_macros as kithara;
 use masonry::{
-    accesskit::{Node as AccessNode, Role, TreeUpdate},
+    accesskit::TreeUpdate,
     app::{RenderRoot, RenderRootOptions, RenderRootSignal},
-    core::{
-        AccessCtx, BoxConstraints, ChildrenIds, CursorIcon, ErasedAction, EventCtx, Handled,
-        LayoutCtx, PaintCtx, PointerEvent, PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx,
-        TextEvent, Widget, WidgetId, WidgetRef, WindowEvent, find_widget_under_pointer,
-    },
-    kurbo::{Point, Rect as MasonryRect, Size},
+    core::{CursorIcon, ErasedAction, Handled, PointerEvent, TextEvent, WidgetId, WindowEvent},
+    kurbo::{Point, Rect as MasonryRect},
     ui_events::keyboard::{Key, NamedKey},
     vello::Scene,
 };
 use num_traits::cast::AsPrimitive;
 use thiserror::Error;
-use tracing::{Span, trace_span};
 
 use super::{
     built::{
@@ -28,22 +20,19 @@ use super::{
     custom::HostAction,
     node::Node,
     picker::{self, HostedEngine},
+    window_layer::WindowLayer,
 };
 #[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
-    backends::VelloBackend,
-    draw::{Pt, Rect, replay},
+    draw::Pt,
     interact::{CursorShape, masonry::cursor_icon},
     render::{
-        DragGhost, Skin, UiEvent, WindowCommand, WindowSurface, shader::ShaderDeclaration,
+        document::{Ctx, placements},
+        shader::ShaderDeclaration,
         vis::VisDeclaration,
     },
-    shaping::TextContext,
 };
-
-#[path = "../masonry_tree/reread.rs"]
-mod reread;
 
 /// A Masonry render root with native-layer synchronization and typed actions.
 #[derive(fieldwork::Fieldwork)]
@@ -609,6 +598,206 @@ where
     }
 }
 
+impl<Action> MasonryRoot<Action>
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
+    /// Shows what the pointer is carrying now.
+    ///
+    /// The ghost is a value the window layer draws, not shape the layer was
+    /// mounted with: the layer stands for the life of the window, and what the
+    /// pointer carries changes under it.
+    fn carry_ghost(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        let Some(window) = &mut self.window else {
+            return false;
+        };
+        let Some(layer) = window.layer else {
+            return false;
+        };
+        let label = ctx.label(window.carried.as_ref());
+        window.carrying = label.is_some();
+        self.root.edit_widget(layer, |mut widget| {
+            let mut window = widget.downcast::<WindowLayer>();
+            let carried = window.widget.carry(label);
+            if carried {
+                window.ctx.request_paint_only();
+            }
+            carried
+        })
+    }
+
+    /// Opens the surfaces the document now holds open, and shuts the rest.
+    ///
+    /// This is the one thing a mounted surface cannot answer for itself. Every
+    /// other read reaches a leaf that is already standing, and re-reading it
+    /// changes what that leaf shows; a popover opening changes nothing inside
+    /// its content, only whether the content stands in the picture. So the flag
+    /// is read here, against the layer the content was mounted into.
+    fn open_surfaces(&mut self, ctx: Ctx<'_, '_>) {
+        let changed: Vec<WidgetId> = self
+            .popovers
+            .iter()
+            .filter(|popover| ctx.flag(Some(&popover.flag)) != popover.state.is_open())
+            .map(|popover| {
+                popover.state.latch(!popover.state.is_open());
+                popover.layer
+            })
+            .collect();
+        for layer in changed {
+            self.root.edit_widget(layer, |mut layer| {
+                layer.ctx.request_layout();
+            });
+        }
+    }
+
+    /// Walks the document again for the poses alone, and moves whatever the
+    /// walk now puts somewhere else.
+    ///
+    /// Nothing is watched this way unless the document declares an object an
+    /// endpoint drives, so a page that never moves pays for none of this.
+    fn place_objects(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        if !ctx.ui.driven {
+            return false;
+        }
+        let placed = placements(&ctx.ui.root, ctx);
+        let mut moved = false;
+        for watched in &self.watched {
+            let Watched::Placed { id, path } = watched else {
+                continue;
+            };
+            let Some(transform) = placed.get(path).copied() else {
+                continue;
+            };
+            let placed = self.root.edit_widget(*id, |mut widget| {
+                let mut node = widget.downcast::<Node>();
+                let moved = node.widget.place(transform);
+                if moved {
+                    node.ctx.request_paint_only();
+                }
+                moved
+            });
+            if placed {
+                kithara::probe_event!(masonry_object_moved, widget = id.to_raw());
+            }
+            moved |= placed;
+        }
+        moved
+    }
+
+    /// Re-reads everything the mounted document shows and hands it to the
+    /// widget that draws it.
+    ///
+    /// This is what a rebuild was doing, minus the rebuild: the tree stays, so a
+    /// gesture in flight and the pointer capture that feeds it both survive, and
+    /// every control bound to the same endpoint moves together rather than one
+    /// of them being poked by hand.
+    ///
+    /// Two kinds of thing change between frames without the document changing.
+    /// A control's *value* comes from an endpoint the control names, and is
+    /// re-read one control at a time. A control's *pose* comes from the objects
+    /// around it, and is worked out by the document walk rather than named
+    /// anywhere, so it takes a walk to re-read — one for the whole document.
+    pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
+        let shown = self.show_values(ctx);
+        self.reread_plans(ctx);
+        let placed = self.place_objects(ctx);
+        self.open_surfaces(ctx);
+        self.stand_blocks(ctx);
+        let carried = self.carry_ghost(ctx);
+        self.moved = shown || placed || carried;
+    }
+
+    /// Carries the frame just read into the gestures already mounted.
+    ///
+    /// A control answers a hand against what it is showing, and what it is
+    /// showing changes without the tree changing shape. The immediate host
+    /// resolves that afresh every frame because it rebuilds; this one re-reads
+    /// it in place.
+    fn reread_plans(&mut self, ctx: Ctx<'_, '_>) {
+        for engine in &self.engines {
+            engine.reread(ctx);
+        }
+    }
+
+    fn show_values(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        let mut moved = false;
+        for watched in &self.watched {
+            match watched {
+                Watched::Read { id, binding } => {
+                    let Some(value) = ctx.read(binding) else {
+                        continue;
+                    };
+                    moved |= self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        let shown = node.widget.show_live(&value);
+                        if shown {
+                            node.ctx.request_paint_only();
+                        }
+                        shown
+                    });
+                }
+                Watched::Snapshot { id } => {
+                    moved |= self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        let shown = node.widget.refresh(ctx);
+                        if shown {
+                            node.ctx.request_paint_only();
+                        }
+                        shown
+                    });
+                }
+                Watched::Spot { id, binding } => {
+                    let Some(at) = ctx.point(Some(binding)) else {
+                        continue;
+                    };
+                    moved |= self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        let moved = node.widget.move_spot(at);
+                        if moved {
+                            node.ctx.request_layout();
+                        }
+                        moved
+                    });
+                }
+                Watched::Lit { id, flag } => {
+                    let on = ctx.flag(Some(flag));
+                    moved |= self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        let lit = node.widget.light(on);
+                        if lit {
+                            node.ctx.request_paint_only();
+                        }
+                        lit
+                    });
+                }
+                Watched::Placed { .. } => {}
+            }
+        }
+        moved
+    }
+
+    /// Shows the blocks the document now shows, and hides the rest.
+    ///
+    /// A block is the same kind of thing as a surface opening: re-reading a
+    /// leaf changes what that leaf shows, while a block changes whether a
+    /// whole subtree stands in the picture at all. The flow above it hides it
+    /// the way it hides a child the room did not reach, so all this does is
+    /// tell the flow to lay itself out again once the answer has changed.
+    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) {
+        let changed: Vec<WidgetId> = self
+            .blocks
+            .iter()
+            .filter(|block| block.state.latch(ctx.flag(Some(&block.hidden))))
+            .map(|block| block.flow)
+            .collect();
+        for flow in changed {
+            self.root.edit_widget(flow, |mut flow| {
+                flow.ctx.request_layout();
+            });
+        }
+    }
+}
+
 fn complete_frame_signals(signals: &mut Vec<RenderRootSignal>) -> bool {
     let mut animation = false;
     signals.retain(|signal| match signal {
@@ -629,189 +818,6 @@ fn frame_requested(signals: &[RenderRootSignal]) -> bool {
             RenderRootSignal::RequestRedraw | RenderRootSignal::RequestAnimFrame
         )
     })
-}
-
-pub(crate) struct WindowLayer {
-    active: Option<WindowCommand>,
-    ghost: Option<DragGhost>,
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-    pointer: Rc<Cell<Option<Pt>>>,
-    text: TextContext,
-    resize_edges: bool,
-    resize_edge: f32,
-}
-
-impl WindowLayer {
-    pub(crate) fn new(
-        ghost: Option<DragGhost>,
-        resize_edges: bool,
-        pointer: Rc<Cell<Option<Pt>>>,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-        skin: &Skin,
-    ) -> Self {
-        Self {
-            ghost,
-            map_event,
-            pointer,
-            resize_edges,
-            active: None,
-            resize_edge: skin.window.resize_edge,
-            text: TextContext::from(skin.text_resources()),
-        }
-    }
-
-    fn bounds(size: Size) -> Rect {
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            w: size.width.as_(),
-            h: size.height.as_(),
-        }
-    }
-
-    /// Takes up what the pointer is carrying now, and says whether that changed
-    /// what this layer draws.
-    fn carry(&mut self, label: Option<&str>) -> bool {
-        self.ghost.as_mut().is_some_and(|ghost| ghost.carry(label))
-    }
-
-    fn command_at(&self, size: Size, pointer: Option<Pt>) -> Option<WindowCommand> {
-        self.resize_layer(size)
-            .and_then(|layer| layer.action_at(pointer).copied())
-    }
-
-    fn resize_layer(&self, size: Size) -> Option<crate::render::HostLayer<WindowCommand>> {
-        self.resize_edges
-            .then(|| WindowSurface::frame(Self::bounds(size), self.resize_edge))
-    }
-}
-
-impl Widget for WindowLayer {
-    type Action = HostAction;
-
-    fn accessibility(
-        &mut self,
-        _ctx: &mut AccessCtx<'_>,
-        _props: &PropertiesRef<'_>,
-        _node: &mut AccessNode,
-    ) {
-    }
-
-    fn accessibility_role(&self) -> Role {
-        Role::GenericContainer
-    }
-
-    fn children_ids(&self) -> ChildrenIds {
-        ChildrenIds::new()
-    }
-
-    fn find_widget_under_pointer<'ctx>(
-        &'ctx self,
-        ctx: QueryCtx<'ctx>,
-        pos: Point,
-    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
-        let local = ctx.window_transform().inverse() * pos;
-        let pointer = Some(Pt {
-            x: local.x.as_(),
-            y: local.y.as_(),
-        });
-        self.command_at(ctx.size(), pointer)
-            .and_then(|_| find_widget_under_pointer(self, ctx, pos))
-    }
-
-    fn get_cursor(&self, ctx: &QueryCtx<'_>, pos: Point) -> CursorIcon {
-        let local = ctx.window_transform().inverse() * pos;
-        let pointer = Some(Pt {
-            x: local.x.as_(),
-            y: local.y.as_(),
-        });
-        let cursor = self.active.map_or_else(
-            || {
-                self.resize_layer(ctx.size())
-                    .map_or(CursorShape::None, |layer| layer.cursor_at(pointer))
-            },
-            command_cursor,
-        );
-        cursor_icon(cursor)
-    }
-
-    fn layout(
-        &mut self,
-        _ctx: &mut LayoutCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        constraints: &BoxConstraints,
-    ) -> Size {
-        constraints.max()
-    }
-
-    fn make_trace_span(&self, id: WidgetId) -> Span {
-        trace_span!("KitharaWindowLayer", id = id.trace())
-    }
-
-    fn on_pointer_event(
-        &mut self,
-        ctx: &mut EventCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        event: &PointerEvent,
-    ) {
-        if let PointerEvent::Down(button) = event {
-            let position = button.state.logical_position();
-            let pointer = Some(Pt {
-                x: position.x.as_(),
-                y: position.y.as_(),
-            });
-            if let Some(command) = self.command_at(ctx.size(), pointer) {
-                self.active = Some(command);
-                ctx.submit_action::<HostAction>((self.map_event)(UiEvent::Window(command)));
-                ctx.capture_pointer();
-                ctx.set_handled();
-                return;
-            }
-        }
-        if ctx.is_pointer_capture_target() {
-            if matches!(event, PointerEvent::Move(_)) {
-                ctx.request_paint_only();
-            }
-            if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
-                self.active = None;
-                ctx.release_pointer();
-                ctx.request_cursor_icon_change();
-            }
-            ctx.set_handled();
-        }
-    }
-
-    fn paint(&mut self, ctx: &mut PaintCtx<'_>, _props: &PropertiesRef<'_>, scene: &mut Scene) {
-        let Some(ghost) = &self.ghost else {
-            return;
-        };
-        let layer = ghost.layer(self.pointer.get(), Self::bounds(ctx.size()), &mut self.text);
-        replay(layer.draw(), &mut VelloBackend::new(scene));
-    }
-
-    fn register_children(&mut self, _ctx: &mut RegisterCtx<'_>) {}
-}
-
-const fn command_cursor(command: WindowCommand) -> CursorShape {
-    match command {
-        WindowCommand::Resize(
-            crate::render::WindowEdge::North | crate::render::WindowEdge::South,
-        ) => CursorShape::ResizeV,
-        WindowCommand::Resize(
-            crate::render::WindowEdge::East | crate::render::WindowEdge::West,
-        ) => CursorShape::ResizeH,
-        WindowCommand::Resize(
-            crate::render::WindowEdge::NorthWest | crate::render::WindowEdge::SouthEast,
-        ) => CursorShape::ResizeDiagonalDown,
-        WindowCommand::Resize(
-            crate::render::WindowEdge::NorthEast | crate::render::WindowEdge::SouthWest,
-        ) => CursorShape::ResizeDiagonalUp,
-        WindowCommand::Drag
-        | WindowCommand::Minimize
-        | WindowCommand::ToggleMaximize
-        | WindowCommand::ToggleFullScreen
-        | WindowCommand::Close => CursorShape::None,
-    }
 }
 
 #[cfg(test)]

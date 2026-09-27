@@ -72,6 +72,8 @@ audio = [
     "kithara/tokio-rt-multi-thread",
     "kithara/warp",
 ]
+# Helpers used by `kithara-stream-tests`: the in-memory source only.
+stream = ["dep:kithara", "kithara/events", "kithara/platform", "kithara/storage", "kithara/stream"]
 # Browser targets deliberately name their closure instead of inheriting the
 # native default: native C++ decoder and stretch backends cannot compile there.
 wasm = [

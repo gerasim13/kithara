@@ -73,7 +73,12 @@ pub mod hls_test_helpers;
 pub mod hls_url;
 #[cfg(feature = "all")]
 pub mod log_filter;
-#[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
+#[cfg(any(
+    feature = "all",
+    feature = "audio",
+    feature = "stream",
+    feature = "wasm"
+))]
 pub mod memory_source;
 #[cfg(all(
     any(feature = "all", feature = "audio", feature = "wasm"),

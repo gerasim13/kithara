@@ -6,14 +6,6 @@ use masonry::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    MasonryHost, MasonryNode, Painted,
-    controls::{Retained, TableLeaf, TreeLeaf},
-    custom::Respoken,
-    flex::{box_constraints, normalized},
-    leaf::{DragProgram, Leaf},
-    node::Node,
-};
 use crate::{
     atoms::{button::declared_width, tab::TabLarge},
     draw::{DrawListBuilder, Rect as DrawRect},
@@ -22,10 +14,19 @@ use crate::{
     module::{MeasureAxis, TextAlign},
     mount,
     render::{
-        ControlsProgram, HostedControlPlan, InputOwner, ReadValue, Skin, TitleProgram,
+        HostedControlPlan, InputOwner, ReadValue, Skin,
         controls::{Draws, Reading},
         document::Measured,
+        masonry::{
+            MasonryHost, MasonryNode, Painted,
+            controls::{Retained, TableLeaf, TreeLeaf},
+            custom::Respoken,
+            flex::{Flex, box_constraints, normalized},
+            leaf::{DragProgram, Leaf},
+            node::Node,
+        },
         scroll::{Bar, Window},
+        window::{ControlsProgram, TitleProgram},
     },
     size::{Dim, SizeSpec, control_size},
     solve,
@@ -62,12 +63,12 @@ pub(crate) trait NodeControl {
 pub(crate) struct Cx<'a> {
     /// The skin this instance wears, which is the host's own unless the skin
     /// names this path.
-    pub(super) skin: &'a Skin,
-    pub(super) path: &'a str,
-    pub(super) owner: InputOwner,
-    pub(super) plan: Option<&'a HostedControlPlan>,
-    pub(super) read: Option<&'a Binding>,
-    pub(super) declared: Size<Length>,
+    pub(in crate::render) skin: &'a Skin,
+    pub(in crate::render) path: &'a str,
+    pub(in crate::render) owner: InputOwner,
+    pub(in crate::render) plan: Option<&'a HostedControlPlan>,
+    pub(in crate::render) read: Option<&'a Binding>,
+    pub(in crate::render) declared: Size<Length>,
 }
 
 impl NodeControl for mount::Drag {
@@ -198,21 +199,21 @@ impl NodeControl for mount::Text<'_> {
 /// only how this toolkit measures, places and clips the child under it, plus
 /// the indicator style resolved once from the skin so the widget can draw the
 /// bar without holding one.
-pub(super) struct Viewport {
+pub(in crate::render) struct Viewport {
     bar: Bar,
     view: Rc<RefCell<Window>>,
 }
 
 impl Viewport {
-    pub(super) const fn new(bar: Bar, view: Rc<RefCell<Window>>) -> Self {
+    pub(in crate::render) const fn new(bar: Bar, view: Rc<RefCell<Window>>) -> Self {
         Self { bar, view }
     }
 
-    pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
+    pub(in crate::render) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
         self.view.borrow().indicate(bounds, self.bar, list);
     }
 
-    pub(super) fn layout(
+    pub(in crate::render) fn layout(
         &mut self,
         ctx: &mut LayoutCtx<'_>,
         children: &mut [WidgetPod<Node>],
@@ -241,14 +242,14 @@ impl Viewport {
         size
     }
 
-    pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
+    pub(in crate::render) fn wheel(&mut self, input: Input<'_>) -> bool {
         self.view.borrow_mut().wheel(input)
     }
 }
 
-pub(super) enum NodeLayout {
+pub(in crate::render) enum NodeLayout {
     Leaf(Leaf),
-    Flex(super::flex::Flex),
+    Flex(Flex),
     /// Branches of which the room picks one.
     Measured(Measured),
     Scroll(Viewport),
@@ -259,25 +260,25 @@ pub(super) enum NodeLayout {
 impl NodeLayout {
     /// A window always answers, because the wheel over it is its own; a leaf
     /// answers only what it says it does.
-    pub(super) fn accepts_input(&self) -> bool {
+    pub(in crate::render) fn accepts_input(&self) -> bool {
         matches!(self, Self::Scroll(_)) || matches!(self, Self::Leaf(leaf) if leaf.accepts_input())
     }
 
-    pub(super) fn accepts_text_input(&self) -> bool {
+    pub(in crate::render) fn accepts_text_input(&self) -> bool {
         matches!(self, Self::Leaf(leaf) if leaf.accepts_text_input())
     }
 
     /// Draws whatever this node paints over its own children. Only a window
     /// has one: its indicator belongs above the rows it scrolls, not under
     /// them.
-    pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
+    pub(in crate::render) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
         match self {
             Self::Scroll(viewport) => viewport.indicate(bounds, list),
             Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => {}
         }
     }
 
-    pub(super) fn layout(
+    pub(in crate::render) fn layout(
         &mut self,
         ctx: &mut LayoutCtx<'_>,
         children: &mut [WidgetPod<Node>],
@@ -300,7 +301,7 @@ impl NodeLayout {
         }
     }
 
-    pub(super) const fn leaf(&mut self) -> Option<&mut Leaf> {
+    pub(in crate::render) const fn leaf(&mut self) -> Option<&mut Leaf> {
         match self {
             Self::Leaf(leaf) => Some(leaf),
             Self::Flex(_) | Self::Measured(_) | Self::Scroll(_) | Self::Stack | Self::Stage => None,
@@ -308,12 +309,12 @@ impl NodeLayout {
     }
 
     /// Whether the leaf this node holds draws differently under the pointer.
-    pub(super) fn reads_pointer(&self) -> bool {
+    pub(in crate::render) fn reads_pointer(&self) -> bool {
         matches!(self, Self::Leaf(leaf) if leaf.reads_pointer())
     }
 
     /// Moves a bounded window under the pointer, answering whether it did.
-    pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
+    pub(in crate::render) fn wheel(&mut self, input: Input<'_>) -> bool {
         match self {
             Self::Scroll(viewport) => viewport.wheel(input),
             Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => false,

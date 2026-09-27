@@ -179,8 +179,8 @@ const UNANSWERED: Points = Points {
     two: None,
 };
 
-fn registry() -> crate::common::registry::TestRegistry {
-    let mut registry = crate::common::registry::player_registry();
+fn registry() -> kithara_ui::mock::TestRegistry {
+    let mut registry = kithara_ui::mock::player_registry();
     for id in ["scene.one", "scene.two"] {
         registry.insert(
             EndpointCategory::Model,

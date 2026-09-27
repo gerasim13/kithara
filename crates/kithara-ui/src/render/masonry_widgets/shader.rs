@@ -13,7 +13,7 @@ use crate::{
     shader::ShaderSpec,
 };
 
-pub(super) struct ShaderLeaf {
+pub(in crate::render) struct ShaderLeaf {
     error: Option<ShaderFrameError>,
     frame: Option<ShaderFrame>,
     image: Option<ImageData>,
@@ -22,7 +22,7 @@ pub(super) struct ShaderLeaf {
 }
 
 impl ShaderLeaf {
-    pub(super) fn new(spec: ShaderSpec, path: String, ctx: Ctx<'_, '_>) -> Self {
+    pub(in crate::render) fn new(spec: ShaderSpec, path: String, ctx: Ctx<'_, '_>) -> Self {
         let mut this = Self {
             path,
             spec,
@@ -34,14 +34,14 @@ impl ShaderLeaf {
         this
     }
 
-    pub(super) fn declaration(&self) -> Option<ShaderDeclaration> {
+    pub(in crate::render) fn declaration(&self) -> Option<ShaderDeclaration> {
         Some(ShaderDeclaration::new(
             self.frame.clone()?,
             self.image.clone()?,
         ))
     }
 
-    pub(super) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
+    pub(in crate::render) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
         let Some(frame) = &self.frame else {
             return;
         };
@@ -75,7 +75,7 @@ impl ShaderLeaf {
         );
     }
 
-    pub(super) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
+    pub(in crate::render) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
         self.update(ctx)
     }
 

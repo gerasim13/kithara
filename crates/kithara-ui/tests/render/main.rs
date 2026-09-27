@@ -4,8 +4,6 @@
 //! the surface it mounts into, driven through the public API.
 
 mod address;
-#[path = "../common/mod.rs"]
-mod common;
 #[cfg(feature = "iced")]
 mod fonts;
 mod picture_library;

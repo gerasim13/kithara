@@ -3,10 +3,6 @@ use std::rc::Rc;
 use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    controls::{MasonryControl, Retained},
-    custom::{HostAction, Repaint},
-};
 use crate::{
     draw::{DrawBuffers, DrawList, DrawListBuilder, Rect, Transform},
     interact::{
@@ -17,6 +13,10 @@ use crate::{
         ControlAction, ReadValue, ScalarRange, Skin, UiEvent, control_event,
         controls::{DataRefresh, Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span},
         document::Ctx,
+        masonry::{
+            controls::{MasonryControl, Retained},
+            custom::{HostAction, Repaint},
+        },
         span_event,
     },
     shaping::TextContext,

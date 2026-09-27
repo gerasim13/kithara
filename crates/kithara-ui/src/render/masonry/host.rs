@@ -20,10 +20,10 @@ use super::{
     },
     node::{Detent, Face, Faces},
     popover::{PopoverLayer, PopoverState},
-    root::WindowLayer,
     shader::ShaderLeaf,
     spot::{Grip, Spot},
     vis::VisLeaf,
+    window_layer::WindowLayer,
 };
 use crate::{
     draw::{Rgba, Transform},
@@ -38,7 +38,7 @@ use crate::{
         document::{
             Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
         },
-        hosted_control_plan,
+        hosted::hosted_control_plan,
         scroll::{Bar, Window},
     },
     shaping::TextContext,
@@ -54,9 +54,9 @@ type Windows = BTreeMap<String, Rc<RefCell<Window>>>;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub struct MasonryHost<'a, Action = UiEvent> {
-    pub(super) skin: &'a Skin,
-    pub(super) ctx: Ctx<'a, 'a>,
-    pub(super) map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    pub(in crate::render) skin: &'a Skin,
+    pub(in crate::render) ctx: Ctx<'a, 'a>,
+    pub(in crate::render) map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     custom: BTreeMap<String, Box<dyn MountedCustom<HostAction>>>,
     #[field(with)]
     state: MasonryState,
@@ -191,7 +191,7 @@ where
     /// the skin changes, which is the same moment every other leaf takes its
     /// colours at. A widget installed at a path has no kind for the skin to
     /// dress and is dressed in nothing.
-    pub(super) fn custom_leaf(
+    pub(in crate::render) fn custom_leaf(
         &self,
         widget: Box<dyn MountedCustom<HostAction>>,
         kind: Option<&str>,
@@ -348,7 +348,7 @@ where
         output
     }
 
-    pub(super) fn shader_leaf(
+    pub(in crate::render) fn shader_leaf(
         &self,
         spec: crate::shader::ShaderSpec,
         path: String,
@@ -368,7 +368,7 @@ where
     /// dressed by. The content is resolved by the caller, which is the only
     /// thing that can reach the reading; the flag travels so that this host can
     /// read it again into the tree it keeps.
-    pub(super) fn text_leaf(
+    pub(in crate::render) fn text_leaf(
         &self,
         spec: &mount::Text<'_>,
         content: String,
@@ -423,7 +423,7 @@ where
         output
     }
 
-    pub(super) fn vis_leaf(
+    pub(in crate::render) fn vis_leaf(
         &self,
         preset: Option<String>,
         value: Option<ReadValue<'_>>,
@@ -448,7 +448,7 @@ impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    pub(super) fn add_window_layer<Program>(
+    pub(in crate::render) fn add_window_layer<Program>(
         &self,
         output: &mut MasonryNode<Action>,
         program: Program,
@@ -471,7 +471,7 @@ where
         self.event(move || crate::render::control_event(&path, action.clone()))
     }
 
-    pub(super) fn event(
+    pub(in crate::render) fn event(
         &self,
         event: impl Fn() -> UiEvent + 'static,
     ) -> Box<dyn Fn() -> HostAction> {
@@ -481,7 +481,7 @@ where
 
     /// Gives a control its own click gesture only where the document says the
     /// leaf owns input; an engine-owned control is painted and left alone.
-    pub(super) fn owned<Control>(
+    pub(in crate::render) fn owned<Control>(
         &self,
         control: Control,
         owner: InputOwner,

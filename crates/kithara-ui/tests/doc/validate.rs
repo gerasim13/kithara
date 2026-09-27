@@ -5,12 +5,11 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     error::UiDocError,
+    mock::TestRegistry,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     source::{MemResolver, UiConfig},
     view,
 };
-
-use crate::common::registry::TestRegistry;
 
 const LAYOUT: &str = "validate.klayout.ron";
 const MODULE: &str = "m.ron";

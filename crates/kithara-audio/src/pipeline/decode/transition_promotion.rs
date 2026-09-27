@@ -1,6 +1,6 @@
 use kithara_stream::VariantTransition;
 
-use super::{
+use super::transition::{
     IncomingDecode, OutgoingFrontier, PreparedPromotion, PromotionJoin, PromotionReadiness,
     incoming_origin, promotion_readiness, shares_default_profile, trim_staged_head,
 };

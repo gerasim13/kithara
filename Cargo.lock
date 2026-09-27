@@ -5753,8 +5753,8 @@ dependencies = [
 name = "kithara-stream-tests"
 version = "0.0.1-alpha5"
 dependencies = [
- "futures",
  "kithara",
+ "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-utils",
  "thiserror 2.0.18",

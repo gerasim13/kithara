@@ -2,8 +2,6 @@
 //! public API.
 
 mod builtin_presets;
-#[path = "../common/mod.rs"]
-mod common;
 mod compile;
 mod document_group;
 mod document_measured;

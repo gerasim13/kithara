@@ -168,8 +168,8 @@ impl Reads for Phase {
     }
 }
 
-fn registry() -> crate::common::registry::TestRegistry {
-    let mut registry = crate::common::registry::player_registry();
+fn registry() -> kithara_ui::mock::TestRegistry {
+    let mut registry = kithara_ui::mock::player_registry();
     for id in ["gallery.phase", "gallery.clock"] {
         registry.insert(
             EndpointCategory::Model,

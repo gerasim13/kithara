@@ -12,6 +12,7 @@ categories = ["caching"]
 [features]
 default = ["client-reqwest", "tls-rustls"]
 usdt = ["kithara-test-utils/usdt"]
+mock = []
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 # HTTP backend forwarding. kithara-assets reaches the single kithara-net
@@ -61,7 +62,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 tempfile = { workspace = true }
 
 [dev-dependencies]
-kithara-assets = { path = ".", features = ["usdt"] }
+kithara-assets = { path = ".", features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }

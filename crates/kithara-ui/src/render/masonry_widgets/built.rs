@@ -6,21 +6,22 @@ use masonry::{
     kurbo::Rect as MasonryRect,
 };
 
-use super::{
-    custom::HostAction,
-    menu::PickerLayer,
-    mount::NodeLayout,
-    node::{Detent, Faces, Node},
-    picker::{EngineTarget, HostedEngine},
-    popover::PopoverState,
-    spot::Spot,
-};
+use super::{mount::NodeLayout, spot::Spot};
 use crate::{
     draw::{Pt, Rgba, Transform},
     expand::Binding,
     ids::InternId,
     layout::{FrameCorners, FrameSides},
-    render::{HostedControlPlan, Skin, UiEvent},
+    render::{
+        HostedControlPlan, Skin, UiEvent,
+        masonry::{
+            custom::HostAction,
+            menu::PickerLayer,
+            node::{Detent, Faces, Node},
+            picker::{EngineTarget, HostedEngine},
+            popover::PopoverState,
+        },
+    },
     solve,
 };
 
@@ -142,7 +143,7 @@ pub(crate) struct NodeBox {
     pub(crate) node: WidgetId,
 }
 
-pub(super) type LayerParts = (
+pub(in crate::render) type LayerParts = (
     NewWidget<Node>,
     solve::Size<solve::Length>,
     Vec<NewWidget<dyn Widget>>,
@@ -155,7 +156,7 @@ pub(super) type LayerParts = (
     Option<WindowTracker>,
     Vec<Watched>,
 );
-pub(super) type RootParts = (
+pub(in crate::render) type RootParts = (
     NewWidget<dyn Widget>,
     Vec<NewWidget<dyn Widget>>,
     Vec<PopoverRegistration>,
@@ -286,7 +287,7 @@ impl<Action> MasonryNode<Action> {
     ///
     /// Chrome is furniture that holds furniture: it names no document path, so
     /// it is not announced as a document node, and neither is anything it holds.
-    pub(super) fn chrome(
+    pub(in crate::render) fn chrome(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
         children: Vec<Self>,
@@ -301,7 +302,7 @@ impl<Action> MasonryNode<Action> {
     /// Announced as it is built, with whether the nodes it holds stand for
     /// document nodes of their own: a wrapper that only places, presses or
     /// scrolls its child speaks for the whole subtree it holds.
-    pub(super) fn document(
+    pub(in crate::render) fn document(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
         children: Vec<Self>,
@@ -318,7 +319,7 @@ impl<Action> MasonryNode<Action> {
         node
     }
 
-    pub(super) fn furniture(
+    pub(in crate::render) fn furniture(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
         background: Option<Rgba>,
@@ -408,7 +409,7 @@ impl<Action> MasonryNode<Action> {
     /// The shape belongs to the node that paints the box, so it is set on the
     /// node after it is built rather than threaded through every constructor
     /// that never rounds anything.
-    pub(super) fn rounded(mut self, round: FrameCorners, radius: f32) -> Self {
+    pub(in crate::render) fn rounded(mut self, round: FrameCorners, radius: f32) -> Self {
         self.widget.widget.set_round(round, radius);
         self
     }

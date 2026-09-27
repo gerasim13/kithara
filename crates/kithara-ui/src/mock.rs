@@ -1,22 +1,18 @@
 use std::collections::BTreeMap;
 
-use kithara_ui::{
+use crate::{
     ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
 
+/// An endpoint registry a test fills by hand.
 #[derive(Default)]
-pub(crate) struct TestRegistry {
+pub struct TestRegistry {
     endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
 }
 
 impl TestRegistry {
-    pub(crate) fn insert(
-        &mut self,
-        category: EndpointCategory,
-        id: &str,
-        description: EndpointDesc,
-    ) {
+    pub fn insert(&mut self, category: EndpointCategory, id: &str, description: EndpointDesc) {
         self.endpoints
             .insert((category, EndpointId(id.to_owned())), description);
     }
@@ -28,7 +24,9 @@ impl EndpointRegistry for TestRegistry {
     }
 }
 
-pub(crate) fn player_registry() -> TestRegistry {
+/// The endpoints the built-in player document names, each with the kind and scope it declares.
+#[must_use]
+pub fn player_registry() -> TestRegistry {
     let mut registry = TestRegistry::default();
     registry.insert(
         EndpointCategory::Command,
@@ -295,7 +293,7 @@ fn insert_clock_endpoints(registry: &mut TestRegistry) {
     );
 }
 
-pub(crate) fn insert_stream_endpoints(registry: &mut TestRegistry) {
+fn insert_stream_endpoints(registry: &mut TestRegistry) {
     registry.insert(
         EndpointCategory::Telemetry,
         "deck.stream.quality_hidden",

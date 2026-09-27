@@ -22,7 +22,7 @@ use crate::{
     render::{
         HostedControlPlan, UiEvent,
         document::Ctx,
-        engine_value,
+        event::engine_value,
         hosted::{TablePlan, TableProjection, TreePlan, TreeProjection},
     },
 };
@@ -32,17 +32,17 @@ use crate::{
 /// The box is a carrier, not a truth of its own: the tree owns where a node
 /// stands, and the root fills this cell out of the tree after every event.
 pub(crate) struct EngineTarget {
-    pub(super) plan: HostedControlPlan,
-    pub(super) area: Rc<Cell<MasonryRect>>,
+    pub(in crate::render) plan: HostedControlPlan,
+    pub(in crate::render) area: Rc<Cell<MasonryRect>>,
     /// The widget that draws this control. It is the engine's own node only
     /// when the control hosts its engine itself; a module handed to an engine
     /// hosts one engine above every control in it, and Masonry paints the
     /// widget that asked for paint rather than its children.
-    pub(super) node: WidgetId,
+    pub(in crate::render) node: WidgetId,
 }
 
 impl EngineTarget {
-    pub(super) fn new(
+    pub(in crate::render) fn new(
         node: WidgetId,
         area: Rc<Cell<MasonryRect>>,
         plan: HostedControlPlan,
@@ -52,19 +52,19 @@ impl EngineTarget {
 }
 
 /// The menu an engine currently shows, ready to be drawn.
-pub(super) struct OpenPicker {
-    pub(super) highlighted: Option<usize>,
-    pub(super) anchor: Rect,
-    pub(super) items: Vec<String>,
+pub(in crate::render) struct OpenPicker {
+    pub(in crate::render) highlighted: Option<usize>,
+    pub(in crate::render) anchor: Rect,
+    pub(in crate::render) items: Vec<String>,
 }
 
 /// What routing one event through the engine produced.
-pub(super) struct Routed {
-    pub(super) outcome: Outcome<HostAction>,
+pub(in crate::render) struct Routed {
+    pub(in crate::render) outcome: Outcome<HostAction>,
     /// The widgets whose face the event changed, which are the widgets that
     /// have to be painted again for it to be seen.
-    pub(super) repaint: Vec<WidgetId>,
-    pub(super) focused: bool,
+    pub(in crate::render) repaint: Vec<WidgetId>,
+    pub(in crate::render) focused: bool,
 }
 
 /// The face one control an engine drives shows right now.
@@ -96,14 +96,18 @@ pub(crate) struct HostedEngine {
     _projections: Vec<Rc<dyn TableProjection>>,
     _tree_projections: Vec<Rc<dyn TreeProjection>>,
     targets: Vec<EngineTarget>,
-    #[field(get(copy), vis = "pub(super)")]
+    #[field(get(copy), vis = "pub(in crate::render)")]
     owner: WidgetId,
-    #[field(get(copy), vis = "pub(super)", rename = "accepts_text_input")]
+    #[field(
+        get(copy),
+        vis = "pub(in crate::render)",
+        rename = "accepts_text_input"
+    )]
     text_input: bool,
 }
 
 impl HostedEngine {
-    pub(super) fn new(
+    pub(in crate::render) fn new(
         owner: WidgetId,
         targets: Vec<EngineTarget>,
         map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
@@ -171,11 +175,11 @@ impl HostedEngine {
     /// the release happens to be over. An item being carried out of a list is
     /// the other kind of gesture — it never takes the pointer, so what the
     /// hand is over hears the event as well.
-    pub(super) fn captures_pointer(&self) -> bool {
+    pub(in crate::render) fn captures_pointer(&self) -> bool {
         self.engine.borrow().captures_pointer()
     }
 
-    pub(super) fn cursor(&self, point: Pt) -> CursorShape {
+    pub(in crate::render) fn cursor(&self, point: Pt) -> CursorShape {
         let engine = self.engine.borrow();
         let targets = self.targets(&engine, Some(point));
         engine.cursor(&targets)
@@ -200,11 +204,11 @@ impl HostedEngine {
             .collect()
     }
 
-    pub(super) fn has_open_picker(&self) -> bool {
+    pub(in crate::render) fn has_open_picker(&self) -> bool {
         self.open_picker().is_some()
     }
 
-    pub(super) fn input_method_area(&self) -> Option<Rect> {
+    pub(in crate::render) fn input_method_area(&self) -> Option<Rect> {
         let engine = self.engine.borrow();
         let targets = self.targets(&engine, None);
         engine.input_method(&targets).map(|request| request.caret)
@@ -215,7 +219,7 @@ impl HostedEngine {
     ///
     /// A control shows at most one menu and a host raises at most one at a
     /// time, so the first open one is the answer.
-    pub(super) fn open_picker(&self) -> Option<OpenPicker> {
+    pub(in crate::render) fn open_picker(&self) -> Option<OpenPicker> {
         let engine = self.engine.borrow();
         self.targets.iter().find_map(|target| {
             let HostedControlPlan::Picker {
@@ -239,13 +243,13 @@ impl HostedEngine {
     /// built would measure every later gesture against a moment that has since
     /// passed. Nothing is reconciled here: the descriptors are rebuilt from
     /// these plans on the next event anyway.
-    pub(super) fn reread(&self, ctx: Ctx<'_, '_>) {
+    pub(in crate::render) fn reread(&self, ctx: Ctx<'_, '_>) {
         for target in &self.targets {
             target.plan.reread(ctx);
         }
     }
 
-    pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
+    pub(in crate::render) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
         let mut engine = self.engine.borrow_mut();
         let before = self.faces(&engine, self.pointer.get());
         if matches!(input, Input::Pointer(_) | Input::Wheel(_)) {
@@ -294,12 +298,12 @@ impl HostedEngine {
         }
     }
 
-    pub(super) fn set_menu_layer(&self, layer: WidgetId) {
+    pub(in crate::render) fn set_menu_layer(&self, layer: WidgetId) {
         self.menu.set(Some(layer));
     }
 
     /// The layer to repaint, once, because the menu it draws has changed.
-    pub(super) fn take_changed_menu(&self) -> Option<WidgetId> {
+    pub(in crate::render) fn take_changed_menu(&self) -> Option<WidgetId> {
         self.menu_changed.replace(false).then(|| self.menu.get())?
     }
 
@@ -324,7 +328,7 @@ impl HostedEngine {
 
     delegate::delegate! {
         to self.engine.borrow_mut() {
-            pub(super) fn clear_focus(&self);
+            pub(in crate::render) fn clear_focus(&self);
         }
     }
 }
@@ -394,7 +398,7 @@ fn bounds(area: MasonryRect) -> Rect {
     }
 }
 
-pub(super) fn sync_ime_area(ctx: &mut EventCtx<'_>, engine: &HostedEngine) {
+pub(in crate::render) fn sync_ime_area(ctx: &mut EventCtx<'_>, engine: &HostedEngine) {
     if let Some(area) = local_ime_area(engine, ctx.window_transform()) {
         ctx.set_ime_area(area);
     } else {
@@ -402,7 +406,10 @@ pub(super) fn sync_ime_area(ctx: &mut EventCtx<'_>, engine: &HostedEngine) {
     }
 }
 
-pub(super) fn local_ime_area(engine: &HostedEngine, transform: Affine) -> Option<MasonryRect> {
+pub(in crate::render) fn local_ime_area(
+    engine: &HostedEngine,
+    transform: Affine,
+) -> Option<MasonryRect> {
     engine.input_method_area().map(|area| {
         transform.inverse().transform_rect_bbox(MasonryRect::new(
             f64::from(area.x),
@@ -415,7 +422,7 @@ pub(super) fn local_ime_area(engine: &HostedEngine, transform: Affine) -> Option
 
 /// Where the window says the hand is, in the coordinates the document is laid
 /// out in.
-pub(super) fn at(event: &PointerEvent) -> Option<Pt> {
+pub(in crate::render) fn at(event: &PointerEvent) -> Option<Pt> {
     let position = match event {
         PointerEvent::Down(button) | PointerEvent::Up(button) => button.state.logical_position(),
         PointerEvent::Move(update) => update.current.logical_position(),
@@ -437,7 +444,7 @@ pub(super) fn at(event: &PointerEvent) -> Option<Pt> {
 /// is a double click only once the release that follows it is in hand. So the
 /// count is carried across the two events here, where the whole document is
 /// routed from, rather than inside any one control.
-pub(super) fn pointing(
+pub(in crate::render) fn pointing(
     event: &PointerEvent,
     double_click: &mut bool,
     scale: f64,

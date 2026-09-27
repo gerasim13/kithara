@@ -2,11 +2,10 @@ use std::rc::Rc;
 
 use masonry::core::EventCtx;
 
-use super::custom::HostAction;
 use crate::{
     draw::Pt,
     interact::{CursorShape, Hit, Input, PointerOwnership, recognizers::Carry},
-    render::{ControlAction, Snap, UiEvent, control_event},
+    render::{ControlAction, Snap, UiEvent, control_event, masonry::custom::HostAction},
 };
 
 /// One placement of a stage: where in the scene its child stands, and — where

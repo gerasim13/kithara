@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use kithara_assets::{ChunkSink, ProcessCtx, ResourceProcessor};
 use kithara_platform::sync::Arc;
+
+use crate::{ChunkSink, ProcessCtx, ResourceProcessor};
 
 #[derive(Debug)]
 struct XorProcessor {
@@ -45,7 +46,9 @@ impl ChunkSink for XorSink {
     }
 }
 
-pub(crate) fn xor_processor(key: u8, calls: Option<Arc<AtomicUsize>>) -> ProcessCtx {
+/// A processor that XORs every byte with `key`, counting its chunks in `calls`.
+#[must_use]
+pub fn xor_processor(key: u8, calls: Option<Arc<AtomicUsize>>) -> ProcessCtx {
     Arc::new(XorProcessor {
         calls,
         identity: [key],

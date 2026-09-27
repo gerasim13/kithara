@@ -2,6 +2,7 @@ use std::collections::HashSet;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
+pub(super) use kithara_assets::mock::xor_processor;
 use kithara_assets::{
     AcquisitionResult, AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState,
     AssetScope, AssetSource, AssetStore, Assets, AssetsResult, ReadSide, ResourceKey,
@@ -14,11 +15,6 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
 };
 use url::Url;
-
-#[path = "../support/xor.rs"]
-mod xor;
-
-pub(super) use xor::xor_processor;
 
 const RESOURCE_NAMESPACE: &str = "test-resource";
 

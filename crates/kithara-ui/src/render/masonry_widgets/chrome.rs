@@ -1,15 +1,18 @@
-use super::{
-    MasonryHost, MasonryNode, Painted,
-    flex::{ChildLayout, Flex},
-    leaf::Leaf,
-    mount::NodeLayout,
-};
+use super::mount::NodeLayout;
 use crate::{
     atoms::chrome::{ChromeChevron, ChromeLabel, footer_role},
     draw::Rgba,
     layout::{Axis, FrameSides},
     module::TextAlign,
-    render::{UiEvent, document::Module},
+    render::{
+        UiEvent,
+        document::Module,
+        masonry::{
+            MasonryHost, MasonryNode, Painted,
+            flex::{ChildLayout, Flex},
+            leaf::Leaf,
+        },
+    },
     shaping::TextContext,
     skin::FrameSkin,
     solve::{Alignment, Length, Padding, Size},
@@ -72,7 +75,7 @@ where
     }
 
     /// The strip under a module, carrying the one word it resolved for itself.
-    pub(super) fn module_footer(&self, content: String) -> MasonryNode<Action> {
+    pub(in crate::render) fn module_footer(&self, content: String) -> MasonryNode<Action> {
         let metrics = self.skin.chrome;
         let role = footer_role(self.skin);
         MasonryNode::chrome(
@@ -94,7 +97,7 @@ where
 
     /// The bar across the top of a module: what it is called, what it is
     /// assigned to, and the chevron that folds it away.
-    pub(super) fn module_header(&self, module: &Module<'_>) -> MasonryNode<Action> {
+    pub(in crate::render) fn module_header(&self, module: &Module<'_>) -> MasonryNode<Action> {
         let metrics = self.skin.chrome;
         let mut children: Vec<MasonryNode<Action>> = Vec::with_capacity(4 + module.assign().len());
         if let Some(chip) = module.chip() {

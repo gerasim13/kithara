@@ -5,8 +5,6 @@
 
 #[cfg(all(feature = "masonry", feature = "capture"))]
 mod census;
-#[path = "../common/mod.rs"]
-mod common;
 #[cfg(all(feature = "masonry", feature = "capture"))]
 mod immediate;
 mod layout;

@@ -29,6 +29,8 @@ capture = [
     "dep:kithara-ui-capture",
 ]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "kithara-ui-input/masonry", "vello"]
+# Test doubles the integration suites share: a hand-filled endpoint registry.
+mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
 # Hand the no-block gate the platform layer the toolkit draws through, so a
@@ -114,7 +116,7 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
     "client-reqwest",
     "tls-rustls",
 ] }
-kithara-ui = { path = ".", default-features = false, features = ["usdt"] }
+kithara-ui = { path = ".", default-features = false, features = ["mock", "usdt"] }
 
 bitflags = { workspace = true }
 clap = { workspace = true }

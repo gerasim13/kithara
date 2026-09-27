@@ -1,4 +1,3 @@
-use super::{controls::MasonryControl, custom::HostAction};
 use crate::{
     atoms::{table::face::TableFace, tree::face::Tree as TreeFace},
     draw::{DrawList, Rect, Transform},
@@ -7,6 +6,7 @@ use crate::{
         Skin,
         document::Ctx,
         hosted::{TablePlan, TreePlan},
+        masonry::{controls::MasonryControl, custom::HostAction},
     },
     shaping::TextContext,
 };
