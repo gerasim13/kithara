@@ -565,7 +565,8 @@ mod sync_tests {
     use kithara_platform::sync::Arc;
     use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
     use kithara_sync::{
-        PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, activation_channels, sync_receipts,
+        LoadedMedia, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, activation_channels,
+        sync_receipts,
     };
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
@@ -574,7 +575,7 @@ mod sync_tests {
     use super::*;
     use crate::{
         bridge::PlaybackShared,
-        rt::sync_owner_fixture::{ReaderMode, prepared_entry, resource, ticket},
+        rt::sync_owner_fixture::{ReaderMode, entry_ticket, resource},
     };
 
     fn activation_with_output(
@@ -595,17 +596,6 @@ mod sync_tests {
         let item_id = TrackId::allocate();
         let load = LoadGeneration::first();
         let member = BeatGridId::allocate().expect("member id");
-        let group = BeatGridId::allocate().expect("group id");
-        let (stamp, head) = prepared_entry(
-            member,
-            group,
-            load,
-            TransportRevision::first(),
-            dependency,
-            rate,
-            0,
-        );
-        let map = head.activation().revision();
         let arbiter = Arc::new(SyncArbiter::new());
         let cell = Arc::new(PermitCell::new(member));
         let revoke: Option<Arc<dyn Fn() + Send + Sync>> = revoke_during_prefix.then(|| {
@@ -622,9 +612,9 @@ mod sync_tests {
             }) as Arc<dyn Fn() + Send + Sync>
         });
         let gate = SyncGateBinding::new(arbiter, cell);
-        let ticket = ticket(
-            item_id,
-            load,
+        let (ticket, _) = entry_ticket(
+            gate,
+            LoadedMedia::new(item_id, load),
             resource(
                 new_mode,
                 rate,
@@ -632,10 +622,12 @@ mod sync_tests {
                 new_duration_required,
                 None,
             ),
-            stamp,
-            head,
-            gate,
+            [0.0; 2],
+            0,
+            rate,
+            dependency,
         );
+        let map = ticket.first().head().activation().revision();
         let mut track = PlayerTrack::builder()
             .sample_rate(rate)
             .item_id(item_id)

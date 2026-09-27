@@ -44,7 +44,7 @@ impl<I: Copy, L> SyncTicket<I, L> {
     /// The ticket of `lane`, loaded as `media`, entering with `first` once
     /// `permit` is claimed through `gate`.
     #[must_use]
-    pub const fn new(
+    pub(crate) const fn new(
         media: LoadedMedia<I>,
         lane: L,
         first: PreparedFirst,

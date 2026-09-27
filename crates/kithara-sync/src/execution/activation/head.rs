@@ -46,7 +46,7 @@ impl ActivationHead {
     /// this head enters at: one output frame from the head's source frame,
     /// at the source rate, on the head's map.
     #[must_use]
-    pub fn first(self, stereo: [f32; 2], source: SourceSpan) -> Option<PreparedFirst> {
+    pub(crate) fn first(self, stereo: [f32; 2], source: SourceSpan) -> Option<PreparedFirst> {
         (source.output_frames() == 1
             && source.start() == self.activation.source()
             && source.sample_rate() == self.source_rate

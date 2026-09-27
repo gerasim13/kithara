@@ -483,10 +483,10 @@ mod tests {
         OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
     };
     use kithara_sync::{
-        LoadGeneration, PermitCell, SyncArbiter, SyncExecutionReject, SyncExecutionStamp,
-        SyncGateBinding, SyncReceipt, SyncReceiptTx, sync_receipts,
+        LoadGeneration, LoadedMedia, SyncExecutionReject, SyncExecutionStamp, SyncGateBinding,
+        SyncReceipt, SyncReceiptTx, sync_receipts,
     };
-    use kithara_warp::{BeatGridId, RenderContext, WarpMapRevision};
+    use kithara_warp::{RenderContext, WarpMapRevision};
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
@@ -495,7 +495,7 @@ mod tests {
             SharedEq, slot_channels,
             sync::{SyncReturn, SyncTicket},
         },
-        rt::sync_owner_fixture::{ReaderMode, prepared_entry, resource, ticket},
+        rt::sync_owner_fixture::{ReaderMode, entry_ticket, fresh_gate, resource},
         test_pools::pools,
     };
 
@@ -589,28 +589,15 @@ mod tests {
     /// its owner controls.
     fn pending_ticket(item_id: TrackId) -> (SyncTicket, SyncExecutionStamp, SyncGateBinding) {
         let rate = NonZeroU32::new(44_100).expect("fixture rate");
-        let member = BeatGridId::allocate().expect("member id");
-        let group = BeatGridId::allocate().expect("group id");
-        let (stamp, head) = prepared_entry(
-            member,
-            group,
-            LoadGeneration::first(),
-            TransportRevision::first(),
-            Some(TransportRevision::first()),
-            rate,
-            0,
-        );
-        let gate = SyncGateBinding::new(
-            Arc::new(SyncArbiter::new()),
-            Arc::new(PermitCell::new(member)),
-        );
-        let ticket = ticket(
-            item_id,
-            LoadGeneration::first(),
-            resource(ReaderMode::Silence, rate, false, false, None),
-            stamp,
-            head,
+        let gate = fresh_gate();
+        let (ticket, stamp) = entry_ticket(
             gate.clone(),
+            LoadedMedia::new(item_id, LoadGeneration::first()),
+            resource(ReaderMode::Silence, rate, false, false, None),
+            [0.0; 2],
+            0,
+            rate,
+            Some(TransportRevision::first()),
         );
         (ticket, stamp, gate)
     }
@@ -783,22 +770,6 @@ mod tests {
             built_processor(ContextRequirement::Session, Some(receipt_tx));
         let item_id = TrackId::allocate();
         let load = LoadGeneration::first();
-        let member = BeatGridId::allocate().expect("member id");
-        let group = BeatGridId::allocate().expect("group id");
-        let (stamp, head) = prepared_entry(
-            member,
-            group,
-            load,
-            TransportRevision::first(),
-            None,
-            rate,
-            0,
-        );
-        let map = head.activation().revision();
-        let gate = SyncGateBinding::new(
-            Arc::new(SyncArbiter::new()),
-            Arc::new(PermitCell::new(member)),
-        );
         let mut track = PlayerTrack::builder()
             .sample_rate(rate)
             .item_id(item_id)
@@ -807,12 +778,21 @@ mod tests {
         track.play();
         assert!(processor.tracks.insert(track).is_none());
         processor.playback.playing.store(true, Ordering::SeqCst);
-        let lane = resource(ReaderMode::Silence, rate, true, true, None);
+        let (ticket, stamp) = entry_ticket(
+            fresh_gate(),
+            LoadedMedia::new(item_id, load),
+            resource(ReaderMode::Silence, rate, true, true, None),
+            [0.0; 2],
+            0,
+            rate,
+            None,
+        );
+        let map = ticket.first().head().activation().revision();
         control
             .sync
             .room()
             .expect("an empty deck takes a ticket")
-            .send(ticket(item_id, load, lane, stamp, head, gate));
+            .send(ticket);
         let mut store = ProcStore::with_capacity(1);
         super::super::install_render_context(&mut store)
             .expect("invariant: fixture installs one context slot");

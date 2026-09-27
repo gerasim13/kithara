@@ -22,12 +22,10 @@ use kithara_bufpool::PoolRegion;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_signal::{
-    AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
-};
+use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan};
 use kithara_test_fixtures::play_fixtures::half;
 use kithara_test_utils::kithara;
-use kithara_warp::{BeatGridId, RenderReader, Warp, WarpConfig};
+use kithara_warp::{RenderReader, Warp, WarpConfig};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Producer, Split},
@@ -40,7 +38,7 @@ use crate::{
     consts,
     rt::{
         PlayerNodeProcessor, StreamShape,
-        sync_owner_fixture::{first_at, prepared_entry},
+        sync_owner_fixture::{entry_ticket, fresh_gate},
         track::{PlayerResource, PlayerTrack, RtSink},
     },
     test_pools::{TestPools, pools},
@@ -732,18 +730,18 @@ fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) 
     );
 
     let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate");
-    let (_, head) = prepared_entry(
-        BeatGridId::allocate().expect("member id"),
-        BeatGridId::allocate().expect("group id"),
-        kithara_sync::LoadGeneration::first(),
-        TransportRevision::first(),
-        None,
-        rate,
-        4_096,
-    );
-    let first = first_at(head, [0.25; 2]);
-    let map = head.activation().revision();
     let (incoming, evidence) = starving_resource(&half, 0);
+    let (ticket, _) = entry_ticket(
+        fresh_gate(),
+        kithara_sync::LoadedMedia::new(TrackId::allocate(), kithara_sync::LoadGeneration::first()),
+        incoming,
+        [0.25; 2],
+        4_096,
+        rate,
+        None,
+    );
+    let (incoming, first): (Box<PlayerResource>, kithara_sync::PreparedFirst) = ticket.into();
+    let map = first.head().activation().revision();
     let _tail = track.activate_sync(
         incoming,
         first.source(),

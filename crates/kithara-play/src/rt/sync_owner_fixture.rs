@@ -1,5 +1,5 @@
-//! A real Sync owner decision for RT unit tests that need an owner-minted
-//! permit, and the mocked resources those tests render.
+//! A real Sync owner and executor for RT unit tests that need a ticket the
+//! executor hands over, and the mocked resources those tests render.
 
 use std::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
@@ -12,18 +12,29 @@ use kithara_audio::{
 };
 use kithara_decode::DecodeError;
 use kithara_events::{EventBus, TrackId};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    CancelScope, CancelToken,
+    maybe_send::MaybeSendFuture,
+    sync::{Arc, Mutex},
+    time::Duration,
+    tokio::{
+        runtime::{Builder, Handle},
+        sync::mpsc,
+    },
+};
 use kithara_signal::{AudioSpec, SessionEpoch, SessionFrame, SourceSpan, TransportRevision};
 use kithara_sync::{
-    ActivationHead, AlignmentSource, GroupState, LoadGeneration, LoadedMedia, ParentFact,
-    ParentGridUpdate, PreparedFirst, SyncAdmission, SyncEffect, SyncError, SyncExecutionStamp,
-    SyncGateBinding, SyncGroup, SyncGroupSnapshot, SyncIntent, SyncMember, SyncMode, SyncOperation,
-    SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
+    ActivationHead, AlignmentSource, ExecutedGroup, GroupState, LoadedMedia, ParentFact,
+    ParentGridUpdate, PermitCell, ReceiptSink, StagePort, Staged, SyncAdmission, SyncArbiter,
+    SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGateBinding, SyncGroup,
+    SyncGroupSnapshot, SyncIntent, SyncMember, SyncMode, SyncOperation, SyncReceipt,
+    SyncReceiptAck, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
 use kithara_warp::{
     AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridRevision,
     BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatMarker, BeatOrdinal, FrameUncertainty,
     MapAxis, MapPosition, MapSegment, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
+    WarpPlan,
 };
 use unimock::{MockFn, Unimock, matching};
 
@@ -100,26 +111,136 @@ fn source_grid(member: BeatGridId, rate: NonZeroU32) -> BeatGridSnapshot {
     .expect("fixture source grid")
 }
 
-/// Return the exact stamp and activation head from one public owner Enable
-/// at output frame 32, prepared from source frame `cue`; no RT test
-/// manufactures a private execution stamp or a first frame off its head.
-pub(crate) fn prepared_entry(
-    member: BeatGridId,
-    group: BeatGridId,
-    load: LoadGeneration,
-    transport: TransportRevision,
-    output_transport: Option<TransportRevision>,
-    rate: NonZeroU32,
+/// The source interval of the one frame `head` enters at.
+fn first_span(head: ActivationHead) -> SourceSpan {
+    let cursor = head.activation();
+    SourceSpan::new(cursor.source(), cursor.source() + 1, head.source_rate(), 1)
+        .expect("one source frame")
+        .with_mapping_revision(NonZeroU64::new(u64::from(cursor.revision())))
+}
+
+/// What ends a test's wait for its entry: the ticket the executor handed
+/// over, or the receipt that rejected it.
+type Entered = Result<SyncTicket, SyncReceipt>;
+
+/// Stages the test's one lane at its plan head, decoding `stereo` there,
+/// and hands the executor's ticket back to the test.
+#[derive(Clone)]
+struct FixturePort {
+    lane: Arc<Mutex<Option<Box<PlayerResource>>>>,
+    runtime: Handle,
+    gate: SyncGateBinding,
+    entered: mpsc::UnboundedSender<Entered>,
+    stereo: [f32; 2],
+}
+
+impl StagePort for FixturePort {
+    type Item = TrackId;
+    type Lane = Box<PlayerResource>;
+
+    fn gate(&self) -> &SyncGateBinding {
+        &self.gate
+    }
+
+    fn handoff(self, ticket: SyncTicket) -> Result<(), SyncExecutionReject> {
+        let _ = self.entered.send(Ok(ticket));
+        Ok(())
+    }
+
+    fn runtime(&self) -> &Handle {
+        &self.runtime
+    }
+
+    fn stage(
+        self,
+        _plan: WarpPlan,
+        head: ActivationHead,
+        _cancel: CancelToken,
+    ) -> impl MaybeSendFuture<Output = Result<Staged<Self::Lane>, SyncExecutionReject>> + 'static
+    {
+        let lane = self
+            .lane
+            .lock()
+            .take()
+            .expect("the fixture stages one lane");
+        async move { Ok(Staged::new(lane, self.stereo, first_span(head))) }
+    }
+}
+
+/// The group owner of the fixture: it mints the permit of an installed
+/// lane through the gate its ticket carries, and a rejection ends the
+/// test's wait.
+struct FixtureOwner {
+    gate: SyncGateBinding,
+    entered: mpsc::UnboundedSender<Entered>,
+}
+
+impl ReceiptSink for FixtureOwner {
+    fn acknowledge(&self, receipt: SyncReceipt) -> SyncReceiptAck {
+        let SyncReceipt::Installed(stamp) = receipt else {
+            let _ = self.entered.send(Err(receipt));
+            return SyncReceiptAck::Recorded;
+        };
+        let owner = self.gate.arbiter().try_control().expect("owner phase");
+        let permit = owner
+            .mint_permit(self.gate.cell(), stamp)
+            .expect("exact permit");
+        SyncReceiptAck::Installed(permit)
+    }
+
+    fn is_bound(&self) -> bool {
+        true
+    }
+}
+
+/// The ticket the executor hands over for `lane`, loaded as `media`, after
+/// one public owner Enable at output frame 32 prepared from source frame
+/// `cue`, decoding `stereo` at its head; with the stamp of that
+/// preparation. The member is the one `gate` claims for, and its owner
+/// mints the permit through `gate`.
+pub(crate) fn entry_ticket(
+    gate: SyncGateBinding,
+    media: LoadedMedia<TrackId>,
+    lane: Box<PlayerResource>,
+    stereo: [f32; 2],
     cue: u64,
-) -> (SyncExecutionStamp, ActivationHead) {
-    let mut owner: GroupState<FixtureGroup> = GroupState::owning(
-        group,
-        rate,
-        SessionEpoch::new(1),
-        SyncMember::Grid {
-            alignment: None,
-            grid: Box::new(FixtureGrid(source_grid(member, rate))),
-        },
+    rate: NonZeroU32,
+    output_transport: Option<TransportRevision>,
+) -> (SyncTicket, SyncExecutionStamp) {
+    let fixture_runtime = Builder::new_current_thread()
+        .build()
+        .expect("fixture runtime");
+    let member = gate.cell().member();
+    let (entered, mut entries) = mpsc::unbounded_channel();
+    let sink = FixtureOwner {
+        gate: gate.clone(),
+        entered: entered.clone(),
+    };
+    let executor = SyncExecutor::new(member, Some(Arc::new(sink)), CancelScope::new(None).token());
+    let lane = Arc::new(Mutex::new(Some(lane)));
+    let runtime = fixture_runtime.handle().clone();
+    executor.load(
+        media,
+        Some(FixturePort {
+            lane,
+            runtime,
+            gate,
+            entered,
+            stereo,
+        }),
+    );
+    let group = BeatGridId::allocate().expect("fixture group identity");
+    let mut owner = ExecutedGroup::new(
+        GroupState::<FixtureGroup>::owning(
+            group,
+            rate,
+            SessionEpoch::new(1),
+            SyncMember::Grid {
+                alignment: None,
+                grid: Box::new(FixtureGrid(source_grid(member, rate))),
+            },
+        ),
+        executor.execution(),
     );
     let parent = BeatGridId::allocate().expect("fixture parent identity");
     let anchor = SessionAnchor::new(SessionFrame::new(32), SessionBeat::default(), 2.0, rate)
@@ -133,14 +254,15 @@ pub(crate) fn prepared_entry(
     if let Some(revision) = output_transport {
         update = update.with_output_transport(revision);
     }
-    let fact = ParentFact::Segment(update);
-    let staged = owner.stage_fact(fact).expect("fixture parent publication");
+    let staged = owner
+        .stage_fact(ParentFact::Segment(update))
+        .expect("fixture parent publication");
     owner.apply_staged(staged);
     let admission = owner
         .transact(SyncOperation::Sync {
             target: group,
-            load,
-            transport,
+            load: media.load(),
+            transport: TransportRevision::first(),
             source: AlignmentSource::Prepared(AssetFrame::new(cue as f64).expect("fixture cue")),
             activation: SessionFrame::new(32),
             intent: SyncIntent::Enable,
@@ -152,38 +274,29 @@ pub(crate) fn prepared_entry(
     let [preparation] = transition.issued() else {
         panic!("one direct member must receive one preparation");
     };
-    let SyncEffect::Projection { plan, .. } = preparation.effect() else {
-        panic!("public Enable must project the member");
-    };
-    let head = ActivationHead::of(plan).expect("public Enable enters the session");
-    assert_eq!(head.activation().output(), SessionFrame::new(32));
-    (preparation.stamp(), head)
+    let stamp = preparation.stamp();
+    let entered = fixture_runtime
+        .block_on(entries.recv())
+        .expect("the executor holds the fixture's senders");
+    match entered {
+        Ok(ticket) => {
+            assert_eq!(
+                ticket.first().head().activation().output(),
+                SessionFrame::new(32)
+            );
+            (ticket, stamp)
+        }
+        Err(receipt) => panic!("the executor rejected the entry: {receipt:?}"),
+    }
 }
 
-/// The frame `stereo`, decoded exactly at `head`.
-pub(crate) fn first_at(head: ActivationHead, stereo: [f32; 2]) -> PreparedFirst {
-    let cursor = head.activation();
-    let source = SourceSpan::new(cursor.source(), cursor.source() + 1, head.source_rate(), 1)
-        .expect("one source frame")
-        .with_mapping_revision(NonZeroU64::new(u64::from(cursor.revision())));
-    head.first(stereo, source).expect("a frame at its head")
-}
-
-/// The ticket of `lane`, loaded as `item_id` at `load`, entering silently
-/// at `head` with the permit the owner mints for `stamp` through `gate`.
-pub(crate) fn ticket(
-    item_id: TrackId,
-    load: LoadGeneration,
-    lane: Box<PlayerResource>,
-    stamp: SyncExecutionStamp,
-    head: ActivationHead,
-    gate: SyncGateBinding,
-) -> SyncTicket {
-    let owner = gate.arbiter().try_control().expect("owner phase");
-    let permit = owner.mint_permit(gate.cell(), stamp).expect("exact permit");
-    drop(owner);
-    let first = first_at(head, [0.0; 2]);
-    SyncTicket::new(LoadedMedia::new(item_id, load), lane, first, permit, gate)
+/// The gate of a fresh member, its permits controlled by a fresh arbiter.
+pub(crate) fn fresh_gate() -> SyncGateBinding {
+    let member = BeatGridId::allocate().expect("fixture member identity");
+    SyncGateBinding::new(
+        Arc::new(SyncArbiter::new()),
+        Arc::new(PermitCell::new(member)),
+    )
 }
 
 /// What a fixture reader answers to every read.
