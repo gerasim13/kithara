@@ -90,10 +90,7 @@ where
         ) {
             self.autoplay_target.store(CrossfadeArm::Disarmed);
         }
-        let default = *self
-            .crossfade_settings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let default = *self.crossfade_settings.lock();
         let settings = transition.settings(default).validate()?;
         let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)
@@ -241,10 +238,7 @@ mod tests {
         let queue = make_queue();
         let id = append(&queue, "https://example.com/a.mp3");
         let _ = queue.select(id, Transition::None);
-        let phase = *queue
-            .pending_select
-            .lock()
-            .expect("BUG: pending_select Mutex is not held across await");
+        let phase = *queue.pending_select.lock();
         match phase {
             SelectPhase::Pending(pending) => {
                 assert_eq!(pending.id, id);

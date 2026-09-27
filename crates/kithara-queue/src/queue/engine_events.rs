@@ -1,5 +1,3 @@
-use std::sync::PoisonError;
-
 use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
 use kithara_events::{Envelope, EventSet, TrackId};
@@ -64,10 +62,7 @@ where
     pub(super) fn drain_player_events(&self) {
         let mut lagged = false;
         {
-            let mut rx = self
-                .player_rx
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut rx = self.player_rx.lock();
             loop {
                 match rx.try_recv() {
                     Ok(Envelope { event: ev, .. }) => self.process_player_event(&ev),

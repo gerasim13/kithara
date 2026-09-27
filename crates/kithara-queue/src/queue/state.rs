@@ -1,13 +1,12 @@
-use std::{
-    ops::Deref,
-    sync::{Mutex, PoisonError},
-};
+use std::ops::Deref;
 
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{
-    CancelScope, CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle,
+    CancelScope, CancelToken,
+    sync::{Arc, Mutex, MutexGuard},
+    tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_play::{
     CrossfadeSettings, PlayError, PlayerImpl,
@@ -243,42 +242,6 @@ where
         self.shutdown.is_cancelled() || self.player.is_closed()
     }
 
-    pub(in crate::queue) fn lock_admission(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.admission
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(super) fn lock_navigation(&self) -> std::sync::MutexGuard<'_, NavigationState> {
-        self.navigation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(super) fn lock_navigation_mut(&self) -> std::sync::MutexGuard<'_, NavigationState> {
-        self.navigation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(in crate::queue) fn lock_pending_select_mut(
-        &self,
-    ) -> std::sync::MutexGuard<'_, SelectPhase> {
-        self.pending_select
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Acquire the selection-apply serialization guard (see
-    /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
-    /// `navigation`/`player` in both `select` and the
-    /// `spawn_apply_after_load` completion, so the two cannot interleave.
-    pub(in crate::queue) fn lock_select_apply(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.select_apply
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
     pub(in crate::queue) fn with_open<T>(
         &self,
         operation: impl FnOnce(&Self) -> T,
@@ -303,9 +266,9 @@ where
     delegate::delegate! {
         to self.tracks {
             #[call(lock)]
-            pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
+            pub(super) fn lock_tracks(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
             #[call(lock)]
-            pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
+            pub(super) fn lock_tracks_mut(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
             pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
         }
         to self.crossfade_armed_for {
@@ -321,6 +284,28 @@ where
             pub(super) fn read_cached_position(&self) -> CachedPosition;
             #[call(store)]
             pub(super) fn write_cached_position(&self, pos: CachedPosition);
+        }
+        to self.admission {
+            #[call(lock)]
+            pub(in crate::queue) fn lock_admission(&self) -> MutexGuard<'_, ()>;
+        }
+        to self.navigation {
+            #[call(lock)]
+            pub(super) fn lock_navigation(&self) -> MutexGuard<'_, NavigationState>;
+            #[call(lock)]
+            pub(super) fn lock_navigation_mut(&self) -> MutexGuard<'_, NavigationState>;
+        }
+        to self.pending_select {
+            #[call(lock)]
+            pub(in crate::queue) fn lock_pending_select_mut(&self) -> MutexGuard<'_, SelectPhase>;
+        }
+        to self.select_apply {
+            /// Acquire the selection-apply serialization guard (see
+            /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
+            /// `navigation`/`player` in both `select` and the
+            /// `spawn_apply_after_load` completion, so the two cannot interleave.
+            #[call(lock)]
+            pub(in crate::queue) fn lock_select_apply(&self) -> MutexGuard<'_, ()>;
         }
     }
 }
