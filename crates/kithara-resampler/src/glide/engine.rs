@@ -56,6 +56,7 @@ pub(in crate::glide) struct GlideEngine {
 impl GlideEngine {
     pub(in crate::glide) fn new<S>(
         settings: &ResamplerSettings<S>,
+        max_input_frames: usize,
         interpolation: Interpolation,
         backend: &'static str,
     ) -> Result<Self, ResamplerBuildError>
@@ -64,7 +65,6 @@ impl GlideEngine {
     {
         let pools = &settings.pools;
         let channels = settings.channels;
-        let max_input_frames = settings.options.chunk_size;
         let max_output_frames =
             max_output_frames(max_input_frames, settings.options.max_ratio_adjustment);
         let mut positions = pools.get::<f32>();

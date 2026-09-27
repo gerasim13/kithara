@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::HasPool;
+use kithara_dsp::interp::Interpolation;
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -39,14 +40,15 @@ impl GlideResampler {
         let ratio = initial_ratio(settings.mode);
         validate_ratio_bounds(backend, settings.options, ratio)?;
         let glide = initial_glide(backend, settings.mode, settings.options, ratio)?;
-        let engine = GlideEngine::new(settings, config.interpolation, backend)?;
+        let input_frames = block_frames(settings.options.chunk_size, config.interpolation);
+        let engine = GlideEngine::new(settings, input_frames, config.interpolation, backend)?;
         Ok(Self {
             config,
             engine,
             glide,
             channels: settings.channels,
             current_ratio: ratio,
-            input_frames: settings.options.chunk_size,
+            input_frames,
             mode: settings.mode,
             options: settings.options,
             cursor: 0.0,
@@ -282,6 +284,13 @@ fn advance_glide_values(current_ratio: &mut f64, glide: &mut GlideState) {
     if glide.remaining == 0 {
         *current_ratio = glide.target;
     }
+}
+
+/// Frames of one buffered block: `chunk_size`, but at least one more than the
+/// interpolation reads past a position. In a shorter block no position can
+/// sample, so the block would never be taken.
+fn block_frames(chunk_size: usize, interpolation: Interpolation) -> usize {
+    chunk_size.max(usize::from(interpolation.padding().1).saturating_add(1))
 }
 
 fn can_sample(cursor: f64, input_frames: usize, after: usize) -> bool {

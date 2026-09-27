@@ -512,3 +512,36 @@ fn every_interpolation_reproduces_a_ramp_through_the_factory(#[case] interpolati
         );
     }
 }
+
+/// A consumer offers `input_frames_next()` frames until the resampler takes
+/// some; a block no longer than the lookahead would never be taken.
+#[kithara::test(native)]
+#[case::linear(Interpolation::Linear)]
+#[case::quadratic(Interpolation::Quadratic)]
+#[case::hermite(Interpolation::Hermite)]
+#[case::watte(Interpolation::Watte)]
+fn every_interpolation_takes_frames_from_its_next_block_at_a_one_frame_chunk(
+    #[case] interpolation: Interpolation,
+) {
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(fixed_mode(44_100, 88_200))
+        .options(ResamplerOptions::builder().chunk_size(1).build())
+        .pools(pools())
+        .build();
+    let config = GlideConfig::builder().interpolation(interpolation).build();
+    let mut resampler = GlideResampler::new("glide", config, &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = vec![0.5; resampler.input_frames_next()];
+    let mut output = vec![0.0; resampler.output_frames_next()];
+
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("the next block should process: {err}"));
+
+    assert!(
+        process.input_frames > 0,
+        "{interpolation:?} took nothing from a block of {} frames",
+        input.len()
+    );
+}
