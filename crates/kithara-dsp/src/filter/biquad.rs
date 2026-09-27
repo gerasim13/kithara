@@ -15,14 +15,17 @@ mod consts {
     pub(super) const SETTLE_FLOOR_LOG2: f64 = -24.0;
     /// Input and output peaks at or below this reset the state.
     pub(super) const SILENT_PEAK: f32 = 1.0e-9;
+    /// Frames a section remembers: a quiet call proves the state silent only
+    /// when it covers them.
+    pub(super) const SECTION_MEMORY: usize = 2;
 }
 
 /// Cascaded biquad sections applied in place to channel planes.
 ///
 /// Sections start as identity. The state carries over between calls, so a
-/// stream split into any chunks yields the same samples. A call whose input
-/// and output both stay at or below `1e-9` resets the state, so silence
-/// never decays into denormals.
+/// stream split into any chunks yields the same samples. A call of at least
+/// two frames whose input and output both stay at or below `1e-9` resets the
+/// state, so silence never decays into denormals.
 pub struct Biquad {
     cascade: platform::Cascade,
     decay: Box<[usize]>,
@@ -68,8 +71,8 @@ impl Biquad {
         planes: &mut [P],
         range: Range<usize>,
     ) -> Result<(), FilterError> {
-        if range.is_empty() {
-            return Ok(());
+        if range.len() < consts::SECTION_MEMORY {
+            return self.cascade.process(planes, range);
         }
         let input = peak(planes, &range);
         self.cascade.process(planes, range.clone())?;

@@ -122,6 +122,25 @@ fn silence_resets_to_the_state_of_a_fresh_filter() {
     assert_eq!(bits(&after), bits(&fresh));
 }
 
+/// At a quarter of the rate with `Q = 1/2` the section is the FIR
+/// `(1 + 2z⁻¹ + z⁻²) / 4`: after `[1, −½]` the next output is `0` while the
+/// section still remembers `−½`, so a one-frame call looks silent.
+#[kithara::test]
+fn a_quiet_call_shorter_than_the_section_memory_keeps_the_state() {
+    let fir = rbj::low_pass(RATE, RATE / 4.0, 0.5).expect("valid low-pass");
+    let mut split = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
+    let mut whole = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
+    split.retune(0, fir).expect("section 0 exists");
+    whole.retune(0, fir).expect("section 0 exists");
+    let mut left = vec![vec![1.0_f32, -0.5, 0.0, 0.0]; 2];
+    let mut right = left.clone();
+    for range in [0..2, 2..3, 3..4] {
+        split.process(&mut left, range).expect("shape matches");
+    }
+    whole.process(&mut right, 0..4).expect("shape matches");
+    assert_eq!(bits(&left), bits(&right));
+}
+
 #[kithara::test]
 fn an_empty_range_keeps_the_state() {
     let mut probed = built(1_000.0);
