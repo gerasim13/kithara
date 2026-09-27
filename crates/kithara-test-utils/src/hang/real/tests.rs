@@ -32,7 +32,7 @@ mod detector_tests {
     /// detector's internal `Instant` must read the SAME (real) clock, so the
     /// bodies stay un-rewritten via `flash(false)`.
     #[kithara::test(native, flash(false))]
-    #[should_panic(expected = "HangDetector")]
+    #[should_panic(expected = "real clock spent the budget")]
     fn tick_after_timeout_panics() {
         let mut detector: HangDetector = HangDetector::new("test.wait", Duration::from_millis(1));
         // The liveness budget starts at the FIRST observation (lazy deadline

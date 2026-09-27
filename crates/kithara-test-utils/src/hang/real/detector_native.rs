@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, panic::Location, path::PathBuf};
 
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::{Duration, Instant, WallInstant};
 
 use super::{
     platform::write_dump,
@@ -39,6 +39,13 @@ pub struct HangDetector<C: HangDump = NoContext> {
     /// `Instant::now` is real while the body's reads are virtual; an eager
     /// stamp mixes clocks and false-fires the moment virtual time outruns real.
     deadline: Option<Instant>,
+    /// Real-clock stamp taken with the deadline, on `WallInstant` — the one
+    /// clock the platform leaves unvirtualised. Under `flash` the deadline is
+    /// virtual, and the engine advances virtual time in one step whenever the
+    /// process goes quiescent: a budget can expire with no real time spent at
+    /// all. Only a second, unvirtualised reading separates that from a stall
+    /// that really lasted the budget.
+    started_real: Option<WallInstant>,
     #[field(with, option_set_some)]
     dump_dir: Option<PathBuf>,
     /// Source location of the most recent reset — the last observed progress.
@@ -58,6 +65,7 @@ impl<C: HangDump> HangDetector<C> {
             label,
             timeout,
             deadline: None,
+            started_real: None,
             ctx: None,
             dump_dir: None,
             fired: false,
@@ -69,9 +77,22 @@ impl<C: HangDump> HangDetector<C> {
     }
 
     fn deadline(&mut self) -> Instant {
+        self.started_real.get_or_insert_with(WallInstant::now);
         *self
             .deadline
             .get_or_insert_with(|| Instant::now() + self.timeout)
+    }
+
+    /// Whether the real clock spent the budget the deadline just declared
+    /// spent. Worded, not measured in the message, because the diagnostic is
+    /// clustered across attempts and a raw duration makes every firing its own
+    /// cluster.
+    fn real_clock_verdict(&self) -> &'static str {
+        match self.started_real {
+            Some(started) if started.elapsed() < self.timeout => "real clock leapt the budget",
+            Some(_) => "real clock spent the budget",
+            None => "real clock never started",
+        }
     }
 
     /// Human-readable account of the stall: where it stuck, where it last made
@@ -84,11 +105,12 @@ impl<C: HangDump> HangDetector<C> {
             )
         };
         format!(
-            "stuck at {stuck} | last progress at {progress} | {spins} tick(s) since progress | timeout {timeout:?}",
+            "stuck at {stuck} | last progress at {progress} | {spins} tick(s) since progress | timeout {timeout:?} | {real}",
             stuck = fmt(self.last_tick),
             progress = fmt(self.last_progress),
             spins = self.spins_since_progress,
             timeout = self.timeout,
+            real = self.real_clock_verdict(),
         )
     }
 
@@ -207,5 +229,35 @@ impl<C: HangDump> HangDetector<C> {
     pub fn tick_with_from<F: FnOnce() -> C>(&mut self, ctx_fn: F, file: &'static str, line: u32) {
         self.ctx = Some(ctx_fn());
         self.tick_from(file, line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::time::Duration;
+
+    use super::{HangDetector, WallInstant};
+
+    #[test]
+    fn a_budget_no_real_time_paid_for_is_reported_as_a_leap() {
+        let mut detector: HangDetector = HangDetector::new("test", Duration::from_secs(600));
+        detector.started_real = Some(WallInstant::now());
+
+        assert_eq!(detector.real_clock_verdict(), "real clock leapt the budget");
+    }
+
+    #[test]
+    fn a_budget_the_real_clock_outlived_is_reported_as_spent() {
+        let mut detector: HangDetector = HangDetector::new("test", Duration::ZERO);
+        detector.started_real = Some(WallInstant::now());
+
+        assert_eq!(detector.real_clock_verdict(), "real clock spent the budget");
+    }
+
+    #[test]
+    fn a_detector_that_never_observed_has_no_real_reading() {
+        let detector: HangDetector = HangDetector::new("test", Duration::from_secs(1));
+
+        assert_eq!(detector.real_clock_verdict(), "real clock never started");
     }
 }
