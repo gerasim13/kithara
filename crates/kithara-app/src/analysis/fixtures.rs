@@ -46,6 +46,16 @@ use crate::{
     waveform::TrackAnalysis,
 };
 
+mod consts {
+    use super::*;
+
+    /// Polls and cadence of [`wait_for_revision`]: two virtual seconds, which is
+    /// a pipeline statement rather than a host budget.
+    pub(super) const REVISION_POLLS: usize = 2_000;
+
+    pub(super) const REVISION_POLL_INTERVAL: Duration = Duration::from_millis(1);
+}
+
 pub(crate) fn chunk_seconds() -> NonZeroU32 {
     NonZeroU32::new(16).expect("fixture chunk duration is non-zero")
 }
@@ -377,11 +387,6 @@ pub(crate) async fn next_subscribe(
     }
 }
 
-/// Polls and cadence of [`wait_for_revision`]: two virtual seconds, which is
-/// a pipeline statement rather than a host budget.
-const REVISION_POLLS: usize = 2_000;
-const REVISION_POLL_INTERVAL: Duration = Duration::from_millis(1);
-
 pub(crate) async fn answer_subscribe(
     requests: &mut mpsc::Receiver<Request>,
     expected: TrackId,
@@ -440,7 +445,7 @@ pub(crate) async fn wait_for_asks(asks: &mut watch::Receiver<usize>, count: usiz
 /// is holding still, and the budget expires on a publication that was only
 /// ever one clock step away.
 pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
-    for _ in 0..REVISION_POLLS {
+    for _ in 0..consts::REVISION_POLLS {
         if state
             .lock()
             .analysis
@@ -451,7 +456,7 @@ pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
         {
             return;
         }
-        sleep(REVISION_POLL_INTERVAL).await;
+        sleep(consts::REVISION_POLL_INTERVAL).await;
     }
     panic!("revision {revision} never reached the deck");
 }

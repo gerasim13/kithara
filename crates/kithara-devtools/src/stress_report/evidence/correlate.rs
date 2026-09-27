@@ -760,6 +760,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consts;
 
     fn evidence() -> StressEvidenceConfig {
         StressEvidenceConfig {
@@ -902,9 +903,6 @@ mod tests {
         assert_eq!(normalized, "committed=1207437641712345678 state=Runnable");
     }
 
-    /// The first line the flash engine writes into a hang dump.
-    const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0 advances=812 advance_blocked=419033 advance_no_deadline=0 advance_yield_releases=7 advance_paced_wait=0";
-
     /// One wedge shows up under whichever termination happened to fire first:
     /// the harness's own wall-timeout on a test that declares one, the outer
     /// pre-kill on a test that does not. Prefixing the wait signature with the
@@ -919,12 +917,18 @@ mod tests {
         let budgets = StressRenderBudgets::default();
 
         let prekill = wait_signatures(
-            &format!("[wait dump] pre-kill\n{ENGINE_COUNTERS}\n"),
+            &format!(
+                "[wait dump] pre-kill\n{ENGINE_COUNTERS}\n",
+                ENGINE_COUNTERS = consts::ENGINE_COUNTERS
+            ),
             &evidence,
             &budgets,
         );
         let wall = wait_signatures(
-            &format!("[wait dump] wall-timeout\n{ENGINE_COUNTERS}\n"),
+            &format!(
+                "[wait dump] wall-timeout\n{ENGINE_COUNTERS}\n",
+                ENGINE_COUNTERS = consts::ENGINE_COUNTERS
+            ),
             &evidence,
             &budgets,
         );
@@ -941,7 +945,10 @@ mod tests {
         evidence.direct_markers.push("pace_anchor=".to_owned());
 
         let signatures = wait_signatures(
-            &format!("[wait dump] audio_worker_loop\n{ENGINE_COUNTERS}\n"),
+            &format!(
+                "[wait dump] audio_worker_loop\n{ENGINE_COUNTERS}\n",
+                ENGINE_COUNTERS = consts::ENGINE_COUNTERS
+            ),
             &evidence,
             &StressRenderBudgets::default(),
         );
@@ -957,7 +964,7 @@ mod tests {
     /// one whose work never started.
     #[test]
     fn a_pacing_signature_keeps_the_real_io_count() {
-        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+        let normalized = normalize_wait(consts::ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("real_io=0"), "{normalized}");
     }
@@ -967,7 +974,7 @@ mod tests {
     /// work in flight.
     #[test]
     fn a_pacing_signature_keeps_the_pace_anchor_state() {
-        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+        let normalized = normalize_wait(consts::ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("pace_anchor=none"), "{normalized}");
     }
@@ -978,7 +985,7 @@ mod tests {
     /// to prevent; the dump itself carries the actual counts.
     #[test]
     fn a_pacing_signature_drops_the_advance_counters() {
-        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+        let normalized = normalize_wait(consts::ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("advances=<volatile>"), "{normalized}");
         assert!(
@@ -991,7 +998,7 @@ mod tests {
     /// give each hang a cluster of its own.
     #[test]
     fn a_pacing_signature_drops_the_virtual_clock() {
-        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+        let normalized = normalize_wait(consts::ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(
             normalized.contains("virtual_now_ns=<volatile>"),

@@ -392,18 +392,15 @@ fn subrange(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
 
     use kithara_core_test_fixtures::{negative_pcm_ramp, pcm_ramp};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools_with_budget;
-
-    const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
+    use crate::{consts, test_pools::pools_with_budget};
 
     fn stereo() -> AudioSpec {
-        AudioSpec::new(2, RATE)
+        AudioSpec::new(2, consts::INTERLEAVED_RATE)
     }
 
     #[kithara::test]
@@ -502,7 +499,7 @@ mod tests {
         let pcm_ramp = pcm_ramp();
         let negative_pcm_ramp = negative_pcm_ramp();
         let width = usize::from(channels);
-        let spec = AudioSpec::new(channels, RATE);
+        let spec = AudioSpec::new(channels, consts::INTERLEAVED_RATE);
         let pools = pools_with_budget(1_024 * size_of::<f32>());
         let mut planar =
             PlanarBuffer::new(&pools, spec, FrameCount::new(2)).expect("planar storage fits");
@@ -543,9 +540,12 @@ mod tests {
         let pools = pools_with_budget(64 * size_of::<f32>());
         let mut planar =
             PlanarBuffer::new(&pools, stereo(), FrameCount::new(1)).expect("planar storage fits");
-        let three =
-            InterleavedView::new(&pcm_ramp[..6], AudioSpec::new(3, RATE), FrameCount::new(2))
-                .expect("fixture shape is exact");
+        let three = InterleavedView::new(
+            &pcm_ramp[..6],
+            AudioSpec::new(3, consts::INTERLEAVED_RATE),
+            FrameCount::new(2),
+        )
+        .expect("fixture shape is exact");
 
         assert_eq!(
             planar.append_interleaved(three),

@@ -1,10 +1,6 @@
 use std::num::NonZeroUsize;
 
-/// Frames one iteration of the strided copies moves. A loop that moves one
-/// sample per iteration runs at half speed whenever it straddles a 4096-byte
-/// page, and `opt-level = "z"` neither unrolls nor aligns it; four samples
-/// per iteration amortize that fetch and roughly halve the cost everywhere.
-const LANES: usize = 4;
+use crate::consts;
 
 /// Writes `plane` into every `stride`-th slot of `output` from slot 0, bit for
 /// bit; the last frame may be partial (`output.len().div_ceil(stride)` frames
@@ -36,17 +32,17 @@ pub(crate) fn gather(input: &[f32], stride: NonZeroUsize, plane: &mut [f32]) -> 
     plane.len().min(input.len().div_ceil(stride.get()))
 }
 
-/// Scatters every whole group of [`LANES`] frames both sides hold; returns
+/// Scatters every whole group of [`consts::LANES`] frames both sides hold; returns
 /// the frames written.
 fn scatter_quads(plane: &[f32], output: &mut [f32], stride: NonZeroUsize) -> usize {
     let step = stride.get();
-    let Some(group) = step.checked_mul(LANES) else {
+    let Some(group) = step.checked_mul(consts::LANES) else {
         return 0;
     };
     let quads = output
         .chunks_exact_mut(group)
-        .zip(plane.chunks_exact(LANES));
-    let frames = quads.len().saturating_mul(LANES);
+        .zip(plane.chunks_exact(consts::LANES));
+    let frames = quads.len().saturating_mul(consts::LANES);
     for (slots, samples) in quads {
         if let [a, b, c, d] = samples
             && let Some((slot_a, rest)) = slots.split_at_mut_checked(step)
@@ -68,15 +64,17 @@ fn scatter_quads(plane: &[f32], output: &mut [f32], stride: NonZeroUsize) -> usi
     frames
 }
 
-/// Gathers every whole group of [`LANES`] frames both sides hold; returns
+/// Gathers every whole group of [`consts::LANES`] frames both sides hold; returns
 /// the frames read.
 fn gather_quads(input: &[f32], stride: NonZeroUsize, plane: &mut [f32]) -> usize {
     let step = stride.get();
-    let Some(group) = step.checked_mul(LANES) else {
+    let Some(group) = step.checked_mul(consts::LANES) else {
         return 0;
     };
-    let quads = plane.chunks_exact_mut(LANES).zip(input.chunks_exact(group));
-    let frames = quads.len().saturating_mul(LANES);
+    let quads = plane
+        .chunks_exact_mut(consts::LANES)
+        .zip(input.chunks_exact(group));
+    let frames = quads.len().saturating_mul(consts::LANES);
     for (slots, samples) in quads {
         if let [slot_a, slot_b, slot_c, slot_d] = slots
             && let Some((a, rest)) = samples.split_at_checked(step)

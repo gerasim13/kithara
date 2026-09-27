@@ -323,7 +323,6 @@ where
 pub(crate) mod tests {
     use core::sync::atomic::{AtomicU64, Ordering};
     use std::{
-        num::NonZeroU32,
         sync::mpsc::{self, RecvTimeoutError},
         thread,
     };
@@ -344,13 +343,9 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::{
+        consts,
         event::QueueEvent,
         test_pools::{TestPools, pools},
-    };
-
-    pub(crate) const TEST_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-        Some(sample_rate) => sample_rate,
-        None => unreachable!(),
     };
 
     /// No queue test ever streams bytes, so the store is here to be wired, not
@@ -405,7 +400,7 @@ pub(crate) mod tests {
                 next_slot: AtomicU64::new(0),
                 nodes: Mutex::default(),
             }),
-            TEST_SAMPLE_RATE,
+            consts::TEST_SAMPLE_RATE,
         )
     }
 
@@ -420,7 +415,7 @@ pub(crate) mod tests {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(TEST_SAMPLE_RATE)
+                .sample_rate(consts::TEST_SAMPLE_RATE)
                 .worker(worker)
                 .session(test_session())
                 .build(),
@@ -461,7 +456,7 @@ pub(crate) mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .grid_id(grid_id)
-                .sample_rate(TEST_SAMPLE_RATE)
+                .sample_rate(consts::TEST_SAMPLE_RATE)
                 .worker(worker)
                 .build(),
         );
