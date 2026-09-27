@@ -15,8 +15,5 @@ pub use kithara_derive::config;
 mod config;
 pub use config::Config;
 
-mod live;
-pub use live::{LiveBool, LiveF32};
-
 #[doc(hidden)]
 pub mod __private;

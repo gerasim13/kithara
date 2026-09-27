@@ -1,15 +1,14 @@
-use core::{fmt, sync::atomic::Ordering};
+use core::fmt;
 
 use arc_swap::ArcSwap;
 use kithara_effects::GainDb;
-use kithara_platform::sync::Arc;
-use portable_atomic::AtomicF32;
+use kithara_platform::{atomic_value::RelaxedAtomicF32, sync::Arc};
 
 use crate::error::PlayError;
 
 #[derive(Clone)]
 pub struct SharedEq {
-    gains: Arc<ArcSwap<Vec<AtomicF32>>>,
+    gains: Arc<ArcSwap<Vec<RelaxedAtomicF32>>>,
 }
 
 impl fmt::Debug for SharedEq {
@@ -24,7 +23,7 @@ impl fmt::Debug for SharedEq {
 impl SharedEq {
     #[must_use]
     pub fn new(bands: usize) -> Self {
-        let gains = (0..bands).map(|_| AtomicF32::new(unity())).collect();
+        let gains = (0..bands).map(|_| RelaxedAtomicF32::new(unity())).collect();
         Self {
             gains: Arc::new(ArcSwap::from_pointee(gains)),
         }
@@ -47,7 +46,7 @@ impl SharedEq {
                 bands: gains.len(),
             });
         };
-        current.store(f32::from(gain_db), Ordering::Relaxed);
+        current.store(f32::from(gain_db));
         Ok(())
     }
 
@@ -67,12 +66,12 @@ impl SharedEq {
     }
 }
 
-fn band_array(gains: &[GainDb]) -> Vec<AtomicF32> {
+fn band_array(gains: &[GainDb]) -> Vec<RelaxedAtomicF32> {
     gains
         .iter()
         .copied()
         .map(f32::from)
-        .map(AtomicF32::new)
+        .map(RelaxedAtomicF32::new)
         .collect()
 }
 
@@ -80,8 +79,8 @@ fn unity() -> f32 {
     f32::from(GainDb::default())
 }
 
-fn load_gain(gain: &AtomicF32) -> f32 {
-    gain.load(Ordering::Relaxed)
+fn load_gain(gain: &RelaxedAtomicF32) -> f32 {
+    gain.load()
 }
 
 #[cfg(test)]

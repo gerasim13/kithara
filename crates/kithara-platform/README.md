@@ -33,6 +33,7 @@ time::sleep(time::Duration::from_millis(10)).await;
 ## Key Types
 
 - `Arc<T>` / atomics / `Mutex<T>` / `RwLock<T>` / `Condvar` - synchronization primitives selected from the system, Loom, or wasm backend.
+- `AtomicValue<T, Read, Write>` — independent boolean or `f32` scalar with fixed load/store orderings and Loom-aware storage; `RelaxedAtomicBool` and `RelaxedAtomicF32` are the common aliases.
 - `MaybeSend` / `MaybeSync` — conditional trait bounds (`Send`/`Sync` on native, blanket no-op on wasm32).
 - `thread::{spawn, spawn_named, is_main_thread, is_worker_thread, assert_main_thread, park_timeout, paced_backoff, unpark}` — thread primitives with thread-affinity helpers.
 - `tokio::task::{spawn, spawn_blocking, yield_now}` — runtime task primitives (native `tokio`, worker-aware on wasm).

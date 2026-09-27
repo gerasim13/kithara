@@ -4808,7 +4808,6 @@ dependencies = [
  "fieldwork",
  "kithara-derive",
  "kithara-test-utils",
- "portable-atomic",
  "serde",
 ]
 
@@ -5520,6 +5519,7 @@ dependencies = [
  "parking_lot",
  "parking_lot_core",
  "pin-project-lite",
+ "portable-atomic",
  "tokio",
  "tokio_with_wasm",
  "tracing",

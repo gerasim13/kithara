@@ -6,12 +6,12 @@ use kithara_effects::eq::EqBandConfig;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
+    atomic_value::RelaxedAtomicF32,
     sync::{Arc, Mutex},
     time::Duration,
 };
 use kithara_signal::FaderValue;
 use kithara_warp::RenderSnapshot;
-use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info};
 
@@ -30,7 +30,7 @@ type SlotHandle = SlotControl;
 #[fieldwork(opt_in, get)]
 pub struct EngineImpl<S> {
     running: AtomicBool,
-    master_volume: AtomicF32,
+    master_volume: RelaxedAtomicF32,
     pub(super) config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
     pub(super) bus: EventBus,
@@ -87,7 +87,7 @@ impl<S> EngineImpl<S> {
             config,
             bus,
             session,
-            master_volume: AtomicF32::new(1.0),
+            master_volume: RelaxedAtomicF32::new(1.0),
             registration: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
@@ -171,7 +171,7 @@ impl<S> EngineImpl<S> {
     /// Store the desired gain without dispatching: the mixer batch already
     /// actuated the graph.
     pub(crate) fn commit_desired_master_volume(&self, level: f32) {
-        self.master_volume.store(level, Ordering::Relaxed);
+        self.master_volume.store(level);
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
@@ -239,7 +239,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn master_volume(&self) -> f32 {
-        self.master_volume.load(Ordering::Relaxed)
+        self.master_volume.load()
     }
 
     pub const fn max_slots(&self) -> usize {
@@ -348,7 +348,7 @@ impl<S> EngineImpl<S> {
         }
 
         let player_id = self.ensure_player_id()?;
-        let master_volume = self.master_volume.load(Ordering::Relaxed);
+        let master_volume = self.master_volume.load();
         self.session.start_player(
             player_id,
             master_volume,

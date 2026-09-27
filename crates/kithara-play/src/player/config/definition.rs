@@ -2,12 +2,15 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_abr::AbrController;
-use kithara_config::{LiveBool, LiveF32};
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{
+    CancelToken,
+    atomic_value::{RelaxedAtomicBool, RelaxedAtomicF32},
+    sync::Arc,
+};
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
 use crate::{PlayWorker, consts, session::SessionBinding};
@@ -48,11 +51,11 @@ fn default_event_bus_capacity() -> NonZeroUsize {
 #[derive(derive_more::Debug)]
 pub struct PlayerConfig<S> {
     /// Live mute state, initially off.
-    #[config(value(bool, self.muted.load()), builder(field = LiveBool::new(false)), patch(skip))]
-    pub(super) muted: LiveBool,
+    #[config(value(bool, self.muted.load()), builder(field = RelaxedAtomicBool::new(false)), patch(skip))]
+    pub(super) muted: RelaxedAtomicBool,
     /// Live output volume in `0.0..=1.0`, initially one.
-    #[config(value(f32, self.volume.load()), builder(field = LiveF32::new(1.0)), patch(skip))]
-    pub(super) volume: LiveF32,
+    #[config(value(f32, self.volume.load()), builder(field = RelaxedAtomicF32::new(1.0)), patch(skip))]
+    pub(super) volume: RelaxedAtomicF32,
     /// How resources created for this player trim leading/trailing audio.
     #[config(value, builder(default))]
     pub gapless_mode: GaplessMode,
@@ -77,11 +80,11 @@ pub struct PlayerConfig<S> {
     /// player at construction, so it is not a document key.
     #[config(
         value(bool, self.auto_advance_enabled.load()),
-        builder(default = LiveBool::new(true), with = |value: bool| LiveBool::new(value)),
+        builder(default = RelaxedAtomicBool::new(true), with = |value: bool| RelaxedAtomicBool::new(value)),
         patch(skip),
         debug(skip)
     )]
-    pub auto_advance_enabled: LiveBool,
+    pub auto_advance_enabled: RelaxedAtomicBool,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
     /// in so rendered output never stretches with inserted silence while the
@@ -99,18 +102,18 @@ pub struct PlayerConfig<S> {
     /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
     #[config(
         value(f32, self.crossfade_duration.load()),
-        builder(default = LiveF32::new(DEFAULT_CROSSFADE_DURATION), with = |value: f32| LiveF32::new(value)),
-        patch(wire = f32, from = LiveF32::new)
+        builder(default = RelaxedAtomicF32::new(DEFAULT_CROSSFADE_DURATION), with = |value: f32| RelaxedAtomicF32::new(value)),
+        patch(wire = f32, from = RelaxedAtomicF32::new)
     )]
-    pub crossfade_duration: LiveF32,
+    pub crossfade_duration: RelaxedAtomicF32,
     /// Default playback-rate target (1.0 = normal). Default:
     /// [`DEFAULT_PLAYING_RATE`].
     #[config(
         value(f32, self.default_rate.load()),
-        builder(default = LiveF32::new(DEFAULT_PLAYING_RATE), with = |value: f32| LiveF32::new(value)),
-        patch(wire = f32, from = LiveF32::new)
+        builder(default = RelaxedAtomicF32::new(DEFAULT_PLAYING_RATE), with = |value: f32| RelaxedAtomicF32::new(value)),
+        patch(wire = f32, from = RelaxedAtomicF32::new)
     )]
-    pub default_rate: LiveF32,
+    pub default_rate: RelaxedAtomicF32,
     /// Capacity of each event topic when this player creates its root bus.
     /// An injected [`EventBus`] keeps its own capacity and identity.
     #[config(value, builder(default = default_event_bus_capacity()))]
@@ -120,11 +123,11 @@ pub struct PlayerConfig<S> {
     /// not a document key.
     #[config(
         value(f32, self.prefetch_duration.load()),
-        builder(default = LiveF32::new(consts::DEFAULT_PREFETCH_DURATION), with = |value: f32| LiveF32::new(value)),
+        builder(default = RelaxedAtomicF32::new(consts::DEFAULT_PREFETCH_DURATION), with = |value: f32| RelaxedAtomicF32::new(value)),
         patch(skip),
         debug(skip)
     )]
-    pub prefetch_duration: LiveF32,
+    pub prefetch_duration: RelaxedAtomicF32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
     #[config(value, builder(default = consts::DEFAULT_MAX_SLOTS))]

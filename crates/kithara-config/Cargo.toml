@@ -12,7 +12,6 @@ kithara-derive = { workspace = true, features = ["config", "built-default", "pat
 
 bon = { workspace = true }
 fieldwork = { workspace = true }
-portable-atomic = { workspace = true }
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true }
