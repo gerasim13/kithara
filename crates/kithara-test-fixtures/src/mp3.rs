@@ -1,14 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-struct Consts;
-impl Consts {
-    /// MPEG-1 Layer III bitrates in kbps, indexed by the header's bitrate bits.
-    const MPEG1_BITRATES_KBPS: [u32; 16] = [
-        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
-    ];
-    /// MPEG-1 sample rates, indexed by the header's sampling-rate bits.
-    const MPEG1_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 32_000, 0];
-}
+use crate::consts;
 
 /// How an MP3 fixture records its own playback length.
 ///
@@ -73,10 +65,10 @@ fn frame_len_and_tag(data: &[u8], offset: usize) -> (usize, usize) {
     assert_eq!((word >> 19) & 0x3, 0b11, "fixture must be MPEG-1");
     assert_eq!((word >> 17) & 0x3, 0b01, "fixture must be Layer III");
 
-    let bitrate = Consts::MPEG1_BITRATES_KBPS
+    let bitrate = consts::MPEG1_BITRATES_KBPS
         [usize::try_from((word >> 12) & 0xF).expect("bitrate index fits usize")]
         * 1000;
-    let sample_rate = Consts::MPEG1_SAMPLE_RATES
+    let sample_rate = consts::MPEG1_SAMPLE_RATES
         [usize::try_from((word >> 10) & 0x3).expect("rate index fits usize")];
     assert!(bitrate > 0 && sample_rate > 0, "frame header must be valid");
     let padding = usize::try_from((word >> 9) & 0x1).expect("padding bit fits usize");
@@ -117,4 +109,24 @@ pub fn without_xing_frame(data: &[u8]) -> Vec<u8> {
         "the stripped stream must carry no Xing/Info frame"
     );
     stripped
+}
+
+/// The first `head_frames` audio frames of `head` followed by every audio frame
+/// of `tail`, both without their Xing/Info frame: a headerless stream whose
+/// bitrate changes where the two meet, the way a VBR encode reads once its tag
+/// is gone. The tail opens a fresh bit reservoir, so the joined stream decodes.
+///
+/// # Panics
+///
+/// On the conditions [`without_xing_frame`] documents, for either input.
+#[must_use]
+pub fn headerless_bitrate_change(head: &[u8], head_frames: usize, tail: &[u8]) -> Vec<u8> {
+    let head = without_xing_frame(head);
+    let tail = without_xing_frame(tail);
+    let end = (0..head_frames).fold(audio_start(&head), |offset, _| {
+        offset + frame_len_and_tag(&head, offset).0
+    });
+    let mut joined = head[..end].to_vec();
+    joined.extend_from_slice(&tail[audio_start(&tail)..]);
+    joined
 }

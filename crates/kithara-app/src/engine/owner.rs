@@ -341,10 +341,17 @@ impl EngineDeck {
         }
     }
 
+    /// Resolves the fraction against the queue's own duration: the mirrored
+    /// UI state catches up only on the next tick, and a track whose duration
+    /// arrived in between would otherwise seek to its start.
     fn seek(&self, fraction: f64) {
-        let duration = self.controller.read(|state| state.duration).max(0.0);
-        let target = fraction.clamp(0.0, 1.0) * duration;
-        if let Err(e) = self.controller.queue().seek(target) {
+        let queue = self.controller.queue();
+        let Some(duration) = queue.duration_seconds() else {
+            debug!(fraction, "seek dropped: the track has no duration yet");
+            return;
+        };
+        let target = fraction.clamp(0.0, 1.0) * duration.max(0.0);
+        if let Err(e) = queue.seek(target) {
             error!("seek failed: {e:?}");
         }
     }
@@ -385,14 +392,12 @@ mod tests {
     use ::kithara::platform::{CancelToken, time::Instant};
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
-    #[cfg(feature = "broadcast")]
-    use crate::analysis::fixtures::tone_mp3;
+    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig, pools::AppQueueControl};
     #[cfg(not(feature = "broadcast"))]
     use crate::{
         deck::DeckId,
         engine::{Command, DeckCmd, Envelope},
     };
-    use crate::{gui::rig::Rig, pools::AppQueueControl};
 
     fn close(rig: &mut Rig) {
         rig.close_window();
@@ -461,6 +466,52 @@ mod tests {
             close(rig);
             rig.frame();
             assert!(!rig.flag("broadcast.on_air"), "the broadcast is released");
+        })
+        .await;
+        rig.close().await;
+    }
+
+    #[cfg(not(feature = "broadcast"))]
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_seek_lands_on_the_duration_the_queue_knows_before_the_next_tick(tone_mp3: String) {
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::realtime()))
+            .await
+            .expect("rig fixture is infallible");
+        rig.call(move |rig| {
+            rig.queues[0]
+                .append(tone_mp3.as_str())
+                .expect("deck A takes the track");
+            let queue_tick = |rig: &mut Rig| {
+                let _ = rig.queues[0].tick();
+            };
+            rig.until(
+                "the queue learns the duration",
+                Rig::DEADLINE,
+                queue_tick,
+                |rig| rig.queues[0].duration_seconds().is_some(),
+            );
+            let duration = rig.queues[0]
+                .duration_seconds()
+                .expect("the queue knows the duration");
+
+            rig.engine.apply(Envelope {
+                command: Command::Deck {
+                    deck: DeckId(0),
+                    cmd: DeckCmd::SeekFraction(0.9),
+                },
+                seq: 1,
+            });
+
+            rig.until(
+                "the seek lands near the end of the track",
+                Rig::DEADLINE,
+                queue_tick,
+                |rig| {
+                    rig.queues[0]
+                        .position_seconds()
+                        .is_some_and(|position| position >= duration * 0.8)
+                },
+            );
         })
         .await;
         rig.close().await;

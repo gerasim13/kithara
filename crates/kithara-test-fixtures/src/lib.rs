@@ -43,7 +43,7 @@ pub mod signal_asset;
 #[cfg(all(feature = "native-fixtures", not(target_arch = "wasm32")))]
 pub mod store;
 
-pub use mp3::{Mp3Shape, without_xing_frame};
+pub use mp3::{Mp3Shape, headerless_bitrate_change, without_xing_frame};
 pub use signal_asset::SignalAsset;
 
 #[cfg(all(feature = "hls-inputs", not(target_arch = "wasm32")))]
@@ -57,3 +57,4 @@ pub use fixtures::{
     integration as integration_fixtures, mock as mock_fixtures, play as play_fixtures,
     stretch as stretch_fixtures, unit as unit_fixtures,
 };
+mod consts;

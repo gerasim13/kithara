@@ -10,7 +10,7 @@ use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
 
-use crate::{PlayWorker, session::SessionBinding};
+use crate::{PlayWorker, consts, session::SessionBinding};
 
 fn allocate_grid_id() -> BeatGridId {
     let Ok(id) = BeatGridId::allocate() else {
@@ -27,14 +27,6 @@ pub const DEFAULT_CROSSFADE_DURATION: f32 = 1.0;
 /// Playback-rate target a player starts with (1.0 = normal speed). Owned
 /// here for the same reason as [`DEFAULT_CROSSFADE_DURATION`].
 pub const DEFAULT_PLAYING_RATE: f32 = 1.0;
-
-struct Consts;
-
-impl Consts {
-    const DEFAULT_EQ_BAND_COUNT: usize = 10;
-    const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
-    const DEFAULT_MAX_SLOTS: usize = 4;
-}
 
 fn default_event_bus_capacity() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_EVENT_BUS_CAPACITY).unwrap_or_else(|| unreachable!())
@@ -76,7 +68,7 @@ pub struct PlayerConfig<S> {
     /// layout is installed at runtime through `PlayerImpl::set_eq_layout`.
     #[config(
         skip = "layout moves to the live equalizer owner",
-        builder(default = generate_log_spaced_bands(Consts::DEFAULT_EQ_BAND_COUNT)),
+        builder(default = generate_log_spaced_bands(consts::DEFAULT_EQ_BAND_COUNT)),
         patch(skip),
         debug(skip)
     )]
@@ -128,14 +120,14 @@ pub struct PlayerConfig<S> {
     /// not a document key.
     #[config(
         value(f32, self.prefetch_duration.load()),
-        builder(default = LiveF32::new(Consts::DEFAULT_PREFETCH_DURATION), with = |value: f32| LiveF32::new(value)),
+        builder(default = LiveF32::new(consts::DEFAULT_PREFETCH_DURATION), with = |value: f32| LiveF32::new(value)),
         patch(skip),
         debug(skip)
     )]
     pub prefetch_duration: LiveF32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
-    #[config(value, builder(default = Consts::DEFAULT_MAX_SLOTS))]
+    #[config(value, builder(default = consts::DEFAULT_MAX_SLOTS))]
     pub max_slots: usize,
     /// Stable synchronization-group identity owned by this player.
     #[config(

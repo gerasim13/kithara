@@ -1,10 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use firewheel_core::{
-    dsp::filter::smoothing_filter::MIN_SETTLE_RATIO,
-    param::smoother::{SmoothedParam, SmootherConfig},
-};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::{
@@ -23,16 +20,18 @@ use crate::{
     WarpCursor, WarpPlanSlot, temporal::RateTarget,
 };
 
+mod consts {
+    /// Span the speed smoother measures its settle threshold against: the range
+    /// a playback speed realistically travels over, from a heavy stretch back to
+    /// unity and a little past it. The smoother reads it as a scale, not a bound,
+    /// so a speed outside it still smooths — it just settles on the same relative
+    /// terms as one inside.
+    pub(super) const SPEED_SMOOTHING_SPAN: f32 = 2.0;
+}
+
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
-
-/// Span the speed smoother measures its settle threshold against: the range
-/// a playback speed realistically travels over, from a heavy stretch back to
-/// unity and a little past it. The smoother reads it as a scale, not a bound,
-/// so a speed outside it still smooths — it just settles on the same relative
-/// terms as one inside.
-const SPEED_SMOOTHING_SPAN: f32 = 2.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
@@ -191,7 +190,7 @@ where
             applied_speed: (config.rate_smooth_frames().get() > 1).then(|| {
                 SmoothedParam::new(
                     speed,
-                    SPEED_SMOOTHING_SPAN,
+                    consts::SPEED_SMOOTHING_SPAN,
                     SmootherConfig {
                         smooth_seconds: smooth_frames / sample_rate * -MIN_SETTLE_RATIO.ln(),
                         settle_ratio: MIN_SETTLE_RATIO,
