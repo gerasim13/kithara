@@ -9,7 +9,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_sync::{LoadGeneration, SyncGateBinding};
+use kithara_sync::{LoadGeneration, SyncGateBinding, SyncReceiptTx};
 use kithara_warp::{RenderReader, RenderSnapshot, WarpMapRevision};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -20,7 +20,7 @@ use smallvec::SmallVec;
 use super::PlaybackShared;
 use crate::{
     bridge::{
-        PlayerCmd, PlayerNotification, SharedEq, SyncReceiptTx,
+        PlayerCmd, PlayerNotification, SharedEq,
         sync::{SyncReturn, SyncTicket},
     },
     rt::{PlayerNodeProcessor, track::PlayerTrack},

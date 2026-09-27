@@ -20,12 +20,15 @@ protocol through which operations are admitted and acknowledged.
 
 It owns `SyncGroup`, the live owner state behind it, the operation and
 admission vocabulary, the immutable topology snapshot, and the monotonic
-topology, operation, and load identities. Musical geometry — beat grids, beat
-alignment, warp maps, and the presentation frontier — remains in
-`kithara-warp`. Session timeline and clock ownership remain in `kithara-host`,
-and execution, epochs, and real-time residency remain in `kithara-play`.
+topology, operation, and load identities. It also owns the execution
+protocol: `SyncExecutor` staging a plan through the `StagePort` a player
+implements, the permit arbiter that orders the owner's control against one
+audio claim, and the per-slot receipt mailbox through which that claim
+reports back. Musical geometry — beat grids, beat alignment, warp maps, and
+the presentation frontier — remains in `kithara-warp`. The session clock
+remains in `kithara-host`; staging I/O and audio rendering remain in
+`kithara-play`, behind the ports this crate defines.
 
-The crate has no renderer, executor, platform backend, or transport
-responsibility, and never depends on a player, host, or queue.
+The crate never depends on a player, host, or queue.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-sync) for the ownership contract.

@@ -1,12 +1,12 @@
 use kithara_platform::sync::{Arc, atomic::Ordering};
-use kithara_signal::TransportRevision;
+use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
-use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp};
+use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, PresentationFrontier};
 
 use super::*;
 use crate::{
-    LoadGeneration, SourceChange, SyncExecutionStamp, SyncOperationId, TopologyRevision,
-    TopologyStamp,
+    LoadGeneration, SourceChange, SyncApplied, SyncExecutionStamp, SyncOperationId, SyncReceipt,
+    SyncReceiptTx, TopologyRevision, TopologyStamp, sync_receipts,
 };
 
 fn stamp(member: BeatGridId) -> SyncExecutionStamp {
@@ -29,6 +29,31 @@ fn bound(arbiter: &Arc<SyncArbiter>) -> SyncGateBinding {
     SyncGateBinding::new(Arc::clone(arbiter), Arc::new(cell()))
 }
 
+fn applied(permit: &ArmPermit) -> SyncApplied {
+    SyncApplied::builder()
+        .stamp(permit.stamp())
+        .frontier(
+            PresentationFrontier::builder()
+                .source(0)
+                .output(SessionFrame::new(0))
+                .build(),
+        )
+        .build()
+}
+
+/// Claim `cell` for `permit` with its receipt pair reserved in `receipts`.
+fn audio_claim<'a, 'r>(
+    arbiter: &'a SyncArbiter,
+    permit: &ArmPermit,
+    cell: &PermitCell,
+    receipts: &'r mut SyncReceiptTx,
+) -> Result<AudioClaim<'a, 'r>, ClaimError> {
+    let reserved = receipts
+        .reserve_pair(applied(permit))
+        .expect("the test mailbox has room for a pair");
+    arbiter.try_claim(permit, cell, reserved)
+}
+
 fn permit(binding: &SyncGateBinding) -> ArmPermit {
     binding
         .arbiter()
@@ -43,6 +68,8 @@ fn control_and_audio_claims_have_one_winner() {
     let arbiter = SyncArbiter::new();
     let a = cell();
     let b = cell();
+    let (mut a_receipts, _a_inbox) = sync_receipts();
+    let (mut b_receipts, _b_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
     let a_permit = control
         .mint_permit(&a, stamp(a.member()))
@@ -52,18 +79,18 @@ fn control_and_audio_claims_have_one_winner() {
         .expect("b permit");
     assert!(arbiter.try_control().is_none());
     assert!(matches!(
-        arbiter.try_claim(&a_permit, &a),
+        audio_claim(&arbiter, &a_permit, &a, &mut a_receipts),
         Err(ClaimError::Busy)
     ));
     drop(control);
 
-    let b_claim = arbiter.try_claim(&b_permit, &b).expect("b claims");
+    let b_claim = audio_claim(&arbiter, &b_permit, &b, &mut b_receipts).expect("b claims");
     assert!(arbiter.try_control().is_none());
     assert!(matches!(
-        arbiter.try_claim(&a_permit, &a),
+        audio_claim(&arbiter, &a_permit, &a, &mut a_receipts),
         Err(ClaimError::Busy)
     ));
-    b_claim.finish_after_receipts();
+    b_claim.finish();
     let _control = arbiter.try_control().expect("owner follows b");
 }
 
@@ -72,6 +99,8 @@ fn revocation_is_affected_member_only() {
     let arbiter = SyncArbiter::new();
     let a = cell();
     let b = cell();
+    let (mut a_receipts, _a_inbox) = sync_receipts();
+    let (mut b_receipts, _b_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
     let a_permit = control
         .mint_permit(&a, stamp(a.member()))
@@ -83,13 +112,12 @@ fn revocation_is_affected_member_only() {
     drop(control);
 
     assert!(matches!(
-        arbiter.try_claim(&a_permit, &a),
+        audio_claim(&arbiter, &a_permit, &a, &mut a_receipts),
         Err(ClaimError::StalePermit)
     ));
-    arbiter
-        .try_claim(&b_permit, &b)
+    audio_claim(&arbiter, &b_permit, &b, &mut b_receipts)
         .expect("unaffected b remains valid")
-        .finish_after_receipts();
+        .finish();
 }
 
 #[kithara::test]
@@ -97,6 +125,8 @@ fn retired_member_cannot_rearm_while_another_member_claims() {
     let arbiter = SyncArbiter::new();
     let a = cell();
     let b = cell();
+    let (mut a_receipts, _a_inbox) = sync_receipts();
+    let (mut b_receipts, _b_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
     let a_stamp = stamp(a.member());
     let a_permit = control.mint_permit(&a, a_stamp).expect("a permit");
@@ -110,28 +140,60 @@ fn retired_member_cannot_rearm_while_another_member_claims() {
     ));
     drop(control);
     assert!(matches!(
-        arbiter.try_claim(&a_permit, &a),
+        audio_claim(&arbiter, &a_permit, &a, &mut a_receipts),
         Err(ClaimError::CellRetired)
     ));
-    arbiter
-        .try_claim(&b_permit, &b)
+    audio_claim(&arbiter, &b_permit, &b, &mut b_receipts)
         .expect("b still claims")
-        .finish_after_receipts();
+        .finish();
 }
 
 #[kithara::test]
 fn claim_releases_owner_only_after_explicit_receipt_completion() {
     let arbiter = SyncArbiter::new();
     let cell = cell();
+    let (mut cell_receipts, _cell_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
     let permit = control
         .mint_permit(&cell, stamp(cell.member()))
         .expect("permit");
     drop(control);
-    let claim = arbiter.try_claim(&permit, &cell).expect("audio claims");
+    let claim = audio_claim(&arbiter, &permit, &cell, &mut cell_receipts).expect("audio claims");
     assert!(arbiter.try_control().is_none());
-    claim.finish_after_receipts();
+    claim.finish();
     let _control = arbiter.try_control().expect("owner enters after receipts");
+}
+
+#[kithara::test]
+fn the_owner_waits_until_the_claim_spends_its_receipt_pair() {
+    let arbiter = SyncArbiter::new();
+    let cell = cell();
+    let (mut receipts, mut inbox) = sync_receipts();
+    let control = arbiter.try_control().expect("owner enters");
+    let permit = control
+        .mint_permit(&cell, stamp(cell.member()))
+        .expect("permit");
+    assert!(matches!(
+        audio_claim(&arbiter, &permit, &cell, &mut receipts),
+        Err(ClaimError::Busy)
+    ));
+    drop(control);
+    assert_eq!(inbox.next_receipt(), None, "a refused claim writes nothing");
+
+    let claim = audio_claim(&arbiter, &permit, &cell, &mut receipts).expect("audio claims");
+    assert_eq!(inbox.next_receipt(), None, "the pair waits for the claim");
+    assert!(arbiter.try_control().is_none());
+    claim.finish();
+
+    assert_eq!(
+        inbox.next_receipt(),
+        Some(SyncReceipt::Armed(permit.stamp()))
+    );
+    assert_eq!(
+        inbox.next_receipt(),
+        Some(SyncReceipt::Presented(applied(&permit)))
+    );
+    let _control = arbiter.try_control().expect("owner enters after the pair");
 }
 
 #[kithara::test]
@@ -152,12 +214,13 @@ fn revision_exhaustion_is_rejected_before_revocation() {
 fn abandoned_claim_can_be_tombstoned_after_audio_quiesces() {
     let arbiter = SyncArbiter::new();
     let cell = cell();
+    let (mut cell_receipts, _cell_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
     let permit = control
         .mint_permit(&cell, stamp(cell.member()))
         .expect("permit");
     drop(control);
-    let claim = arbiter.try_claim(&permit, &cell).expect("audio claims");
+    let claim = audio_claim(&arbiter, &permit, &cell, &mut cell_receipts).expect("audio claims");
     drop(claim);
     assert!(arbiter.try_control().is_none());
     assert!(matches!(
@@ -171,7 +234,7 @@ fn abandoned_claim_can_be_tombstoned_after_audio_quiesces() {
         Err(ControlEnterError::Closed)
     ));
     assert!(matches!(
-        arbiter.try_claim(&permit, &cell),
+        audio_claim(&arbiter, &permit, &cell, &mut cell_receipts),
         Err(ClaimError::Closed)
     ));
 }
@@ -181,22 +244,23 @@ fn a_reserved_source_parks_its_claim_while_another_member_claims() {
     let arbiter = Arc::new(SyncArbiter::new());
     let a = bound(&arbiter);
     let b = bound(&arbiter);
+    let (mut a_receipts, _a_inbox) = sync_receipts();
+    let (mut b_receipts, _b_inbox) = sync_receipts();
     let (a_permit, b_permit) = (permit(&a), permit(&b));
 
     let reservation = a.reserve_source().expect("a player reserves a");
     assert_eq!(a.permit_state(&a_permit), PermitState::Parked);
     assert!(matches!(
-        arbiter.try_claim(&a_permit, a.cell()),
+        audio_claim(&arbiter, &a_permit, a.cell(), &mut a_receipts),
         Err(ClaimError::SourceParked)
     ));
     assert!(matches!(
         a.reserve_source(),
         Err(ControlError::SourceReserved)
     ));
-    arbiter
-        .try_claim(&b_permit, b.cell())
+    audio_claim(&arbiter, &b_permit, b.cell(), &mut b_receipts)
         .expect("an unrelated member claims while a is reserved")
-        .finish_after_receipts();
+        .finish();
     let control = arbiter.try_control().expect("owner enters");
     assert_eq!(control.source_change(a.cell()), None);
     control
@@ -210,6 +274,7 @@ fn a_reserved_source_parks_its_claim_while_another_member_claims() {
 fn a_permit_minted_during_an_edit_waits_for_its_outcome() {
     let arbiter = Arc::new(SyncArbiter::new());
     let binding = bound(&arbiter);
+    let (mut binding_receipts, _binding_inbox) = sync_receipts();
 
     let aborted = binding.reserve_source().expect("a player reserves");
     let survives = permit(&binding);
@@ -226,7 +291,7 @@ fn a_permit_minted_during_an_edit_waits_for_its_outcome() {
     assert_eq!(binding.permit_state(&stale), PermitState::Parked);
     committed.publish(SourceChange::Discontinuity);
     assert!(matches!(
-        arbiter.try_claim(&stale, binding.cell()),
+        audio_claim(&arbiter, &stale, binding.cell(), &mut binding_receipts),
         Err(ClaimError::SourceParked)
     ));
     let control = arbiter.try_control().expect("owner enters");
@@ -250,6 +315,7 @@ fn a_permit_minted_during_an_edit_waits_for_its_outcome() {
 fn an_unpublished_reservation_aborts_without_a_change() {
     let arbiter = Arc::new(SyncArbiter::new());
     let binding = bound(&arbiter);
+    let (mut binding_receipts, _binding_inbox) = sync_receipts();
     let permit = permit(&binding);
     let before = binding.source_revision();
 
@@ -260,16 +326,16 @@ fn an_unpublished_reservation_aborts_without_a_change() {
     assert_eq!(control.source_change(binding.cell()), None);
     assert_eq!(control.current_source(binding.cell()), Ok(before));
     drop(control);
-    arbiter
-        .try_claim(&permit, binding.cell())
+    audio_claim(&arbiter, &permit, binding.cell(), &mut binding_receipts)
         .expect("the unchanged source still claims")
-        .finish_after_receipts();
+        .finish();
 }
 
 #[kithara::test]
 fn a_published_change_coalesces_and_holds_the_old_permit_until_withdrawal() {
     let arbiter = Arc::new(SyncArbiter::new());
     let binding = bound(&arbiter);
+    let (mut binding_receipts, _binding_inbox) = sync_receipts();
     let permit = permit(&binding);
     let before = binding.source_revision();
 
@@ -284,7 +350,7 @@ fn a_published_change_coalesces_and_holds_the_old_permit_until_withdrawal() {
     assert_ne!(binding.source_revision(), before);
     assert_eq!(binding.permit_state(&permit), PermitState::Parked);
     assert!(matches!(
-        arbiter.try_claim(&permit, binding.cell()),
+        audio_claim(&arbiter, &permit, binding.cell(), &mut binding_receipts),
         Err(ClaimError::SourceParked)
     ));
 
@@ -311,24 +377,23 @@ fn a_published_change_coalesces_and_holds_the_old_permit_until_withdrawal() {
         .mint_permit(binding.cell(), stamp(binding.cell().member()))
         .expect("the reconciled source mints again");
     drop(control);
-    arbiter
-        .try_claim(&fresh, binding.cell())
+    audio_claim(&arbiter, &fresh, binding.cell(), &mut binding_receipts)
         .expect("a permit for the new source claims")
-        .finish_after_receipts();
+        .finish();
 }
 
 #[kithara::test]
 fn a_reservation_does_not_wait_for_an_in_progress_claim() {
     let arbiter = Arc::new(SyncArbiter::new());
     let binding = bound(&arbiter);
+    let (mut binding_receipts, _binding_inbox) = sync_receipts();
     let permit = permit(&binding);
-    let claim = arbiter
-        .try_claim(&permit, binding.cell())
+    let claim = audio_claim(&arbiter, &permit, binding.cell(), &mut binding_receipts)
         .expect("audio claims");
     let reservation = binding
         .reserve_source()
         .expect("a player reserves while the callback claims");
-    claim.finish_after_receipts();
+    claim.finish();
     reservation.publish(SourceChange::Discontinuity);
     assert_eq!(binding.permit_state(&permit), PermitState::Parked);
 }

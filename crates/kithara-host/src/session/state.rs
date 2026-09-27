@@ -17,7 +17,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{SessionSampleRate, StreamShape, session::RegisteredPlayer};
 use kithara_sync::{
     ControlGuard, GroupState, PermitCell, SyncArbiter, SyncError, SyncGateBinding, SyncGroup,
-    SyncGroupSnapshot, SyncReceipt, SyncStatusSnapshot,
+    SyncGroupSnapshot, SyncReceipt, SyncReceiptInbox, SyncStatusSnapshot,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
 use tracing::{debug, warn};
@@ -31,7 +31,7 @@ use super::{
 use crate::{
     PlayerMember,
     api::{SessionDuckingMode, SlotId},
-    bridge::{SharedEq, SyncReceiptRx},
+    bridge::SharedEq,
     rt::{LimiterNode, MasterEqNode},
 };
 
@@ -40,17 +40,7 @@ pub(super) struct SlotNodes {
     pub(super) player_node_id: NodeID,
     pub(super) volume_node_id: NodeID,
     pub(super) slot_id: SlotId,
-    pub(super) sync_receipts: SyncReceiptRx,
-    pub(super) pending_receipt: Option<SyncReceipt>,
-}
-
-impl SlotNodes {
-    /// The next callback receipt, the one a failed owner update kept first.
-    pub(super) fn next_receipt(&mut self) -> Option<SyncReceipt> {
-        self.pending_receipt
-            .take()
-            .or_else(|| self.sync_receipts.try_pop())
-    }
+    pub(super) sync_receipts: SyncReceiptInbox,
 }
 
 /// A slot whose nodes have left the graph while the callback may still hold
@@ -282,7 +272,7 @@ impl<T, S> Drop for SessionState<T, S> {
             .flat_map(|deck| deck.slots.iter_mut());
         let retiring = self.retiring.iter_mut().map(|retiring| &mut retiring.slot);
         for slot in live.chain(retiring) {
-            while let Some(receipt) = slot.next_receipt() {
+            while let Some(receipt) = slot.sync_receipts.next_receipt() {
                 if let Err(error) = self.root.acknowledge(receipt) {
                     warn!(?error, ?receipt, "final sync receipt could not be recorded");
                 }

@@ -15,7 +15,7 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_sync::{PermitState, SyncExecutionReject, SyncGateBinding};
+use kithara_sync::{PermitState, SyncExecutionReject, SyncGateBinding, SyncReceiptTx};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
@@ -31,8 +31,7 @@ use super::{
 };
 use crate::{
     bridge::{
-        NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, SyncReceiptTx, TrackState,
-        TrackTransition,
+        NodeInputs, PlaybackShared, PlayerCmd, PlayerNotification, TrackState, TrackTransition,
         sync::{SyncReturn, SyncTicket},
     },
     rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots, render::SyncRender},
@@ -265,7 +264,10 @@ impl PlayerNodeProcessor {
             let Some(receipts) = self.sync_receipts.as_mut() else {
                 return;
             };
-            if !receipts.publish_rejected(ticket.permit.stamp(), reason) {
+            if receipts
+                .publish_rejected(ticket.permit.stamp(), reason)
+                .is_err()
+            {
                 return;
             }
         }
@@ -593,17 +595,16 @@ mod tests {
     use kithara_signal::{
         AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
     };
-    use kithara_sync::{LoadGeneration, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt};
+    use kithara_sync::{
+        LoadGeneration, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, sync_receipts,
+    };
     use kithara_warp::{BeatGridId, RenderContext, WarpMapRevision};
     use ringbuf::traits::{Consumer, Producer};
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
-        bridge::{
-            SharedEq, slot_channels,
-            sync::{PreparedFirst, sync_receipts},
-        },
+        bridge::{SharedEq, slot_channels, sync::PreparedFirst},
         resource::Resource,
         rt::sync_owner_fixture::prepared_entry,
         test_pools::pools,
@@ -771,7 +772,7 @@ mod tests {
         ));
         assert!(!processor.playback.playing.load(Ordering::SeqCst));
         assert_eq!(processor.prefetch_duration, 0.0);
-        assert!(receipt_rx.try_pop().is_none());
+        assert!(receipt_rx.next_receipt().is_none());
 
         returned.push(control.sync_return_rx.try_pop().expect("first return"));
         processor.maintain_sync_mailboxes();
@@ -810,11 +811,13 @@ mod tests {
         assert!(processor.cmd_rx.try_peek().is_none());
         assert!(!processor.playback.playing.load(Ordering::SeqCst));
         assert_eq!(processor.prefetch_duration, 0.25);
-        assert!(matches!(receipt_rx.try_pop(), Some(SyncReceipt::Rejected {
+        assert!(
+            matches!(receipt_rx.next_receipt(), Some(SyncReceipt::Rejected {
             stamp,
             reason: SyncExecutionReject::Cancelled,
-        }) if stamp == pending_stamp));
-        assert!(receipt_rx.try_pop().is_none());
+        }) if stamp == pending_stamp)
+        );
+        assert!(receipt_rx.next_receipt().is_none());
 
         while let Some(value) = control.sync_return_rx.try_pop() {
             returned.push(value);
@@ -857,7 +860,7 @@ mod tests {
         assert!(processor.sync_rx.try_peek().is_none());
         assert!(processor.cmd_rx.try_peek().is_none());
         assert!(
-            receipt_rx.try_pop().is_none(),
+            receipt_rx.next_receipt().is_none(),
             "withdrawal already belongs to the owner"
         );
         assert!(matches!(

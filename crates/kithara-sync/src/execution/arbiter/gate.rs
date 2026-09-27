@@ -5,6 +5,7 @@ use kithara_platform::{
 };
 
 use super::{ArmPermit, ControlGuard, PermitCell, consts};
+use crate::ReceiptReservation;
 
 /// Arbitrates one session's owner mutations and audio claims without owning
 /// the synchronization ledger. The Host owns this value for the session.
@@ -73,18 +74,26 @@ impl SyncArbiter {
     }
 
     /// Claim a ready audio candidate with one gate CAS and no wait or lock.
-    /// Capacity, first-span validity, and the activation frame are the RT
-    /// caller's preconditions before this method is invoked.
+    /// The claim takes the candidate's reserved receipt pair, so the gate
+    /// reopens only once both receipts are written. First-span validity and
+    /// the activation frame are the RT caller's preconditions.
     ///
     /// # Errors
     ///
     /// Returns the precise busy, closed, wrong-member, stale-permit, or
-    /// parked-source refusal before an audio change.
-    pub fn try_claim(
+    /// parked-source refusal before an audio change. The reservation is
+    /// released with the refusal.
+    pub fn try_claim<'r>(
         &self,
         permit: &ArmPermit,
         cell: &PermitCell,
-    ) -> Result<AudioClaim<'_>, ClaimError> {
+        receipts: ReceiptReservation<'r>,
+    ) -> Result<AudioClaim<'_, 'r>, ClaimError> {
+        debug_assert_eq!(
+            receipts.stamp(),
+            permit.stamp,
+            "the reserved receipts report the permit's preparation"
+        );
         if permit.stamp.member().grid_id() != cell.member {
             return Err(ClaimError::WrongMember);
         }
@@ -126,7 +135,10 @@ impl SyncArbiter {
         } else if !permit.source_current(cell) {
             Err(ClaimError::SourceParked)
         } else {
-            Ok(AudioClaim { arbiter: self })
+            Ok(AudioClaim {
+                arbiter: self,
+                receipts,
+            })
         };
         if result.is_err() {
             let _ = self.phase.compare_exchange(
@@ -178,14 +190,17 @@ pub enum ClaimError {
 /// Dropping this value without finishing leaves the gate claimed, so no owner
 /// may proceed on an audio change it has not heard about.
 #[must_use]
-pub struct AudioClaim<'a> {
+pub struct AudioClaim<'a, 'r> {
     pub(super) arbiter: &'a SyncArbiter,
+    receipts: ReceiptReservation<'r>,
 }
 
-impl AudioClaim<'_> {
-    /// Complete only after a nonempty prefetched span was consumed and both
-    /// Armed and Presented were written into pre-reserved receipt slots.
-    pub fn finish_after_receipts(self) {
+impl AudioClaim<'_, '_> {
+    /// Complete after a nonempty prefetched span was consumed: write Armed
+    /// and Presented into the reserved slots, then reopen the gate.
+    #[inline]
+    pub fn finish(self) {
+        self.receipts.publish();
         let _ = self.arbiter.phase.compare_exchange(
             consts::AUDIO_CLAIMED,
             consts::OPEN,

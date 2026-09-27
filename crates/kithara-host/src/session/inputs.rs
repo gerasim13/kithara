@@ -164,7 +164,10 @@ fn drain_slot_receipts<T, S>(
     control: &ControlGuard<'_>,
     at: SlotAt,
 ) -> Result<(), SessionError> {
-    while let Some(receipt) = at.get(state).and_then(SlotNodes::next_receipt) {
+    while let Some(receipt) = at
+        .get(state)
+        .and_then(|slot| slot.sync_receipts.next_receipt())
+    {
         let result = match receipt {
             SyncReceipt::Armed(_) | SyncReceipt::Presented(_) | SyncReceipt::Rejected { .. } => {
                 acknowledge_root(state, receipt, control).map(|_| ())
@@ -175,7 +178,7 @@ fn drain_slot_receipts<T, S>(
         };
         if let Err(error) = result {
             if let Some(slot) = at.get(state) {
-                slot.pending_receipt = Some(receipt);
+                slot.sync_receipts.keep(receipt);
             }
             return Err(error);
         }
@@ -195,7 +198,7 @@ fn reap_retired_slots<T, S>(
 ) -> Result<(), SessionError> {
     let mut index = 0;
     while index < state.retiring.len() {
-        if !state.retiring[index].slot.sync_receipts.producer_gone() {
+        if !state.retiring[index].slot.sync_receipts.is_producer_gone() {
             index += 1;
             continue;
         }

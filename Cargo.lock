@@ -5866,6 +5866,7 @@ dependencies = [
  "kithara-warp",
  "kithara-workspace-hack",
  "num-traits",
+ "ringbuf",
  "thiserror 2.0.18",
  "tracing",
 ]

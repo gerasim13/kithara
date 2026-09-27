@@ -11,6 +11,7 @@ use kithara_effects::{
 };
 use kithara_output::OutputGroup;
 use kithara_signal::FaderValue;
+use kithara_sync::sync_receipts;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
@@ -25,7 +26,7 @@ use super::{
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
-    bridge::{slot_channels, sync_receipts},
+    bridge::slot_channels,
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
 /// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
@@ -445,7 +446,6 @@ pub(super) mod slots {
             volume_memo: slot_volume_memo,
             volume_node_id: slot_volume_id,
             sync_receipts: receipt_rx,
-            pending_receipt: None,
         });
         debug!(
             player_id,

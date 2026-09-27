@@ -7,7 +7,7 @@ use kithara_dsp::{
     param::{Mix, MixDSP, SmootherConfig},
 };
 use kithara_events::TrackId;
-use kithara_sync::{ClaimError, PermitState, SyncApplied, SyncExecutionReject};
+use kithara_sync::{ClaimError, PermitState, SyncApplied, SyncExecutionReject, SyncReceiptTx};
 use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
@@ -24,7 +24,7 @@ use super::{
 use crate::{
     CrossfadeCurve, CrossfadeSettings,
     bridge::{
-        PlaybackShared, PlayerNotification, RtMetrics, SyncReceiptTx, TrackState,
+        PlaybackShared, PlayerNotification, RtMetrics, TrackState,
         sync::{SyncReturn, SyncTicket},
     },
     rt::{TrackSlot, TrackSlots},
@@ -411,7 +411,10 @@ fn reject_sync(sync: &mut SyncRender<'_>, reason: SyncExecutionReject) {
     let Some(receipts) = sync.receipts.as_mut() else {
         return;
     };
-    if !receipts.publish_rejected(ticket.permit.stamp(), reason) {
+    if receipts
+        .publish_rejected(ticket.permit.stamp(), reason)
+        .is_err()
+    {
         return;
     }
     let Some(ticket) = sync.pending.try_pop() else {
@@ -565,7 +568,7 @@ fn claim_and_render_sync(
     let Some(receipts) = sync.receipts.as_mut() else {
         return SyncAttempt::None;
     };
-    let Some(reservation) = receipts.reserve_pair(stamp, applied) else {
+    let Some(reservation) = receipts.reserve_pair(applied) else {
         return SyncAttempt::None;
     };
     let gate = ticket.gate.clone();
@@ -597,10 +600,9 @@ fn claim_and_render_sync(
             outcome: prefix,
         };
     }
-    let claim = match gate.arbiter().try_claim(&permit, gate.cell()) {
+    let claim = match gate.arbiter().try_claim(&permit, gate.cell(), reservation) {
         Ok(claim) => claim,
         Err(ClaimError::SourceParked) => {
-            drop(reservation);
             return SyncAttempt::PrefixRendered {
                 item_id,
                 offset,
@@ -608,7 +610,6 @@ fn claim_and_render_sync(
             };
         }
         Err(ClaimError::StalePermit | ClaimError::CellRetired) => {
-            drop(reservation);
             retire_withdrawn_sync(sync);
             return SyncAttempt::PrefixRendered {
                 item_id,
@@ -617,7 +618,6 @@ fn claim_and_render_sync(
             };
         }
         Err(error) => {
-            drop(reservation);
             reject_sync(sync, claim_rejection(error));
             return SyncAttempt::PrefixRendered {
                 item_id,
@@ -649,8 +649,7 @@ fn claim_and_render_sync(
     sync.playback
         .active_sync_map
         .store(u64::from(map), Ordering::Release);
-    reservation.publish();
-    claim.finish_after_receipts();
+    claim.finish();
 
     // Tail I/O and the remaining new-lane read happen after claim release.
     old.render(context, read_bufs, bus_bufs, offset..frames, sink.metrics());
@@ -768,7 +767,9 @@ mod sync_tests {
     use kithara_signal::{
         AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
     };
-    use kithara_sync::{LoadGeneration, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt};
+    use kithara_sync::{
+        LoadGeneration, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, sync_receipts,
+    };
     use kithara_test_utils::kithara;
     use kithara_warp::{BeatGridId, RenderContext};
     use ringbuf::{
@@ -779,10 +780,7 @@ mod sync_tests {
 
     use super::*;
     use crate::{
-        bridge::{
-            PlaybackShared,
-            sync::{PreparedFirst, sync_receipts},
-        },
+        bridge::{PlaybackShared, sync::PreparedFirst},
         resource::Resource,
         rt::sync_owner_fixture::prepared_entry,
         test_pools::pools,
@@ -1003,7 +1001,7 @@ mod sync_tests {
             );
         }
         let mut delivered = Vec::new();
-        while let Some(receipt) = receipt_rx.try_pop() {
+        while let Some(receipt) = receipt_rx.next_receipt() {
             delivered.push(receipt);
         }
         let pending_remains = pending.try_peek().is_some();

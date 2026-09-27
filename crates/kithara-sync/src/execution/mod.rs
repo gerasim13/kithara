@@ -2,6 +2,7 @@ mod arbiter;
 mod command;
 mod executor;
 mod group;
+mod mailbox;
 mod port;
 
 pub use arbiter::{
@@ -12,4 +13,5 @@ pub use arbiter::{
 pub use command::SyncExecution;
 pub use executor::SyncExecutor;
 pub use group::{ExecutedGroup, SyncAttachment};
+pub use mailbox::{ReceiptReservation, SyncReceiptInbox, SyncReceiptTx, sync_receipts};
 pub use port::{ReceiptSink, StagePort, SyncReceiptAck};
