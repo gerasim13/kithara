@@ -52,7 +52,7 @@ pub(crate) enum SyncCmd {
         target: BeatGridId,
         member: BeatGridId,
         intent: SyncIntent,
-        observation: Option<ResidentLoadObservation>,
+        observation: Option<Box<ResidentLoadObservation>>,
     },
 }
 

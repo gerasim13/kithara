@@ -40,6 +40,7 @@ impl<S> PlayerRuntime<S> {
             load,
             requested_speed: f64::from(self.core.warp.stretch().speed()),
             render,
+            source: self.core.engine.source_revision(),
             staging,
         })
     }

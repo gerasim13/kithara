@@ -5,8 +5,9 @@ mod group;
 mod port;
 
 pub use arbiter::{
-    ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError, ControlGuard, PermitCell,
-    PreparedRevocation, SyncArbiter, SyncGateBinding,
+    ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError, ControlGuard,
+    PendingSourceChange, PermitCell, PermitState, PreparedRevocation, SourceReservation,
+    SourceRevision, SyncArbiter, SyncGateBinding,
 };
 pub use command::SyncExecution;
 pub use executor::SyncExecutor;

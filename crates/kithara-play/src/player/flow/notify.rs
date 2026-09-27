@@ -2,6 +2,7 @@ use std::{ops::Deref, sync::atomic::Ordering};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
+use kithara_sync::SourceChange;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -91,6 +92,12 @@ where
 
         if pending.index >= self.item_count() {
             return;
+        }
+        // The audio thread already stitched the successor in, so the change
+        // is reported, not held: nothing is left to abort.
+        match self.core.engine.edit_source() {
+            Ok(edit) => edit.commit(SourceChange::Discontinuity),
+            Err(error) => tracing::warn!(%error, "gapless promotion unreported to sync owner"),
         }
         self.phase
             .lock()

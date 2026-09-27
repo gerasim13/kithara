@@ -368,7 +368,7 @@ impl<S> Host<S> {
                 target: deck.id(),
                 member: deck.track_id,
                 intent,
-                observation,
+                observation: observation.map(Box::new),
             }))? {
             HostReply::Admission(Ok(_)) => Ok(()),
             HostReply::Admission(Err(rejected)) => {

@@ -199,6 +199,34 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     );
 }
 
+/// The operation the deck beside the cued one syncs under. Its lane installs
+/// whenever its own media allows, before or after the cued deck's, so these
+/// scenarios leave its receipt out.
+async fn beside_operation(harness: &ProductHarness, case: SyncCase) -> u64 {
+    let beside = Arc::clone(&harness.decks[1]);
+    let state = harness
+        .host
+        .with(move |host| host.deck_sync_state(&beside))
+        .await
+        .unwrap_or_else(|error| panic!("{}: read the deck beside: {error}", case.id()));
+    let SyncStatusSnapshot::Prepared { operation, .. } = state.status else {
+        panic!(
+            "{}: the paused deck beside holds its own sync pending: {:?}",
+            case.id(),
+            state.status
+        );
+    };
+    u64::from(operation)
+}
+
+/// `receipts` without the one answered for the deck `beside`.
+fn cued(receipts: Vec<Delivered>, beside: u64) -> Vec<Delivered> {
+    receipts
+        .into_iter()
+        .filter(|receipt| receipt.operation != beside)
+        .collect()
+}
+
 #[kithara::test(
     native,
     tokio,
@@ -219,6 +247,7 @@ async fn unloading_the_track_retires_its_installed_lane_without_a_stale_receipt(
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
     let operation = prepare_cue(&mut harness, case, rate, cue, LISTEN_FRAMES + BLOCK_FRAMES).await;
     let installed = render_until(&mut harness, case, operation, INSTALLED).await;
+    let beside = beside_operation(&harness, case).await;
     let deck = Arc::clone(&harness.decks[0]);
     let before = harness
         .host
@@ -241,9 +270,9 @@ async fn unloading_the_track_retires_its_installed_lane_without_a_stale_receipt(
 
     let control = harness.decks[0].control().clone();
     harness.host.run(move || control.clear()).await;
-    let after_withdrawal = delivered();
+    let after_withdrawal = cued(delivered(), beside);
     assert!(
-        after_withdrawal.starts_with(&installed),
+        after_withdrawal.starts_with(&cued(installed, beside)),
         "the Installed receipt remains recorded through clear"
     );
     harness.settle(case, 8).await;
@@ -265,7 +294,7 @@ async fn unloading_the_track_retires_its_installed_lane_without_a_stale_receipt(
     assert_eq!(harness.decks[0].len(), 0, "cleared deck has no resident");
     assert!(harness.decks[0].playback_view().buffered.is_none());
     assert_eq!(
-        delivered(),
+        cued(delivered(), beside),
         after_withdrawal,
         "no receipt after clear returns"
     );
@@ -277,7 +306,78 @@ async fn unloading_the_track_retires_its_installed_lane_without_a_stale_receipt(
         "{}: cleared deck produces no PCM after custody returns",
         case.id()
     );
-    assert_eq!(delivered(), after_withdrawal, "no late receipt after clear");
+    assert_eq!(
+        cued(delivered(), beside),
+        after_withdrawal,
+        "no late receipt after clear"
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(60))
+)]
+#[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
+async fn a_seek_withdraws_the_installed_lane_it_made_stale_and_keeps_the_mode(
+    #[case] sources: PreparedSources,
+    #[case] rate: f64,
+    #[case] cue: Start,
+) {
+    let case = STAGED_CUE_BESIDE_A_DECK;
+    let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
+    let operation = prepare_cue(&mut harness, case, rate, cue, LISTEN_FRAMES + BLOCK_FRAMES).await;
+    let installed = render_until(&mut harness, case, operation, INSTALLED).await;
+    let beside = beside_operation(&harness, case).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let before = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("read installed deck state");
+    assert!(
+        matches!(before.status, SyncStatusSnapshot::Prepared { operation: pending, .. } if u64::from(pending) == operation),
+        "{}: the installed lane is pending until its first PCM",
+        case.id()
+    );
+
+    let control = harness.decks[0].control().clone();
+    let target = harness.start_seconds(0, cue) / 2.0;
+    harness
+        .host
+        .run(move || control.seek(target))
+        .await
+        .unwrap_or_else(|error| panic!("{}: seek the deck: {error}", case.id()));
+    harness.settle(case, 8).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let after = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("read sought deck state");
+
+    assert!(
+        !matches!(after.status, SyncStatusSnapshot::Prepared { operation: pending, .. } if u64::from(pending) == operation),
+        "{}: a seek leaves no decision taken for the old source: {:?}",
+        case.id(),
+        after.status
+    );
+    assert_eq!(
+        after.mode,
+        before.mode,
+        "{}: a seek keeps the mode",
+        case.id()
+    );
+    assert_eq!(
+        cued(delivered(), beside),
+        cued(installed, beside),
+        "{}: the withdrawn lane is dropped without a rejection",
+        case.id()
+    );
 }
 
 #[kithara::test(

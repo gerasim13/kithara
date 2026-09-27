@@ -1,5 +1,5 @@
 use kithara_events::TrackId;
-use kithara_sync::LoadGeneration;
+use kithara_sync::{LoadGeneration, SourceRevision};
 use kithara_warp::RenderSnapshot;
 
 use crate::bridge::PlaybackSnapshot;
@@ -39,6 +39,7 @@ pub struct ResidentLoadObservation {
     pub(crate) load: LoadGeneration,
     pub(crate) requested_speed: f64,
     pub(crate) render: ResidentRender,
+    pub(crate) source: Option<SourceRevision>,
     pub(crate) staging: ResidentStaging,
 }
 
@@ -65,6 +66,13 @@ impl ResidentLoadObservation {
     #[must_use]
     pub const fn render(&self) -> &ResidentRender {
         &self.render
+    }
+
+    /// Host-arbitrated source revision this observation was taken at; `None`
+    /// when no Host session arbitrates the player.
+    #[must_use]
+    pub const fn source(&self) -> Option<SourceRevision> {
+        self.source
     }
 
     /// Whether staging still targets this committed load.

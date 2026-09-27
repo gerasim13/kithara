@@ -7,7 +7,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_sync::LoadGeneration;
+use kithara_sync::{LoadGeneration, SourceChange};
 use kithara_warp::WarpConfig;
 use tracing::{debug, warn};
 
@@ -198,7 +198,7 @@ impl<S> PlayerRuntime<S> {
         self.set_status(PlayerStatus::Unknown);
         *self.core.start_position.lock() = None;
         let slot = self.slot();
-        let _ = self.send_to_slot(PlayerCmd::Clear);
+        let _ = self.send_source_change(PlayerCmd::Clear, SourceChange::Discontinuity);
 
         if self.core.engine.is_running() {
             if let Some(slot) = slot

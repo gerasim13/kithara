@@ -8,8 +8,9 @@ mod protocol;
 
 pub use execution::{
     ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError, ControlGuard,
-    ExecutedGroup, PermitCell, PreparedRevocation, ReceiptSink, StagePort, SyncArbiter,
-    SyncAttachment, SyncExecution, SyncExecutor, SyncGateBinding, SyncReceiptAck,
+    ExecutedGroup, PendingSourceChange, PermitCell, PermitState, PreparedRevocation, ReceiptSink,
+    SourceReservation, SourceRevision, StagePort, SyncArbiter, SyncAttachment, SyncExecution,
+    SyncExecutor, SyncGateBinding, SyncReceiptAck,
 };
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{

@@ -15,7 +15,7 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_sync::SyncExecutionReject;
+use kithara_sync::{PermitState, SyncExecutionReject};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
@@ -256,7 +256,10 @@ impl PlayerNodeProcessor {
         let Some(ticket) = self.sync_rx.try_peek() else {
             return;
         };
-        if ticket.gate.still_permits(&ticket.permit) {
+        // Only a current permit earns a rejection. A withdrawn one is the
+        // owner's already; a parked one is withdrawn by the source change
+        // that parked it.
+        if ticket.gate.permit_state(&ticket.permit) == PermitState::Current {
             let Some(receipts) = self.sync_receipts.as_mut() else {
                 return;
             };

@@ -1,6 +1,6 @@
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
-use kithara_sync::LoadGeneration;
+use kithara_sync::{LoadGeneration, SourceChange, SourceReservation, SourceRevision};
 use ringbuf::traits::{Observer, Producer};
 
 use super::core::EngineImpl;
@@ -9,7 +9,24 @@ use crate::{
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
     rt::track::PlayerResource,
+    session::SessionError,
 };
+
+/// One change of what this player's resident plays, held from before the
+/// audio thread can see it until it is reported. Without a Host session no
+/// owner plans against the source, so there is nothing to hold.
+#[must_use]
+pub(crate) struct SourceEdit(Option<SourceReservation>);
+
+impl SourceEdit {
+    /// Report the change once the audio thread holds it. Dropping the edit
+    /// instead means nothing changed.
+    pub(crate) fn commit(self, change: SourceChange) {
+        if let Some(reservation) = self.0 {
+            reservation.publish(change);
+        }
+    }
+}
 
 /// Capacity held for one off-RT load while its resource is moved out of the
 /// queue. Other producers cannot consume these entries before the load sends.
@@ -83,6 +100,26 @@ impl<S> Drop for SlotLoadReservation<'_, S> {
 }
 
 impl<S> EngineImpl<S> {
+    /// Hold this player's source against Host plans before changing it.
+    ///
+    /// # Errors
+    /// Returns an error when another change of the same source is in flight
+    /// or its revision space is spent.
+    pub(crate) fn edit_source(&self) -> Result<SourceEdit, PlayError> {
+        self.session
+            .sync_gate()
+            .map(|gate| gate.reserve_source())
+            .transpose()
+            .map(SourceEdit)
+            .map_err(|error| SessionError::SyncControl(error).into())
+    }
+
+    /// The Host-arbitrated revision of this player's source, if a Host
+    /// session arbitrates it.
+    pub(crate) fn source_revision(&self) -> Option<SourceRevision> {
+        self.session.sync_gate().map(|gate| gate.source_revision())
+    }
+
     /// Admit the seek before changing any reader. The slots lock owns the sole
     /// command producer, so a free entry cannot disappear before the push.
     pub(crate) fn send_slot_seek(

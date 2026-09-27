@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
+use kithara_sync::SourceChange;
 use tracing::{debug, warn};
 
 use super::super::core::PlayerRuntime;
@@ -25,13 +26,31 @@ where
 {
     fn apply_playback(&self, playback: SelectionPlayback) {
         if playback == SelectionPlayback::Play {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+            let _ = self.send_paused(false);
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+            let _ = self.send_paused(true);
             self.enter_paused();
         }
+    }
+
+    /// Stop or restart the resident at a frame no sync plan predicted.
+    fn send_paused(&self, paused: bool) -> Result<(), PlayError> {
+        self.send_source_change(PlayerCmd::SetPaused(paused), SourceChange::Discontinuity)
+    }
+
+    /// Send a command that changes what the resident plays and report the
+    /// change once the audio thread holds it.
+    pub(crate) fn send_source_change(
+        &self,
+        cmd: PlayerCmd,
+        change: SourceChange,
+    ) -> Result<(), PlayError> {
+        let edit = self.core.engine.edit_source()?;
+        self.send_to_slot(cmd)?;
+        edit.commit(change);
+        Ok(())
     }
 
     /// Place the freshly-loaded track at the position handed over before it
@@ -81,11 +100,13 @@ where
         index: usize,
         crossfade: CrossfadeSettings,
     ) -> Result<bool, PlayError> {
+        let edit = self.core.engine.edit_source()?;
         let Some((item_id, load, _src, duration_seconds)) =
             self.enqueue_to_processor(index, Some(crossfade))?
         else {
             return Ok(false);
         };
+        edit.commit(SourceChange::Discontinuity);
         self.phase.lock().set_resident((item_id, load));
         self.publish_current_track_snapshot(duration_seconds);
         self.apply_start_position();
@@ -94,7 +115,7 @@ where
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+        let _ = self.send_paused(true);
         self.enter_paused();
         debug!(phase = ?self.phase_kind(), "pause");
     }
@@ -125,7 +146,7 @@ where
                 return;
             }
         };
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+        let _ = self.send_paused(false);
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
@@ -180,9 +201,11 @@ where
             },
         };
 
+        let edit = self.core.engine.edit_source()?;
         self.core
             .engine
             .send_slot_seek(slot_id, target, target_secs)?;
+        edit.commit(SourceChange::Discontinuity);
 
         if matches!(outcome, SeekOutcome::Landed { .. }) {
             playback.position.store(target_secs, Ordering::Relaxed);
@@ -281,9 +304,126 @@ where
         item_id: TrackId,
         settings: CrossfadeSettings,
     ) -> Result<(), PlayError> {
-        self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
-            item_id,
-            settings,
-        }))
+        self.send_source_change(
+            PlayerCmd::Transition(TrackTransition::FadeIn { item_id, settings }),
+            SourceChange::Discontinuity,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::sync::Arc;
+    use kithara_sync::{PermitCell, SourceChange, SyncArbiter, SyncGateBinding};
+    use kithara_test_utils::kithara;
+    use kithara_warp::BeatGridId;
+
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        bridge::PlayerCmd,
+        error::PlayError,
+        mock,
+        player::{Player, PlayerConfig, PlayerImpl},
+        test_pools::{TestPools, pools},
+    };
+
+    fn gated_player() -> (PlayerImpl<TestPools>, SyncGateBinding) {
+        let gate = SyncGateBinding::new(
+            Arc::new(SyncArbiter::new()),
+            Arc::new(PermitCell::new(BeatGridId::allocate().expect("member id"))),
+        );
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .session(mock::session().with_sync_gate(gate.clone()))
+                .build(),
+        );
+        (player, gate)
+    }
+
+    /// Reconcile what the player reported so far, as the Host does.
+    fn reconcile(gate: &SyncGateBinding) -> Option<SourceChange> {
+        let control = gate.arbiter().try_control().expect("owner enters");
+        let observed = control.source_change(gate.cell())?;
+        control.acknowledge_source_change(gate.cell(), observed);
+        Some(observed.change())
+    }
+
+    #[kithara::test]
+    fn a_seek_the_audio_thread_holds_reports_a_discontinuity() {
+        let (player, gate) = gated_player();
+        player.play();
+        assert_eq!(
+            reconcile(&gate),
+            Some(SourceChange::Discontinuity),
+            "resuming restarts the source at an unplanned frame"
+        );
+        let before = gate.source_revision();
+
+        Player::seek_seconds(&player, 1.0).expect("the slot admits the seek");
+
+        assert_ne!(gate.source_revision(), before);
+        assert_eq!(reconcile(&gate), Some(SourceChange::Discontinuity));
+        drop(
+            gate.reserve_source()
+                .expect("the committed seek released the source"),
+        );
+    }
+
+    #[kithara::test]
+    fn a_seek_the_audio_thread_cannot_hold_changes_nothing() {
+        let (player, gate) = gated_player();
+        player.play();
+        let _ = reconcile(&gate);
+        while player.send_to_slot(PlayerCmd::SetFadeDuration(0.0)).is_ok() {}
+        let before = gate.source_revision();
+
+        assert!(matches!(
+            Player::seek_seconds(&player, 1.0),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+
+        assert_eq!(gate.source_revision(), before);
+        assert_eq!(reconcile(&gate), None);
+        drop(
+            gate.reserve_source()
+                .expect("the refused seek released the source"),
+        );
+    }
+
+    #[kithara::test]
+    fn pause_and_speed_report_their_change() {
+        let (player, gate) = gated_player();
+        player.play();
+        let _ = reconcile(&gate);
+
+        player.set_rate(1.5);
+        assert_eq!(reconcile(&gate), Some(SourceChange::Timing));
+        player.pause();
+        assert_eq!(reconcile(&gate), Some(SourceChange::Discontinuity));
+        player.set_default_rate(0.8);
+        assert_eq!(
+            reconcile(&gate),
+            Some(SourceChange::Timing),
+            "a paused rate change still moves where playback resumes"
+        );
+    }
+
+    #[kithara::test]
+    fn a_closed_player_seeks_without_touching_the_source() {
+        let (mut player, gate) = gated_player();
+        player.play();
+        let _ = reconcile(&gate);
+        Player::close(&mut player).expect("close");
+        let before = gate.source_revision();
+
+        assert!(matches!(
+            Player::seek_seconds(&player, 1.0),
+            Err(PlayError::Closed)
+        ));
+
+        assert_eq!(gate.source_revision(), before);
+        assert_eq!(reconcile(&gate), None);
     }
 }

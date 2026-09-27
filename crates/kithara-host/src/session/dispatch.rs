@@ -12,10 +12,9 @@ use kithara_play::{
 };
 use kithara_signal::SessionFrame;
 use kithara_sync::{
-    AlignmentSource, ArmPermit, ControlEnterError, ControlGuard, GroupState, PermitCell,
-    PreparedRevocation, SyncAdmission, SyncCapability, SyncError, SyncExecutionReject, SyncGroup,
-    SyncIntent, SyncMode, SyncOperation, SyncReceipt, SyncReceiptAck, SyncRejected, SyncTransition,
-    TopologyOperation,
+    AlignmentSource, ControlEnterError, ControlGuard, GroupState, PermitCell, PreparedRevocation,
+    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperation,
+    SyncRejected, SyncTransition, TopologyOperation,
 };
 use kithara_warp::{BeatGrid, BeatGridId};
 use tracing::{debug, trace, warn};
@@ -24,6 +23,7 @@ use tracing::{debug, trace, warn};
 use super::protocol::HostCmdMsg;
 use super::{
     graph::{controls, lifecycle, player_index, slots, tap},
+    inputs::{acknowledge_root, drain_owner_inputs, queue_failed_gate_receipt},
     protocol::{
         Cmd, HostCmd, HostReply, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
         SessionStream, SyncCmd,
@@ -59,10 +59,7 @@ where
                     );
                 }
             };
-            if let Err(error) = drain_audio_receipts(state, &control) {
-                return HostReply::Play(Reply::Err(error));
-            }
-            if let Err(error) = drain_failed_gate_receipts(state) {
+            if let Err(error) = drain_owner_inputs(state, &control) {
                 return HostReply::Play(Reply::Err(error));
             }
             if let Err(error) = transport::observe_commits(state, &control) {
@@ -84,10 +81,7 @@ where
                     );
                 }
             };
-            if let Err(error) = drain_audio_receipts(state, &control) {
-                return HostReply::Play(Reply::Err(error));
-            }
-            if let Err(error) = drain_failed_gate_receipts(state) {
+            if let Err(error) = drain_owner_inputs(state, &control) {
                 return HostReply::Play(Reply::Err(error));
             }
             HostReply::Play(
@@ -106,10 +100,7 @@ where
                 Ok(control) => control,
                 Err(error) => return control_failure_reply(HostCmd::<S>::Sync(cmd), error),
             };
-            if let Err(error) = drain_audio_receipts(state, &_control) {
-                return HostReply::Err(error.into());
-            }
-            if let Err(error) = drain_failed_gate_receipts(state) {
+            if let Err(error) = drain_owner_inputs(state, &_control) {
                 return HostReply::Err(error.into());
             }
             run_sync_cmd(state, cmd, &_control)
@@ -143,8 +134,7 @@ fn enter_error(error: ControlEnterError) -> SessionError {
 pub(super) fn pump_before_work<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     let arbiter = state.sync_arbiter.clone();
     let control = arbiter.enter_host_control().map_err(enter_error)?;
-    drain_audio_receipts(state, &control)?;
-    drain_failed_gate_receipts(state)?;
+    drain_owner_inputs(state, &control)?;
     transport::observe_commits(state, &control)?;
     Ok(())
 }
@@ -157,8 +147,7 @@ pub(super) fn with_owner_cut<T, S, R>(
 ) -> Result<R, SessionError> {
     let arbiter = state.sync_arbiter.clone();
     let control = arbiter.enter_host_control().map_err(enter_error)?;
-    drain_audio_receipts(state, &control)?;
-    drain_failed_gate_receipts(state)?;
+    drain_owner_inputs(state, &control)?;
     publish(state, &control)
 }
 
@@ -205,8 +194,7 @@ pub(super) fn drain_after_quiescence<T, S>(
 ) -> Result<(), SessionError> {
     let arbiter = state.sync_arbiter.clone();
     let control = arbiter.enter_host_control().map_err(enter_error)?;
-    drain_audio_receipts(state, &control)?;
-    drain_failed_gate_receipts(state)?;
+    drain_owner_inputs(state, &control)?;
     let Some(group) = quiesced_deck else {
         return Ok(());
     };
@@ -229,112 +217,6 @@ pub(super) fn drain_after_quiescence<T, S>(
         .map_err(|rejected| SessionError::Sync(rejected.error().clone()))?;
     revocation.revoke();
     state.publish_root();
-    Ok(())
-}
-
-/// A timed-out Installed never reached the owner. The Host retains one
-/// terminal rejection for that member, then applies it on the next Control
-/// cut after the in-flight audio claim completes. The executor drops its lane
-/// immediately and cannot accidentally arm it.
-fn queue_failed_gate_receipt<T, S>(
-    state: &mut SessionState<T, S>,
-    receipt: SyncReceipt,
-) -> Result<(), SessionError> {
-    let terminal = match receipt {
-        SyncReceipt::Installed(stamp) => SyncReceipt::Rejected {
-            stamp,
-            reason: SyncExecutionReject::ControlBusy,
-        },
-        rejected @ SyncReceipt::Rejected { .. } => rejected,
-        _ => return Err(SessionError::Graph("executor sent an audio receipt".into())),
-    };
-    let member = match terminal {
-        SyncReceipt::Rejected { stamp, .. } => stamp.member().grid_id(),
-        _ => {
-            return Err(SessionError::Graph(
-                "missing terminal rejection stamp".into(),
-            ));
-        }
-    };
-    let entry = state
-        .sync_cells
-        .iter_mut()
-        .find(|entry| entry.cell.member() == member)
-        .ok_or(SessionError::SyncMemberNotRegistered(member))?;
-    match entry.pending_gate_receipt {
-        Some(existing) if existing == terminal => Ok(()),
-        Some(_) => Err(SessionError::Graph(
-            "member already has an undrained gate failure".into(),
-        )),
-        None => {
-            entry.pending_gate_receipt = Some(terminal);
-            Ok(())
-        }
-    }
-}
-
-fn drain_failed_gate_receipts<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
-    for index in 0..state.sync_cells.len() {
-        let Some(receipt) = state.sync_cells[index].pending_gate_receipt else {
-            continue;
-        };
-        if let Err(error) = state.root.acknowledge(receipt)
-            && !error.is_superseded_rejection(receipt)
-        {
-            return Err(error.into());
-        }
-        state.sync_cells[index].pending_gate_receipt = None;
-        state.publish_root();
-    }
-    Ok(())
-}
-
-/// Sole consumer of the per-slot callback receipts. A failed owner update
-/// keeps the popped receipt in its fixed slot for a later owner cut.
-fn drain_audio_receipts<T, S>(
-    state: &mut SessionState<T, S>,
-    control: &ControlGuard<'_>,
-) -> Result<(), SessionError> {
-    for deck_index in 0..state.graph.len() {
-        let slots = state
-            .graph
-            .deck(deck_index)
-            .map_or(0, |deck| deck.slots.len());
-        for slot_index in 0..slots {
-            loop {
-                let receipt = state
-                    .graph
-                    .deck_mut(deck_index)
-                    .and_then(|deck| deck.slots.get_mut(slot_index))
-                    .and_then(|slot| {
-                        slot.pending_receipt
-                            .take()
-                            .or_else(|| slot.sync_receipts.try_pop())
-                    });
-                let Some(receipt) = receipt else { break };
-                let result = match receipt {
-                    SyncReceipt::Armed(_)
-                    | SyncReceipt::Presented(_)
-                    | SyncReceipt::Rejected { .. } => {
-                        acknowledge_root(state, receipt, control).map(|_| ())
-                    }
-                    _ => Err(SessionError::Graph(
-                        "RT mailbox carried a non-audio sync receipt".into(),
-                    )),
-                };
-                if let Err(error) = result {
-                    if let Some(slot) = state
-                        .graph
-                        .deck_mut(deck_index)
-                        .and_then(|deck| deck.slots.get_mut(slot_index))
-                    {
-                        slot.pending_receipt = Some(receipt);
-                    }
-                    return Err(error);
-                }
-            }
-        }
-    }
     Ok(())
 }
 
@@ -401,12 +283,19 @@ fn run_sync_cmd<T, S>(
             {
                 return HostReply::Err(PlayError::NotReady);
             }
-            if !state
+            let Some(entry) = state
                 .sync_cells
                 .iter()
-                .any(|entry| entry.cell.member() == member)
-            {
+                .find(|entry| entry.cell.member() == member && entry.group == target)
+            else {
                 return HostReply::Err(SessionError::SyncMemberNotRegistered(member).into());
+            };
+            // The observation stands only for the source it was taken at.
+            if resident
+                .source()
+                .is_none_or(|observed| control.current_source(&entry.cell) != Ok(observed))
+            {
+                return HostReply::Err(PlayError::NotReady);
             }
             let (boundary, _) = match transport::commit_boundary(state) {
                 Ok(boundary) => boundary,
@@ -471,32 +360,6 @@ fn run_sync_cmd<T, S>(
 
 /// Records one executor receipt on the root group and publishes the state it
 /// leaves; a refused receipt changes nothing and publishes nothing.
-fn acknowledge_root<T, S>(
-    state: &mut SessionState<T, S>,
-    receipt: SyncReceipt,
-    control: &ControlGuard<'_>,
-) -> Result<SyncReceiptAck, SessionError> {
-    let permit: Option<ArmPermit> = match receipt {
-        SyncReceipt::Installed(stamp) => {
-            let member = stamp.member().grid_id();
-            let cell = state
-                .sync_cells
-                .iter()
-                .find(|entry| entry.cell.member() == member)
-                .ok_or(SessionError::SyncMemberNotRegistered(member))?;
-            Some(control.mint_permit(&cell.cell, stamp)?)
-        }
-        _ => None,
-    };
-    if let Err(error) = state.root.acknowledge(receipt)
-        && !error.is_superseded_rejection(receipt)
-    {
-        return Err(error.into());
-    }
-    state.publish_root();
-    Ok(permit.map_or(SyncReceiptAck::Recorded, SyncReceiptAck::Installed))
-}
-
 fn transact_root<T, S>(
     state: &mut SessionState<T, S>,
     operation: SyncOperation<PlayerMember>,

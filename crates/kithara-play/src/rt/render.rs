@@ -10,7 +10,7 @@ use firewheel::{
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_events::TrackId;
-use kithara_sync::{ClaimError, SyncApplied, SyncExecutionReject};
+use kithara_sync::{ClaimError, PermitState, SyncApplied, SyncExecutionReject};
 use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
@@ -437,9 +437,10 @@ fn claim_rejection(error: ClaimError) -> SyncExecutionReject {
     match error {
         ClaimError::Busy => SyncExecutionReject::Late,
         ClaimError::WrongMember => SyncExecutionReject::Geometry,
-        ClaimError::Closed | ClaimError::CellRetired | ClaimError::StalePermit => {
-            SyncExecutionReject::Cancelled
-        }
+        ClaimError::Closed
+        | ClaimError::CellRetired
+        | ClaimError::StalePermit
+        | ClaimError::SourceParked => SyncExecutionReject::Cancelled,
     }
 }
 
@@ -455,9 +456,15 @@ fn render_sync_activation(
     let Some(ticket) = sync.pending.try_peek() else {
         return SyncAttempt::None;
     };
-    if !ticket.gate.still_permits(&ticket.permit) {
-        retire_withdrawn_sync(sync);
-        return SyncAttempt::None;
+    // A parked source waits before Late is judged: the owner withdraws the
+    // ticket after the change, or the change aborts and the ticket stays.
+    match ticket.gate.permit_state(&ticket.permit) {
+        PermitState::Current => {}
+        PermitState::Parked => return SyncAttempt::None,
+        PermitState::Withdrawn => {
+            retire_withdrawn_sync(sync);
+            return SyncAttempt::None;
+        }
     }
     let Some(context) = context else {
         reject_sync(sync, SyncExecutionReject::Geometry);
@@ -591,6 +598,14 @@ fn claim_and_render_sync(
     }
     let claim = match gate.arbiter().try_claim(&permit, gate.cell()) {
         Ok(claim) => claim,
+        Err(ClaimError::SourceParked) => {
+            drop(reservation);
+            return SyncAttempt::PrefixRendered {
+                item_id,
+                offset,
+                outcome: prefix,
+            };
+        }
         Err(ClaimError::StalePermit | ClaimError::CellRetired) => {
             drop(reservation);
             retire_withdrawn_sync(sync);

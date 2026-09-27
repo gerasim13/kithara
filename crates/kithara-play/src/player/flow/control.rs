@@ -1,6 +1,8 @@
 use kithara_effects::{GainDb, eq::EqBandConfig};
+use kithara_sync::SourceChange;
 use kithara_test_macros as kithara;
 use kithara_warp::StretchControls;
+use tracing::warn;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -90,9 +92,10 @@ impl<S> PlayerRuntime<S> {
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
         let target = self.core.params.set_default_rate(rate);
-        self.core.warp.stretch().set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
             self.set_rate(target);
+        } else {
+            let _ = self.change_speed(target);
         }
     }
 
@@ -131,7 +134,9 @@ impl<S> PlayerRuntime<S> {
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
         let target = rate.max(StretchControls::MIN_SPEED);
-        let revision = self.core.warp.stretch().set_speed(target);
+        let Some(revision) = self.change_speed(target) else {
+            return;
+        };
         let snapshot = self
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
@@ -150,6 +155,21 @@ impl<S> PlayerRuntime<S> {
             );
         }
         self.core.worker.wake();
+    }
+
+    /// Move the requested speed and report the timing change, returning the
+    /// request revision. `None` when the source could not be held.
+    fn change_speed(&self, target: f32) -> Option<u64> {
+        let edit = match self.core.engine.edit_source() {
+            Ok(edit) => edit,
+            Err(error) => {
+                warn!(%error, target, "speed change refused");
+                return None;
+            }
+        };
+        let revision = self.core.warp.stretch().set_speed(target);
+        edit.commit(SourceChange::Timing);
+        Some(revision)
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
