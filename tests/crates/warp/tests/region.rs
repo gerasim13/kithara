@@ -1,10 +1,12 @@
 use std::num::NonZero;
 
-use kithara_platform::sync::Arc;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, OutputContext, TransportRevision};
-use kithara_stretch::StretchKind;
+use kithara::{
+    platform::sync::Arc,
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec, OutputContext, TransportRevision},
+    stretch::StretchKind,
+};
 use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
-use kithara_test_utils::kithara;
+use kithara_test_utils::kithara::hang_watchdog;
 
 use crate::{
     GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
@@ -65,7 +67,7 @@ fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32], frame_offset: u64) -> 
 
 /// Render `source` through a key-locked renderer with `plan`, feeding
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
-#[kithara::hang_watchdog]
+#[hang_watchdog]
 fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     let pools = pools();
     let controls = StretchControls::new(speed);
@@ -382,7 +384,7 @@ fn i64_of(x: usize) -> i64 {
 
 #[kithara::test]
 fn activation_keeps_the_absolute_host_frame_rounding_phase() {
-    use kithara_warp::{BeatGridQuery, MapPosition};
+    use kithara::warp::{BeatGridQuery, MapPosition};
 
     use crate::{Beat, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint, SessionAnchor};
 
@@ -435,7 +437,7 @@ fn activation_keeps_the_absolute_host_frame_rounding_phase() {
     assert!((rate - 1.1).abs() < 1e-12);
 }
 
-#[kithara::hang_watchdog]
+#[hang_watchdog]
 fn render_on_grid(
     backend: StretchKind,
     speed: f32,
@@ -451,7 +453,7 @@ fn render_on_grid(
     render_configured_grid(config, plan, source, session_beats, swap, None)
 }
 
-#[kithara::hang_watchdog]
+#[hang_watchdog]
 fn render_configured_grid(
     config: WarpConfig,
     plan: Option<WarpPlan>,
@@ -486,7 +488,7 @@ pub(crate) struct Presented {
 /// session context, stopping once `output_frames` are rendered; `updates`
 /// may retarget the context and install that retarget's plan at any
 /// source/output frontier.
-#[kithara::hang_watchdog]
+#[hang_watchdog]
 pub(crate) fn render_configured_grid_with_updates(
     config: WarpConfig,
     spec: AudioSpec,
@@ -600,7 +602,7 @@ pub(crate) fn render_configured_grid_with_updates(
             };
             let planned = match fx.prepare_quantum(meta, remaining) {
                 Ok(frames) => frames.get(),
-                Err(kithara_warp::WarpRenderError::NeedsService) => {
+                Err(kithara::warp::WarpRenderError::NeedsService) => {
                     while fx.transition_pending() {
                         if let Some(output) = fx.flush() {
                             present(&mut out, output);

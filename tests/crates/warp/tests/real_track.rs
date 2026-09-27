@@ -4,19 +4,18 @@
 
 use std::{io::Cursor, num::NonZero};
 
+use kithara::{
+    decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+    platform::time::Duration,
+    resampler::NoResamplerBackend,
+    signal::AudioSpec,
+    stretch::StretchKind,
+};
 use kithara_integration_tests::{
     audio_artifact::AudioArtifactTap,
     grid::{Start, analysed_grid},
-    kithara::{
-        decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
-        resampler::NoResamplerBackend,
-    },
 };
-use kithara_platform::time::Duration;
-use kithara_signal::AudioSpec;
-use kithara_stretch::StretchKind;
 use kithara_test_fixtures::assets::by_name;
-use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use crate::{
@@ -95,7 +94,7 @@ struct Track {
     spec: AudioSpec,
     pcm: Vec<f32>,
     beats: Vec<(f64, f64)>,
-    model: kithara_beat::BeatGridModel,
+    model: kithara::beat::BeatGridModel,
     bpm: f64,
 }
 
@@ -126,7 +125,7 @@ impl Track {
             .beats
             .iter()
             .filter(|beat| beat.ordinal >= first.ordinal)
-            .map(|beat| kithara_beat::GridBeat {
+            .map(|beat| kithara::beat::GridBeat {
                 at: beat.at - first.at,
                 ordinal: beat.ordinal - first.ordinal,
                 confidence: beat.confidence,
@@ -163,7 +162,7 @@ impl Track {
         pcm.truncate((first_frame + needed) * CH);
         pcm.drain(..first_frame * CH);
         let decoded = needed.to_f64().expect("frames fit f64");
-        let model = kithara_beat::BeatGridModel::try_from(kithara_beat::RawBeatGrid {
+        let model = kithara::beat::BeatGridModel::try_from(kithara::beat::RawBeatGrid {
             beats: rebased
                 .into_iter()
                 .filter(|beat| beat.at * rate < decoded)

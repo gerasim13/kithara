@@ -1,7 +1,8 @@
-use kithara_dsp::fade::FadeCurve;
-use kithara_host::{CrossfaderBus, crossfader_gain};
-use kithara_play::{CrossfadeCurve, CrossfadeSettings};
-use kithara_test_utils::kithara;
+use kithara::{
+    dsp::fade::FadeCurve,
+    host::{CrossfaderBus, crossfader_gain},
+    play::{CrossfadeCurve, CrossfadeSettings},
+};
 
 const POSITIONS: [f32; 7] = [0.0, 5.0e-6, 0.1, 0.5, 0.9, 0.999_995, 1.0];
 

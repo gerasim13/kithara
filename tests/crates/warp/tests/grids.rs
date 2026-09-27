@@ -96,7 +96,7 @@ pub fn asset_grid_over(
     let mut beats = Vec::with_capacity(spans.len() + 1);
     for (index, (start, frames_per_beat, count)) in spans.iter().enumerate() {
         if index == 0 {
-            beats.push(kithara_beat::GridBeat {
+            beats.push(kithara::beat::GridBeat {
                 at: *start / rate,
                 ordinal,
                 confidence: Some(1.0),
@@ -109,18 +109,18 @@ pub fn asset_grid_over(
             .unwrap_or_default()
             .mul_add(*frames_per_beat, *start);
         ordinal += count;
-        beats.push(kithara_beat::GridBeat {
+        beats.push(kithara::beat::GridBeat {
             at: end / rate,
             ordinal,
             confidence: Some(1.0),
         });
     }
     let (_, last_spacing, _) = spans.last().expect("fixture has a marked span");
-    let model = kithara_beat::BeatGridModel::try_from(kithara_beat::RawBeatGrid {
-        schema_version: kithara_beat::SCHEMA_VERSION,
+    let model = kithara::beat::BeatGridModel::try_from(kithara::beat::RawBeatGrid {
+        schema_version: kithara::beat::SCHEMA_VERSION,
         model_id: "warp-spans".to_owned(),
         revision: 1,
-        state: kithara_beat::BeatGridState::Final,
+        state: kithara::beat::BeatGridState::Final,
         duration: None,
         bpm: rate * SECONDS_PER_MINUTE / last_spacing,
         beats,

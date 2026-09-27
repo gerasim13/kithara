@@ -4356,6 +4356,7 @@ dependencies = [
  "kithara-decode",
  "kithara-download",
  "kithara-drm",
+ "kithara-dsp",
  "kithara-effects",
  "kithara-encode",
  "kithara-events",
@@ -4963,10 +4964,7 @@ dependencies = [
 name = "kithara-dsp-tests"
 version = "0.0.1-alpha5"
 dependencies = [
- "kithara-dsp",
- "kithara-host",
- "kithara-play",
- "kithara-signal",
+ "kithara",
  "kithara-test-utils",
 ]
 
@@ -5558,7 +5556,6 @@ dependencies = [
  "derive_more",
  "kithara",
  "kithara-app",
- "kithara-dsp",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -6083,15 +6080,10 @@ name = "kithara-warp-tests"
 version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
- "kithara-beat",
  "kithara-derive",
  "kithara-integration-tests",
- "kithara-platform",
- "kithara-signal",
- "kithara-stretch",
  "kithara-test-fixtures",
  "kithara-test-utils",
- "kithara-warp",
  "num-traits",
  "serde",
  "serde_json",
