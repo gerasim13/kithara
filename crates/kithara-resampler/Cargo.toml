@@ -11,7 +11,6 @@ categories = ["multimedia::audio"]
 
 [features]
 default = []
-apple-accelerate = ["kithara-apple/accelerate"]
 resample-glide = ["dep:kithara-dsp"]
 resample-rubato = ["dep:rubato"]
 
@@ -37,7 +36,7 @@ tracing = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara-apple = { workspace = true, features = ["accelerate", "audio-toolbox"] }
+kithara-apple = { workspace = true, features = ["audio-toolbox"] }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true }

@@ -4,7 +4,10 @@
 use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
-use kithara_dsp::filter::{Biquad, rbj};
+use kithara_dsp::{
+    filter::{Biquad, rbj},
+    interp::{InterpError, Interpolation, interpolate},
+};
 use kithara_test_utils::kithara;
 
 #[global_allocator]
@@ -88,5 +91,31 @@ fn biquad_never_allocates_after_construction() {
         filter
             .process(&mut planes, 0..FRAMES)
             .expect("silence resets");
+    });
+}
+
+#[kithara::test(native)]
+fn interpolation_never_allocates() {
+    let window = vec![0.25_f32; FRAMES + 4];
+    let positions: Vec<f32> = std::iter::successors(Some(1.5_f32), |position| Some(position + 1.0))
+        .take(FRAMES - 1)
+        .collect();
+    let mut output = vec![0.0_f32; FRAMES];
+    assert_no_alloc(|| {
+        for method in [
+            Interpolation::Linear,
+            Interpolation::Quadratic,
+            Interpolation::Hermite,
+            Interpolation::Watte,
+        ] {
+            assert_eq!(
+                interpolate(method, &window, &positions, &mut output),
+                Ok(FRAMES - 1)
+            );
+        }
+        assert_eq!(
+            interpolate(Interpolation::Linear, &window, &[f32::NAN], &mut output),
+            Err(InterpError::OutOfWindow)
+        );
     });
 }

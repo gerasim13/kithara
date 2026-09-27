@@ -6,6 +6,7 @@
 //! on Apple, `fearless_simd` at the SIMD level the CPU reports elsewhere.
 //! Kernels never allocate, never panic and never sanitize implicitly.
 //! `filter` holds biquad cascades with a silence rule that keeps denormals out.
+//! `interp` reads a window at fractional positions with one of four methods.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -18,6 +19,8 @@ mod backend;
 pub mod fade;
 /// Biquad cascades over channel planes and the designs that feed them.
 pub mod filter;
+/// Window interpolation at fractional positions.
+pub mod interp;
 mod layout;
 /// Parameter smoothing and A/B mixing owned by firewheel, re-exported as the
 /// one import path the workspace uses; a re-export can later become a local

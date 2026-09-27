@@ -4,11 +4,13 @@ use std::{
 };
 
 use kithara_bufpool::{HasPool, SampleBuffer};
-use kithara_dsp::filter::{Biquad, FilterError, rbj};
+use kithara_dsp::{
+    filter::{Biquad, FilterError, rbj},
+    interp::{InterpError, Interpolation, interpolate},
+};
 use num_traits::cast::ToPrimitive;
 use smallvec::SmallVec;
 
-use super::GlideInterpolation;
 use crate::{ResamplerBuildError, ResamplerError, ResamplerMode, ResamplerSettings};
 
 pub(in crate::glide) struct RenderRequest<'a, I, O> {
@@ -26,11 +28,13 @@ mod consts {
     pub(super) const FILTER_OP: &str = "glide anti-alias filter";
     pub(super) const INPUT_OP: &str = "glide input";
     pub(super) const POSITIONS_OP: &str = "glide positions";
+    pub(super) const INTERP_OP: &str = "glide interpolation";
 }
 
 /// Per channel the window is `[history | input | tail]`: history is the last
-/// consumed frame, the tail repeats the last input frame. With the filter
-/// on, the persistent filter advances over consumed frames only and a
+/// consumed frame, the tail repeats the last input frame `after + 1` times,
+/// so an exact span reads its last positions inside the window. With the
+/// filter on, the persistent filter advances over consumed frames only and a
 /// lookahead copy filters the rest, so the output does not depend on how
 /// the stream is chunked.
 #[derive(fieldwork::Fieldwork)]
@@ -42,7 +46,7 @@ pub(in crate::glide) struct GlideEngine {
     lookahead: Biquad,
     tuned: Option<f64>,
     seeded: bool,
-    interpolation: GlideInterpolation,
+    interpolation: Interpolation,
     sample_rate: f64,
     max_input_frames: usize,
     #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
@@ -52,7 +56,7 @@ pub(in crate::glide) struct GlideEngine {
 impl GlideEngine {
     pub(in crate::glide) fn new<S>(
         settings: &ResamplerSettings<S>,
-        interpolation: GlideInterpolation,
+        interpolation: Interpolation,
         backend: &'static str,
     ) -> Result<Self, ResamplerBuildError>
     where
@@ -70,7 +74,10 @@ impl GlideEngine {
         let mut windows = SmallVec::new();
         for _ in 0..channels.get() {
             let mut window = pools.get::<f32>();
-            ensure_build_len(&mut window, max_input_frames.saturating_add(2), backend)?;
+            let window_len = max_input_frames
+                .saturating_add(2)
+                .saturating_add(usize::from(interpolation.padding().1));
+            ensure_build_len(&mut window, window_len, backend)?;
             window.fill(0.0);
             windows.push(window);
         }
@@ -154,14 +161,17 @@ impl GlideEngine {
             Some(ratio) => self.filter_window(ratio, consumed, end)?,
             None => self.tuned = None,
         }
+        let tail = end.saturating_add(usize::from(self.interpolation.padding().1));
         for (window, target) in self.windows.iter_mut().zip(output.iter_mut()) {
-            window[end] = window[frames];
-            backend::interpolate(
+            let last = window[frames];
+            window[end..=tail].fill(last);
+            interpolate(
                 self.interpolation,
-                &window[..=end],
+                &window[..=tail],
                 &self.positions[..produced],
                 &mut target.deref_mut()[..produced],
-            );
+            )
+            .map_err(interp_error)?;
             if consumed > 0 {
                 window[0] = window[consumed];
             }
@@ -225,6 +235,13 @@ fn filter_error(err: FilterError) -> ResamplerError {
     }
 }
 
+fn interp_error(err: InterpError) -> ResamplerError {
+    ResamplerError::Backend {
+        op: consts::INTERP_OP,
+        detail: err.to_string(),
+    }
+}
+
 fn low_pass_filter(
     channels: NonZeroUsize,
     backend: &'static str,
@@ -266,95 +283,5 @@ fn sample_rate(mode: ResamplerMode) -> f64 {
             source_sample_rate, ..
         } => f64::from(source_sample_rate.get()),
         ResamplerMode::VariableRatio { sample_rate, .. } => f64::from(sample_rate.get()),
-    }
-}
-
-#[cfg(all(
-    feature = "apple-accelerate",
-    any(target_os = "macos", target_os = "ios")
-))]
-mod backend {
-    use kithara_apple::accelerate::{linear_interpolate_f32, quadratic_interpolate_f32};
-
-    use super::GlideInterpolation;
-
-    pub(super) fn interpolate(
-        kind: GlideInterpolation,
-        source: &[f32],
-        positions: &[f32],
-        target: &mut [f32],
-    ) {
-        match kind {
-            GlideInterpolation::Linear => linear_interpolate_f32(source, positions, target),
-            GlideInterpolation::Quadratic => quadratic_interpolate_f32(source, positions, target),
-        };
-    }
-}
-
-#[cfg(not(all(
-    feature = "apple-accelerate",
-    any(target_os = "macos", target_os = "ios")
-)))]
-mod backend {
-    use num_traits::cast::ToPrimitive;
-
-    use super::GlideInterpolation;
-
-    pub(super) fn interpolate(
-        kind: GlideInterpolation,
-        source: &[f32],
-        positions: &[f32],
-        target: &mut [f32],
-    ) {
-        match kind {
-            GlideInterpolation::Linear => {
-                interpolate_with::<LinearInterpolation>(source, positions, target);
-            }
-            GlideInterpolation::Quadratic => {
-                interpolate_with::<QuadraticInterpolation>(source, positions, target);
-            }
-        }
-    }
-
-    trait Interpolation {
-        fn sample(source: &[f32], base: usize, frac: f32) -> f32;
-    }
-
-    struct LinearInterpolation;
-
-    impl Interpolation for LinearInterpolation {
-        fn sample(source: &[f32], base: usize, frac: f32) -> f32 {
-            let center = source.get(base).copied().unwrap_or(0.0);
-            let right = source.get(base.saturating_add(1)).copied().unwrap_or(0.0);
-            center.mul_add(1.0 - frac, right * frac)
-        }
-    }
-
-    struct QuadraticInterpolation;
-
-    impl Interpolation for QuadraticInterpolation {
-        fn sample(source: &[f32], base: usize, frac: f32) -> f32 {
-            let left = if base == 0 {
-                source.first().copied().unwrap_or(0.0)
-            } else {
-                source.get(base.saturating_sub(1)).copied().unwrap_or(0.0)
-            };
-            let center = source.get(base).copied().unwrap_or(0.0);
-            let right = source.get(base.saturating_add(1)).copied().unwrap_or(0.0);
-            let slope = 0.5 * (right - left);
-            let curve = 0.5 * (right - 2.0 * center + left);
-            center + frac * slope + frac * frac * curve
-        }
-    }
-
-    fn interpolate_with<I>(source: &[f32], positions: &[f32], target: &mut [f32])
-    where
-        I: Interpolation,
-    {
-        for (position, output) in positions.iter().zip(target.iter_mut()) {
-            let base = position.floor().to_usize().unwrap_or(usize::MAX);
-            let frac = position - base.to_f32().unwrap_or(0.0);
-            *output = I::sample(source, base, frac);
-        }
     }
 }

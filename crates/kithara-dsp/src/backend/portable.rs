@@ -2,6 +2,7 @@ use fearless_simd::{Level, dispatch, prelude::*};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use super::cascade::Cascade;
+pub(crate) use super::interpolate::interpolate;
 use super::simd::padded;
 
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {

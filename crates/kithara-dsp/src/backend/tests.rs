@@ -3,10 +3,12 @@ use std::num::NonZeroUsize;
 use fearless_simd::{Level, dispatch};
 use kithara_test_fixtures::signal::Wave;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
 use super::{cascade, portable, simd, strided};
+use crate::interp::{InterpError, Interpolation};
 
 const SIZES: [usize; 15] = [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 63, 64, 1023, 4096];
 const OFFSETS: [usize; 2] = [0, 1];
@@ -525,6 +527,103 @@ fn peak_matches_the_scalar_maximum_on_every_backend() {
                     "{name} at {len}"
                 );
             }
+        }
+    }
+}
+
+/// Largest interpolation error against the `f64` oracle, relative to the
+/// window peak: four `f32` epsilons.
+const INTERP_PARITY: f64 = 4.768_371_582_031_25e-7;
+const INTERP_WINDOW: u16 = 257;
+const INTERP_POSITIONS: u16 = 1_000;
+const INTERP_METHODS: [Interpolation; 4] = [
+    Interpolation::Linear,
+    Interpolation::Quadratic,
+    Interpolation::Hermite,
+    Interpolation::Watte,
+];
+
+type Interp = fn(Interpolation, &[f32], &[f32], &mut [f32]) -> Result<usize, InterpError>;
+
+/// The textbook formulas in `f64` over the same `f32` samples and positions.
+fn interp_oracle(method: Interpolation, window: &[f32], position: f32) -> f64 {
+    let p = f64::from(position);
+    let base = p.floor();
+    let x = p - base;
+    let [ym1, y0, y1, y2] = [-1.0, 0.0, 1.0, 2.0].map(|offset: f64| {
+        (base + offset)
+            .to_usize()
+            .and_then(|index| window.get(index))
+            .map_or(0.0, |sample| f64::from(*sample))
+    });
+    match method {
+        Interpolation::Linear => (y1 - y0).mul_add(x, y0),
+        Interpolation::Quadratic => {
+            let slope = 0.5 * (y1 - ym1);
+            let curve = 0.5 * (y1 - 2.0 * y0 + ym1);
+            curve.mul_add(x, slope).mul_add(x, y0)
+        }
+        Interpolation::Hermite => {
+            let c1 = 0.5 * (y1 - ym1);
+            let c2 = ym1 - 2.5 * y0 + 2.0 * y1 - 0.5 * y2;
+            let c3 = 1.5 * (y0 - y1) + 0.5 * (y2 - ym1);
+            c3.mul_add(x, c2).mul_add(x, c1).mul_add(x, y0)
+        }
+        Interpolation::Watte => {
+            let outer = ym1 + y2;
+            let c1 = 1.5 * y1 - 0.5 * (y0 + outer);
+            let c2 = 0.5 * (outer - y0 - y1);
+            c2.mul_add(x, c1).mul_add(x, y0)
+        }
+    }
+}
+
+#[kithara::test]
+fn every_interpolation_backend_tracks_the_f64_oracle() {
+    let backends: Vec<(&str, Interp)> = Vec::from([
+        ("portable", portable::interpolate as Interp),
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        ("accelerate", accelerate::interpolate),
+    ]);
+    let window: Vec<f32> = signal(
+        usize::from(INTERP_WINDOW).saturating_add(SPECIALS.len()),
+        SINE,
+    )
+    .into_iter()
+    .skip(SPECIALS.len())
+    .collect();
+    let peak = window
+        .iter()
+        .fold(0.0_f64, |peak, sample| peak.max(f64::from(sample.abs())));
+    for method in INTERP_METHODS {
+        let (before, after) = method.padding();
+        let low = f64::from(before);
+        let span = f64::from(INTERP_WINDOW) - f64::from(after) - low;
+        let positions: Vec<f32> = (0..INTERP_POSITIONS)
+            .filter_map(|step| {
+                (f64::from(step) / f64::from(INTERP_POSITIONS))
+                    .mul_add(span, low)
+                    .to_f32()
+            })
+            .collect();
+        for (name, run) in &backends {
+            let mut output = vec![UNWRITTEN; positions.len()];
+            assert_eq!(
+                run(method, &window, &positions, &mut output),
+                Ok(positions.len()),
+                "{name}: {method:?}"
+            );
+            let worst = positions
+                .iter()
+                .zip(&output)
+                .fold(0.0_f64, |worst, (position, sample)| {
+                    worst
+                        .max((f64::from(*sample) - interp_oracle(method, &window, *position)).abs())
+                });
+            assert!(
+                worst <= INTERP_PARITY * peak,
+                "{name}: {method:?} off by {worst} of {peak}"
+            );
         }
     }
 }

@@ -138,8 +138,9 @@ impl GlideResampler {
         let mut current_ratio = self.current_ratio;
         let mut glide = self.glide;
         let mut peak = current_ratio;
+        let after = usize::from(self.config.interpolation.padding().1);
 
-        while produced < position_capacity && can_sample(cursor, input_frames) {
+        while produced < position_capacity && can_sample(cursor, input_frames, after) {
             positions[produced] = (cursor + 1.0).to_f32().unwrap_or(0.0);
             peak = peak.max(current_ratio);
             cursor += current_ratio;
@@ -283,14 +284,11 @@ fn advance_glide_values(current_ratio: &mut f64, glide: &mut GlideState) {
     }
 }
 
-fn can_sample(cursor: f64, input_frames: usize) -> bool {
-    if input_frames < 2 {
-        return false;
-    }
-    let Some(base) = cursor.floor().to_usize() else {
-        return false;
-    };
-    base.saturating_add(1) < input_frames
+fn can_sample(cursor: f64, input_frames: usize, after: usize) -> bool {
+    cursor
+        .floor()
+        .to_usize()
+        .is_some_and(|base| base.saturating_add(after) < input_frames)
 }
 
 fn frames_for_ratio(input_frames: usize, ratio: f64) -> usize {

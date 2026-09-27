@@ -26,7 +26,7 @@ pub use event::{
     SeekLifecycleStage, SegmentLocation, TrackFailureKind,
 };
 #[cfg(feature = "resample-glide")]
-pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation};
+pub use kithara_resampler::glide::{GlideBackend, GlideConfig};
 #[cfg(feature = "resample-rubato")]
 pub use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 pub use kithara_resampler::{

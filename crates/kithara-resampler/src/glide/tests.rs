@@ -1,12 +1,13 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_dsp::interp::Interpolation;
 use kithara_test_fixtures::{
     signal::Wave,
     unit_fixtures::{glide_alias, glide_quadratic, glide_transition, glide_unity},
 };
 use kithara_test_utils::kithara;
 
-use super::{GlideBackend, GlideConfig, GlideInterpolation, resampler::GlideResampler};
+use super::{GlideBackend, GlideConfig, resampler::GlideResampler};
 use crate::{
     RatioGlide, Resampler, ResamplerBackend, ResamplerCapabilities, ResamplerConfig,
     ResamplerControl, ResamplerMode, ResamplerOptions, ResamplerSettings, create_resampler,
@@ -91,6 +92,14 @@ fn stream_through(chunk: usize, input: &[f32]) -> Vec<f32> {
         offset += process.input_frames;
     }
     output
+}
+
+/// Largest error of a method reproducing a straight line.
+const RAMP_TOLERANCE: f32 = 1.0e-5;
+
+/// `input[i] = i`: an interpolated sample reads back as its source position.
+fn ramp_input(frames: u16) -> Vec<f32> {
+    (0..frames).map(f32::from).collect()
 }
 
 #[kithara::test(native, flash(false))]
@@ -203,7 +212,7 @@ fn factory_output_exposes_glide_control_surface() {
 fn linear_mode_can_be_selected_by_config() {
     let backend = GlideBackend::with_config(
         GlideConfig::builder()
-            .interpolation(GlideInterpolation::Linear)
+            .interpolation(Interpolation::Linear)
             .build(),
     );
     let config = ResamplerConfig::builder()
@@ -430,4 +439,76 @@ fn entering_the_filter_keeps_a_constant_signal_constant() {
             .all(|sample| (sample - 0.5).abs() < CONSTANT_TOLERANCE),
         "the filter did not start in the steady state: {output:?}"
     );
+}
+
+/// Positions in the last interval `[n, n + 1)` read the tail, which holds
+/// `after + 1` copies of the last input frame.
+#[kithara::test(native)]
+#[case::linear(Interpolation::Linear)]
+#[case::quadratic(Interpolation::Quadratic)]
+#[case::hermite(Interpolation::Hermite)]
+#[case::watte(Interpolation::Watte)]
+fn exact_span_keeps_a_constant_at_the_boundary_for_every_method(
+    #[case] interpolation: Interpolation,
+) {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let config = GlideConfig::builder().interpolation(interpolation).build();
+    let mut resampler = GlideResampler::new("glide", config, &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = [0.75; 15];
+    let mut output = [0.0; 20];
+
+    resampler
+        .process_exact_span(&[input.as_slice()], &mut [output.as_mut_slice()])
+        .unwrap_or_else(|err| panic!("exact span should render: {err}"));
+
+    assert!(
+        output
+            .iter()
+            .all(|sample| (*sample - 0.75).abs() < CONSTANT_TOLERANCE),
+        "{interpolation:?} changed a constant at the exact-span boundary: {output:?}"
+    );
+}
+
+/// Frames 0 and 1 read the seeded history, which a ramp does not continue.
+#[kithara::test(native)]
+#[case::linear(Interpolation::Linear)]
+#[case::quadratic(Interpolation::Quadratic)]
+#[case::hermite(Interpolation::Hermite)]
+#[case::watte(Interpolation::Watte)]
+fn every_interpolation_reproduces_a_ramp_through_the_factory(#[case] interpolation: Interpolation) {
+    let backend = GlideBackend::with_config(
+        GlideConfig::builder()
+            .interpolation(interpolation)
+            .anti_alias(false)
+            .build(),
+    );
+    let config = ResamplerConfig::builder()
+        .backend(backend)
+        .settings(settings(fixed_mode(44_100, 88_200)))
+        .build();
+    let mut resampler = create_resampler(&config)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = ramp_input(16);
+    let mut output = [0.0; 34];
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("ramp process should succeed: {err}"));
+
+    assert!(
+        process.output_frames > 2,
+        "{interpolation:?} rendered {} frames",
+        process.output_frames
+    );
+    for (sample, frame) in output[..process.output_frames].iter().zip(0_u16..).skip(2) {
+        let expected = f32::from(frame) * 0.5;
+        assert!(
+            (sample - expected).abs() < RAMP_TOLERANCE,
+            "{interpolation:?} frame {frame}: {sample} against {expected}"
+        );
+    }
 }
