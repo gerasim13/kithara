@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, ops::Range};
 
 use fearless_simd::{Level, dispatch};
 use kithara_test_fixtures::signal::Wave;
@@ -493,6 +493,58 @@ fn every_cascade_backend_tracks_the_f64_oracle_across_a_retune() {
                 }
             }
         }
+    }
+}
+
+type CascadeCall = fn(&mut cascade::Cascade, &mut [Vec<f32>], Range<usize>);
+
+fn native_call(cascade: &mut cascade::Cascade, planes: &mut [Vec<f32>], range: Range<usize>) {
+    cascade.process(planes, range).expect("shape matches");
+}
+
+fn fallback_call(cascade: &mut cascade::Cascade, planes: &mut [Vec<f32>], range: Range<usize>) {
+    dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, cascade, planes, range));
+}
+
+/// Channel 0 plays a tone while channel 1 rings out from one impulse through
+/// glide's low-pass below unity (`0.9 · sr / 2`), eight frames per call.
+#[kithara::test]
+fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
+    const CALL: usize = 8;
+    const CALLS: usize = 1_024;
+    let Coefficients { a1, a2, b0, b1, b2 } = Coefficients::from_params(
+        Type::LowPass,
+        Hertz::from_hz(f64::from(RATE)).expect("positive rate"),
+        Hertz::from_hz(0.45 * f64::from(RATE)).expect("positive cutoff"),
+        std::f64::consts::FRAC_1_SQRT_2,
+    )
+    .expect("valid low-pass");
+    let section = [b0, b1, b2, a1, a2].map(|value| value.to_f32().expect("coefficient fits f32"));
+    let runs: [(&str, CascadeCall); 2] = [
+        ("portable-native", native_call),
+        ("portable-fallback", fallback_call),
+    ];
+    for (name, call) in runs {
+        let mut cascade = cascade::Cascade::new(stride(2), stride(1)).expect("cascade");
+        cascade.set_section(0, section).expect("section");
+        let mut wave = (0..).map(|frame| f32::from(SINE.sample(frame, RATE)) / 32_768.0);
+        let subnormal: usize = (0..CALLS)
+            .map(|block| {
+                let tone = wave.by_ref().take(CALL).collect();
+                let mut ring = vec![0.0; CALL];
+                if let Some(first) = ring.first_mut().filter(|_| block == 0) {
+                    *first = 1.0;
+                }
+                let mut planes = [tone, ring];
+                call(&mut cascade, &mut planes, 0..CALL);
+                let [_, ring] = &planes;
+                ring.iter().filter(|sample| sample.is_subnormal()).count()
+            })
+            .sum();
+        assert_eq!(
+            subnormal, 0,
+            "{name}: the silent channel rang in subnormals"
+        );
     }
 }
 

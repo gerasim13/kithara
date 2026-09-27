@@ -10,11 +10,16 @@ use crate::filter::FilterError;
 mod consts {
     /// A section that passes its input through.
     pub(super) const IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
+    /// Section memory below this on every entry restarts from zero at the
+    /// end of a call, before its free decay reaches subnormals.
+    pub(super) const FLUSH_FLOOR: f32 = 1.0e-30;
 }
 
 /// Direct form I sections run on every channel, `S::f32s::LEN` channels per
 /// vector. Channel `c`, section `s` keeps `[x1, x2, y1, y2]` at
-/// `state[c × sections + s]`.
+/// `state[c × sections + s]`. A call ends by zeroing every section memory
+/// that has fallen below `1e-30`, so a silent channel beside a playing one
+/// stops ringing before subnormals.
 pub(crate) struct Cascade {
     channels: NonZeroUsize,
     coefficients: Box<[[f32; 5]]>,
@@ -129,8 +134,12 @@ pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
             }
             for (lane, channel) in states.chunks_mut(sections).enumerate() {
                 if let Some(delay) = channel.get_mut(section) {
-                    *delay = [x1, x2, y1, y2]
+                    let memory = [x1, x2, y1, y2]
                         .map(|vector| vector.as_slice().get(lane).copied().unwrap_or(0.0));
+                    let ringing = memory
+                        .iter()
+                        .any(|value| value.abs() >= consts::FLUSH_FLOOR);
+                    *delay = if ringing { memory } else { [0.0; 4] };
                 }
             }
         }
