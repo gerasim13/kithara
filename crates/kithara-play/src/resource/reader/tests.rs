@@ -1,5 +1,5 @@
 use std::{
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    num::{NonZeroU32, NonZeroUsize},
     ops::Range,
     sync::atomic::{AtomicU8, Ordering},
 };
@@ -22,10 +22,12 @@ use kithara_bufpool::PoolRegion;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan};
+use kithara_signal::{
+    AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
+};
 use kithara_test_fixtures::play_fixtures::half;
 use kithara_test_utils::kithara;
-use kithara_warp::{RenderReader, Warp, WarpConfig, WarpMapRevision};
+use kithara_warp::{BeatGridId, RenderReader, Warp, WarpConfig};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Producer, Split},
@@ -34,13 +36,11 @@ use ringbuf::{
 use super::*;
 use crate::{
     CrossfadeSettings,
-    bridge::{
-        PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels,
-        sync::PreparedFirst,
-    },
+    bridge::{PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels},
     consts,
     rt::{
         PlayerNodeProcessor, StreamShape,
+        sync_owner_fixture::{first_at, prepared_entry},
         track::{PlayerResource, PlayerTrack, RtSink},
     },
     test_pools::{TestPools, pools},
@@ -732,18 +732,22 @@ fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) 
     );
 
     let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate");
-    let revision = NonZeroU64::MIN;
-    let first = PreparedFirst {
-        stereo: [0.25; 2],
-        source: SourceSpan::new(4_096, 4_097, rate, 1)
-            .expect("first source span")
-            .with_mapping_revision(Some(revision)),
-    };
+    let (_, head) = prepared_entry(
+        BeatGridId::allocate().expect("member id"),
+        BeatGridId::allocate().expect("group id"),
+        kithara_sync::LoadGeneration::first(),
+        TransportRevision::first(),
+        None,
+        rate,
+        4_096,
+    );
+    let first = first_at(head, [0.25; 2]);
+    let map = head.activation().revision();
     let (incoming, evidence) = starving_resource(&half, 0);
     let _tail = track.activate_sync(
         incoming,
-        first.source,
-        WarpMapRevision::from(revision),
+        first.source(),
+        map,
         rate,
         CrossfadeSettings::default(),
     );
@@ -774,16 +778,17 @@ fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) 
     );
 
     let seam_end = i64::try_from(consts::BLOCK_FRAMES + seam + 1).expect("test frame fits i64");
+    let first_end = i64::try_from(first.source().end()).expect("test source frame fits i64");
     assert_eq!(
         played_frontier(&evidence),
-        Some((4_097, SessionFrame::new(seam_end))),
+        Some((first_end, SessionFrame::new(seam_end))),
         "the first frame's evidence still stands after its starved suffix"
     );
     assert_eq!(
         evidence
             .load()
             .and_then(|snapshot| snapshot.frontier().warp_map()),
-        Some(WarpMapRevision::from(revision)),
+        Some(map),
         "the first frame's evidence names the map it was placed on"
     );
 

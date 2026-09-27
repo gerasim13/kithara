@@ -8,24 +8,25 @@ use kithara_platform::{
     sync::Arc,
     tokio::{runtime::Handle, sync::oneshot},
 };
-use kithara_signal::SessionEpoch;
-use kithara_sync::{ArmPermit, LoadGeneration, StagePort, SyncExecutionReject, SyncGateBinding};
-use kithara_warp::{MapAxis, WarpCursor, WarpMapRevision, WarpPlan, supports_playback_rate};
+use kithara_signal::SourceSpan;
+use kithara_sync::{ActivationHead, StagePort, Staged, SyncExecutionReject, SyncGateBinding};
+use kithara_warp::{WarpPlan, supports_playback_rate};
 use kithara_worker::TaskError;
 use tracing::warn;
 
 use super::{Resource, ResourceConfig, SourceType};
 use crate::{
     PlayWorker, TrackConfig,
-    bridge::sync::{PreparedFirst, SyncTicket},
+    bridge::sync::SyncTicket,
     rt::track::PlayerResource,
     worker::{Readiness, ReadinessProbe, StagedSlot},
 };
 
-/// One staged lane to open: the plan it enters, the cancel it answers to,
-/// and the probe that proves its prepared PCM.
+/// One staged lane to open: the plan it enters and its head, the cancel it
+/// answers to, and the probe that proves its prepared PCM.
 pub(crate) struct StageRequest {
     pub(crate) plan: WarpPlan,
+    pub(crate) head: ActivationHead,
     pub(crate) cancel: CancelToken,
     pub(crate) probe: ReadinessProbe,
     pub(crate) verdict: oneshot::Receiver<Readiness>,
@@ -61,13 +62,7 @@ impl From<DecodeError> for StagingError {
 
 /// An opened staged lane: its reader keeps the worker lease and the ring of
 /// prepared PCM until the lane is dropped.
-pub(crate) struct StagedLane {
-    resource: Box<PlayerResource>,
-    first: PreparedFirst,
-    activation: WarpCursor,
-    epoch: SessionEpoch,
-    output_rate: std::num::NonZeroU32,
-}
+type StagedLane = Staged<Box<PlayerResource>>;
 
 type OpenStaged =
     dyn Fn(StageRequest) -> BoxFuture<'static, Result<StagedLane, StagingError>> + Send + Sync;
@@ -82,8 +77,6 @@ pub(crate) struct StagingRecipe {
     #[field(get, vis = "pub(crate)")]
     handle: Handle,
     open: Arc<OpenStaged>,
-    handoff: Option<Arc<Handoff>>,
-    gate: Option<SyncGateBinding>,
 }
 
 impl StagingRecipe {
@@ -102,23 +95,21 @@ impl StagingRecipe {
         let worker = worker.clone();
         let open: Arc<OpenStaged> =
             Arc::new(move |request| Box::pin(open_staged(config.clone(), worker.clone(), request)));
-        Some(Self {
-            handle,
-            open,
-            handoff: None,
-            gate: None,
-        })
+        Some(Self { handle, open })
     }
 
-    /// Bind this load's exact slot and Host gate before the executor sees it.
-    pub(crate) fn with_handoff(
-        mut self,
+    /// Binds this load's exact slot, through `handoff`, and its Host gate
+    /// before the executor sees it.
+    pub(crate) fn bind(
+        self,
         gate: SyncGateBinding,
         handoff: impl Fn(SyncTicket) -> Result<(), SyncExecutionReject> + Send + Sync + 'static,
-    ) -> Self {
-        self.gate = Some(gate);
-        self.handoff = Some(Arc::new(handoff));
-        self
+    ) -> SlotStaging {
+        SlotStaging {
+            recipe: self,
+            gate,
+            handoff: Arc::new(handoff),
+        }
     }
 
     /// Reserves a worker slot, then opens and positions the lane in it.
@@ -130,12 +121,25 @@ impl StagingRecipe {
     }
 }
 
-impl StagePort for StagingRecipe {
-    type Media = (TrackId, LoadGeneration);
-    type Lane = StagedLane;
+/// A staging recipe bound to one slot: the Host gate its activations are
+/// claimed through and the handoff into its audio callback.
+#[derive(Clone)]
+pub(crate) struct SlotStaging {
+    recipe: StagingRecipe,
+    gate: SyncGateBinding,
+    handoff: Arc<Handoff>,
+}
+
+impl StagePort for SlotStaging {
+    type Item = TrackId;
+    type Lane = Box<PlayerResource>;
 
     fn runtime(&self) -> &Handle {
-        self.handle()
+        self.recipe.handle()
+    }
+
+    fn gate(&self) -> &SyncGateBinding {
+        &self.gate
     }
 
     /// Opens the lane, then holds it only once its probe proves the plan's
@@ -143,17 +147,19 @@ impl StagePort for StagingRecipe {
     fn stage(
         self,
         plan: WarpPlan,
+        head: ActivationHead,
         cancel: CancelToken,
     ) -> impl MaybeSendFuture<Output = Result<StagedLane, SyncExecutionReject>> + 'static {
         async move {
             let (probe, verdict) = ReadinessProbe::new(&plan);
             let request = StageRequest {
                 plan,
+                head,
                 cancel,
                 probe,
                 verdict,
             };
-            match self.open(request).await {
+            match self.recipe.open(request).await {
                 Ok(lane) => Ok(lane),
                 Err(StagingError::Capacity) => Err(SyncExecutionReject::Capacity),
                 Err(StagingError::Cancelled) => Err(SyncExecutionReject::Cancelled),
@@ -166,39 +172,8 @@ impl StagePort for StagingRecipe {
         }
     }
 
-    fn handoff(
-        self,
-        media: Self::Media,
-        lane: Self::Lane,
-        cancel: CancelToken,
-        permit: ArmPermit,
-    ) -> Result<(), SyncExecutionReject> {
-        let Some(gate) = self.gate else {
-            cancel.cancel();
-            return Err(SyncExecutionReject::Cancelled);
-        };
-        let Some(handoff) = self.handoff else {
-            cancel.cancel();
-            return Err(SyncExecutionReject::Cancelled);
-        };
-        let (item_id, load) = media;
-        if permit.stamp().load() != load {
-            cancel.cancel();
-            return Err(SyncExecutionReject::Cancelled);
-        }
-        handoff(SyncTicket {
-            item_id,
-            load,
-            resource: lane.resource,
-            first: lane.first,
-            permit,
-            gate,
-            activation: lane.activation.output(),
-            source_start: lane.activation.source(),
-            epoch: lane.epoch,
-            output_rate: lane.output_rate,
-            map: lane.activation.revision(),
-        })
+    fn handoff(self, ticket: SyncTicket) -> Result<(), SyncExecutionReject> {
+        (self.handoff)(ticket)
     }
 }
 
@@ -213,19 +188,11 @@ where
 {
     let StageRequest {
         plan,
+        head,
         cancel,
         probe,
         verdict,
     } = request;
-    let activation = plan.activation();
-    let (epoch, output_rate) = match plan.output_axis() {
-        Some(MapAxis::Session(axis)) => (axis.epoch(), axis.sample_rate()),
-        _ => return Err(StagingError::Geometry),
-    };
-    let source_rate = match plan.source_axis() {
-        Some(MapAxis::Asset(axis)) => axis.sample_rate(),
-        _ => return Err(StagingError::Geometry),
-    };
     let slot: StagedSlot = worker.reserve_staged(cancel.clone())?;
     let warp = config.warp.entering(Arc::new(plan));
     let stretch = Arc::clone(warp.stretch());
@@ -269,25 +236,18 @@ where
         Ok(Readiness::Failed) => return Err(StagingError::Geometry),
         Err(_) => return Err(StagingError::Cancelled),
     }
-    let first = prepare_first(&mut resource, activation, output_rate, source_rate)?;
+    let (stereo, source) = prepare_first(&mut resource, head)?;
     let resource =
         PlayerResource::new(resource, src, worker.pools()).map_err(|_| StagingError::Capacity)?;
-    Ok(StagedLane {
-        resource: Box::new(resource),
-        first,
-        activation,
-        epoch,
-        output_rate,
-    })
+    Ok(Staged::new(Box::new(resource), stereo, source))
 }
 
+/// Decodes the lane's first frame, which the executor places at `head`.
 fn prepare_first(
     resource: &mut Resource,
-    activation: WarpCursor,
-    output_rate: std::num::NonZeroU32,
-    source_rate: std::num::NonZeroU32,
-) -> Result<PreparedFirst, StagingError> {
-    if resource.spec().sample_rate != output_rate {
+    head: ActivationHead,
+) -> Result<([f32; 2], SourceSpan), StagingError> {
+    if resource.spec().sample_rate != head.output_rate() {
         return Err(StagingError::Geometry);
     }
     let mut left = [0.0];
@@ -304,17 +264,8 @@ fn prepare_first(
     else {
         return Err(StagingError::Geometry);
     };
-    let count = count.get();
-    if count != 1
-        || source.output_frames() != 1
-        || source.start() != activation.source()
-        || source.sample_rate() != source_rate
-        || source.mapping_revision().map(WarpMapRevision::from) != Some(activation.revision())
-    {
+    if count.get() != 1 {
         return Err(StagingError::Geometry);
     }
-    Ok(PreparedFirst {
-        stereo: [left[0], right[0]],
-        source,
-    })
+    Ok(([left[0], right[0]], source))
 }

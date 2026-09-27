@@ -6,12 +6,12 @@ use tracing::debug;
 
 use crate::{
     PlayError,
-    resource::StagingRecipe,
+    resource::SlotStaging,
     session::{SessionError, SessionHandle},
 };
 
 /// Executor of the preparations a player's group issues for its track.
-pub(crate) type SyncStaging = SyncExecutor<StagingRecipe>;
+pub(crate) type SyncStaging = SyncExecutor<SlotStaging>;
 
 impl<S: 'static> ReceiptSink for SessionHandle<S>
 where

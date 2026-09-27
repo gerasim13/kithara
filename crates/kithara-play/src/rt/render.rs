@@ -7,8 +7,10 @@ use kithara_dsp::{
     param::{Mix, MixDSP, SmootherConfig},
 };
 use kithara_events::TrackId;
-use kithara_sync::{ClaimError, PermitState, SyncApplied, SyncExecutionReject, SyncReceiptTx};
-use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
+use kithara_sync::{
+    ClaimError, PermitState, PreparedFirst, SyncApplied, SyncExecutionReject, SyncReceiptTx,
+};
+use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{
     HeapCons, HeapProd,
@@ -19,7 +21,7 @@ use tracing::warn;
 
 use super::{
     processor::{PlayerNodeProcessor, StreamShape},
-    track::{RtSink, SyncFadeTail, TrackReadOutcome},
+    track::{PlayerResource, RtSink, SyncFadeTail, TrackReadOutcome},
 };
 use crate::{
     bridge::{
@@ -405,7 +407,7 @@ fn reject_sync(sync: &mut SyncRender<'_>, reason: SyncExecutionReject) {
         return;
     };
     if receipts
-        .publish_rejected(ticket.permit.stamp(), reason)
+        .publish_rejected(ticket.permit().stamp(), reason)
         .is_err()
     {
         return;
@@ -455,7 +457,7 @@ fn render_sync_activation(
     };
     // A parked source waits before Late is judged: the owner withdraws the
     // ticket after the change, or the change aborts and the ticket stays.
-    match ticket.gate.permit_state(&ticket.permit) {
+    match ticket.gate().permit_state(&ticket.permit()) {
         PermitState::Current => {}
         PermitState::Parked => return SyncAttempt::None,
         PermitState::Withdrawn => {
@@ -470,19 +472,20 @@ fn render_sync_activation(
     let output = context.output();
     let start = i64::from(output.output_frames().start);
     let end = i64::from(output.output_frames().end);
-    if output.session_epoch() != ticket.epoch {
+    let head = ticket.first().head();
+    if output.session_epoch() != head.epoch() {
         reject_sync(sync, SyncExecutionReject::Cancelled);
         return SyncAttempt::None;
     }
     if ticket
-        .permit
+        .permit()
         .stamp()
         .output_transport()
         .is_some_and(|revision| output.transport_revision() != Some(revision))
     {
         return SyncAttempt::None;
     }
-    let activation = i64::from(ticket.activation);
+    let activation = i64::from(head.activation().output());
     if activation >= end {
         return SyncAttempt::None;
     }
@@ -498,15 +501,11 @@ fn render_sync_activation(
         reject_sync(sync, SyncExecutionReject::Capacity);
         return SyncAttempt::None;
     }
-    let source = ticket.first.source;
-    if output.sample_rate() != ticket.output_rate
-        || source.start() != ticket.source_start
-        || source.output_frames() != 1
-        || source.mapping_revision().map(WarpMapRevision::from) != Some(ticket.map)
-        || !tracks.get(ticket.item_id).is_some_and(|track| {
-            track.load() == Some(ticket.load)
+    if output.sample_rate() != head.output_rate()
+        || !tracks.get(ticket.item()).is_some_and(|track| {
+            track.load() == Some(ticket.load())
                 && track.state().is_leading()
-                && track.output_sample_rate() == ticket.output_rate.get()
+                && track.output_sample_rate() == head.output_rate().get()
         })
     {
         reject_sync(sync, SyncExecutionReject::Geometry);
@@ -546,16 +545,17 @@ fn claim_and_render_sync(
     let Some(ticket) = sync.pending.try_peek() else {
         return SyncAttempt::None;
     };
-    let stamp = ticket.permit.stamp();
-    let source = ticket.first.source;
+    let stamp = ticket.permit().stamp();
+    let first = ticket.first();
+    let map = first.head().activation().revision();
     let applied = SyncApplied::builder()
         .stamp(stamp)
         .frontier(
             PresentationFrontier::builder()
-                .source(source.end())
+                .source(first.source().end())
                 .output(first_context.output().output_frames().end)
                 .build()
-                .with_warp_map(Some(ticket.map)),
+                .with_warp_map(Some(map)),
         )
         .build();
     let Some(receipts) = sync.receipts.as_mut() else {
@@ -564,9 +564,9 @@ fn claim_and_render_sync(
     let Some(reservation) = receipts.reserve_pair(applied) else {
         return SyncAttempt::None;
     };
-    let gate = ticket.gate.clone();
-    let permit = ticket.permit;
-    let item_id = ticket.item_id;
+    let gate = ticket.gate().clone();
+    let permit = ticket.permit();
+    let item_id = ticket.item();
 
     // The ordinary resident serves the prefix before the claim. A losing
     // claim resumes that resident at offset without replaying prefix PCM.
@@ -624,18 +624,17 @@ fn claim_and_render_sync(
     let Some(ticket) = sync.pending.try_pop() else {
         unreachable!("the claimed sync ticket was removed without a consumer");
     };
-    let SyncTicket {
-        item_id,
-        resource,
-        first,
-        output_rate,
-        map,
-        ..
-    } = ticket;
+    let (resource, first): (Box<PlayerResource>, PreparedFirst) = ticket.into();
     let Some(track) = tracks.get_mut(item_id) else {
         unreachable!("the preflighted resident disappeared during one callback");
     };
-    let mut old = track.activate_sync(resource, first.source, map, output_rate, consts::SYNC_FADE);
+    let mut old = track.activate_sync(
+        resource,
+        first.source(),
+        map,
+        first.head().output_rate(),
+        consts::SYNC_FADE,
+    );
     track.render_first(&first, &first_context, read_bufs, bus_bufs, offset, sink);
     // Release-store after first PCM and before receipts makes the selected
     // binding visible whenever Host consumes Presented.
@@ -746,7 +745,7 @@ pub(super) const fn eviction_priority(state: TrackState) -> u8 {
 #[cfg(test)]
 mod sync_tests {
     use std::{
-        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        num::{NonZeroU32, NonZeroUsize},
         sync::atomic::{AtomicUsize, Ordering},
     };
 
@@ -757,9 +756,7 @@ mod sync_tests {
     use kithara_decode::DecodeError;
     use kithara_events::EventBus;
     use kithara_platform::{sync::Arc, time::Duration};
-    use kithara_signal::{
-        AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
-    };
+    use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, TransportRevision};
     use kithara_sync::{
         LoadGeneration, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, sync_receipts,
     };
@@ -773,9 +770,9 @@ mod sync_tests {
 
     use super::*;
     use crate::{
-        bridge::{PlaybackShared, sync::PreparedFirst},
+        bridge::PlaybackShared,
         resource::Resource,
-        rt::sync_owner_fixture::prepared_entry,
+        rt::sync_owner_fixture::{prepared_entry, ticket},
         test_pools::pools,
     };
 
@@ -888,19 +885,18 @@ mod sync_tests {
         let load = LoadGeneration::first();
         let member = BeatGridId::allocate().expect("member id");
         let group = BeatGridId::allocate().expect("group id");
-        let (stamp, map) = prepared_entry(
+        let (stamp, head) = prepared_entry(
             member,
             group,
             load,
             TransportRevision::first(),
             dependency,
             rate,
+            0,
         );
+        let map = head.activation().revision();
         let arbiter = Arc::new(SyncArbiter::new());
         let cell = Arc::new(PermitCell::new(member));
-        let owner = arbiter.try_control().expect("owner phase");
-        let permit = owner.mint_permit(&cell, stamp).expect("exact permit");
-        drop(owner);
         let revoke: Option<Arc<dyn Fn() + Send + Sync>> = revoke_during_prefix.then(|| {
             let arbiter = Arc::clone(&arbiter);
             let cell = Arc::clone(&cell);
@@ -915,31 +911,20 @@ mod sync_tests {
             }) as Arc<dyn Fn() + Send + Sync>
         });
         let gate = SyncGateBinding::new(arbiter, cell);
-        let first = PreparedFirst {
-            stereo: [0.0, 0.0],
-            source: SourceSpan::new(0, 1, rate, 1)
-                .expect("first source span")
-                .with_mapping_revision(Some(NonZeroU64::MIN)),
-        };
-        let ticket = SyncTicket {
+        let ticket = ticket(
             item_id,
             load,
-            resource: resource(
+            resource(
                 new_mode,
                 rate,
                 new_read_required,
                 new_duration_required,
                 None,
             ),
-            first,
-            permit,
+            stamp,
+            head,
             gate,
-            activation: SessionFrame::new(32),
-            source_start: 0,
-            epoch: SessionEpoch::new(1),
-            output_rate: rate,
-            map,
-        };
+        );
         let mut track = super::super::track::PlayerTrack::builder()
             .sample_rate(rate)
             .item_id(item_id)

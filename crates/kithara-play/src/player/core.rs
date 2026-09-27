@@ -7,7 +7,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_sync::{LoadGeneration, SourceChange};
+use kithara_sync::{LoadGeneration, LoadedMedia, SourceChange};
 use kithara_warp::WarpConfig;
 use tracing::{debug, warn};
 
@@ -160,7 +160,9 @@ impl<S> PlayerRuntime<S> {
         let staging = item
             .staging
             .and_then(|recipe| self.core.engine.bind_staging(slot, recipe));
-        self.core.staging.load((item.item_id, load), staging);
+        self.core
+            .staging
+            .load(LoadedMedia::new(item.item_id, load), staging);
         let rate = self.core.engine.master_sample_rate();
         if let Some(sample_rate) = NonZeroU32::new(rate) {
             self.core.track_grid.load(

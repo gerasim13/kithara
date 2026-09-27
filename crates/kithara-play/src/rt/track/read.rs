@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+use kithara_sync::PreparedFirst;
 use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 use num_traits::cast::AsPrimitive;
@@ -12,7 +13,6 @@ use super::{
 };
 use crate::bridge::{
     PlaybackFault, PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState,
-    sync::PreparedFirst,
 };
 
 struct TrackReadContext<'a> {
@@ -65,17 +65,18 @@ impl PlayerTrack {
         at: usize,
         sink: &mut RtSink<'_>,
     ) {
-        scratch_bufs[0][at] = first.stereo[0];
-        scratch_bufs[1][at] = first.stereo[1];
+        let [left, right] = first.stereo();
+        scratch_bufs[0][at] = left;
+        scratch_bufs[1][at] = right;
         self.fade.mix_range(scratch_bufs, mix_bufs, at..at + 1, 1);
         self.advance_media_clock(1);
         self.publish_render(
             context,
             PresentationFrontier::builder()
-                .source(first.source.end())
+                .source(first.source().end())
                 .output(context.output().output_frames().end)
                 .build()
-                .with_warp_map(first.source.mapping_revision().map(WarpMapRevision::from)),
+                .with_warp_map(first.source().mapping_revision().map(WarpMapRevision::from)),
         );
         self.update_after_mix(sink.notifications);
     }

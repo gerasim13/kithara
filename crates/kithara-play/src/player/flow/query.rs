@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_events::{EventBus, EventReceiver, EventSet, TrackId};
-use kithara_sync::{ResidentLoadObservation, ResidentRender, ResidentStaging};
+use kithara_sync::{LoadedMedia, ResidentLoadObservation, ResidentRender, ResidentStaging};
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -27,12 +27,10 @@ impl<S> PlayerRuntime<S> {
             Some((_, None)) | None => ResidentRender::Missing,
         };
         let staging = match self.core.staging.stageable_media() {
-            Some((staged_id, staged_load)) if (staged_id, staged_load) == (item_id, load) => {
-                ResidentStaging::Available
-            }
-            Some((staged_id, staged_load)) => ResidentStaging::DifferentLoad {
-                item_id: staged_id,
-                load: staged_load,
+            Some(staged) if staged == LoadedMedia::new(item_id, load) => ResidentStaging::Available,
+            Some(staged) => ResidentStaging::DifferentLoad {
+                item_id: staged.item(),
+                load: staged.load(),
             },
             None => ResidentStaging::Unavailable,
         };

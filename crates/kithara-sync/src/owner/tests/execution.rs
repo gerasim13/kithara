@@ -1,3 +1,5 @@
+use std::num::{NonZeroU32, NonZeroU64};
+
 use kithara_platform::{
     CancelToken,
     maybe_send::MaybeSendFuture,
@@ -7,7 +9,7 @@ use kithara_platform::{
         sync::{mpsc, oneshot},
     },
 };
-use kithara_signal::{SessionFrame, TransportRevision};
+use kithara_signal::{SessionFrame, SourceSpan, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridQuery, PresentationFrontier, WarpPlan};
 
@@ -17,10 +19,11 @@ use super::{
     preparation::{asset_grid, attach_grid, cue, window},
 };
 use crate::{
-    AlignmentSource, ArmPermit, ExecutedGroup, LoadGeneration, ParentFact, PermitCell, ReceiptSink,
-    StagePort, SyncAdmission, SyncApplied, SyncArbiter, SyncAttachment, SyncCapability, SyncEffect,
-    SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup, SyncIntent,
-    SyncOperation, SyncReceipt, SyncReceiptAck,
+    ActivationHead, AlignmentSource, ExecutedGroup, LoadGeneration, LoadedMedia, ParentFact,
+    PermitCell, PreparedFirst, ReceiptSink, StagePort, Staged, SyncAdmission, SyncApplied,
+    SyncArbiter, SyncAttachment, SyncCapability, SyncEffect, SyncError, SyncExecutionReject,
+    SyncExecutionStamp, SyncExecutor, SyncGateBinding, SyncGroup, SyncIntent, SyncOperation,
+    SyncReceipt, SyncReceiptAck, SyncTicket,
 };
 
 /// The first session frame no caller can use.
@@ -37,41 +40,55 @@ impl Drop for Lane {
     }
 }
 
-/// Stages every plan at once and announces each staged lane.
+/// The source interval of the one frame `head` enters at.
+fn first_span(head: ActivationHead) -> SourceSpan {
+    let cursor = head.activation();
+    SourceSpan::new(cursor.source(), cursor.source() + 1, head.source_rate(), 1)
+        .expect("one source frame")
+        .with_mapping_revision(NonZeroU64::new(u64::from(cursor.revision())))
+}
+
+/// Stages every plan at once, decoding the frame its head enters at, and
+/// announces each staged lane.
 #[derive(Clone)]
 struct Port {
     runtime: Handle,
+    gate: SyncGateBinding,
     staged: mpsc::UnboundedSender<oneshot::Receiver<()>>,
     installed: Arc<Mutex<Vec<Lane>>>,
 }
 
 impl StagePort for Port {
-    type Media = u64;
+    type Item = u64;
     type Lane = Lane;
 
     fn runtime(&self) -> &Handle {
         &self.runtime
     }
 
+    fn gate(&self) -> &SyncGateBinding {
+        &self.gate
+    }
+
     fn stage(
         self,
         _plan: WarpPlan,
+        head: ActivationHead,
         _cancel: CancelToken,
-    ) -> impl MaybeSendFuture<Output = Result<Lane, SyncExecutionReject>> + 'static {
+    ) -> impl MaybeSendFuture<Output = Result<Staged<Lane>, SyncExecutionReject>> + 'static {
         async move {
             let (released, release) = oneshot::channel();
             let _ = self.staged.send(release);
-            Ok(Lane(Some(released)))
+            Ok(Staged::new(
+                Lane(Some(released)),
+                [0.0; 2],
+                first_span(head),
+            ))
         }
     }
 
-    fn handoff(
-        self,
-        _media: Self::Media,
-        lane: Self::Lane,
-        _cancel: CancelToken,
-        _permit: ArmPermit,
-    ) -> Result<(), SyncExecutionReject> {
+    fn handoff(self, ticket: SyncTicket<u64, Lane>) -> Result<(), SyncExecutionReject> {
+        let (lane, _): (Lane, PreparedFirst) = ticket.into();
         self.installed.lock().push(lane);
         Ok(())
     }
@@ -142,12 +159,14 @@ impl Fixture {
             arbiter: Arc::new(SyncArbiter::new()),
             cell: Arc::new(PermitCell::new(track)),
         };
+        let slot_gate = SyncGateBinding::new(Arc::clone(&owner.arbiter), Arc::clone(&owner.cell));
         let executor = SyncExecutor::new(track, Some(Arc::new(owner)), CancelToken::root());
         let (staged_tx, staged) = mpsc::unbounded_channel();
         executor.load(
-            1,
+            LoadedMedia::new(1, LoadGeneration::first()),
             Some(Port {
                 runtime: Handle::current(),
+                gate: slot_gate,
                 staged: staged_tx,
                 installed,
             }),
@@ -217,6 +236,55 @@ async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled()
         "an owner that kept the preparation pending hears that its lane is gone"
     );
     assert_eq!(released.await, Ok(()), "the refused lane is released");
+}
+
+#[kithara::test(tokio)]
+async fn a_first_frame_counts_only_at_its_plans_activation_head() {
+    let mut fixture = Fixture::new(Answer::Record, None);
+    let admission = fixture
+        .group
+        .transact(cue_at(fixture.track, 24_000))
+        .expect("the cue is admitted");
+    let SyncAdmission::Prepared(preparation) = admission else {
+        panic!("expected a preparation, got {admission:?}");
+    };
+    let SyncEffect::Projection { plan, .. } = preparation.effect() else {
+        panic!("a cue projects the track");
+    };
+    let head = ActivationHead::of(plan).expect("the projection enters the session");
+    let cursor = head.activation();
+    let at_head = first_span(head);
+    let span = |start: u64, rate, frames| {
+        SourceSpan::new(start, start + 1, rate, frames)
+            .expect("fixture span")
+            .with_mapping_revision(at_head.mapping_revision())
+    };
+    let foreign_rate = NonZeroU32::new(head.source_rate().get() + 1).expect("fixture rate");
+    let foreign_map = NonZeroU64::new(u64::from(cursor.revision()) + 1);
+
+    let first = head
+        .first([0.5, -0.5], at_head)
+        .expect("the frame at the head counts");
+    assert_eq!(first.head(), head);
+    assert_eq!(first.stereo(), [0.5, -0.5]);
+    for (case, off_head) in [
+        (
+            "a shifted start",
+            span(cursor.source() + 1, head.source_rate(), 1),
+        ),
+        ("a foreign rate", span(cursor.source(), foreign_rate, 1)),
+        ("a foreign map", at_head.with_mapping_revision(foreign_map)),
+        ("no map", at_head.with_mapping_revision(None)),
+        (
+            "two output frames",
+            span(cursor.source(), head.source_rate(), 2),
+        ),
+    ] {
+        assert!(
+            head.first([0.0; 2], off_head).is_none(),
+            "{case} does not count"
+        );
+    }
 }
 
 #[kithara::test(tokio)]
@@ -292,7 +360,7 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
         cell: Arc::new(PermitCell::new(track)),
     };
     let unstageable = SyncExecutor::<Port>::new(track, Some(Arc::new(owner)), CancelToken::root());
-    unstageable.load(1, None);
+    unstageable.load(LoadedMedia::new(1, LoadGeneration::first()), None);
     assert_eq!(
         refused(&unstageable),
         SyncError::CapabilityUnavailable {

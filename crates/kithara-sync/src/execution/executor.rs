@@ -11,24 +11,27 @@ use kithara_platform::{
 use kithara_warp::{BeatGridId, supports_playback_rate};
 use tracing::warn;
 
-use super::{ReceiptSink, StagePort, SyncExecution, SyncReceiptAck, command::Execute};
+use super::{
+    ActivationHead, LoadedMedia, PreparedFirst, ReceiptSink, StagePort, SyncExecution,
+    SyncReceiptAck, SyncTicket, command::Execute,
+};
 use crate::{
     ArmPermit, SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp,
     SyncPreparation, SyncReceipt,
 };
 
 struct Loaded<P: StagePort> {
-    media: P::Media,
+    media: LoadedMedia<P::Item>,
     port: Option<P>,
 }
 
 struct Held<P: StagePort> {
     stamp: SyncExecutionStamp,
-    media: P::Media,
+    media: LoadedMedia<P::Item>,
     port: P,
     cancel: CancelToken,
     runtime: Handle,
-    lane: Option<P::Lane>,
+    lane: Option<(P::Lane, PreparedFirst)>,
 }
 
 /// What the owner hears about one preparation: `rejected` is the reason its
@@ -133,7 +136,7 @@ impl<P: StagePort> SyncExecutor<P> {
     /// The media the member now holds, staged through `port` when it can be
     /// staged at all; a preparation staged for another load is dropped and
     /// reported cancelled.
-    pub fn load(&self, media: P::Media, port: Option<P>) {
+    pub fn load(&self, media: LoadedMedia<P::Item>, port: Option<P>) {
         let mut state = self.0.state.lock();
         let stale = state.held.take_if(|held| held.media != media);
         state.loaded = Some(Loaded { media, port });
@@ -145,7 +148,7 @@ impl<P: StagePort> SyncExecutor<P> {
 
     /// The loaded media that can currently open a prepared lane.
     #[must_use]
-    pub fn stageable_media(&self) -> Option<P::Media> {
+    pub fn stageable_media(&self) -> Option<LoadedMedia<P::Item>> {
         self.0
             .state
             .lock()
@@ -246,7 +249,13 @@ impl<P: StagePort> Execute for Shared<P> {
         drop(state);
         cancel_silently(superseded);
         drop(spawn_on(&runtime, async move {
-            let outcome = port.stage(plan, cancel.clone()).await;
+            let outcome = match ActivationHead::of(&plan) {
+                Some(head) => port
+                    .stage(plan, head, cancel.clone())
+                    .await
+                    .and_then(|staged| staged.at(head).ok_or(SyncExecutionReject::Geometry)),
+                None => Err(SyncExecutionReject::Geometry),
+            };
             self.settle(stamp, &cancel, outcome);
         }));
     }
@@ -264,7 +273,7 @@ impl<P: StagePort> Shared<P> {
         self: &Arc<Self>,
         stamp: SyncExecutionStamp,
         cancel: &CancelToken,
-        outcome: Result<P::Lane, SyncExecutionReject>,
+        outcome: Result<(P::Lane, PreparedFirst), SyncExecutionReject>,
     ) {
         let mut state = self.state.lock();
         let Some(held) = state
@@ -329,7 +338,8 @@ impl<P: StagePort> Shared<P> {
     }
 
     /// Leaves the executor's pre-claim custody only while the same staged
-    /// stamp is still held after the blocking owner acknowledgement.
+    /// stamp is still held after the blocking owner acknowledgement; a
+    /// permit minted for another load cancels the lane instead.
     fn handoff_installed(&self, stamp: SyncExecutionStamp, permit: ArmPermit) {
         let transferred = {
             let mut state = self.state.lock();
@@ -340,11 +350,19 @@ impl<P: StagePort> Shared<P> {
         let Some(mut held) = transferred else {
             return;
         };
-        let Some(lane) = held.lane.take() else {
+        let Some((lane, first)) = held.lane.take() else {
             return;
         };
         let runtime = held.runtime.clone();
-        let result = held.port.handoff(held.media, lane, held.cancel, permit);
+        let result = if permit.stamp().load() == held.media.load() {
+            let gate = held.port.gate().clone();
+            held.port
+                .handoff(SyncTicket::new(held.media, lane, first, permit, gate))
+        } else {
+            held.cancel.cancel();
+            drop(lane);
+            Err(SyncExecutionReject::Cancelled)
+        };
         if let Err(reason) = result {
             let mut state = self.state.lock();
             let _ = state.commit(

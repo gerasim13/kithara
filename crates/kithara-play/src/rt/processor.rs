@@ -260,12 +260,12 @@ impl PlayerNodeProcessor {
         // Only a current permit earns a rejection. A withdrawn one is the
         // owner's already; a parked one is withdrawn by the source change
         // that parked it.
-        if ticket.gate.permit_state(&ticket.permit) == PermitState::Current {
+        if ticket.gate().permit_state(&ticket.permit()) == PermitState::Current {
             let Some(receipts) = self.sync_receipts.as_mut() else {
                 return;
             };
             if receipts
-                .publish_rejected(ticket.permit.stamp(), reason)
+                .publish_rejected(ticket.permit().stamp(), reason)
                 .is_err()
             {
                 return;
@@ -582,8 +582,6 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
     use firewheel::{
         clock::InstantSamples,
         mask::{ConnectedMask, ConstantMask, SilenceMask},
@@ -604,9 +602,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        bridge::{SharedEq, slot_channels, sync::PreparedFirst},
+        bridge::{SharedEq, slot_channels},
         resource::Resource,
-        rt::sync_owner_fixture::prepared_entry,
+        rt::sync_owner_fixture::{prepared_entry, ticket},
         test_pools::pools,
     };
 
@@ -693,37 +691,27 @@ mod tests {
         let rate = NonZeroU32::new(44_100).expect("fixture rate");
         let member = BeatGridId::allocate().expect("member id");
         let group = BeatGridId::allocate().expect("group id");
-        let (stamp, map) = prepared_entry(
+        let (stamp, head) = prepared_entry(
             member,
             group,
             LoadGeneration::first(),
             TransportRevision::first(),
             Some(TransportRevision::first()),
             rate,
+            0,
         );
-        let arbiter = Arc::new(SyncArbiter::new());
-        let cell = Arc::new(PermitCell::new(member));
-        let owner = arbiter.try_control().expect("owner phase");
-        let permit = owner.mint_permit(&cell, stamp).expect("exact permit");
-        drop(owner);
-        SyncTicket {
+        let gate = SyncGateBinding::new(
+            Arc::new(SyncArbiter::new()),
+            Arc::new(PermitCell::new(member)),
+        );
+        ticket(
             item_id,
-            load: LoadGeneration::first(),
-            resource: sync_resource(false),
-            first: PreparedFirst {
-                stereo: [0.0, 0.0],
-                source: SourceSpan::new(0, 1, rate, 1)
-                    .expect("source span")
-                    .with_mapping_revision(Some(NonZeroU64::MIN)),
-            },
-            permit,
-            gate: SyncGateBinding::new(arbiter, cell),
-            activation: SessionFrame::new(32),
-            source_start: 0,
-            epoch: SessionEpoch::new(1),
-            output_rate: rate,
-            map,
-        }
+            LoadGeneration::first(),
+            sync_resource(false),
+            stamp,
+            head,
+            gate,
+        )
     }
 
     #[kithara::test]
@@ -752,7 +740,7 @@ mod tests {
         );
         processor.sync_return_held = Some(SyncReturn::Tail(held_tail));
         let pending = pending_ticket(item_id);
-        let pending_stamp = pending.permit.stamp();
+        let pending_stamp = pending.permit().stamp();
         assert!(control.sync_tx.try_push(pending).is_ok());
         assert!(control.cmd_tx.try_push(PlayerCmd::Clear).is_ok());
         assert!(
@@ -830,7 +818,7 @@ mod tests {
             match value {
                 SyncReturn::Tail(tail) => tails.push(tail.item_id),
                 SyncReturn::Track(track) => tracks.push(track.item_id()),
-                SyncReturn::Ticket(ticket) => tickets.push(ticket.permit.stamp()),
+                SyncReturn::Ticket(ticket) => tickets.push(ticket.permit().stamp()),
             }
         }
         assert_eq!(tails.len(), 3);
@@ -847,10 +835,14 @@ mod tests {
         assert_eq!(tickets.as_slice(), &[pending_stamp]);
 
         let withdrawn = pending_ticket(item_id);
-        let withdrawn_stamp = withdrawn.permit.stamp();
-        let owner = withdrawn.gate.arbiter().try_control().expect("owner phase");
+        let withdrawn_stamp = withdrawn.permit().stamp();
+        let owner = withdrawn
+            .gate()
+            .arbiter()
+            .try_control()
+            .expect("owner phase");
         owner
-            .preflight_revoke(withdrawn.gate.cell())
+            .preflight_revoke(withdrawn.gate().cell())
             .expect("fixture permit revision")
             .revoke();
         drop(owner);
@@ -865,7 +857,7 @@ mod tests {
         );
         assert!(matches!(
             control.sync_return_rx.try_pop(),
-            Some(SyncReturn::Ticket(ticket)) if ticket.permit.stamp() == withdrawn_stamp
+            Some(SyncReturn::Ticket(ticket)) if ticket.permit().stamp() == withdrawn_stamp
         ));
     }
 

@@ -23,7 +23,7 @@ use crate::{
         sync::{SyncReturn, SyncTicket},
     },
     error::PlayError,
-    resource::StagingRecipe,
+    resource::{SlotStaging, StagingRecipe},
     rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
 };
@@ -179,11 +179,11 @@ impl<S> EngineImpl<S> {
         while let Some(returned) = handle.sync_return_rx.try_pop() {
             match returned {
                 SyncReturn::Ticket(ticket) => {
-                    if let Some(seek) = ticket.resource.seek_handle() {
-                        handle.unbind_seek(ticket.item_id, &seek);
+                    if let Some(seek) = ticket.lane().seek_handle() {
+                        handle.unbind_seek(ticket.item(), &seek);
                     }
-                    if let Some(render) = ticket.resource.render_reader() {
-                        handle.unbind_render(ticket.item_id, &render);
+                    if let Some(render) = ticket.lane().render_reader() {
+                        handle.unbind_render(ticket.item(), &render);
                     }
                 }
                 SyncReturn::Track(track) => {
@@ -207,14 +207,10 @@ impl<S> EngineImpl<S> {
     }
 
     /// Bind a staged lane to the same slot and load that received its resident.
-    pub(crate) fn bind_staging(
-        &self,
-        slot: SlotId,
-        recipe: StagingRecipe,
-    ) -> Option<StagingRecipe> {
+    pub(crate) fn bind_staging(&self, slot: SlotId, recipe: StagingRecipe) -> Option<SlotStaging> {
         let gate = self.session.sync_gate()?;
         let slots = Arc::clone(&self.slots);
-        Some(recipe.with_handoff(gate, move |ticket: SyncTicket| {
+        Some(recipe.bind(gate, move |ticket: SyncTicket| {
             let mut slots = slots.lock();
             let Some(entry) = slots.entry_mut(slot) else {
                 return Err(SyncExecutionReject::Cancelled);
@@ -222,22 +218,22 @@ impl<S> EngineImpl<S> {
             if entry.closing
                 || entry
                     .control
-                    .render_binding(ticket.item_id)
+                    .render_binding(ticket.item())
                     .map(|(load, _)| load)
-                    != Some(ticket.load)
+                    != Some(ticket.load())
             {
                 return Err(SyncExecutionReject::Cancelled);
             }
             if entry.control.sync_tx.vacant_len() == 0 {
                 return Err(SyncExecutionReject::Capacity);
             }
-            let Some(reader) = ticket.resource.render_reader() else {
+            let Some(reader) = ticket.lane().render_reader() else {
                 return Err(SyncExecutionReject::Geometry);
             };
-            let seek = ticket.resource.seek_handle();
-            let item_id = ticket.item_id;
-            let load = ticket.load;
-            let map = ticket.map;
+            let seek = ticket.lane().seek_handle();
+            let item_id = ticket.item();
+            let load = ticket.load();
+            let map = ticket.first().head().activation().revision();
             if entry.control.sync_tx.try_push(ticket).is_err() {
                 unreachable!("sole slot sync producer retained its vacancy");
             }

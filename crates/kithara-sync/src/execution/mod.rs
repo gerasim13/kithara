@@ -1,3 +1,4 @@
+mod activation;
 mod arbiter;
 mod command;
 mod executor;
@@ -5,6 +6,7 @@ mod group;
 mod mailbox;
 mod port;
 
+pub use activation::{ActivationHead, LoadedMedia, PreparedFirst, Staged, SyncTicket};
 pub use arbiter::{
     AppliedSource, ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError,
     ControlGuard, PendingSourceChange, PermitCell, PermitState, PreparedRevocation,

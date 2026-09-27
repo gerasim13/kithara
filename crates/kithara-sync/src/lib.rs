@@ -8,11 +8,12 @@ mod protocol;
 mod root;
 
 pub use execution::{
-    AppliedSource, ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError,
-    ControlGuard, ExecutedGroup, PendingSourceChange, PermitCell, PermitState, PreparedRevocation,
-    ReceiptReservation, ReceiptSink, SourceReservation, SourceRevision, StagePort, SyncArbiter,
-    SyncAttachment, SyncExecution, SyncExecutor, SyncGateBinding, SyncReceiptAck, SyncReceiptInbox,
-    SyncReceiptTx, sync_receipts,
+    ActivationHead, AppliedSource, ArmPermit, AudioClaim, ClaimError, ControlEnterError,
+    ControlError, ControlGuard, ExecutedGroup, LoadedMedia, PendingSourceChange, PermitCell,
+    PermitState, PreparedFirst, PreparedRevocation, ReceiptReservation, ReceiptSink,
+    SourceReservation, SourceRevision, StagePort, Staged, SyncArbiter, SyncAttachment,
+    SyncExecution, SyncExecutor, SyncGateBinding, SyncReceiptAck, SyncReceiptInbox, SyncReceiptTx,
+    SyncTicket, sync_receipts,
 };
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{

@@ -5,7 +5,7 @@ mod processor;
 mod render;
 mod slots;
 #[cfg(test)]
-mod sync_owner_fixture;
+pub(crate) mod sync_owner_fixture;
 pub mod track;
 
 pub use context::{

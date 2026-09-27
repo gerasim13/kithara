@@ -1,12 +1,14 @@
 use kithara_platform::{CancelToken, maybe_send::MaybeSendFuture, tokio::runtime::Handle};
 use kithara_warp::WarpPlan;
 
-use crate::{ArmPermit, SyncExecutionReject, SyncReceipt};
+use super::{ActivationHead, Staged, SyncTicket};
+use crate::{ArmPermit, SyncExecutionReject, SyncGateBinding, SyncReceipt};
 
-/// Opens the staged lanes of one load of a member's media.
+/// Opens the staged lanes of one load of a member's media and hands each
+/// installed lane to the member's audio path.
 pub trait StagePort: Clone + Send + 'static {
-    /// Identifies one load of the member's media.
-    type Media: Copy + Eq + Send + 'static;
+    /// Identifies the Player's item a load of media is of.
+    type Item: Copy + Eq + Send + 'static;
     /// Holds a staged lane's prepared PCM until the preparation it serves
     /// ends.
     type Lane: Send + 'static;
@@ -14,28 +16,28 @@ pub trait StagePort: Clone + Send + 'static {
     /// The runtime staging and receipt delivery run on.
     fn runtime(&self) -> &Handle;
 
-    /// Opens a lane that plays `plan` and resolves once its prepared PCM is
-    /// proven, or with the reason the lane cannot be held.
+    /// The gate the member's audio path claims each activation through.
+    fn gate(&self) -> &SyncGateBinding;
+
+    /// Opens a lane that plays `plan` from `head` and resolves once its
+    /// prepared PCM is proven, with the first frame it decoded, or with the
+    /// reason the lane cannot be held.
     fn stage(
         self,
         plan: WarpPlan,
+        head: ActivationHead,
         cancel: CancelToken,
-    ) -> impl MaybeSendFuture<Output = Result<Self::Lane, SyncExecutionReject>> + 'static;
+    ) -> impl MaybeSendFuture<Output = Result<Staged<Self::Lane>, SyncExecutionReject>> + 'static;
 
-    /// Transfer one exact installed lane and its cancel custody to the
-    /// member's audio path before its activation can be claimed.
+    /// Transfer one exact installed lane to the member's audio path before
+    /// its activation can be claimed.
     ///
     /// # Errors
     ///
-    /// Returns a pre-Armed rejection if the load, ready span, or bounded
-    /// handoff capacity is no longer available. The lane is retired off RT.
-    fn handoff(
-        self,
-        media: Self::Media,
-        lane: Self::Lane,
-        cancel: CancelToken,
-        permit: ArmPermit,
-    ) -> Result<(), SyncExecutionReject>;
+    /// Returns a pre-Armed rejection if the ready span or bounded handoff
+    /// capacity is no longer available. The lane is retired off RT.
+    fn handoff(self, ticket: SyncTicket<Self::Item, Self::Lane>)
+    -> Result<(), SyncExecutionReject>;
 }
 
 /// The owner's answer to one executor receipt. An Installed answer carries
