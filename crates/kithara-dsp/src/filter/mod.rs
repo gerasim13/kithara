@@ -1,11 +1,11 @@
 mod biquad;
-mod coefficients;
 mod error;
-/// Robert Bristow-Johnson cookbook designs.
-pub mod rbj;
 #[cfg(test)]
 mod tests;
 
-pub use biquad::Biquad;
-pub use coefficients::Coefficients;
+/// Cookbook designs owned by the `biquad` crate, re-exported as the one
+/// import path the workspace uses.
+pub use ::biquad::{Coefficients, Errors, Hertz, Type};
 pub use error::FilterError;
+
+pub use self::biquad::Biquad;

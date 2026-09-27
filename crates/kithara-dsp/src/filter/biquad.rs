@@ -49,15 +49,18 @@ impl Biquad {
     /// Replaces the coefficients of one section; the state carries over.
     ///
     /// # Errors
-    /// [`FilterError::Shape`] when `section` is out of range.
+    /// [`FilterError::Shape`] when `section` is out of range,
+    /// [`FilterError::Parameters`] when a coefficient is not finite in `f32`
+    /// or a pole leaves the unit circle.
     pub fn retune(
         &mut self,
         section: usize,
-        coefficients: Coefficients,
+        coefficients: Coefficients<f64>,
     ) -> Result<(), FilterError> {
         let slot = self.decay.get_mut(section).ok_or(FilterError::Shape)?;
-        self.cascade.set_section(section, coefficients.section())?;
-        *slot = decay(coefficients);
+        let values = in_f32(coefficients)?;
+        self.cascade.set_section(section, values)?;
+        *slot = decay(values);
         Ok(())
     }
 
@@ -123,9 +126,23 @@ fn peak<P: Deref<Target = [f32]>>(planes: &[P], range: &Range<usize>) -> f32 {
         .fold(0.0, f32::max)
 }
 
-/// Frames until the slowest pole of `coefficients` decays below `2⁻²⁴`.
-fn decay(coefficients: Coefficients) -> usize {
-    let [_, _, _, a1, a2] = coefficients.section().map(f64::from);
+/// `[b0, b1, b2, a1, a2]` rounded to `f32`, when every value stays finite
+/// there and both poles of `1 + a1 z⁻¹ + a2 z⁻²` lie inside the unit circle.
+fn in_f32(coefficients: Coefficients<f64>) -> Result<[f32; 5], FilterError> {
+    let Coefficients { a1, a2, b0, b1, b2 } = coefficients;
+    let values = [b0, b1, b2, a1, a2].map(|value| value.to_f32().unwrap_or(f32::NAN));
+    let [_, _, _, a1, a2] = values;
+    let stable = a2.abs() < 1.0 && a1.abs() < 1.0 + a2;
+    if stable && values.iter().all(|value| value.is_finite()) {
+        Ok(values)
+    } else {
+        Err(FilterError::Parameters)
+    }
+}
+
+/// Frames until the slowest pole of `values` decays below `2⁻²⁴`.
+fn decay(values: [f32; 5]) -> usize {
+    let [_, _, _, a1, a2] = values.map(f64::from);
     let discriminant = a1.mul_add(a1, -4.0 * a2);
     let radius = if discriminant < 0.0 {
         a2.sqrt()

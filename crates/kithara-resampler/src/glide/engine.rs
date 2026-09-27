@@ -5,7 +5,7 @@ use std::{
 
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_dsp::{
-    filter::{Biquad, FilterError, rbj},
+    filter::{Biquad, Coefficients, Errors, FilterError, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
 };
 use num_traits::cast::ToPrimitive;
@@ -210,8 +210,8 @@ impl GlideEngine {
         if self.tuned == Some(cutoff) {
             return Ok(());
         }
-        let low_pass =
-            rbj::low_pass(self.sample_rate, cutoff, consts::LOW_PASS_Q).map_err(filter_error)?;
+        let low_pass = low_pass_design(self.sample_rate, cutoff)
+            .map_err(|_| filter_error(FilterError::Parameters))?;
         self.filter.retune(0, low_pass).map_err(filter_error)?;
         self.lookahead.retune(0, low_pass).map_err(filter_error)?;
         if self.tuned.is_none() {
@@ -226,6 +226,16 @@ impl GlideEngine {
         self.tuned = Some(cutoff);
         Ok(())
     }
+}
+
+/// The RBJ low-pass at `cutoff` Hz with the anti-alias quality.
+fn low_pass_design(sample_rate: f64, cutoff: f64) -> Result<Coefficients<f64>, Errors> {
+    Coefficients::from_params(
+        Type::LowPass,
+        Hertz::from_hz(sample_rate)?,
+        Hertz::from_hz(cutoff)?,
+        consts::LOW_PASS_Q,
+    )
 }
 
 fn filter_error(err: FilterError) -> ResamplerError {

@@ -4969,6 +4969,7 @@ name = "kithara-dsp"
 version = "0.0.1-alpha5"
 dependencies = [
  "assert_no_alloc",
+ "biquad",
  "criterion",
  "fast-interleave",
  "fearless_simd",

@@ -8,7 +8,10 @@ use num_traits::ToPrimitive;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
 use super::{cascade, portable, simd, strided};
-use crate::interp::{InterpError, Interpolation};
+use crate::{
+    filter::{Coefficients, Hertz, Type},
+    interp::{InterpError, Interpolation},
+};
 
 const SIZES: [usize; 15] = [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 63, 64, 1023, 4096];
 const OFFSETS: [usize; 2] = [0, 1];
@@ -350,13 +353,14 @@ fn halves(sections: usize) -> [Vec<[f32; 5]>; 2] {
             .iter()
             .take(sections)
             .map(|cutoff| {
-                crate::filter::rbj::low_pass(
-                    f64::from(RATE),
-                    *cutoff,
+                let Coefficients { a1, a2, b0, b1, b2 } = Coefficients::from_params(
+                    Type::LowPass,
+                    Hertz::from_hz(f64::from(RATE)).expect("positive rate"),
+                    Hertz::from_hz(*cutoff).expect("positive cutoff"),
                     std::f64::consts::FRAC_1_SQRT_2,
                 )
-                .expect("valid low-pass")
-                .section()
+                .expect("valid low-pass");
+                [b0, b1, b2, a1, a2].map(|value| value.to_f32().expect("coefficient fits f32"))
             })
             .collect()
     })

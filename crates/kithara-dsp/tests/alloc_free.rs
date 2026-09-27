@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use kithara_dsp::{
-    filter::{Biquad, rbj},
+    filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
 };
 use kithara_test_utils::kithara;
@@ -61,8 +61,13 @@ fn biquad_never_allocates_after_construction() {
     let four = NonZeroUsize::MIN.saturating_add(3);
     let mut filter = Biquad::new(TWO, four).expect("filter builds");
     let mut lookahead = Biquad::new(TWO, four).expect("filter builds");
-    let low_pass =
-        rbj::low_pass(48_000.0, 4_000.0, std::f64::consts::FRAC_1_SQRT_2).expect("valid low-pass");
+    let low_pass = Coefficients::from_params(
+        Type::LowPass,
+        Hertz::from_hz(48_000.0).expect("positive rate"),
+        Hertz::from_hz(4_000.0).expect("positive cutoff"),
+        std::f64::consts::FRAC_1_SQRT_2,
+    )
+    .expect("valid low-pass");
     let mut planes = vec![vec![0.25_f32; FRAMES]; TWO.get()];
     assert_no_alloc(|| {
         for section in 0..four.get() {

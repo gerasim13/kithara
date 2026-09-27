@@ -2,9 +2,8 @@ use std::num::NonZeroUsize;
 
 use kithara_test_fixtures::signal::Wave;
 use kithara_test_utils::kithara;
-use num_traits::ToPrimitive;
 
-use super::{Biquad, FilterError, rbj};
+use super::{Biquad, Coefficients, FilterError, Hertz, Type};
 
 const RATE: f64 = 48_000.0;
 const Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
@@ -24,8 +23,18 @@ const SINE: Wave = Wave::Sine {
     peak: i16::MAX,
 };
 
-fn low_pass(cutoff: f64) -> super::Coefficients {
-    rbj::low_pass(RATE, cutoff, Q).expect("valid low-pass")
+fn design(sample_rate: f64, cutoff: f64, q: f64) -> Coefficients<f64> {
+    Coefficients::from_params(
+        Type::LowPass,
+        Hertz::from_hz(sample_rate).expect("positive rate"),
+        Hertz::from_hz(cutoff).expect("positive cutoff"),
+        q,
+    )
+    .expect("valid low-pass")
+}
+
+fn low_pass(cutoff: f64) -> Coefficients<f64> {
+    design(RATE, cutoff, Q)
 }
 
 fn stereo(frames: usize, wave: Wave) -> Vec<Vec<f32>> {
@@ -52,29 +61,40 @@ fn bits(planes: &[Vec<f32>]) -> Vec<Vec<u32>> {
 
 #[kithara::test]
 fn low_pass_matches_the_cookbook_reference() {
-    for (actual, expected) in low_pass(1_000.0).section().into_iter().zip(REFERENCE) {
-        let expected = expected.to_f32().expect("reference fits f32");
+    let Coefficients { a1, a2, b0, b1, b2 } = low_pass(1_000.0);
+    for (actual, expected) in [b0, b1, b2, a1, a2].into_iter().zip(REFERENCE) {
         assert!(
-            (actual - expected).abs() <= f32::EPSILON * expected.abs(),
+            (actual - expected).abs() <= 4.0 * f64::EPSILON * expected.abs(),
             "{actual} differs from {expected}"
         );
     }
 }
 
+/// A section runs in `f32`: every value must be finite there and both poles
+/// must lie inside the unit circle.
 #[kithara::test]
-fn low_pass_rejects_parameters_outside_its_domain() {
-    for (sample_rate, cutoff, q) in [
-        (0.0, 1_000.0, Q),
-        (RATE, 0.0, Q),
-        (RATE, 24_000.0, Q),
-        (RATE, 1_000.0, 0.0),
-        (f64::NAN, 1_000.0, Q),
-        (RATE, f64::INFINITY, Q),
+fn retune_rejects_a_section_that_is_not_finite_or_stable_in_f32() {
+    let valid = low_pass(1_000.0);
+    let mut filter = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
+    for section in [
+        Coefficients {
+            a1: -2.0,
+            a2: 1.0,
+            ..valid
+        },
+        Coefficients {
+            b0: f64::NAN,
+            ..valid
+        },
+        Coefficients {
+            b1: 1.0e40,
+            ..valid
+        },
     ] {
         assert_eq!(
-            rbj::low_pass(sample_rate, cutoff, q),
+            filter.retune(0, section),
             Err(FilterError::Parameters),
-            "{sample_rate} / {cutoff} / {q}"
+            "{section:?}"
         );
     }
 }
@@ -127,7 +147,7 @@ fn silence_resets_to_the_state_of_a_fresh_filter() {
 /// section still remembers `−½`, so a one-frame call looks silent.
 #[kithara::test]
 fn a_quiet_call_shorter_than_the_section_memory_keeps_the_state() {
-    let fir = rbj::low_pass(RATE, RATE / 4.0, 0.5).expect("valid low-pass");
+    let fir = design(RATE, RATE / 4.0, 0.5);
     let mut split = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
     let mut whole = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
     split.retune(0, fir).expect("section 0 exists");

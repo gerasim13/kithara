@@ -4,7 +4,7 @@ use std::{f64::consts::FRAC_1_SQRT_2, hint::black_box, num::NonZeroUsize};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
-    filter::{Biquad, rbj},
+    filter::{Biquad, Coefficients, Hertz, Type},
     interp::{Interpolation, interpolate},
 };
 use num_traits::ToPrimitive;
@@ -93,7 +93,13 @@ fn kernels(c: &mut Criterion) {
 
 fn biquad(c: &mut Criterion) {
     const FRAMES: usize = 1_024;
-    let low_pass = rbj::low_pass(48_000.0, 4_000.0, FRAC_1_SQRT_2).expect("valid low-pass");
+    let low_pass = Coefficients::from_params(
+        Type::LowPass,
+        Hertz::from_hz(48_000.0).expect("positive rate"),
+        Hertz::from_hz(4_000.0).expect("positive cutoff"),
+        FRAC_1_SQRT_2,
+    )
+    .expect("valid low-pass");
     let mut group = c.benchmark_group("biquad");
     group.throughput(Throughput::Elements(
         u64::try_from(FRAMES).expect("frame count fits u64"),

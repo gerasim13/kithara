@@ -10,6 +10,7 @@ keywords = ["audio", "dsp", "simd", "accelerate"]
 categories = ["multimedia::audio"]
 
 [dependencies]
+biquad = { workspace = true }
 fearless_simd = { workspace = true }
 firewheel-core = { workspace = true }
 num-traits = { workspace = true }
