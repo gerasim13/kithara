@@ -3,7 +3,25 @@ use kithara_test_fixtures::unit_fixtures::{
 };
 use kithara_test_utils::kithara;
 
-use super::{clear_f32, copy_f32, linear_interpolate_f32, ramp_f32};
+use super::{
+    clear_f32, copy_f32, deinterleave_pair_f32, interleave_pair_f32, linear_interpolate_f32,
+    ramp_f32,
+};
+
+const SPECIALS: [f32; 8] = [
+    0.0,
+    -0.0,
+    f32::from_bits(1),
+    f32::MIN_POSITIVE,
+    f32::MAX,
+    f32::INFINITY,
+    f32::NEG_INFINITY,
+    f32::NAN,
+];
+
+fn bits<const N: usize>(values: [f32; N]) -> [u32; N] {
+    values.map(f32::to_bits)
+}
 
 #[kithara::test(native, flash(false))]
 fn copy_f32_matches_slice_copy(accelerate_copy: Vec<f32>) {
@@ -61,4 +79,41 @@ fn quadratic_interpolation_matches_scalar_positions(accelerate_wave: Vec<f32>) {
     for (actual, expected) in target.iter().zip(expected) {
         assert!((actual - expected).abs() < 0.000_001);
     }
+}
+
+#[kithara::test(native, flash(false))]
+fn interleave_pair_writes_only_the_common_prefix() {
+    let mut output = [9.0_f32; 7];
+    assert_eq!(
+        interleave_pair_f32(&[1.0, 2.0, 3.0, 4.0], &[-1.0, -2.0, -3.0], &mut output),
+        3
+    );
+    assert_eq!(bits(output), bits([1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 9.0]));
+}
+
+#[kithara::test(native, flash(false))]
+fn deinterleave_pair_reads_only_whole_pairs() {
+    let (mut left, mut right) = ([9.0_f32; 4], [9.0_f32; 4]);
+    assert_eq!(
+        deinterleave_pair_f32(&[1.0, -1.0, 2.0, -2.0, 3.0], &mut left, &mut right),
+        2
+    );
+    assert_eq!(bits(left), bits([1.0, 2.0, 9.0, 9.0]));
+    assert_eq!(bits(right), bits([-1.0, -2.0, 9.0, 9.0]));
+}
+
+#[kithara::test(native, flash(false))]
+fn layout_moves_special_values_bit_for_bit() {
+    let mut interleaved = [1.0_f32; 16];
+    assert_eq!(
+        interleave_pair_f32(&SPECIALS, &SPECIALS, &mut interleaved),
+        8
+    );
+    let (mut left, mut right) = ([1.0_f32; 8], [1.0_f32; 8]);
+    assert_eq!(
+        deinterleave_pair_f32(&interleaved, &mut left, &mut right),
+        8
+    );
+    assert_eq!(bits(left), bits(SPECIALS));
+    assert_eq!(bits(right), bits(SPECIALS));
 }

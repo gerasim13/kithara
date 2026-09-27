@@ -34,6 +34,7 @@ use kithara::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
+    signal::{AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -44,14 +45,18 @@ use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use tempfile::TempDir;
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const HLS_SEGMENT_COUNT: usize = 6;
-    const HLS_SEGMENT_SIZE: usize = 96_000;
-    const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
-    const HLS_READ_TARGET_BYTES: usize = 196_608;
-    const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
+mod consts {
+    pub(super) const HLS_SEGMENT_COUNT: usize = 6;
+    pub(super) const HLS_SEGMENT_SIZE: usize = 96_000;
+    pub(super) const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
+    pub(super) const HLS_READ_TARGET_BYTES: usize = 196_608;
+    pub(super) const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
 }
+
+/// Frames per planar layout pass: one large device block.
+const LAYOUT_FRAMES: usize = 4096;
+/// Sample rate of the layout benches.
+const LAYOUT_RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
 /// The generated full-length MPEG clip the benchmark server and decoders read.
 fn test_mp3_bytes() -> &'static [u8] {
@@ -210,7 +215,7 @@ fn hls_media_playlist(variant: usize) -> String {
     let mut lines = String::from(
         "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n",
     );
-    for segment in 0..Consts::HLS_SEGMENT_COUNT {
+    for segment in 0..consts::HLS_SEGMENT_COUNT {
         lines.push_str("#EXTINF:4.0,\n");
         lines.push_str(&format!("seg/{variant}/{segment}.bin\n"));
     }
@@ -224,7 +229,7 @@ fn hls_segment_data(variant: usize, segment: usize) -> Vec<u8> {
         reason = "synthetic fixture byte pattern is intentionally 8-bit"
     )]
     let pattern = ((variant * 37 + segment * 11) % 256) as u8;
-    vec![pattern; Consts::HLS_SEGMENT_SIZE]
+    vec![pattern; consts::HLS_SEGMENT_SIZE]
 }
 
 async fn hls_master_endpoint() -> &'static str {
@@ -247,7 +252,7 @@ async fn hls_segment_endpoint(Path((variant, segment)): Path<(usize, String)>) -
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    if variant > 1 || segment_index >= Consts::HLS_SEGMENT_COUNT {
+    if variant > 1 || segment_index >= consts::HLS_SEGMENT_COUNT {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -337,7 +342,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
 
                     let mut buf = [0.0_f32; 4_096];
                     let mut total = 0usize;
-                    while total < Consts::AUDIO_READ_TARGET_SAMPLES {
+                    while total < consts::AUDIO_READ_TARGET_SAMPLES {
                         match audio.read(&mut buf) {
                             Ok(kithara::audio::ReadOutcome::Frames { count, .. }) => {
                                 total += count.get();
@@ -405,7 +410,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
 
                     let mut buf = [0_u8; 8_192];
                     let mut total = 0usize;
-                    while total < Consts::HLS_READ_TARGET_BYTES {
+                    while total < consts::HLS_READ_TARGET_BYTES {
                         let n = stream
                             .read(&mut buf)
                             .unwrap_or_else(|e| panic!("stream read failed: {e}"));
@@ -415,7 +420,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         total += n;
                     }
 
-                    for seek_pos in Consts::HLS_SEEK_POSITIONS {
+                    for seek_pos in consts::HLS_SEEK_POSITIONS {
                         if let Some(len) = stream.len()
                             && seek_pos > len
                         {
@@ -440,10 +445,45 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
     group.finish();
 }
 
+/// Planar ↔ interleaved layout in `kithara-signal`.
+fn bench_layout(c: &mut Criterion) {
+    let mut group = c.benchmark_group("refactor_layout");
+    let pools = pools();
+    let frames = FrameCount::new(LAYOUT_FRAMES);
+    for channels in [2_u16, 6] {
+        let spec = AudioSpec::new(channels, LAYOUT_RATE);
+        let width = usize::from(channels);
+        let planar = PlanarBuffer::new(&pools, spec, frames)
+            .unwrap_or_else(|err| panic!("bench planar storage: {err}"));
+        let mut interleaved = vec![0.0_f32; LAYOUT_FRAMES * width];
+        group.bench_function(format!("interleave_{channels}ch"), |b| {
+            b.iter(|| {
+                planar
+                    .view()
+                    .interleave_into(black_box(&mut interleaved))
+                    .is_ok()
+            });
+        });
+        let source = vec![0.25_f32; LAYOUT_FRAMES * width];
+        let view = InterleavedView::new(&source, spec, frames)
+            .unwrap_or_else(|err| panic!("bench interleaved view: {err}"));
+        let mut planes = vec![vec![0.0_f32; LAYOUT_FRAMES]; width];
+        let mut destinations: Vec<&mut [f32]> = planes.iter_mut().map(Vec::as_mut_slice).collect();
+        group.bench_function(format!("deinterleave_{channels}ch"), |b| {
+            b.iter(|| {
+                view.deinterleave_channels_into_at(black_box(&mut destinations), 0)
+                    .is_ok()
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_resampler_process,
     bench_audio_file_new_and_read,
-    bench_hls_stream_seek_read
+    bench_hls_stream_seek_read,
+    bench_layout
 );
 criterion_main!(benches);

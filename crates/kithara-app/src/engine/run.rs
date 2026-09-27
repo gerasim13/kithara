@@ -142,6 +142,9 @@ mod tests {
                     && rig.queues[0]
                         .duration_seconds()
                         .is_some_and(|seconds| seconds > 0.0)
+                    && rig.queues[0]
+                        .position_seconds()
+                        .is_some_and(|seconds| seconds > 0.0)
             });
             rig.send("deck-a/wave", ControlAction::SetScalar(0.9));
             rig.pump();

@@ -7,14 +7,16 @@ use web_sys::BroadcastChannel;
 
 use crate::web::observer::marshal::{set_bool, set_f64, set_str};
 
+mod consts {
+    /// Length of the alphanumeric DRM salt. Mirrors `SALT_LEN` in
+    /// [`NativeInner`](crate::native::inner::NativeInner) and `kithara_app::drm`.
+    pub(super) const SALT_LEN: usize = 16;
+}
+
 pub(crate) fn next_request_id() -> u32 {
     static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
     NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
-
-/// Length of the alphanumeric DRM salt. Mirrors `SALT_LEN` in
-/// [`NativeInner`](crate::native::inner::NativeInner) and `kithara_app::drm`.
-const SALT_LEN: usize = 16;
 
 /// Generate a 16-character alphanumeric DRM salt on the main thread,
 /// mirroring [`NativeInner`](crate::native::inner::NativeInner)'s
@@ -25,7 +27,7 @@ const SALT_LEN: usize = 16;
 pub(crate) fn generate_salt() -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-    let mut bytes = [0u8; SALT_LEN];
+    let mut bytes = [0u8; consts::SALT_LEN];
     if !fill_random(&mut bytes) {
         let seed = next_request_id();
         for (i, b) in bytes.iter_mut().enumerate() {

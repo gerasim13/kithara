@@ -34,3 +34,4 @@ pub(crate) use native::{EventBridge, FFI_RUNTIME, Inner, Router};
 pub use native::{asset, cipher, config, logging, salt};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::inner::Inner;
+mod consts;
