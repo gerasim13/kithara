@@ -54,7 +54,7 @@ impl SyncArbiter {
     /// Returns `Busy` when the callback has not finished its claim within
     /// `wait`; the caller may retry off RT. Returns `Closed` after callback
     /// quiescence has tombstoned this session.
-    pub fn enter_host_control(
+    pub(crate) fn enter_host_control(
         &self,
         wait: Duration,
     ) -> Result<ControlGuard<'_>, ControlEnterError> {
@@ -156,7 +156,7 @@ impl SyncArbiter {
 
     /// Tombstone the session after its audio callback and owner work have
     /// quiesced. This also closes a claim abandoned before both receipts.
-    pub fn close_quiescent(&self) {
+    pub(crate) fn close_quiescent(&self) {
         self.phase.store(consts::CLOSED, Ordering::Release);
     }
 }

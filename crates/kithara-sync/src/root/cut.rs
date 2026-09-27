@@ -5,9 +5,10 @@ use kithara_warp::{BeatGrid, BeatGridId, BeatGridStamp, MapAxis};
 
 use super::{RegisteredCell, RootError, RootPort};
 use crate::{
-    ControlError, ControlGuard, GroupState, ParentGridUpdate, PermitCell, PreparedRevocation,
-    SourceRevision, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMode, SyncOperation,
-    SyncRejected, SyncTransition, TopologyOperation,
+    ControlError, ControlGuard, GroupState, ObservedEntry, ParentGridUpdate, PermitCell,
+    PreparedRevocation, PublicOperation, SourceRevision, SyncAdmission, SyncCapability, SyncError,
+    SyncGroup, SyncMode, SyncOperation, SyncOperationId, SyncRejected, SyncTransition,
+    TopologyOperation,
 };
 
 /// An owner cut that holds Control but has not yet heard the audio callback,
@@ -60,10 +61,18 @@ pub struct RootCut<'r, G: SyncGroup<NestedGroup = G>> {
 }
 
 impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
-    /// The root group as this cut has left it so far.
-    #[must_use]
-    pub fn group(&self) -> &GroupState<G> {
-        self.group
+    /// Ends the decision `operation` the deck `target` holds while it waits
+    /// for its Host, which cannot observe the deck's track afresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal with its operation; nothing changes then.
+    pub fn abandon_replan(
+        &mut self,
+        target: BeatGridId,
+        operation: SyncOperationId,
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
+        self.verified(SyncOperation::AbandonReplan { operation, target })
     }
 
     /// The source revision a decision planned for `member` of the deck
@@ -80,6 +89,12 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
             .map(|entry| self.control.current_source(&entry.cell))
     }
 
+    /// The root group as this cut has left it so far.
+    #[must_use]
+    pub fn group(&self) -> &GroupState<G> {
+        self.group
+    }
+
     /// Publishes the session segment the render graph committed.
     ///
     /// # Errors
@@ -92,7 +107,11 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
         update: ParentGridUpdate,
     ) -> Result<(), SyncError> {
         let axis_changed = self.group.snapshot().axis() != MapAxis::Session(update.axis());
-        self.publish_transition(port, axis_changed, |group| group.publish_session(update))
+        let fence = transition_fence(&self.control, self.group, self.cells, axis_changed)?;
+        let transition = self.group.publish_session(update)?;
+        fence.commit(|member| axis_changed || transition_replaces_ticket(&transition, member));
+        port.publish(self.group);
+        Ok(())
     }
 
     /// Publishes a later session grid that is not available yet, on a new
@@ -109,52 +128,34 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
         sample_rate: NonZeroU32,
         epoch: SessionEpoch,
     ) -> Result<(), SyncError> {
-        self.publish_transition(port, true, |group| {
-            group.publish_unavailable_grid(stamp, sample_rate, epoch)
-        })
+        let fence = transition_fence(&self.control, self.group, self.cells, true)?;
+        self.group
+            .publish_unavailable_grid(stamp, sample_rate, epoch)?;
+        fence.commit(|_| true);
+        port.publish(self.group);
+        Ok(())
     }
 
-    /// Transacts one operation the Host may issue on the root group:
-    /// preflights every affected cell before the owner changes, then revokes
-    /// the tickets the admission replaces. A refusal changes nothing.
+    /// Plans once more the decision `operation` the deck `target` holds while
+    /// it waits for its Host, from the entry the Host observed afresh.
     ///
     /// # Errors
     ///
-    /// Returns the refusal with its operation.
-    pub fn transact_verified<P: RootPort<G>>(
+    /// Returns the refusal with its operation; nothing changes then.
+    pub fn replan(
         &mut self,
-        port: &P,
-        operation: SyncOperation<G>,
+        target: BeatGridId,
+        operation: SyncOperationId,
+        entry: ObservedEntry,
     ) -> Result<SyncAdmission, SyncRejected<G>> {
-        if topology_conflicts_with_projection(port, &operation) {
-            return Err(SyncRejected::new(
-                SyncError::CapabilityUnavailable {
-                    capability: SyncCapability::Topology,
-                },
-                operation,
-            ));
-        }
-        let affected = affected_cells(self.group, self.cells, &operation);
-        let mut prepared: Vec<PreparedRevocation<'_, '_, '_>> = Vec::with_capacity(affected.len());
-        for cell in &affected {
-            let revoke = match self.control.preflight_revoke(cell) {
-                Ok(revoke) => revoke,
-                Err(error) => {
-                    return Err(SyncRejected::new(
-                        SyncError::ExecutionControl(error),
-                        operation,
-                    ));
-                }
-            };
-            prepared.push(revoke);
-        }
-        let admission = self.group.transact(operation)?;
-        for (cell, revoke) in affected.iter().zip(prepared) {
-            if admission_replaces_ticket(&admission, cell.member()) {
-                revoke.revoke();
-            }
-        }
-        Ok(admission)
+        self.verified(SyncOperation::Replan {
+            operation,
+            target,
+            load: entry.load(),
+            transport: entry.transport(),
+            source: entry.source(),
+            activation: entry.activation(),
+        })
     }
 
     /// The member's end of life: its cell is retired, so no permit minted
@@ -173,40 +174,110 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
         Ok(Some(self.cells.remove(index).group))
     }
 
-    /// Commits one root grid publication while audio claims are excluded.
-    /// Preflights every cell before the owner changes, then revokes only the
-    /// tickets the transition replaces, except that a new axis or epoch
-    /// fences every cell.
-    fn publish_transition<P: RootPort<G>>(
+    /// Transacts one operation a caller asked of the root group and publishes
+    /// the root it admits. A topology edit of a grid the render graph
+    /// projects is refused. A refusal changes and publishes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal with its operation.
+    pub fn transact<P: RootPort<G>>(
         &mut self,
         port: &P,
-        axis_changed: bool,
-        publish: impl FnOnce(&mut GroupState<G>) -> Result<SyncTransition, SyncError>,
-    ) -> Result<(), SyncError> {
-        let cells: Vec<&PermitCell> = self
-            .cells
-            .iter()
-            .filter(|entry| {
-                axis_changed
-                    || self.group.with_group(entry.group, SyncGroup::mode)
-                        == Some(SyncMode::HostSync)
-            })
-            .map(|entry| &*entry.cell)
-            .collect();
-        let prepared = cells
-            .iter()
-            .map(|cell| self.control.preflight_revoke(cell))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(SyncError::ExecutionControl)?;
-        let transition = publish(&mut *self.group)?;
-        for (cell, revoke) in cells.iter().zip(prepared) {
-            if axis_changed || transition_replaces_ticket(&transition, cell.member()) {
+        operation: PublicOperation<G>,
+    ) -> Result<SyncAdmission, SyncRejected<G>> {
+        let PublicOperation(operation) = operation;
+        if topology_conflicts_with_projection(port, &operation) {
+            return Err(SyncRejected::new(
+                SyncError::CapabilityUnavailable {
+                    capability: SyncCapability::Topology,
+                },
+                operation,
+            ));
+        }
+        let admission = self.verified(operation)?;
+        port.publish(self.group);
+        Ok(admission)
+    }
+
+    /// Preflights every affected cell before the owner changes, then revokes
+    /// the tickets the admission replaces. A refusal changes nothing.
+    fn verified(&mut self, operation: SyncOperation<G>) -> Result<SyncAdmission, SyncRejected<G>> {
+        let affected = affected_cells(self.group, self.cells, &operation);
+        let fence = match Fence::prepare(&self.control, affected) {
+            Ok(fence) => fence,
+            Err(error) => {
+                return Err(SyncRejected::new(
+                    SyncError::ExecutionControl(error),
+                    operation,
+                ));
+            }
+        };
+        let admission = self.group.transact(operation)?;
+        fence.commit(|member| admission_replaces_ticket(&admission, member));
+        Ok(admission)
+    }
+}
+
+/// Revocations preflighted under the cut's Control for every cell an owner
+/// change may replace, before that change, and published after it commits.
+pub(super) struct Fence<'cut> {
+    prepared: Vec<(BeatGridId, PreparedRevocation<'cut, 'cut, 'cut>)>,
+}
+
+impl<'cut> Fence<'cut> {
+    /// Revokes the ticket of every member the committed change `replaced`.
+    pub(super) fn commit<F>(self, replaced: F)
+    where
+        F: Fn(BeatGridId) -> bool,
+    {
+        for (member, revoke) in self.prepared {
+            if replaced(member) {
                 revoke.revoke();
             }
         }
-        port.publish(self.group);
-        Ok(())
     }
+
+    /// Preflights each cell once, in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first cell's refusal; nothing is revoked then.
+    pub(super) fn prepare<I>(
+        control: &'cut ControlGuard<'cut>,
+        cells: I,
+    ) -> Result<Self, ControlError>
+    where
+        I: IntoIterator<Item = &'cut PermitCell>,
+    {
+        let prepared = cells
+            .into_iter()
+            .map(|cell| {
+                control
+                    .preflight_revoke(cell)
+                    .map(|revoke| (cell.member(), revoke))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { prepared })
+    }
+}
+
+/// A root grid publication fences the cells of every deck that follows the
+/// root, and every cell when the axis or epoch changes.
+fn transition_fence<'cut, G: SyncGroup<NestedGroup = G>>(
+    control: &'cut ControlGuard<'cut>,
+    group: &GroupState<G>,
+    cells: &'cut [RegisteredCell],
+    axis_changed: bool,
+) -> Result<Fence<'cut>, SyncError> {
+    let fenced = cells
+        .iter()
+        .filter(|entry| {
+            axis_changed
+                || group.with_group(entry.group, SyncGroup::mode) == Some(SyncMode::HostSync)
+        })
+        .map(|entry| &*entry.cell);
+    Fence::prepare(control, fenced).map_err(SyncError::ExecutionControl)
 }
 
 /// Only cells belonging to the transaction's affected deck or subtree are

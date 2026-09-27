@@ -3,10 +3,10 @@ use kithara_play::{
     PlayError,
     player::{ResidentLoadObservation, ResidentRender, ResidentStaging},
 };
-use kithara_signal::{SessionFrame, TransportRevision};
+use kithara_signal::SessionFrame;
 use kithara_sync::{
-    AlignmentSource, GroupState, LoadGeneration, RootCut, RootPort, SyncGroup, SyncOperation,
-    SyncOperationId, SyncStatusSnapshot,
+    AlignmentSource, GroupState, ObservedEntry, RootCut, RootPort, SyncGroup, SyncOperationId,
+    SyncStatusSnapshot,
 };
 use kithara_warp::BeatGridId;
 use tracing::debug;
@@ -20,14 +20,6 @@ use crate::PlayerMember;
 /// Output frames the Host leaves between the audio it has already rendered
 /// and a deck entry's first admissible activation.
 const ENTRY_LEAD_FRAMES: i64 = 2048;
-
-/// The track entry one fresh resident observation stands for.
-pub(super) struct ObservedEntry {
-    pub(super) load: LoadGeneration,
-    pub(super) transport: TransportRevision,
-    pub(super) source: AlignmentSource,
-    pub(super) activation: SessionFrame,
-}
 
 /// Validates `resident`, observed for `member` of the deck `target`, against
 /// the transport the Host processed and the source the member's cell holds
@@ -72,15 +64,15 @@ pub(super) fn observed_entry<S>(
     let activation = i64::from(boundary.max(output.output_frames().end))
         .checked_add(ENTRY_LEAD_FRAMES)
         .ok_or(SessionError::TransportFrameExhausted)?;
-    Ok(ObservedEntry {
-        load: resident.load(),
-        transport: processed.revision(),
-        source: AlignmentSource::Audible {
+    Ok(ObservedEntry::builder()
+        .load(resident.load())
+        .transport(processed.revision())
+        .source(AlignmentSource::Audible {
             frontier: snapshot.frontier(),
             speed: resident.requested_speed(),
-        },
-        activation: SessionFrame::new(activation),
-    })
+        })
+        .activation(SessionFrame::new(activation))
+        .build())
 }
 
 /// A deck decision waiting for its Host, and the Host's fresh observation of
@@ -164,30 +156,14 @@ fn settle<S>(
         .ok_or(PlayError::NotReady)
         .and_then(|resident| observed_entry(cut, port, deck, member, &resident, true));
     let refused = match entry {
-        Ok(entry) => {
-            let replan = SyncOperation::Replan {
-                target: deck,
-                operation,
-                load: entry.load,
-                transport: entry.transport,
-                source: entry.source,
-                activation: entry.activation,
-            };
-            match cut.transact_verified(&*port, replan) {
-                Ok(_) => return Ok(()),
-                Err(rejected) => rejected.error().to_string(),
-            }
-        }
+        Ok(entry) => match cut.replan(deck, operation, entry) {
+            Ok(_) => return Ok(()),
+            Err(rejected) => rejected.error().to_string(),
+        },
         Err(error) => error.to_string(),
     };
     debug!(?deck, ?operation, %refused, "sync: a waiting deck cannot be planned again");
-    cut.transact_verified(
-        &*port,
-        SyncOperation::AbandonReplan {
-            target: deck,
-            operation,
-        },
-    )
-    .map(drop)
-    .map_err(|rejected| SessionError::Sync(rejected.error().clone()))
+    cut.abandon_replan(deck, operation)
+        .map(drop)
+        .map_err(|rejected| SessionError::Sync(rejected.error().clone()))
 }

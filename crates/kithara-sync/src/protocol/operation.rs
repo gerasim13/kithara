@@ -6,8 +6,8 @@ use kithara_warp::{
 };
 
 use crate::{
-    LoadGeneration, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncTransition,
-    TopologyStamp,
+    LoadGeneration, SyncError, SyncGroup, SyncMember, SyncOperationId, SyncPreparation,
+    SyncRejected, SyncTransition, TopologyStamp,
 };
 
 /// Playback state from which synchronization is requested.
@@ -173,6 +173,56 @@ impl<G: SyncGroup> SyncOperation<G> {
             | Self::Tempo { target, .. } => *target,
         }
     }
+}
+
+/// An operation any caller may ask of a session root. What only the root's
+/// own observation may decide (a quiesced member, a changed source, a
+/// waiting deck planned again) is refused when it is built.
+#[derive(Debug)]
+pub struct PublicOperation<G: SyncGroup>(pub(crate) SyncOperation<G>);
+
+impl<G: SyncGroup> TryFrom<SyncOperation<G>> for PublicOperation<G> {
+    type Error = SyncRejected<G>;
+
+    fn try_from(operation: SyncOperation<G>) -> Result<Self, Self::Error> {
+        let error = match &operation {
+            SyncOperation::WithdrawQuiescedMember { target } => {
+                SyncError::QuiescenceRequired { member_id: *target }
+            }
+            SyncOperation::InvalidateSource { target, .. } => {
+                SyncError::SourceChangeUnverified { member_id: *target }
+            }
+            SyncOperation::Replan { target, .. } | SyncOperation::AbandonReplan { target, .. } => {
+                SyncError::ReplanUnverified { group_id: *target }
+            }
+            SyncOperation::Topology { .. }
+            | SyncOperation::Transport { .. }
+            | SyncOperation::Sync { .. }
+            | SyncOperation::Prepare { .. }
+            | SyncOperation::Relocate { .. }
+            | SyncOperation::Tempo { .. } => return Ok(Self(operation)),
+        };
+        Err(SyncRejected::new(error, operation))
+    }
+}
+
+/// Where a deck's track enters, as one fresh observation of its audible
+/// source places it.
+#[derive(Clone, Copy, Debug, bon::Builder, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+pub struct ObservedEntry {
+    /// Exact Track load observed.
+    #[field(get, copy)]
+    load: LoadGeneration,
+    /// Exact committed session transport state observed.
+    #[field(get, copy)]
+    transport: TransportRevision,
+    /// Where the track's recording stands.
+    #[field(get, copy)]
+    source: AlignmentSource,
+    /// First output frame the entry may take effect at.
+    #[field(get, copy)]
+    activation: SessionFrame,
 }
 
 /// A committed change to the source one member plays.

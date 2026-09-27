@@ -1,20 +1,21 @@
 use std::{cell::Cell, num::NonZeroU32};
 
 use kithara_platform::time::Duration;
-use kithara_signal::{SessionEpoch, TransportRevision};
+use kithara_signal::{SessionEpoch, SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    AssetAxis, AssetExtent, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot,
-    BeatGridStamp, MapAxis,
+    AssetAxis, AssetExtent, AssetFrame, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot,
+    BeatGridStamp, BeatsPerMinute, MapAxis, PresentationFrontier,
 };
 
 use super::*;
 use crate::{
-    ControlEnterError, GroupState, LoadGeneration, SyncAdmission, SyncExecutionReject,
-    SyncExecutionStamp, SyncGroup, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
-    SyncOperationId, SyncReceipt, SyncReceiptInbox, TopologyOperation, TopologyRevision,
-    TopologyStamp,
-    owner::tests::fixtures::{TestGrid, TestGroup},
+    AlignmentSource, ControlEnterError, GroupState, LoadGeneration, PublicOperation, SourceChange,
+    SyncAdmission, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent,
+    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
+    SyncReceiptInbox, SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
+    TransportOperation,
+    owner::tests::fixtures::{TestGrid, TestGroup, deck_with_a_preparation},
     sync_receipts,
 };
 
@@ -89,29 +90,32 @@ fn root(owner_wait: Duration) -> SyncRoot<TestGroup> {
     )
 }
 
-/// Attaches a track still without geometry under one owner cut.
-fn attach_track(root: &mut SyncRoot<TestGroup>, port: &mut FakePort, track: BeatGridId) {
+/// Attaching `track`, still without geometry, to the root at `base`.
+fn attach(base: TopologyStamp, track: BeatGridId) -> SyncOperation<TestGroup> {
     let grid = BeatGridSnapshot::unavailable(
         track,
         BeatGridRevision::first(),
         MapAxis::Asset(AssetAxis::new(rate(), AssetExtent::Bounded(480_000))),
     );
+    SyncOperation::Topology {
+        base,
+        operations: Box::new([TopologyOperation::Attach {
+            member: SyncMember::Grid {
+                alignment: None,
+                grid: Box::new(TestGrid(grid)),
+            },
+        }]),
+    }
+}
+
+/// Attaches a track still without geometry under one owner cut.
+fn attach_track(root: &mut SyncRoot<TestGroup>, port: &mut FakePort, track: BeatGridId) {
     let entered = root.enter().expect("the owner is free");
     let admission = entered
         .run(port, |cut, port| {
             let base = cut.group().topology().expect("root topology").stamp();
-            cut.transact_verified(
-                &*port,
-                SyncOperation::Topology {
-                    base,
-                    operations: Box::new([TopologyOperation::Attach {
-                        member: SyncMember::Grid {
-                            alignment: None,
-                            grid: Box::new(TestGrid(grid)),
-                        },
-                    }]),
-                },
-            )
+            let attach = PublicOperation::try_from(attach(base, track)).expect("a public edit");
+            cut.transact(&*port, attach)
         })
         .expect("the cut drains nothing")
         .expect("the root admits a track grid");
@@ -152,12 +156,16 @@ fn a_deck_and_its_member_register_once() {
 
 #[kithara::test]
 fn a_busy_owner_keeps_one_terminal_rejection_for_its_next_cut() {
-    let mut root = root(Duration::ZERO);
+    let (deck, preparation) = deck_with_a_preparation();
+    let mut root = SyncRoot::new(
+        deck,
+        SyncRootConfig::builder().owner_wait(Duration::ZERO).build(),
+    );
     let mut port = FakePort::default();
-    let (deck, member) = (id(), id());
-    attach_track(&mut root, &mut port, member);
+    let deck = root.group().id();
+    let member = preparation.stamp().member().grid_id();
     let binding = root.register(deck, member).expect("registration");
-    let installed = SyncReceipt::Installed(stamp(&root, member));
+    let installed = SyncReceipt::Installed(preparation.stamp());
     let held = binding.arbiter().try_control().expect("the gate is open");
 
     for _ in 0..2 {
@@ -167,7 +175,7 @@ fn a_busy_owner_keeps_one_terminal_rejection_for_its_next_cut() {
         );
     }
     let different = SyncReceipt::Rejected {
-        stamp: stamp(&root, member),
+        stamp: preparation.stamp(),
         reason: SyncExecutionReject::Late,
     };
     assert_eq!(
@@ -175,17 +183,38 @@ fn a_busy_owner_keeps_one_terminal_rejection_for_its_next_cut() {
         Some(RootError::GateFailurePending)
     );
     drop(held);
+    assert!(matches!(
+        root.group().status(),
+        SyncStatusSnapshot::Prepared { .. }
+    ));
+
+    let busy = |status: SyncStatusSnapshot| {
+        matches!(
+            status,
+            SyncStatusSnapshot::Rejected {
+                operation,
+                reason: SyncExecutionReject::ControlBusy,
+                ..
+            } if operation == preparation.stamp().operation()
+        )
+    };
+    let entered = root.enter().expect("the owner is free");
+    let seen = entered
+        .run(&mut port, |cut, _| cut.group().status())
+        .expect("the kept rejection is recorded");
+    assert!(busy(seen), "the body sees the rejection recorded: {seen:?}");
+    assert_eq!(port.publishes.get(), 1);
 
     let entered = root.enter().expect("the owner is free");
-    let seen = entered.run(&mut port, |_, port| port.publishes.get());
+    let seen = entered
+        .run(&mut port, |cut, _| cut.group().status())
+        .expect("nothing is left to record");
+    assert!(busy(seen));
     assert_eq!(
-        seen,
-        Ok(1),
-        "the kept rejection is recorded before the body"
+        port.publishes.get(),
+        1,
+        "a recorded rejection is not recorded again"
     );
-    let entered = root.enter().expect("the owner is free");
-    let seen = entered.run(&mut port, |_, port| port.publishes.get());
-    assert_eq!(seen, Ok(1), "a recorded rejection is not recorded again");
 }
 
 #[kithara::test]
@@ -232,4 +261,126 @@ fn closing_drains_every_inbox_publishes_once_and_refuses_later_entry() {
     assert_eq!(port.retiring[0].1.next_receipt(), None);
     assert_eq!(port.publishes.get(), 1);
     assert_eq!(root.enter().err(), Some(ControlEnterError::Closed));
+}
+
+#[kithara::test]
+fn public_operations_refuse_every_owner_only_operation() {
+    let target = id();
+    let (load, transport) = (LoadGeneration::first(), TransportRevision::first());
+    let source = AlignmentSource::Prepared(AssetFrame::default());
+    let window = SessionFrame::new(0)..SessionFrame::new(1);
+    let owner_only: [(SyncOperation<TestGroup>, SyncError); 4] = [
+        (
+            SyncOperation::WithdrawQuiescedMember { target },
+            SyncError::QuiescenceRequired { member_id: target },
+        ),
+        (
+            SyncOperation::InvalidateSource {
+                target,
+                change: SourceChange::Timing,
+            },
+            SyncError::SourceChangeUnverified { member_id: target },
+        ),
+        (
+            SyncOperation::Replan {
+                target,
+                operation: SyncOperationId::first(),
+                load,
+                transport,
+                source,
+                activation: SessionFrame::new(0),
+            },
+            SyncError::ReplanUnverified { group_id: target },
+        ),
+        (
+            SyncOperation::AbandonReplan {
+                target,
+                operation: SyncOperationId::first(),
+            },
+            SyncError::ReplanUnverified { group_id: target },
+        ),
+    ];
+    for (operation, refusal) in owner_only {
+        let rejected = PublicOperation::try_from(operation)
+            .err()
+            .expect("only the root's own observation issues it");
+        assert_eq!(rejected.error(), &refusal);
+        assert_eq!(rejected.operation().target(), target);
+    }
+
+    let public: [SyncOperation<TestGroup>; 6] = [
+        SyncOperation::Topology {
+            base: TopologyStamp::new(target, TopologyRevision::first()),
+            operations: Box::new([]),
+        },
+        SyncOperation::Transport {
+            target,
+            load,
+            transport,
+            operation: TransportOperation::Play,
+        },
+        SyncOperation::Sync {
+            target,
+            load,
+            transport,
+            source,
+            activation: SessionFrame::new(0),
+            intent: SyncIntent::Enable,
+        },
+        SyncOperation::Prepare {
+            target,
+            load,
+            transport,
+            source,
+            window: window.clone(),
+        },
+        SyncOperation::Relocate {
+            target,
+            load,
+            transport,
+            cue: AssetFrame::default(),
+            frontier: PresentationFrontier::builder()
+                .source(0)
+                .output(SessionFrame::new(0))
+                .build(),
+            window,
+        },
+        SyncOperation::Tempo {
+            target,
+            tempo: BeatsPerMinute::try_from(120.0).expect("finite positive bpm"),
+            commit: SessionFrame::new(0),
+            smoothing: 0.0,
+        },
+    ];
+    for operation in public {
+        let converted = PublicOperation::try_from(operation).expect("any caller may ask it");
+        assert_eq!(converted.0.target(), target);
+    }
+}
+
+#[kithara::test]
+fn a_public_operation_publishes_only_when_the_root_admits_it() {
+    let mut root = root(DEFAULT_OWNER_WAIT);
+    let mut port = FakePort::default();
+    let base = root.group().topology().expect("root topology").stamp();
+    attach_track(&mut root, &mut port, id());
+    let attached = root.group().topology().expect("root topology");
+    assert_eq!(port.publishes.get(), 1, "an admission publishes the root");
+
+    let entered = root.enter().expect("the owner is free");
+    let rejected = entered
+        .run(&mut port, |cut, port| {
+            let stale = PublicOperation::try_from(attach(base, id())).expect("a public edit");
+            cut.transact(&*port, stale)
+        })
+        .expect("the cut drains nothing")
+        .expect_err("a stale base is refused");
+
+    assert!(matches!(rejected.error(), SyncError::StaleTopology { .. }));
+    assert_eq!(port.publishes.get(), 1, "a refusal publishes nothing");
+    assert_eq!(
+        root.group().topology().expect("root topology"),
+        attached,
+        "a refusal changes nothing"
+    );
 }

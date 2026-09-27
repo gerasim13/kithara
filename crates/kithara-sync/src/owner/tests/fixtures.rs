@@ -5,10 +5,14 @@ use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, SessionAnchor, SessionBeat,
 };
 
+use super::{
+    modes::synced_deck,
+    preparation::{asset_grid, attach_grid, cue, prepare},
+};
 use crate::{
     GroupState, ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt,
-    SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
+    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncPreparation,
+    SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
 
 /// Test-only recursive group that delegates to the real owner state.
@@ -137,4 +141,16 @@ pub(super) fn fixture_group() -> TestGroup {
         SessionEpoch::new(0),
         SyncMemberKind::Grid,
     )
+}
+
+/// A local deck at 120 BPM whose one track grid holds a preparation its
+/// executor has not installed yet.
+pub(crate) fn deck_with_a_preparation() -> (GroupState<TestGroup>, SyncPreparation) {
+    let mut deck = synced_deck();
+    let track = BeatGridId::allocate().expect("invariant: fixture track id is available");
+    let _ = attach_grid(&mut deck, asset_grid(track, 960_000, 24_000));
+    match prepare(&mut deck, track, cue(0), 0) {
+        SyncAdmission::Prepared(preparation) => (deck, preparation),
+        admission => panic!("expected a prepared member, got {admission:?}"),
+    }
 }

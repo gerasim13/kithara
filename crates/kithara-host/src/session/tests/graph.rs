@@ -13,7 +13,7 @@ use kithara_play::{
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, RootPort, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode,
+    GroupState, PublicOperation, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode,
     SyncOperation, TopologyOperation,
 };
 #[cfg(test)]
@@ -174,11 +174,10 @@ fn attach_player_with_id<T, S>(
         }]),
     };
     let admission = with_owner_cut(state, |cut, port| {
-        let admission = cut
-            .transact_verified(&*port, attach)
-            .expect("fixture player attachment");
-        port.publish(cut.group());
-        Ok(admission)
+        let attach = PublicOperation::try_from(attach).expect("fixture topology is public");
+        Ok(cut
+            .transact(&*port, attach)
+            .expect("fixture player attachment"))
     })
     .expect("fixture owner cut");
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));

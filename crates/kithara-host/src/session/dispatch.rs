@@ -7,8 +7,8 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 use kithara_sync::{
-    ControlEnterError, EnteredCut, RootCut, RootError, RootPort, SyncAdmission, SyncError,
-    SyncGroup, SyncIntent, SyncOperation, SyncRejected,
+    ControlEnterError, EnteredCut, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
+    SyncIntent, SyncOperation, SyncRejected,
 };
 use tracing::{debug, trace, warn};
 
@@ -212,10 +212,10 @@ fn run_sync_cmd<S>(
             };
             SyncOperation::Sync {
                 target,
-                load: entry.load,
-                transport: entry.transport,
-                source: entry.source,
-                activation: entry.activation,
+                load: entry.load(),
+                transport: entry.transport(),
+                source: entry.source(),
+                activation: entry.activation(),
                 intent,
             }
         }
@@ -252,36 +252,9 @@ fn run_sync_cmd<S>(
             }
         }
     };
-    let result = transact_root(cut, port, operation);
-    if result.is_ok() {
-        port.publish(cut.group());
-    }
-    HostReply::Admission(result)
-}
-
-/// Transacts one caller's operation on the root group. An operation only the
-/// Host's own observation may issue is refused and changes nothing.
-fn transact_root<S>(
-    cut: &mut RootCut<'_, PlayerMember>,
-    port: &OwnerPort<'_, S>,
-    operation: SyncOperation<PlayerMember>,
-) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-    let error = match &operation {
-        SyncOperation::WithdrawQuiescedMember { target } => {
-            Some(SyncError::QuiescenceRequired { member_id: *target })
-        }
-        SyncOperation::InvalidateSource { target, .. } => {
-            Some(SyncError::SourceChangeUnverified { member_id: *target })
-        }
-        SyncOperation::Replan { target, .. } | SyncOperation::AbandonReplan { target, .. } => {
-            Some(SyncError::ReplanUnverified { group_id: *target })
-        }
-        _ => None,
-    };
-    if let Some(error) = error {
-        return Err(SyncRejected::new(error, operation));
-    }
-    cut.transact_verified(port, operation)
+    HostReply::Admission(
+        PublicOperation::try_from(operation).and_then(|operation| cut.transact(&*port, operation)),
+    )
 }
 
 pub(crate) fn run_cmd<T, S>(state: &mut SessionState<T, S>, cmd: Cmd<S>) -> Reply
@@ -672,7 +645,7 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
     use kithara_play::DEFAULT_GATE_SMOOTHING;
-    use kithara_sync::{SyncCapability, SyncGroupSnapshot, TopologyOperation};
+    use kithara_sync::{SyncAdmission, SyncCapability, SyncGroupSnapshot, TopologyOperation};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,

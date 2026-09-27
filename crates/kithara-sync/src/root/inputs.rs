@@ -1,6 +1,6 @@
 use kithara_warp::BeatGridId;
 
-use super::{InboxAt, RegisteredCell, RootCut, RootError, RootPort};
+use super::{InboxAt, RegisteredCell, RootCut, RootError, RootPort, cut::Fence};
 use crate::{
     ControlError, SyncError, SyncExecutionReject, SyncGroup, SyncOperation, SyncReceipt,
     SyncReceiptAck, SyncReceiptInbox,
@@ -109,9 +109,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
                 continue;
             };
             let member = entry.member();
-            let revocation = self
-                .control
-                .preflight_revoke(&entry.cell)
+            let fence = Fence::prepare(&self.control, [&*entry.cell])
                 .map_err(SyncError::ExecutionControl)?;
             match self.group.transact(SyncOperation::InvalidateSource {
                 target: member,
@@ -122,7 +120,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
                     if *rejected.error() == SyncError::GroupNotFound { group_id: member } => {}
                 Err(rejected) => return Err(rejected.error().clone().into()),
             }
-            revocation.revoke();
+            fence.commit(|_| true);
             self.control
                 .acknowledge_source_change(&entry.cell, observed);
             port.publish(self.group);
@@ -180,17 +178,15 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
         let Some(entry) = self.cells.iter().find(|entry| entry.group == group) else {
             return Ok(());
         };
-        let revocation = self
-            .control
-            .preflight_revoke(&entry.cell)
-            .map_err(SyncError::ExecutionControl)?;
+        let fence =
+            Fence::prepare(&self.control, [&*entry.cell]).map_err(SyncError::ExecutionControl)?;
         let _admission = self
             .group
             .transact(SyncOperation::WithdrawQuiescedMember {
                 target: entry.member(),
             })
             .map_err(|rejected| RootError::Sync(rejected.error().clone()))?;
-        revocation.revoke();
+        fence.commit(|_| true);
         port.publish(self.group);
         Ok(())
     }
