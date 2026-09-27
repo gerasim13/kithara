@@ -165,7 +165,7 @@ mod wire {
         QueryStreamShape,
         Tick,
         /// Reports one executor outcome to the group that issued the
-        /// preparation; answered with the owner's own acknowledgement result.
+        /// preparation; always answered with the owner's answer.
         AcknowledgeSync {
             receipt: SyncReceipt,
         },
@@ -597,12 +597,13 @@ mod handle {
             self.exec_ok(Cmd::Tick).map(|_| ())
         }
 
-        /// Delivers one executor receipt to the session's group owner.
+        /// Delivers one executor receipt to the session's group owner and
+        /// returns the owner's answer, a refusal included.
         ///
         /// # Errors
         ///
         /// Returns [`PlayError::SessionUnbound`] before the player joins a
-        /// session, and the owner's refusal of a stale or unknown receipt.
+        /// session, and [`PlayError::SessionGone`] once the session is gone.
         pub fn acknowledge_sync(&self, receipt: SyncReceipt) -> Result<SyncReceiptAck, PlayError> {
             match self.exec_ok(Cmd::AcknowledgeSync { receipt })? {
                 Reply::SyncAcknowledged(answer) => Ok(answer),

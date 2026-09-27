@@ -7,8 +7,8 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 use kithara_sync::{
-    ControlEnterError, EnteredCut, EntryRefusal, PublicOperation, RootCut, RootError, SyncError,
-    SyncGroup, SyncOperation, SyncRejected,
+    ControlEnterError, EntryRefusal, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
+    SyncOperation, SyncRejected,
 };
 use tracing::{debug, trace, warn};
 
@@ -37,16 +37,11 @@ where
     match cmd {
         HostCmd::Play(Cmd::AcknowledgeSync { receipt }) => {
             let (sync, mut port) = state.owner_parts();
-            let acknowledged = sync
-                .enter_to_acknowledge(receipt)
-                .map_err(root_error)
-                .and_then(|entered| {
-                    run_cut(entered, &mut port, |cut, port| {
-                        transport::observe_commits(cut, port)?;
-                        cut.acknowledge(port, receipt).map_err(root_error)
-                    })
-                });
-            HostReply::Play(acknowledged.map_or_else(Reply::Err, Reply::SyncAcknowledged))
+            HostReply::Play(Reply::SyncAcknowledged(sync.acknowledge(
+                &mut port,
+                receipt,
+                transport::observe_commits,
+            )))
         }
         HostCmd::RegisterMember { group, member } => match pump_before_work(state) {
             Ok(()) => state.sync.register(group, member).map_or_else(
@@ -175,17 +170,9 @@ pub(super) fn with_owner_cut<T, S, R>(
     body: impl FnOnce(&mut RootCut<'_, PlayerMember>, &mut OwnerPort<'_, S>) -> Result<R, SessionError>,
 ) -> Result<R, SessionError> {
     let (sync, mut port) = state.owner_parts();
-    let entered = sync.enter().map_err(enter_error)?;
-    run_cut(entered, &mut port, body)
-}
-
-fn run_cut<S, R>(
-    entered: EnteredCut<'_, PlayerMember>,
-    port: &mut OwnerPort<'_, S>,
-    body: impl FnOnce(&mut RootCut<'_, PlayerMember>, &mut OwnerPort<'_, S>) -> Result<R, SessionError>,
-) -> Result<R, SessionError> {
-    entered
-        .run(port, body)
+    sync.enter()
+        .map_err(enter_error)?
+        .run(&mut port, body)
         .map_err(root_error)
         .and_then(|result| result)
 }

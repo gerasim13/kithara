@@ -17,8 +17,8 @@ use crate::{
     AlignmentSource, ControlEnterError, GroupState, LoadGeneration, PublicOperation, SourceChange,
     SyncAdmission, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent,
     SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
-    SyncReceiptInbox, SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
-    TransportOperation,
+    SyncReceiptAck, SyncReceiptInbox, SyncStatusSnapshot, TopologyOperation, TopologyRevision,
+    TopologyStamp, TransportOperation,
     owner::tests::fixtures::{
         TestGrid, TestGroup, deck_with_a_preparation, root_with_a_waiting_deck,
     },
@@ -160,6 +160,11 @@ fn waiting_root() -> (SyncRoot<TestGroup>, BeatGridId, SyncOperationId) {
     (root, deck, operation)
 }
 
+/// A Host with no commit the root has not seen yet.
+fn committed_nothing(_: &mut RootCut<'_, TestGroup>, _: &mut FakePort) -> Result<(), SyncError> {
+    Ok(())
+}
+
 /// A Host that cannot observe any deck's track afresh.
 fn unobserved(_: &TestGroup) -> Option<ResidentLoadObservation<u32>> {
     None
@@ -237,8 +242,8 @@ fn a_busy_owner_keeps_one_terminal_rejection_for_its_next_cut() {
 
     for _ in 0..2 {
         assert_eq!(
-            root.enter_to_acknowledge(installed).err(),
-            Some(RootError::Enter(ControlEnterError::Busy))
+            root.acknowledge(&mut port, installed, committed_nothing),
+            SyncReceiptAck::GateFailed
         );
     }
     let different = SyncReceipt::Rejected {
@@ -246,8 +251,9 @@ fn a_busy_owner_keeps_one_terminal_rejection_for_its_next_cut() {
         reason: SyncExecutionReject::Late,
     };
     assert_eq!(
-        root.enter_to_acknowledge(different).err(),
-        Some(RootError::GateFailurePending)
+        root.acknowledge(&mut port, different, committed_nothing),
+        SyncReceiptAck::Refused,
+        "a member keeps one gate failure"
     );
     drop(held);
     assert!(matches!(
@@ -281,6 +287,108 @@ fn a_busy_owner_keeps_one_terminal_rejection_for_its_next_cut() {
         port.publishes.get(),
         1,
         "a recorded rejection is not recorded again"
+    );
+}
+
+#[kithara::test]
+fn a_closed_root_fails_the_gate_of_every_receipt() {
+    let mut root = root(DEFAULT_OWNER_WAIT);
+    let mut port = FakePort::default();
+    root.close(&mut port);
+
+    let rejected = SyncReceipt::Rejected {
+        stamp: stamp(&root, id()),
+        reason: SyncExecutionReject::Late,
+    };
+    assert_eq!(
+        root.acknowledge(&mut port, rejected, committed_nothing),
+        SyncReceiptAck::GateFailed
+    );
+}
+
+#[kithara::test]
+fn an_install_of_an_unregistered_member_is_refused() {
+    let mut root = root(DEFAULT_OWNER_WAIT);
+    let mut port = FakePort::default();
+    let installed = SyncReceipt::Installed(stamp(&root, id()));
+
+    assert_eq!(
+        root.acknowledge(&mut port, installed, committed_nothing),
+        SyncReceiptAck::Refused
+    );
+    assert_eq!(port.publishes.get(), 0);
+}
+
+#[kithara::test]
+fn a_failed_observation_records_nothing_and_fails_the_gate_only_when_the_owner_is_gone() {
+    let (deck, preparation) = deck_with_a_preparation();
+    let mut root = SyncRoot::new(deck, SyncRootConfig::builder().build());
+    let mut port = FakePort::default();
+    let deck = root.group().id();
+    let member = preparation.stamp().member().grid_id();
+    let _ = root.register(deck, member).expect("registration");
+    let installed = SyncReceipt::Installed(preparation.stamp());
+
+    for (error, answer) in [
+        (SyncError::OwnerUnavailable, SyncReceiptAck::GateFailed),
+        (SyncError::ControlBusy, SyncReceiptAck::Refused),
+    ] {
+        let expected = error.clone();
+        assert_eq!(
+            root.acknowledge(&mut port, installed, |_, _| Err(error)),
+            answer,
+            "{expected:?}"
+        );
+        assert!(matches!(
+            root.group().status(),
+            SyncStatusSnapshot::Prepared { .. }
+        ));
+        assert_eq!(port.publishes.get(), 0);
+    }
+
+    assert!(matches!(
+        root.acknowledge(&mut port, installed, committed_nothing),
+        SyncReceiptAck::Installed(_)
+    ));
+    assert_eq!(port.publishes.get(), 1);
+}
+
+#[kithara::test]
+fn the_observation_runs_after_the_callback_receipts_are_recorded() {
+    let (deck, preparation) = deck_with_a_preparation();
+    let mut root = SyncRoot::new(deck, SyncRootConfig::builder().build());
+    let deck = root.group().id();
+    let member = preparation.stamp().member().grid_id();
+    let _ = root.register(deck, member).expect("registration");
+    let late = SyncReceipt::Rejected {
+        stamp: preparation.stamp(),
+        reason: SyncExecutionReject::Late,
+    };
+    let (_tx, mut inbox) = sync_receipts();
+    inbox.keep(late);
+    let mut port = FakePort {
+        live: vec![inbox],
+        ..FakePort::default()
+    };
+
+    let mut observed = None;
+    let _ = root.acknowledge(&mut port, late, |cut, port| {
+        observed = Some((cut.group().status(), port.publishes.get()));
+        Ok(())
+    });
+
+    assert!(
+        matches!(
+            observed,
+            Some((
+                SyncStatusSnapshot::Rejected {
+                    reason: SyncExecutionReject::Late,
+                    ..
+                },
+                1
+            ))
+        ),
+        "{observed:?}"
     );
 }
 

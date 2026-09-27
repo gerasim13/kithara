@@ -1,14 +1,8 @@
-use kithara_sync::{
-    ReceiptSink, SyncError, SyncExecutionReject, SyncExecutor, SyncReceipt, SyncReceiptAck,
-};
+use kithara_sync::{ReceiptSink, SyncExecutionReject, SyncExecutor, SyncReceipt, SyncReceiptAck};
 use kithara_test_utils::kithara;
 use tracing::debug;
 
-use crate::{
-    PlayError,
-    resource::SlotStaging,
-    session::{SessionError, SessionHandle},
-};
+use crate::{PlayError, resource::SlotStaging, session::SessionHandle};
 
 /// Executor of the preparations a player's group issues for its track.
 pub(crate) type SyncStaging = SyncExecutor<SlotStaging>;
@@ -22,31 +16,31 @@ where
     }
 
     fn acknowledge(&self, receipt: SyncReceipt) -> SyncReceiptAck {
-        let answer = self.acknowledge_sync(receipt);
+        let answer = self.acknowledge_sync(receipt).unwrap_or_else(|error| {
+            debug!(%error, "sync: an executor receipt did not reach its owner");
+            match error {
+                PlayError::SessionGone { .. } => SyncReceiptAck::GateFailed,
+                _ => SyncReceiptAck::Refused,
+            }
+        });
         let delivered = match receipt {
             SyncReceipt::Installed(stamp) => Some((stamp, 0)),
             SyncReceipt::Rejected { stamp, reason } => Some((stamp, reject_code(reason))),
             _ => None,
         };
         if let Some((stamp, rejected)) = delivered {
+            let accepted = matches!(
+                answer,
+                SyncReceiptAck::Recorded | SyncReceiptAck::Installed(_)
+            );
             kithara::probe_event!(
                 sync_receipt_delivered,
                 operation = u64::from(stamp.operation()),
                 rejected = rejected,
-                accepted = u64::from(answer.is_ok())
+                accepted = u64::from(accepted)
             );
         }
-        if let Err(error) = &answer {
-            debug!(%error, "sync: the owner refused an executor receipt");
-        }
-        match answer {
-            Ok(answer) => answer,
-            Err(PlayError::Session(
-                SessionError::SyncControlBusy | SessionError::Sync(SyncError::OwnerUnavailable),
-            ))
-            | Err(PlayError::SessionGone { .. }) => SyncReceiptAck::GateFailed,
-            Err(_) => SyncReceiptAck::Refused,
-        }
+        answer
     }
 }
 

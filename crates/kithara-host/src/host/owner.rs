@@ -10,8 +10,8 @@ use kithara_play::{
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
     GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected,
-    SyncStaged, SyncStatusSnapshot, SyncTransition, TopologyOperation,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncReceiptAck,
+    SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition, TopologyOperation,
 };
 use kithara_warp::{BeatGrid, BeatGridId};
 
@@ -550,7 +550,9 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
             .dispatcher
             .exec_host(HostCmd::Play(Cmd::AcknowledgeSync { receipt }))
         {
-            Ok(HostReply::Play(Reply::SyncAcknowledged(_))) => Ok(self.root_view.status()),
+            Ok(HostReply::Play(Reply::SyncAcknowledged(
+                SyncReceiptAck::Recorded | SyncReceiptAck::Installed(_),
+            ))) => Ok(self.root_view.status()),
             _ => Err(SyncError::OwnerUnavailable),
         }
     }

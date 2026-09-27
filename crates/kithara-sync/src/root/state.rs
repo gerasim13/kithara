@@ -1,11 +1,11 @@
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_warp::BeatGridId;
-use tracing::warn;
+use tracing::{debug, warn};
 
-use super::{EnteredCut, InboxAt, RootError, RootPort, inputs::queue_gate_failure};
+use super::{EnteredCut, InboxAt, RootCut, RootError, RootPort, inputs::queue_gate_failure};
 use crate::{
-    ControlEnterError, GroupState, PermitCell, SyncArbiter, SyncGateBinding, SyncGroup,
-    SyncReceipt, SyncReceiptInbox,
+    ControlEnterError, GroupState, PermitCell, SyncArbiter, SyncError, SyncGateBinding, SyncGroup,
+    SyncReceipt, SyncReceiptAck, SyncReceiptInbox,
 };
 
 /// How long entering the root waits for an audio claim in flight before it
@@ -132,6 +132,43 @@ impl<G: SyncGroup<NestedGroup = G>> SyncRoot<G> {
             .map(|control| EnteredCut::new(control, group, cells))
     }
 
+    /// Answers one executor receipt under an owner cut: the cut records what
+    /// the audio callback, the players and the executor left first, then
+    /// `observe` brings the root up to what its Host has committed, then the
+    /// receipt is recorded and an install mints its permit. An owner too
+    /// busy to take an install keeps its terminal rejection for the next cut
+    /// instead. The answer is `GateFailed` when the owner could not be
+    /// entered, could not take the install now, or is unavailable, and
+    /// `Refused` for any other refusal; neither records the receipt.
+    pub fn acknowledge<P, F>(
+        &mut self,
+        port: &mut P,
+        receipt: SyncReceipt,
+        observe: F,
+    ) -> SyncReceiptAck
+    where
+        P: RootPort<G>,
+        F: FnOnce(&mut RootCut<'_, G>, &mut P) -> Result<(), SyncError>,
+    {
+        let answer = self.enter_to_acknowledge(receipt).and_then(|entered| {
+            entered
+                .run(port, |cut, port| {
+                    observe(cut, port)?;
+                    cut.acknowledge(port, receipt)
+                })
+                .and_then(|answer| answer)
+        });
+        answer.unwrap_or_else(|error| {
+            debug!(%error, "sync: the owner refused an executor receipt");
+            match error {
+                RootError::Enter(_)
+                | RootError::InstallRacedSourceChange
+                | RootError::Sync(SyncError::OwnerUnavailable) => SyncReceiptAck::GateFailed,
+                _ => SyncReceiptAck::Refused,
+            }
+        })
+    }
+
     /// Enters an owner cut to acknowledge an executor receipt. An owner too
     /// busy to take an install keeps its terminal rejection for the next cut
     /// instead, and the executor drops that lane.
@@ -140,7 +177,7 @@ impl<G: SyncGroup<NestedGroup = G>> SyncRoot<G> {
     ///
     /// Returns `Enter(Busy)` once that rejection is kept, the reason it could
     /// not be kept, or `Enter(Closed)` after [`Self::close`].
-    pub fn enter_to_acknowledge(
+    fn enter_to_acknowledge(
         &mut self,
         receipt: SyncReceipt,
     ) -> Result<EnteredCut<'_, G>, RootError> {
