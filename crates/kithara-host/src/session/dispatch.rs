@@ -891,9 +891,12 @@ mod tests {
     use firewheel::{ActivateInfo, processor::FirewheelProcessor};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
-    use kithara_platform::sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+    use kithara_platform::{
+        sync::{
+            Arc,
+            atomic::{AtomicU64, AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
     use kithara_play::DEFAULT_GATE_SMOOTHING;
     use kithara_sync::SyncGroupSnapshot;
@@ -944,7 +947,11 @@ mod tests {
     }
 
     /// These tests never retire a processor that is still rendering.
-    impl SessionStream for RouteLossStream {}
+    impl SessionStream for RouteLossStream {
+        fn callback_stall(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
 
     type TestState = SessionState<RouteLossStream, TestPools>;
 

@@ -454,6 +454,7 @@ where
                 sample_rate_hint,
                 output_block_frames,
                 limiter,
+                callback_stall,
                 ..
             } => {
                 let root = Self::session_root(sample_rate_hint)?;
@@ -463,6 +464,7 @@ where
                     root.sample_rate,
                     output_block_frames,
                     limiter,
+                    callback_stall,
                 )
                 .resolve()?;
                 Ok(Self::owner(

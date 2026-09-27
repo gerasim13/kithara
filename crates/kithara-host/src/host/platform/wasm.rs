@@ -2,7 +2,10 @@ use std::{collections::HashMap, mem, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
 use kithara_effects::LimiterConfig;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{
     GroupState, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
@@ -90,12 +93,13 @@ impl<S> Platform<S> {
         sample_rate: NonZeroU32,
         _output_block_frames: Option<NonZeroU32>,
         limiter: LimiterConfig,
+        callback_stall: Duration,
     ) -> Result<StartedPlatform<S>, PlayError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(group, view, sample_rate, limiter)?;
+            crate::session::web::spawn::<S>(group, view, sample_rate, limiter, callback_stall)?;
         Ok((dispatcher, Self::owner(web_state)))
     }
 

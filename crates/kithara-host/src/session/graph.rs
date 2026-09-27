@@ -15,6 +15,7 @@ use kithara_platform::{
     time::{Duration, WallInstant},
 };
 use kithara_signal::FaderValue;
+use kithara_test_utils::kithara;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
@@ -84,40 +85,57 @@ fn remove_node(fw_ctx: &mut FirewheelContext, id: NodeID) -> Result<(), SessionE
         .map_err(|error| SessionError::Graph(format!("remove audio node {id:?}: {error:?}")))
 }
 
-/// Firewheel's successful update only queues a new schedule. The old player
-/// processor no longer owns its sole receipt producer after the callback has
-/// accepted that schedule and a later update has consumed `DropSchedule`.
+/// Firewheel's successful update only queues a new schedule. The callback that
+/// polls it hands the old schedule back, and the next update drops the old
+/// player processor with its sole receipt producer. A callback writes its
+/// clock right after polling, so the second clock change seen after queueing
+/// comes from a callback that polled the schedule. A device callback may run
+/// far apart from the graph block size, so the wait follows callbacks rather
+/// than a fixed deadline. It gives up once a polled schedule still left the
+/// producer standing, the context lost its callback, or the callback stayed
+/// silent past the stream's stall. The device callback runs on real time, so
+/// the wait does too.
+#[kithara::flash(false)]
 fn wait_for_slot_processors<T: SessionStream>(
     fw_ctx: &mut FirewheelContext,
-    stream: Option<&mut T>,
+    mut stream: Option<&mut T>,
     slots: &[SlotNodes],
 ) -> Result<(), SessionError> {
-    if slots.iter().all(|slot| slot.sync_receipts.producer_gone()) {
+    let retired = |slots: &[SlotNodes]| slots.iter().all(|slot| slot.sync_receipts.producer_gone());
+    if retired(slots) {
         return Ok(());
     }
-    let info = fw_ctx.stream_info().ok_or(SessionError::NoContext)?;
-    let callback_nanos = (u64::from(info.max_block_frames.get()) * 2_000_000_000)
-        .div_ceil(u64::from(info.sample_rate.get()));
-    // A queued schedule can arrive just after a callback. Allow its next
-    // callback and the following Host update to return the old processor.
-    let deadline =
-        WallInstant::now() + Duration::from_nanos(callback_nanos).max(Duration::from_millis(20));
-    let mut stream = stream;
-    while slots.iter().any(|slot| !slot.sync_receipts.producer_gone()) {
+    let stall = stream
+        .as_deref()
+        .map_or(Duration::ZERO, SessionStream::callback_stall);
+    let mut clock = fw_ctx.audio_clock().samples;
+    let mut callbacks = 0_u8;
+    let mut silent_until = WallInstant::now() + stall;
+    loop {
         if let Some(stream) = stream.as_deref_mut() {
             stream.drive_control()?;
         }
         fw_ctx.update().map_err(|error| {
             SessionError::Graph(format!("audio graph retirement update failed: {error:?}"))
         })?;
-        if WallInstant::now() >= deadline
-            && slots.iter().any(|slot| !slot.sync_receipts.producer_gone())
-        {
+        if retired(slots) {
+            return Ok(());
+        }
+        if callbacks >= 2 || !fw_ctx.is_active() {
             return Err(SessionError::CallbackQuiescencePending);
+        }
+        let observed = fw_ctx.audio_clock().samples;
+        if observed == clock {
+            if WallInstant::now() >= silent_until {
+                return Err(SessionError::CallbackQuiescencePending);
+            }
+        } else {
+            clock = observed;
+            callbacks += 1;
+            silent_until = WallInstant::now() + stall;
         }
         thread::yield_now();
     }
-    Ok(())
 }
 
 pub(super) mod tap {
@@ -763,7 +781,11 @@ mod tests {
     }
 
     /// The test drives the thread-local device processor itself.
-    impl SessionStream for TestStream {}
+    impl SessionStream for TestStream {
+        fn callback_stall(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
 
     type TestState = SessionState<TestStream, TestPools>;
 

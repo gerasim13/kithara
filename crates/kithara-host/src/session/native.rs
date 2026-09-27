@@ -19,8 +19,8 @@ use tracing::{debug, warn};
 use super::{
     dispatch::run_host_cmd,
     protocol::{
-        Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
-        SessionDispatcher, SessionStream,
+        Cmd, DeviceStream, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply,
+        Reply, SessionDispatcher, SessionStream,
     },
     state::{RootView, SessionState},
 };
@@ -185,9 +185,6 @@ where
     })
 }
 
-/// The audio device runs the cpal callback on its own thread.
-impl SessionStream for CpalStream {}
-
 fn start_stream_cpal(
     ctx: &mut FirewheelContext,
     sample_rate: u32,
@@ -226,15 +223,19 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     sample_rate: NonZeroU32,
     output_block_frames: Option<NonZeroU32>,
     limiter: LimiterConfig,
+    callback_stall: Duration,
 ) -> Arc<dyn HostDispatcher<S>> {
-    spawn_session_client::<CpalStream, S>(
+    spawn_session_client::<DeviceStream<CpalStream>, S>(
         "kithara-engine",
         root,
         root_view,
         sample_rate,
         output_block_frames,
         limiter,
-        move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
+        move |ctx, sample_rate| {
+            start_stream_cpal(ctx, sample_rate, output_block_frames)
+                .map(|stream| DeviceStream::new(stream, callback_stall))
+        },
     )
 }
 
