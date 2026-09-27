@@ -1210,6 +1210,56 @@ fn ambient_blocking_closure_pins_virtual_clock() {
     );
 }
 
+/// The other half of what a pooled closure declares: `spin_loop` is work, a
+/// cooperative yield is the absence of it, and only the first may pin the
+/// clock. Both reach the engine as one dedicated credit, so until the yield
+/// told the engine apart from the work, the one thread able to freeze the
+/// clock held the one yield unable to thaw it — a spin that outlived every
+/// virtual deadline around it, which is how
+/// `test_seek_complete_emitted_only_after_output_commit[chunk]` reached an
+/// outer kill with its holder still on CPU.
+///
+/// Mirrors [`ambient_blocking_closure_pins_virtual_clock`]: same shape, same
+/// 50ms real release, opposite verdict on the sibling's 10ms virtual park.
+#[kithara::test(native, flash(false))]
+fn a_yielding_blocking_closure_releases_the_virtual_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let _rt = rt.enter();
+    let entered = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(AtomicUsize::new(0));
+    let entered_in = Arc::clone(&entered);
+    let release_in = Arc::clone(&release);
+    let handle = crate::tokio::task::spawn_blocking(move || {
+        entered_in.store(1, Ordering::Release);
+        while release_in.load(Ordering::Acquire) == 0 {
+            crate::thread::yield_now();
+        }
+    });
+    while entered.load(Ordering::Acquire) == 0 {
+        thread::yield_now();
+    }
+    let release_timer = Arc::clone(&release);
+    let releaser = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        release_timer.store(1, Ordering::Release);
+    });
+    let start = RealInstant::now();
+    forward::park_for(Duration::from_millis(10));
+    let waited = start.elapsed();
+    releaser.join().expect("releaser thread");
+    rt.block_on(handle).expect("blocking closure joined");
+    assert!(
+        waited < Duration::from_millis(40),
+        "a yielding blocking closure held the virtual clock for its whole real \
+         lifetime: a 10ms deadline took {waited:?} real to fire"
+    );
+}
+
 /// A starved poll loop must not buy virtual time with its own backoff. A dated
 /// backoff registers a free `Timed` deadline that the engine services in
 /// isolation: each wake re-polls and re-sleeps, so a consumer whose producer is

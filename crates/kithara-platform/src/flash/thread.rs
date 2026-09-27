@@ -100,9 +100,17 @@ where
 /// advance, then wakes it on the next advance to re-check. Off the sim path
 /// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
 /// behaviour is unchanged. See `crate::flash::system::yield_until_advance`.
+///
+/// A DEDICATED participant takes the sim path even where the callstack itself
+/// is not a flash region. Its credit is what holds the clock still, and
+/// [`credit::DedicatedSlot::claim_pooled`](crate::flash::system::credit) states
+/// the term it is held on: an engine park releases it. A pooled
+/// `spawn_blocking` closure inherits the ambient gate and the credit but never
+/// pushes an active region, so `flash_enabled()` alone would hand the one
+/// thread that can freeze the engine the one yield that cannot thaw it.
 #[inline]
 pub fn yield_now() {
-    if crate::flash::flash_enabled() {
+    if crate::flash::flash_enabled() || crate::flash::ctx::dedicated() {
         crate::flash::system::yield_until_advance();
     } else {
         crate::backend::thread::yield_now();
