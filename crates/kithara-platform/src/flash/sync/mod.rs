@@ -16,5 +16,5 @@ pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub use crate::{
     backend::sync::{Arc, OnceLock, Weak, atomic},
-    common::gate::{CondvarGate, ThreadGate, WaitGate},
+    common::gate::{CondvarGate, ExclusiveGate, ExclusiveGuard, ThreadGate, WaitGate},
 };
