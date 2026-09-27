@@ -151,6 +151,7 @@ impl ItemQueue {
             #[call(current)]
             pub(crate) fn current_index(&self) -> usize;
             pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) fn index_of(&self, item_id: TrackId) -> Option<usize>;
             pub(crate) fn is_announced(&self, index: usize) -> bool;
             #[call(len)]
             pub(crate) fn item_count(&self) -> usize;

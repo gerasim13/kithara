@@ -84,6 +84,16 @@ impl PlayerNodeProcessor {
                         self.unload_slot(slot);
                     }
                 }
+                PlayerCmd::CancelPreload { item_id } => {
+                    if self
+                        .tracks
+                        .get(item_id)
+                        .is_some_and(|track| track.state() == TrackState::Preloading)
+                        && let Some(slot) = self.tracks.slot_of(item_id)
+                    {
+                        self.unload_slot(slot);
+                    }
+                }
                 PlayerCmd::Clear => {
                     self.clear_all_tracks();
                 }

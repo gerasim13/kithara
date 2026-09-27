@@ -70,6 +70,12 @@ impl Playlist {
             .is_some_and(|slot| slot.resource.is_some())
     }
 
+    pub(crate) fn index_of(&self, item_id: TrackId) -> Option<usize> {
+        self.items
+            .iter()
+            .position(|slot| slot.as_ref().is_some_and(|slot| slot.item_id == item_id))
+    }
+
     pub(crate) fn insert(&mut self, q: QueuedResource, at: Option<usize>) -> usize {
         let pos = at.map_or(self.items.len(), |i| i.min(self.items.len()));
         self.items.insert(pos, Some(q.into()));

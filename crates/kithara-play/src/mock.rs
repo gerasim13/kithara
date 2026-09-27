@@ -5,6 +5,8 @@ use std::{
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
+#[cfg(test)]
+use ringbuf::traits::{Consumer, Producer};
 
 pub use crate::api::equalizer::EqualizerMock;
 use crate::{
@@ -75,15 +77,48 @@ pub fn session_at<S>(sample_rate: NonZeroU32) -> SessionBinding<S> {
     binding(None, sample_rate)
 }
 
+/// A binding to a fresh `SessionMock`, together with that mock standing in
+/// for the audio threads of the slots it allocates.
+#[cfg(test)]
+pub(crate) fn session_with_mock<S>() -> (SessionBinding<S>, Arc<SessionMock>) {
+    let mock = Arc::new(SessionMock::new(None, SAMPLE_RATE));
+    let dispatcher: Arc<dyn SessionDispatcher<S>> = Arc::clone(&mock) as _;
+    (SessionBinding::new(dispatcher, SAMPLE_RATE), mock)
+}
+
 fn binding<S>(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> SessionBinding<S> {
-    SessionBinding::new(
-        Arc::new(SessionMock {
+    SessionBinding::new(Arc::new(SessionMock::new(shape, sample_rate)), sample_rate)
+}
+
+impl SessionMock {
+    fn new(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> Self {
+        Self {
             shape,
             sample_rate,
             next_player: AtomicU64::new(1),
             next_slot: AtomicU64::new(0),
             nodes: Mutex::default(),
-        }),
-        sample_rate,
-    )
+        }
+    }
+
+    /// Answer as the audio thread of every allocated slot.
+    #[cfg(test)]
+    pub(crate) fn notify(&self, notification: &crate::bridge::PlayerNotification) {
+        for node in self.nodes.lock().iter_mut() {
+            assert!(
+                node.notif_tx.try_push(notification.clone()).is_ok(),
+                "fixture notification ring has room"
+            );
+        }
+    }
+
+    /// Everything the audio threads of the allocated slots were sent, in order.
+    #[cfg(test)]
+    pub(crate) fn take_commands(&self) -> Vec<crate::bridge::PlayerCmd> {
+        let mut commands = Vec::new();
+        for node in self.nodes.lock().iter_mut() {
+            commands.extend(node.cmd_rx.pop_iter());
+        }
+        commands
+    }
 }
