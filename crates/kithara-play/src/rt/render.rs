@@ -202,7 +202,7 @@ impl RenderPass {
                 if let Some(handoff) = handover
                     && handoff.offset < frames
                 {
-                    let offset = handoff.offset;
+                    let mut offset = handoff.offset;
                     for (next_arena_idx, (next_handle, next_state)) in
                         loaded_tracks.iter().enumerate()
                     {
@@ -224,7 +224,10 @@ impl RenderPass {
                         if let Some(snapshot) = outcome_position_duration(&outcome) {
                             leading_outcome_pos_dur = Some(snapshot);
                         }
-                        break;
+                        match next_handover(&outcome, offset) {
+                            Some(next) if next.offset < frames => offset = next.offset,
+                            _ => break,
+                        }
                     }
                 }
             }
