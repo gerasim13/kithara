@@ -62,8 +62,10 @@ where
             }
             PlayerNotification::PlaybackStopped {
                 reason: TrackPlaybackStopReason::Eof,
+                item_id,
                 ..
             } => {
+                self.settle_withdrawal(slot_id, *item_id);
                 self.handle_track_playback_stopped(item, notification);
             }
             _ => {

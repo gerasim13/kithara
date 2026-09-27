@@ -38,41 +38,61 @@ pub(crate) struct PendingLoads {
     pub(crate) next: Option<PendingNext>,
     /// Armed successors withdrawn from the processor. The audio thread may
     /// have stitched one in before it read the withdrawal, so they stay in
-    /// question until the processor names the successor it started or a
+    /// question until the processor reports the successor it played or a
     /// later leading track replaces them.
     withdrawn: Vec<TrackId>,
+    /// Withdrawn successors whose cancel the command ring refused. The
+    /// processor still holds them and may stitch one in at any later track
+    /// end, so a later leading track does not settle them.
+    uncancelled: Vec<TrackId>,
 }
 
 impl PendingLoads {
-    /// The processor started `item_id`. While a withdrawal is in question
-    /// that start is the stitch that settles it, when it names the armed
-    /// successor or a withdrawn one; the armed successor is consumed only
-    /// when it is the one started.
-    pub(crate) fn settle_started(&mut self, item_id: TrackId) -> bool {
+    /// The command ring refused the cancel for `item_id`, so the processor
+    /// still holds that preload.
+    pub(crate) fn cancel_refused(&mut self, item_id: TrackId) {
+        self.withdrawn.retain(|withdrawn| *withdrawn != item_id);
+        if !self.uncancelled.contains(&item_id) {
+            self.uncancelled.push(item_id);
+        }
+    }
+
+    const fn in_question(&self) -> bool {
+        !(self.withdrawn.is_empty() && self.uncancelled.is_empty())
+    }
+
+    /// The processor played `item_id`: it reported the track's start or its
+    /// natural end. While a withdrawal is in question that is the stitch that
+    /// settles it, when it names the armed successor or a withdrawn one; the
+    /// armed successor is consumed only when it is the one played.
+    pub(crate) fn settle_played(&mut self, item_id: TrackId) -> bool {
         let armed = self
             .next
             .as_ref()
             .is_some_and(|next| !next.state.activated() && next.item_id == item_id);
-        if self.withdrawn.is_empty() || !(armed || self.withdrawn.contains(&item_id)) {
+        let withdrawn = self.withdrawn.contains(&item_id) || self.uncancelled.contains(&item_id);
+        if !self.in_question() || !(armed || withdrawn) {
             return false;
         }
         if armed {
             self.next = None;
         }
         self.withdrawn.clear();
+        self.uncancelled
+            .retain(|uncancelled| *uncancelled != item_id);
         true
     }
 
     /// The successor a track's end settles. While a withdrawal is in question
     /// the audio thread may have stitched a withdrawn track in instead of the
-    /// armed one, so the armed successor waits for the processor to name the
-    /// track it started.
+    /// armed one, so the armed successor waits for the processor to report the
+    /// track it played.
     pub(crate) fn take_at_end(&mut self) -> Option<PendingNext> {
         let activated = self
             .next
             .as_ref()
             .is_some_and(|next| next.state.activated());
-        if self.withdrawn.is_empty() || activated {
+        if !self.in_question() || activated {
             self.next.take()
         } else {
             None
@@ -91,10 +111,11 @@ impl PendingLoads {
 
     delegate::delegate! {
         to self.withdrawn {
-            /// A new track leads. Every withdrawal sent before it reaches the
-            /// processor while that track or a newer one leads, which unloads a
-            /// withdrawn preload and fades out one already stitched in, so
-            /// nothing withdrawn stays in question.
+            /// A new track leads. Every cancel the ring accepted before it
+            /// reaches the processor while that track or a newer one leads,
+            /// which unloads a withdrawn preload and fades out one already
+            /// stitched in, so those withdrawals are settled. A refused cancel
+            /// never reached it, so that successor stays in question.
             #[call(clear)]
             pub(crate) fn clear_withdrawn(&mut self);
         }
