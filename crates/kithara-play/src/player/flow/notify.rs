@@ -51,6 +51,9 @@ where
             PlayerNotification::HandoverRequested { .. } => {
                 self.handle_handover_requested(item);
             }
+            PlayerNotification::PlaybackStarted { item_id, .. } => {
+                self.settle_withdrawal(slot_id, *item_id);
+            }
             PlayerNotification::RateChanged { rate } => {
                 self.core
                     .engine
@@ -77,24 +80,6 @@ where
                 }
             }
         }
-    }
-
-    fn finalize_handover_if_armed(&self) {
-        let pending = self.phase.lock().pending_mut().and_then(Option::take);
-        let Some(pending) = pending else {
-            return;
-        };
-
-        if pending.state.activated() {
-            return;
-        }
-
-        if pending.index >= self.item_count() {
-            return;
-        }
-        let index = pending.index;
-        self.core.items.set_current(index);
-        self.announce_current_item(index);
     }
 
     fn handle_handover_requested(&self, item: Option<ItemRole>) {
