@@ -61,7 +61,7 @@ const fn filter_error(error: BiquadError) -> FilterError {
 }
 
 /// Linear and Quadratic on `vDSP_vlint`/`vDSP_vqint`, Hermite and Watte on
-/// `fearless_simd`.
+/// the scalar kernel.
 pub(crate) fn interpolate(
     method: Interpolation,
     window: &[f32],
