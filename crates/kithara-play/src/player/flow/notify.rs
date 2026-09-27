@@ -43,6 +43,7 @@ where
         let emitted_any = item
             .as_ref()
             .is_some_and(|item| publish_notification(self, notification, item));
+        self.settle_withdrawal(slot_id, notification);
 
         match notification {
             PlayerNotification::Requested => {
@@ -50,9 +51,6 @@ where
             }
             PlayerNotification::HandoverRequested { .. } => {
                 self.handle_handover_requested(item);
-            }
-            PlayerNotification::PlaybackStarted { item_id, .. } => {
-                self.settle_withdrawal(slot_id, *item_id);
             }
             PlayerNotification::RateChanged { rate } => {
                 self.core
@@ -62,10 +60,8 @@ where
             }
             PlayerNotification::PlaybackStopped {
                 reason: TrackPlaybackStopReason::Eof,
-                item_id,
                 ..
             } => {
-                self.settle_withdrawal(slot_id, *item_id);
                 self.handle_track_playback_stopped(item, notification);
             }
             _ => {

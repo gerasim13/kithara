@@ -11,7 +11,7 @@ use super::super::{
 };
 use crate::{
     api::{EngineEvent, SlotId, TrackId},
-    bridge::PlayerCmd,
+    bridge::{PlayerCmd, PlayerNotification, TrackPlaybackStopReason},
     error::PlayError,
 };
 
@@ -272,19 +272,35 @@ where
     }
 
     /// Settle a withdrawal still in question once the processor reports the
-    /// track it played, by its start or its natural end: the queue follows the
-    /// successor stitched in, and one removed from the queue since keeps
-    /// playing unannounced.
-    pub(crate) fn settle_withdrawal(&self, slot_id: SlotId, item_id: TrackId) {
+    /// track it played, by its start or its natural or failed end: the queue
+    /// follows the successor stitched in, and one removed from the queue since
+    /// keeps playing unannounced. A withdrawn successor the processor reports
+    /// unloaded can no longer be stitched in and leaves the question.
+    pub(crate) fn settle_withdrawal(&self, slot_id: SlotId, notification: &PlayerNotification) {
         if self.slot() != Some(slot_id) {
             return;
         }
+        let played = match notification {
+            PlayerNotification::PlaybackStarted { item_id, .. }
+            | PlayerNotification::PlaybackStopped {
+                reason: TrackPlaybackStopReason::Eof | TrackPlaybackStopReason::Failed(_),
+                item_id,
+                ..
+            } => *item_id,
+            PlayerNotification::Unloaded { item_id, .. } => {
+                if let Some(loads) = self.phase.lock().pending_loads_mut() {
+                    loads.retire(*item_id);
+                }
+                return;
+            }
+            _ => return,
+        };
         let settled = self
             .phase
             .lock()
             .pending_loads_mut()
-            .is_some_and(|loads| loads.settle_played(item_id));
-        let Some(index) = settled.then(|| self.core.items.index_of(item_id)).flatten() else {
+            .is_some_and(|loads| loads.settle_played(played));
+        let Some(index) = settled.then(|| self.core.items.index_of(played)).flatten() else {
             return;
         };
         self.core.items.set_current(index);
@@ -320,7 +336,7 @@ mod tests {
     use crate::{
         PlayWorker, PlayWorkerConfig,
         api::{EngineEvent, PlayerEvent, SelectionPlayback},
-        bridge::{PlayerNotification, TrackPlaybackStopReason},
+        bridge::PlaybackFault,
         mock,
         player::PlayerConfig,
         resource::Resource,
@@ -669,5 +685,47 @@ mod tests {
         player.process_notifications();
 
         assert_eq!(player.current_index(), 1);
+    }
+
+    /// A successor that fails on its first render never reports a start, but
+    /// its failed end still names the track the processor stitched in.
+    #[kithara::test]
+    fn a_re_armed_successor_that_fails_in_its_stitch_block_is_reported() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        player.arm_next(2).expect("re-arm accepted");
+
+        audio_thread.notify(&ended("first", ids[0]));
+        audio_thread.notify(&PlayerNotification::PlaybackStopped {
+            src: Arc::from("third"),
+            item_id: ids[2],
+            reason: TrackPlaybackStopReason::Failed(PlaybackFault::OutputRangeUnavailable),
+            seek_epoch: 0,
+        });
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.armed_next(), None);
+    }
+
+    /// The processor can evict a preload whose cancel the full ring refused;
+    /// once it reports the unload, that successor is out of question and the
+    /// next track end promotes the armed successor as usual.
+    #[kithara::test]
+    fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        while player.send_to_slot(PlayerCmd::SetPaused(true)).is_ok() {}
+        player.unarm_next();
+        audio_thread.take_commands();
+        player.arm_next(2).expect("re-arm accepted");
+
+        audio_thread.notify(&PlayerNotification::Unloaded {
+            src: Arc::from("second"),
+            item_id: ids[1],
+        });
+        audio_thread.notify(&ended("first", ids[0]));
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.armed_next(), None);
     }
 }
