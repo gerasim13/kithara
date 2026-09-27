@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use kithara_bufpool::HasPool;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_sync::LoadGeneration;
+use kithara_sync::{LoadGeneration, SourceChange};
 
 #[cfg(test)]
 use super::super::PlayerImpl;
@@ -21,8 +21,8 @@ use crate::{
 enum ArmDecision {
     /// The same index is already armed; return its src verbatim.
     AlreadyArmed(Arc<str>),
-    /// The slot was cleared; optionally unload the previous item.
-    Clear(Option<TrackId>),
+    /// The slot was cleared; optionally unload the previous pending track.
+    Clear(Option<PendingNext>),
 }
 
 struct ActivatedPending {
@@ -105,12 +105,9 @@ where
                 ArmDecision::AlreadyArmed(existing.src.clone())
             }
             Some(existing) => {
-                let unload = (!(existing.state.activated() && existing.index == current_index))
-                    .then_some(existing.item_id);
-                if let Some(slot) = phase.pending_mut() {
-                    *slot = None;
-                }
-                ArmDecision::Clear(unload)
+                let preserve = existing.state.activated() && existing.index == current_index;
+                let cleared = phase.pending_mut().and_then(Option::take);
+                ArmDecision::Clear(cleared.filter(|_| !preserve))
             }
             None => ArmDecision::Clear(None),
         };
@@ -120,8 +117,8 @@ where
             ArmDecision::AlreadyArmed(src) => return Ok(Some(src)),
             ArmDecision::Clear(unload) => unload,
         };
-        if let Some(item_id) = to_unload {
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
+        if let Some(pending) = to_unload {
+            self.unload_pending(&pending);
         }
 
         let Some((item_id, load, src, duration_seconds)) =
@@ -232,10 +229,22 @@ where
                     .bus()
                     .publish(EngineEvent::CrossfadeCancelled);
             }
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack {
-                item_id: pending.item_id,
-            });
+            self.unload_pending(&pending);
         }
+    }
+
+    /// Unload a pending track the handover no longer wants. An activated one
+    /// is the resident, so its accepted unload is reported as a source change
+    /// whatever replaces it.
+    fn unload_pending(&self, pending: &PendingNext) {
+        let unload = PlayerCmd::UnloadTrack {
+            item_id: pending.item_id,
+        };
+        let _ = if pending.state.activated() {
+            self.send_source_change(unload, SourceChange::Discontinuity)
+        } else {
+            self.send_to_slot(unload)
+        };
     }
 }
 
@@ -285,8 +294,9 @@ mod tests {
     use kithara_events::{Envelope, EventBus};
     use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
+    use kithara_sync::{PermitCell, SyncArbiter, SyncGateBinding};
     use kithara_test_utils::kithara;
-    use kithara_warp::BeatGrid;
+    use kithara_warp::{BeatGrid, BeatGridId};
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -703,6 +713,62 @@ mod tests {
             after_retry.load(),
             first.load().checked_next().expect("fixture generation")
         );
+    }
+
+    #[kithara::test]
+    fn an_accepted_resident_unload_reports_its_change_when_the_replacement_is_refused() {
+        let gate = SyncGateBinding::new(
+            Arc::new(SyncArbiter::new()),
+            Arc::new(PermitCell::new(BeatGridId::allocate().expect("member id"))),
+        );
+        let (session, mock_session) = mock::session_with_drain();
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(session.with_sync_gate(gate.clone()))
+                .build(),
+        );
+        for src in ["first", "second", "third"] {
+            player.insert(resource(src), TrackId::allocate(), None);
+        }
+        player.play();
+        player.arm_next(1).expect("preload accepted");
+        player.commit_next(1).expect("handover accepted");
+        let control = gate.arbiter().try_control().expect("owner enters");
+        if let Some(observed) = control.source_change(gate.cell()) {
+            control.acknowledge_source_change(gate.cell(), observed);
+        }
+        drop(control);
+        mock_session.drain_commands();
+        for _ in 0..29 {
+            player
+                .send_to_slot(PlayerCmd::SetPaused(true))
+                .expect("fixture leaves room for the setting and the unload");
+        }
+        let transition = SelectTransition {
+            playback: SelectionPlayback::Play,
+            crossfade: CrossfadeSettings::default(),
+        };
+
+        assert!(matches!(
+            player.select_item_with_crossfade(2, transition),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+
+        let control = gate.arbiter().try_control().expect("owner enters");
+        assert_eq!(
+            control
+                .source_change(gate.cell())
+                .map(|observed| observed.change()),
+            Some(SourceChange::Discontinuity),
+            "the audio thread holds the resident's unload"
+        );
+        drop(control);
+        mock_session.drain_commands();
+        player
+            .select_item_with_crossfade(2, transition)
+            .expect("the refused replacement kept its resource for a retry");
     }
 
     #[kithara::test]
