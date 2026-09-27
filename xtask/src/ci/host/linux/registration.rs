@@ -9,9 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::profile::{LinuxHost, LinuxRunner, WindowsGuest};
-use crate::ci::cache::client_environment;
-
-const API_VERSION: &str = "X-GitHub-Api-Version";
+use crate::{ci::cache::client_environment, consts};
 
 #[derive(Deserialize)]
 struct Registration {
@@ -216,7 +214,7 @@ fn client(token: &str) -> Result<Client> {
     );
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(USER_AGENT, HeaderValue::from_static("kithara-ci"));
-    headers.insert(API_VERSION, HeaderValue::from_static("2022-11-28"));
+    headers.insert(consts::API_VERSION, HeaderValue::from_static("2022-11-28"));
     let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
         .context("the runner token is not a usable header value")?;
     authorization.set_sensitive(true);
@@ -241,13 +239,16 @@ fn read_token(path: &Path) -> Result<String> {
 /// through a command line where every process on the machine could read them.
 fn write_secret(path: &Path, contents: &str) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
-    super::permissions::set_mode(path, super::permissions::OWNER_ONLY)
+    super::permissions::set_mode(path, consts::OWNER_ONLY)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Registration, is_prunable, runtime_environment};
-    use crate::ci::{environment::CacheTrust, host::linux::profile::tests::host_fixture};
+    use crate::{
+        ci::{environment::CacheTrust, host::linux::profile::tests::host_fixture},
+        consts,
+    };
 
     /// The shape every Linux host file had: written before the prefix existed.
     fn host_store(directory: &std::path::Path) -> std::path::PathBuf {
@@ -259,7 +260,7 @@ mod tests {
              AWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
         )
         .expect("write the host store");
-        super::super::permissions::set_mode(&path, super::super::permissions::OWNER_ONLY)
+        super::super::permissions::set_mode(&path, consts::OWNER_ONLY)
             .expect("restrict the host store");
         path
     }

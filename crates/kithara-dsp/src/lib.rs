@@ -13,6 +13,7 @@
 )]
 
 mod backend;
+mod consts;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
 mod layout;

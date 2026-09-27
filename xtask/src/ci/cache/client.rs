@@ -8,28 +8,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 
-use super::{
-    super::config::{CiPins, PINS_PATH},
-    provision::{self, SCCACHE_PREFIX},
-    snapshot,
-    snapshot::SnapshotArgs,
-    verify,
-};
-use crate::ci::host::mac::read_secret;
-
-mod consts {
-    /// What only the host can say about a scope's store: where it is, and the
-    /// credentials its bucket policy admits. A client cannot run without these.
-    pub(super) const HOST_KEYS: [&str; 4] = [
-        "SCCACHE_BUCKET",
-        "SCCACHE_ENDPOINT",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-    ];
-
-    /// The region every scope is provisioned in.
-    pub(super) const REGION: &str = "us-east-1";
-}
+use super::{super::config::CiPins, provision, snapshot, snapshot::SnapshotArgs, verify};
+use crate::{ci::host::mac::read_secret, consts};
 
 /// Everything else a client is told, fixed by how a scope is provisioned.
 ///
@@ -41,8 +21,8 @@ mod consts {
 /// start.
 fn defaults(endpoint: &str) -> [(&'static str, &'static str); 4] {
     [
-        ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
-        ("SCCACHE_REGION", consts::REGION),
+        ("SCCACHE_S3_KEY_PREFIX", consts::SCCACHE_PREFIX),
+        ("SCCACHE_REGION", consts::CACHE_REGION),
         (
             "SCCACHE_S3_USE_SSL",
             if endpoint.starts_with("https://") {
@@ -63,7 +43,7 @@ pub(super) fn provisioned_environment(
     secret: &str,
 ) -> Result<BTreeMap<String, String>> {
     let mut environment = BTreeMap::new();
-    for (name, value) in consts::HOST_KEYS
+    for (name, value) in consts::CACHE_HOST_KEYS
         .into_iter()
         .zip([bucket, endpoint, key, secret])
     {
@@ -87,7 +67,7 @@ pub(crate) fn client_environment(path: &Path) -> Result<BTreeMap<String, String>
 /// Read the restricted cache credentials injected into a CI job.
 pub(crate) fn current_client_environment() -> Result<BTreeMap<String, String>> {
     let mut environment = BTreeMap::new();
-    for key in consts::HOST_KEYS {
+    for key in consts::CACHE_HOST_KEYS {
         let value = env::var(key).with_context(|| format!("{key} must be configured"))?;
         insert_client_environment(&mut environment, key, &value)?;
     }
@@ -126,7 +106,7 @@ fn insert_client_environment(
     value: &str,
 ) -> Result<()> {
     ensure!(
-        consts::HOST_KEYS.contains(&key) || defaults("").iter().any(|(name, _)| *name == key),
+        consts::CACHE_HOST_KEYS.contains(&key) || defaults("").iter().any(|(name, _)| *name == key),
         "unexpected cache environment key"
     );
     ensure!(!value.is_empty(), "empty cache environment value");
@@ -148,7 +128,7 @@ fn insert_client_environment(
 fn complete_client_environment(
     mut environment: BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>> {
-    for key in consts::HOST_KEYS {
+    for key in consts::CACHE_HOST_KEYS {
         ensure!(
             environment.contains_key(key),
             "the cache environment has no {key}"
@@ -196,7 +176,7 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             env_file,
             arguments,
         } => {
-            let pins = CiPins::load(Path::new(PINS_PATH))?;
+            let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
             let status = Command::new("docker")
                 .args(["compose", "--env-file"])
                 .arg(env_file)
@@ -252,7 +232,7 @@ mod tests {
 
         assert_eq!(
             environment.get("SCCACHE_S3_KEY_PREFIX").map(String::as_str),
-            Some(SCCACHE_PREFIX)
+            Some(consts::SCCACHE_PREFIX)
         );
     }
 
@@ -266,8 +246,8 @@ mod tests {
         let environment = client_environment(&path).expect("the host said all it has to");
 
         for (key, value) in [
-            ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
-            ("SCCACHE_REGION", consts::REGION),
+            ("SCCACHE_S3_KEY_PREFIX", consts::SCCACHE_PREFIX),
+            ("SCCACHE_REGION", consts::CACHE_REGION),
             ("SCCACHE_S3_USE_SSL", "true"),
             ("AWS_EC2_METADATA_DISABLED", "true"),
         ] {
@@ -321,7 +301,7 @@ mod tests {
         assert_eq!(
             missing,
             [
-                ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
+                ("SCCACHE_S3_KEY_PREFIX", consts::SCCACHE_PREFIX),
                 ("SCCACHE_S3_USE_SSL", "false"),
                 ("AWS_EC2_METADATA_DISABLED", "true"),
             ]
@@ -339,7 +319,7 @@ mod tests {
         let missing = missing_defaults(|key| environment.get(key).map(|value| (*value).to_owned()));
 
         assert!(
-            missing.contains(&("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX)),
+            missing.contains(&("SCCACHE_S3_KEY_PREFIX", consts::SCCACHE_PREFIX)),
             "{missing:?}"
         );
     }
@@ -354,10 +334,13 @@ mod tests {
         let written = provisioned_environment("kithara-review", "http://cache", "key", "secret")
             .expect("provisioning names every host key");
 
-        assert_eq!(written.len(), consts::HOST_KEYS.len() + defaults("").len());
+        assert_eq!(
+            written.len(),
+            consts::CACHE_HOST_KEYS.len() + defaults("").len()
+        );
         assert_eq!(
             written.get("SCCACHE_S3_KEY_PREFIX").map(String::as_str),
-            Some(SCCACHE_PREFIX)
+            Some(consts::SCCACHE_PREFIX)
         );
     }
 }
