@@ -43,19 +43,41 @@ type PlanCtx = super::PlanCtx<crate::test_pools::TestPools>;
 type TestAssetScope = AssetScope<crate::test_pools::TestPools>;
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
-    let cancel = CancelToken::never();
-    let backend = Arc::new(
-        AssetStore::builder(crate::test_pools::pools())
+    ctx_over(
+        &AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
-            .cancel(cancel)
+            .cancel(CancelToken::never())
             .build(),
-    );
+        "test",
+        prefetch_budget,
+    )
+}
+
+/// A memory store too small to retain any media: every commit evicts its own
+/// bytes, the way a byte-capped cache drops the entry with the fewest hits.
+fn evicting_ctx() -> PlanCtx {
+    ctx_over(
+        &AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Memory)
+            .max_bytes(1)
+            .cancel(CancelToken::never())
+            .build(),
+        "evicting",
+        1,
+    )
+}
+
+fn ctx_over(
+    store: &AssetStore<crate::test_pools::TestPools>,
+    discriminator: &str,
+    prefetch_budget: usize,
+) -> PlanCtx {
     PlanCtx {
         bus: EventBus::new(8),
-        scope: backend
+        scope: store
             .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),
-                discriminator: Some("test".to_owned()),
+                discriminator: Some(discriminator.to_owned()),
             })
             .expect("test asset scope"),
         seek_epoch: 0,
@@ -3130,27 +3152,80 @@ fn an_evicted_slot_is_opened_again() {
     );
 }
 
-fn disk_ctx(root: &std::path::Path) -> PlanCtx {
-    let cancel = CancelToken::never();
-    let backend = Arc::new(
-        AssetStore::builder(crate::test_pools::pools())
-            .backend(StorageBackend::Disk { root: root.into() })
-            .cancel(cancel)
-            .build(),
+/// The peer drains evictions on its own thread, so the eviction a commit triggers
+/// can reach the slot before that fetch settles; a loaded slot over dropped bytes
+/// is skipped by dispatch, and a reader parked on it waits forever.
+#[kithara::test]
+fn an_eviction_that_overtakes_the_settle_keeps_the_segment_owed() {
+    let ctx = evicting_ctx();
+    let v = make_var(0, 0, &[64, 64], &ctx);
+    let session = active_session(&v, &ctx, 0);
+    let claim = claim_segment_zero(&v, &ctx);
+    write_seg_bytes(&v, &ctx, 0, 64);
+    assert!(
+        !v.segments()[0].contains(&ctx.scope, 0..64),
+        "precondition: the commit evicted its own bytes"
     );
-    PlanCtx {
-        bus: EventBus::new(8),
-        scope: backend
-            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
-                url: Url::parse("https://example.com/master.m3u8").expect("master url"),
-                discriminator: Some("disk".to_owned()),
-            })
-            .expect("test asset scope"),
-        seek_epoch: 0,
-        headers: None,
-        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
-        config: PlanConfig::builder().prefetch_budget(1).build(),
-    }
+
+    let key = v.segments()[0].resource_id().clone();
+    assert_eq!(v.on_evict(&key), Some(0), "the peer drains the eviction");
+    v.rebuild(&ctx, 0);
+    claim.into_loaded(64);
+
+    let refetch = session.dispatch(&ctx, 1);
+    assert_eq!(
+        refetch.first().map(|cmd| cmd.url().clone()),
+        Some(v.segments()[0].url().clone()),
+        "the evicted segment must be fetched again, not skipped as loaded"
+    );
+}
+
+/// Eviction leaves an in-flight slot to its claim, so a cancelled fetch must settle
+/// it itself: bytes another writer committed meanwhile make it loaded, not a
+/// `Downloading` slot with no fetch behind it.
+#[kithara::test]
+fn a_cancelled_fetch_settles_a_segment_another_writer_committed() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[64], &ctx);
+    let root = CancelToken::root();
+    let session = HlsSession::active(
+        root,
+        Arc::new(SeekState::new()),
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        0,
+    );
+    push_planned(&v, 0);
+    let mut cmds = session.dispatch(&ctx, 1);
+    let on_complete = cmds
+        .first_mut()
+        .and_then(kithara_download::FetchCmd::take_on_complete)
+        .expect("the dispatched fetch settles through its completion");
+    write_seg_bytes(&v, &ctx, 0, 64);
+    assert!(
+        v.segments()[0].contains(&ctx.scope, 0..64),
+        "precondition: another writer committed the bytes"
+    );
+    session.abort();
+
+    on_complete(0, None, Some(&kithara_net::NetError::Cancelled));
+
+    assert!(
+        v.segments()[0].state().is_loaded(),
+        "the committed segment must settle loaded, not stay claimed by a finished fetch"
+    );
+}
+
+fn disk_ctx(root: &std::path::Path) -> PlanCtx {
+    ctx_over(
+        &AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Disk { root: root.into() })
+            .cancel(CancelToken::never())
+            .build(),
+        "disk",
+        1,
+    )
 }
 
 /// A ready gate over a pending read is a loop with no exit.

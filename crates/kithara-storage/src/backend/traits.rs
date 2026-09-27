@@ -201,7 +201,8 @@ pub trait Driver: DriverIo {
 pub trait AvailabilityObserver: Send + Sync {
     /// Record that the resource has been committed with `final_len`
     /// bytes. Only fires for `commit(Some(final_len))`; `commit(None)`
-    /// is silent.
+    /// is silent. Fires before the resource reports `Committed`, so anyone
+    /// acting on that status is ordered after this record.
     fn on_commit(&self, final_len: u64);
 
     /// Record that `range` has just become available.
