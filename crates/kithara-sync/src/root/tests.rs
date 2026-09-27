@@ -516,13 +516,16 @@ fn an_entry_reads_the_host_clock_only_as_far_as_its_evidence_holds() {
     let gate = root.register(target, member).expect("registration");
     let (epoch, revision) = (SessionEpoch::new(3), TransportRevision::first());
     let snapshot = rendered(SessionFrame::new(4_096), epoch, revision);
-    let processed = |epoch| {
+    let transport = |epoch, revision, rate| {
         ProcessedTransport::builder()
             .revision(revision)
             .session_epoch(epoch)
-            .sample_rate(rate())
+            .sample_rate(rate)
             .build()
     };
+    let processed = |epoch| transport(epoch, revision, rate());
+    let later = revision.checked_next().expect("a later transport");
+    let other_rate = NonZeroU32::new(rate().get() * 2).expect("another rate");
     let observed = |staging, source| {
         ResidentLoadObservation::builder()
             .item_id(0_u32)
@@ -556,6 +559,22 @@ fn an_entry_reads_the_host_clock_only_as_far_as_its_evidence_holds() {
             observed(staged, current),
             member,
             Some(processed(SessionEpoch::new(4))),
+            None,
+            Err(EntryRefusal::NotReady),
+            &[Processed][..],
+        ),
+        (
+            observed(staged, current),
+            member,
+            Some(transport(epoch, later, rate())),
+            None,
+            Err(EntryRefusal::NotReady),
+            &[Processed][..],
+        ),
+        (
+            observed(staged, current),
+            member,
+            Some(transport(epoch, revision, other_rate)),
             None,
             Err(EntryRefusal::NotReady),
             &[Processed][..],
@@ -624,6 +643,35 @@ fn an_entry_reads_the_host_clock_only_as_far_as_its_evidence_holds() {
         assert_eq!(entry, expected, "case {index}");
         assert_eq!(port.clock_reads.into_inner(), reads, "case {index}");
     }
+
+    gate.reserve_source()
+        .expect("the member reserves its source")
+        .publish(SourceChange::Timing);
+    assert_ne!(
+        Some(gate.source_revision()),
+        current,
+        "the change moves the source"
+    );
+    let mut port = FakePort {
+        processed: Some(processed(epoch)),
+        ..FakePort::default()
+    };
+    let entered = root.enter().expect("the owner is free");
+    let stale = entered
+        .run(&mut port, |cut, port| {
+            cut.requested_sync(
+                port,
+                target,
+                member,
+                SyncIntent::Enable,
+                &observed(staged, current),
+            )
+            .err()
+        })
+        .expect("the cut reconciles the change");
+
+    assert_eq!(stale, Some(EntryRefusal::NotReady), "a stale source");
+    assert_eq!(port.clock_reads.into_inner(), [Processed]);
 }
 
 #[kithara::test]
