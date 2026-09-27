@@ -18,7 +18,7 @@ use kithara_test_utils::kithara;
 use tracing::debug;
 
 use crate::{
-    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, consts,
     error::{SourceError, StreamError, StreamResult},
     playhead::PlayheadWrite,
     seek_state::{Activity, SeekControl, SeekObserve},
@@ -308,12 +308,6 @@ impl<T: StreamType> Stream<T> {
         }
     }
 }
-
-/// Watchdog budget for the blocking [`Read`] adapter. The source's own give-up
-/// authority (the network layer's inactivity timeout and retry budget) must fail
-/// a stalled range first, so only a read that neither progresses nor fails is a
-/// hang; sized like the storage and HLS blocking-wait watchdogs.
-const READ_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Per-probe wait policy threaded into [`Stream::try_read_with`]. Internal
 /// plumbing, NOT a public knob — it selects the `Source::wait_range` timeout
@@ -651,7 +645,7 @@ impl<T: StreamType> Read for Stream<T> {
     /// attempt parks in the event-driven `wait_range`. Each re-aim starts a fresh source wait, so
     /// only this loop can see that nothing arrives: returning is its only progress.
     #[kithara::flash(true)]
-    #[kithara::hang_watchdog(timeout = READ_HANG_TIMEOUT)]
+    #[kithara::hang_watchdog(timeout = consts::READ_HANG_TIMEOUT)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             match self.try_read_with(buf, WaitMode::Block) {
