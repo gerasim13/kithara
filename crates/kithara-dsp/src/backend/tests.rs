@@ -627,3 +627,41 @@ fn every_interpolation_backend_tracks_the_f64_oracle() {
         }
     }
 }
+
+/// Neighbours of opposite sign cancel in the Catmull-Rom coefficients; `f32`
+/// arithmetic there loses more than the four epsilons the contract allows.
+const CANCELLING_WINDOW: [f32; 4] = [-0.573_767_2, 0.718_489_6, -0.533_961_2, 0.338_097_85];
+const CANCELLING_POSITION: f32 = 1.947_738_2;
+
+#[kithara::test]
+fn every_interpolation_backend_rounds_once_on_a_cancelling_window() {
+    let backends: Vec<(&str, Interp)> = Vec::from([
+        ("portable", portable::interpolate as Interp),
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        ("accelerate", accelerate::interpolate),
+    ]);
+    let peak = CANCELLING_WINDOW
+        .iter()
+        .fold(0.0_f64, |peak, sample| peak.max(f64::from(sample.abs())));
+    for method in INTERP_METHODS {
+        let (before, _) = method.padding();
+        let positions = [f32::from(before), CANCELLING_POSITION];
+        for (name, run) in &backends {
+            let mut output = [UNWRITTEN; 2];
+            assert_eq!(
+                run(method, &CANCELLING_WINDOW, &positions, &mut output),
+                Ok(positions.len()),
+                "{name}: {method:?}"
+            );
+            for (position, sample) in positions.iter().zip(output) {
+                let error = (f64::from(sample)
+                    - interp_oracle(method, &CANCELLING_WINDOW, *position))
+                .abs();
+                assert!(
+                    error <= INTERP_PARITY * peak,
+                    "{name}: {method:?} at {position} off by {error} of {peak}"
+                );
+            }
+        }
+    }
+}
