@@ -50,7 +50,7 @@ where
     /// committed, so the superseded track barges in. Held only across the synchronous
     /// apply critical section - never across an `.await`. That section waits on the
     /// player's session, so a contender parks on the gate instead of blocking a lock.
-    pub(super) select_apply: Arc<ExclusiveGate>,
+    pub(super) select_apply: ExclusiveGate,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
     /// `Arc<Tracks>`; every status transition goes through
@@ -194,7 +194,7 @@ where
             action_at_item_end: Mutex::new(action_at_item_end),
             crossfade_settings: Mutex::new(crossfade_settings),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
-            select_apply: Arc::new(ExclusiveGate::default()),
+            select_apply: ExclusiveGate::default(),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
             autoplay_target: AtomicTrackId::disarmed(),
