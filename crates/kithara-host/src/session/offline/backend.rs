@@ -9,7 +9,11 @@ use firewheel::{
 };
 use kithara_platform::time::Duration;
 
-use super::{OfflineSessionError, task::CHANNELS};
+use super::{
+    super::protocol::{SessionError, SessionStream},
+    OfflineSessionError,
+    task::CHANNELS,
+};
 
 #[derive(Builder, Clone, Copy)]
 #[builder(state_mod(vis = "pub(crate)"))]
@@ -37,14 +41,16 @@ pub(super) struct OfflineStream {
     sample_rate: NonZeroU32,
 }
 
-impl OfflineStream {
-    /// Apply a queued graph schedule without rendering PCM or moving the
-    /// offline clock. This lets a synchronous deck stop observe processor
-    /// retirement while another deck's stream remains active.
-    pub(super) fn poll_control(&mut self) -> Result<(), OfflineSessionError> {
+/// The offline callback runs only when the Host renders a block, so graph
+/// retirement drives it here instead of waiting for a device.
+impl SessionStream for OfflineStream {
+    fn drive_control(&mut self) -> Result<(), SessionError> {
         self.render(0, 0, &mut [])
+            .map_err(|error| SessionError::Graph(error.to_string()))
     }
+}
 
+impl OfflineStream {
     pub(super) fn render(
         &mut self,
         position: u64,

@@ -22,6 +22,18 @@ use crate::{
 pub(crate) type StartStreamFn<T> =
     Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
 
+/// The stream a session runs its audio callback on. Graph retirement waits
+/// until the callback has accepted a new schedule. A device stream runs its
+/// own callbacks, so it needs no drive; a stream whose callback runs only
+/// when the Host asks overrides [`Self::drive_control`].
+pub(crate) trait SessionStream {
+    /// Run one control-only callback: apply queued graph messages without
+    /// rendering PCM or moving the stream clock.
+    fn drive_control(&mut self) -> Result<(), SessionError> {
+        Ok(())
+    }
+}
+
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),

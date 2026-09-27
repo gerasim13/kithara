@@ -22,7 +22,7 @@ use kithara_warp::BeatGridId;
 
 use super::super::{
     dispatch::run_cmd,
-    protocol::{Cmd, Reply, SessionDispatcher},
+    protocol::{Cmd, Reply, SessionDispatcher, SessionStream},
     state::{RootView, SessionState},
 };
 use crate::{PlayerMember, host::HeldPlayer};
@@ -36,6 +36,7 @@ pub(crate) struct GraphSession<T, S> {
 
 impl<T, S> GraphSession<T, S>
 where
+    T: SessionStream,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 =
@@ -96,6 +97,7 @@ impl<S> SessionDispatcher<S> for FixtureSession {
 #[cfg(test)]
 pub(crate) fn state<T, F>(start_stream_fn: F) -> SessionState<T, TestPools>
 where
+    T: SessionStream,
     F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 {
     state_for(

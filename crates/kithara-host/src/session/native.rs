@@ -20,7 +20,7 @@ use super::{
     dispatch::run_host_cmd,
     protocol::{
         Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
-        SessionDispatcher,
+        SessionDispatcher, SessionStream,
     },
     state::{RootView, SessionState},
 };
@@ -98,6 +98,7 @@ fn complete_shutdown<T, S>(
 
 fn idle_tick<T, S>(state: &mut SessionState<T, S>)
 where
+    T: SessionStream,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     if let HostReply::Play(Reply::Err(error)) = run_host_cmd(state, HostCmd::Play(Cmd::Tick))
@@ -116,6 +117,7 @@ fn engine_thread<T, S>(
     limiter: LimiterConfig,
     start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) where
+    T: SessionStream,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let mut state = SessionState::<T, S>::new(
@@ -161,6 +163,7 @@ fn spawn_session_client<T, S>(
     start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) -> Arc<SessionClient<S>>
 where
+    T: SessionStream,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg<S>>();
@@ -181,6 +184,9 @@ where
         cmd_tx: Mutex::new(cmd_tx),
     })
 }
+
+/// The audio device runs the cpal callback on its own thread.
+impl SessionStream for CpalStream {}
 
 fn start_stream_cpal(
     ctx: &mut FirewheelContext,

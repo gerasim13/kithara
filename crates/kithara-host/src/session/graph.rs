@@ -20,7 +20,7 @@ use tracing::{debug, warn};
 
 use super::{
     dispatch::{drain_after_quiescence, publish_root_transition, with_owner_cut},
-    protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
+    protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError, SessionStream},
     state::{
         Deck, GraphRegistry, MixTap, SessionState, SlotNodes, add_graph_node, ensure_ctx,
         prepare_eq_layout,
@@ -87,8 +87,9 @@ fn remove_node(fw_ctx: &mut FirewheelContext, id: NodeID) -> Result<(), SessionE
 /// Firewheel's successful update only queues a new schedule. The old player
 /// processor no longer owns its sole receipt producer after the callback has
 /// accepted that schedule and a later update has consumed `DropSchedule`.
-fn wait_for_slot_processors(
+fn wait_for_slot_processors<T: SessionStream>(
     fw_ctx: &mut FirewheelContext,
+    stream: Option<&mut T>,
     slots: &[SlotNodes],
 ) -> Result<(), SessionError> {
     if slots.iter().all(|slot| slot.sync_receipts.producer_gone()) {
@@ -101,7 +102,11 @@ fn wait_for_slot_processors(
     // callback and the following Host update to return the old processor.
     let deadline =
         WallInstant::now() + Duration::from_nanos(callback_nanos).max(Duration::from_millis(20));
+    let mut stream = stream;
     while slots.iter().any(|slot| !slot.sync_receipts.producer_gone()) {
+        if let Some(stream) = stream.as_deref_mut() {
+            stream.drive_control()?;
+        }
         fw_ctx.update().map_err(|error| {
             SessionError::Graph(format!("audio graph retirement update failed: {error:?}"))
         })?;
@@ -265,7 +270,7 @@ pub(super) mod lifecycle {
             .playback_buffers(render_quantum_frames, response_budget_frames)?;
         Ok(())
     }
-    pub(in crate::session) fn stop_player<T, S>(
+    pub(in crate::session) fn stop_player<T: SessionStream, S>(
         state: &mut SessionState<T, S>,
         player_id: PlayerId,
     ) -> Result<(), SessionError> {
@@ -273,13 +278,13 @@ pub(super) mod lifecycle {
         let idx = player_index(state, player_id)?;
         stop_player_idx(state, idx)
     }
-    fn stop_player_idx<T, S>(
+    fn stop_player_idx<T: SessionStream, S>(
         state: &mut SessionState<T, S>,
         idx: usize,
     ) -> Result<(), SessionError> {
         let had_slots = !deck_at_mut(&mut state.graph, idx)?.slots.is_empty();
         {
-            let (ctx, graph) = (&mut state.ctx, &mut state.graph);
+            let (ctx, stream, graph) = (&mut state.ctx, &mut state.stream, &mut state.graph);
             let player = deck_at_mut(graph, idx)?;
             if !player.started {
                 return Err(SessionError::NotRunning(player.player_id));
@@ -289,7 +294,7 @@ pub(super) mod lifecycle {
                 fw_ctx.update().map_err(|error| {
                     SessionError::Graph(format!("graph update after player stop failed: {error:?}"))
                 })?;
-                wait_for_slot_processors(fw_ctx, &player.slots)?;
+                wait_for_slot_processors(fw_ctx, stream.as_mut(), &player.slots)?;
             }
         }
         if state.ctx.is_none() && state.stream.is_some() {
@@ -472,14 +477,14 @@ pub(super) mod slots {
         let reply = Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot_id)));
         Ok(reply)
     }
-    pub(in crate::session) fn release_slot<T, S>(
+    pub(in crate::session) fn release_slot<T: SessionStream, S>(
         state: &mut SessionState<T, S>,
         player_id: PlayerId,
         slot: SlotId,
     ) -> Result<(), SessionError> {
         debug!(player_id, ?slot, "[KITHARA-ROUTE] releasing player slot");
         let idx = player_index(state, player_id)?;
-        let (ctx, graph) = (&mut state.ctx, &mut state.graph);
+        let (ctx, stream, graph) = (&mut state.ctx, &mut state.stream, &mut state.graph);
         let player = deck_at_mut(graph, idx)?;
         if !player.started {
             return Err(SessionError::NotRunning(player_id));
@@ -491,7 +496,7 @@ pub(super) mod slots {
             .ok_or(SessionError::SlotNotFound(slot))?;
         let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
         let last_slot = (player.slots.len() == 1).then_some(player.grid_id);
-        remove_slot_graph(fw_ctx, &player.slots[slot_index])?;
+        remove_slot_graph(fw_ctx, stream.as_mut(), &player.slots[slot_index])?;
         drain_after_quiescence(state, last_slot)?;
         let slot_nodes = deck_at_mut(&mut state.graph, idx)?.slots.remove(slot_index);
         debug!(
@@ -501,8 +506,9 @@ pub(super) mod slots {
         );
         Ok(())
     }
-    pub(super) fn remove_slot_graph(
+    pub(super) fn remove_slot_graph<T: SessionStream>(
         fw_ctx: &mut FirewheelContext,
+        stream: Option<&mut T>,
         slot: &SlotNodes,
     ) -> Result<(), SessionError> {
         remove_node(fw_ctx, slot.volume_node_id)?;
@@ -510,7 +516,7 @@ pub(super) mod slots {
         fw_ctx.update().map_err(|error| {
             SessionError::Graph(format!("graph update after slot release failed: {error:?}"))
         })?;
-        wait_for_slot_processors(fw_ctx, std::slice::from_ref(slot))
+        wait_for_slot_processors(fw_ctx, stream, std::slice::from_ref(slot))
     }
 }
 
@@ -754,6 +760,9 @@ mod tests {
     struct TestStream {
         stream: u64,
     }
+
+    /// The test drives the thread-local device processor itself.
+    impl SessionStream for TestStream {}
 
     type TestState = SessionState<TestStream, TestPools>;
 

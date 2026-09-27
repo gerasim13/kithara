@@ -26,7 +26,7 @@ use super::{
     graph::{controls, lifecycle, player_index, slots, tap},
     protocol::{
         Cmd, HostCmd, HostReply, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
-        SyncCmd,
+        SessionStream, SyncCmd,
     },
     state::{SessionState, register_player},
     transport,
@@ -39,6 +39,7 @@ use crate::{
 
 pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
+    T: SessionStream,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
@@ -629,6 +630,7 @@ fn topology_conflicts_with_graph<T, S>(
 
 pub(crate) fn run_cmd<T, S>(state: &mut SessionState<T, S>, cmd: Cmd<S>) -> Reply
 where
+    T: SessionStream,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
@@ -823,6 +825,7 @@ pub(super) fn drain_host_channel<T, S>(
     rx: &mpsc::Receiver<HostCmdMsg<S>>,
     mut observe: impl FnMut(&HostReply),
 ) where
+    T: SessionStream,
     S: HasPool<f32> + Send + Sync + 'static,
 {
     for msg in rx.try_iter() {
@@ -836,7 +839,7 @@ pub(super) fn drain_host_channel<T, S>(
     }
 }
 
-fn unregister_player<T, S>(
+fn unregister_player<T: SessionStream, S>(
     state: &mut SessionState<T, S>,
     player_id: PlayerId,
 ) -> Result<(), SessionError> {
@@ -1070,6 +1073,9 @@ mod tests {
     struct RouteLossStream {
         _processor: FirewheelProcessor,
     }
+
+    /// These tests never retire a processor that is still rendering.
+    impl SessionStream for RouteLossStream {}
 
     type TestState = SessionState<RouteLossStream, TestPools>;
 

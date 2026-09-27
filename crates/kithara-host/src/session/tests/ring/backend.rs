@@ -11,6 +11,7 @@ use firewheel::{
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::buffer::RingWriter;
+use crate::session::protocol::SessionStream;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -117,6 +118,9 @@ pub(crate) struct RingBackend {
     committed_frames: u64,
     block_frames_usize: usize,
 }
+
+/// A test renders the ring backend block by block itself.
+impl SessionStream for RingBackend {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
