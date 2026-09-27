@@ -16,3 +16,12 @@ pub(crate) const ENTRY_LEAD_FRAMES: i64 = 2_048;
 /// holds exactly one pair, so a pair is reservable only while no receipt of
 /// the slot waits for the owner.
 pub(crate) const RECEIPT_PAIR: usize = 2;
+
+/// Tickets one deck holds at once: the ring stays occupied until the
+/// callback claims or returns its ticket, so a full ring means the deck is
+/// still busy with an activation.
+pub(crate) const TICKET_RING: usize = 1;
+
+/// Returns one deck holds for the control thread: a claim needs the whole
+/// ring free, so the old reader's tail and one returned track always fit.
+pub(crate) const RETURN_RING: usize = 2;

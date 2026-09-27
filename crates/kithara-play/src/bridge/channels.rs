@@ -9,7 +9,9 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_sync::{LoadGeneration, SyncGateBinding, SyncReceiptTx};
+use kithara_sync::{
+    ActivationAudio, ActivationControl, LoadGeneration, SyncGateBinding, SyncReceiptTx,
+};
 use kithara_warp::{RenderReader, RenderSnapshot, WarpMapRevision};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -19,10 +21,7 @@ use smallvec::SmallVec;
 
 use super::PlaybackShared;
 use crate::{
-    bridge::{
-        PlayerCmd, PlayerNotification, SharedEq,
-        sync::{SyncReturn, SyncTicket},
-    },
+    bridge::{PlayerCmd, PlayerNotification, SharedEq, sync::PlayerSync},
     consts,
     rt::track::PlayerTrack,
 };
@@ -42,8 +41,7 @@ pub struct NodeInputs {
     /// is stamped with.
     #[field(with)]
     pub(crate) sync_gate: Option<SyncGateBinding>,
-    pub(crate) sync_rx: HeapCons<SyncTicket>,
-    pub(crate) sync_return_tx: HeapProd<SyncReturn>,
+    pub(crate) sync: ActivationAudio<PlayerSync>,
 }
 
 /// Producer for interleaved stereo mix samples and their drop count.
@@ -99,8 +97,7 @@ pub struct SlotControl {
     pub trash_rx: HeapCons<PlayerTrack>,
     pub cmd_tx: HeapProd<PlayerCmd>,
     pub eq: SharedEq,
-    pub(crate) sync_tx: HeapProd<SyncTicket>,
-    pub(crate) sync_return_rx: HeapCons<SyncReturn>,
+    pub(crate) sync: ActivationControl<PlayerSync>,
     render: RenderBindings,
     seek: SeekBindings,
 }
@@ -230,8 +227,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
     let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(COMMAND_CAPACITY).split();
     let (notif_tx, notif_rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_CAPACITY).split();
     let (trash_tx, trash_rx) = HeapRb::<PlayerTrack>::new(TRASH_CAPACITY).split();
-    let (sync_tx, sync_rx) = HeapRb::<SyncTicket>::new(1).split();
-    let (sync_return_tx, sync_return_rx) = HeapRb::<SyncReturn>::new(2).split();
+    let (sync_control, sync_audio) = kithara_sync::activation_channels::<PlayerSync>();
     let playback = Arc::new(PlaybackShared::default());
 
     let inputs = NodeInputs {
@@ -240,8 +236,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         trash_tx,
         sync_receipts: None,
         sync_gate: None,
-        sync_rx,
-        sync_return_tx,
+        sync: sync_audio,
         playback: Arc::clone(&playback),
     };
     let control = SlotControl {
@@ -250,8 +245,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         trash_rx,
         cmd_tx,
         eq,
-        sync_tx,
-        sync_return_rx,
+        sync: sync_control,
         seek: SeekBindings::default(),
         render: RenderBindings::default(),
     };

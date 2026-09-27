@@ -85,13 +85,13 @@ impl<I: Copy, L> SyncTicket<I, L> {
 
     /// The permit the owner minted for this installation.
     #[must_use]
-    pub const fn permit(&self) -> ArmPermit {
+    pub(crate) const fn permit(&self) -> ArmPermit {
         self.permit
     }
 
     /// The gate the activation is claimed through.
     #[must_use]
-    pub const fn gate(&self) -> &SyncGateBinding {
+    pub(crate) const fn gate(&self) -> &SyncGateBinding {
         &self.gate
     }
 }
@@ -100,5 +100,38 @@ impl<I: Copy, L> SyncTicket<I, L> {
 impl<I, L> From<SyncTicket<I, L>> for (L, PreparedFirst) {
     fn from(ticket: SyncTicket<I, L>) -> Self {
         (ticket.lane, ticket.first)
+    }
+}
+
+/// What of an unclaimed ticket the callback hands back: the item it was
+/// loaded for, and the lane and gate the control thread releases.
+pub struct ReturnedTicket<I, L> {
+    item: I,
+    lane: L,
+    _gate: SyncGateBinding,
+}
+
+impl<I: Copy, L> ReturnedTicket<I, L> {
+    /// The Player's item the lane was loaded for.
+    #[must_use]
+    pub const fn item(&self) -> I {
+        self.item
+    }
+
+    /// The unclaimed lane.
+    #[must_use]
+    pub const fn lane(&self) -> &L {
+        &self.lane
+    }
+}
+
+/// Keep what needs releasing off the audio thread; the rest is plain data.
+impl<I: Copy, L> From<SyncTicket<I, L>> for ReturnedTicket<I, L> {
+    fn from(ticket: SyncTicket<I, L>) -> Self {
+        Self {
+            item: ticket.item(),
+            lane: ticket.lane,
+            _gate: ticket.gate,
+        }
     }
 }

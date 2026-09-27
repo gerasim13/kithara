@@ -12,7 +12,7 @@ use kithara_signal::FaderValue;
 use kithara_sync::{LoadGeneration, SyncExecutionReject};
 use kithara_warp::RenderSnapshot;
 use portable_atomic::AtomicF32;
-use ringbuf::traits::{Consumer, Observer, Producer};
+use ringbuf::traits::Consumer;
 use tracing::{debug, info};
 
 use super::{config::EngineConfig, slots::SlotTable};
@@ -176,7 +176,7 @@ impl<S> EngineImpl<S> {
                 handle.unbind_render(track.item_id(), &render);
             }
         }
-        while let Some(returned) = handle.sync_return_rx.try_pop() {
+        while let Some(returned) = handle.sync.next_return() {
             match returned {
                 SyncReturn::Ticket(ticket) => {
                     if let Some(seek) = ticket.lane().seek_handle() {
@@ -224,9 +224,9 @@ impl<S> EngineImpl<S> {
             {
                 return Err(SyncExecutionReject::Cancelled);
             }
-            if entry.control.sync_tx.vacant_len() == 0 {
+            let Some(room) = entry.control.sync.room() else {
                 return Err(SyncExecutionReject::Capacity);
-            }
+            };
             let Some(reader) = ticket.lane().render_reader() else {
                 return Err(SyncExecutionReject::Geometry);
             };
@@ -234,9 +234,7 @@ impl<S> EngineImpl<S> {
             let item_id = ticket.item();
             let load = ticket.load();
             let map = ticket.first().head().activation().revision();
-            if entry.control.sync_tx.try_push(ticket).is_err() {
-                unreachable!("sole slot sync producer retained its vacancy");
-            }
+            room.send(ticket);
             entry
                 .control
                 .bind_sync_resource(item_id, load, map, seek, reader);

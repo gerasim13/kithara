@@ -8,25 +8,22 @@ use kithara_dsp::{
 };
 use kithara_events::TrackId;
 use kithara_sync::{
-    ClaimError, PermitState, PreparedFirst, SyncApplied, SyncExecutionReject, SyncReceiptTx,
+    ActivationDeck, ActivationResident, LoadGeneration, PreparedFirst, SyncAttempt,
 };
-use kithara_warp::{PresentationFrontier, RenderContext};
+use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
-use ringbuf::{
-    HeapCons, HeapProd,
-    traits::{Consumer, Observer, Producer},
-};
+use ringbuf::HeapProd;
 use smallvec::SmallVec;
 use tracing::warn;
 
 use super::{
     processor::{PlayerNodeProcessor, StreamShape},
-    track::{PlayerResource, RtSink, SyncFadeTail, TrackReadOutcome},
+    track::{PlayerResource, PlayerTrack, RtSink, SyncFadeTail, TrackReadOutcome},
 };
 use crate::{
     bridge::{
         PlaybackShared, PlayerNotification, RtMetrics, TrackState,
-        sync::{SyncReturn, SyncTicket},
+        sync::{PlaySync, PlayerSync},
     },
     consts,
     rt::{TrackSlot, TrackSlots},
@@ -67,29 +64,151 @@ pub(crate) struct RenderTargets<'a> {
     pub(crate) tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     /// Slot seek epoch published when this block started rendering.
     pub(crate) seek_epoch: u64,
-    pub(crate) sync: SyncRender<'a>,
-}
-
-pub(crate) struct SyncRender<'a> {
-    pub(crate) pending: &'a mut HeapCons<SyncTicket>,
-    pub(crate) tail: &'a mut Option<SyncFadeTail>,
-    pub(crate) receipts: &'a mut Option<SyncReceiptTx>,
-    pub(crate) returns: &'a mut HeapProd<SyncReturn>,
+    pub(crate) sync: &'a mut PlaySync,
     pub(crate) playback: &'a PlaybackShared,
 }
 
-enum SyncAttempt {
-    None,
-    Claimed {
-        item_id: TrackId,
-        outcome: Option<TrackReadOutcome>,
-        handover_offset: Option<usize>,
-    },
-    PrefixRendered {
-        item_id: TrackId,
-        offset: usize,
-        outcome: Option<TrackReadOutcome>,
-    },
+type BlockAttempt = SyncAttempt<TrackId, TrackReadOutcome>;
+
+/// One block's tracks and buffers, as the sync callback renders them.
+struct PlayDeck<'a, 'b> {
+    tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+    read_bufs: &'a mut [&'b mut [f32]],
+    bus_bufs: &'a mut [&'b mut [f32]],
+    sink: &'a mut RtSink<'b>,
+    playback: &'a PlaybackShared,
+}
+
+/// The resident track one activation attempt renders.
+struct PlayResident<'r, 'b> {
+    track: &'r mut PlayerTrack,
+    read_bufs: &'r mut [&'b mut [f32]],
+    bus_bufs: &'r mut [&'b mut [f32]],
+    sink: &'r mut RtSink<'b>,
+    context: &'r RenderContext,
+    playback: &'r PlaybackShared,
+}
+
+impl<'b> ActivationDeck<PlayerSync> for PlayDeck<'_, 'b> {
+    type Outcome = TrackReadOutcome;
+    type Resident<'r>
+        = PlayResident<'r, 'b>
+    where
+        Self: 'r;
+
+    fn resident<'r>(
+        &'r mut self,
+        item: TrackId,
+        context: &'r RenderContext,
+    ) -> Option<PlayResident<'r, 'b>> {
+        Some(PlayResident {
+            track: self.tracks.get_mut(item)?,
+            read_bufs: self.read_bufs,
+            bus_bufs: self.bus_bufs,
+            sink: self.sink,
+            context,
+            playback: self.playback,
+        })
+    }
+
+    fn render_tail(
+        &mut self,
+        tail: &mut SyncFadeTail,
+        context: &RenderContext,
+        range: Range<usize>,
+    ) {
+        tail.render(
+            context,
+            self.read_bufs,
+            self.bus_bufs,
+            range,
+            self.sink.metrics(),
+        );
+    }
+}
+
+impl ActivationResident<PlayerSync> for PlayResident<'_, '_> {
+    type Outcome = TrackReadOutcome;
+
+    fn serves(&self, load: LoadGeneration, output_rate: NonZeroU32) -> bool {
+        self.track.load() == Some(load)
+            && self.track.state().is_leading()
+            && self.track.output_sample_rate() == output_rate.get()
+    }
+
+    fn render(&mut self, range: Range<usize>) -> TrackReadOutcome {
+        self.track.render(
+            Some(self.context),
+            self.read_bufs,
+            self.bus_bufs,
+            range,
+            self.sink,
+        )
+    }
+
+    fn leads_after(&self, prefix: Option<&TrackReadOutcome>) -> bool {
+        self.track.state().is_leading()
+            && prefix.is_none_or(|outcome| matches!(outcome, TrackReadOutcome::Full { .. }))
+    }
+
+    /// The selected map is stored with Release after the first frame renders
+    /// and before its receipts are written, so it is visible whenever the
+    /// Host consumes Presented.
+    fn activate(
+        &mut self,
+        lane: Box<PlayerResource>,
+        first: &PreparedFirst,
+        first_context: &RenderContext,
+        at: usize,
+    ) -> SyncFadeTail {
+        let map = first.head().activation().revision();
+        let old = self.track.activate_sync(
+            lane,
+            first.source(),
+            map,
+            first.head().output_rate(),
+            consts::SYNC_FADE,
+        );
+        self.track.render_first(
+            first,
+            first_context,
+            self.read_bufs,
+            self.bus_bufs,
+            at,
+            self.sink,
+        );
+        self.playback
+            .active_sync_map
+            .store(u64::from(map), Ordering::Release);
+        old
+    }
+
+    fn render_tail(&mut self, tail: &mut SyncFadeTail, range: Range<usize>) {
+        tail.render(
+            self.context,
+            self.read_bufs,
+            self.bus_bufs,
+            range,
+            self.sink.metrics(),
+        );
+    }
+
+    fn finish(&mut self, suffix: Range<usize>) -> (TrackReadOutcome, Option<usize>) {
+        if suffix.is_empty() {
+            return (
+                TrackReadOutcome::Full {
+                    position: self.track.position(),
+                    frames: suffix.start,
+                    duration: self.track.duration(),
+                    frames_until_eof: self.track.frames_until_eof(),
+                },
+                None,
+            );
+        }
+        let base = suffix.start;
+        let outcome = self.render(suffix);
+        extend_outcome(base, outcome)
+    }
 }
 
 pub(crate) struct RenderPass {
@@ -177,38 +296,25 @@ impl RenderPass {
         }
         let tracks = targets.tracks;
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
-        let mut sync = targets.sync;
         // Keep the ordinary leading traversal from the start of the block:
         // the old prefix can reach EOF before the attempted physical switch.
         let order = TrackOrder::capture(tracks);
-        return_settled_tail(&mut sync);
-        let mut attempt = if is_playing {
-            render_sync_activation(
-                context,
-                frames,
-                tracks,
-                &mut sync,
-                &mut read_bufs,
-                &mut bus_bufs,
-                &mut sink,
-            )
-        } else {
-            SyncAttempt::None
-        };
-        if matches!(&attempt, SyncAttempt::Claimed { .. }) {
-            playback_started = true;
-        } else if let (Some(context), Some(tail)) = (context, sync.tail.as_mut()) {
-            if !tail.settled() {
-                tail.render(
-                    context,
-                    &mut read_bufs,
-                    &mut bus_bufs,
-                    0..frames,
-                    targets.metrics,
-                );
+        let mut attempt = {
+            let mut deck = PlayDeck {
+                tracks: &mut *tracks,
+                read_bufs: &mut read_bufs,
+                bus_bufs: &mut bus_bufs,
+                sink: &mut sink,
+                playback: targets.playback,
+            };
+            if is_playing {
+                targets.sync.attempt(&mut deck, context, frames)
+            } else {
+                targets.sync.fade(&mut deck, context, frames);
+                SyncAttempt::None
             }
-            return_settled_tail(&mut sync);
-        }
+        };
+        playback_started |= matches!(&attempt, SyncAttempt::Claimed { .. });
         let (rendered, leading_outcome_pos_dur) = render_active_tracks(
             context,
             tracks,
@@ -258,7 +364,7 @@ fn render_active_tracks(
     context: Option<&RenderContext>,
     tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     order: &TrackOrder,
-    attempt: &mut SyncAttempt,
+    attempt: &mut BlockAttempt,
     read_bufs: &mut [&mut [f32]],
     bus_bufs: &mut [&mut [f32]],
     sink: &mut RtSink<'_>,
@@ -281,22 +387,16 @@ fn render_active_tracks(
             let Some(track) = tracks.at_mut(*track_handle) else {
                 continue;
             };
-            let result = match attempt {
-                SyncAttempt::Claimed {
-                    item_id,
-                    outcome,
-                    handover_offset,
-                } if *item_id == track.item_id() => {
-                    let Some(outcome) = outcome.take() else {
-                        unreachable!("claimed track retains its one render outcome");
-                    };
-                    (outcome, *handover_offset)
-                }
-                SyncAttempt::PrefixRendered {
-                    item_id,
-                    offset,
-                    outcome,
-                } if *item_id == track.item_id() => {
+            let result = match (attempt.take_claimed(track.item_id()), &mut *attempt) {
+                (Some(claimed), _) => claimed,
+                (
+                    None,
+                    SyncAttempt::PrefixRendered {
+                        item_id,
+                        offset,
+                        outcome,
+                    },
+                ) if *item_id == track.item_id() => {
                     let prefix = outcome.take();
                     match prefix {
                         Some(TrackReadOutcome::Full { .. }) => {
@@ -384,290 +484,6 @@ fn render_active_tracks(
     (playback_started, leading_outcome_pos_dur)
 }
 
-fn return_settled_tail(sync: &mut SyncRender<'_>) {
-    if !sync.tail.as_ref().is_some_and(SyncFadeTail::settled) || sync.returns.vacant_len() == 0 {
-        return;
-    }
-    let Some(tail) = sync.tail.take() else {
-        return;
-    };
-    if sync.returns.try_push(SyncReturn::Tail(tail)).is_err() {
-        unreachable!("sole sync return producer retained its vacancy");
-    }
-}
-
-fn reject_sync(sync: &mut SyncRender<'_>, reason: SyncExecutionReject) {
-    if sync.returns.vacant_len() == 0 {
-        return;
-    }
-    let Some(ticket) = sync.pending.try_peek() else {
-        return;
-    };
-    let Some(receipts) = sync.receipts.as_mut() else {
-        return;
-    };
-    if receipts
-        .publish_rejected(ticket.permit().stamp(), reason)
-        .is_err()
-    {
-        return;
-    }
-    let Some(ticket) = sync.pending.try_pop() else {
-        return;
-    };
-    if sync.returns.try_push(SyncReturn::Ticket(ticket)).is_err() {
-        unreachable!("sole sync return producer retained its vacancy");
-    }
-}
-
-fn retire_withdrawn_sync(sync: &mut SyncRender<'_>) {
-    if sync.returns.vacant_len() == 0 {
-        return;
-    }
-    let Some(ticket) = sync.pending.try_pop() else {
-        return;
-    };
-    if sync.returns.try_push(SyncReturn::Ticket(ticket)).is_err() {
-        unreachable!("sole sync return producer retained its vacancy");
-    }
-}
-
-fn claim_rejection(error: ClaimError) -> SyncExecutionReject {
-    match error {
-        ClaimError::Busy => SyncExecutionReject::Late,
-        ClaimError::WrongMember => SyncExecutionReject::Geometry,
-        ClaimError::Closed
-        | ClaimError::CellRetired
-        | ClaimError::StalePermit
-        | ClaimError::SourceParked => SyncExecutionReject::Cancelled,
-    }
-}
-
-fn render_sync_activation(
-    context: Option<&RenderContext>,
-    frames: usize,
-    tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
-    sync: &mut SyncRender<'_>,
-    read_bufs: &mut [&mut [f32]],
-    bus_bufs: &mut [&mut [f32]],
-    sink: &mut RtSink<'_>,
-) -> SyncAttempt {
-    let Some(ticket) = sync.pending.try_peek() else {
-        return SyncAttempt::None;
-    };
-    // A parked source waits before Late is judged: the owner withdraws the
-    // ticket after the change, or the change aborts and the ticket stays.
-    match ticket.gate().permit_state(&ticket.permit()) {
-        PermitState::Current => {}
-        PermitState::Parked => return SyncAttempt::None,
-        PermitState::Withdrawn => {
-            retire_withdrawn_sync(sync);
-            return SyncAttempt::None;
-        }
-    }
-    let Some(context) = context else {
-        reject_sync(sync, SyncExecutionReject::Geometry);
-        return SyncAttempt::None;
-    };
-    let output = context.output();
-    let start = i64::from(output.output_frames().start);
-    let end = i64::from(output.output_frames().end);
-    let head = ticket.first().head();
-    if output.session_epoch() != head.epoch() {
-        reject_sync(sync, SyncExecutionReject::Cancelled);
-        return SyncAttempt::None;
-    }
-    if ticket
-        .permit()
-        .stamp()
-        .output_transport()
-        .is_some_and(|revision| output.transport_revision() != Some(revision))
-    {
-        return SyncAttempt::None;
-    }
-    let activation = i64::from(head.activation().output());
-    if activation >= end {
-        return SyncAttempt::None;
-    }
-    if activation < start {
-        reject_sync(sync, SyncExecutionReject::Late);
-        return SyncAttempt::None;
-    }
-    let Ok(offset) = usize::try_from(activation - start) else {
-        reject_sync(sync, SyncExecutionReject::Geometry);
-        return SyncAttempt::None;
-    };
-    if offset >= frames || sync.tail.is_some() || sync.returns.vacant_len() < 2 {
-        reject_sync(sync, SyncExecutionReject::Capacity);
-        return SyncAttempt::None;
-    }
-    if output.sample_rate() != head.output_rate()
-        || !tracks.get(ticket.item()).is_some_and(|track| {
-            track.load() == Some(ticket.load())
-                && track.state().is_leading()
-                && track.output_sample_rate() == head.output_rate().get()
-        })
-    {
-        reject_sync(sync, SyncExecutionReject::Geometry);
-        return SyncAttempt::None;
-    }
-    claim_and_render_sync(
-        context,
-        offset..frames,
-        tracks,
-        sync,
-        read_bufs,
-        bus_bufs,
-        sink,
-    )
-}
-
-/// Reserve both receipts and the old prefix before claiming the first frame.
-fn claim_and_render_sync(
-    context: &RenderContext,
-    window: Range<usize>,
-    tracks: &mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
-    sync: &mut SyncRender<'_>,
-    read_bufs: &mut [&mut [f32]],
-    bus_bufs: &mut [&mut [f32]],
-    sink: &mut RtSink<'_>,
-) -> SyncAttempt {
-    let offset = window.start;
-    let frames = window.end;
-    let Some(first_context) = context.for_output_range(offset..offset + 1) else {
-        reject_sync(sync, SyncExecutionReject::Geometry);
-        return SyncAttempt::None;
-    };
-    if context.for_output_range(offset..frames).is_none() {
-        reject_sync(sync, SyncExecutionReject::Geometry);
-        return SyncAttempt::None;
-    }
-    let Some(ticket) = sync.pending.try_peek() else {
-        return SyncAttempt::None;
-    };
-    let stamp = ticket.permit().stamp();
-    let first = ticket.first();
-    let map = first.head().activation().revision();
-    let applied = SyncApplied::builder()
-        .stamp(stamp)
-        .frontier(
-            PresentationFrontier::builder()
-                .source(first.source().end())
-                .output(first_context.output().output_frames().end)
-                .build()
-                .with_warp_map(Some(map)),
-        )
-        .build();
-    let Some(receipts) = sync.receipts.as_mut() else {
-        return SyncAttempt::None;
-    };
-    let Some(reservation) = receipts.reserve_pair(applied) else {
-        return SyncAttempt::None;
-    };
-    let gate = ticket.gate().clone();
-    let permit = ticket.permit();
-    let item_id = ticket.item();
-
-    // The ordinary resident serves the prefix before the claim. A losing
-    // claim resumes that resident at offset without replaying prefix PCM.
-    let prefix = if offset > 0 {
-        let Some(track) = tracks.get_mut(item_id) else {
-            unreachable!("the preflighted resident disappeared during one callback");
-        };
-        Some(track.render(Some(context), read_bufs, bus_bufs, 0..offset, sink))
-    } else {
-        None
-    };
-    if !tracks
-        .get(item_id)
-        .is_some_and(|track| track.state().is_leading())
-        || prefix
-            .as_ref()
-            .is_some_and(|outcome| !matches!(outcome, TrackReadOutcome::Full { .. }))
-    {
-        drop(reservation);
-        reject_sync(sync, SyncExecutionReject::Late);
-        return SyncAttempt::PrefixRendered {
-            item_id,
-            offset,
-            outcome: prefix,
-        };
-    }
-    let claim = match gate.arbiter().try_claim(&permit, gate.cell(), reservation) {
-        Ok(claim) => claim,
-        Err(ClaimError::SourceParked) => {
-            return SyncAttempt::PrefixRendered {
-                item_id,
-                offset,
-                outcome: prefix,
-            };
-        }
-        Err(ClaimError::StalePermit | ClaimError::CellRetired) => {
-            retire_withdrawn_sync(sync);
-            return SyncAttempt::PrefixRendered {
-                item_id,
-                offset,
-                outcome: prefix,
-            };
-        }
-        Err(error) => {
-            reject_sync(sync, claim_rejection(error));
-            return SyncAttempt::PrefixRendered {
-                item_id,
-                offset,
-                outcome: prefix,
-            };
-        }
-    };
-
-    // The sole consumer keeps this one-ticket ring occupied until the claim.
-    let Some(ticket) = sync.pending.try_pop() else {
-        unreachable!("the claimed sync ticket was removed without a consumer");
-    };
-    let (resource, first): (Box<PlayerResource>, PreparedFirst) = ticket.into();
-    let Some(track) = tracks.get_mut(item_id) else {
-        unreachable!("the preflighted resident disappeared during one callback");
-    };
-    let mut old = track.activate_sync(
-        resource,
-        first.source(),
-        map,
-        first.head().output_rate(),
-        consts::SYNC_FADE,
-    );
-    track.render_first(&first, &first_context, read_bufs, bus_bufs, offset, sink);
-    // Release-store after first PCM and before receipts makes the selected
-    // binding visible whenever Host consumes Presented.
-    sync.playback
-        .active_sync_map
-        .store(u64::from(map), Ordering::Release);
-    claim.finish();
-
-    // Tail I/O and the remaining new-lane read happen after claim release.
-    old.render(context, read_bufs, bus_bufs, offset..frames, sink.metrics());
-    let (outcome, handover_offset) = if offset + 1 < frames {
-        let suffix = track.render(Some(context), read_bufs, bus_bufs, offset + 1..frames, sink);
-        extend_outcome(offset + 1, suffix)
-    } else {
-        (
-            TrackReadOutcome::Full {
-                position: track.position(),
-                frames: offset + 1,
-                duration: track.duration(),
-                frames_until_eof: track.frames_until_eof(),
-            },
-            None,
-        )
-    };
-    *sync.tail = Some(old);
-    return_settled_tail(sync);
-    SyncAttempt::Claimed {
-        item_id,
-        outcome: Some(outcome),
-        handover_offset,
-    }
-}
-
 /// Account for the PCM already rendered before a suffix read, so the normal
 /// leading-track handover code sees one block-relative outcome.
 fn extend_outcome(base: usize, suffix: TrackReadOutcome) -> (TrackReadOutcome, Option<usize>) {
@@ -744,127 +560,22 @@ pub(super) const fn eviction_priority(state: TrackState) -> u8 {
 
 #[cfg(test)]
 mod sync_tests {
-    use std::{
-        num::{NonZeroU32, NonZeroUsize},
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::{num::NonZeroU32, sync::atomic::Ordering};
 
-    use kithara_audio::{
-        ReadOutcome as AudioReadOutcome,
-        mock::{AudioControlMock, AudioReadMock, AudioSessionMock},
-    };
-    use kithara_decode::DecodeError;
-    use kithara_events::EventBus;
-    use kithara_platform::{sync::Arc, time::Duration};
-    use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_platform::sync::Arc;
+    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
     use kithara_sync::{
-        LoadGeneration, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, sync_receipts,
+        PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, activation_channels, sync_receipts,
     };
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGridId, RenderContext};
-    use ringbuf::{
-        HeapRb,
-        traits::{Producer, Split},
-    };
-    use unimock::{MockFn, Unimock, matching};
+    use kithara_warp::BeatGridId;
+    use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
     use crate::{
         bridge::PlaybackShared,
-        resource::Resource,
-        rt::sync_owner_fixture::{prepared_entry, ticket},
-        test_pools::pools,
+        rt::sync_owner_fixture::{ReaderMode, prepared_entry, resource, ticket},
     };
-
-    #[derive(Clone, Copy, Debug)]
-    enum ReaderMode {
-        Silence,
-        Eof,
-        Failure,
-        ShortThenEof,
-    }
-
-    fn resource(
-        mode: ReaderMode,
-        rate: NonZeroU32,
-        read_required: bool,
-        track: bool,
-        on_read: Option<Arc<dyn Fn() + Send + Sync>>,
-    ) -> Box<super::super::track::PlayerResource> {
-        let calls = AtomicUsize::new(0);
-        let event_bus = AudioSessionMock::event_bus
-            .each_call(matching!())
-            .answers(&|mock| mock.make_ref(EventBus::new(1)));
-        let spec = AudioReadMock::spec
-            .each_call(matching!())
-            .returns(AudioSpec::new(2, rate));
-        let preload = AudioControlMock::preload
-            .next_call(matching!())
-            .returns(Ok(()));
-        let reader = if read_required {
-            let read = AudioReadMock::read_planar
-                .each_call(matching!())
-                .answers_arc(Arc::new(move |_, output| {
-                    if let Some(on_read) = &on_read {
-                        on_read();
-                    }
-                    match mode {
-                        ReaderMode::Silence => {
-                            let frames = output[0].len();
-                            for channel in output.iter_mut() {
-                                channel.fill(0.0);
-                            }
-                            Ok(AudioReadOutcome::Frames {
-                                count: NonZeroUsize::new(frames).expect("nonempty callback read"),
-                                position: Duration::ZERO,
-                                source_span: None,
-                            })
-                        }
-                        ReaderMode::Eof => Ok(AudioReadOutcome::Eof {
-                            position: Duration::ZERO,
-                        }),
-                        ReaderMode::Failure => Err(DecodeError::InvalidData {
-                            detail: "fixture fault",
-                        }),
-                        ReaderMode::ShortThenEof if calls.fetch_add(1, Ordering::Relaxed) == 0 => {
-                            let count = output[0].len().min(16);
-                            for channel in output.iter_mut() {
-                                channel[..count].fill(0.5);
-                            }
-                            Ok(AudioReadOutcome::Frames {
-                                count: NonZeroUsize::new(count).expect("fixture read has space"),
-                                position: Duration::ZERO,
-                                source_span: None,
-                            })
-                        }
-                        ReaderMode::ShortThenEof => Ok(AudioReadOutcome::Eof {
-                            position: Duration::ZERO,
-                        }),
-                    }
-                }));
-            if track {
-                let duration = AudioSessionMock::duration
-                    .each_call(matching!())
-                    .returns(Some(Duration::from_secs(1)));
-                Unimock::new((event_bus, duration, spec, preload, read))
-            } else {
-                Unimock::new((event_bus, spec, preload, read))
-            }
-        } else if track {
-            let duration = AudioSessionMock::duration
-                .each_call(matching!())
-                .returns(Some(Duration::from_secs(1)));
-            Unimock::new((event_bus, duration, spec, preload))
-        } else {
-            Unimock::new((event_bus, spec, preload))
-        };
-        let src: Arc<str> = Arc::from("fixture");
-        let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
-        Box::new(
-            super::super::track::PlayerResource::new(resource, src, &pools())
-                .expect("fixture resource fits pool"),
-        )
-    }
 
     fn activation_with_output(
         old_mode: ReaderMode,
@@ -873,7 +584,7 @@ mod sync_tests {
         actual_revision: Option<TransportRevision>,
         output_start: i64,
         revoke_during_prefix: bool,
-    ) -> (SyncAttempt, [f32; 128], Vec<SyncReceipt>, bool) {
+    ) -> (BlockAttempt, [f32; 128], Vec<SyncReceipt>, bool) {
         let rate = NonZeroU32::new(48_000).expect("fixture rate");
         let can_reach_activation = output_start < 32
             && dependency.is_none_or(|revision| actual_revision == Some(revision));
@@ -925,7 +636,7 @@ mod sync_tests {
             head,
             gate,
         );
-        let mut track = super::super::track::PlayerTrack::builder()
+        let mut track = PlayerTrack::builder()
             .sample_rate(rate)
             .item_id(item_id)
             .load(load)
@@ -933,13 +644,14 @@ mod sync_tests {
         track.play();
         let mut tracks = TrackSlots::<{ PlayerNodeProcessor::MAX_TRACKS }>::default();
         assert!(tracks.insert(track).is_none());
-        let (mut ticket_tx, mut pending) = HeapRb::<SyncTicket>::new(1).split();
-        assert!(ticket_tx.try_push(ticket).is_ok());
+        let (mut control, audio) = activation_channels::<PlayerSync>();
+        control
+            .room()
+            .expect("an empty deck takes a ticket")
+            .send(ticket);
         let (mut notification_tx, _notification_rx) = HeapRb::<PlayerNotification>::new(16).split();
-        let (mut returns, _return_rx) = HeapRb::<SyncReturn>::new(2).split();
         let (receipt_tx, mut receipt_rx) = sync_receipts();
-        let mut receipts = Some(receipt_tx);
-        let mut tail = None;
+        let mut sync = PlaySync::new(audio, Some(receipt_tx), None);
         let playback = PlaybackShared::default();
         let metrics = RtMetrics::default();
         let output = OutputContext::new(
@@ -957,21 +669,14 @@ mod sync_tests {
         let mut read = [&mut read_left[..], &mut read_right[..]];
         let mut bus = [&mut bus_left[..], &mut bus_right[..]];
         let mut sink = RtSink::new(&mut notification_tx, &metrics, 0);
-        let attempt = render_sync_activation(
-            Some(&context),
-            128,
-            &mut tracks,
-            &mut SyncRender {
-                pending: &mut pending,
-                tail: &mut tail,
-                receipts: &mut receipts,
-                returns: &mut returns,
-                playback: &playback,
-            },
-            &mut read,
-            &mut bus,
-            &mut sink,
-        );
+        let mut deck = PlayDeck {
+            tracks: &mut tracks,
+            read_bufs: &mut read,
+            bus_bufs: &mut bus,
+            sink: &mut sink,
+            playback: &playback,
+        };
+        let attempt = sync.attempt(&mut deck, Some(&context), 128);
         if matches!(&attempt, SyncAttempt::Claimed { .. }) {
             assert_eq!(
                 playback.active_sync_map.load(Ordering::Acquire),
@@ -982,14 +687,14 @@ mod sync_tests {
         while let Some(receipt) = receipt_rx.next_receipt() {
             delivered.push(receipt);
         }
-        let pending_remains = pending.try_peek().is_some();
+        let pending_remains = control.room().is_none();
         (attempt, bus_left, delivered, pending_remains)
     }
 
     fn activation(
         old_mode: ReaderMode,
         new_mode: ReaderMode,
-    ) -> (SyncAttempt, [f32; 128], Vec<SyncReceipt>) {
+    ) -> (BlockAttempt, [f32; 128], Vec<SyncReceipt>) {
         let (attempt, pcm, receipts, _) = activation_with_output(
             old_mode,
             new_mode,
@@ -1071,7 +776,7 @@ mod sync_tests {
     fn suffix_decode_failure_keeps_failure_position_and_exact_receipt_pair() {
         let (attempt, pcm, receipts) = activation(ReaderMode::Silence, ReaderMode::Failure);
         let SyncAttempt::Claimed {
-            outcome: Some(outcome),
+            outcome,
             handover_offset,
             ..
         } = attempt
@@ -1120,7 +825,7 @@ mod sync_tests {
     fn suffix_eof_keeps_handover_after_consumed_first_frame() {
         let (attempt, _, receipts) = activation(ReaderMode::Silence, ReaderMode::Eof);
         let SyncAttempt::Claimed {
-            outcome: Some(outcome),
+            outcome,
             handover_offset,
             ..
         } = attempt

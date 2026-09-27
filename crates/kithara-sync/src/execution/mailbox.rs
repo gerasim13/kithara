@@ -18,7 +18,7 @@ pub struct SyncReceiptInbox {
 /// Two slots held for one activation until its first PCM span is consumed.
 /// Only the audio claim it is handed to can write them.
 #[must_use]
-pub struct ReceiptReservation<'a> {
+pub(crate) struct ReceiptReservation<'a> {
     tx: &'a mut SyncReceiptTx,
     pair: [SyncReceipt; consts::RECEIPT_PAIR],
 }
@@ -34,7 +34,7 @@ impl SyncReceiptTx {
     /// Reserve `Armed` and `Presented` of `applied` before the audio gate can
     /// be claimed, or `None` while a receipt of this slot is still waiting.
     #[inline]
-    pub fn reserve_pair(&mut self, applied: SyncApplied) -> Option<ReceiptReservation<'_>> {
+    pub(crate) fn reserve_pair(&mut self, applied: SyncApplied) -> Option<ReceiptReservation<'_>> {
         (self.0.vacant_len() >= consts::RECEIPT_PAIR).then_some(ReceiptReservation {
             tx: self,
             pair: [
@@ -50,7 +50,7 @@ impl SyncReceiptTx {
     ///
     /// Returns the rejection when the mailbox has no vacant slot for it.
     #[inline]
-    pub fn publish_rejected(
+    pub(crate) fn publish_rejected(
         &mut self,
         stamp: SyncExecutionStamp,
         reason: SyncExecutionReject,

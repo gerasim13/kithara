@@ -2,12 +2,13 @@ use std::sync::atomic::Ordering;
 
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_sync::TrackDisposal;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 
 use super::{
     TrackSlot,
-    processor::PlayerNodeProcessor,
+    processor::{PlayerNodeProcessor, discard_track},
     track::{PlayerResource, PlayerTrack},
 };
 use crate::bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition};
@@ -72,14 +73,15 @@ impl PlayerNodeProcessor {
         for slot in loaded {
             self.unload_slot(slot);
         }
-        self.retire_sync_tail();
-        self.retire_pending_sync(kithara_sync::SyncExecutionReject::Cancelled);
+        self.sync.retire_tail();
+        self.sync
+            .retire_pending(kithara_sync::SyncExecutionReject::Cancelled);
         self.tracks_transitions.clear();
         self.playback.position.store(0.0, Ordering::Relaxed);
         self.playback.frontier.store(0.0, Ordering::Relaxed);
         self.playback.cached.store(0.0, Ordering::Relaxed);
         self.playback.duration.store(0.0, Ordering::Relaxed);
-        self.tracks.len() == 0 && self.sync_custody_cleared()
+        self.tracks.len() == 0 && self.sync.custody_cleared()
     }
 
     fn can_run_track_command(&self, command: &PlayerCmd) -> bool {
@@ -87,16 +89,16 @@ impl PlayerNodeProcessor {
             PlayerCmd::UnloadTrack { item_id } => self
                 .tracks
                 .get(*item_id)
-                .is_none_or(|track| !track.has_sync_lane() || self.can_return_sync()),
+                .is_none_or(|track| !track.has_sync_lane() || self.sync.can_return()),
             PlayerCmd::LoadTrack { item_id, .. } => {
                 if self
                     .tracks
                     .get(*item_id)
                     .is_some_and(PlayerTrack::has_sync_lane)
                 {
-                    self.can_return_sync()
+                    self.sync.can_return()
                 } else if self.tracks.is_full() {
-                    self.can_return_sync()
+                    self.sync.can_return()
                         || self.tracks.iter().any(|(_, track)| !track.has_sync_lane())
                 } else {
                     true
@@ -258,7 +260,12 @@ impl PlayerNodeProcessor {
             .build(resource);
 
         if let Some(rejected) = self.tracks.insert(track) {
-            self.discard_track(rejected);
+            discard_track(
+                &self.playback,
+                &mut self.trash_tx,
+                rejected,
+                TrackDisposal::Trash,
+            );
             return;
         }
 

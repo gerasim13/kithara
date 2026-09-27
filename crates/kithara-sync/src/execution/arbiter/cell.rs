@@ -51,7 +51,7 @@ impl SyncGateBinding {
     /// What this exact owner-issued permit allows the audio callback now.
     /// The audio claim repeats these checks under the gate before changing PCM.
     #[must_use]
-    pub fn permit_state(&self, permit: &ArmPermit) -> PermitState {
+    pub(crate) fn permit_state(&self, permit: &ArmPermit) -> PermitState {
         if permit.stamp.member().grid_id() != self.cell.member
             || self.cell.retired.load(Ordering::Acquire)
             || !permit.matches(&self.cell)
@@ -95,7 +95,7 @@ impl SyncGateBinding {
 
 /// What an owner-issued permit allows the audio callback at one moment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PermitState {
+pub(crate) enum PermitState {
     /// The permit is current and its source unchanged: the ticket may claim.
     Current,
     /// The player is changing, or has changed, the source the permit names.
@@ -123,12 +123,12 @@ pub struct AppliedSource(AtomicU64);
 
 impl AppliedSource {
     /// Record `source` as applied by a block whose evidence is published.
-    pub fn publish(&self, source: SourceRevision) {
+    pub(crate) fn publish(&self, source: SourceRevision) {
         self.0.store(source.0 + 1, Ordering::Release);
     }
 
     /// Withdraw the stamp after a block that rendered nothing.
-    pub fn clear(&self) {
+    pub(crate) fn clear(&self) {
         self.0.store(0, Ordering::Release);
     }
 

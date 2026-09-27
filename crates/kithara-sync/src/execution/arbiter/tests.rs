@@ -3,7 +3,7 @@ use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_test_utils::kithara;
 use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, PresentationFrontier};
 
-use super::*;
+use super::{gate::AudioClaim, *};
 use crate::{
     DEFAULT_OWNER_WAIT, LoadGeneration, SourceChange, SyncApplied, SyncExecutionStamp,
     SyncOperationId, SyncReceipt, SyncReceiptTx, TopologyRevision, TopologyStamp, sync_receipts,

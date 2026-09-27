@@ -5,7 +5,7 @@ use kithara_platform::{
 };
 
 use super::{ArmPermit, ControlGuard, PermitCell, consts};
-use crate::ReceiptReservation;
+use crate::execution::mailbox::ReceiptReservation;
 
 /// Arbitrates one session's owner mutations and audio claims without owning
 /// the synchronization ledger. The Host owns this value for the session.
@@ -86,7 +86,7 @@ impl SyncArbiter {
     /// Returns the precise busy, closed, wrong-member, stale-permit, or
     /// parked-source refusal before an audio change. The reservation is
     /// released with the refusal.
-    pub fn try_claim<'r>(
+    pub(crate) fn try_claim<'r>(
         &self,
         permit: &ArmPermit,
         cell: &PermitCell,
@@ -174,7 +174,7 @@ pub enum ControlEnterError {
 
 /// Refusal of an RT claim before any audio state changes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum ClaimError {
+pub(crate) enum ClaimError {
     #[error("session commit gate is busy")]
     Busy,
     #[error("session is closed")]
@@ -193,7 +193,7 @@ pub enum ClaimError {
 /// Dropping this value without finishing leaves the gate claimed, so no owner
 /// may proceed on an audio change it has not heard about.
 #[must_use]
-pub struct AudioClaim<'a, 'r> {
+pub(crate) struct AudioClaim<'a, 'r> {
     pub(super) arbiter: &'a SyncArbiter,
     receipts: ReceiptReservation<'r>,
 }
@@ -202,7 +202,7 @@ impl AudioClaim<'_, '_> {
     /// Complete after a nonempty prefetched span was consumed: write Armed
     /// and Presented into the reserved slots, then reopen the gate.
     #[inline]
-    pub fn finish(self) {
+    pub(crate) fn finish(self) {
         self.receipts.publish();
         let _ = self.arbiter.phase.compare_exchange(
             consts::AUDIO_CLAIMED,

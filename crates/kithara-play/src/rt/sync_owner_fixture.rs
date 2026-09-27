@@ -1,9 +1,19 @@
-//! A real Sync owner decision for RT unit tests that need an owner-minted permit.
+//! A real Sync owner decision for RT unit tests that need an owner-minted
+//! permit, and the mocked resources those tests render.
 
-use std::num::{NonZeroU32, NonZeroU64};
+use std::{
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
-use kithara_events::TrackId;
-use kithara_signal::{SessionEpoch, SessionFrame, SourceSpan, TransportRevision};
+use kithara_audio::{
+    ReadOutcome as AudioReadOutcome,
+    mock::{AudioControlMock, AudioReadMock, AudioSessionMock},
+};
+use kithara_decode::DecodeError;
+use kithara_events::{EventBus, TrackId};
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{AudioSpec, SessionEpoch, SessionFrame, SourceSpan, TransportRevision};
 use kithara_sync::{
     ActivationHead, AlignmentSource, GroupState, LoadGeneration, LoadedMedia, ParentFact,
     ParentGridUpdate, PreparedFirst, SyncAdmission, SyncEffect, SyncError, SyncExecutionStamp,
@@ -15,8 +25,11 @@ use kithara_warp::{
     BeatGridSnapshot, BeatGridStamp, BeatGridState, BeatMarker, BeatOrdinal, FrameUncertainty,
     MapAxis, MapPosition, MapSegment, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
 };
+use unimock::{MockFn, Unimock, matching};
 
-use crate::{bridge::sync::SyncTicket, rt::track::PlayerResource};
+use crate::{
+    bridge::sync::SyncTicket, resource::Resource, rt::track::PlayerResource, test_pools::pools,
+};
 
 struct FixtureGroup(GroupState<Self>);
 
@@ -171,4 +184,95 @@ pub(crate) fn ticket(
     drop(owner);
     let first = first_at(head, [0.0; 2]);
     SyncTicket::new(LoadedMedia::new(item_id, load), lane, first, permit, gate)
+}
+
+/// What a fixture reader answers to every read.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ReaderMode {
+    Silence,
+    Eof,
+    Failure,
+    ShortThenEof,
+}
+
+/// A stereo resource at `rate` whose reader answers `mode`, calling
+/// `on_read` first; `read_required` and `track` declare whether the test
+/// must read it and ask its duration.
+pub(crate) fn resource(
+    mode: ReaderMode,
+    rate: NonZeroU32,
+    read_required: bool,
+    track: bool,
+    on_read: Option<Arc<dyn Fn() + Send + Sync>>,
+) -> Box<PlayerResource> {
+    let calls = AtomicUsize::new(0);
+    let event_bus = AudioSessionMock::event_bus
+        .each_call(matching!())
+        .answers(&|mock| mock.make_ref(EventBus::new(1)));
+    let spec = AudioReadMock::spec
+        .each_call(matching!())
+        .returns(AudioSpec::new(2, rate));
+    let preload = AudioControlMock::preload
+        .next_call(matching!())
+        .returns(Ok(()));
+    let reader = if read_required {
+        let read = AudioReadMock::read_planar
+            .each_call(matching!())
+            .answers_arc(Arc::new(move |_, output| {
+                if let Some(on_read) = &on_read {
+                    on_read();
+                }
+                match mode {
+                    ReaderMode::Silence => {
+                        let frames = output[0].len();
+                        for channel in output.iter_mut() {
+                            channel.fill(0.0);
+                        }
+                        Ok(AudioReadOutcome::Frames {
+                            count: NonZeroUsize::new(frames).expect("nonempty callback read"),
+                            position: Duration::ZERO,
+                            source_span: None,
+                        })
+                    }
+                    ReaderMode::Eof => Ok(AudioReadOutcome::Eof {
+                        position: Duration::ZERO,
+                    }),
+                    ReaderMode::Failure => Err(DecodeError::InvalidData {
+                        detail: "fixture fault",
+                    }),
+                    ReaderMode::ShortThenEof if calls.fetch_add(1, Ordering::Relaxed) == 0 => {
+                        let count = output[0].len().min(16);
+                        for channel in output.iter_mut() {
+                            channel[..count].fill(0.5);
+                        }
+                        Ok(AudioReadOutcome::Frames {
+                            count: NonZeroUsize::new(count).expect("fixture read has space"),
+                            position: Duration::ZERO,
+                            source_span: None,
+                        })
+                    }
+                    ReaderMode::ShortThenEof => Ok(AudioReadOutcome::Eof {
+                        position: Duration::ZERO,
+                    }),
+                }
+            }));
+        if track {
+            let duration = AudioSessionMock::duration
+                .each_call(matching!())
+                .returns(Some(Duration::from_secs(1)));
+            Unimock::new((event_bus, duration, spec, preload, read))
+        } else {
+            Unimock::new((event_bus, spec, preload, read))
+        }
+    } else if track {
+        let duration = AudioSessionMock::duration
+            .each_call(matching!())
+            .returns(Some(Duration::from_secs(1)));
+        Unimock::new((event_bus, duration, spec, preload))
+    } else {
+        Unimock::new((event_bus, spec, preload))
+    };
+    let src: Arc<str> = Arc::from("fixture");
+    let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
+    Box::new(PlayerResource::new(resource, src, &pools()).expect("fixture resource fits pool"))
 }
