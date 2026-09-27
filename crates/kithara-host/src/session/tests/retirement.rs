@@ -62,13 +62,12 @@ impl Drop for DeviceThread {
     }
 }
 
-/// A platform device runs its callback on real time.
+/// A platform device runs its callback on real time. The gate stays held
+/// through each callback, so none is in flight once the test changes it.
 #[kithara::flash(false)]
 fn run_device(mut processor: FirewheelProcessor, callback: &Mutex<Callback>, running: &AtomicBool) {
     let mut output = [0.0_f32; BLOCK_FRAMES * 2];
     while running.load(Ordering::Acquire) {
-        // The gate stays held through the callback, so no callback is in
-        // flight once the test changes it.
         let gate = callback.lock();
         if matches!(*gate, Callback::Runs) {
             let input = InterleavedSlice::new(&[] as &[f32], 0, 0)

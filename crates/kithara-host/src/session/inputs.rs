@@ -186,7 +186,9 @@ fn drain_slot_receipts<T, S>(
 /// Destroy the receiver of every retiring slot whose processor the callback
 /// has handed back. The producer is checked before the final drain, so no
 /// receipt it pushed is lost. A deck whose last processor is gone then
-/// withdraws only that track's remaining decisions.
+/// withdraws only that track's remaining decisions. After that final drain
+/// every refusal of the withdrawal is a broken quiescence contract that no
+/// later drain can change, so it is reported once rather than retried.
 fn reap_retired_slots<T, S>(
     state: &mut SessionState<T, S>,
     control: &ControlGuard<'_>,
