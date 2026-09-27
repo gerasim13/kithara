@@ -163,22 +163,24 @@ fn processor_set_paused_updates_playback() {
 
 #[kithara::test(tokio)]
 async fn processor_clear_unloads_tracks_and_resets_snapshot() {
-    let (reader, _recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
-    let resource = Resource::from_reader(reader, None);
-    let player_resource = Box::new(
-        PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
-            .expect("player resource fits the test pool budget"),
-    );
-
     let (mut processor, mut control) = make_processor();
+    let item_id = TrackId::allocate();
 
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             load: kithara::sync::LoadGeneration::first(),
-            resource: player_resource,
-            item_id: TrackId::allocate(),
+            resource: create_duration_player_resource("track.mp3", Duration::from_secs(60)),
+            item_id,
         })
+        .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            item_id,
+            settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
+        }))
         .ok();
     processor.drain_commands();
     assert_eq!(processor.track_count(), 1);
@@ -187,14 +189,7 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
         .playback()
         .playing
         .store(true, AtomicOrdering::SeqCst);
-    processor
-        .playback()
-        .position
-        .store(42.0, AtomicOrdering::Relaxed);
-    processor
-        .playback()
-        .duration
-        .store(60.0, AtomicOrdering::Relaxed);
+    assert_eq!(processor.playback().snapshot().duration(), 60.0);
 
     control.cmd_tx.try_push(PlayerCmd::Clear).ok();
     processor.drain_commands();
@@ -204,14 +199,8 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
         0,
         "arena must be empty after Clear"
     );
-    assert_eq!(
-        processor.playback().position.load(AtomicOrdering::Relaxed),
-        0.0
-    );
-    assert_eq!(
-        processor.playback().duration.load(AtomicOrdering::Relaxed),
-        0.0
-    );
+    assert_eq!(processor.playback().snapshot().position(), 0.0);
+    assert_eq!(processor.playback().snapshot().duration(), 0.0);
     assert!(!processor.playback().playing.load(AtomicOrdering::SeqCst));
 }
 
@@ -236,14 +225,12 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: first_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
 
-    assert_eq!(
-        processor.playback().duration.load(AtomicOrdering::Relaxed),
-        64.0
-    );
+    assert_eq!(processor.playback().snapshot().duration(), 64.0);
 
     control
         .cmd_tx
@@ -256,7 +243,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
     processor.drain_commands();
 
     assert_eq!(
-        processor.playback().duration.load(AtomicOrdering::Relaxed),
+        processor.playback().snapshot().duration(),
         64.0,
         "preload must not publish the next track duration"
     );
@@ -266,18 +253,13 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: second_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
 
-    assert_eq!(
-        processor.playback().position.load(AtomicOrdering::Relaxed),
-        0.0
-    );
-    assert_eq!(
-        processor.playback().duration.load(AtomicOrdering::Relaxed),
-        162.0
-    );
+    assert_eq!(processor.playback().snapshot().position(), 0.0);
+    assert_eq!(processor.playback().snapshot().duration(), 162.0);
 }
 
 #[kithara::test(tokio)]
@@ -301,6 +283,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
@@ -445,6 +428,7 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
             settings: kithara::play::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();

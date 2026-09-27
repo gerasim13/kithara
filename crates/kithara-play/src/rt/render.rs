@@ -1,14 +1,11 @@
 use std::{num::NonZeroU32, ops::Range, sync::atomic::Ordering};
 
-use firewheel::{
-    dsp::{
-        fade::FadeCurve,
-        mix::{Mix, MixDSP},
-    },
-    node::ProcBuffers,
-    param::smoother::SmootherConfig,
-};
+use firewheel::node::ProcBuffers;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::{
+    fade::FadeCurve,
+    param::{Mix, MixDSP, SmootherConfig},
+};
 use kithara_events::TrackId;
 use kithara_sync::{ClaimError, PermitState, SyncApplied, SyncExecutionReject};
 use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
@@ -378,7 +375,11 @@ fn render_active_tracks(
                         continue;
                     };
                     next_track.play();
-                    next_track.render(context, read_bufs, bus_bufs, offset..frames, sink);
+                    let outcome =
+                        next_track.render(context, read_bufs, bus_bufs, offset..frames, sink);
+                    if let Some(snapshot) = outcome_position_duration(&outcome) {
+                        leading_outcome_pos_dur = Some(snapshot);
+                    }
                     break;
                 }
             }

@@ -101,14 +101,13 @@ where
         crossfade: CrossfadeSettings,
     ) -> Result<bool, PlayError> {
         let edit = self.core.engine.edit_source()?;
-        let Some((item_id, load, _src, duration_seconds)) =
+        let Some((item_id, load, _src, _duration)) =
             self.enqueue_to_processor(index, Some(crossfade))?
         else {
             return Ok(false);
         };
         self.phase.lock().set_resident((item_id, load));
         edit.commit(SourceChange::Discontinuity);
-        self.publish_current_track_snapshot(duration_seconds);
         self.apply_start_position();
         Ok(true)
     }
@@ -291,20 +290,31 @@ where
 
     /// Fade a loaded track in as the resident. The resident is recorded
     /// before the change is reported, so evidence rendered on the new source
-    /// never pairs with the track it replaced.
+    /// never pairs with the track it replaced. Once the processor accepts the
+    /// `FadeIn`, the playhead reads describe the new resident at its head with
+    /// `duration_seconds` until the audio thread takes it on.
     pub(crate) fn start_resident(
         &self,
         item_id: TrackId,
         load: LoadGeneration,
+        duration_seconds: f64,
     ) -> Result<(), PlayError> {
         let edit = self.core.engine.edit_source()?;
-        self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
-            item_id,
-            settings: CrossfadeSettings {
-                duration: self.crossfade_duration(),
-                ..CrossfadeSettings::default()
-            },
-        }))?;
+        let playback = self
+            .slot()
+            .and_then(|slot| self.core.engine.slot_playback(slot))
+            .ok_or(PlayError::NoActiveSlot)?;
+        let settings = CrossfadeSettings {
+            duration: self.crossfade_duration(),
+            ..CrossfadeSettings::default()
+        };
+        playback.lead(duration_seconds, |epoch| {
+            self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
+                item_id,
+                settings,
+                epoch,
+            }))
+        })?;
         self.phase.lock().set_resident((item_id, load));
         edit.commit(SourceChange::Discontinuity);
         Ok(())

@@ -147,7 +147,12 @@ impl<S> PlayerRuntime<S> {
             return Ok(None);
         };
         let src = Arc::clone(item.player_resource.src());
-        command.send(item.item_id, load, Box::new(item.player_resource));
+        command.send(
+            item.item_id,
+            load,
+            Box::new(item.player_resource),
+            item.duration_seconds,
+        );
         *last_load = Some(load);
         drop(last_load);
 

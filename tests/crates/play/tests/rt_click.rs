@@ -209,6 +209,7 @@ fn fading_in(constant_half: &'static [u8]) -> (PlayerNodeProcessor, SlotControl,
         PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
             settings: crossfade(FADE_SECONDS),
+            epoch: 0,
         }),
     );
 
@@ -303,6 +304,7 @@ fn a_changed_crossfade_duration_applies_to_the_next_fade(
         PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: second_id,
             settings: crossfade(FADE_SECONDS / 10.0),
+            epoch: 0,
         }),
     );
     let handed_over = pump(&mut processor, SETTLE_BLOCKS * 3);

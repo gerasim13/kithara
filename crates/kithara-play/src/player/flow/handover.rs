@@ -164,7 +164,11 @@ where
             return Ok(());
         };
 
-        if let Err(error) = self.start_resident(activated.item_id, activated.load) {
+        if let Err(error) = self.start_resident(
+            activated.item_id,
+            activated.load,
+            activated.duration_seconds,
+        ) {
             if let Some(pending) = self
                 .phase
                 .lock()
@@ -179,7 +183,6 @@ where
             return Err(error);
         }
         self.publish_crossfade_started();
-        self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
         if index != current_index {
             self.core.items.set_current(index);
@@ -806,5 +809,74 @@ mod tests {
         assert_eq!(begins.load(Ordering::Relaxed), 0);
         assert_eq!(playback.seek_epoch.load(Ordering::SeqCst), 0);
         assert_eq!(playback.position.load(Ordering::Relaxed), before_position);
+    }
+
+    fn armed_player() -> PlayerImpl<TestPools> {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(mock::session())
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+        if let Some(pending_slot) = player.phase.lock().pending_mut() {
+            *pending_slot = Some(PendingNext {
+                item_id: TrackId::allocate(),
+                load: LoadGeneration::first(),
+                src: Arc::from("next.mp3"),
+                state: PendingNextState::Armed,
+                index: 1,
+                duration_seconds: 162.0,
+            });
+        }
+        player
+    }
+
+    /// An audio block already under way when the handover is committed still
+    /// renders the outgoing item and publishes its playhead at the end. The
+    /// committed item must stay the one the player reports until the audio
+    /// thread takes it on.
+    #[kithara::test]
+    fn committed_item_outlives_a_block_the_outgoing_item_was_rendering() {
+        let player = armed_player();
+
+        player.commit_next(1).expect("commit_next must succeed");
+        let playback = player
+            .slot()
+            .and_then(|slot| player.core.engine.slot_playback(slot))
+            .expect("the slot must carry playback state");
+        playback.position.store(62.3, Ordering::Relaxed);
+        playback.duration.store(64.295, Ordering::Relaxed);
+
+        assert_eq!(player.duration_seconds(), Some(162.0));
+        assert_eq!(player.position_seconds(), Some(0.0));
+    }
+
+    /// A `FadeIn` the full command queue rejects never reaches the audio
+    /// thread, so the player keeps reporting the item the audio thread plays
+    /// and keeps the successor armed for a retry.
+    #[kithara::test]
+    fn a_rejected_fade_in_leaves_the_playhead_on_the_playing_item() {
+        let player = armed_player();
+        let playback = player
+            .slot()
+            .and_then(|slot| player.core.engine.slot_playback(slot))
+            .expect("the slot must carry playback state");
+        playback.position.store(62.3, Ordering::Relaxed);
+        playback.duration.store(64.295, Ordering::Relaxed);
+        while player.send_to_slot(PlayerCmd::SetPaused(false)).is_ok() {}
+
+        assert!(matches!(
+            player.commit_next(1),
+            Err(PlayError::SlotChannelFull { .. })
+        ));
+
+        assert_eq!(player.armed_next(), Some(1));
+        assert_eq!(player.duration_seconds(), Some(64.295));
+        assert_eq!(player.position_seconds(), Some(62.3));
     }
 }

@@ -2543,6 +2543,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fearless_simd"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3772b63c40606beea8fe1f7b06a60de27ceb9bfc2d9dad3427368ca41dc7e62"
+
+[[package]]
 name = "fenestra-anim"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4827,6 +4833,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-mp4",
  "kithara-mpa",
  "kithara-platform",
@@ -4959,6 +4966,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-dsp"
+version = "0.0.1-alpha5"
+dependencies = [
+ "assert_no_alloc",
+ "criterion",
+ "fast-interleave",
+ "fearless_simd",
+ "firewheel-core",
+ "kithara-apple",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-dsp-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-dsp",
+ "kithara-host",
+ "kithara-play",
+ "kithara-signal",
+ "kithara-test-utils",
+]
+
+[[package]]
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -4968,9 +5002,9 @@ dependencies = [
  "derive-where",
  "fieldwork",
  "firewheel",
- "firewheel-core",
  "kithara-bufpool",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-effects",
  "kithara-resampler",
  "kithara-signal",
@@ -5291,6 +5325,7 @@ dependencies = [
  "firewheel-web-audio",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-dsp",
  "kithara-effects",
  "kithara-events",
  "kithara-output",
@@ -5338,6 +5373,7 @@ dependencies = [
  "kithara-app",
  "kithara-derive",
  "kithara-devtools",
+ "kithara-dsp",
  "kithara-encode",
  "kithara-events",
  "kithara-test-dylib",
@@ -5528,6 +5564,7 @@ dependencies = [
  "kithara-derive",
  "kithara-download",
  "kithara-drm",
+ "kithara-dsp",
  "kithara-effects",
  "kithara-events",
  "kithara-file",
@@ -5570,6 +5607,7 @@ dependencies = [
  "firewheel",
  "kithara",
  "kithara-app",
+ "kithara-dsp",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5700,12 +5738,12 @@ version = "0.0.1-alpha5"
 dependencies = [
  "delegate",
  "derive_more",
- "fast-interleave",
  "fieldwork",
  "kithara-blob",
  "kithara-bufpool",
  "kithara-core-test-fixtures",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -6080,10 +6118,10 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
- "firewheel-core",
  "kithara-beat",
  "kithara-bufpool",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-platform",
  "kithara-signal",
  "kithara-stretch",
@@ -6214,6 +6252,7 @@ dependencies = [
  "indexmap",
  "itertools 0.13.0",
  "jni",
+ "js-sys",
  "libc",
  "linux-raw-sys 0.12.1",
  "log",
@@ -6224,6 +6263,7 @@ dependencies = [
  "num-complex",
  "num-traits",
  "objc2-foundation 0.3.2",
+ "once_cell",
  "parking_lot",
  "parking_lot_core",
  "percent-encoding",
@@ -6266,6 +6306,8 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "winnow 1.0.3",
  "zerocopy",

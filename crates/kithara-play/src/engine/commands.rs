@@ -40,11 +40,14 @@ pub(crate) struct SlotLoadReservation<'a, S> {
 
 impl<S> SlotLoadReservation<'_, S> {
     /// Publish the load and optional `FadeIn` together after preparation.
+    /// A `FadeIn` makes the item leading with `duration_seconds`, so the
+    /// playhead reads describe it from the send on.
     pub(crate) fn send(
         mut self,
         item_id: TrackId,
         load: LoadGeneration,
         resource: Box<PlayerResource>,
+        duration_seconds: f64,
     ) {
         let mut slots = self.engine.slots.lock();
         let Some(entry) = slots.entry_mut(self.slot) else {
@@ -66,11 +69,16 @@ impl<S> SlotLoadReservation<'_, S> {
         }
         if let Some(settings) = self.transition
             && handle
-                .cmd_tx
-                .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
-                    item_id,
-                    settings,
-                }))
+                .playback
+                .lead(duration_seconds, |epoch| {
+                    handle
+                        .cmd_tx
+                        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+                            item_id,
+                            settings,
+                            epoch,
+                        }))
+                })
                 .is_err()
         {
             unreachable!("reserved FadeIn command entry disappeared");

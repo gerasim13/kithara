@@ -187,6 +187,7 @@ fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: 
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: outgoing,
             settings: crossfade(0.0),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
@@ -203,6 +204,7 @@ fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: 
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: incoming,
             settings: crossfade(CROSSFADE_SECONDS),
+            epoch: 0,
         }))
         .ok();
     processor.drain_commands();
