@@ -8,8 +8,8 @@ pub(crate) use kithara_play::{
     SessionSampleRate,
 };
 use kithara_sync::{
-    ResidentLoadObservation, SyncAdmission, SyncError, SyncIntent, SyncOperation, SyncRejected,
-    TopologyOperation,
+    ResidentLoadObservation, SyncAdmission, SyncError, SyncGateBinding, SyncIntent, SyncOperation,
+    SyncRejected, TopologyOperation,
 };
 use kithara_warp::BeatGridId;
 
@@ -39,8 +39,22 @@ pub(crate) trait SessionStream {
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
-    ApplyMix { levels: Box<[HostLevel]> },
-    EnableOutput { outputs: OutputGroup },
+    /// Registers the permit cell of `member`, which plays in the deck
+    /// `group`, before its player attaches.
+    RegisterMember {
+        group: BeatGridId,
+        member: BeatGridId,
+    },
+    /// Retires one player's permit cell after its callback users quiesce.
+    RetireMember {
+        member: BeatGridId,
+    },
+    ApplyMix {
+        levels: Box<[HostLevel]>,
+    },
+    EnableOutput {
+        outputs: OutputGroup,
+    },
     Shutdown,
 }
 
@@ -62,6 +76,7 @@ pub(crate) enum HostReply {
     Play(Reply),
     Admission(Result<SyncAdmission, SyncRejected<PlayerMember>>),
     DeckSyncState(DeckSyncState),
+    SyncGate(SyncGateBinding),
     Ok,
     Err(PlayError),
 }

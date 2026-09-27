@@ -78,8 +78,10 @@ impl HostDispatcher<TestPools> for Dispatcher {
         &self,
         cmd: HostCmd<TestPools>,
     ) -> Result<HostReply, HostDispatchError<TestPools>> {
-        let HostCmd::Sync(SyncCmd::TransactCurrent(operations)) = cmd else {
-            panic!("unexpected fixture Host command")
+        let operations = match cmd {
+            HostCmd::Sync(SyncCmd::TransactCurrent(operations)) => operations,
+            HostCmd::RetireMember { .. } => return Ok(HostReply::Ok),
+            _ => panic!("unexpected fixture Host command"),
         };
         match self.detach {
             Outcome::SessionGone => Err(HostDispatchError::before_send(

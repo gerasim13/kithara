@@ -48,14 +48,21 @@ where
                 });
             HostReply::Play(acknowledged.map_or_else(Reply::Err, Reply::SyncAcknowledged))
         }
-        HostCmd::Play(Cmd::RetireSyncMember { member }) => {
+        HostCmd::RegisterMember { group, member } => match pump_before_work(state) {
+            Ok(()) => state.sync.register(group, member).map_or_else(
+                |error| HostReply::Err(root_error(error).into()),
+                HostReply::SyncGate,
+            ),
+            Err(error) => HostReply::Err(error.into()),
+        },
+        HostCmd::RetireMember { member } => {
             let retired = with_owner_cut(state, |cut, port| {
                 if let Some(group) = cut.retire(member).map_err(root_error)? {
                     port.retiring.retain(|retiring| retiring.group != group);
                 }
                 Ok(())
             });
-            HostReply::Play(retired.map_or_else(Reply::Err, |()| Reply::Ok))
+            retired.map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok)
         }
         HostCmd::Play(cmd) => match pump_before_work(state) {
             Ok(()) => HostReply::Play(run_cmd(state, cmd)),
@@ -210,6 +217,8 @@ fn control_failure_reply<S>(cmd: HostCmd<S>, failure: ControlEnterError) -> Host
         HostCmd::Sync(SyncCmd::TransactCurrent(_))
         | HostCmd::Sync(SyncCmd::QueryDeckState { .. })
         | HostCmd::Sync(SyncCmd::RequestDeckSync { .. })
+        | HostCmd::RegisterMember { .. }
+        | HostCmd::RetireMember { .. }
         | HostCmd::ApplyMix { .. }
         | HostCmd::EnableOutput { .. } => HostReply::Err(session_error.into()),
     }
@@ -282,10 +291,6 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     match cmd {
-        Cmd::RegisterSyncMember { group, member } => state
-            .sync
-            .register(group, member)
-            .map_or_else(|error| Reply::Err(root_error(error)), Reply::SyncGate),
         Cmd::RegisterPlayer {
             grid_id,
             bus,
@@ -406,9 +411,7 @@ where
         }
         Cmd::QueryStreamShape => Reply::StreamShape(state.stream_facts().shape()),
         Cmd::Tick => tick_session(state),
-        Cmd::AcknowledgeSync { .. } | Cmd::RetireSyncMember { .. } => {
-            Reply::Err(SessionError::SyncControlBusy)
-        }
+        Cmd::AcknowledgeSync { .. } => Reply::Err(SessionError::SyncControlBusy),
     }
 }
 
@@ -1713,6 +1716,32 @@ mod tests {
             }
             _ => panic!("stop returned an unexpected reply"),
         }
+    }
+
+    #[kithara::test]
+    fn a_member_registers_once_and_again_after_it_retires() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let group = BeatGridId::allocate().expect("group id");
+        let member = BeatGridId::allocate().expect("member id");
+        let register =
+            |state: &mut TestState| run_host_cmd(state, HostCmd::RegisterMember { group, member });
+
+        assert!(matches!(register(&mut state), HostReply::SyncGate(_)));
+        assert!(matches!(
+            register(&mut state),
+            HostReply::Err(PlayError::Session(SessionError::SyncMemberAlreadyRegistered(id)))
+                if id == member
+        ));
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::RetireMember { member }),
+            HostReply::Ok
+        ));
+        assert!(
+            matches!(register(&mut state), HostReply::SyncGate(_)),
+            "retirement removes the member's cell"
+        );
     }
 
     #[kithara::test]

@@ -163,12 +163,12 @@ impl<S> Host<S> {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         let group_id = player.sync_group_grid_id();
         let track_id = player.sync_track_grid_id();
-        let gate = match self.dispatcher.exec(Cmd::RegisterSyncMember {
+        let gate = match self.dispatcher.exec_host(HostCmd::RegisterMember {
             group: group_id,
             member: track_id,
         })? {
-            Reply::SyncGate(gate) => gate,
-            Reply::Err(error) => return Err(error.into()),
+            HostReply::SyncGate(gate) => gate,
+            HostReply::Err(error) => return Err(error),
             _ => {
                 return Err(PlayError::Internal(
                     "unexpected sync-member registration reply".into(),
@@ -193,9 +193,12 @@ impl<S> Host<S> {
     }
 
     pub(super) fn retire_sync_member(&self, member: BeatGridId) -> Result<(), PlayError> {
-        match self.dispatcher.exec(Cmd::RetireSyncMember { member })? {
-            Reply::Ok => Ok(()),
-            Reply::Err(error) => Err(error.into()),
+        match self
+            .dispatcher
+            .exec_host(HostCmd::RetireMember { member })?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(
                 "unexpected sync-member retirement reply".into(),
             )),

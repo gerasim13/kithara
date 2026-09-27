@@ -8,7 +8,7 @@ mod wire {
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
-    use kithara_sync::{ControlError, SyncError, SyncGateBinding, SyncReceipt, SyncReceiptAck};
+    use kithara_sync::{ControlError, SyncError, SyncReceipt, SyncReceiptAck};
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
@@ -164,15 +164,6 @@ mod wire {
         QuerySampleRate,
         QueryStreamShape,
         Tick,
-        /// Allocate the stable claim cell for a track before player attachment.
-        RegisterSyncMember {
-            group: BeatGridId,
-            member: BeatGridId,
-        },
-        /// Retire one player's claim cell after its callback users quiesce.
-        RetireSyncMember {
-            member: BeatGridId,
-        },
         /// Reports one executor outcome to the group that issued the
         /// preparation; answered with the owner's own acknowledgement result.
         AcknowledgeSync {
@@ -202,7 +193,6 @@ mod wire {
         PlayerRegistered(RegisteredPlayer),
         SessionTransport(SessionTransportSnapshot),
         SlotAllocated(Box<AllocatedSlot>),
-        SyncGate(SyncGateBinding),
         SyncAcknowledged(SyncReceiptAck),
         SampleRate(SessionSampleRate),
         StreamShape(Option<StreamShape>),
