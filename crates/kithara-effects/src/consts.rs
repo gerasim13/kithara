@@ -1,5 +1,5 @@
 use biquad::Coefficients;
-use firewheel::{dsp::filter::smoothing_filter::MIN_SETTLE_RATIO, param::smoother::SmootherConfig};
+use kithara_dsp::param::{MIN_SETTLE_RATIO, SmootherConfig};
 
 pub(crate) const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 pub(crate) const NYQUIST_FACTOR: f32 = 2.0;

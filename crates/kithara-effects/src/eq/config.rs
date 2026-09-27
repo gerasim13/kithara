@@ -1,6 +1,6 @@
 use bon::Builder;
-use firewheel::param::smoother::SmootherConfig;
 use kithara_bufpool::PoolRegion;
+use kithara_dsp::param::SmootherConfig;
 
 use crate::consts;
 

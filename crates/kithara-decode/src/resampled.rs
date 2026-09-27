@@ -7,7 +7,7 @@ use kithara_resampler::{
     ResamplerSettings, create_resampler,
 };
 use kithara_signal::{
-    AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, PlanarBuffer, sanitize_sample,
+    AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer,
 };
 use kithara_stream::AudioCodec;
 use kithara_test_utils::kithara;
@@ -134,12 +134,24 @@ where
         let base_len = self.input.frames().get();
         self.input
             .resize_frames(FrameCount::new(base_len.saturating_add(frames)))?;
-        for channel in 0..channels {
-            let destination = self.input.channel_mut(channel)?;
-            for frame in 0..frames {
-                let base = frame.saturating_mul(channels);
-                destination[base_len + frame] = sanitize_sample(chunk.samples[base + channel]);
-            }
+        if frames == 0 {
+            return Ok(());
+        }
+        let source_frames = FrameCount::new(frames);
+        let samples = spec.sample_count(source_frames)?.get();
+        let source = InterleavedView::new(&chunk.samples[..samples], spec, source_frames)?;
+        let stride = self.input.stride().get();
+        let end = base_len + frames;
+        let mut planes: SmallVec<[&mut [f32]; 8]> = self
+            .input
+            .as_samples_mut()
+            .chunks_exact_mut(stride)
+            .take(channels)
+            .map(|plane| &mut plane[..end])
+            .collect();
+        source.deinterleave_channels_into_at(&mut planes, base_len)?;
+        for plane in &mut planes {
+            kithara_dsp::sanitize(&mut plane[base_len..]);
         }
         Ok(())
     }

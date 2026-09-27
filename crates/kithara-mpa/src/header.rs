@@ -169,6 +169,7 @@ pub(crate) fn parse_frame_header(header: u32) -> Result<FrameHeader> {
         layer,
         version,
         has_crc,
+        bitrate,
         sample_rate,
         frame_size,
     })
