@@ -19,6 +19,34 @@ fn kernels(c: &mut Criterion) {
         for channels in [TWO, SIX] {
             let mut interleaved = vec![0.0_f32; channels.get() * frames];
             group.bench_with_input(
+                BenchmarkId::new(format!("fi_interleave_{channels}ch"), frames),
+                &frames,
+                |b, _| {
+                    b.iter(|| {
+                        fast_interleave::interleave_variable(
+                            black_box(&planes[..channels.get()]),
+                            0..frames,
+                            &mut interleaved,
+                            channels,
+                        );
+                    });
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("fi_deinterleave_{channels}ch"), frames),
+                &frames,
+                |b, _| {
+                    b.iter(|| {
+                        fast_interleave::deinterleave_variable(
+                            black_box(&interleaved),
+                            channels,
+                            &mut restored,
+                            0..frames,
+                        );
+                    });
+                },
+            );
+            group.bench_with_input(
                 BenchmarkId::new(format!("interleave_{channels}ch"), frames),
                 &frames,
                 |b, _| {
