@@ -248,6 +248,8 @@ mod tests {
 
     fn fixture_in(mode: EqMode) -> Fixture {
         let mut fixture = Fixture::new(["+2.0%", "-1.0%"]);
+        // The Host has processed a tempo, so the tempo map has its master.
+        fixture.stage.host_bpm = Some(124.0);
         fixture.eq_mode = mode;
         for (_, settings, _) in &mut fixture.decks {
             settings.eq_bands = vec![GainDb::default(); mode.bands().len()];
