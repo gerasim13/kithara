@@ -254,11 +254,22 @@ pub(super) fn append(
 /// missing entirely (its thread exited and the credit leaked), every instance
 /// is parked (`S`/`D`, so nothing is spinning), or one is runnable (`R`).
 /// Thread ids and tick counters are volatile and stay in the raw artifact.
+///
+/// A parked thread is counted with what it is parked on, because a wedge
+/// leaves every thread parked and the state letter alone then separates
+/// nothing. The kernel's wait channel does: a holder on a futex is inside a
+/// lock it took without releasing its credit, one on the reactor is waiting
+/// for real I/O, and one on a timer is sleeping out a real deadline. A
+/// runnable thread is on CPU and has no channel to report.
 fn thread_census(lines: &[String]) -> Vec<String> {
     let mut census: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for line in lines {
-        let Some((name, state)) = thread_reading(line) else {
+        let Some((name, state, wait)) = thread_reading(line) else {
             continue;
+        };
+        let state = match wait {
+            Some(wait) => format!("{state} on {wait}"),
+            None => state,
         };
         let count = census.entry(name).or_default().entry(state).or_default();
         *count = count.saturating_add(1);
@@ -276,14 +287,20 @@ fn thread_census(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The name and scheduler state of one `tid=... name=... state=...` reading.
-fn thread_reading(line: &str) -> Option<(String, String)> {
+/// The name, scheduler state, and wait channel of one
+/// `tid=... name=... state=... wchan=...` reading.
+///
+/// The channel is absent for a thread that is not waiting on one: a runnable
+/// thread reports `0`, and a dump taken where the kernel does not publish the
+/// channel omits the field.
+fn thread_reading(line: &str) -> Option<(String, String, Option<String>)> {
     let field = |key: &str| {
         line.split_whitespace()
             .find_map(|part| part.strip_prefix(key))
             .map(str::to_owned)
     };
-    Some((field("name=")?, field("state=")?))
+    let wait = field("wchan=").filter(|wait| wait != "0" && !wait.is_empty());
+    Some((field("name=")?, field("state=")?, wait))
 }
 
 /// Cluster the flight-recorder tails of one envelope. Both lanes share the
@@ -507,15 +524,19 @@ mod tests {
             "name=tokio-rt-worker tid=7 state=S cpu_ticks=3 wchan=futex_wait",
             "name=tokio-rt-worker tid=8 state=R cpu_ticks=62000 wchan=0",
             "name=tokio-rt-worker tid=9 state=S cpu_ticks=1 wchan=futex_wait",
+            "name=tokio-rt-worker tid=10 state=S cpu_ticks=1 wchan=ep_poll",
             "name=main tid=1 state=S cpu_ticks=0 wchan=do_wait",
         ]
         .map(str::to_owned);
 
+        // The two parked on a futex are inside a lock and the one on the
+        // reactor is waiting for I/O. Folding them together would report four
+        // threads asleep and name nothing they are asleep on.
         assert_eq!(
             thread_census(&lines),
             vec![
-                "main: 1 S".to_owned(),
-                "tokio-rt-worker: 1 R, 2 S".to_owned()
+                "main: 1 S on do_wait".to_owned(),
+                "tokio-rt-worker: 1 R, 1 S on ep_poll, 2 S on futex_wait".to_owned()
             ]
         );
     }
