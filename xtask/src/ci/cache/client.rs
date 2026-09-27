@@ -10,22 +10,67 @@ use clap::{Args, Subcommand};
 
 use super::{
     super::config::{CiPins, PINS_PATH},
-    provision, snapshot,
+    provision::{self, SCCACHE_PREFIX},
+    snapshot,
     snapshot::SnapshotArgs,
     verify,
 };
 use crate::ci::host::mac::read_secret;
 
-const CLIENT_KEYS: [&str; 8] = [
-    "SCCACHE_BUCKET",
-    "SCCACHE_S3_KEY_PREFIX",
-    "SCCACHE_ENDPOINT",
-    "SCCACHE_REGION",
-    "SCCACHE_S3_USE_SSL",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_EC2_METADATA_DISABLED",
-];
+mod consts {
+    /// What only the host can say about a scope's store: where it is, and the
+    /// credentials its bucket policy admits. A client cannot run without these.
+    pub(super) const HOST_KEYS: [&str; 4] = [
+        "SCCACHE_BUCKET",
+        "SCCACHE_ENDPOINT",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    ];
+
+    /// The region every scope is provisioned in.
+    pub(super) const REGION: &str = "us-east-1";
+}
+
+/// Everything else a client is told, fixed by how a scope is provisioned.
+///
+/// A host may state these, and what it states is kept; what it leaves out is
+/// filled in here. A host file is written once and outlives the code reading
+/// it, so a key added later is missing from every file that predates it. When
+/// that key was a required one, the prefix, sccache wrote every object to the
+/// bucket root, where nothing expires, and the lane's own client refused to
+/// start.
+fn defaults(endpoint: &str) -> [(&'static str, &'static str); 4] {
+    [
+        ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
+        ("SCCACHE_REGION", consts::REGION),
+        (
+            "SCCACHE_S3_USE_SSL",
+            if endpoint.starts_with("https://") {
+                "true"
+            } else {
+                "false"
+            },
+        ),
+        ("AWS_EC2_METADATA_DISABLED", "true"),
+    ]
+}
+
+/// The whole environment a client is given for one scope's store.
+pub(super) fn provisioned_environment(
+    bucket: &str,
+    endpoint: &str,
+    key: &str,
+    secret: &str,
+) -> Result<BTreeMap<String, String>> {
+    let mut environment = BTreeMap::new();
+    for (name, value) in consts::HOST_KEYS
+        .into_iter()
+        .zip([bucket, endpoint, key, secret])
+    {
+        insert_client_environment(&mut environment, name, value)?;
+    }
+    complete_client_environment(environment)
+}
 
 /// Read the restricted environment a cache client may inherit.
 pub(crate) fn client_environment(path: &Path) -> Result<BTreeMap<String, String>> {
@@ -42,11 +87,37 @@ pub(crate) fn client_environment(path: &Path) -> Result<BTreeMap<String, String>
 /// Read the restricted cache credentials injected into a CI job.
 pub(crate) fn current_client_environment() -> Result<BTreeMap<String, String>> {
     let mut environment = BTreeMap::new();
-    for key in CLIENT_KEYS {
+    for key in consts::HOST_KEYS {
         let value = env::var(key).with_context(|| format!("{key} must be configured"))?;
         insert_client_environment(&mut environment, key, &value)?;
     }
+    for (key, _) in defaults("") {
+        if let Some(value) = env::var(key).ok().filter(|value| !value.is_empty()) {
+            insert_client_environment(&mut environment, key, &value)?;
+        }
+    }
     complete_client_environment(environment)
+}
+
+/// The defaults a job's own processes lack, once the job was given a store.
+///
+/// sccache reads its configuration from the environment it starts in, so a
+/// key the host left out has to be put into the lane's environment rather than
+/// only filled in where this crate reads it. A job with no store keeps its
+/// local cache and is told nothing. An empty value is a missing one: a runner
+/// that forwards an unset variable hands over an empty string, and sccache
+/// reads an empty prefix as the bucket root.
+pub(crate) fn missing_defaults(
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Vec<(&'static str, &'static str)> {
+    let lookup = |key: &str| lookup(key).filter(|value| !value.is_empty());
+    let (Some(_), Some(endpoint)) = (lookup("SCCACHE_BUCKET"), lookup("SCCACHE_ENDPOINT")) else {
+        return Vec::new();
+    };
+    defaults(&endpoint)
+        .into_iter()
+        .filter(|(key, _)| lookup(key).is_none())
+        .collect()
 }
 
 fn insert_client_environment(
@@ -55,7 +126,7 @@ fn insert_client_environment(
     value: &str,
 ) -> Result<()> {
     ensure!(
-        CLIENT_KEYS.contains(&key),
+        consts::HOST_KEYS.contains(&key) || defaults("").iter().any(|(name, _)| *name == key),
         "unexpected cache environment key"
     );
     ensure!(!value.is_empty(), "empty cache environment value");
@@ -75,12 +146,23 @@ fn insert_client_environment(
 }
 
 fn complete_client_environment(
-    environment: BTreeMap<String, String>,
+    mut environment: BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>> {
-    ensure!(
-        environment.len() == CLIENT_KEYS.len(),
-        "incomplete cache environment"
-    );
+    for key in consts::HOST_KEYS {
+        ensure!(
+            environment.contains_key(key),
+            "the cache environment has no {key}"
+        );
+    }
+    let endpoint = environment
+        .get("SCCACHE_ENDPOINT")
+        .cloned()
+        .unwrap_or_default();
+    for (key, value) in defaults(&endpoint) {
+        environment
+            .entry(key.to_owned())
+            .or_insert_with(|| value.to_owned());
+    }
     Ok(environment)
 }
 
@@ -139,4 +221,143 @@ pub(super) fn required(name: &str) -> Result<String> {
     let value = env::var(name).with_context(|| format!("{name} must be configured"))?;
     ensure!(!value.trim().is_empty(), "{name} must not be empty");
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    use super::*;
+
+    fn host_file(contents: &str) -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.env");
+        fs::write(&path, contents).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        (directory, path)
+    }
+
+    /// The Linux fleet's host files were written before the prefix existed.
+    /// Refusing them left the lane without its source layer, and sccache,
+    /// which is not asked, wrote to the bucket root.
+    #[test]
+    fn a_host_file_written_before_the_prefix_still_yields_it() {
+        let (_directory, path) = host_file(
+            "SCCACHE_BUCKET=kithara-review\nSCCACHE_ENDPOINT=http://kithara-ci-cache:9000\n\
+             SCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\n\
+             AWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
+        );
+
+        let environment = client_environment(&path).expect("an older host file is complete");
+
+        assert_eq!(
+            environment.get("SCCACHE_S3_KEY_PREFIX").map(String::as_str),
+            Some(SCCACHE_PREFIX)
+        );
+    }
+
+    #[test]
+    fn a_host_names_only_its_store_and_the_credentials_for_it() {
+        let (_directory, path) = host_file(
+            "SCCACHE_BUCKET=kithara-trusted\nSCCACHE_ENDPOINT=https://cache\n\
+             AWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\n",
+        );
+
+        let environment = client_environment(&path).expect("the host said all it has to");
+
+        for (key, value) in [
+            ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
+            ("SCCACHE_REGION", consts::REGION),
+            ("SCCACHE_S3_USE_SSL", "true"),
+            ("AWS_EC2_METADATA_DISABLED", "true"),
+        ] {
+            assert_eq!(
+                environment.get(key).map(String::as_str),
+                Some(value),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn what_a_host_states_is_kept() {
+        let (_directory, path) = host_file(
+            "SCCACHE_BUCKET=kithara-review\nSCCACHE_ENDPOINT=http://cache\n\
+             SCCACHE_REGION=eu-central-1\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\n",
+        );
+
+        let environment = client_environment(&path).unwrap();
+
+        assert_eq!(
+            environment.get("SCCACHE_REGION").map(String::as_str),
+            Some("eu-central-1")
+        );
+    }
+
+    #[test]
+    fn a_host_file_without_credentials_is_refused_by_name() {
+        let (_directory, path) = host_file(
+            "SCCACHE_BUCKET=kithara-review\nSCCACHE_ENDPOINT=http://cache\nAWS_ACCESS_KEY_ID=key\n",
+        );
+
+        let error = client_environment(&path).expect_err("no secret, no client");
+
+        assert!(
+            error.to_string().contains("AWS_SECRET_ACCESS_KEY"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_job_given_a_store_is_told_what_its_host_left_out() {
+        let environment = BTreeMap::from([
+            ("SCCACHE_BUCKET", "kithara-review"),
+            ("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000"),
+            ("SCCACHE_REGION", "us-east-1"),
+        ]);
+
+        let missing = missing_defaults(|key| environment.get(key).map(|value| (*value).to_owned()));
+
+        assert_eq!(
+            missing,
+            [
+                ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
+                ("SCCACHE_S3_USE_SSL", "false"),
+                ("AWS_EC2_METADATA_DISABLED", "true"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_job_handed_an_empty_prefix_is_given_the_default() {
+        let environment = BTreeMap::from([
+            ("SCCACHE_BUCKET", "kithara-review"),
+            ("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000"),
+            ("SCCACHE_S3_KEY_PREFIX", ""),
+        ]);
+
+        let missing = missing_defaults(|key| environment.get(key).map(|value| (*value).to_owned()));
+
+        assert!(
+            missing.contains(&("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX)),
+            "{missing:?}"
+        );
+    }
+
+    #[test]
+    fn a_job_without_a_store_is_told_nothing() {
+        assert!(missing_defaults(|_| None).is_empty());
+    }
+
+    #[test]
+    fn provisioning_writes_what_a_client_reads() {
+        let written = provisioned_environment("kithara-review", "http://cache", "key", "secret")
+            .expect("provisioning names every host key");
+
+        assert_eq!(written.len(), consts::HOST_KEYS.len() + defaults("").len());
+        assert_eq!(
+            written.get("SCCACHE_S3_KEY_PREFIX").map(String::as_str),
+            Some(SCCACHE_PREFIX)
+        );
+    }
 }

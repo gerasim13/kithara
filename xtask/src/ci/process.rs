@@ -159,6 +159,11 @@ impl Process {
             .map(PathBuf::from)
     }
 
+    /// Where this process's Cargo keeps its registry and git checkouts.
+    pub(crate) fn cargo_home(&self) -> Option<PathBuf> {
+        cargo_home(|name| self.environment_path(name))
+    }
+
     /// A command that runs inside a subdirectory of the checkout. Build tools
     /// that locate their project by walking up from the working directory —
     /// Gradle looks for the settings file — need the directory that owns them,
@@ -457,6 +462,17 @@ fn executable_extensions(vars: &BTreeMap<OsString, OsString>) -> Vec<String> {
     }
 }
 
+/// The directory Cargo itself settles on: the one it was named, else `.cargo`
+/// in the home directory. An image that stops naming it still has one, and a
+/// cache layer restored anywhere else is one Cargo never reads.
+fn cargo_home(lookup: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+    lookup("CARGO_HOME").or_else(|| {
+        lookup("HOME")
+            .or_else(|| lookup("USERPROFILE"))
+            .map(|home| home.join(".cargo"))
+    })
+}
+
 fn output_text(output: Output, label: &str) -> Result<String> {
     if !output.status.success() {
         return Err(ChildFailure::captured(
@@ -573,6 +589,25 @@ mod tests {
         assert!(error.to_string().contains("fixture state"));
         assert!(error.to_string().contains('7'));
         assert!(error.to_string().contains("unexpected"));
+    }
+
+    #[test]
+    fn an_image_that_names_no_cargo_home_uses_the_one_in_home() {
+        let environment = BTreeMap::from([("HOME", "/home/runner")]);
+
+        let home = cargo_home(|name| environment.get(name).map(PathBuf::from));
+
+        assert_eq!(home, Some(PathBuf::from("/home/runner/.cargo")));
+    }
+
+    #[test]
+    fn a_named_cargo_home_is_the_one_used() {
+        let environment =
+            BTreeMap::from([("CARGO_HOME", "/cache/cargo"), ("HOME", "/home/runner")]);
+
+        let home = cargo_home(|name| environment.get(name).map(PathBuf::from));
+
+        assert_eq!(home, Some(PathBuf::from("/cache/cargo")));
     }
 
     #[test]

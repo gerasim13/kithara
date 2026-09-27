@@ -16,8 +16,8 @@ use tracing::warn;
 
 use super::{
     LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, SCCACHE_SLOT_CACHE_NAMESPACE,
-    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, lane_build::LaneBuild,
-    run::CacheGroup,
+    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, cache::missing_defaults, config::CiConfig,
+    lane_build::LaneBuild, run::CacheGroup,
 };
 
 struct Consts;
@@ -413,6 +413,12 @@ impl CiEnvironment {
             insert(&mut vars, "SCCACHE_IDLE_TIMEOUT", SCCACHE_IDLE_TIMEOUT);
             if let Some(server_uds) = &sccache.paths.server_uds {
                 insert(&mut vars, "SCCACHE_SERVER_UDS", server_uds);
+            }
+            // sccache takes its configuration from the environment it starts
+            // in, so what the host left out of its store's environment is
+            // filled in here rather than trusted to every host file.
+            for (name, value) in missing_defaults(|name| env::var(name).ok()) {
+                insert(&mut vars, name, value);
             }
         }
         insert(&mut vars, "SWIFTPM_CACHE_PATH", &swiftpm_cache);
@@ -1087,6 +1093,14 @@ mod tests {
                     .map(OsString::as_os_str),
                 Some(OsStr::new(SCCACHE_IDLE_TIMEOUT))
             );
+            // The host named its store and left the prefix out, as every
+            // Linux host file did: the server must still write under it.
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_S3_KEY_PREFIX"))
+                    .map(OsString::as_os_str),
+                Some(OsStr::new("sccache"))
+            );
+            assert!(!vars.contains_key(OsStr::new("SCCACHE_REGION")));
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());
             let fixture_lease = root.join("review/fixtures/.kithara-ci-leases/job-29");
@@ -1119,6 +1133,10 @@ mod tests {
             .env(ChildEnv::CACHE_ROOT, directory.path())
             .env("KITHARA_CI_CACHE_ROOT", directory.path())
             .env("KITHARA_CACHE_TRUST", "review")
+            .env("SCCACHE_BUCKET", "kithara-review")
+            .env("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000")
+            .env("SCCACHE_REGION", "us-east-1")
+            .env_remove("SCCACHE_S3_KEY_PREFIX")
             .env("GITLAB_CI", "true")
             .env("CI_RUNNER_ID", "999")
             .env("CI_CONCURRENT_ID", "1")
