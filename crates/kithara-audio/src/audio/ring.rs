@@ -204,18 +204,6 @@ impl RingConsumer {
             // that timer needs global quiescence, so the wake is the only
             // release that costs nothing. The blocking path states the demand
             // before it parks, and a non-blocking poll has no park to carry it.
-            //
-            // The park the blocking path takes is what the hang watchdog reads,
-            // so a reader that polls instead leaves no record of the demand it
-            // kept repeating. The probe is that record: paired with the
-            // producer's own park it says whether the two ends agree about the
-            // ring, and the epoch says whether they are talking about the same
-            // seek.
-            kithara::probe_event!(
-                reader_ring_empty,
-                epoch = self.validator.epoch,
-                preloaded = u64::from(self.preloaded)
-            );
             wake_worker(ctx.worker, self.consumer_wake_mode);
             return RecvOutcome::Empty;
         }
