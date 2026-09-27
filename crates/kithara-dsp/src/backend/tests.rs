@@ -42,7 +42,7 @@ struct Pairs {
 }
 
 fn pairs() -> Vec<Pairs> {
-    let mut pairs = vec![
+    Vec::from([
         Pairs {
             name: "portable-native",
             deinterleave_pair: portable::deinterleave_pair,
@@ -53,14 +53,13 @@ fn pairs() -> Vec<Pairs> {
             deinterleave_pair: |input, left, right| dispatch!(Level::fallback(), simd => portable::deinterleave_pair_kernel(simd, input, left, right)),
             interleave_pair: |left, right, output| dispatch!(Level::fallback(), simd => portable::interleave_pair_kernel(simd, left, right, output)),
         },
-    ];
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pairs.push(Pairs {
-        name: "accelerate",
-        deinterleave_pair: accelerate::deinterleave_pair,
-        interleave_pair: accelerate::interleave_pair,
-    });
-    pairs
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Pairs {
+            name: "accelerate",
+            deinterleave_pair: accelerate::deinterleave_pair,
+            interleave_pair: accelerate::interleave_pair,
+        },
+    ])
 }
 
 fn signal(len: usize, wave: Wave) -> Vec<f32> {
