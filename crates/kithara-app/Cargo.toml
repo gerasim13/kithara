@@ -85,6 +85,7 @@ kithara = { workspace = true, default-features = false, features = [
     "warp",
     "worker",
 ] }
+kithara-app-document = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-events = { workspace = true }
@@ -148,7 +149,7 @@ tracing-wasm = { workspace = true }
 kithara = { workspace = true, default-features = false, features = ["download", "apple", "client-wreq"] }
 
 [build-dependencies]
-serde_yaml_ng = { workspace = true }
+kithara-app-document = { workspace = true }
 
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["usdt", "download", "offline", "ui-capture"] }

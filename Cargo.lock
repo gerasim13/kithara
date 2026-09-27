@@ -4501,6 +4501,7 @@ dependencies = [
  "iced",
  "kithara",
  "kithara-app",
+ "kithara-app-document",
  "kithara-assets",
  "kithara-derive",
  "kithara-encode",
@@ -4524,6 +4525,15 @@ dependencies = [
  "tracing-subscriber",
  "tracing-wasm",
  "url",
+]
+
+[[package]]
+name = "kithara-app-document"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "serde_yaml_ng",
 ]
 
 [[package]]

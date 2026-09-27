@@ -26,12 +26,12 @@ use kithara::{
     queue::QueueConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
+use kithara_app_document::merge;
 use serde_yaml_ng::Value;
 
 use super::{
     env::{MissingEnv, expand},
     layouts::asset_layouts,
-    merge::merge,
     policy::{PolicyError, drm_policy},
     schema::Document,
 };

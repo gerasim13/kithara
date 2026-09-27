@@ -730,12 +730,18 @@ prefix_args = [
 
 [test.lanes.app]
 program = "cargo"
-owns = ["crates/kithara-app/", "tests/crates/app/"]
+owns = [
+  "crates/kithara-app/",
+  "crates/kithara-app-document/",
+  "tests/crates/app/",
+]
 prefix_args = [
   "nextest",
   "run",
   "-p",
   "kithara-app",
+  "-p",
+  "kithara-app-document",
   "-p",
   "kithara-app-tests",
   "--cargo-profile",
