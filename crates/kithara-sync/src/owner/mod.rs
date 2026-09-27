@@ -1,6 +1,7 @@
 mod descent;
 mod lifecycle;
 mod mutation;
+mod pending;
 mod placement;
 mod preparation;
 mod relocation;

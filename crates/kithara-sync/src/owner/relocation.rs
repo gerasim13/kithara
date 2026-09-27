@@ -4,8 +4,9 @@ use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_warp::{AssetFrame, BeatGridId, PresentationFrontier};
 
 use super::{
+    pending::Entry,
     placement::{Missing, place},
-    preparation::{Decision, Entry},
+    preparation::Decision,
     state::GroupState,
 };
 use crate::{AlignmentSource, LoadGeneration, SyncAdmission, SyncError, SyncGroup};

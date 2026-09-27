@@ -947,7 +947,13 @@ fn rejected_public_enable_restores_the_still_sounding_manual_mode() {
         .expect("owner accepts a pre-claim rejection");
     assert_eq!(group.mode(), SyncMode::Off);
     assert_eq!(group.tempo(), None);
-    assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Rejected {
+            reason: SyncExecutionReject::Capacity,
+            ..
+        }
+    ));
     let retry = group
         .transact(sync_at(deck, SyncIntent::Enable, SessionFrame::new(4_096)))
         .expect("ON can retry from the actual manual mode");

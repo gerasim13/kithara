@@ -9,6 +9,7 @@ use kithara_warp::{
 use super::{
     descent::{Parent, Staged, Takeover, output_transport},
     lifecycle::Applied,
+    pending::{Entry, Pending, Phase, transition},
     placement::{
         Missing, Placement, carry, continue_on, entry_window, place, place_mapped, project,
         retarget_boundary,
@@ -22,121 +23,6 @@ use crate::{
     SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncTransition,
     TopologyStamp,
 };
-
-/// The one unapplied decision a group holds for a direct member.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum Pending {
-    /// The member's preparation is issued to its executor.
-    Prepared {
-        preparation: SyncPreparation,
-        entry: Entry,
-        phase: Phase,
-    },
-    /// The member's preparation needs grid coverage not yet published.
-    Waiting {
-        member: BeatGridId,
-        operation: SyncOperationId,
-        load: LoadGeneration,
-        transport: TransportRevision,
-        required: MapRegion,
-    },
-}
-
-/// How a preparation moves its member.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum Entry {
-    /// A silent member starts to sound, and its activation must stay inside
-    /// the launch window it was asked for.
-    Launch(Range<SessionFrame>),
-    /// A sounding member leaves its applied map.
-    Replace,
-    /// A public deck entry replans from its actual source inside this window.
-    Public {
-        source: AlignmentSource,
-        window: Range<SessionFrame>,
-    },
-    /// A sounding member moves to an exact cue while its applied map keeps
-    /// sounding; a new group grid withdraws it rather than carrying it.
-    Relocate,
-}
-
-/// How far the executor carried a preparation out.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Phase {
-    /// Issued and not acknowledged yet.
-    Issued,
-    /// Held by the executor, which may still drop it.
-    Installed,
-    /// Committed to the output; only its presentation or a new session axis
-    /// ends it.
-    Armed,
-}
-
-impl Pending {
-    pub(super) fn member(&self) -> BeatGridId {
-        match self {
-            Self::Prepared { preparation, .. } => preparation.stamp().member().grid_id(),
-            Self::Waiting { member, .. } => *member,
-        }
-    }
-
-    pub(super) fn operation(&self) -> SyncOperationId {
-        match self {
-            Self::Prepared { preparation, .. } => preparation.stamp().operation(),
-            Self::Waiting { operation, .. } => *operation,
-        }
-    }
-
-    pub(super) fn load(&self) -> LoadGeneration {
-        match self {
-            Self::Prepared { preparation, .. } => preparation.stamp().load(),
-            Self::Waiting { load, .. } => *load,
-        }
-    }
-
-    pub(super) fn transport(&self) -> TransportRevision {
-        match self {
-            Self::Prepared { preparation, .. } => preparation.stamp().transport(),
-            Self::Waiting { transport, .. } => *transport,
-        }
-    }
-
-    pub(super) fn enters_map(&self) -> bool {
-        match self {
-            Self::Prepared { preparation, .. } => {
-                matches!(preparation.effect(), SyncEffect::Projection { .. })
-            }
-            Self::Waiting { .. } => false,
-        }
-    }
-
-    pub(super) const fn preparation(&self) -> Option<&SyncPreparation> {
-        match self {
-            Self::Prepared { preparation, .. } => Some(preparation),
-            Self::Waiting { .. } => None,
-        }
-    }
-
-    const fn relocates(&self) -> bool {
-        matches!(
-            self,
-            Self::Prepared {
-                entry: Entry::Relocate,
-                ..
-            }
-        )
-    }
-
-    pub(super) const fn armed(&self) -> bool {
-        matches!(
-            self,
-            Self::Prepared {
-                phase: Phase::Armed,
-                ..
-            }
-        )
-    }
-}
 
 /// The request one preparation answers.
 pub(super) struct PrepareRequest {
@@ -414,7 +300,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
         let operation = take_operation(self.grid.id(), &mut self.next_operation)?;
         let topology = self.topology_stamp();
-        let pending = Mint {
+        let mint = Mint {
             owner: &self.grid,
             member: &member,
             operation,
@@ -424,17 +310,30 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             output_transport: output_transport(self.timeline, self.parent),
             entry,
             replaces,
-        }
-        .pending(planned, &mut next_map)?;
-        let admission = match &pending {
-            Pending::Prepared { preparation, .. } => SyncAdmission::Prepared(preparation.clone()),
-            Pending::Waiting { required, .. } => SyncAdmission::Deferred {
-                operation,
-                topology,
-                required: *required,
-            },
+        };
+        let (pending, admission) = match planned {
+            Ok((alignment, plan)) => {
+                let preparation = mint.preparation(alignment, plan, &mut next_map);
+                let admission = SyncAdmission::Prepared(preparation.clone());
+                let pending = Pending::Prepared {
+                    preparation,
+                    entry: mint.entry,
+                    phase: Phase::Issued,
+                };
+                (pending, admission)
+            }
+            Err(Missing::Coverage(required)) => (
+                mint.waiting(required),
+                SyncAdmission::Deferred {
+                    operation,
+                    topology,
+                    required,
+                },
+            ),
+            Err(Missing::Refused(error)) => return Err(error),
         };
         self.next_map = next_map;
+        self.rejection = None;
         self.before_entry = self.reconcile_before_entry(
             &self.grid,
             self.timeline,
@@ -488,9 +387,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// activation, continuing the recording its applied map plays there; a
     /// relocation it held is withdrawn, and the retarget is a new operation.
     /// A Host-to-Local handoff uses the exact latch cut instead of choosing a
-    /// later beat, so the Local timeline and replacement map start together. A
-    /// timeline without geometry withdraws every decision but a handoff, and
-    /// a new axis withdraws everything, applied maps too.
+    /// later beat, so the Local timeline and replacement map start together.
+    /// A silent member's decision waiting to be planned again keeps waiting
+    /// on the Host timeline; a sounding one's is retargeted like any other.
+    /// A timeline without geometry withdraws every decision but a handoff,
+    /// and a new axis withdraws everything, applied maps too.
     pub(super) fn refreshed(
         &self,
         grid: &BeatGridSnapshot,
@@ -599,6 +500,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     }
                 }
                 (Some(waiting @ Pending::Waiting { .. }), None) => Some(waiting.clone()),
+                (Some(replanning @ Pending::Replanning { .. }), None)
+                    if live && matches!(timeline, Timeline::Host) =>
+                {
+                    Some(replanning.clone())
+                }
                 (
                     Some(
                         held @ Pending::Prepared {
@@ -754,10 +660,11 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     }
 
     /// Drops, on a topology change, every decision whose member left the
-    /// group and every issued or installed preparation: each was stamped with
-    /// the topology being replaced, and an execution receipt is never
-    /// restamped past a new fence. What is armed or applied already sounds,
-    /// so a member that stays keeps it.
+    /// group, every issued or installed preparation and every decision
+    /// waiting to be planned again: each was placed under the topology being
+    /// replaced, and an execution receipt is never restamped past a new
+    /// fence. What is armed or applied already sounds, so a member that stays
+    /// keeps it.
     pub(super) fn retain_current_pending(&mut self) -> SyncTransition {
         let held = std::mem::take(&mut self.pending);
         self.pending = held
@@ -769,7 +676,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         Pending::Prepared {
                             phase: Phase::Issued | Phase::Installed,
                             ..
-                        }
+                        } | Pending::Replanning { .. }
                     )
             })
             .cloned()
@@ -851,37 +758,6 @@ fn public_on_host(
     Ok(Some(Some(pending)))
 }
 
-/// The preparations `next` issues and withdraws compared with `held`: each
-/// one a member did not hold before is issued, and each one whose operation
-/// no preparation of its member carries on afterwards is withdrawn.
-pub(super) fn transition(held: &[Pending], next: &[Pending]) -> SyncTransition {
-    let issued = next
-        .iter()
-        .filter_map(Pending::preparation)
-        .filter(|preparation| {
-            !held
-                .iter()
-                .any(|old| old.preparation() == Some(preparation))
-        })
-        .cloned()
-        .collect();
-    let withdrawn = held
-        .iter()
-        .filter_map(Pending::preparation)
-        .filter(|preparation| {
-            let member = preparation.stamp().member().grid_id();
-            let operation = preparation.stamp().operation();
-            !next.iter().any(|new| {
-                new.preparation().is_some()
-                    && new.member() == member
-                    && new.operation() == operation
-            })
-        })
-        .map(SyncPreparation::stamp)
-        .collect();
-    SyncTransition::new(issued, withdrawn)
-}
-
 /// `held` when it still releases its member from a timeline that lost its
 /// geometry: a handoff.
 fn handoff(held: &Pending) -> Option<&Pending> {
@@ -891,7 +767,7 @@ fn handoff(held: &Pending) -> Option<&Pending> {
         {
             Some(held)
         }
-        Pending::Prepared { .. } | Pending::Waiting { .. } => None,
+        Pending::Prepared { .. } | Pending::Waiting { .. } | Pending::Replanning { .. } => None,
     }
 }
 
@@ -904,37 +780,51 @@ impl Mint<'_> {
         next_map: &mut Option<WarpMapRevision>,
     ) -> Result<Pending, SyncError> {
         match planned {
-            Ok((alignment, plan)) => {
-                *next_map = plan.activation().revision().checked_next();
-                Ok(Pending::Prepared {
-                    preparation: SyncPreparation::new(
-                        SyncExecutionStamp::new(
-                            self.operation,
-                            self.member.stamp(),
-                            self.owner.stamp(),
-                            self.topology,
-                            self.load,
-                            self.transport,
-                        )
-                        .with_output_transport(self.output_transport),
-                        SyncEffect::Projection {
-                            alignment,
-                            plan,
-                            replaces: self.replaces,
-                        },
-                    ),
-                    entry: self.entry,
-                    phase: Phase::Issued,
-                })
-            }
-            Err(Missing::Coverage(required)) => Ok(Pending::Waiting {
-                member: self.member.id(),
-                operation: self.operation,
-                load: self.load,
-                transport: self.transport,
-                required,
+            Ok((alignment, plan)) => Ok(Pending::Prepared {
+                preparation: self.preparation(alignment, plan, next_map),
+                entry: self.entry,
+                phase: Phase::Issued,
             }),
+            Err(Missing::Coverage(required)) => Ok(self.waiting(required)),
             Err(Missing::Refused(error)) => Err(error),
+        }
+    }
+
+    /// The preparation projecting the member through `plan`, spending the
+    /// map revision the projection takes.
+    fn preparation(
+        &self,
+        alignment: BeatAlignment,
+        plan: WarpPlan,
+        next_map: &mut Option<WarpMapRevision>,
+    ) -> SyncPreparation {
+        *next_map = plan.activation().revision().checked_next();
+        SyncPreparation::new(
+            SyncExecutionStamp::new(
+                self.operation,
+                self.member.stamp(),
+                self.owner.stamp(),
+                self.topology,
+                self.load,
+                self.transport,
+            )
+            .with_output_transport(self.output_transport),
+            SyncEffect::Projection {
+                alignment,
+                plan,
+                replaces: self.replaces,
+            },
+        )
+    }
+
+    /// The decision waiting for the grid coverage `required`.
+    fn waiting(self, required: MapRegion) -> Pending {
+        Pending::Waiting {
+            member: self.member.id(),
+            operation: self.operation,
+            load: self.load,
+            transport: self.transport,
+            required,
         }
     }
 }

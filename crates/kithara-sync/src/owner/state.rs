@@ -8,9 +8,9 @@ use kithara_warp::{
 
 use super::{
     descent::{Parent, Takeover},
-    lifecycle::Applied,
+    lifecycle::{Applied, Rejection},
     mutation::{materialize_topology, routed_group},
-    preparation::Pending,
+    pending::Pending,
     timeline::{Blocked, Custodian, PriorTimeline, Timeline},
 };
 use crate::{
@@ -32,6 +32,8 @@ pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     pub(super) parent: Option<Parent>,
     pub(super) next_operation: Option<SyncOperationId>,
     pub(super) blocked: Option<Blocked>,
+    pub(super) rejection: Option<Rejection>,
+    pub(super) replanned: Option<SyncOperationId>,
     pub(super) pending: Vec<Pending>,
     pub(super) applied: Vec<Applied>,
     pub(super) next_map: Option<WarpMapRevision>,
@@ -55,6 +57,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             next_operation: Some(SyncOperationId::first()),
             topology_revision: TopologyRevision::first(),
             blocked: None,
+            rejection: None,
+            replanned: None,
             pending: Vec::new(),
             applied: Vec::new(),
             next_map: Some(WarpMapRevision::first()),
@@ -372,7 +376,18 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 .max_by_key(|pending| pending.operation())
         });
         match latest {
-            None => self.applied_status(topology),
+            None => self.rejection.map_or_else(
+                || self.applied_status(topology),
+                |Rejection { operation, reason }| SyncStatusSnapshot::Rejected {
+                    operation,
+                    topology,
+                    reason,
+                },
+            ),
+            Some(Pending::Replanning { operation, .. }) => SyncStatusSnapshot::Replanning {
+                operation: *operation,
+                topology,
+            },
             Some(Pending::Waiting {
                 operation,
                 required,

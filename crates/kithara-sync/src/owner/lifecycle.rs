@@ -2,13 +2,15 @@ use kithara_warp::{BeatGridId, BeatGridQuery, BeatGridStamp, WarpMapRevision, Wa
 use num_traits::ToPrimitive;
 
 use super::{
-    preparation::{Pending, Phase, transition},
+    pending::{Pending, Phase, transition},
     state::GroupState,
-    timeline::Custodian,
+    timeline::{Custodian, Timeline},
+    transaction::take_operation,
 };
 use crate::{
-    SourceChange, SyncApplied, SyncEffect, SyncError, SyncExecutionStamp, SyncGroup,
-    SyncPreparation, SyncReceipt, SyncStatusSnapshot, SyncTransition,
+    SourceChange, SyncAdmission, SyncApplied, SyncEffect, SyncError, SyncExecutionReject,
+    SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncReceipt,
+    SyncStatusSnapshot, SyncTransition,
 };
 
 /// The map one direct member sounds through, as its executor presented it.
@@ -29,10 +31,17 @@ pub(super) struct Applied {
     locked_grid: BeatGridStamp,
 }
 
+/// The latest decision of a group that ended without sounding.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Rejection {
+    pub(super) operation: SyncOperationId,
+    pub(super) reason: SyncExecutionReject,
+}
+
 /// What one receipt does to the preparation its member holds.
 enum Step {
     Phase(Phase),
-    Drop,
+    Drop(SyncExecutionReject),
     Present(SyncApplied),
 }
 
@@ -173,12 +182,16 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// direct member.
     ///
     /// A receipt advances its preparation one phase at a time: installed,
-    /// armed, presented; installing and arming need the member grid the
-    /// preparation was placed on to still be current. A rejection drops a
-    /// preparation that is not armed and leaves the member on the map it
-    /// already sounds through. A presentation makes the preparation's map the
-    /// member's applied one, or releases the member for a handoff. Nothing
-    /// changes on a refusal.
+    /// armed, presented. Installing needs the member grid the preparation was
+    /// placed on to still be current; what the executor holds already arms
+    /// and sounds on a member grid refined since, and a Host deck then waits
+    /// to catch up with the refinement. A rejection drops a preparation that
+    /// is not armed and leaves the member on the map it already sounds
+    /// through. A Host deck's entry or retarget that missed for a transient
+    /// reason, or on a refined member grid, instead waits to be planned once
+    /// more; a second miss ends it. A presentation makes the preparation's
+    /// map the member's applied one, or releases the member for a handoff.
+    /// Nothing changes on a refusal.
     pub(super) fn record(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
         let stamp = receipt.stamp();
         let member = stamp.member().grid_id();
@@ -195,11 +208,17 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             .enumerate()
             .find_map(|(index, held)| match held {
                 Pending::Prepared {
-                    preparation, phase, ..
-                } if held.member() == member => Some((index, preparation, *phase)),
-                Pending::Prepared { .. } | Pending::Waiting { .. } => None,
+                    preparation,
+                    entry,
+                    phase,
+                } if held.member() == member => {
+                    Some((index, preparation, entry.replans_a_miss(), *phase))
+                }
+                Pending::Prepared { .. } | Pending::Waiting { .. } | Pending::Replanning { .. } => {
+                    None
+                }
             });
-        let Some((index, preparation, phase)) = held else {
+        let Some((index, preparation, replans_a_miss, phase)) = held else {
             return Err(if self.sounds(stamp) {
                 SyncError::DuplicateAcknowledgement {
                     operation: stamp.operation(),
@@ -231,7 +250,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         let step = match (receipt, phase) {
             (SyncReceipt::Installed(_), Phase::Issued) => Step::Phase(Phase::Installed),
             (SyncReceipt::Armed(_), Phase::Installed) => Step::Phase(Phase::Armed),
-            (SyncReceipt::Rejected { .. }, Phase::Issued | Phase::Installed) => Step::Drop,
+            (SyncReceipt::Rejected { reason, .. }, Phase::Issued | Phase::Installed) => {
+                Step::Drop(reason)
+            }
             (SyncReceipt::Presented(applied), Phase::Armed) => Step::Present(applied),
             (SyncReceipt::Installed(_), Phase::Installed | Phase::Armed)
             | (SyncReceipt::Armed(_), Phase::Armed) => {
@@ -239,38 +260,49 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }
             _ => return Err(SyncError::ReceiptOutOfOrder { operation }),
         };
-        if matches!(step, Step::Phase(_)) && current != expected.member() {
+        let refined = current != expected.member();
+        if matches!(step, Step::Phase(Phase::Installed)) && refined {
             return Err(SyncError::StaleGridRevision {
                 current,
                 given: expected.member(),
             });
         }
-        let restoration = match (self.before_entry, &step) {
-            (Some((held, prior)), Step::Drop) if held == Custodian::Decision(operation) => {
-                Some((prior, self.restored_entry_grid(prior)?))
-            }
-            _ => None,
-        };
+        let host_deck = matches!(self.timeline, Timeline::Host)
+            && matches!(self.members.as_slice(), [SyncMember::Grid { .. }])
+            && matches!(preparation.effect(), SyncEffect::Projection { .. });
         match step {
             Step::Phase(next) => {
                 if let Some(Pending::Prepared { phase, .. }) = self.pending.get_mut(index) {
                     *phase = next;
                 }
             }
-            Step::Drop => {
-                self.pending.remove(index);
-                if let Some((prior, grid)) = restoration {
-                    for lane in &mut self.applied {
-                        lane.restore_local_lock(prior.grid(), grid.stamp());
+            Step::Drop(reason) => {
+                let transient = refined
+                    || matches!(
+                        reason,
+                        SyncExecutionReject::Late | SyncExecutionReject::ControlBusy
+                    );
+                if host_deck && replans_a_miss && transient && self.replanned != Some(operation) {
+                    if let Some(held) = self.pending.get_mut(index) {
+                        *held = Pending::Replanning {
+                            member,
+                            operation,
+                            load: expected.load(),
+                            transport: expected.transport(),
+                            missed: Some(reason),
+                        };
                     }
-                    self.timeline = prior.timeline();
-                    self.grid = grid;
-                    self.before_entry = None;
-                    self.blocked = None;
+                } else {
+                    self.end_decision(index, operation)?;
+                    self.rejection = Some(Rejection { operation, reason });
                 }
             }
             Step::Present(applied) => {
                 let lane = presented(preparation, applied)?;
+                let mut next_operation = self.next_operation;
+                let catch_up = (refined && host_deck && lane.is_some())
+                    .then(|| take_operation(self.grid.id(), &mut next_operation))
+                    .transpose()?;
                 self.pending.remove(index);
                 self.applied.retain(|held| held.member() != member);
                 self.applied.extend(lane);
@@ -280,9 +312,81 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 {
                     self.before_entry = None;
                 }
+                if let Some(catch_up) = catch_up {
+                    self.next_operation = next_operation;
+                    self.pending.push(Pending::Replanning {
+                        member,
+                        operation: catch_up,
+                        load: expected.load(),
+                        transport: expected.transport(),
+                        missed: None,
+                    });
+                }
+                self.rejection = None;
+                self.replanned = None;
             }
         }
         Ok(self.status())
+    }
+
+    /// Ends the decision a deck holds while it waits to be planned again,
+    /// because its Host cannot observe the track afresh. A missed decision
+    /// ends rejected for the reason it missed with; a catch-up leaves the
+    /// track sounding through the map it presented.
+    pub(super) fn abandon_replan(
+        &mut self,
+        operation: SyncOperationId,
+    ) -> Result<SyncAdmission, SyncError> {
+        let (index, missed) = self
+            .pending
+            .iter()
+            .enumerate()
+            .find_map(|(index, held)| match held {
+                Pending::Replanning {
+                    operation: waiting,
+                    missed,
+                    ..
+                } if *waiting == operation => Some((index, *missed)),
+                Pending::Replanning { .. } | Pending::Prepared { .. } | Pending::Waiting { .. } => {
+                    None
+                }
+            })
+            .ok_or(SyncError::NotReplanning { operation })?;
+        let reserved = self.reserve_operation()?;
+        self.end_decision(index, operation)?;
+        if let Some(reason) = missed {
+            self.rejection = Some(Rejection { operation, reason });
+        }
+        self.next_operation = reserved.checked_next();
+        Ok(SyncAdmission::StateChanged {
+            operation: reserved,
+            topology: self.topology_stamp(),
+            mode: self.mode(),
+            grid: self.grid.stamp(),
+            transition: SyncTransition::default(),
+        })
+    }
+
+    /// Ends the decision held at `index` without it sounding. An unpresented
+    /// entry hands its group back the timeline that still sounds.
+    fn end_decision(&mut self, index: usize, operation: SyncOperationId) -> Result<(), SyncError> {
+        let restoration = match self.before_entry {
+            Some((held, prior)) if held == Custodian::Decision(operation) => {
+                Some((prior, self.restored_entry_grid(prior)?))
+            }
+            _ => None,
+        };
+        self.pending.remove(index);
+        if let Some((prior, grid)) = restoration {
+            for lane in &mut self.applied {
+                lane.restore_local_lock(prior.grid(), grid.stamp());
+            }
+            self.timeline = prior.timeline();
+            self.grid = grid;
+            self.before_entry = None;
+            self.blocked = None;
+        }
+        Ok(())
     }
 
     /// Whether `stamp` names the presentation a member already sounds through.

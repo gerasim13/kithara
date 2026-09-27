@@ -1,3 +1,4 @@
+use kithara_play::player::ResidentLoadObservation;
 use portable_atomic::{AtomicF32, Ordering};
 
 /// The part of a player the Host holds: a web player stays on its own thread, so the
@@ -15,5 +16,11 @@ impl HeldPlayer {
 
     pub(crate) fn host_level(&self) -> f32 {
         self.0.load(Ordering::Relaxed)
+    }
+
+    /// The Host holds no web player it could observe, so a decision waiting
+    /// for a fresh observation of its track ends.
+    pub(crate) const fn resident_observation(&self) -> Option<ResidentLoadObservation> {
+        None
     }
 }

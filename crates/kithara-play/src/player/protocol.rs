@@ -30,6 +30,13 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Read one coherent playback view.
     fn playback_view(&self) -> PlaybackView;
 
+    /// One committed resident load and its matching live render
+    /// observation, read without entering the player's command admission,
+    /// so the player's session owner can read it while a command of this
+    /// player waits on that owner. `None` once the player closed or while
+    /// nothing is resident.
+    fn resident_observation(&self) -> Option<ResidentLoadObservation>;
+
     /// Seek within the current item.
     fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
 
@@ -111,6 +118,13 @@ where
             .playback_snapshot()
             .map(PlaybackView::from)
             .unwrap_or_default()
+    }
+
+    fn resident_observation(&self) -> Option<ResidentLoadObservation> {
+        if self.runtime.is_closed() {
+            return None;
+        }
+        self.runtime.resident_sync_observation()
     }
 
     fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {

@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     SyncAdmission, SyncEffect, SyncError, SyncGroup, SyncIntent, SyncMemberKind, SyncMode,
-    SyncPreparation, owner::preparation::Pending,
+    SyncPreparation, owner::pending::Pending,
 };
 
 /// A deck following `anchor` as revision one of the parent `parent`.
@@ -39,7 +39,7 @@ pub(super) fn prepared(group: &Group, member: BeatGridId) -> SyncPreparation {
             {
                 Some(preparation.clone())
             }
-            Pending::Prepared { .. } | Pending::Waiting { .. } => None,
+            Pending::Prepared { .. } | Pending::Waiting { .. } | Pending::Replanning { .. } => None,
         })
         .expect("the member holds a prepared map")
 }

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use kithara_play::player::ResidentLoadObservation;
 use kithara_sync::{
     ExecutedGroup, GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup,
     SyncGroupSnapshot, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
@@ -34,6 +35,10 @@ impl PlayerMember {
             /// Reads the desired Host level used for later graph registration.
             #[must_use]
             pub(crate) fn host_level(&self) -> f32;
+            /// Observes the deck's resident track afresh, outside its player's
+            /// command admission.
+            #[must_use]
+            pub(crate) fn resident_observation(&self) -> Option<ResidentLoadObservation>;
         }
     }
 }

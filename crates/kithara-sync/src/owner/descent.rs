@@ -3,7 +3,8 @@ use kithara_warp::{BeatGridSnapshot, BeatGridStamp, MapAxis, WarpMapRevision};
 
 use super::{
     lifecycle::Applied,
-    preparation::{Pending, Refreshed, transition},
+    pending::{Pending, transition},
+    preparation::Refreshed,
     state::{GroupState, Withdrawal, validate_successor},
     timeline::{Custodian, PriorTimeline, Timeline},
     transaction::take_operation,

@@ -6,9 +6,9 @@ use kithara_warp::{
 
 use crate::{
     ControlError, LoadGeneration, ParentFact, SyncAdmission, SyncApplied, SyncCapability,
-    SyncExecutionStamp, SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberKind, SyncMode,
-    SyncOperation, SyncOperationId, SyncReceipt, SyncRejected, SyncStaged, SyncTransition,
-    TopologyStamp,
+    SyncExecutionReject, SyncExecutionStamp, SyncGroupSnapshot, SyncGroupTopologyError,
+    SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt, SyncRejected,
+    SyncStaged, SyncTransition, TopologyStamp,
 };
 
 /// Canonical synchronization state observed from one live group.
@@ -31,6 +31,19 @@ pub enum SyncStatusSnapshot {
         topology: TopologyStamp,
         warp_map: Option<WarpMapRevision>,
         activation: SessionFrame,
+    },
+    /// A decision waits for its Host to observe the track's source afresh
+    /// and plan it once more.
+    Replanning {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+    },
+    /// The latest decision ended without sounding, for `reason`; the track
+    /// sounds on as it did before.
+    Rejected {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        reason: SyncExecutionReject,
     },
     /// The renderer has applied a continuity-preserving correction.
     Converging {
@@ -248,6 +261,14 @@ pub enum SyncError {
     /// source change.
     #[error("member {member_id} source change can be reported only by its player")]
     SourceChangeUnverified { member_id: BeatGridId },
+    /// A live public transaction cannot replan a decision from an
+    /// observation the Host did not take itself.
+    #[error("group {group_id} replans only from its Host's own observation")]
+    ReplanUnverified { group_id: BeatGridId },
+    /// A replan named a decision that no longer waits for one: a newer
+    /// decision superseded it, or it ended.
+    #[error("operation {operation} is not waiting to be planned again")]
+    NotReplanning { operation: SyncOperationId },
     /// A group owner cannot mint another warp-map revision.
     #[error("warp-map revision space is exhausted for group {group_id}")]
     WarpMapRevisionExhausted { group_id: BeatGridId },

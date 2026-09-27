@@ -4,6 +4,7 @@ mod dispatch;
 mod graph;
 mod inputs;
 pub(crate) mod protocol;
+mod replan;
 pub(crate) mod state;
 #[cfg(test)]
 pub(crate) mod tests;

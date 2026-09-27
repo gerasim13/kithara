@@ -26,7 +26,8 @@ impl SyncExecution {
             SyncOperation::Sync {
                 intent: SyncIntent::Enable | SyncIntent::AlignNow,
                 ..
-            } => self.0.admit_own_member(),
+            }
+            | SyncOperation::Replan { .. } => self.0.admit_own_member(),
             SyncOperation::Sync {
                 intent: SyncIntent::Free,
                 ..

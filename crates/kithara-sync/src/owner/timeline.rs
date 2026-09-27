@@ -6,6 +6,7 @@ use kithara_warp::{
 
 use super::{
     descent::{Parent, Takeover},
+    pending::Pending,
     preparation::SyncEntry,
     state::{GroupState, Withdrawal, validate_successor},
     transaction::take_operation,
@@ -195,7 +196,53 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 source,
                 activation,
             });
-        self.commit(effect, entry)
+        let admission = self.commit(effect, entry)?;
+        self.rejection = None;
+        Ok(admission)
+    }
+
+    /// Plans once more the decision a deck holds while it waits for its
+    /// Host, from the source the Host observed afresh for the same load. The
+    /// deck's mode stays. A missed decision is planned once only: its
+    /// successor missing again ends it.
+    pub(super) fn transact_replan(
+        &mut self,
+        operation: SyncOperationId,
+        entry: SyncEntry,
+    ) -> Result<SyncAdmission, SyncError> {
+        let (member, load, missed) = self
+            .pending
+            .iter()
+            .find_map(|held| match held {
+                Pending::Replanning {
+                    member,
+                    operation: waiting,
+                    load,
+                    missed,
+                    ..
+                } if *waiting == operation => Some((*member, *load, *missed)),
+                Pending::Replanning { .. } | Pending::Prepared { .. } | Pending::Waiting { .. } => {
+                    None
+                }
+            })
+            .ok_or(SyncError::NotReplanning { operation })?;
+        if entry.load != load {
+            return Err(SyncError::LoadMismatch {
+                member_id: member,
+                expected: load,
+                given: entry.load,
+            });
+        }
+        let admission = self.commit(ModeEffect::Unchanged, Some(entry))?;
+        if missed.is_some() {
+            self.replanned = self
+                .pending
+                .iter()
+                .find(|held| held.member() == member)
+                .map(Pending::operation);
+        }
+        self.rejection = None;
+        Ok(admission)
     }
 
     /// Commits a tempo on a group that owns its timeline.

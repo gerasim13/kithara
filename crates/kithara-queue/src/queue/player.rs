@@ -27,6 +27,7 @@ where
         to self.player {
             fn set_host_level(&self, level: f32);
             fn host_level(&self) -> f32;
+            fn resident_observation(&self) -> Option<ResidentLoadObservation>;
         }
     }
 }

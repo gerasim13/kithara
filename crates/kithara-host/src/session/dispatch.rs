@@ -6,15 +6,11 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
-use kithara_play::{
-    PlayError, StreamShape,
-    player::{ResidentRender, ResidentStaging},
-};
-use kithara_signal::SessionFrame;
+use kithara_play::{PlayError, StreamShape};
 use kithara_sync::{
-    AlignmentSource, ControlEnterError, ControlGuard, GroupState, PermitCell, PreparedRevocation,
-    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperation,
-    SyncRejected, SyncTransition, TopologyOperation,
+    ControlEnterError, ControlGuard, GroupState, PermitCell, PreparedRevocation, SyncAdmission,
+    SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperation, SyncRejected,
+    SyncTransition, TopologyOperation,
 };
 use kithara_warp::{BeatGrid, BeatGridId};
 use tracing::{debug, trace, warn};
@@ -28,6 +24,7 @@ use super::{
         Cmd, HostCmd, HostReply, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
         SessionStream, SyncCmd,
     },
+    replan,
     state::{SessionState, register_player},
     transport,
     transport::RouteRestartStatus,
@@ -122,7 +119,7 @@ where
     }
 }
 
-fn enter_error(error: ControlEnterError) -> SessionError {
+pub(super) fn enter_error(error: ControlEnterError) -> SessionError {
     match error {
         ControlEnterError::Busy => SessionError::SyncControlBusy,
         ControlEnterError::Closed => SessionError::Sync(SyncError::OwnerUnavailable),
@@ -236,59 +233,23 @@ fn run_sync_cmd<T, S>(
             let Some(resident) = observation else {
                 return HostReply::Err(PlayError::NotReady);
             };
-            if matches!(intent, SyncIntent::Enable | SyncIntent::AlignNow)
-                && resident.staging() != ResidentStaging::Available
-            {
-                return HostReply::Err(PlayError::NotReady);
-            }
-            let ResidentRender::Snapshot(snapshot) = resident.render() else {
-                return HostReply::Err(PlayError::NotReady);
-            };
-            let Some(processed) = state
-                .transport_control
-                .as_mut()
-                .and_then(|transport| transport.observation().snapshot())
-            else {
-                return HostReply::Err(SessionError::TransportNotProcessed.into());
-            };
-            let output = snapshot.context().output();
-            if output.session_epoch() != processed.session_epoch()
-                || output.transport_revision() != Some(processed.revision())
-                || output.sample_rate() != processed.session_grid().axis().sample_rate()
-            {
-                return HostReply::Err(PlayError::NotReady);
-            }
-            let Some(entry) = state
-                .sync_cells
-                .iter()
-                .find(|entry| entry.cell.member() == member && entry.group == target)
-            else {
-                return HostReply::Err(SessionError::SyncMemberNotRegistered(member).into());
-            };
-            // The observation stands only for the source it was taken at.
-            if resident
-                .source()
-                .is_none_or(|observed| control.current_source(&entry.cell) != Ok(observed))
-            {
-                return HostReply::Err(PlayError::NotReady);
-            }
-            let (boundary, _) = match transport::commit_boundary(state) {
-                Ok(boundary) => boundary,
-                Err(error) => return HostReply::Err(error.into()),
-            };
-            let lower_bound = boundary.max(output.output_frames().end);
-            let Some(activation) = i64::from(lower_bound).checked_add(2048) else {
-                return HostReply::Err(SessionError::TransportFrameExhausted.into());
+            let entry = match replan::observed_entry(
+                state,
+                target,
+                member,
+                &resident,
+                matches!(intent, SyncIntent::Enable | SyncIntent::AlignNow),
+                control,
+            ) {
+                Ok(entry) => entry,
+                Err(error) => return HostReply::Err(error),
             };
             SyncOperation::Sync {
                 target,
-                load: resident.load(),
-                transport: processed.revision(),
-                source: AlignmentSource::Audible {
-                    frontier: snapshot.frontier(),
-                    speed: resident.requested_speed(),
-                },
-                activation: SessionFrame::new(activation),
+                load: entry.load,
+                transport: entry.transport,
+                source: entry.source,
+                activation: entry.activation,
                 intent,
             }
         }
@@ -333,8 +294,8 @@ fn run_sync_cmd<T, S>(
     HostReply::Admission(result)
 }
 
-/// Records one executor receipt on the root group and publishes the state it
-/// leaves; a refused receipt changes nothing and publishes nothing.
+/// Transacts one caller's operation on the root group. An operation only the
+/// Host's own observation may issue is refused and changes nothing.
 fn transact_root<T, S>(
     state: &mut SessionState<T, S>,
     operation: SyncOperation<PlayerMember>,
@@ -347,11 +308,25 @@ fn transact_root<T, S>(
         SyncOperation::InvalidateSource { target, .. } => {
             Some(SyncError::SourceChangeUnverified { member_id: *target })
         }
+        SyncOperation::Replan { target, .. } | SyncOperation::AbandonReplan { target, .. } => {
+            Some(SyncError::ReplanUnverified { group_id: *target })
+        }
         _ => None,
     };
     if let Some(error) = error {
         return Err(SyncRejected::new(error, operation));
     }
+    transact_verified(state, operation, control)
+}
+
+/// Transacts one operation the Host may issue on the root group: preflights
+/// every affected cell before the owner changes, then revokes the tickets
+/// the admission replaces. A refusal changes nothing.
+pub(super) fn transact_verified<T, S>(
+    state: &mut SessionState<T, S>,
+    operation: SyncOperation<PlayerMember>,
+    control: &ControlGuard<'_>,
+) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(
             SyncError::CapabilityUnavailable {
@@ -692,6 +667,11 @@ where
         && !matches!(error, SessionError::SyncControlBusy)
     {
         warn!(?error, "session tick failed");
+    }
+    if let Err(error) = replan::replan_waiting(state)
+        && !matches!(error, SessionError::SyncControlBusy)
+    {
+        warn!(?error, "replanning a waiting deck failed");
     }
 }
 

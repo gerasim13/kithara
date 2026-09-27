@@ -5,7 +5,7 @@ use super::{
         apply_topology_operations, materialize_topology, next_topology_revision, owns_direct_grid,
         preview_topology, routed_group, validate_topology_candidate,
     },
-    preparation::PrepareRequest,
+    preparation::{PrepareRequest, SyncEntry},
     relocation::RelocateRequest,
     state::GroupState,
     timeline::Custodian,
@@ -92,6 +92,23 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 smoothing,
                 ..
             } => self.transact_tempo(*tempo, *commit, *smoothing),
+            SyncOperation::Replan {
+                operation,
+                load,
+                transport,
+                source,
+                activation,
+                ..
+            } => self.transact_replan(
+                *operation,
+                SyncEntry {
+                    load: *load,
+                    transport: *transport,
+                    source: *source,
+                    activation: *activation,
+                },
+            ),
+            SyncOperation::AbandonReplan { operation, .. } => self.abandon_replan(*operation),
             SyncOperation::Transport { .. }
             | SyncOperation::Prepare { .. }
             | SyncOperation::Relocate { .. }
@@ -187,6 +204,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }
             SyncOperation::Topology { .. }
             | SyncOperation::Sync { .. }
+            | SyncOperation::Replan { .. }
+            | SyncOperation::AbandonReplan { .. }
             | SyncOperation::Tempo { .. } => Err(SyncError::CapabilityUnavailable {
                 capability: SyncCapability::Alignment,
             }),

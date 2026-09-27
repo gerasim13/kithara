@@ -565,10 +565,13 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use kithara_signal::SessionFrame;
-    use kithara_sync::{ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate};
+    use kithara_signal::{SessionFrame, TransportRevision};
+    use kithara_sync::{
+        AlignmentSource, LoadGeneration, ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate,
+        SyncOperationId,
+    };
     use kithara_test_utils::{bufpool::TestPools, kithara};
-    use kithara_warp::{BeatGridStamp, MapAxis, SessionAnchor, SessionBeat};
+    use kithara_warp::{AssetFrame, BeatGridStamp, MapAxis, SessionAnchor, SessionBeat};
 
     use super::*;
 
@@ -609,6 +612,35 @@ mod tests {
             assert_eq!(host.stage_fact(fact).err(), Some(refusal.clone()));
         }
         assert_eq!(host.snapshot().stamp(), grid.stamp());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn only_the_host_plans_a_waiting_deck_again() {
+        let mut host =
+            Host::<TestPools>::new(HostConfig::builder().build()).expect("fixture realtime Host");
+        let deck = BeatGridId::allocate().expect("deck identity");
+        let operation = SyncOperationId::first();
+        let refusal = SyncError::ReplanUnverified { group_id: deck };
+
+        for forged in [
+            SyncOperation::Replan {
+                target: deck,
+                operation,
+                load: LoadGeneration::first(),
+                transport: TransportRevision::first(),
+                source: AlignmentSource::Prepared(AssetFrame::default()),
+                activation: SessionFrame::new(0),
+            },
+            SyncOperation::AbandonReplan {
+                target: deck,
+                operation,
+            },
+        ] {
+            let rejected = host
+                .transact(forged)
+                .expect_err("only the Host's own observation settles a waiting decision");
+            assert_eq!(rejected.error(), &refusal);
+        }
     }
 
     #[kithara::test]

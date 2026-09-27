@@ -16,6 +16,7 @@ use super::{
     super::{
         dispatch::{pump_before_work, run_host_cmd},
         protocol::{HostCmd, HostCmdMsg, HostReply},
+        replan::replan_waiting,
         state::{RootView, SessionState, ensure_ctx},
     },
     OfflineSessionClient,
@@ -84,6 +85,7 @@ where
         // cannot be recorded. Never offer the same PCM range a second time.
         self.position = next_position;
         pump_before_work(state).map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        replan_waiting(state).map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         Ok(output)
     }
 

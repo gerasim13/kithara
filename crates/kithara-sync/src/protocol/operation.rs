@@ -116,6 +116,32 @@ pub enum SyncOperation<G: SyncGroup> {
         /// Strongest change committed since the owner last reconciled it.
         change: SourceChange,
     },
+    /// Plans once more the decision a Deck holds for its track while it
+    /// waits for its Host: one its executor missed for a transient reason,
+    /// or one that sounded on a track grid refined since. The Host observed
+    /// the track's source afresh for it.
+    Replan {
+        /// Stable Deck grid holding the decision.
+        target: BeatGridId,
+        /// Operation of the waiting decision.
+        operation: SyncOperationId,
+        /// Exact Track load the Host observed.
+        load: LoadGeneration,
+        /// Exact committed session transport state the Host observed.
+        transport: TransportRevision,
+        /// Where the track's recording stands, as the Host observed it.
+        source: AlignmentSource,
+        /// First output frame the new decision may take effect at.
+        activation: SessionFrame,
+    },
+    /// Ends the decision a Deck holds for its track while it waits for its
+    /// Host, which cannot observe the track's source afresh.
+    AbandonReplan {
+        /// Stable Deck grid holding the decision.
+        target: BeatGridId,
+        /// Operation of the waiting decision.
+        operation: SyncOperationId,
+    },
     /// Commits a new tempo on a group that owns its own beat timeline.
     Tempo {
         /// Stable group grid receiving the tempo.
@@ -142,6 +168,8 @@ impl<G: SyncGroup> SyncOperation<G> {
             | Self::Relocate { target, .. }
             | Self::WithdrawQuiescedMember { target }
             | Self::InvalidateSource { target, .. }
+            | Self::Replan { target, .. }
+            | Self::AbandonReplan { target, .. }
             | Self::Tempo { target, .. } => *target,
         }
     }

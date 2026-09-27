@@ -122,20 +122,20 @@ fn launched(group: &mut Group, track: BeatGridId, earliest: i64) -> SyncPreparat
     }
 }
 
-fn plan(preparation: &SyncPreparation) -> &WarpPlan {
+pub(super) fn plan(preparation: &SyncPreparation) -> &WarpPlan {
     let SyncEffect::Projection { plan, .. } = preparation.effect() else {
         panic!("expected a projection, got {preparation:?}");
     };
     plan
 }
 
-fn map(preparation: &SyncPreparation) -> WarpMapRevision {
+pub(super) fn map(preparation: &SyncPreparation) -> WarpMapRevision {
     plan(preparation).activation().revision()
 }
 
 /// The recording frame `plan` reaches at `output`, rounded as a renderer
 /// consumes it.
-fn source_at(plan: &WarpPlan, output: i64) -> u64 {
+pub(super) fn source_at(plan: &WarpPlan, output: i64) -> u64 {
     let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(output)) else {
         panic!("the plan covers frame {output}");
     };
@@ -143,7 +143,7 @@ fn source_at(plan: &WarpPlan, output: i64) -> u64 {
 }
 
 /// The receipt of `preparation` sounding exactly from its activation.
-fn presented(preparation: &SyncPreparation) -> SyncReceipt {
+pub(super) fn presented(preparation: &SyncPreparation) -> SyncReceipt {
     let (warp_map, activation) = preparation.activation();
     let source = match preparation.effect() {
         SyncEffect::Projection { plan, .. } => plan.activation().source(),
@@ -165,12 +165,12 @@ fn presented(preparation: &SyncPreparation) -> SyncReceipt {
     )
 }
 
-fn acknowledge(group: &mut Group, receipt: SyncReceipt) -> SyncStatusSnapshot {
+pub(super) fn acknowledge(group: &mut Group, receipt: SyncReceipt) -> SyncStatusSnapshot {
     group.acknowledge(receipt).expect("the receipt is recorded")
 }
 
 /// Installs, arms and presents `preparation`.
-fn sound(group: &mut Group, preparation: &SyncPreparation) -> SyncStatusSnapshot {
+pub(super) fn sound(group: &mut Group, preparation: &SyncPreparation) -> SyncStatusSnapshot {
     let _ = acknowledge(group, SyncReceipt::Installed(preparation.stamp()));
     let _ = acknowledge(group, SyncReceipt::Armed(preparation.stamp()));
     acknowledge(group, presented(preparation))
@@ -195,7 +195,10 @@ fn operation(admission: &SyncAdmission) -> SyncOperationId {
     }
 }
 
-fn transact(group: &mut Group, operation: SyncOperation<super::TestGroup>) -> SyncAdmission {
+pub(super) fn transact(
+    group: &mut Group,
+    operation: SyncOperation<super::TestGroup>,
+) -> SyncAdmission {
     group
         .transact(operation)
         .expect("the group admits the operation")
@@ -218,13 +221,13 @@ fn free_at(group: &mut Group, frame: i64) -> SyncAdmission {
 /// A track grid that publishes new revisions while its group owns it; a
 /// queued revision is published right after the next observation.
 #[derive(Clone)]
-struct PublishingGrid {
+pub(super) struct PublishingGrid {
     current: Arc<Mutex<BeatGridSnapshot>>,
     queued: Arc<Mutex<Option<BeatGridSnapshot>>>,
 }
 
 impl PublishingGrid {
-    fn new(grid: BeatGridSnapshot) -> Self {
+    pub(super) fn new(grid: BeatGridSnapshot) -> Self {
         Self {
             current: Arc::new(Mutex::new(grid)),
             queued: Arc::new(Mutex::new(None)),
@@ -260,7 +263,7 @@ fn successor(live: &PublishingGrid, frames: u64) -> BeatGridSnapshot {
 }
 
 /// The next complete revision of the track grid `live` publishes.
-fn publish_next(live: &PublishingGrid) -> BeatGridSnapshot {
+pub(super) fn publish_next(live: &PublishingGrid) -> BeatGridSnapshot {
     let next = successor(live, 960_000);
     *live.current.lock() = next.clone();
     next
@@ -297,7 +300,7 @@ fn sounding_under_root(track: &PublishingGrid) -> (Group, BeatGridId, SyncPrepar
     (root, deck_id, preparation)
 }
 
-fn transition(admission: SyncAdmission) -> SyncTransition {
+pub(super) fn transition(admission: SyncAdmission) -> SyncTransition {
     match admission {
         SyncAdmission::StateChanged { transition, .. } => transition,
         admission => panic!("expected a state change, got {admission:?}"),
@@ -305,7 +308,7 @@ fn transition(admission: SyncAdmission) -> SyncTransition {
 }
 
 /// An accepted first Host entry that the executor has not claimed yet.
-fn pending_public_entry() -> (Group, BeatGridId, SyncPreparation) {
+pub(super) fn pending_public_entry() -> (Group, BeatGridId, SyncPreparation) {
     let (mut group, track, _) = owning_deck_with_parent();
     let deck = group.id();
     let admission = transact(
@@ -319,7 +322,7 @@ fn pending_public_entry() -> (Group, BeatGridId, SyncPreparation) {
     (group, track, entry.clone())
 }
 
-fn raw_successor(group: &mut Group, track: BeatGridId) -> SyncPreparation {
+pub(super) fn raw_successor(group: &mut Group, track: BeatGridId) -> SyncPreparation {
     let admission = prepare(group, track, cue(0), 0);
     let SyncAdmission::Prepared(preparation) = admission else {
         panic!("raw Prepare replaces the first entry: {admission:?}");
@@ -363,7 +366,14 @@ fn a_raw_replacement_rejection_restores_the_prior_manual_mode() {
         },
     );
     assert_eq!(group.mode(), SyncMode::Off);
-    assert!(matches!(status, SyncStatusSnapshot::Off { .. }));
+    assert_eq!(
+        status,
+        SyncStatusSnapshot::Rejected {
+            operation: successor.stamp().operation(),
+            topology: successor.stamp().topology(),
+            reason: SyncExecutionReject::Capacity,
+        }
+    );
     assert!(group.before_entry.is_none());
 }
 
@@ -599,8 +609,18 @@ fn rejecting_a_mapped_host_entry_keeps_the_exact_prior_local_lock() {
     );
     assert!(matches!(
         status,
-        SyncStatusSnapshot::Locked { applied, .. } if applied.stamp() == old.stamp()
+        SyncStatusSnapshot::Rejected {
+            reason: SyncExecutionReject::Capacity,
+            ..
+        }
     ));
+    let lane = group.applied_of(track).expect("the old map sounds on");
+    assert_eq!(lane.applied().stamp(), old.stamp());
+    assert_eq!(
+        lane.locked_grid(),
+        group.grid.stamp(),
+        "the old map still locks to the restored Local timeline"
+    );
     assert!(group.pending.is_empty());
     let retarget = transition(commit_tempo(&mut group));
     let [local] = retarget.issued() else {
@@ -615,8 +635,18 @@ fn rejecting_a_mapped_host_entry_keeps_the_exact_prior_local_lock() {
     );
     assert!(matches!(
         status,
-        SyncStatusSnapshot::Converging { applied, .. } if applied.stamp() == old.stamp()
+        SyncStatusSnapshot::Rejected {
+            reason: SyncExecutionReject::Capacity,
+            ..
+        }
     ));
+    let lane = group.applied_of(track).expect("the old map sounds on");
+    assert_eq!(lane.applied().stamp(), old.stamp());
+    assert_ne!(
+        lane.locked_grid(),
+        group.grid.stamp(),
+        "the old map converges on the new Local tempo"
+    );
 }
 
 #[kithara::test]
@@ -1011,7 +1041,7 @@ fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
 }
 
 #[kithara::test]
-fn a_member_grid_publication_fences_installing_and_arming() {
+fn a_member_grid_publication_fences_installing_but_not_what_the_executor_holds() {
     let mut group = synced_deck();
     let track = BeatGridId::allocate().expect("grid id");
     let live = PublishingGrid::new(asset_grid(track, 960_000, 24_000));
@@ -1033,24 +1063,13 @@ fn a_member_grid_publication_fences_installing_and_arming() {
     let installed = launched(&mut group, track, 0);
     assert_eq!(installed.stamp().member(), current);
     let _ = acknowledge(&mut group, SyncReceipt::Installed(installed.stamp()));
-    let republished = publish_next(&live).stamp();
-    let before = group.pending.clone();
-    assert_eq!(
-        group.acknowledge(SyncReceipt::Armed(installed.stamp())),
-        Err(SyncError::StaleGridRevision {
-            current: republished,
-            given: current,
-        })
-    );
-    assert_eq!(group.pending, before);
-
-    let _ = acknowledge(
-        &mut group,
-        SyncReceipt::Rejected {
-            stamp: installed.stamp(),
-            reason: SyncExecutionReject::Geometry,
-        },
-    );
+    let _ = publish_next(&live);
+    let _ = acknowledge(&mut group, SyncReceipt::Armed(installed.stamp()));
+    assert!(group.pending.iter().any(|held| held.armed()));
+    assert!(matches!(
+        acknowledge(&mut group, presented(&installed)),
+        SyncStatusSnapshot::Locked { .. }
+    ));
     assert!(group.pending.is_empty());
 }
 
@@ -1154,11 +1173,14 @@ fn a_rejected_launch_leaves_the_member_silent() {
 
     assert_eq!(
         status,
-        SyncStatusSnapshot::Off {
+        SyncStatusSnapshot::Rejected {
+            operation: preparation.stamp().operation(),
             topology: preparation.stamp().topology(),
+            reason: SyncExecutionReject::Geometry,
         }
     );
     assert!(group.pending.is_empty());
+    assert!(group.applied.is_empty());
 }
 
 #[kithara::test]
@@ -1401,10 +1423,20 @@ fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
     let SyncStatusSnapshot::Locked { applied, .. } = locked else {
         panic!("the first map locked");
     };
-    let SyncStatusSnapshot::Converging { applied: still, .. } = status else {
-        panic!("the old map sounds against a grid that moved on, got {status:?}");
-    };
-    assert_eq!(still, applied);
+    assert_eq!(
+        status,
+        SyncStatusSnapshot::Rejected {
+            operation: retarget.stamp().operation(),
+            topology: retarget.stamp().topology(),
+            reason: SyncExecutionReject::Late,
+        },
+        "a local deck does not plan a missed retarget again"
+    );
+    assert_eq!(
+        group.applied_of(track).map(|lane| lane.applied()),
+        Some(applied),
+        "the old map sounds on"
+    );
     assert!(group.pending.is_empty());
 }
 
@@ -1675,10 +1707,18 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
     );
 
     assert!(group.pending.is_empty());
-    assert!(
-        matches!(status, SyncStatusSnapshot::Converging { applied, .. } if applied.stamp() == preparation.stamp()),
-        "{status:?}"
+    assert_eq!(
+        status,
+        SyncStatusSnapshot::Rejected {
+            operation: handoff.stamp().operation(),
+            topology: handoff.stamp().topology(),
+            reason: SyncExecutionReject::Geometry,
+        }
     );
+    assert!(matches!(
+        group.applied_of(track).map(|lane| lane.applied()),
+        Some(applied) if applied.stamp() == preparation.stamp()
+    ));
 }
 
 #[kithara::test]
@@ -2002,7 +2042,13 @@ fn a_new_entry_after_a_source_change_inherits_the_prior_timeline() {
         },
     );
     assert_eq!(group.mode(), SyncMode::Off);
-    assert!(matches!(status, SyncStatusSnapshot::Off { .. }));
+    assert!(matches!(
+        status,
+        SyncStatusSnapshot::Rejected {
+            reason: SyncExecutionReject::Capacity,
+            ..
+        }
+    ));
 }
 
 #[kithara::test]
