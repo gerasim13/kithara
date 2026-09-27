@@ -223,7 +223,18 @@ where
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
+        // A pass reports one `Backpressured` for two unrelated reasons, and the
+        // count alone cannot separate them: the playback ring has no room for
+        // the next chunk, or the source is spent and its end marker is already
+        // queued. The first clears when the reader drains; the second never
+        // does. Naming each park at the site that takes it is what tells a
+        // wedge that is waiting for the reader from one that is already over.
         if !self.port.can_push_direct() {
+            kithara::probe_event!(
+                decoder_ring_full,
+                epoch = self.runtime.seek_epoch,
+                chunks_sent = self.runtime.chunks_sent
+            );
             return TickResult::Backpressured;
         }
 
@@ -275,7 +286,10 @@ where
                 }
             }
 
-            TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
+            TrackStep::Eof if self.runtime.eof_sent => {
+                kithara::probe_event!(decoder_source_spent, epoch = self.runtime.seek_epoch);
+                TickResult::Backpressured
+            }
 
             TrackStep::Eof => {
                 let epoch = self.source.decode_epoch();
