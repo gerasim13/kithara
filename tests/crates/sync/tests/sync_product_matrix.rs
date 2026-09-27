@@ -181,6 +181,9 @@ pub(super) struct SyncCase {
     gridded: bool,
     /// Each player's control-to-audio deadline; `None` keeps it unbounded.
     response_budget: Option<NonZeroUsize>,
+    /// The callback never waits for its decoder, as on a real-time host: an
+    /// underrun sounds instead of stalling the render.
+    realtime: bool,
 }
 
 impl SyncCase {
@@ -201,7 +204,13 @@ impl SyncCase {
             capacity: None,
             gridded: false,
             response_budget: None,
+            realtime: false,
         }
+    }
+
+    const fn realtime(mut self) -> Self {
+        self.realtime = true;
+        self
     }
 
     const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
@@ -293,6 +302,9 @@ const TEMPO_DOWN_30: SyncCase =
         .ride(TempoRide::Down, 30);
 pub(super) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
+/// [`ONE_DECK`] on a callback that never waits for its decoder.
+pub(super) const ONE_DECK_REALTIME: SyncCase =
+    SyncCase::running("one-deck-realtime", 1, 48_000, OperationOrder::PlaySyncSeek).realtime();
 pub(super) const PUBLIC_SYNTHETIC_ENABLE: SyncCase = SyncCase::running(
     "public-synthetic-enable",
     1,
@@ -366,14 +378,16 @@ pub(super) const SHARED_DEADLINE: SyncCase = SyncCase::running(
     48_000,
     OperationOrder::PlaySyncSeek,
 )
-.ride(TempoRide::Up, 120);
+.ride(TempoRide::Up, 120)
+.realtime();
 pub(super) const SHARED_DEADLINE_CONTROL: SyncCase = SyncCase::running(
     "shared-worker-control",
     1,
     48_000,
     OperationOrder::PlaySyncSeek,
 )
-.ride(TempoRide::Up, 120);
+.ride(TempoRide::Up, 120)
+.realtime();
 
 /// Two decks of one real track synced one after the other onto the Host grid.
 pub(super) const REAL_TRACK_SYNC: SyncCase = SyncCase::running(
@@ -785,7 +799,7 @@ impl ProductHarness {
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
                     .crossfade_duration(0.0)
-                    .block_on_underrun(true)
+                    .block_on_underrun(!case.realtime)
                     .maybe_response_budget_frames(case.response_budget)
                     .build(),
             );

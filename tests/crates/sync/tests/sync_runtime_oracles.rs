@@ -9,9 +9,9 @@ use kithara_integration_tests::{
 };
 
 use super::sync_product_matrix::{
-    Audible, BLOCK_FRAMES, CHANNELS, CUE, ONE_DECK, PreparedSources, ProductHarness,
-    SHARED_DEADLINE, SHARED_DEADLINE_CONTROL, SyncCase, mixed_sources, sweep_sources,
-    synthetic_sources,
+    Audible, BLOCK_FRAMES, CHANNELS, CUE, ONE_DECK, ONE_DECK_REALTIME, PreparedSources,
+    ProductHarness, SHARED_DEADLINE, SHARED_DEADLINE_CONTROL, SyncCase, mixed_sources,
+    sweep_sources, synthetic_sources,
 };
 
 const TWENTY_MS_FRAMES: usize = 960;
@@ -29,29 +29,29 @@ struct AlignedRun {
 }
 
 async fn tempo_retarget_run(
+    case: SyncCase,
     block_frames: usize,
     warm_blocks: usize,
     retarget: bool,
     prepared: &PreparedSources,
 ) -> CommandRun {
     let mut harness =
-        ProductHarness::new_for_block(ONE_DECK, prepared, CUE, Audible::Deck(0), block_frames)
-            .await;
-    harness.request_sync(ONE_DECK).await;
+        ProductHarness::new_for_block(case, prepared, CUE, Audible::Deck(0), block_frames).await;
+    harness.request_sync(case).await;
     let warm_frames = warm_blocks * BLOCK_FRAMES;
     for _ in 0..warm_frames.div_ceil(block_frames) {
-        let _ = harness.render(ONE_DECK, block_frames).await;
+        let _ = harness.render(case, block_frames).await;
     }
     let mut samples = harness
-        .capture_frames(ONE_DECK, ONE_DECK.sample_rate as usize, block_frames)
+        .capture_frames(case, case.sample_rate as usize, block_frames)
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
     if retarget {
-        harness.set_tempo(ONE_DECK, 132.0, false).await;
+        harness.set_tempo(case, 132.0, false).await;
     }
     samples.extend(
         harness
-            .capture_frames(ONE_DECK, ONE_DECK.sample_rate as usize * 2, block_frames)
+            .capture_frames(case, case.sample_rate as usize * 2, block_frames)
             .await,
     );
     CommandRun {
@@ -224,9 +224,10 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     for (phase, warm_blocks) in [("early", 47), ("middle", 94), ("late", 140)] {
         for block_frames in [128, 256, 512] {
             let control =
-                tempo_retarget_run(block_frames, warm_blocks, false, &sweep_sources).await;
+                tempo_retarget_run(ONE_DECK, block_frames, warm_blocks, false, &sweep_sources)
+                    .await;
             let candidate =
-                tempo_retarget_run(block_frames, warm_blocks, true, &sweep_sources).await;
+                tempo_retarget_run(ONE_DECK, block_frames, warm_blocks, true, &sweep_sources).await;
             let aligned = align_runs(&candidate, &control);
             let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
             let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
@@ -404,8 +405,10 @@ async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: Prepar
 )]
 #[ignore = "ignored-red: bound Warp render is not implemented"]
 async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: PreparedSources) {
-    let control = tempo_retarget_run(BLOCK_FRAMES, 16, false, &sweep_sources).await;
-    let candidate = tempo_retarget_run(BLOCK_FRAMES, 16, true, &sweep_sources).await;
+    let control =
+        tempo_retarget_run(ONE_DECK_REALTIME, BLOCK_FRAMES, 16, false, &sweep_sources).await;
+    let candidate =
+        tempo_retarget_run(ONE_DECK_REALTIME, BLOCK_FRAMES, 16, true, &sweep_sources).await;
     let aligned = align_runs(&candidate, &control);
     let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
     let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
