@@ -176,9 +176,10 @@ pub(super) fn acknowledge_root<T, S>(
                 .ok_or(SessionError::SyncMemberNotRegistered(member))?;
             match control.mint_permit(&cell.cell, stamp) {
                 Ok(permit) => Some(permit),
-                // The player is changing this source. The lane fails at the
-                // gate, and the change it waits for supersedes the rejection.
-                Err(ControlError::SourceReserved | ControlError::SourceChanged) => {
+                // A change committed after this pass reconciled the member.
+                // The lane fails at the gate, and the next pass withdraws it
+                // first, superseding the rejection.
+                Err(ControlError::SourceChanged) => {
                     queue_failed_gate_receipt(state, receipt)?;
                     return Err(SessionError::SyncControlBusy);
                 }

@@ -65,10 +65,14 @@ pub struct ControlGuard<'a> {
 impl<'arbiter> ControlGuard<'arbiter> {
     /// Mint the permit in the same owner reply that accepts Installed.
     ///
+    /// A player editing the source does not refuse the permit: it names the
+    /// committed source, so the edit parks it until the change is reconciled
+    /// and the permit withdrawn, or the edit aborts and the permit claims.
+    ///
     /// # Errors
     ///
     /// Returns an error when the cell belongs to another member or is
-    /// retired, or when its source is reserved or changed unreconciled.
+    /// retired, or when its source changed unreconciled.
     pub fn mint_permit(
         &self,
         cell: &PermitCell,
@@ -80,17 +84,20 @@ impl<'arbiter> ControlGuard<'arbiter> {
         if cell.retired.load(Ordering::Acquire) {
             return Err(ControlError::CellRetired);
         }
-        let source_revision = self.current_source(cell)?;
+        let source = cell.source.load(Ordering::Acquire);
+        if change_of(source) != consts::UNCHANGED {
+            return Err(ControlError::SourceChanged);
+        }
         Ok(ArmPermit {
             stamp,
             permit_revision: cell.permit_revision.load(Ordering::Acquire),
-            source_revision: source_revision.0,
+            source_revision: revision_of(source),
         })
     }
 
     /// The source revision a Host decision may rely on. A reservation taken
-    /// after this read parks every permit minted from it until its change
-    /// is reconciled or aborted.
+    /// after this read parks every permit minted since until its change is
+    /// reconciled or aborted.
     ///
     /// # Errors
     /// Returns an error when the source is reserved or changed unreconciled.

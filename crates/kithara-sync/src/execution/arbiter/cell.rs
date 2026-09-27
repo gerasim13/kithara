@@ -72,9 +72,9 @@ impl SyncGateBinding {
     }
 
     /// Take the exclusive right to change this member's source, without
-    /// waiting on the Host or the audio callback. While the right is held, a
-    /// permit for this member parks instead of claiming and the Host mints no
-    /// new one. Other members are unaffected.
+    /// waiting on the Host or the audio callback. While the right is held,
+    /// every permit for this member parks instead of claiming, including one
+    /// the Host mints meanwhile. Other members are unaffected.
     ///
     /// # Errors
     /// Returns an error when the source is already reserved or its revision

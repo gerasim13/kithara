@@ -198,16 +198,52 @@ fn a_reserved_source_parks_its_claim_while_another_member_claims() {
         .expect("an unrelated member claims while a is reserved")
         .finish_after_receipts();
     let control = arbiter.try_control().expect("owner enters");
-    assert!(matches!(
-        control.mint_permit(a.cell(), stamp(a.cell().member())),
-        Err(ControlError::SourceReserved)
-    ));
     assert_eq!(control.source_change(a.cell()), None);
     control
         .retire_cell(b.cell())
         .expect("retirement ignores reservations");
     drop(control);
     drop(reservation);
+}
+
+#[kithara::test]
+fn a_permit_minted_during_an_edit_waits_for_its_outcome() {
+    let arbiter = Arc::new(SyncArbiter::new());
+    let binding = bound(&arbiter);
+
+    let aborted = binding.reserve_source().expect("a player reserves");
+    let survives = permit(&binding);
+    assert_eq!(binding.permit_state(&survives), PermitState::Parked);
+    drop(aborted);
+    assert_eq!(
+        binding.permit_state(&survives),
+        PermitState::Current,
+        "an aborted edit leaves the permit its unchanged source"
+    );
+
+    let committed = binding.reserve_source().expect("a player reserves again");
+    let stale = permit(&binding);
+    assert_eq!(binding.permit_state(&stale), PermitState::Parked);
+    committed.publish(SourceChange::Discontinuity);
+    assert!(matches!(
+        arbiter.try_claim(&stale, binding.cell()),
+        Err(ClaimError::SourceParked)
+    ));
+    let control = arbiter.try_control().expect("owner enters");
+    let observed = control
+        .source_change(binding.cell())
+        .expect("the committed edit is pending");
+    control
+        .preflight_revoke(binding.cell())
+        .expect("preflight")
+        .revoke();
+    control.acknowledge_source_change(binding.cell(), observed);
+    drop(control);
+    assert_eq!(
+        binding.permit_state(&stale),
+        PermitState::Withdrawn,
+        "a committed edit withdraws the permit minted on the old source"
+    );
 }
 
 #[kithara::test]
