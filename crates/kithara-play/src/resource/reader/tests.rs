@@ -1,5 +1,6 @@
 use std::{
     num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
     sync::atomic::{AtomicU8, Ordering},
 };
 
@@ -533,10 +534,12 @@ fn starving_track(samples: &[f32], frames: usize) -> (PlayerTrack, RenderReader)
     (track, evidence)
 }
 
-/// Render the `block`-th output block of one track on the session axis.
+/// Render the `range` of the `block`-th output block of one track on the
+/// session axis.
 fn render_track_block(
     track: &mut PlayerTrack,
     block: usize,
+    range: Range<usize>,
     notifications: &mut HeapProd<PlayerNotification>,
     metrics: &RtMetrics,
 ) {
@@ -555,50 +558,145 @@ fn render_track_block(
     let mut scratch = [&mut scratch_left[..], &mut scratch_right[..]];
     let mut mix = [&mut mix_left[..], &mut mix_right[..]];
     let mut sink = RtSink::new(notifications, metrics, 0);
-    let _ = track.render(
-        Some(&context),
-        &mut scratch,
-        &mut mix,
+    let _ = track.render(Some(&context), &mut scratch, &mut mix, range, &mut sink);
+}
+
+fn played_frontier(evidence: &RenderReader) -> Option<(i64, SessionFrame)> {
+    evidence.load().map(|snapshot| {
+        let frontier = snapshot.frontier();
+        let source = i64::try_from(frontier.source()).expect("test source frame fits i64");
+        (source, frontier.output())
+    })
+}
+
+#[kithara::test(native, flash(false))]
+fn a_played_block_publishes_evidence_for_the_pcm_it_consumed(half: Vec<f32>) {
+    let (mut track, evidence) = starving_track(&half, Consts::BLOCK_FRAMES);
+    let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
+    let metrics = RtMetrics::default();
+
+    render_track_block(
+        &mut track,
+        0,
         0..Consts::BLOCK_FRAMES,
-        &mut sink,
+        &mut notifications,
+        &metrics,
+    );
+
+    let block = i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
+    assert_eq!(
+        played_frontier(&evidence),
+        Some((block, SessionFrame::new(block))),
+        "the evidence names the source and output the block consumed"
     );
 }
 
 #[kithara::test(native, flash(false))]
 fn a_block_that_plays_no_pcm_withdraws_the_render_evidence(half: Vec<f32>) {
-    let (mut track, evidence) = starving_track(&half, Consts::BLOCK_FRAMES);
+    let (mut track, evidence) = starving_track(&half, 2 * Consts::BLOCK_FRAMES);
     let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
     let metrics = RtMetrics::default();
+    for block in 0..2 {
+        render_track_block(
+            &mut track,
+            block,
+            0..Consts::BLOCK_FRAMES,
+            &mut notifications,
+            &metrics,
+        );
+    }
+    assert!(
+        evidence.load().is_some(),
+        "the played blocks publish their evidence"
+    );
 
-    render_track_block(&mut track, 0, &mut notifications, &metrics);
-    let played = evidence
-        .load()
-        .map(|snapshot| snapshot.frontier())
-        .expect("a block that played PCM publishes its evidence");
-    let block = i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
-    assert_eq!(i64::try_from(played.source()), Ok(block));
-    assert_eq!(played.output(), SessionFrame::new(block));
+    render_track_block(
+        &mut track,
+        2,
+        0..Consts::BLOCK_FRAMES,
+        &mut notifications,
+        &metrics,
+    );
 
-    render_track_block(&mut track, 1, &mut notifications, &metrics);
     assert!(
         evidence.load().is_none(),
         "a starved block played no PCM, so no evidence stands for it"
     );
 }
 
+/// A block can reach one track in two segments. A suffix that starves keeps
+/// the evidence its prefix published, as an unsplit block that starves
+/// part-way keeps the evidence for what it played.
 #[kithara::test(native, flash(false))]
-fn a_stopped_track_withdraws_its_render_evidence(half: Vec<f32>) {
-    let (mut track, evidence) = starving_track(&half, 2 * Consts::BLOCK_FRAMES);
+#[case::prefix_plays_through(Consts::BLOCK_FRAMES / 2)]
+#[case::prefix_starves_part_way(Consts::BLOCK_FRAMES / 4)]
+fn a_starved_suffix_keeps_the_evidence_its_block_already_played(
+    half: Vec<f32>,
+    #[case] prefix_pcm: usize,
+) {
+    let prefix = Consts::BLOCK_FRAMES / 2;
+    let (mut track, evidence) = starving_track(&half, Consts::BLOCK_FRAMES + prefix_pcm);
     let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
     let metrics = RtMetrics::default();
+    render_track_block(
+        &mut track,
+        0,
+        0..Consts::BLOCK_FRAMES,
+        &mut notifications,
+        &metrics,
+    );
 
-    render_track_block(&mut track, 0, &mut notifications, &metrics);
+    render_track_block(&mut track, 1, 0..prefix, &mut notifications, &metrics);
+    render_track_block(
+        &mut track,
+        1,
+        prefix..Consts::BLOCK_FRAMES,
+        &mut notifications,
+        &metrics,
+    );
+
+    let played =
+        i64::try_from(Consts::BLOCK_FRAMES + prefix_pcm).expect("test frame count fits i64");
+    assert_eq!(
+        played_frontier(&evidence),
+        Some((played, SessionFrame::new(played))),
+        "the prefix PCM still stands after its starved suffix"
+    );
+
+    render_track_block(
+        &mut track,
+        2,
+        0..Consts::BLOCK_FRAMES,
+        &mut notifications,
+        &metrics,
+    );
+    assert!(
+        evidence.load().is_none(),
+        "the next block played no PCM, so the prefix evidence does not outlive it"
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn a_stopped_track_withdraws_its_render_evidence(half: Vec<f32>) {
+    let (mut track, evidence) = starving_track(&half, 3 * Consts::BLOCK_FRAMES);
+    let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
+    let metrics = RtMetrics::default();
+    for block in 0..2 {
+        render_track_block(
+            &mut track,
+            block,
+            0..Consts::BLOCK_FRAMES,
+            &mut notifications,
+            &metrics,
+        );
+    }
     assert!(
         evidence.load().is_some(),
-        "the played block publishes its evidence"
+        "the played blocks publish their evidence"
     );
 
     track.stop();
+
     assert!(
         evidence.load().is_none(),
         "a stopped track renders no further block for its evidence to stand for"

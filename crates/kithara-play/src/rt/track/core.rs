@@ -3,9 +3,9 @@ use std::num::NonZeroU32;
 use bon::bon;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_signal::SourceSpan;
+use kithara_signal::{SessionEpoch, SessionFrame, SourceSpan};
 use kithara_sync::LoadGeneration;
-use kithara_warp::{RenderReader, WarpMapRevision};
+use kithara_warp::{PresentationFrontier, RenderContext, RenderReader, WarpMapRevision};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
@@ -87,6 +87,10 @@ pub struct PlayerTrack {
     /// rendering a position the user has already left. [`read`](Self::read) uses the
     /// gap to refuse natural-EOF finalization until the re-base arrives.
     pub(super) seek_epoch: u64,
+    /// Session-axis frame where the render evidence this track last
+    /// published ends, which tells a later segment of the same block that
+    /// the block already played this track's PCM.
+    pub(super) evidence_end: Option<(SessionEpoch, SessionFrame)>,
 }
 
 #[bon]
@@ -125,6 +129,7 @@ impl PlayerTrack {
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
             ended_at_eof: false,
+            evidence_end: None,
         };
         track.update_service_class(TrackState::Preloading);
         track
@@ -182,6 +187,7 @@ impl PlayerTrack {
     /// happened on the control thread through [`PlayerResource::seek_handle`].
     pub fn seek(&mut self, seconds: f64) {
         self.resource.reset_for_seek();
+        self.evidence_end = None;
         let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_media_frames = AsPrimitive::as_(frames);
         self.triggers.reset();
@@ -211,9 +217,26 @@ impl PlayerTrack {
             self.update_service_class(new_state);
             // A track that no longer renders withdraws what it last sounded.
             if !new_state.is_playing() {
-                self.resource.clear_render();
+                self.withdraw_render();
             }
         }
+    }
+
+    /// Publish what this track rendered into `context` and remember where it
+    /// ends.
+    pub(super) fn publish_render(
+        &mut self,
+        context: &RenderContext,
+        frontier: PresentationFrontier,
+    ) {
+        let output = context.output();
+        self.evidence_end = Some((output.session_epoch(), output.output_frames().end));
+        self.resource.publish_render(context, frontier);
+    }
+
+    pub(super) fn withdraw_render(&mut self) {
+        self.evidence_end = None;
+        self.resource.clear_render();
     }
 
     /// Instantly stop (silent, finished state).
@@ -281,6 +304,7 @@ impl PlayerTrack {
             item_id: self.item_id,
         };
         self.sync_map = Some(map);
+        self.evidence_end = None;
         self.served_media_frames =
             source_frame_on_output_clock(source.start(), source.sample_rate(), sample_rate);
         self.fade.fade_in(settings, sample_rate);
