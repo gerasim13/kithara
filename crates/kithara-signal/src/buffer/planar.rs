@@ -1,8 +1,8 @@
-use std::ops::Range;
+use std::{num::NonZeroUsize, ops::Range};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 
-use crate::{AudioSpec, FrameCount, InterleavedView, SignalError, consts};
+use crate::{AudioSpec, FrameCount, InterleavedView, SignalError};
 
 /// Pool-backed channel-major samples with independent logical length and stride.
 #[derive(Debug)]
@@ -49,6 +49,45 @@ impl PlanarBuffer {
     #[must_use]
     pub fn as_samples_mut(&mut self) -> &mut [f32] {
         &mut self.samples
+    }
+
+    /// Append every frame of `source` after the logical end of each channel,
+    /// growing pooled storage when necessary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when `source` has another channel count or the
+    /// grown storage cannot be represented or reserved; the buffer is then
+    /// unchanged.
+    pub fn append_interleaved(&mut self, source: InterleavedView<'_>) -> Result<(), SignalError> {
+        let channel_count = self.spec.channel_count()?;
+        let source_channels = source.spec().channel_count()?;
+        if source_channels != channel_count {
+            return Err(SignalError::ChannelCount {
+                expected: channel_count.get(),
+                actual: source_channels.get(),
+            });
+        }
+        let start = self.frames.get();
+        let appended = source.frames().get();
+        let end = start
+            .checked_add(appended)
+            .ok_or_else(|| SignalError::SampleCountOverflow {
+                channels: channel_count.get(),
+                frames: appended,
+            })?;
+        self.reserve_frames(FrameCount::new(end))?;
+        if let Some(stride) = NonZeroUsize::new(self.stride.get()) {
+            kithara_dsp::deinterleave_channel_major(
+                source.samples(),
+                channel_count,
+                &mut self.samples,
+                stride,
+                start..end,
+            );
+        }
+        self.frames = FrameCount::new(end);
+        Ok(())
     }
 
     /// Borrow one logical channel.
@@ -267,25 +306,14 @@ impl<'a> PlanarView<'a> {
             });
         }
         let output = &mut output[..required];
-        let channel_count = self.spec.channel_count()?;
-        let channels = channel_count.get();
-        if channels <= consts::FAST_CHANNELS {
-            let mut input = [&[][..]; consts::FAST_CHANNELS];
-            for (channel, slot) in input.iter_mut().enumerate().take(channels) {
-                *slot = self.channel(channel)?;
-            }
-            kithara_dsp::interleave_variable(
-                &input[..channels],
-                0..self.frames.get(),
+        if let Some(stride) = NonZeroUsize::new(self.stride.get()) {
+            kithara_dsp::interleave_channel_major(
+                self.samples,
+                stride,
+                self.start..self.start + self.frames.get(),
                 output,
-                channel_count,
+                self.spec.channel_count()?,
             );
-        } else {
-            for frame in 0..self.frames.get() {
-                for channel in 0..channels {
-                    output[frame * channels + channel] = self.channel(channel)?[frame];
-                }
-            }
         }
         InterleavedView::new(output, self.spec, self.frames)
     }
@@ -369,7 +397,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools_with_budget;
+    use crate::{consts, test_pools::pools_with_budget};
 
     fn stereo() -> AudioSpec {
         AudioSpec::new(2, consts::INTERLEAVED_RATE)
@@ -459,6 +487,74 @@ mod tests {
                 -value
             );
         }
+    }
+
+    #[kithara::test]
+    #[case::mono(1)]
+    #[case::stereo(2)]
+    #[case::three_channels(3)]
+    #[case::wide_nine_channels(9)]
+    #[case::wide_twelve_channels(12)]
+    fn appended_frames_extend_every_channel_and_interleave_back(#[case] channels: u16) {
+        let pcm_ramp = pcm_ramp();
+        let negative_pcm_ramp = negative_pcm_ramp();
+        let width = usize::from(channels);
+        let spec = AudioSpec::new(channels, consts::INTERLEAVED_RATE);
+        let pools = pools_with_budget(1_024 * size_of::<f32>());
+        let mut planar =
+            PlanarBuffer::new(&pools, spec, FrameCount::new(2)).expect("planar storage fits");
+        for channel in 0..width {
+            planar
+                .channel_mut(channel)
+                .expect("channel exists")
+                .copy_from_slice(&negative_pcm_ramp[2 * channel..2 * channel + 2]);
+        }
+        let appended = &pcm_ramp[..5 * width];
+
+        planar
+            .append_interleaved(
+                InterleavedView::new(appended, spec, FrameCount::new(5))
+                    .expect("fixture shape is exact"),
+            )
+            .expect("the same channel count appends");
+
+        assert_eq!(planar.frames(), FrameCount::new(7));
+        for channel in 0..width {
+            let mut expected = negative_pcm_ramp[2 * channel..2 * channel + 2].to_vec();
+            expected.extend(appended.iter().skip(channel).step_by(width));
+            assert_eq!(planar.channel(channel).expect("channel exists"), expected);
+        }
+        let mut output = vec![f32::NAN; appended.len()];
+        let written = planar
+            .view()
+            .range(2..7)
+            .expect("appended frames lie inside")
+            .interleave_into(&mut output)
+            .expect("output fits");
+        assert_eq!(written.samples(), appended);
+    }
+
+    #[kithara::test]
+    fn appending_a_foreign_channel_count_leaves_the_buffer_untouched() {
+        let pcm_ramp = pcm_ramp();
+        let pools = pools_with_budget(64 * size_of::<f32>());
+        let mut planar =
+            PlanarBuffer::new(&pools, stereo(), FrameCount::new(1)).expect("planar storage fits");
+        let three = InterleavedView::new(
+            &pcm_ramp[..6],
+            AudioSpec::new(3, consts::INTERLEAVED_RATE),
+            FrameCount::new(2),
+        )
+        .expect("fixture shape is exact");
+
+        assert_eq!(
+            planar.append_interleaved(three),
+            Err(SignalError::ChannelCount {
+                expected: 2,
+                actual: 3,
+            })
+        );
+        assert_eq!(planar.frames(), FrameCount::new(1));
     }
 
     #[kithara::test]

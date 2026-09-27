@@ -19,6 +19,8 @@ fn kernels(c: &mut Criterion) {
             u64::try_from(frames).expect("frame count fits u64"),
         ));
         let planes = vec![vec![0.25_f32; frames]; consts::SIX.get()];
+        let planar = planes.concat();
+        let stride = NonZeroUsize::new(frames).expect("bench sizes are non-zero");
         let mut restored = planes.clone();
         for channels in [consts::TWO, consts::SIX] {
             let mut interleaved = vec![0.0_f32; channels.get() * frames];
@@ -55,8 +57,9 @@ fn kernels(c: &mut Criterion) {
                 &frames,
                 |b, _| {
                     b.iter(|| {
-                        kithara_dsp::interleave_variable(
-                            black_box(&planes[..channels.get()]),
+                        kithara_dsp::interleave_channel_major(
+                            black_box(&planar[..channels.get() * frames]),
+                            stride,
                             0..frames,
                             &mut interleaved,
                             channels,

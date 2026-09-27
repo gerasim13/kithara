@@ -5,8 +5,6 @@ use std::num::NonZeroU32;
 pub(crate) const INTERLEAVED_RATE: NonZeroU32 =
     NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
-pub(crate) const FAST_CHANNELS: usize = 8;
-
 #[cfg(test)]
 pub(crate) const FRAME_RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("44.1 kHz is non-zero");
 
