@@ -132,26 +132,15 @@ where
             .source_frames_seen
             .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
         let base_len = self.input.frames().get();
-        self.input
-            .resize_frames(FrameCount::new(base_len.saturating_add(frames)))?;
-        if frames == 0 {
-            return Ok(());
-        }
         let source_frames = FrameCount::new(frames);
         let samples = spec.sample_count(source_frames)?.get();
-        let source = InterleavedView::new(&chunk.samples[..samples], spec, source_frames)?;
-        let stride = self.input.stride().get();
-        let end = base_len + frames;
-        let mut planes: SmallVec<[&mut [f32]; 8]> = self
-            .input
-            .as_samples_mut()
-            .chunks_exact_mut(stride)
-            .take(channels)
-            .map(|plane| &mut plane[..end])
-            .collect();
-        source.deinterleave_channels_into_at(&mut planes, base_len)?;
-        for plane in &mut planes {
-            kithara_dsp::sanitize(&mut plane[base_len..]);
+        self.input.append_interleaved(InterleavedView::new(
+            &chunk.samples[..samples],
+            spec,
+            source_frames,
+        )?)?;
+        for channel in 0..channels {
+            kithara_dsp::sanitize(&mut self.input.channel_mut(channel)?[base_len..]);
         }
         Ok(())
     }

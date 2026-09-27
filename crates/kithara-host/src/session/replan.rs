@@ -15,11 +15,7 @@ use super::{
     dispatch::with_owner_cut, port::OwnerPort, protocol::SessionError, state::SessionState,
     transport,
 };
-use crate::PlayerMember;
-
-/// Output frames the Host leaves between the audio it has already rendered
-/// and a deck entry's first admissible activation.
-const ENTRY_LEAD_FRAMES: i64 = 2048;
+use crate::{PlayerMember, consts};
 
 /// Validates `resident`, observed for `member` of the deck `target`, against
 /// the transport the Host processed and the source the member's cell holds
@@ -62,7 +58,7 @@ pub(super) fn observed_entry<S>(
     }
     let (boundary, _) = transport::commit_boundary(port.stream.ctx, port.transport)?;
     let activation = i64::from(boundary.max(output.output_frames().end))
-        .checked_add(ENTRY_LEAD_FRAMES)
+        .checked_add(consts::ENTRY_LEAD_FRAMES)
         .ok_or(SessionError::TransportFrameExhausted)?;
     Ok(ObservedEntry::builder()
         .load(resident.load())

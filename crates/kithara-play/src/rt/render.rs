@@ -22,11 +22,11 @@ use super::{
     track::{RtSink, SyncFadeTail, TrackReadOutcome},
 };
 use crate::{
-    CrossfadeCurve, CrossfadeSettings,
     bridge::{
         PlaybackShared, PlayerNotification, RtMetrics, TrackState,
         sync::{SyncReturn, SyncTicket},
     },
+    consts,
     rt::{TrackSlot, TrackSlots},
 };
 
@@ -89,13 +89,6 @@ enum SyncAttempt {
         outcome: Option<TrackReadOutcome>,
     },
 }
-
-const SYNC_FADE: CrossfadeSettings = CrossfadeSettings {
-    duration: 0.004,
-    curve: CrossfadeCurve::Linear,
-    depth: 1.0,
-    position: 0.5,
-};
 
 pub(crate) struct RenderPass {
     gate: MixDSP,
@@ -642,7 +635,7 @@ fn claim_and_render_sync(
     let Some(track) = tracks.get_mut(item_id) else {
         unreachable!("the preflighted resident disappeared during one callback");
     };
-    let mut old = track.activate_sync(resource, first.source, map, output_rate, SYNC_FADE);
+    let mut old = track.activate_sync(resource, first.source, map, output_rate, consts::SYNC_FADE);
     track.render_first(&first, &first_context, read_bufs, bus_bufs, offset, sink);
     // Release-store after first PCM and before receipts makes the selected
     // binding visible whenever Host consumes Presented.

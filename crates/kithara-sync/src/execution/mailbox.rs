@@ -3,12 +3,7 @@ use ringbuf::{
     traits::{Consumer, Observer, Producer, Split},
 };
 
-use crate::{SyncApplied, SyncExecutionReject, SyncExecutionStamp, SyncReceipt};
-
-/// Receipts one activation writes: `Armed`, then `Presented`. The mailbox
-/// holds exactly one pair, so a pair is reservable only while no receipt of
-/// the slot waits for the owner.
-const RECEIPT_PAIR: usize = 2;
+use crate::{SyncApplied, SyncExecutionReject, SyncExecutionStamp, SyncReceipt, consts};
 
 /// The sole audio-thread writer for one allocated slot's execution receipts.
 pub struct SyncReceiptTx(HeapProd<SyncReceipt>);
@@ -25,13 +20,13 @@ pub struct SyncReceiptInbox {
 #[must_use]
 pub struct ReceiptReservation<'a> {
     tx: &'a mut SyncReceiptTx,
-    pair: [SyncReceipt; RECEIPT_PAIR],
+    pair: [SyncReceipt; consts::RECEIPT_PAIR],
 }
 
 /// Make the per-slot, single-producer receipt channel off the audio thread.
 #[must_use]
 pub fn sync_receipts() -> (SyncReceiptTx, SyncReceiptInbox) {
-    let (tx, rx) = HeapRb::<SyncReceipt>::new(RECEIPT_PAIR).split();
+    let (tx, rx) = HeapRb::<SyncReceipt>::new(consts::RECEIPT_PAIR).split();
     (SyncReceiptTx(tx), SyncReceiptInbox { rx, kept: None })
 }
 
@@ -40,7 +35,7 @@ impl SyncReceiptTx {
     /// be claimed, or `None` while a receipt of this slot is still waiting.
     #[inline]
     pub fn reserve_pair(&mut self, applied: SyncApplied) -> Option<ReceiptReservation<'_>> {
-        (self.0.vacant_len() >= RECEIPT_PAIR).then_some(ReceiptReservation {
+        (self.0.vacant_len() >= consts::RECEIPT_PAIR).then_some(ReceiptReservation {
             tx: self,
             pair: [
                 SyncReceipt::Armed(applied.stamp()),
@@ -79,7 +74,11 @@ impl ReceiptReservation<'_> {
     /// Panics if the reserved pair no longer fits in the sole producer's ring.
     pub(crate) fn publish(self) {
         let written = self.tx.0.push_slice(&self.pair);
-        assert_eq!(written, RECEIPT_PAIR, "reserved sync receipts must fit");
+        assert_eq!(
+            written,
+            consts::RECEIPT_PAIR,
+            "reserved sync receipts must fit"
+        );
     }
 }
 
@@ -182,7 +181,7 @@ mod tests {
     fn a_full_mailbox_hands_the_rejection_back() {
         let (mut tx, _inbox) = sync_receipts();
         let stamp = stamp();
-        for _ in 0..RECEIPT_PAIR {
+        for _ in 0..consts::RECEIPT_PAIR {
             tx.publish_rejected(stamp, SyncExecutionReject::Late)
                 .expect("rejection fits");
         }

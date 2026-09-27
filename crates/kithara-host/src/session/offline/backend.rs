@@ -12,7 +12,7 @@ use kithara_platform::time::Duration;
 use super::{
     super::protocol::{SessionError, SessionStream},
     OfflineSessionError,
-    task::CHANNELS,
+    task::consts::CHANNELS,
 };
 
 #[derive(Builder, Clone, Copy)]

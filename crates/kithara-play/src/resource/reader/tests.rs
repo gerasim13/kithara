@@ -38,19 +38,13 @@ use crate::{
         PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels,
         sync::PreparedFirst,
     },
+    consts,
     rt::{
         PlayerNodeProcessor, StreamShape,
         track::{PlayerResource, PlayerTrack, RtSink},
     },
     test_pools::{TestPools, pools},
 };
-
-struct Consts;
-
-impl Consts {
-    const BLOCK_FRAMES: usize = 512;
-    const SAMPLE_RATE: u32 = 44_100;
-}
 
 struct DropState;
 
@@ -95,7 +89,7 @@ impl Default for EofReader {
             meta: TrackMetadata::default(),
             spec: AudioSpec::new(
                 2,
-                NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+                NonZeroU32::new(consts::SAMPLE_RATE).expect("static rate"),
             ),
             position_frames: 0,
             total_frames: 0,
@@ -121,7 +115,7 @@ impl EofReader {
 
     fn position_duration(&self) -> Duration {
         let frames = u32::try_from(self.position_frames).expect("test frame count fits u32");
-        Duration::from_secs_f64(f64::from(frames) / f64::from(Consts::SAMPLE_RATE))
+        Duration::from_secs_f64(f64::from(frames) / f64::from(consts::SAMPLE_RATE))
     }
 
     fn take_frames(&mut self, capacity: usize) -> Option<NonZeroUsize> {
@@ -163,7 +157,7 @@ impl AudioSession for EofReader {
     fn duration(&self) -> Option<Duration> {
         let frames = u32::try_from(self.total_frames).expect("test frame count fits u32");
         Some(Duration::from_secs_f64(
-            f64::from(frames) / f64::from(Consts::SAMPLE_RATE),
+            f64::from(frames) / f64::from(consts::SAMPLE_RATE),
         ))
     }
     fn event_bus(&self) -> &EventBus {
@@ -241,8 +235,8 @@ fn warped_player_resource(
 
 fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
     let info = ProcInfo {
-        sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
-        frames: Consts::BLOCK_FRAMES,
+        sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
+        frames: consts::BLOCK_FRAMES,
         in_silence_mask: SilenceMask::default(),
         out_silence_mask: SilenceMask::default(),
         in_constant_mask: ConstantMask::default(),
@@ -253,15 +247,15 @@ fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
         process_to_playback_delay: None,
         did_just_unbypass: false,
         last_marker_instant: InstantSamples(0),
-        sample_rate_recip: f64::from(Consts::SAMPLE_RATE).recip(),
+        sample_rate_recip: f64::from(consts::SAMPLE_RATE).recip(),
         clock_samples: InstantSamples(0),
         duration_since_stream_start: Duration::ZERO,
         stream_status: StreamStatus::empty(),
         dropped_frames: 0,
     };
     let inputs: [&[f32]; 0] = [];
-    let mut left = [0.0; Consts::BLOCK_FRAMES];
-    let mut right = [0.0; Consts::BLOCK_FRAMES];
+    let mut left = [0.0; consts::BLOCK_FRAMES];
+    let mut right = [0.0; consts::BLOCK_FRAMES];
     let mut outputs = [&mut left[..], &mut right[..]];
     let buffers = ProcBuffers {
         inputs: &inputs,
@@ -314,9 +308,9 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
     let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
-        sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
         max_block_frames: NonZeroU32::new(
-            u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32"),
+            u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32"),
         )
         .expect("static block size"),
     };
@@ -327,7 +321,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         logger,
         store: ProcStore::with_capacity(0),
         scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(
-            Consts::BLOCK_FRAMES,
+            consts::BLOCK_FRAMES,
         ),
         declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
     };
@@ -367,9 +361,9 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         .expect("first track loaded")
         .position()
         - first_position;
-    let block_frames = u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32");
+    let block_frames = u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32");
     let expected_advance =
-        f64::from(block_frames) * f64::from(effective_rate) / f64::from(Consts::SAMPLE_RATE);
+        f64::from(block_frames) * f64::from(effective_rate) / f64::from(consts::SAMPLE_RATE);
     assert!((first_advance - expected_advance).abs() < f64::EPSILON);
     assert_eq!(
         processor.playback().rate.load(Ordering::Relaxed),
@@ -495,7 +489,7 @@ fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
     let mut resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
     let output = OutputContext::new(
         SessionFrame::new(0)..SessionFrame::new(1),
-        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
         SessionEpoch::new(1),
         None,
     )
@@ -538,7 +532,7 @@ fn starving_resource(samples: &[f32], frames: usize) -> (Box<PlayerResource>, Re
 fn starving_track(samples: &[f32], frames: usize) -> (PlayerTrack, RenderReader) {
     let (resource, evidence) = starving_resource(samples, frames);
     let mut track = PlayerTrack::builder()
-        .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"))
+        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"))
         .item_id(TrackId::allocate())
         .load(kithara_sync::LoadGeneration::first())
         .build(resource);
@@ -548,11 +542,11 @@ fn starving_track(samples: &[f32], frames: usize) -> (PlayerTrack, RenderReader)
 
 /// The `block`-th output block on the session axis.
 fn block_context(block: usize) -> RenderContext {
-    let start = i64::try_from(block * Consts::BLOCK_FRAMES).expect("test frame fits i64");
-    let end = start + i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
+    let start = i64::try_from(block * consts::BLOCK_FRAMES).expect("test frame fits i64");
+    let end = start + i64::try_from(consts::BLOCK_FRAMES).expect("block size fits i64");
     let output = OutputContext::new(
         SessionFrame::new(start)..SessionFrame::new(end),
-        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
         SessionEpoch::new(1),
         None,
     )
@@ -570,8 +564,8 @@ fn render_track_block(
     metrics: &RtMetrics,
 ) {
     let context = block_context(block);
-    let [mut scratch_left, mut scratch_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
-    let [mut mix_left, mut mix_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
+    let [mut scratch_left, mut scratch_right] = [[0.0; consts::BLOCK_FRAMES]; 2];
+    let [mut mix_left, mut mix_right] = [[0.0; consts::BLOCK_FRAMES]; 2];
     let mut scratch = [&mut scratch_left[..], &mut scratch_right[..]];
     let mut mix = [&mut mix_left[..], &mut mix_right[..]];
     let mut sink = RtSink::new(notifications, metrics, 0);
@@ -588,19 +582,19 @@ fn played_frontier(evidence: &RenderReader) -> Option<(i64, SessionFrame)> {
 
 #[kithara::test(native, flash(false))]
 fn a_played_block_publishes_evidence_for_the_pcm_it_consumed(half: Vec<f32>) {
-    let (mut track, evidence) = starving_track(&half, Consts::BLOCK_FRAMES);
+    let (mut track, evidence) = starving_track(&half, consts::BLOCK_FRAMES);
     let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
     let metrics = RtMetrics::default();
 
     render_track_block(
         &mut track,
         0,
-        0..Consts::BLOCK_FRAMES,
+        0..consts::BLOCK_FRAMES,
         &mut notifications,
         &metrics,
     );
 
-    let block = i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
+    let block = i64::try_from(consts::BLOCK_FRAMES).expect("block size fits i64");
     assert_eq!(
         played_frontier(&evidence),
         Some((block, SessionFrame::new(block))),
@@ -610,14 +604,14 @@ fn a_played_block_publishes_evidence_for_the_pcm_it_consumed(half: Vec<f32>) {
 
 #[kithara::test(native, flash(false))]
 fn a_block_that_plays_no_pcm_withdraws_the_render_evidence(half: Vec<f32>) {
-    let (mut track, evidence) = starving_track(&half, 2 * Consts::BLOCK_FRAMES);
+    let (mut track, evidence) = starving_track(&half, 2 * consts::BLOCK_FRAMES);
     let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
     let metrics = RtMetrics::default();
     for block in 0..2 {
         render_track_block(
             &mut track,
             block,
-            0..Consts::BLOCK_FRAMES,
+            0..consts::BLOCK_FRAMES,
             &mut notifications,
             &metrics,
         );
@@ -630,7 +624,7 @@ fn a_block_that_plays_no_pcm_withdraws_the_render_evidence(half: Vec<f32>) {
     render_track_block(
         &mut track,
         2,
-        0..Consts::BLOCK_FRAMES,
+        0..consts::BLOCK_FRAMES,
         &mut notifications,
         &metrics,
     );
@@ -645,20 +639,20 @@ fn a_block_that_plays_no_pcm_withdraws_the_render_evidence(half: Vec<f32>) {
 /// the evidence its prefix published, as an unsplit block that starves
 /// part-way keeps the evidence for what it played.
 #[kithara::test(native, flash(false))]
-#[case::prefix_plays_through(Consts::BLOCK_FRAMES / 2)]
-#[case::prefix_starves_part_way(Consts::BLOCK_FRAMES / 4)]
+#[case::prefix_plays_through(consts::BLOCK_FRAMES / 2)]
+#[case::prefix_starves_part_way(consts::BLOCK_FRAMES / 4)]
 fn a_starved_suffix_keeps_the_evidence_its_block_already_played(
     half: Vec<f32>,
     #[case] prefix_pcm: usize,
 ) {
-    let prefix = Consts::BLOCK_FRAMES / 2;
-    let (mut track, evidence) = starving_track(&half, Consts::BLOCK_FRAMES + prefix_pcm);
+    let prefix = consts::BLOCK_FRAMES / 2;
+    let (mut track, evidence) = starving_track(&half, consts::BLOCK_FRAMES + prefix_pcm);
     let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
     let metrics = RtMetrics::default();
     render_track_block(
         &mut track,
         0,
-        0..Consts::BLOCK_FRAMES,
+        0..consts::BLOCK_FRAMES,
         &mut notifications,
         &metrics,
     );
@@ -667,13 +661,13 @@ fn a_starved_suffix_keeps_the_evidence_its_block_already_played(
     render_track_block(
         &mut track,
         1,
-        prefix..Consts::BLOCK_FRAMES,
+        prefix..consts::BLOCK_FRAMES,
         &mut notifications,
         &metrics,
     );
 
     let played =
-        i64::try_from(Consts::BLOCK_FRAMES + prefix_pcm).expect("test frame count fits i64");
+        i64::try_from(consts::BLOCK_FRAMES + prefix_pcm).expect("test frame count fits i64");
     assert_eq!(
         played_frontier(&evidence),
         Some((played, SessionFrame::new(played))),
@@ -683,7 +677,7 @@ fn a_starved_suffix_keeps_the_evidence_its_block_already_played(
     render_track_block(
         &mut track,
         2,
-        0..Consts::BLOCK_FRAMES,
+        0..consts::BLOCK_FRAMES,
         &mut notifications,
         &metrics,
     );
@@ -695,14 +689,14 @@ fn a_starved_suffix_keeps_the_evidence_its_block_already_played(
 
 #[kithara::test(native, flash(false))]
 fn a_stopped_track_withdraws_its_render_evidence(half: Vec<f32>) {
-    let (mut track, evidence) = starving_track(&half, 3 * Consts::BLOCK_FRAMES);
+    let (mut track, evidence) = starving_track(&half, 3 * consts::BLOCK_FRAMES);
     let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
     let metrics = RtMetrics::default();
     for block in 0..2 {
         render_track_block(
             &mut track,
             block,
-            0..Consts::BLOCK_FRAMES,
+            0..consts::BLOCK_FRAMES,
             &mut notifications,
             &metrics,
         );
@@ -726,18 +720,18 @@ fn a_stopped_track_withdraws_its_render_evidence(half: Vec<f32>) {
 /// withdraws it.
 #[kithara::test(native, flash(false))]
 fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) {
-    let (mut track, _outgoing) = starving_track(&half, Consts::BLOCK_FRAMES);
+    let (mut track, _outgoing) = starving_track(&half, consts::BLOCK_FRAMES);
     let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
     let metrics = RtMetrics::default();
     render_track_block(
         &mut track,
         0,
-        0..Consts::BLOCK_FRAMES,
+        0..consts::BLOCK_FRAMES,
         &mut notifications,
         &metrics,
     );
 
-    let rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate");
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate");
     let revision = NonZeroU64::MIN;
     let first = PreparedFirst {
         stereo: [0.25; 2],
@@ -753,13 +747,13 @@ fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) 
         rate,
         CrossfadeSettings::default(),
     );
-    let seam = Consts::BLOCK_FRAMES / 4;
+    let seam = consts::BLOCK_FRAMES / 4;
     let context = block_context(1);
     let first_context = context
         .for_output_range(seam..seam + 1)
         .expect("the seam lies in the block");
-    let [mut scratch_left, mut scratch_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
-    let [mut mix_left, mut mix_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
+    let [mut scratch_left, mut scratch_right] = [[0.0; consts::BLOCK_FRAMES]; 2];
+    let [mut mix_left, mut mix_right] = [[0.0; consts::BLOCK_FRAMES]; 2];
     let mut scratch = [&mut scratch_left[..], &mut scratch_right[..]];
     let mut mix = [&mut mix_left[..], &mut mix_right[..]];
     let mut sink = RtSink::new(&mut notifications, &metrics, 0);
@@ -775,11 +769,11 @@ fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) 
         Some(&context),
         &mut scratch,
         &mut mix,
-        seam + 1..Consts::BLOCK_FRAMES,
+        seam + 1..consts::BLOCK_FRAMES,
         &mut sink,
     );
 
-    let seam_end = i64::try_from(Consts::BLOCK_FRAMES + seam + 1).expect("test frame fits i64");
+    let seam_end = i64::try_from(consts::BLOCK_FRAMES + seam + 1).expect("test frame fits i64");
     assert_eq!(
         played_frontier(&evidence),
         Some((4_097, SessionFrame::new(seam_end))),
@@ -796,7 +790,7 @@ fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) 
     render_track_block(
         &mut track,
         2,
-        0..Consts::BLOCK_FRAMES,
+        0..consts::BLOCK_FRAMES,
         &mut notifications,
         &metrics,
     );

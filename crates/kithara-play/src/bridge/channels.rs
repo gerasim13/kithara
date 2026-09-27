@@ -23,7 +23,8 @@ use crate::{
         PlayerCmd, PlayerNotification, SharedEq,
         sync::{SyncReturn, SyncTicket},
     },
-    rt::{PlayerNodeProcessor, track::PlayerTrack},
+    consts,
+    rt::track::PlayerTrack,
 };
 
 /// RT-owned channel halves and playback atomics for one player node.
@@ -105,12 +106,12 @@ pub struct SlotControl {
 }
 
 #[derive(Default)]
-struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
+struct SeekBindings(SmallVec<[SeekBinding; consts::SLOT_TRACKS]>);
 
 type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
 
 #[derive(Default)]
-struct RenderBindings(SmallVec<[RenderBinding; SLOT_TRACKS]>);
+struct RenderBindings(SmallVec<[RenderBinding; consts::SLOT_TRACKS]>);
 
 type RenderBinding = (
     TrackId,
@@ -118,8 +119,6 @@ type RenderBinding = (
     Option<WarpMapRevision>,
     RenderReader,
 );
-
-const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {
     /// Begin a seek on every track this slot holds, off the audio thread.
