@@ -95,15 +95,19 @@ fn kernels(c: &mut Criterion) {
     group.finish();
 }
 
-fn biquad(c: &mut Criterion) {
-    const FRAMES: usize = 1_024;
-    let low_pass = Coefficients::from_params(
+fn low_pass() -> Coefficients<f64> {
+    Coefficients::from_params(
         Type::LowPass,
         Hertz::from_hz(48_000.0).expect("positive rate"),
         Hertz::from_hz(4_000.0).expect("positive cutoff"),
         FRAC_1_SQRT_2,
     )
-    .expect("valid low-pass");
+    .expect("valid low-pass")
+}
+
+fn biquad(c: &mut Criterion) {
+    const FRAMES: usize = 1_024;
+    let low_pass = low_pass();
     let mut group = c.benchmark_group("biquad");
     group.throughput(Throughput::Elements(
         u64::try_from(FRAMES).expect("frame count fits u64"),
@@ -129,7 +133,11 @@ fn biquad(c: &mut Criterion) {
         }
     }
     group.finish();
+}
 
+fn biquad_decay(c: &mut Criterion) {
+    const FRAMES: usize = 1_024;
+    let low_pass = low_pass();
     let mut group = c.benchmark_group("biquad_decay");
     group.throughput(Throughput::Elements(
         u64::try_from(FRAMES).expect("frame count fits u64"),
@@ -195,5 +203,5 @@ fn interp(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, kernels, biquad, interp);
+criterion_group!(benches, kernels, biquad, biquad_decay, interp);
 criterion_main!(benches);
