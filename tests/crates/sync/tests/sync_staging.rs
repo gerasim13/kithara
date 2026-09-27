@@ -339,6 +339,12 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
 /// One sample off by a rounding step and a different signal from the first
 /// frame both report as a diverging position, and the buffers do not survive
 /// into a stress report: only the count and the widest gap tell them apart.
+///
+/// Each side's level comes too, because once every sample differs the count
+/// has nothing left to say. Two levels that agree while no sample does put
+/// the same audio at a different place in its own timeline; two that disagree
+/// put different audio there, and the two accusations land on opposite halves
+/// of the product.
 fn divergence(candidate: &[f32], control: &[f32]) -> Option<String> {
     let mut first = None;
     let mut differing = 0usize;
@@ -353,8 +359,26 @@ fn divergence(candidate: &[f32], control: &[f32]) -> Option<String> {
     }
     let (sample, heard, expected) = first?;
     Some(format!(
-        "from frame {} ({heard} against {expected}); {differing} of {} samples differ, widest {widest}",
+        "from frame {} ({heard} against {expected}); {differing} of {} samples differ, \
+         widest {widest}; level {} against {}",
         sample / usize::from(CHANNELS),
         candidate.len(),
+        level(candidate),
+        level(control),
     ))
+}
+
+/// Root-mean-square of `pcm`, the one summary of a render that survives a
+/// shift along its own timeline.
+fn level(pcm: &[f32]) -> f32 {
+    if pcm.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = pcm.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a level printed into a panic message, not a signal value"
+    )]
+    let rms = (sum / pcm.len() as f64).sqrt() as f32;
+    rms
 }
