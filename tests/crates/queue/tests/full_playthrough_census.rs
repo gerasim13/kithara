@@ -19,7 +19,7 @@
 //! Cochlea says the take never falls silent for longer than the handover's
 //! block quantum and never sums two tracks above the level one plays at.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use kithara::{
     events::TrackId,
