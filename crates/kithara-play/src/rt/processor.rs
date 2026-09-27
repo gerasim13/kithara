@@ -551,6 +551,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         let context = match self.render_context(&extra.store, info) {
             Ok(context) => context,
             Err(reason) => {
+                self.playback.applied_source.clear();
                 let _ = extra.logger.try_error(reason);
                 return ProcessStatus::ClearAllOutputs;
             }
@@ -561,7 +562,10 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         self.update_position_duration(leading_outcome_pos_dur);
         self.refresh_effective_rate();
-        if drained && let Some(source) = source {
+        // Evidence stands for a source only while blocks keep rendering it.
+        if !playback_started {
+            self.playback.applied_source.clear();
+        } else if drained && let Some(source) = source {
             self.playback.applied_source.publish(source);
         }
 

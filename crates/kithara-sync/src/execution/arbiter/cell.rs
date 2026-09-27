@@ -116,6 +116,8 @@ pub struct SourceRevision(pub(super) u64);
 /// The callback reads the member's revision before draining its commands and
 /// publishes it once that block's render evidence is out. A reader loads it
 /// before the evidence, which then reflects every change committed up to it.
+/// A block that renders nothing clears it: the evidence left from an earlier
+/// block no longer sounds.
 #[derive(Debug, Default)]
 pub struct AppliedSource(AtomicU64);
 
@@ -125,7 +127,12 @@ impl AppliedSource {
         self.0.store(source.0 + 1, Ordering::Release);
     }
 
-    /// The newest applied revision; `None` before the first rendered block.
+    /// Withdraw the stamp after a block that rendered nothing.
+    pub fn clear(&self) {
+        self.0.store(0, Ordering::Release);
+    }
+
+    /// The newest applied revision; `None` while no block renders.
     #[must_use]
     pub fn load(&self) -> Option<SourceRevision> {
         self.0

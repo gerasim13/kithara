@@ -6,15 +6,16 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant},
     },
-    play::PlayError,
+    play::{PlayError, ResidentRender, player::PlayerControlSource},
+    queue::Queue,
     signal::SessionFrame,
     sync::{
         AlignmentSource, LoadGeneration, SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
         SyncStatusSnapshot,
     },
-    warp::AssetFrame,
+    warp::{AssetFrame, PresentationFrontier},
 };
-use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
+use kithara_integration_tests::{bufpool_ext::TestPools, grid::Start, kithara, usdt_trace};
 
 use super::{
     sync_listening::render_frames,
@@ -397,6 +398,7 @@ async fn a_sync_request_waits_for_the_audio_thread_to_apply_a_seek(
 ) {
     let case = STAGED_BESIDE_PLAYBACK_CONTROL;
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
+    let before_seek = rendered_frontier(&harness, case);
     let control = harness.decks[0].control().clone();
     let target = harness.start_seconds(0, cue) / 2.0;
     harness
@@ -428,6 +430,66 @@ async fn a_sync_request_waits_for_the_audio_thread_to_apply_a_seek(
                 case.id()
             )
         });
+    // Nothing renders between the admission and this read, so it is the
+    // evidence the Host admitted.
+    // Playback alone moves the source about as far as the output, so a
+    // source advance far past it is the seek the evidence rendered.
+    let admitted = rendered_frontier(&harness, case);
+    let source_advance = admitted.source().checked_sub(before_seek.source());
+    let output_advance = i64::from(admitted.output()) - i64::from(before_seek.output());
+    assert!(
+        source_advance
+            .and_then(|advance| i64::try_from(advance).ok())
+            .is_some_and(|advance| advance > 2 * output_advance),
+        "{}: the admitted evidence plays from the seek target, source advance \
+         {source_advance:?} across {output_advance} output frames",
+        case.id()
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(60))
+)]
+#[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
+async fn a_paused_deck_offers_no_sounding_evidence(
+    #[case] sources: PreparedSources,
+    #[case] cue: Start,
+) {
+    let case = STAGED_BESIDE_PLAYBACK_CONTROL;
+    let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
+    let control = harness.decks[0].control().clone();
+    harness.host.run(move || control.pause()).await;
+    harness.settle(case, 8).await;
+
+    let deck = Arc::clone(&harness.decks[0]);
+    let paused = harness
+        .host
+        .with(move |host| host.request_deck_sync(&deck, SyncIntent::Enable))
+        .await;
+    assert!(
+        matches!(paused, Err(PlayError::NotReady)),
+        "{}: the last block rendered before the pause is no sounding proof: {paused:?}",
+        case.id()
+    );
+}
+
+/// The source/output boundary the deck's latest render evidence reached.
+fn rendered_frontier(harness: &ProductHarness, case: SyncCase) -> PresentationFrontier {
+    let observation = <Queue<TestPools> as PlayerControlSource>::resident_sync_observation(
+        harness.decks[0].control(),
+    )
+    .unwrap_or_else(|error| panic!("{}: observe the deck: {error}", case.id()))
+    .unwrap_or_else(|| panic!("{}: the deck has a resident load", case.id()));
+    match observation.render() {
+        ResidentRender::Snapshot(snapshot) => snapshot.frontier(),
+        render => panic!("{}: the deck has render evidence: {render:?}", case.id()),
+    }
 }
 
 #[kithara::test(
