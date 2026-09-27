@@ -1,5 +1,5 @@
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     ops::Range,
     sync::atomic::{AtomicU8, Ordering},
 };
@@ -25,7 +25,7 @@ use kithara_platform::{CancelToken, sync::Arc};
 use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, SourceSpan};
 use kithara_test_fixtures::play_fixtures::half;
 use kithara_test_utils::kithara;
-use kithara_warp::{RenderReader, Warp, WarpConfig};
+use kithara_warp::{RenderReader, Warp, WarpConfig, WarpMapRevision};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Producer, Split},
@@ -33,7 +33,11 @@ use ringbuf::{
 
 use super::*;
 use crate::{
-    bridge::{PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels},
+    CrossfadeSettings,
+    bridge::{
+        PlayerCmd, PlayerNotification, RtMetrics, SharedEq, TrackTransition, slot_channels,
+        sync::PreparedFirst,
+    },
     rt::{
         PlayerNodeProcessor, StreamShape,
         track::{PlayerResource, PlayerTrack, RtSink},
@@ -512,9 +516,9 @@ fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
     assert!(reader.load().is_none());
 }
 
-/// A playing track over a reader that serves `frames` once and then stalls,
-/// with the reader of the render evidence it publishes.
-fn starving_track(samples: &[f32], frames: usize) -> (PlayerTrack, RenderReader) {
+/// A resource over a reader that serves `frames` once and then stalls, with
+/// the reader of the render evidence it publishes.
+fn starving_resource(samples: &[f32], frames: usize) -> (Box<PlayerResource>, RenderReader) {
     let mut warp = Warp::new((), &WarpConfig::builder().build());
     let publisher = warp
         .take_publisher()
@@ -525,13 +529,33 @@ fn starving_track(samples: &[f32], frames: usize) -> (PlayerTrack, RenderReader)
     resource.render_publisher = Some(publisher);
     let resource = PlayerResource::new(resource, Arc::from("starving"), &pools())
         .unwrap_or_else(|error| panic!("test player resource: {error}"));
+    (Box::new(resource), evidence)
+}
+
+/// A playing track over a [`starving_resource`].
+fn starving_track(samples: &[f32], frames: usize) -> (PlayerTrack, RenderReader) {
+    let (resource, evidence) = starving_resource(samples, frames);
     let mut track = PlayerTrack::builder()
         .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"))
         .item_id(TrackId::allocate())
         .load(kithara_sync::LoadGeneration::first())
-        .build(Box::new(resource));
+        .build(resource);
     track.play();
     (track, evidence)
+}
+
+/// The `block`-th output block on the session axis.
+fn block_context(block: usize) -> RenderContext {
+    let start = i64::try_from(block * Consts::BLOCK_FRAMES).expect("test frame fits i64");
+    let end = start + i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
+    let output = OutputContext::new(
+        SessionFrame::new(start)..SessionFrame::new(end),
+        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        SessionEpoch::new(1),
+        None,
+    )
+    .expect("fixture output range is ordered");
+    RenderContext::new(output, None).expect("fixture context is valid")
 }
 
 /// Render the `range` of the `block`-th output block of one track on the
@@ -543,16 +567,7 @@ fn render_track_block(
     notifications: &mut HeapProd<PlayerNotification>,
     metrics: &RtMetrics,
 ) {
-    let start = i64::try_from(block * Consts::BLOCK_FRAMES).expect("test frame fits i64");
-    let end = start + i64::try_from(Consts::BLOCK_FRAMES).expect("block size fits i64");
-    let output = OutputContext::new(
-        SessionFrame::new(start)..SessionFrame::new(end),
-        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
-        SessionEpoch::new(1),
-        None,
-    )
-    .expect("fixture output range is ordered");
-    let context = RenderContext::new(output, None).expect("fixture context is valid");
+    let context = block_context(block);
     let [mut scratch_left, mut scratch_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
     let [mut mix_left, mut mix_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
     let mut scratch = [&mut scratch_left[..], &mut scratch_right[..]];
@@ -700,5 +715,91 @@ fn a_stopped_track_withdraws_its_render_evidence(half: Vec<f32>) {
     assert!(
         evidence.load().is_none(),
         "a stopped track renders no further block for its evidence to stand for"
+    );
+}
+
+/// A sync activation plays its claimed first frame at the seam and the new
+/// resource renders the rest of the block. A suffix that starves keeps the
+/// evidence of that first frame, and the next block that plays nothing
+/// withdraws it.
+#[kithara::test(native, flash(false))]
+fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) {
+    let (mut track, _outgoing) = starving_track(&half, Consts::BLOCK_FRAMES);
+    let (mut notifications, _notifications) = HeapRb::<PlayerNotification>::new(8).split();
+    let metrics = RtMetrics::default();
+    render_track_block(
+        &mut track,
+        0,
+        0..Consts::BLOCK_FRAMES,
+        &mut notifications,
+        &metrics,
+    );
+
+    let rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate");
+    let revision = NonZeroU64::MIN;
+    let first = PreparedFirst {
+        stereo: [0.25; 2],
+        source: SourceSpan::new(4_096, 4_097, rate, 1)
+            .expect("first source span")
+            .with_mapping_revision(Some(revision)),
+    };
+    let (incoming, evidence) = starving_resource(&half, 0);
+    let _tail = track.activate_sync(
+        incoming,
+        first.source,
+        WarpMapRevision::from(revision),
+        rate,
+        CrossfadeSettings::default(),
+    );
+    let seam = Consts::BLOCK_FRAMES / 4;
+    let context = block_context(1);
+    let first_context = context
+        .for_output_range(seam..seam + 1)
+        .expect("the seam lies in the block");
+    let [mut scratch_left, mut scratch_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
+    let [mut mix_left, mut mix_right] = [[0.0; Consts::BLOCK_FRAMES]; 2];
+    let mut scratch = [&mut scratch_left[..], &mut scratch_right[..]];
+    let mut mix = [&mut mix_left[..], &mut mix_right[..]];
+    let mut sink = RtSink::new(&mut notifications, &metrics, 0);
+    track.render_first(
+        &first,
+        &first_context,
+        &mut scratch,
+        &mut mix,
+        seam,
+        &mut sink,
+    );
+    let _ = track.render(
+        Some(&context),
+        &mut scratch,
+        &mut mix,
+        seam + 1..Consts::BLOCK_FRAMES,
+        &mut sink,
+    );
+
+    let seam_end = i64::try_from(Consts::BLOCK_FRAMES + seam + 1).expect("test frame fits i64");
+    assert_eq!(
+        played_frontier(&evidence),
+        Some((4_097, SessionFrame::new(seam_end))),
+        "the first frame's evidence still stands after its starved suffix"
+    );
+    assert_eq!(
+        evidence
+            .load()
+            .and_then(|snapshot| snapshot.frontier().warp_map()),
+        Some(WarpMapRevision::from(revision)),
+        "the first frame's evidence names the map it was placed on"
+    );
+
+    render_track_block(
+        &mut track,
+        2,
+        0..Consts::BLOCK_FRAMES,
+        &mut notifications,
+        &metrics,
+    );
+    assert!(
+        evidence.load().is_none(),
+        "the next block played no PCM, so the first frame's evidence does not outlive it"
     );
 }
