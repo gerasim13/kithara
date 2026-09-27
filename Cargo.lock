@@ -5556,7 +5556,6 @@ version = "0.0.1-alpha5"
 dependencies = [
  "cochlea-features",
  "derive_more",
- "firewheel",
  "kithara",
  "kithara-app",
  "kithara-dsp",
