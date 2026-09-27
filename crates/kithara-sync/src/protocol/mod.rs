@@ -14,8 +14,8 @@ pub use facts::{ParentFact, ParentGridUpdate, ParentWithdrawal, SessionAxisUpdat
 pub use group::{SyncError, SyncGroup, SyncStatusSnapshot};
 pub use member::SyncMember;
 pub use operation::{
-    AlignmentSource, SyncAdmission, SyncCapability, SyncIntent, SyncMemberKind, SyncMode,
-    SyncOperation, TopologyOperation, TransportOperation,
+    AlignmentSource, SourceChange, SyncAdmission, SyncCapability, SyncIntent, SyncMemberKind,
+    SyncMode, SyncOperation, TopologyOperation, TransportOperation,
 };
 pub use preparation::{SyncEffect, SyncExecutionStamp, SyncPreparation};
 pub use rejected::SyncRejected;

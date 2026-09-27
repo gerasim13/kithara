@@ -502,11 +502,17 @@ fn transact_root<T, S>(
     operation: SyncOperation<PlayerMember>,
     control: &ControlGuard<'_>,
 ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-    if let SyncOperation::WithdrawQuiescedMember { target } = &operation {
-        return Err(SyncRejected::new(
-            SyncError::QuiescenceRequired { member_id: *target },
-            operation,
-        ));
+    let error = match &operation {
+        SyncOperation::WithdrawQuiescedMember { target } => {
+            Some(SyncError::QuiescenceRequired { member_id: *target })
+        }
+        SyncOperation::InvalidateSource { target, .. } => {
+            Some(SyncError::SourceChangeUnverified { member_id: *target })
+        }
+        _ => None,
+    };
+    if let Some(error) = error {
+        return Err(SyncRejected::new(error, operation));
     }
     if topology_conflicts_with_graph(state, &operation) {
         return Err(SyncRejected::new(

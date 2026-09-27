@@ -6,8 +6,8 @@ use super::{
     state::GroupState,
 };
 use crate::{
-    SyncApplied, SyncEffect, SyncError, SyncExecutionStamp, SyncGroup, SyncPreparation,
-    SyncReceipt, SyncStatusSnapshot, SyncTransition,
+    SourceChange, SyncApplied, SyncEffect, SyncError, SyncExecutionStamp, SyncGroup,
+    SyncPreparation, SyncReceipt, SyncStatusSnapshot, SyncTransition,
 };
 
 /// The map one direct member sounds through, as its executor presented it.
@@ -113,6 +113,49 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             self.grid = grid;
             self.before_entry = None;
             self.blocked = None;
+        }
+        Ok(transition)
+    }
+
+    /// Withdraws every decision placed against one member's source after the
+    /// player committed a change to that source.
+    ///
+    /// The accepted mode stays. An unpresented entry keeps its prior timeline
+    /// in custody, because that timeline still sounds. A discontinuity also
+    /// ends the applied map's proof of where the member stands; a timing
+    /// change keeps it, because a mapped lane plays its map, not the speed.
+    /// The Host has drained the member's receipts first, so an Armed
+    /// preparation signals a broken receipt contract.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown member or an Armed preparation.
+    pub(super) fn invalidate_source(
+        &mut self,
+        member: BeatGridId,
+        change: SourceChange,
+    ) -> Result<SyncTransition, SyncError> {
+        if self.direct_grid(member).is_none() {
+            return Err(SyncError::MemberNotFound {
+                group_id: self.grid.id(),
+                member_id: member,
+            });
+        }
+        if let Some(pending) = self
+            .pending
+            .iter()
+            .find(|pending| pending.member() == member && pending.armed())
+        {
+            return Err(SyncError::ArmedOperation {
+                member_id: member,
+                operation: pending.operation(),
+            });
+        }
+        let mut remaining = self.pending.clone();
+        remaining.retain(|pending| pending.member() != member);
+        let transition = transition(&self.pending, &remaining);
+        self.pending = remaining;
+        if change == SourceChange::Discontinuity {
+            self.applied.retain(|lane| lane.member() != member);
         }
         Ok(transition)
     }

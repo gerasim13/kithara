@@ -236,6 +236,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// pending decision on the same physical axis and load still owns it.
     /// A same-load replacement inherits custody; an axis or owner change
     /// severs it before a late rejection can restore an obsolete timeline.
+    /// An entry a source change already withdrew holds custody with no
+    /// decision, because its prior timeline still sounds; the next entry
+    /// inherits it.
     pub(super) fn reconcile_before_entry(
         &self,
         grid: &BeatGridSnapshot,
@@ -253,10 +256,18 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         {
             return Some((operation, prior));
         }
-        let previous = self
+        let Some(previous) = self
             .pending
             .iter()
-            .find(|held| held.operation() == operation)?;
+            .find(|held| held.operation() == operation)
+        else {
+            return Some(
+                pending
+                    .iter()
+                    .find(|held| held.enters_map())
+                    .map_or((operation, prior), |held| (held.operation(), prior)),
+            );
+        };
         pending
             .iter()
             .find(|held| {

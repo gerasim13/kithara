@@ -244,6 +244,10 @@ pub enum SyncError {
     /// A live public transaction cannot assert that a callback has quiesced.
     #[error("member {member_id} can be withdrawn only after callback quiescence")]
     QuiescenceRequired { member_id: BeatGridId },
+    /// A live public transaction cannot assert that the player committed a
+    /// source change.
+    #[error("member {member_id} source change can be reported only by its player")]
+    SourceChangeUnverified { member_id: BeatGridId },
     /// A group owner cannot mint another warp-map revision.
     #[error("warp-map revision space is exhausted for group {group_id}")]
     WarpMapRevisionExhausted { group_id: BeatGridId },

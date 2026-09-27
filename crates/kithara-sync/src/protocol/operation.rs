@@ -108,6 +108,14 @@ pub enum SyncOperation<G: SyncGroup> {
         /// Exact direct Track grid whose physical source is gone.
         target: BeatGridId,
     },
+    /// Withdraws what the owner planned against one member's source after the
+    /// player committed a change to that source.
+    InvalidateSource {
+        /// Exact direct Track grid whose source changed.
+        target: BeatGridId,
+        /// Strongest change committed since the owner last reconciled it.
+        change: SourceChange,
+    },
     /// Commits a new tempo on a group that owns its own beat timeline.
     Tempo {
         /// Stable group grid receiving the tempo.
@@ -133,9 +141,24 @@ impl<G: SyncGroup> SyncOperation<G> {
             | Self::Prepare { target, .. }
             | Self::Relocate { target, .. }
             | Self::WithdrawQuiescedMember { target }
+            | Self::InvalidateSource { target, .. }
             | Self::Tempo { target, .. } => *target,
         }
     }
+}
+
+/// A committed change to the source one member plays.
+///
+/// Variants are ordered by strength: coalescing several changes keeps the
+/// greatest, so a discontinuity is never hidden behind a later timing change.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SourceChange {
+    /// The source keeps its position, but its speed or run state changed, so
+    /// what it plays from now on moves differently.
+    Timing,
+    /// The source jumped, stopped for a while, or was replaced, so what played
+    /// before no longer tells where it stands.
+    Discontinuity,
 }
 
 /// One atomic ownership-tree operation.

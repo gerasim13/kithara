@@ -94,7 +94,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             SyncOperation::Transport { .. }
             | SyncOperation::Prepare { .. }
             | SyncOperation::Relocate { .. }
-            | SyncOperation::WithdrawQuiescedMember { .. } => {
+            | SyncOperation::WithdrawQuiescedMember { .. }
+            | SyncOperation::InvalidateSource { .. } => {
                 return self.transact_member(operation);
             }
         };
@@ -160,6 +161,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             SyncOperation::WithdrawQuiescedMember { target } => {
                 self.reserve_operation().and_then(|operation| {
                     let transition = self.withdraw_quiesced_member(*target)?;
+                    self.next_operation = operation.checked_next();
+                    Ok(SyncAdmission::StateChanged {
+                        operation,
+                        topology: self.topology_stamp(),
+                        mode: self.mode(),
+                        grid: self.grid.stamp(),
+                        transition,
+                    })
+                })
+            }
+            SyncOperation::InvalidateSource { target, change } => {
+                self.reserve_operation().and_then(|operation| {
+                    let transition = self.invalidate_source(*target, *change)?;
                     self.next_operation = operation.checked_next();
                     Ok(SyncAdmission::StateChanged {
                         operation,

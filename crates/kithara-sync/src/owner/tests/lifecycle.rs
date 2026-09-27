@@ -21,10 +21,11 @@ use super::{
     refresh::{pending_members, prepared},
 };
 use crate::{
-    AlignmentSource, LoadGeneration, SessionAxisUpdate, SyncAdmission, SyncApplied, SyncEffect,
-    SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent, SyncMember,
-    SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt,
-    SyncStatusSnapshot, SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp,
+    AlignmentSource, LoadGeneration, SessionAxisUpdate, SourceChange, SyncAdmission, SyncApplied,
+    SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
+    SyncPreparation, SyncReceipt, SyncStatusSnapshot, SyncTransition, TopologyOperation,
+    TopologyRevision, TopologyStamp,
 };
 
 /// A deck at 120 BPM holding one track grid.
@@ -1903,4 +1904,163 @@ fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
         Err(SyncError::NoPreparedOperation)
     );
     assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+}
+
+fn invalidate(group: &mut Group, track: BeatGridId, change: SourceChange) -> SyncTransition {
+    transition(transact(
+        group,
+        SyncOperation::InvalidateSource {
+            target: track,
+            change,
+        },
+    ))
+}
+
+/// A Disable reporting the sounding map of `preparation` at `output`.
+fn audible_disable(
+    deck: BeatGridId,
+    preparation: &SyncPreparation,
+    output: i64,
+) -> SyncOperation<super::TestGroup> {
+    let frontier = PresentationFrontier::builder()
+        .warp_map(map(preparation))
+        .source(source_at(plan(preparation), output))
+        .output(SessionFrame::new(output))
+        .build();
+    SyncOperation::Sync {
+        target: deck,
+        load: LoadGeneration::first(),
+        transport: TransportRevision::first(),
+        source: AlignmentSource::Audible {
+            frontier,
+            speed: 1.0,
+        },
+        activation: SessionFrame::new(output),
+        intent: SyncIntent::Disable,
+    }
+}
+
+#[kithara::test]
+fn a_source_change_before_entry_keeps_host_mode_and_disable_restores_off() {
+    let (mut group, track, entry) = pending_public_entry();
+    let deck = group.id();
+
+    let withdrawn = invalidate(&mut group, track, SourceChange::Discontinuity);
+    assert_eq!(withdrawn.withdrawn(), [entry.stamp()]);
+    assert_eq!(
+        group.mode(),
+        SyncMode::HostSync,
+        "the accepted intent stays"
+    );
+    assert!(group.pending.is_empty());
+    assert_eq!(
+        group.acknowledge(SyncReceipt::Installed(entry.stamp())),
+        Err(SyncError::NoPreparedOperation),
+        "a ticket placed against the old source cannot be installed"
+    );
+
+    group
+        .accept_parent(parent_update(
+            parent_stamp(parent_id(), 2),
+            anchor_at_rate(2.1, 48_000),
+        ))
+        .expect("a Host tempo change restages the deck");
+    let _ = transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Disable, SessionFrame::new(4_096)),
+    );
+    assert_eq!(
+        group.mode(),
+        SyncMode::Off,
+        "the unentered Host target never sounded, so Disable restores Off"
+    );
+    assert!(group.before_entry.is_none());
+}
+
+#[kithara::test]
+fn a_new_entry_after_a_source_change_inherits_the_prior_timeline() {
+    let (mut group, track, _) = pending_public_entry();
+    let deck = group.id();
+    let _ = invalidate(&mut group, track, SourceChange::Timing);
+
+    let issued = transition(transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(4_096)),
+    ));
+    let [fresh] = issued.issued() else {
+        panic!("a repeated ON issues one fresh entry");
+    };
+    assert_eq!(
+        group.before_entry.map(|(operation, _)| operation),
+        Some(fresh.stamp().operation())
+    );
+    let status = acknowledge(
+        &mut group,
+        SyncReceipt::Rejected {
+            stamp: fresh.stamp(),
+            reason: SyncExecutionReject::Capacity,
+        },
+    );
+    assert_eq!(group.mode(), SyncMode::Off);
+    assert!(matches!(status, SyncStatusSnapshot::Off { .. }));
+}
+
+#[kithara::test]
+fn a_discontinuity_ends_the_applied_proof_while_timing_keeps_it() {
+    for (change, latches) in [
+        (SourceChange::Timing, true),
+        (SourceChange::Discontinuity, false),
+    ] {
+        let (mut group, track, entry) = pending_public_entry();
+        let deck = group.id();
+        let _ = sound(&mut group, &entry);
+        let (_, activation) = entry.activation();
+        let cut = i64::from(activation) + 512;
+
+        let _ = invalidate(&mut group, track, change);
+        assert_eq!(
+            group.mode(),
+            SyncMode::HostSync,
+            "{change:?} keeps the mode"
+        );
+        assert_eq!(!group.applied.is_empty(), latches, "{change:?}");
+        let disabled = group.transact(audible_disable(deck, &entry, cut));
+        if latches {
+            assert!(disabled.is_ok(), "{change:?}: {disabled:?}");
+            assert_eq!(group.mode(), SyncMode::LocalSync);
+        } else {
+            assert_eq!(
+                disabled
+                    .expect_err("a discontinuous source is no sounding proof")
+                    .error(),
+                &SyncError::CapabilityUnavailable {
+                    capability: SyncCapability::Alignment,
+                }
+            );
+            assert_eq!(group.mode(), SyncMode::HostSync);
+        }
+    }
+}
+
+#[kithara::test]
+fn a_source_change_refuses_an_unpaired_armed_receipt() {
+    let (mut group, track, entry) = pending_public_entry();
+    let _ = acknowledge(&mut group, SyncReceipt::Installed(entry.stamp()));
+    let _ = acknowledge(&mut group, SyncReceipt::Armed(entry.stamp()));
+    let prior = group.pending.clone();
+
+    let refused = group
+        .transact(SyncOperation::InvalidateSource {
+            target: track,
+            change: SourceChange::Discontinuity,
+        })
+        .expect_err("the Host drains the pair before it reconciles a source change");
+    assert_eq!(
+        refused.error(),
+        &SyncError::ArmedOperation {
+            member_id: track,
+            operation: entry.stamp().operation(),
+        }
+    );
+    assert_eq!(group.pending, prior);
 }
