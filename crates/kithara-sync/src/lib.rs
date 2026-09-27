@@ -5,6 +5,7 @@
 mod execution;
 mod owner;
 mod protocol;
+mod root;
 
 pub use execution::{
     AppliedSource, ArmPermit, AudioClaim, ClaimError, ControlEnterError, ControlError,
@@ -21,4 +22,8 @@ pub use protocol::{
     SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncMode,
     SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
     SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
+};
+pub use root::{
+    DEFAULT_OWNER_WAIT, EnteredCut, InboxAt, RegisteredCell, RootCut, RootError, RootPort,
+    SyncRoot, SyncRootConfig,
 };

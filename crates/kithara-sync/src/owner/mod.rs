@@ -7,7 +7,7 @@ mod preparation;
 mod relocation;
 mod state;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod timeline;
 mod transaction;
 

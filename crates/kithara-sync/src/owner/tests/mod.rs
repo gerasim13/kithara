@@ -1,5 +1,5 @@
 mod execution;
-mod fixtures;
+pub(crate) mod fixtures;
 mod grid;
 mod lifecycle;
 mod modes;

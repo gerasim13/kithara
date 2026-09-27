@@ -16,7 +16,7 @@ use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
 use super::{
-    dispatch::{drain_after_retirement, publish_root_transition, with_owner_cut},
+    dispatch::{drain_after_retirement, with_owner_cut},
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError, SessionStream},
     state::{
         Deck, GraphRegistry, MixTap, RetiringSlot, SessionState, SlotNodes, add_graph_node,
@@ -328,21 +328,20 @@ pub(super) mod lifecycle {
             let session_stamp = session_grid_generation
                 .stamp()
                 .map_err(|error| graph_state(error.message()))?;
-            let MapAxis::Session(axis) = state.root.snapshot().axis() else {
+            let MapAxis::Session(axis) = state.sync.group().snapshot().axis() else {
                 return Err(graph_state(
                     "session host published a non-session grid during idle shutdown",
                 ));
             };
             let sample_rate = axis.sample_rate();
-            with_owner_cut(state, |state, control| {
-                publish_root_transition(state, control, true, |root| {
-                    root.publish_unavailable_grid(
-                        session_stamp,
-                        sample_rate,
-                        session_grid_generation.epoch(),
-                    )
-                })?;
-                Ok(())
+            with_owner_cut(state, |cut, port| {
+                cut.publish_unavailable_grid(
+                    port,
+                    session_stamp,
+                    sample_rate,
+                    session_grid_generation.epoch(),
+                )
+                .map_err(SessionError::from)
             })?;
             state.reserved_session_grid = Some(session_grid_generation);
             state
@@ -406,7 +405,7 @@ pub(super) mod slots {
         if !deck_at(state, idx)?.started {
             return Err(SessionError::NotRunning(player_id));
         }
-        let gate = state.group_gate(deck_at(state, idx)?.grid_id);
+        let gate = state.sync.gate(deck_at(state, idx)?.grid_id);
         let master_eq_id = deck_at(state, idx)?.master_eq_node_id;
         let (fw_ctx, master_eq_id) = match (&mut state.ctx, master_eq_id) {
             (None, _) => return Err(SessionError::NoContext),
@@ -1051,7 +1050,7 @@ mod tests {
         });
         let mut state = test_state(start_test_stream);
         let first_player = register(&mut state);
-        let initial = state.root.snapshot();
+        let initial = state.sync.group().snapshot();
         assert_eq!(initial.revision(), BeatGridRevision::first());
         assert_eq!(
             initial.state(),
@@ -1075,7 +1074,7 @@ mod tests {
         );
         start_at(&mut state, first_player, 0);
         let before = set_tempo_and_read_session_grid(&mut state);
-        let first_live = state.root.snapshot();
+        let first_live = state.sync.group().snapshot();
         assert_eq!(first_live, before.session_grid());
         assert_eq!(
             first_live.revision(),
@@ -1093,7 +1092,7 @@ mod tests {
             invalidate_audio_route(&mut state, "deferred route before idle teardown"),
             Reply::Ok
         ));
-        let route_boundary = state.root.snapshot();
+        let route_boundary = state.sync.group().snapshot();
         assert_eq!(
             state
                 .reserved_session_grid
@@ -1105,7 +1104,7 @@ mod tests {
         assert!(state.stream_needs_restart);
 
         unregister(&mut state, first_player);
-        let unavailable = state.root.snapshot();
+        let unavailable = state.sync.group().snapshot();
         assert_eq!(
             unavailable.revision(),
             first_live
@@ -1149,7 +1148,7 @@ mod tests {
         let second_player = register(&mut state);
         start_at(&mut state, second_player, 0);
         let after = set_tempo_and_read_session_grid(&mut state);
-        let second_live = state.root.snapshot();
+        let second_live = state.sync.group().snapshot();
         assert_eq!(second_live, after.session_grid());
         assert_eq!(
             second_live.revision(),
@@ -1194,7 +1193,7 @@ mod tests {
             invalidate_audio_route(&mut state, "test route restart"),
             Reply::Ok
         ));
-        let reserved = state.root.snapshot();
+        let reserved = state.sync.group().snapshot();
         assert!(reserved.revision() > live.session_grid_stamp().revision());
         assert_eq!(
             state
@@ -1215,7 +1214,7 @@ mod tests {
             Reply::Err(SessionError::TransportNotProcessed)
         ));
         assert_eq!(
-            state.root.snapshot(),
+            state.sync.group().snapshot(),
             reserved,
             "a stale transport observation must not replace the route reservation"
         );
@@ -1229,7 +1228,7 @@ mod tests {
             Reply::Err(SessionError::TransportNotProcessed)
         ));
         assert_eq!(
-            state.root.snapshot(),
+            state.sync.group().snapshot(),
             reserved,
             "a transport command must not cross an unfinished route boundary"
         );
@@ -1269,7 +1268,7 @@ mod tests {
             Reply::Err(error) => panic!("restarted transport snapshot failed: {error}"),
             _ => panic!("restarted transport query returned an unexpected reply"),
         };
-        let published = state.root.snapshot();
+        let published = state.sync.group().snapshot();
         assert_eq!(published.state(), BeatGridState::Live);
         let MapAxis::Session(reserved_axis) = reserved.axis() else {
             panic!("the route reservation uses the session axis")
@@ -1298,7 +1297,7 @@ mod tests {
 
         unregister(&mut state, player);
 
-        let unavailable = state.root.snapshot();
+        let unavailable = state.sync.group().snapshot();
         assert!(unavailable.revision() > reserved.revision());
         assert_eq!(
             unavailable.state(),

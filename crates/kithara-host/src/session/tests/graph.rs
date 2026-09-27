@@ -13,15 +13,15 @@ use kithara_play::{
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
-    TopologyOperation,
+    GroupState, RootPort, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode,
+    SyncOperation, TopologyOperation,
 };
 #[cfg(test)]
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::BeatGridId;
 
 use super::super::{
-    dispatch::run_cmd,
+    dispatch::{run_cmd, with_owner_cut},
     protocol::{Cmd, Reply, SessionDispatcher, SessionStream},
     state::{RootView, SessionState},
 };
@@ -60,7 +60,12 @@ where
     #[must_use]
     pub(crate) fn exec(&mut self, cmd: Cmd<S>) -> Reply {
         if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
-            && self.state.root.with_group(*grid_id, |_| ()).is_none()
+            && self
+                .state
+                .sync
+                .group()
+                .with_group(*grid_id, |_| ())
+                .is_none()
         {
             attach_player_with_id(&mut self.state, *grid_id, pools.clone());
         }
@@ -154,24 +159,29 @@ fn attach_player_with_id<T, S>(
             .build(),
     );
     let base = state
-        .root
+        .sync
+        .group()
         .topology()
         .expect("fixture host topology")
         .stamp();
-    let admission = state
-        .root
-        .transact(SyncOperation::Topology {
-            base,
-            operations: Box::new([TopologyOperation::Attach {
-                member: SyncMember::Group {
-                    alignment: None,
-                    group: Box::new(target_member(player, sample_rate)),
-                },
-            }]),
-        })
-        .expect("fixture player attachment");
+    let attach = SyncOperation::Topology {
+        base,
+        operations: Box::new([TopologyOperation::Attach {
+            member: SyncMember::Group {
+                alignment: None,
+                group: Box::new(target_member(player, sample_rate)),
+            },
+        }]),
+    };
+    let admission = with_owner_cut(state, |cut, port| {
+        let admission = cut
+            .transact_verified(&*port, attach)
+            .expect("fixture player attachment");
+        port.publish(cut.group());
+        Ok(admission)
+    })
+    .expect("fixture owner cut");
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
-    state.publish_root();
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]

@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_signal::SessionFrame;
-use kithara_sync::{ControlGuard, ParentGridUpdate, SyncError};
+use kithara_sync::{ParentGridUpdate, RootCut, SyncError};
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
@@ -14,11 +14,13 @@ use super::{
     process::converge_transport_restart,
 };
 use crate::{
+    PlayerMember,
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
     session::{
         SessionError,
-        dispatch::{publish_root_transition, stream_died, with_owner_cut},
-        state::SessionState,
+        dispatch::{stream_died, with_owner_cut},
+        port::OwnerPort,
+        state::{GraphRegistry, SessionState},
     },
 };
 
@@ -125,7 +127,7 @@ pub(crate) fn set_tempo<T, S>(
     }
     ensure_no_pending_commit(state)?;
     let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
+    let (target_frame, sample_rate) = commit_boundary(state.ctx.as_ref(), &state.transport)?;
     let next = SessionTransportCommit::new(
         tempo,
         accepted.is_none_or(|commit| commit.is_playing()),
@@ -162,7 +164,7 @@ pub(crate) fn set_playing<T, S>(
     }
     ensure_no_pending_commit(state)?;
     let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
+    let (target_frame, sample_rate) = commit_boundary(state.ctx.as_ref(), &state.transport)?;
     let next = SessionTransportCommit::new(accepted.tempo(), playing, revision);
     let stamp =
         TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
@@ -180,7 +182,7 @@ pub(crate) fn seek<T, S>(
         .ok_or(SessionError::TransportNotProcessed)?;
     ensure_no_pending_commit(state)?;
     let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
+    let (target_frame, sample_rate) = commit_boundary(state.ctx.as_ref(), &state.transport)?;
     let next =
         SessionTransportCommit::relocate(accepted.tempo(), accepted.is_playing(), revision, target);
     let stamp =
@@ -213,7 +215,7 @@ pub(crate) fn prepare_route_restart<T, S>(
         .as_ref()
         .ok_or(SessionError::NoContext)?
         .is_active();
-    let current = state.root.snapshot();
+    let current = state.sync.group().snapshot();
     let MapAxis::Session(axis) = current.axis() else {
         return Err(SessionError::Graph(
             "session host published a non-session grid axis".to_owned(),
@@ -255,11 +257,9 @@ pub(crate) fn prepare_route_restart<T, S>(
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
         let sample_rate = NonZeroU32::new(sample_rate).unwrap_or_else(|| axis.sample_rate());
-        with_owner_cut(state, |state, control| {
-            publish_root_transition(state, control, true, |root| {
-                root.publish_unavailable_grid(stamp, sample_rate, target.epoch())
-            })?;
-            Ok(())
+        with_owner_cut(state, |cut, port| {
+            cut.publish_unavailable_grid(port, stamp, sample_rate, target.epoch())
+                .map_err(SessionError::from)
         })?;
         state.reserved_session_grid = Some(target);
         target
@@ -295,7 +295,7 @@ fn finish_route_restart<T, S>(
         .promote(actual)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     if promoted != target {
-        let published = state.root.snapshot();
+        let published = state.sync.group().snapshot();
         let MapAxis::Session(published_axis) = published.axis() else {
             return Err(SessionError::Graph(
                 "session host published a non-session grid axis".to_owned(),
@@ -304,11 +304,14 @@ fn finish_route_restart<T, S>(
         let stamp = promoted
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        with_owner_cut(state, |state, control| {
-            publish_root_transition(state, control, true, |root| {
-                root.publish_unavailable_grid(stamp, published_axis.sample_rate(), promoted.epoch())
-            })?;
-            Ok(())
+        with_owner_cut(state, |cut, port| {
+            cut.publish_unavailable_grid(
+                port,
+                stamp,
+                published_axis.sample_rate(),
+                promoted.epoch(),
+            )
+            .map_err(SessionError::from)
         })?;
         state.reserved_session_grid = Some(promoted);
     }
@@ -355,7 +358,7 @@ fn schedule_commit<T, S>(
     state.transport.ledger_mut().last = Some(revision);
     if let Err(error) = update_context(state) {
         publish_transport_event(
-            state,
+            &state.graph,
             &TransportEvent::Failed {
                 revision: Some(u64::from(revision)),
                 reason: error.to_string(),
@@ -369,13 +372,13 @@ fn schedule_commit<T, S>(
     Ok(())
 }
 
-pub(crate) fn commit_boundary<T, S>(
-    state: &SessionState<T, S>,
+pub(crate) fn commit_boundary(
+    ctx: Option<&FirewheelContext>,
+    transport: &SessionTransportState,
 ) -> Result<(SessionFrame, NonZeroU32), SessionError> {
-    let ctx = state.ctx.as_ref().ok_or(SessionError::NoContext)?;
+    let ctx = ctx.ok_or(SessionError::NoContext)?;
     let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
-    let lead_frames = state
-        .transport
+    let lead_frames = transport
         .observed()
         .map_or(0, |_| i64::from(stream_info.max_block_frames.get()));
     let target_frame = ctx
@@ -467,8 +470,8 @@ fn refresh_observation<T, S>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
-    with_owner_cut(state, |state, control| {
-        publish_committed(state, &observation, control).map_err(SessionError::from)
+    with_owner_cut(state, |cut, port| {
+        publish_committed(cut, port, &observation).map_err(SessionError::from)
     })?;
     if matches!(
         state.transport.phase,
@@ -495,29 +498,29 @@ fn refresh_observation<T, S>(
 /// # Errors
 ///
 /// Returns the root group's refusal of the committed session grid.
-pub(crate) fn observe_commits<T, S>(
-    state: &mut SessionState<T, S>,
-    control: &ControlGuard<'_>,
+pub(in crate::session) fn observe_commits<S>(
+    cut: &mut RootCut<'_, PlayerMember>,
+    port: &mut OwnerPort<'_, S>,
 ) -> Result<(), SyncError> {
-    if state.reserved_session_grid.is_some() {
+    if port.reserved_session_grid.is_some() {
         return Ok(());
     }
-    let Some(transport_control) = state.transport_control.as_mut() else {
+    let Some(transport_control) = port.transport_control.as_mut() else {
         return Ok(());
     };
     let observation = transport_control.observation();
-    publish_committed(state, &observation, control)
+    publish_committed(cut, port, &observation)
 }
 
 /// Publishes the committed session grid on the root group and records the
 /// commit completion the graph reported; both are idempotent.
-fn publish_committed<T, S>(
-    state: &mut SessionState<T, S>,
+fn publish_committed<S>(
+    cut: &mut RootCut<'_, PlayerMember>,
+    port: &mut OwnerPort<'_, S>,
     observation: &TransportObservation,
-    control: &ControlGuard<'_>,
 ) -> Result<(), SyncError> {
     if let Some(snapshot) = observation.snapshot()
-        && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
+        && cut.group().snapshot().stamp() != snapshot.session_grid_stamp()
     {
         let mut update = ParentGridUpdate::new(
             snapshot.session_grid_stamp(),
@@ -526,38 +529,39 @@ fn publish_committed<T, S>(
             None,
         )
         .with_output_transport(snapshot.revision());
-        if state.ctx.is_some() {
-            let (floor, _) = commit_boundary(state).map_err(|error| match error {
-                SessionError::TransportFrameExhausted => SyncError::ExecutionFrameExhausted,
-                _ => SyncError::OwnerUnavailable,
-            })?;
+        if port.stream.ctx.is_some() {
+            let (floor, _) =
+                commit_boundary(port.stream.ctx, port.transport).map_err(|error| match error {
+                    SessionError::TransportFrameExhausted => SyncError::ExecutionFrameExhausted,
+                    _ => SyncError::OwnerUnavailable,
+                })?;
             update = update.with_execution_floor(floor);
         }
-        let axis_changed = state.root.snapshot().axis() != MapAxis::Session(update.axis());
-        publish_root_transition(state, control, axis_changed, |root| {
-            root.publish_session(update)
-        })?;
+        cut.publish_session(port, update)?;
     }
     if let Some(completion) = observation.completion() {
-        apply_completion(state, completion);
+        apply_completion(port.transport, port.graph, completion);
     }
     Ok(())
 }
 
 /// Treats the graph's reported pending revision as authoritative for whether an abort happened,
 /// regardless of whether this side's own delivery bookkeeping had caught up.
-fn apply_completion<T, S>(state: &mut SessionState<T, S>, completion: TransportCommitResult) {
+fn apply_completion<S>(
+    transport: &mut SessionTransportState,
+    graph: &GraphRegistry<S>,
+    completion: TransportCommitResult,
+) {
     let revision = completion.revision();
-    if state
-        .transport
+    if transport
         .ledger()
         .completed
         .is_some_and(|completed| revision <= completed)
     {
         return;
     }
-    let observed = state.transport.observed();
-    let phase = std::mem::take(&mut state.transport.phase);
+    let observed = transport.observed();
+    let phase = std::mem::take(&mut transport.phase);
     let (active, committed, rejected) = match (completion, phase) {
         (TransportCommitResult::Applied(_), TransportPhase::Applying { next, .. })
             if next.revision() == revision =>
@@ -574,19 +578,19 @@ fn apply_completion<T, S>(state: &mut SessionState<T, S>, completion: TransportC
         ) if pending_revision == revision => (previous, None, false),
         _ => (observed, None, true),
     };
-    let ledger = state.transport.ledger_mut();
+    let ledger = transport.ledger_mut();
     ledger.completed = Some(revision);
     if rejected {
         ledger.rejected = Some(revision);
     }
-    state.transport.phase = active.map_or(TransportPhase::Unconfigured, |active| {
+    transport.phase = active.map_or(TransportPhase::Unconfigured, |active| {
         TransportPhase::Stable { active }
     });
     if let Some(next) = committed {
-        publish_transport_commit(state, observed, next);
+        publish_transport_commit(graph, observed, next);
     } else if rejected {
         publish_transport_event(
-            state,
+            graph,
             &TransportEvent::Failed {
                 revision: Some(u64::from(revision)),
                 reason: "render graph rejected transport commit".to_owned(),
@@ -595,13 +599,13 @@ fn apply_completion<T, S>(state: &mut SessionState<T, S>, completion: TransportC
     }
 }
 
-fn publish_transport_commit<T, S>(
-    state: &SessionState<T, S>,
+fn publish_transport_commit<S>(
+    graph: &GraphRegistry<S>,
     previous: Option<SessionTransportCommit>,
     next: SessionTransportCommit,
 ) {
     for event in transport_events(previous, next).into_iter().flatten() {
-        publish_transport_event(state, &event);
+        publish_transport_event(graph, &event);
     }
 }
 
@@ -632,8 +636,8 @@ fn transport_events(
     [tempo, play_state, seek]
 }
 
-fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
-    for deck in state.graph.decks() {
+fn publish_transport_event<S>(graph: &GraphRegistry<S>, event: &TransportEvent) {
+    for deck in graph.decks() {
         deck.bus.publish(event.clone());
     }
 }

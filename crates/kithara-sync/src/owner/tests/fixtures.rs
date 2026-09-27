@@ -15,7 +15,7 @@ use crate::{
 ///
 /// The production nested-group representation lives in `kithara-play`, which
 /// this crate must not depend on.
-pub(super) struct TestGroup(pub(super) GroupState<Self>);
+pub(crate) struct TestGroup(pub(super) GroupState<Self>);
 
 impl TestGroup {
     fn unavailable(
@@ -62,7 +62,7 @@ pub(super) trait Accept: SyncGroup {
 impl<T: SyncGroup> Accept for T {}
 
 /// A plain live grid owned by a group as its direct member.
-pub(super) struct TestGrid(pub(super) BeatGridSnapshot);
+pub(crate) struct TestGrid(pub(crate) BeatGridSnapshot);
 
 impl BeatGrid for TestGrid {
     delegate::delegate! {

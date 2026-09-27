@@ -51,11 +51,14 @@ impl SyncArbiter {
     /// an owner receipt or member retirement.
     ///
     /// # Errors
-    /// Returns `Busy` when the callback has not finished its claim within the
-    /// owner wait budget; the caller may retry off RT. Returns `Closed` after
-    /// callback quiescence has tombstoned this session.
-    pub fn enter_host_control(&self) -> Result<ControlGuard<'_>, ControlEnterError> {
-        let deadline = WallInstant::now() + Duration::from_millis(18);
+    /// Returns `Busy` when the callback has not finished its claim within
+    /// `wait`; the caller may retry off RT. Returns `Closed` after callback
+    /// quiescence has tombstoned this session.
+    pub fn enter_host_control(
+        &self,
+        wait: Duration,
+    ) -> Result<ControlGuard<'_>, ControlEnterError> {
+        let deadline = WallInstant::now() + wait;
         self.owner_waiting.fetch_add(1, Ordering::AcqRel);
         let entered = loop {
             if self.phase.load(Ordering::Acquire) == consts::CLOSED {

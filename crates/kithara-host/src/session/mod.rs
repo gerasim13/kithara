@@ -2,7 +2,7 @@
 
 mod dispatch;
 mod graph;
-mod inputs;
+mod port;
 pub(crate) mod protocol;
 mod replan;
 pub(crate) mod state;

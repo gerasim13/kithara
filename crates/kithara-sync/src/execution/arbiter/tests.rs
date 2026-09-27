@@ -5,8 +5,8 @@ use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, PresentationFron
 
 use super::*;
 use crate::{
-    LoadGeneration, SourceChange, SyncApplied, SyncExecutionStamp, SyncOperationId, SyncReceipt,
-    SyncReceiptTx, TopologyRevision, TopologyStamp, sync_receipts,
+    DEFAULT_OWNER_WAIT, LoadGeneration, SourceChange, SyncApplied, SyncExecutionStamp,
+    SyncOperationId, SyncReceipt, SyncReceiptTx, TopologyRevision, TopologyStamp, sync_receipts,
 };
 
 fn stamp(member: BeatGridId) -> SyncExecutionStamp {
@@ -224,13 +224,13 @@ fn abandoned_claim_can_be_tombstoned_after_audio_quiesces() {
     drop(claim);
     assert!(arbiter.try_control().is_none());
     assert!(matches!(
-        arbiter.enter_host_control(),
+        arbiter.enter_host_control(DEFAULT_OWNER_WAIT),
         Err(ControlEnterError::Busy)
     ));
     arbiter.close_quiescent();
     assert!(arbiter.try_control().is_none());
     assert!(matches!(
-        arbiter.enter_host_control(),
+        arbiter.enter_host_control(DEFAULT_OWNER_WAIT),
         Err(ControlEnterError::Closed)
     ));
     assert!(matches!(

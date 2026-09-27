@@ -16,15 +16,16 @@ use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{SessionSampleRate, StreamShape, session::RegisteredPlayer};
 use kithara_sync::{
-    ControlGuard, GroupState, PermitCell, SyncArbiter, SyncError, SyncGateBinding, SyncGroup,
-    SyncGroupSnapshot, SyncReceipt, SyncReceiptInbox, SyncStatusSnapshot,
+    GroupState, SyncError, SyncGroup, SyncGroupSnapshot, SyncReceiptInbox, SyncRoot,
+    SyncRootConfig, SyncStatusSnapshot,
 };
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
 use tracing::{debug, warn};
 
 use super::{
-    dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
+    dispatch::{restart_stream, trace_stream_info},
     graph::tap,
+    port::{OwnerPort, StreamFacts},
     protocol::{PlayerId, SessionError, StartStreamFn},
     transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
 };
@@ -147,8 +148,6 @@ impl<S> GraphRegistry<S> {
             pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut Deck<S>>;
             #[call(iter)]
             pub(super) fn decks(&self) -> impl Iterator<Item = &Deck<S>>;
-            #[call(iter_mut)]
-            pub(super) fn decks_mut(&mut self) -> impl Iterator<Item = &mut Deck<S>>;
             pub(super) fn len(&self) -> usize;
         }
     }
@@ -162,12 +161,6 @@ pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConf
 pub(super) enum MixTap {
     Requested(OutputGroup),
     Installed(NodeID),
-}
-
-pub(super) struct RegisteredSyncCell {
-    pub(super) group: BeatGridId,
-    pub(super) cell: Arc<PermitCell>,
-    pub(super) pending_gate_receipt: Option<SyncReceipt>,
 }
 
 struct RootSnapshot {
@@ -192,7 +185,7 @@ impl RootView {
         })))
     }
 
-    fn publish(
+    pub(super) fn publish(
         &self,
         root: &GroupState<PlayerMember>,
         stream_shape: Option<StreamShape>,
@@ -231,9 +224,7 @@ impl RootView {
 pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
     pub(super) retiring: Vec<RetiringSlot>,
-    pub(super) root: GroupState<PlayerMember>,
-    pub(super) sync_arbiter: Arc<SyncArbiter>,
-    pub(super) sync_cells: Vec<RegisteredSyncCell>,
+    pub(super) sync: SyncRoot<PlayerMember>,
     pub(super) limiter: LimiterConfig,
     pub(super) ctx: Option<FirewheelContext>,
     pub(super) mix_tap: Option<MixTap>,
@@ -266,31 +257,8 @@ impl<T, S> Drop for SessionState<T, S> {
     fn drop(&mut self) {
         self.stream.take();
         self.ctx.take();
-        let live = self
-            .graph
-            .decks_mut()
-            .flat_map(|deck| deck.slots.iter_mut());
-        let retiring = self.retiring.iter_mut().map(|retiring| &mut retiring.slot);
-        for slot in live.chain(retiring) {
-            while let Some(receipt) = slot.sync_receipts.next_receipt() {
-                if let Err(error) = self.root.acknowledge(receipt) {
-                    warn!(?error, ?receipt, "final sync receipt could not be recorded");
-                }
-            }
-        }
-        for cell in &mut self.sync_cells {
-            if let Some(receipt) = cell.pending_gate_receipt.take()
-                && let Err(error) = self.root.acknowledge(receipt)
-            {
-                warn!(
-                    ?error,
-                    ?receipt,
-                    "final gate rejection could not be recorded"
-                );
-            }
-        }
-        self.publish_root();
-        self.sync_arbiter.close_quiescent();
+        let (sync, mut port) = self.owner_parts();
+        sync.close(&mut port);
     }
 }
 
@@ -319,9 +287,7 @@ impl<T, S> SessionState<T, S> {
             requested_max_block_frames,
             requested_declick_frames,
             limiter,
-            root,
-            sync_arbiter: Arc::new(SyncArbiter::new()),
-            sync_cells: Vec::new(),
+            sync: SyncRoot::new(root, SyncRootConfig::builder().build()),
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
@@ -345,61 +311,52 @@ impl<T, S> SessionState<T, S> {
     }
 
     pub(super) fn publish_root(&self) {
+        let stream = self.stream_facts();
         self.root_view
-            .publish(&self.root, stream_shape(self), sample_rate(self));
+            .publish(self.sync.group(), stream.shape(), stream.sample_rate());
     }
 
-    pub(super) fn register_sync_member(
-        &mut self,
-        group: BeatGridId,
-        member: BeatGridId,
-    ) -> Result<SyncGateBinding, SessionError> {
-        if self
-            .sync_cells
-            .iter()
-            .any(|entry| entry.group == group || entry.cell.member() == member)
-        {
-            return Err(SessionError::SyncMemberAlreadyRegistered(member));
+    pub(super) const fn stream_facts(&self) -> StreamFacts<'_> {
+        StreamFacts {
+            ctx: self.ctx.as_ref(),
+            stream_needs_restart: self.stream_needs_restart,
+            requested_max_block_frames: self.requested_max_block_frames,
+            sample_rate_hint: self.sample_rate_hint,
         }
-        let cell = Arc::new(PermitCell::new(member));
-        self.sync_cells.push(RegisteredSyncCell {
-            group,
-            cell: Arc::clone(&cell),
-            pending_gate_receipt: None,
-        });
-        Ok(SyncGateBinding::new(Arc::clone(&self.sync_arbiter), cell))
     }
 
-    /// The gate of the member registered under `group`: its source revision
-    /// stamps the render evidence of that deck's slots.
-    pub(super) fn group_gate(&self, group: BeatGridId) -> Option<SyncGateBinding> {
-        self.sync_cells
-            .iter()
-            .find(|entry| entry.group == group)
-            .map(|entry| {
-                SyncGateBinding::new(Arc::clone(&self.sync_arbiter), Arc::clone(&entry.cell))
-            })
-    }
-
-    /// The member's end of life: a slot still retiring for it can no longer
-    /// report anything the owner would apply, so its receiver goes too.
-    pub(super) fn retire_sync_member(
-        &mut self,
-        member: BeatGridId,
-        control: &ControlGuard<'_>,
-    ) -> Result<(), SessionError> {
-        let Some(index) = self
-            .sync_cells
-            .iter()
-            .position(|entry| entry.cell.member() == member)
-        else {
-            return Ok(());
+    /// Splits the sync root from the session fields its owner cut reads, so
+    /// a cut can hold both.
+    pub(super) fn owner_parts(&mut self) -> (&mut SyncRoot<PlayerMember>, OwnerPort<'_, S>) {
+        let Self {
+            sync,
+            graph,
+            retiring,
+            transport,
+            transport_control,
+            reserved_session_grid,
+            ctx,
+            stream_needs_restart,
+            requested_max_block_frames,
+            sample_rate_hint,
+            root_view,
+            ..
+        } = self;
+        let port = OwnerPort {
+            graph,
+            retiring,
+            transport,
+            transport_control,
+            reserved_session_grid: *reserved_session_grid,
+            stream: StreamFacts {
+                ctx: ctx.as_ref(),
+                stream_needs_restart: *stream_needs_restart,
+                requested_max_block_frames: *requested_max_block_frames,
+                sample_rate_hint: *sample_rate_hint,
+            },
+            view: root_view,
         };
-        control.retire_cell(&self.sync_cells[index].cell)?;
-        let entry = self.sync_cells.remove(index);
-        self.retiring
-            .retain(|retiring| retiring.group != entry.group);
-        Ok(())
+        (sync, port)
     }
 }
 
@@ -429,7 +386,8 @@ pub(super) fn register_player<T, S>(
         .checked_add(1)
         .ok_or(SessionError::PlayerIdExhausted)?;
     let master_volume = state
-        .root
+        .sync
+        .group()
         .with_group(grid_id, PlayerMember::host_level)
         .ok_or_else(|| {
             SessionError::Graph(
