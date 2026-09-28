@@ -39,6 +39,11 @@ pub(crate) trait SessionStream {
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
+    /// Reads one deck's accepted mode, tempo and executor evidence beside
+    /// what its track last presented.
+    QueryDeckState {
+        target: BeatGridId,
+    },
     /// Registers the permit cell of `member`, which plays in the deck
     /// `group`, before its player attaches.
     RegisterMember {
@@ -61,9 +66,6 @@ pub(crate) enum HostCmd<S> {
 pub(crate) enum SyncCmd {
     Transact(SyncOperation<PlayerMember>),
     TransactCurrent(Box<[TopologyOperation<PlayerMember>]>),
-    QueryDeckState {
-        target: BeatGridId,
-    },
     RequestDeckSync {
         target: BeatGridId,
         member: BeatGridId,

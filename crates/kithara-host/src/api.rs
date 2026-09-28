@@ -20,8 +20,9 @@ pub struct DeckSyncState {
     /// Tempo the deck's own or inherited timeline approaches; `None` while
     /// the deck is off.
     pub accepted_tempo: Option<BeatsPerMinute>,
-    /// Tempo the map the deck sounds through carries at the Host's last
-    /// processed output frame; `None` while no map sounds.
+    /// Tempo the map the deck's track last presented carries at the output
+    /// frame it reached; `None` while no map sounds, including while the
+    /// deck is paused.
     pub applied_tempo: Option<BeatsPerMinute>,
 }
 

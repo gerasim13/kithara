@@ -11,7 +11,9 @@ use kithara_platform::{
 };
 use kithara_signal::{SessionFrame, SourceSpan, TransportRevision};
 use kithara_test_utils::kithara;
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridQuery, PresentationFrontier, WarpPlan};
+use kithara_warp::{
+    BeatGrid, BeatGridId, BeatGridQuery, PresentationFrontier, WarpMapRevision, WarpPlan,
+};
 
 use super::{
     TestGrid, TestGroup,
@@ -453,6 +455,81 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
             capability: SyncCapability::Alignment,
         }
     );
+}
+
+/// Only what the track presented names the applied tempo: a frontier on the
+/// sounding ramp reads the ramp where it reached, and one naming another map
+/// or none reads nothing.
+#[kithara::test(tokio)]
+async fn the_applied_tempo_is_read_where_the_track_presented_its_map() {
+    let mut fixture = Fixture::new(Answer::Record, None);
+    let deck = fixture.group.id();
+    let _ = fixture
+        .group
+        .transact(SyncOperation::Tempo {
+            target: deck,
+            tempo: kithara_warp::BeatsPerMinute::try_from(180.0).expect("tempo"),
+            commit: SessionFrame::new(0),
+            smoothing: 1.0,
+        })
+        .expect("a one-second local ramp is admitted");
+    let SyncAdmission::Prepared(initial) = fixture
+        .group
+        .transact(cue_at(fixture.track, 0))
+        .expect("the local map is prepared")
+    else {
+        panic!("one local projection");
+    };
+    let _ = fixture.staged.recv().await.expect("the lane stages");
+    for receipt in [
+        SyncReceipt::Installed(initial.stamp()),
+        SyncReceipt::Armed(initial.stamp()),
+    ] {
+        let _ = fixture.group.acknowledge(receipt).expect("owner takes it");
+    }
+    let SyncEffect::Projection { plan, .. } = initial.effect() else {
+        panic!("the local decision is a projection");
+    };
+    let activation = plan.activation();
+    let heard = |map: Option<WarpMapRevision>, output: i64| {
+        PresentationFrontier::builder()
+            .maybe_warp_map(map)
+            .source(activation.source())
+            .output(SessionFrame::new(output))
+            .build()
+    };
+    let presented = heard(Some(activation.revision()), activation.output().into());
+    let _ = fixture
+        .group
+        .acknowledge(SyncReceipt::Presented(
+            SyncApplied::builder()
+                .stamp(initial.stamp())
+                .frontier(presented)
+                .build(),
+        ))
+        .expect("the ramped local map is sounding");
+
+    let ramp = [4_800, 24_000].map(|output| {
+        let frontier = heard(Some(activation.revision()), output);
+        let BeatGridQuery::Resolved(tempo) = plan.target_tempo_at(frontier.output()) else {
+            panic!("the sounding ramp has a tempo at {output}");
+        };
+        assert_eq!(
+            fixture.group.applied_tempo_at(frontier),
+            Some(tempo),
+            "the applied tempo is the ramp's where the track reached {output}"
+        );
+        tempo
+    });
+    assert_ne!(ramp[0], ramp[1], "both frontiers lie on the ramp");
+    let other = WarpMapRevision::from(
+        NonZeroU64::new(u64::from(activation.revision()) + 1).expect("a later revision"),
+    );
+    assert_eq!(
+        fixture.group.applied_tempo_at(heard(Some(other), 4_800)),
+        None
+    );
+    assert_eq!(fixture.group.applied_tempo_at(heard(None, 4_800)), None);
 }
 
 #[kithara::test(tokio)]

@@ -354,7 +354,7 @@ impl<S> Host<S> {
         }
         match self
             .dispatcher
-            .exec_host(HostCmd::Sync(SyncCmd::QueryDeckState { target: deck.id() }))?
+            .exec_host(HostCmd::QueryDeckState { target: deck.id() })?
         {
             HostReply::DeckSyncState(snapshot) => Ok(snapshot),
             HostReply::Err(error) => Err(error),

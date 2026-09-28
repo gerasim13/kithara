@@ -6,11 +6,11 @@ use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
-use kithara_signal::SessionFrame;
 use kithara_sync::{
-    ControlEnterError, EntryRefusal, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
-    SyncOperation, SyncReceiptAck, SyncRejected,
+    ControlEnterError, EntryRefusal, PublicOperation, ResidentRender, RootCut, RootError,
+    SyncError, SyncGroup, SyncOperation, SyncReceiptAck, SyncRejected,
 };
+use kithara_warp::{BeatGridId, PresentationFrontier};
 use tracing::{debug, trace, warn};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -64,6 +64,13 @@ where
             Ok(()) => HostReply::Play(run_cmd(state, cmd)),
             Err(error) => HostReply::Play(Reply::Err(error)),
         },
+        HostCmd::QueryDeckState { target } => {
+            let heard = presented(state, target);
+            with_owner_cut(state, |cut, _| deck_state(cut, target, heard)).map_or_else(
+                |error| HostReply::Err(error.into()),
+                HostReply::DeckSyncState,
+            )
+        }
         HostCmd::Sync(cmd) => {
             let (sync, mut port) = state.owner_parts();
             let entered = match sync.enter() {
@@ -203,13 +210,46 @@ fn control_failure_reply<S>(cmd: HostCmd<S>, failure: ControlEnterError) -> Host
         HostCmd::Play(_) => HostReply::Play(Reply::Err(session_error)),
         HostCmd::Shutdown => HostReply::Ok,
         HostCmd::Sync(SyncCmd::TransactCurrent(_))
-        | HostCmd::Sync(SyncCmd::QueryDeckState { .. })
         | HostCmd::Sync(SyncCmd::RequestDeckSync { .. })
+        | HostCmd::QueryDeckState { .. }
         | HostCmd::RegisterMember { .. }
         | HostCmd::RetireMember { .. }
         | HostCmd::ApplyMix { .. }
         | HostCmd::EnableOutput { .. } => HostReply::Err(session_error.into()),
     }
+}
+
+/// Where the deck's track last presented its sound, observed outside Control
+/// the way a waiting deck is; `None` while it presents nothing.
+fn presented<T, S>(state: &SessionState<T, S>, deck: BeatGridId) -> Option<PresentationFrontier> {
+    let observation = state
+        .sync
+        .group()
+        .with_group(deck, PlayerMember::resident_observation)
+        .flatten()?;
+    let ResidentRender::Snapshot(snapshot) = observation.render() else {
+        return None;
+    };
+    Some(snapshot.frontier())
+}
+
+/// The deck's accepted mode and tempo, its executor status, and the tempo
+/// the applied map carries where the deck's track was `heard`.
+fn deck_state(
+    cut: &RootCut<'_, PlayerMember>,
+    target: BeatGridId,
+    heard: Option<PresentationFrontier>,
+) -> Result<DeckSyncState, SessionError> {
+    cut.group()
+        .with_group(target, |group| DeckSyncState {
+            mode: group.mode(),
+            status: group.status(),
+            accepted_tempo: group.tempo(),
+            applied_tempo: heard.and_then(|heard| group.applied_tempo_at(heard)),
+        })
+        .ok_or(SessionError::Sync(SyncError::GroupNotFound {
+            group_id: target,
+        }))
 }
 
 fn run_sync_cmd<S>(
@@ -234,29 +274,6 @@ fn run_sync_cmd<S>(
                 Ok(operation) => operation,
                 Err(refusal) => return HostReply::Err(entry_refusal(refusal)),
             }
-        }
-        SyncCmd::QueryDeckState { target } => {
-            let output = port
-                .stream
-                .ctx
-                .map(|ctx| SessionFrame::new(ctx.audio_clock().samples.0));
-            return cut
-                .group()
-                .with_group(target, |group| DeckSyncState {
-                    mode: group.mode(),
-                    status: group.status(),
-                    accepted_tempo: group.tempo(),
-                    applied_tempo: output.and_then(|output| group.applied_tempo_at(output)),
-                })
-                .map_or_else(
-                    || {
-                        HostReply::Err(
-                            SessionError::from(SyncError::GroupNotFound { group_id: target })
-                                .into(),
-                        )
-                    },
-                    HostReply::DeckSyncState,
-                );
         }
         SyncCmd::Transact(operation) => match transport::observe_commits(cut, port) {
             Ok(()) => operation,

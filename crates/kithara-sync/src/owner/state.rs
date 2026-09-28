@@ -1,9 +1,9 @@
 use std::num::NonZeroU32;
 
-use kithara_signal::{SessionEpoch, SessionFrame};
+use kithara_signal::SessionEpoch;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
-    BeatGridState, BeatsPerMinute, MapAxis, SessionAxis, WarpMapRevision,
+    BeatGridState, BeatsPerMinute, MapAxis, PresentationFrontier, SessionAxis, WarpMapRevision,
 };
 
 use super::{
@@ -81,15 +81,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             .tempo(self.parent.and_then(Parent::segment).as_ref())
     }
 
-    /// Returns the tempo the latest map a member sounds through carries at
-    /// `output`.
+    /// Returns the tempo the applied map a member's track presented through
+    /// `heard` carries at the output frame it reached.
     ///
-    /// A group whose members sound through no map claims no applied tempo,
-    /// and neither does a map whose frozen target cannot answer at `output`.
+    /// Only a presented frontier proves which map sounded where: a frontier
+    /// whose map no member sounds through claims no applied tempo, and
+    /// neither does a map whose frozen target cannot answer there.
     #[must_use]
-    pub fn applied_tempo_at(&self, output: SessionFrame) -> Option<BeatsPerMinute> {
-        let BeatGridQuery::Resolved(tempo) = self.latest_applied()?.plan().target_tempo_at(output)
-        else {
+    pub fn applied_tempo_at(&self, heard: PresentationFrontier) -> Option<BeatsPerMinute> {
+        let lane = self
+            .applied
+            .iter()
+            .find(|lane| heard.warp_map() == Some(lane.map()))?;
+        let BeatGridQuery::Resolved(tempo) = lane.plan().target_tempo_at(heard.output()) else {
             return None;
         };
         Some(tempo)
