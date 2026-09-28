@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use kithara_bufpool::HasPool;
+use kithara_events::TrackId;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
@@ -9,11 +10,12 @@ use kithara_play::{
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
-    GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncReceiptAck,
-    SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition, TopologyOperation,
+    GroupState, ParentFact, ResidentLoadObservation, ResidentRender, SyncAdmission, SyncAttachment,
+    SyncError, SyncGroup, SyncGroupSnapshot, SyncIntent, SyncMember, SyncMemberKind, SyncMode,
+    SyncOperation, SyncReceipt, SyncReceiptAck, SyncRejected, SyncStaged, SyncStatusSnapshot,
+    SyncTransition, TopologyOperation,
 };
-use kithara_warp::{BeatGrid, BeatGridId};
+use kithara_warp::{BeatGrid, BeatGridId, PresentationFrontier};
 
 #[cfg(feature = "offline")]
 use super::offline::OfflineRuntime;
@@ -340,7 +342,8 @@ impl<S> Host<S> {
     }
 
     /// Reads one attached deck's accepted mode, tempo and actual executor
-    /// evidence.
+    /// evidence. A closed player presents nothing, so the Host answers for
+    /// its deck without an applied tempo.
     ///
     /// # Errors
     /// Returns an error for a foreign or detached deck, or when the canonical
@@ -352,10 +355,15 @@ impl<S> Host<S> {
         if deck.host_id != self.id {
             return Err(PlayError::ForeignSession);
         }
-        match self
-            .dispatcher
-            .exec_host(HostCmd::QueryDeckState { target: deck.id() })?
-        {
+        let heard = match P::resident_sync_observation(deck.control()) {
+            Ok(observation) => observation.as_ref().and_then(presented),
+            Err(PlayError::Closed) => None,
+            Err(error) => return Err(error),
+        };
+        match self.dispatcher.exec_host(HostCmd::QueryDeckState {
+            target: deck.id(),
+            heard,
+        })? {
             HostReply::DeckSyncState(snapshot) => Ok(snapshot),
             HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(
@@ -582,6 +590,15 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
             _ => Err(SyncError::OwnerUnavailable),
         }
     }
+}
+
+/// Where the deck's track last presented its sound; `None` while it
+/// presents nothing.
+fn presented(observation: &ResidentLoadObservation<TrackId>) -> Option<PresentationFrontier> {
+    let ResidentRender::Snapshot(snapshot) = observation.render() else {
+        return None;
+    };
+    Some(snapshot.frontier())
 }
 
 fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(), PlayError> {

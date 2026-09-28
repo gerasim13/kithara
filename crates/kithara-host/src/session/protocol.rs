@@ -11,7 +11,7 @@ use kithara_sync::{
     ResidentLoadObservation, SyncAdmission, SyncError, SyncGateBinding, SyncIntent, SyncOperation,
     SyncRejected, TopologyOperation,
 };
-use kithara_warp::BeatGridId;
+use kithara_warp::{BeatGridId, PresentationFrontier};
 
 use crate::{
     PlayerMember,
@@ -40,9 +40,10 @@ pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
     /// Reads one deck's accepted mode, tempo and executor evidence beside
-    /// what its track last presented.
+    /// where its track was `heard`, as the player's owner observed it.
     QueryDeckState {
         target: BeatGridId,
+        heard: Option<PresentationFrontier>,
     },
     /// Registers the permit cell of `member`, which plays in the deck
     /// `group`, before its player attaches.

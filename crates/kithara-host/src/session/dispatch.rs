@@ -7,8 +7,8 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 use kithara_sync::{
-    ControlEnterError, EntryRefusal, PublicOperation, ResidentRender, RootCut, RootError,
-    SyncError, SyncGroup, SyncOperation, SyncReceiptAck, SyncRejected,
+    ControlEnterError, EntryRefusal, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
+    SyncOperation, SyncReceiptAck, SyncRejected,
 };
 use kithara_warp::{BeatGridId, PresentationFrontier};
 use tracing::{debug, trace, warn};
@@ -64,8 +64,7 @@ where
             Ok(()) => HostReply::Play(run_cmd(state, cmd)),
             Err(error) => HostReply::Play(Reply::Err(error)),
         },
-        HostCmd::QueryDeckState { target } => {
-            let heard = presented(state, target);
+        HostCmd::QueryDeckState { target, heard } => {
             with_owner_cut(state, |cut, _| deck_state(cut, target, heard)).map_or_else(
                 |error| HostReply::Err(error.into()),
                 HostReply::DeckSyncState,
@@ -217,20 +216,6 @@ fn control_failure_reply<S>(cmd: HostCmd<S>, failure: ControlEnterError) -> Host
         | HostCmd::ApplyMix { .. }
         | HostCmd::EnableOutput { .. } => HostReply::Err(session_error.into()),
     }
-}
-
-/// Where the deck's track last presented its sound, observed outside Control
-/// the way a waiting deck is; `None` while it presents nothing.
-fn presented<T, S>(state: &SessionState<T, S>, deck: BeatGridId) -> Option<PresentationFrontier> {
-    let observation = state
-        .sync
-        .group()
-        .with_group(deck, PlayerMember::resident_observation)
-        .flatten()?;
-    let ResidentRender::Snapshot(snapshot) = observation.render() else {
-        return None;
-    };
-    Some(snapshot.frontier())
 }
 
 /// The deck's accepted mode and tempo, its executor status, and the tempo
