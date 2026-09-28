@@ -552,3 +552,9 @@ pub(crate) const FLASH_TOGGLE: &str = "flash";
 pub(crate) const NO_BLOCK_TOGGLE: &str = "no-block";
 pub(crate) const CONFIG_PATH: &str = ".config/typos.toml";
 pub(crate) const TYPOS_INSTALL_HINT: &str = "cargo install typos-cli";
+
+/// How often a lock waiter tries the lock again.
+pub(crate) const LOCK_WAIT_POLL: Duration = Duration::from_secs(1);
+
+/// How often a lock waiter repeats what it waits for and who holds it.
+pub(crate) const LOCK_WAIT_HEARTBEAT: Duration = Duration::from_secs(30);

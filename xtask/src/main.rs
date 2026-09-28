@@ -8,6 +8,7 @@ mod apple_docgen;
 mod child;
 mod ci;
 mod config;
+mod job;
 mod mutants;
 mod parity;
 mod publish;

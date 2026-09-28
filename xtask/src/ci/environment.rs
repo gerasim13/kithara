@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{build_cache, config::CiConfig, lane_build::LaneBuild, run::CacheGroup};
-use crate::consts;
+use crate::{consts, job::is_gitlab};
 
 struct SccacheSlot {
     index: usize,
@@ -786,10 +786,6 @@ fn reclaim_build_caches(
     Ok(targets.len())
 }
 
-pub(crate) fn is_gitlab() -> bool {
-    env::var_os("GITLAB_CI").is_some_and(|value| !value.is_empty())
-}
-
 /// How much room the cache still has. A job reads this through whatever the
 /// executor mounted the cache with — a virtiofs share into an ephemeral macOS
 /// guest, a bind mount into a container — and those report the filesystem
@@ -1177,6 +1173,7 @@ mod tests {
             .env("CI_RUNNER_ID", "999")
             .env("CI_CONCURRENT_ID", "1")
             .env("CI_JOB_ID", "29")
+            .env("CI_JOB_URL", "https://gitlab.example/-/jobs/29")
             .env("HOME", directory.path().join("home"))
             .env_remove("CI")
             .env_remove("CI_PROJECT_DIR")

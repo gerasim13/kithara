@@ -763,7 +763,7 @@ mod tests {
             .write(true)
             .open(profile.join(".cargo-lock"))
             .unwrap();
-        let lock = FileLock::exclusive(file).unwrap();
+        let lock = FileLock::try_exclusive(file).unwrap();
 
         let contents = candidate_entries(directory.path()).unwrap();
         assert!(

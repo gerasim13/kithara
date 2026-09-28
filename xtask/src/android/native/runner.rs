@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::lock::FileLock;
+use kithara_devtools::lock::{FileLock, Wait};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -93,7 +93,18 @@ pub(crate) fn run(session_path: &Path, binary: &Path, args: &[String]) -> Result
         .read(true)
         .write(true)
         .open(session.evidence.join("device.lock"))?;
-    let _lock = FileLock::exclusive(lock)?;
+    let subject = format!(
+        "the Android device ({})",
+        session.evidence.join("device.lock").display()
+    );
+    let holder = crate::job::lock_holder()?;
+    let _lock = FileLock::exclusive(
+        lock,
+        &Wait {
+            subject: &subject,
+            holder: &holder,
+        },
+    )?;
     child::check(Some(&cancel))?;
 
     let Some(test) = exact_test(args) else {

@@ -18,7 +18,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::lock::FileLock;
+use kithara_devtools::lock::{FileLock, Wait};
 
 use crate::consts;
 
@@ -44,10 +44,20 @@ impl LaneBuild {
         let lock = File::options()
             .create(true)
             .truncate(false)
+            .read(true)
             .write(true)
             .open(dir.join(consts::LOCK_FILE))
             .with_context(|| format!("opening the lane build lock in {}", dir.display()))?;
-        let lock = FileLock::exclusive(lock).context("waiting for the lane build lock")?;
+        let subject = format!("the lane build directory {}", dir.display());
+        let holder = crate::job::lock_holder()?;
+        let lock = FileLock::exclusive(
+            lock,
+            &Wait {
+                subject: &subject,
+                holder: &holder,
+            },
+        )
+        .context("taking the lane build lock")?;
         let tracked = tracked_sources(project_root)?;
         let record = dir.join(consts::SOURCES_FILE);
         let mut recorded = read_sources(&record)?;

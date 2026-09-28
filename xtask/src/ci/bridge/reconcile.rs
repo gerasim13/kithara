@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::lock::FileLock;
+use kithara_devtools::lock::{FileLock, Wait};
 use tracing::{info, warn};
 
 use super::{
@@ -32,8 +32,16 @@ struct ReconcileLock {
 impl ReconcileLock {
     fn acquire(state_dir: &Path) -> Result<Self> {
         let file = open_reconcile_lock(state_dir)?;
-        let lock = FileLock::exclusive(file)
-            .with_context(|| format!("locking bridge state {}", state_dir.display()))?;
+        let subject = format!("bridge state {}", state_dir.display());
+        let holder = crate::job::lock_holder()?;
+        let lock = FileLock::exclusive(
+            file,
+            &Wait {
+                subject: &subject,
+                holder: &holder,
+            },
+        )
+        .with_context(|| format!("locking {subject}"))?;
         Ok(Self { _lock: lock })
     }
 

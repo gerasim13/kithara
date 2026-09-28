@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::lock::FileLock;
+use kithara_devtools::lock::{FileLock, Wait};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -116,7 +116,15 @@ fn bootstrap(config: &Config, context: &Path) -> Result<PathBuf> {
         .read(true)
         .write(true)
         .open(config.objects.join(format!("{hash}.lock")))?;
-    let _lock = FileLock::exclusive(lock)?;
+    let subject = format!("ndk-context bootstrap object {hash}");
+    let holder = crate::job::lock_holder()?;
+    let _lock = FileLock::exclusive(
+        lock,
+        &Wait {
+            subject: &subject,
+            holder: &holder,
+        },
+    )?;
     if !object.exists() {
         let temporary = object.with_extension(format!("{}.tmp", std::process::id()));
         let status = child::run(
