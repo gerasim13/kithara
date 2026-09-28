@@ -496,12 +496,17 @@ fn patch_attributes(attributes: &[Attribute]) -> Result<Vec<Attribute>> {
             continue;
         };
         for option in list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
-            if let Meta::List(group) = option
-                && group.path.is_ident("patch")
-            {
-                let options = group.tokens;
-                grouped.push(parse_quote!(#[patch(#options)]));
+            if !option.path().is_ident("patch") {
+                continue;
             }
+            let Meta::List(group) = option else {
+                return Err(Error::new_spanned(
+                    option,
+                    "patch options go in a group: `patch(...)`",
+                ));
+            };
+            let options = group.tokens;
+            grouped.push(parse_quote!(#[patch(#options)]));
         }
     }
     if let Some(attribute) = native.first()
@@ -1100,6 +1105,31 @@ mod tests {
                 error
                     .to_string()
                     .contains("choose either a native patch attribute or its config group"),
+                "{error}"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_option_outside_its_group_is_refused() {
+        for input in [
+            parse_quote! {
+                #[config(patch)]
+                struct Config { batch: usize }
+            },
+            parse_quote! {
+                struct Config {
+                    #[config(value, patch = skip)]
+                    batch: usize,
+                }
+            },
+        ] {
+            let input: DeriveInput = input;
+            let error = derive(&input).expect_err("patch options belong in a group");
+            assert!(
+                error
+                    .to_string()
+                    .contains("patch options go in a group: `patch(...)`"),
                 "{error}"
             );
         }

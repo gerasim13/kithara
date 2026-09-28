@@ -59,10 +59,10 @@ fn a_judged_update_commits_whole_or_not_at_all() {
 struct Session<'a> {
     #[config(skip = "borrowed construction resource", debug(skip))]
     resource: &'a str,
-    #[config(skip = "counted by the owner", builder(skip))]
-    opened: u32,
     #[config(nested)]
     levels: Levels,
+    #[config(skip = "derived from the levels it opens with", builder(skip = levels.level()))]
+    opened: u32,
 }
 
 struct Wrapped<T>(T);
@@ -99,7 +99,10 @@ fn retained_values_are_owned_and_resources_stay_private() {
     assert_eq!(values.levels.level, 7);
     assert_eq!(values.levels.limit, None);
     assert_eq!(session.resource, "injected");
-    assert_eq!(session.opened, 0);
+    assert_eq!(
+        session.opened, 7,
+        "a skipped field reads the builder's arguments"
+    );
 }
 
 #[kithara::test]
@@ -110,7 +113,7 @@ fn debug_prints_every_field_but_the_skipped_ones() {
         .build();
     assert_eq!(
         format!("{session:?}"),
-        "Session { opened: 0, levels: Levels { level: 2, limit: Some(4) }, .. }"
+        "Session { levels: Levels { level: 2, limit: Some(4) }, opened: 2, .. }"
     );
 }
 

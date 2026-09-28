@@ -137,7 +137,9 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
 }
 
 /// A bon function builder over `new`, which bon keeps private and hidden:
-/// the type's constructor is `X::builder()`.
+/// the type's constructor is `X::builder()`. Skipped fields are bound in
+/// declaration order before any argument moves into `Self`, so their
+/// expressions read the arguments and the skipped fields above them.
 fn builder(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> TokenStream {
     let name = &item.ident;
     let visibility = &item.vis;
@@ -152,20 +154,24 @@ fn builder(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Tok
             Construction::Argument(argument) => Some(argument),
             Construction::Initialised(_) => None,
         });
-    let initialisers = members.iter().map(|member| {
-        let name = member.name;
-        match &member.construction {
-            Construction::Argument(_) => quote!(#name),
-            Construction::Initialised(value) => quote!(#name: #value),
-        }
-    });
+    let initialisers = members
+        .iter()
+        .filter_map(|member| match &member.construction {
+            Construction::Argument(_) => None,
+            Construction::Initialised(value) => {
+                let (field, ty) = (member.name, member.ty);
+                Some(quote!(let #field: #ty = #value;))
+            }
+        });
+    let fields = members.iter().map(|member| member.name);
     quote! {
         #[::kithara_config::__private::bon::bon(crate = ::kithara_config::__private::bon)]
         #[automatically_derived]
         impl #impl_generics #name #ty_generics #where_clause {
             #top
             #visibility fn new(#(#arguments),*) -> Self {
-                Self { #(#initialisers),* }
+                #(#initialisers)*
+                Self { #(#fields),* }
             }
         }
     }
@@ -407,8 +413,11 @@ mod tests {
         assert!(expanded.contains(
             "# [doc = r\" How far the ratio may go.\"] # [builder (default = Consts :: MAX_BAR_RATIO)] ratio : f64"
         ));
-        assert!(expanded.contains("phase : Phase :: Idle"));
-        assert!(expanded.contains("count : :: core :: default :: Default :: default ()"));
+        assert!(expanded.contains(
+            "let phase : Phase = Phase :: Idle ; \
+             let count : usize = :: core :: default :: Default :: default () ; \
+             Self { ratio , phase , count }"
+        ));
         assert!(
             !expanded.contains("phase : Phase)"),
             "a skipped field is no argument"
