@@ -189,6 +189,13 @@ mod tests {
         )
     }
 
+    /// A slot whose model is already in hand.
+    fn holding(model: Arc<BeatGridModel>) -> Arc<PreparedGrid> {
+        let prepared = Arc::new(PreparedGrid::default());
+        prepared.put(model);
+        prepared
+    }
+
     fn grid() -> TrackGrid {
         TrackGrid::new(
             BeatGridId::allocate().expect("the identity space is available"),
@@ -234,7 +241,7 @@ mod tests {
             BeatGridId::allocate().expect("the identity space is available"),
             rate(),
         );
-        let prepared = Arc::new(PreparedGrid::holding(served()));
+        let prepared = holding(served());
 
         track.load(&prepared, rate(), Some(96_000));
 
@@ -257,7 +264,7 @@ mod tests {
     #[kithara::test]
     fn a_rate_change_reprojects_the_model_it_already_holds() {
         let track = grid();
-        let prepared = Arc::new(PreparedGrid::holding(served()));
+        let prepared = holding(served());
 
         track.load(&prepared, rate(), Some(96_000));
         let first = track.snapshot();
@@ -314,7 +321,7 @@ mod tests {
     #[kithara::test]
     fn an_unchanged_slot_does_not_move_the_revision() {
         let track = grid();
-        let prepared = Arc::new(PreparedGrid::holding(served()));
+        let prepared = holding(served());
 
         track.load(&prepared, rate(), Some(96_000));
         let first = track.snapshot();
@@ -328,9 +335,26 @@ mod tests {
     }
 
     #[kithara::test]
+    fn a_slot_handed_the_model_it_holds_does_not_move_the_revision() {
+        let track = grid();
+        let prepared = holding(served());
+
+        track.load(&prepared, rate(), Some(96_000));
+        let first = track.snapshot();
+        prepared.put(served());
+        let again = track.snapshot();
+
+        assert_eq!(
+            first.revision(),
+            again.revision(),
+            "an equal model is no new grid, so nothing is replanned"
+        );
+    }
+
+    #[kithara::test]
     fn releasing_a_track_leaves_the_grid_unavailable() {
         let track = grid();
-        let prepared = Arc::new(PreparedGrid::holding(served()));
+        let prepared = holding(served());
 
         track.load(&prepared, rate(), Some(96_000));
         let loaded = track.snapshot();

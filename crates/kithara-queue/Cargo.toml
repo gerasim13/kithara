@@ -37,6 +37,7 @@ usdt = ["kithara-play/usdt", "kithara-sync/usdt", "kithara-test-utils/usdt"]
 kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
+kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-download = { workspace = true, default-features = false }

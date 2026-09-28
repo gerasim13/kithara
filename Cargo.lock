@@ -5653,6 +5653,7 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
+ "kithara-beat",
  "kithara-bufpool",
  "kithara-derive",
  "kithara-download",

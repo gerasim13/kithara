@@ -25,24 +25,26 @@ use crate::{
     worker::{ServiceClass, TrackPriority},
 };
 
-/// The prepared beat grid this load starts with, and the read that fills it
-/// in when the track named a source instead of handing one over.
+/// The prepared beat grid this load publishes, and the read that fills it in
+/// when the track named a source instead of handing one over.
 ///
-/// The read is deliberately not awaited here. A track whose audio is ready
-/// becomes playable at once; its grid arrives when its own source answers,
-/// into the very slot this load handed out. A load that is over has dropped
-/// that slot, so a late answer reaches nobody.
+/// The slot is the one the track's owner handed the configuration, else one
+/// of this load's own. The read is deliberately not awaited here. A track
+/// whose audio is ready becomes playable at once; its grid arrives when its
+/// own source answers, into the slot this load publishes. A load that is over
+/// has dropped its end of the slot, so a late answer reaches only what still
+/// holds it.
 fn prepared_grid<S, B>(config: &ResourceConfig<S, B>) -> Arc<PreparedGrid>
 where
     B: Default,
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    let slot: Arc<PreparedGrid> = config.grid_slot.clone().unwrap_or_default();
     match config.beat_grid() {
-        None => Arc::default(),
-        Some(ArtifactSource::Value(model)) => Arc::new(PreparedGrid::holding(Arc::clone(model))),
+        None => {}
+        Some(ArtifactSource::Value(model)) => slot.put(Arc::clone(model)),
         Some(source) => {
-            let slot = Arc::new(PreparedGrid::default());
-            let read = slot.clone();
+            let read = Arc::clone(&slot);
             let source = source.clone();
             let audio = config.src.clone();
             let downloader = config.downloader.clone();
@@ -60,9 +62,9 @@ where
                     Err(error) => warn!(%error, "resource: the prepared beat grid never arrived"),
                 }
             }));
-            slot
         }
     }
+    slot
 }
 
 /// Type-erased audio resource wrapping any `AudioReader`.

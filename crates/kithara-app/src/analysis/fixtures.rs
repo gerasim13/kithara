@@ -253,6 +253,29 @@ pub(crate) fn rhythm_grid() -> BeatGridModel {
     .expect("the rhythm beats form a valid grid")
 }
 
+/// What an analysis pass finds on the rhythm fixtures: the beats of
+/// [`rhythm_grid`], stated in frames of their 48 kHz source.
+pub(crate) fn rhythm_analysis() -> TrackAnalysis {
+    const BEATS: u64 = 24;
+    const SPACING: u64 = 24_000;
+
+    TrackAnalysis::builder()
+        .token("rhythm".into())
+        .revision(1)
+        .source_sample_rate(other_axis())
+        .settled(true)
+        .beat(BeatSnapshot::new(
+            BeatArtifact::new(
+                120.0,
+                (0..BEATS).map(|beat| (beat * SPACING, Some(1.0))).collect(),
+                Vec::new(),
+            ),
+            BeatState::Final,
+            Vec::new(),
+        ))
+        .build()
+}
+
 /// A waveform the caller hands over.
 pub(crate) fn served_waveform() -> Waveform {
     Waveform::try_from(vec![Bucket::new(0.25, 0.5, 0.75); 8]).expect("fixture bands are in range")
@@ -421,6 +444,22 @@ pub(crate) async fn answer_subscribe(
     let (tx, rx) = watch::channel(None);
     assert!(reply.send(rx).is_ok(), "the deck waits for the reply");
     tx
+}
+
+/// Answer every subscription with `artifacts`, as the owner of one analysed
+/// track would, until the decks let go of their handle.
+pub(crate) async fn serve_subscriptions(
+    mut requests: mpsc::Receiver<Request>,
+    artifacts: watch::Receiver<Option<TrackArtifacts>>,
+) {
+    while let Some(request) = requests.recv().await {
+        if let Request::Subscribe { reply, .. } = request {
+            assert!(
+                reply.send(artifacts.clone()).is_ok(),
+                "the deck waits for the reply"
+            );
+        }
+    }
 }
 
 /// Wait until the deck has taken a publication at or past `revision`.

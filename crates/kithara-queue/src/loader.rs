@@ -125,6 +125,9 @@ where
                 ..ScopeLabel::default()
             }));
         }
+        if let Some(slot) = self.tracks.grid_slot(id) {
+            config.set_grid_slot(slot);
+        }
         self.player.prepare_config(config).map_err(QueueError::from)
     }
 

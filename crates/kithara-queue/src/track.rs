@@ -4,13 +4,15 @@ use std::sync::{
 };
 
 use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
+use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
-use kithara_platform::CancelToken;
-use kithara_play::{ResourceConfig, ResourceSrc};
+use kithara_platform::{CancelToken, sync::Arc};
+use kithara_play::{PreparedGrid, ResourceConfig, ResourceSrc};
 
 use crate::{
     attempts::{AttemptGuard, Ticket},
+    error::QueueError,
     event::{QueueEvent, TrackStatus},
 };
 
@@ -109,6 +111,8 @@ where
     pub(crate) source: TrackSource<S>,
     pub(crate) status: TrackStatus,
     observer: AudioObserverSlot,
+    /// The track's prepared beat grid, published by every load of the track.
+    grid: Arc<PreparedGrid>,
 }
 
 impl<S> TrackRecord<S>
@@ -124,6 +128,7 @@ where
             source,
             load: None,
             observer: AudioObserverSlot::default(),
+            grid: Arc::default(),
         }
     }
 
@@ -177,6 +182,27 @@ where
             return;
         };
         slot.attach(observer);
+    }
+
+    /// The slot every load of this track publishes its beat grid into.
+    pub(crate) fn grid_slot(&self, id: TrackId) -> Option<Arc<PreparedGrid>> {
+        self.lock()
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| Arc::clone(&record.grid))
+    }
+
+    /// Hand this track the beat grid its owner found: the load playing it
+    /// now publishes it, and so does every later load of the track.
+    pub(crate) fn offer_beat_grid(
+        &self,
+        id: TrackId,
+        grid: Arc<BeatGridModel>,
+    ) -> Result<(), QueueError> {
+        self.grid_slot(id)
+            .ok_or(QueueError::UnknownTrackId(id))?
+            .put(grid);
+        Ok(())
     }
 
     /// Whether the user's selection wants this track's live attempt.
@@ -377,7 +403,7 @@ mod tests {
 
     use kithara_assets::AssetStore;
     use kithara_audio::{AudioObserveError, AudioObserver};
-    use kithara_platform::sync::Arc;
+    use kithara_beat::{BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_test_utils::kithara;
 
@@ -493,6 +519,58 @@ mod tests {
         let tracks = two_tracks();
 
         assert!(tracks.source(TrackId(3)).is_none());
+    }
+
+    /// A grid of two beats half a second apart.
+    fn grid() -> Arc<BeatGridModel> {
+        Arc::new(
+            BeatGridModel::try_from(RawBeatGrid {
+                schema_version: SCHEMA_VERSION,
+                model_id: "offered".to_owned(),
+                revision: 1,
+                state: BeatGridState::Final,
+                duration: Some(1.0),
+                bpm: 120.0,
+                beats: vec![
+                    GridBeat {
+                        at: 0.0,
+                        ordinal: 0,
+                        confidence: None,
+                    },
+                    GridBeat {
+                        at: 0.5,
+                        ordinal: 1,
+                        confidence: None,
+                    },
+                ],
+                downbeats: Vec::new(),
+                meter: None,
+            })
+            .expect("the fixture grid holds together"),
+        )
+    }
+
+    #[kithara::test]
+    fn an_offered_grid_reaches_the_slot_of_its_own_track_only() {
+        let tracks = two_tracks();
+
+        tracks
+            .offer_beat_grid(TrackId(2), grid())
+            .expect("the track is queued");
+
+        let held = |id| tracks.grid_slot(id).expect("the track is queued").read().1;
+        assert_eq!(held(TrackId(2)).as_deref(), Some(&*grid()));
+        assert_eq!(held(TrackId(1)), None, "another track holds no grid");
+    }
+
+    #[kithara::test]
+    fn a_grid_offered_for_an_unqueued_track_is_refused() {
+        let tracks = two_tracks();
+
+        assert!(matches!(
+            tracks.offer_beat_grid(TrackId(3), grid()),
+            Err(QueueError::UnknownTrackId(TrackId(3)))
+        ));
     }
 
     fn token() -> CancelToken {

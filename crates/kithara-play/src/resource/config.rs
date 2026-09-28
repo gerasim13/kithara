@@ -16,7 +16,7 @@ use kithara_warp::WarpConfig;
 use kithara_waveform::Waveform;
 use url::Url;
 
-use super::{ArtifactSource, ResourceSrc, resampler::PlaybackResamplerBackend};
+use super::{ArtifactSource, PreparedGrid, ResourceSrc, resampler::PlaybackResamplerBackend};
 use crate::{EngineLoad, PlayWorker};
 
 /// Unified configuration for opening an audio resource.
@@ -90,6 +90,14 @@ where
     pub(crate) downloader: Option<Downloader>,
     /// Shared live audio-engine cost meter (decode + effects).
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
+    /// The slot this track's grid is published into, when what outlives a
+    /// single load owns it (a queue's track record). The load puts its
+    /// prepared grid there and its player reads the slot, so a grid the owner
+    /// learns later reaches the load as well. `None` gives each load a slot of
+    /// its own. Not a document key, and not a builder input: the owner hands
+    /// it to a built configuration.
+    #[builder(skip)]
+    pub(crate) grid_slot: Option<Arc<PreparedGrid>>,
     /// Additional HTTP headers to include in all network requests.
     pub(crate) headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav"). Per-call input

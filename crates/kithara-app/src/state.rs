@@ -20,7 +20,7 @@ use kithara::{
     stream::AudioCodec,
 };
 use num_traits::{ToPrimitive, cast::AsPrimitive};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     analysis::{AnalysisEvent, AnalysisHandle, TrackArtifacts},
@@ -424,6 +424,7 @@ pub(crate) async fn listen(
     let mut held = HeldAnalysis {
         analysis,
         queue: queue.clone(),
+        track: None,
         rx: None,
     };
     held.follow(&state).await;
@@ -465,6 +466,8 @@ pub(crate) async fn listen(
 struct HeldAnalysis {
     analysis: AnalysisHandle,
     queue: AppQueueControl,
+    /// The track the deck follows, whose grid the queue is handed.
+    track: Option<TrackId>,
     rx: Option<watch::Receiver<Option<TrackArtifacts>>>,
 }
 
@@ -491,6 +494,7 @@ impl HeldAnalysis {
                 .and_then(|index| st.tracks.get(index).map(|track| track.id))
         };
         let track = held.and_then(|id| self.queue.track_source(id).map(|source| (id, source)));
+        self.track = track.as_ref().map(|(id, _)| *id);
         self.rx = None;
         self.rx = match (track, self.axis()) {
             (Some((id, source)), Some(axis)) => {
@@ -503,14 +507,24 @@ impl HeldAnalysis {
         self.mirror(state, true);
     }
 
+    /// Show the followed track's latest artifacts, and hand the queue the
+    /// grid they state, so the track's loads publish it to the Host.
     fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
         let next = self.rx.as_ref().and_then(|rx| rx.borrow().clone());
         if !open {
             self.rx = None;
         }
         let mut st = state.lock();
-        if !same_revision(st.analysis.as_ref(), next.as_ref()) {
-            st.set_analysis(next);
+        if same_revision(st.analysis.as_ref(), next.as_ref()) {
+            return;
+        }
+        let grid = next.as_ref().and_then(TrackArtifacts::grid).cloned();
+        st.set_analysis(next);
+        drop(st);
+        if let (Some(id), Some(grid)) = (self.track, grid)
+            && let Err(error) = self.queue.offer_beat_grid(id, Arc::new(grid))
+        {
+            debug!(track = ?id, %error, "analysis: the queue let go of the track before its grid");
         }
     }
 

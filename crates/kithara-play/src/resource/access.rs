@@ -7,10 +7,10 @@ use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_file::File;
 use kithara_hls::Hls;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_waveform::Waveform;
 
-use super::{ArtifactFetch, ArtifactSource, ResourceConfig, ResourceSrc, SourceType};
+use super::{ArtifactFetch, ArtifactSource, PreparedGrid, ResourceConfig, ResourceSrc, SourceType};
 
 impl<S, B: Default> ResourceConfig<S, B>
 where
@@ -93,6 +93,12 @@ where
     /// Replace the parent cancel token for this resource.
     pub fn set_cancel(&mut self, cancel: CancelToken) {
         self.cancel = Some(cancel);
+    }
+
+    /// Publish this track's grid into `slot`, which its owner keeps across
+    /// loads, instead of a slot of the load's own.
+    pub fn set_grid_slot(&mut self, slot: Arc<PreparedGrid>) {
+        self.grid_slot = Some(slot);
     }
 
     /// Replace the rate this resource's decoder resamples onto.

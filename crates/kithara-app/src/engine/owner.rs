@@ -768,6 +768,97 @@ mod tests {
         rig.close().await;
     }
 
+    /// A library track reaches its deck without a grid: the SYNC ask waits on
+    /// beats until the deck's analysis states them, then locks on the Host.
+    #[cfg(not(feature = "broadcast"))]
+    #[kithara::test(native, tokio)]
+    async fn the_sync_button_waits_for_the_analysed_grid_and_locks_on_it(rhythm_a_mp3: String) {
+        use ::kithara::{
+            platform::{
+                time::Duration,
+                tokio::{sync::watch, task},
+            },
+            prelude::ResourceSrc,
+            ui::render::ControlAction,
+        };
+
+        use crate::{
+            analysis::{
+                AnalysisHandle,
+                fixtures::{rhythm_analysis, serve_subscriptions},
+            },
+            pools::{AppResourceConfig, AppTrackSource},
+        };
+
+        /// Two bars at 124 BPM, the latest a musical entry lands, and the
+        /// output's start.
+        const ENTRY: Duration = Duration::from_secs(5);
+
+        let (analysis, requests) = AnalysisHandle::channel();
+        let (artifacts, served) = watch::channel(None);
+        task::spawn(serve_subscriptions(requests, served));
+        let rig = OffThread::spawn("engine", move || {
+            Ok::<_, Infallible>(Rig::analysed(analysis))
+        })
+        .await
+        .expect("rig fixture is infallible");
+        rig.call(move |rig| {
+            let publish = |rig: &mut Rig| {
+                rig.engine.tick();
+                rig.engine.publish();
+                rig.frame();
+            };
+            let synced = |rig: &Rig| rig.flag("deck.playback.synced@deck=a");
+            let word = |rig: &Rig| rig.text("deck.playback.sync_state@deck=a");
+
+            let config = &rig.config;
+            let track = AppResourceConfig::for_src(
+                ResourceSrc::parse(&rhythm_a_mp3).expect("fixture url parses"),
+            )
+            .downloader(config.downloader.clone())
+            .worker(config.worker.clone())
+            .store(config.store.clone())
+            .audio(config.audio.clone())
+            .hls(config.hls.clone())
+            .file(config.file.clone())
+            .build();
+            rig.queues[0]
+                .append(AppTrackSource::Config(Box::new(track)))
+                .expect("deck A takes the track");
+            rig.until(
+                "the track loads",
+                Rig::DEADLINE,
+                |rig| {
+                    let _ = rig.queues[0].tick();
+                },
+                |rig| rig.queues[0].duration_seconds().is_some(),
+            );
+            rig.send("bar/host-tempo", ControlAction::StepScalar(4.0));
+            rig.send("deck-a/play", ControlAction::Activate);
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.until(
+                "the Host waits for the deck's beats",
+                ENTRY,
+                publish,
+                |rig| word(rig).as_deref() == Some("WAITS FOR BEATS"),
+            );
+            assert!(!synced(rig), "a deck without beats stays off the Host");
+
+            artifacts.send_replace(Some(rhythm_analysis().into()));
+            rig.until(
+                "the analysed deck plays at the Host's tempo",
+                ENTRY,
+                publish,
+                |rig| {
+                    synced(rig) && rig.text("deck.playback.bpm@deck=a").as_deref() == Some("124.0")
+                },
+            );
+        })
+        .await;
+        rig.close().await;
+    }
+
     #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, flash(false))]
     fn a_rung_picked_on_a_deck_without_a_ladder_publishes_the_ladder_mode() {

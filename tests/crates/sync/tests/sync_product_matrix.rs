@@ -24,12 +24,12 @@ use kithara::{
     },
     play::{
         ArtifactSource, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        ResourceConfig, ResourceSrc, Tempo,
+        ResourceConfig, ResourceSrc, SessionError, Tempo,
     },
     queue::{Queue, QueueConfig, QueueError, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
     sync::{
-        AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncMode, SyncOperation,
+        AlignmentSource, LoadGeneration, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperation,
         SyncOperationId, SyncStatusSnapshot,
     },
     warp::{
@@ -75,6 +75,11 @@ pub(super) const CUE: Start = Start::Seconds(5.25);
 
 /// The beat grid every synthetic rhythm fixture was rendered on.
 fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
+    ArtifactSource::Value(synthetic_model())
+}
+
+/// The model of [`synthetic_grid`].
+fn synthetic_model() -> Arc<BeatGridModel> {
     let spacing = SECONDS_PER_MINUTE / START_BPM;
     let beats = (0..SYNTHETIC_BEATS)
         .map(|ordinal| GridBeat {
@@ -95,7 +100,7 @@ fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
         meter: None,
     })
     .expect("synthetic rhythm beats form a valid grid");
-    ArtifactSource::Value(Arc::new(model))
+    Arc::new(model)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -314,6 +319,10 @@ pub(super) const PUBLIC_SYNTHETIC_ENABLE: SyncCase = SyncCase::running(
 )
 .gridded()
 .hold(120.0);
+/// [`PUBLIC_SYNTHETIC_ENABLE`] with a track opened without its grid, as a
+/// library track the app analyses after the load.
+const OFFERED_GRID: SyncCase =
+    SyncCase::running("offered-grid", 1, 48_000, OperationOrder::PlaySyncSeek).hold(120.0);
 /// A paused deck on a host whose rate differs from the fixtures' 48 kHz.
 pub(super) const STAGED_CUE: SyncCase =
     SyncCase::running("staged-cue", 1, 44_100, OperationOrder::SyncPlaySeek)
@@ -1095,6 +1104,19 @@ impl ProductHarness {
         self.host
             .with(move |host| host.request_deck_sync(&deck, intent))
             .await
+    }
+
+    /// Hands the first deck's track `grid`, as an app hands the grid its
+    /// analysis found for a loaded track.
+    async fn offer_first_deck_grid(&self, grid: Arc<BeatGridModel>) {
+        let control = self.decks[0].control().clone();
+        self.host
+            .run(move || {
+                let track = control.current().expect("the first deck holds a track");
+                control.offer_beat_grid(track.id, grid)
+            })
+            .await
+            .unwrap_or_else(|error| panic!("offer the first deck's grid: {error}"));
     }
 
     /// Sets the Host tempo and renders until its graph processed it.
@@ -2359,6 +2381,55 @@ async fn off_during_a_break_leaves_the_deck_manual_and_playing_by_hand(#[case] c
         pulses as f64 >= passed,
         "by hand the deck passes {passed} fixture beats, sounded {pulses}"
     );
+    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
+}
+
+/// A track opened without a grid covers no entry on the Host timeline, and
+/// the grid its queue is handed after the load is the grid the Host aligns by.
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(90))
+)]
+async fn a_grid_handed_to_the_queue_after_the_load_aligns_the_deck() {
+    let case = OFFERED_GRID;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    harness.settle_host_tempo(case, 124.0).await;
+    let refused = harness.request_first_deck(SyncIntent::Enable).await;
+    assert!(
+        matches!(
+            refused,
+            Err(PlayError::Session(SessionError::Sync(
+                SyncError::GridCoverageUnavailable { .. }
+            )))
+        ),
+        "a track opened without its grid covers no entry, got {refused:?}"
+    );
+
+    harness.offer_first_deck_grid(synthetic_model()).await;
+
+    harness
+        .request_first_deck(SyncIntent::Enable)
+        .await
+        .expect("the handed grid reaches the load already playing");
+    harness
+        .deck_state_when(
+            case,
+            |state| is_sounding(state.status) && at_bpm(state.applied_tempo, 124.0),
+            "the Host map over the handed grid",
+        )
+        .await;
     assert!(harness.failures.is_empty(), "{:?}", harness.failures);
 }
 

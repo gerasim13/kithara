@@ -107,12 +107,87 @@ impl Rig {
         assert_eq!(update(&mut self.ui, message).units(), 0);
     }
 
-    #[cfg(not(feature = "broadcast"))]
+    #[cfg(feature = "broadcast")]
+    pub(crate) fn on_air() -> Self {
+        use kithara::worker::{Worker, WorkerConfig};
+
+        let config = test_fixture::config();
+        let broadcast = AppBroadcastConfig::builder(
+            Worker::new(WorkerConfig::new()),
+            config.worker.pools().clone(),
+        )
+        .cancel(config.shutdown.child())
+        .build();
+        Self::realtime_with(
+            &config,
+            Broadcaster::new(broadcast),
+            AnalysisHandle::channel().0,
+        )
+    }
+
+    pub(crate) fn pump(&mut self) -> Vec<u64> {
+        let mut applied = Vec::new();
+        while let Ok(envelope) = self.commands.try_recv() {
+            applied.push(envelope.seq);
+            self.engine.apply(envelope);
+        }
+        self.engine.publish();
+        applied
+    }
+
+    fn realtime_with(config: &AppConfig, broadcast: Broadcaster, analysis: AnalysisHandle) -> Self {
+        let host = AppHost::new(HostConfig::builder().build()).expect("test host");
+        Self::build(config, host, broadcast, move |deck| {
+            StateController::new(
+                deck.queue.control().clone(),
+                Arc::clone(&deck.timestretch),
+                deck.cancel_child(),
+                analysis.clone(),
+            )
+        })
+    }
+
+    pub(crate) fn send(&mut self, path: &str, action: ControlAction) {
+        self.message(Message::Ui(UiEvent::Control {
+            action,
+            path: path.to_owned(),
+        }));
+    }
+
+    pub(crate) fn until(
+        &mut self,
+        what: &str,
+        within: Duration,
+        mut step: impl FnMut(&mut Self),
+        mut done: impl FnMut(&mut Self) -> bool,
+    ) {
+        let deadline = Instant::now() + within;
+        loop {
+            step(self);
+            if done(self) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what}: not within {within:?}");
+            thread::paced_backoff(Duration::from_millis(5));
+        }
+    }
+}
+
+#[cfg(not(feature = "broadcast"))]
+impl Rig {
+    /// A realtime rig whose decks ask `analysis` for their tracks' artifacts.
+    pub(crate) fn analysed(analysis: AnalysisHandle) -> Self {
+        Self::realtime_with(
+            &test_fixture::config(),
+            Broadcaster::new(AppBroadcastConfig::default()),
+            analysis,
+        )
+    }
+
     pub(crate) fn offline() -> Self {
         Self::offline_with(|_| {})
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn offline_with(configure: impl FnOnce(&mut AppConfig)) -> Self {
         let mut config = test_fixture::config();
         configure(&mut config);
@@ -141,52 +216,10 @@ impl Rig {
         rig
     }
 
-    #[cfg(feature = "broadcast")]
-    pub(crate) fn on_air() -> Self {
-        use kithara::worker::{Worker, WorkerConfig};
-
-        let config = test_fixture::config();
-        let broadcast = AppBroadcastConfig::builder(
-            Worker::new(WorkerConfig::new()),
-            config.worker.pools().clone(),
-        )
-        .cancel(config.shutdown.child())
-        .build();
-        Self::realtime_with(&config, Broadcaster::new(broadcast))
-    }
-
-    pub(crate) fn pump(&mut self) -> Vec<u64> {
-        let mut applied = Vec::new();
-        while let Ok(envelope) = self.commands.try_recv() {
-            applied.push(envelope.seq);
-            self.engine.apply(envelope);
-        }
-        self.engine.publish();
-        applied
-    }
-
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn realtime() -> Self {
-        Self::realtime_with(
-            &test_fixture::config(),
-            Broadcaster::new(AppBroadcastConfig::default()),
-        )
+        Self::analysed(AnalysisHandle::channel().0)
     }
 
-    fn realtime_with(config: &AppConfig, broadcast: Broadcaster) -> Self {
-        let host = AppHost::new(HostConfig::builder().build()).expect("test host");
-        let (analysis, _) = AnalysisHandle::channel();
-        Self::build(config, host, broadcast, |deck| {
-            StateController::new(
-                deck.queue.control().clone(),
-                Arc::clone(&deck.timestretch),
-                deck.cancel_child(),
-                analysis.clone(),
-            )
-        })
-    }
-
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn scalar(&self, key: &str) -> f64 {
         let root = ReadRoot::new(&self.ui);
         match Walk::new(&root).get(key) {
@@ -195,44 +228,17 @@ impl Rig {
         }
     }
 
-    pub(crate) fn send(&mut self, path: &str, action: ControlAction) {
-        self.message(Message::Ui(UiEvent::Control {
-            action,
-            path: path.to_owned(),
-        }));
-    }
-
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn shows(&mut self, id: DeckId, change: impl FnOnce(&mut crate::state::UiState)) {
         change(&mut self.states[id.0].lock());
         self.engine.publish();
         self.ui.refresh();
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn text(&self, key: &str) -> Option<String> {
         let root = ReadRoot::new(&self.ui);
         match Walk::new(&root).get(key) {
             Some(ReadValue::Text(value)) => Some(value.to_owned()),
             _ => None,
-        }
-    }
-
-    pub(crate) fn until(
-        &mut self,
-        what: &str,
-        within: Duration,
-        mut step: impl FnMut(&mut Self),
-        mut done: impl FnMut(&mut Self) -> bool,
-    ) {
-        let deadline = Instant::now() + within;
-        loop {
-            step(self);
-            if done(self) {
-                return;
-            }
-            assert!(Instant::now() < deadline, "{what}: not within {within:?}");
-            thread::paced_backoff(Duration::from_millis(5));
         }
     }
 }

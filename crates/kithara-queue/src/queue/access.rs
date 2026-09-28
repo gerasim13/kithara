@@ -1,10 +1,13 @@
 use kithara_audio::AudioObserver;
+use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
+use kithara_platform::sync::Arc;
 use smallvec::SmallVec;
 
 use super::QueueControl;
 use crate::{
+    error::QueueError,
     event::{QueueEvent, QueueRepeatMode},
     navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
     track::{TrackEntry, TrackRecord, TrackSource},
@@ -96,13 +99,6 @@ where
             .map(TrackRecord::entry)
     }
 
-    /// The original [`TrackSource`] for `id`, if still queued. Lets callers
-    /// rebuild a resource by track identity rather than by queue position.
-    #[must_use]
-    pub fn track_source(&self, id: TrackId) -> Option<TrackSource<S>> {
-        self.tracks.source(id)
-    }
-
     delegate::delegate! {
         to self.loader {
             /// Attach a bounded decoded-audio observer to `id`'s decoder.
@@ -122,6 +118,22 @@ where
             /// by decoded-audio observers attached to this queue.
             #[must_use]
             pub fn sample_rate(&self) -> u32;
+        }
+        to self.tracks {
+            /// Hand track `id` the beat grid its owner found, such as one a local
+            /// analysis produced. The load playing the track now publishes it, and so
+            /// does every later load of the track; a grid equal to the one held
+            /// changes nothing.
+            ///
+            /// # Errors
+            ///
+            /// [`QueueError::UnknownTrackId`] when `id` is not queued.
+            pub fn offer_beat_grid(&self, id: TrackId, grid: Arc<BeatGridModel>) -> Result<(), QueueError>;
+            /// The original [`TrackSource`] for `id`, if still queued. Lets callers
+            /// rebuild a resource by track identity rather than by queue position.
+            #[must_use]
+            #[call(source)]
+            pub fn track_source(&self, id: TrackId) -> Option<TrackSource<S>>;
         }
         to self {
             /// Live variant metadata of the currently playing adaptive item.
