@@ -318,7 +318,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     }
 
     /// Fixes the beat and tempo actually playing at `activation` as the
-    /// group's own timeline, including mid-way through a tempo approach.
+    /// group's own timeline, including mid-way through a tempo approach. A
+    /// group none of whose members sounds a map leaves for `Off` instead:
+    /// its track plays by hand, whatever a stale frontier still names.
     fn latch(
         &self,
         load: LoadGeneration,
@@ -338,21 +340,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             return match prior {
                 PriorTimeline::Local(Some(local), _) => self.local_effect(local, activation),
                 PriorTimeline::Off(_) | PriorTimeline::Local(None, _) => {
-                    let grid = self.withdrawn_grid()?;
-                    validate_successor(&self.grid, &grid, Withdrawal::Allowed)?;
-                    let descent = ParentWithdrawal::new(grid.stamp(), activation, None);
-                    Ok(ModeEffect::Changed {
-                        timeline: prior.timeline(),
-                        grid,
-                        descent: Box::new(ParentFact::Withdrawn(descent)),
-                        at: activation,
-                        release: None,
-                    })
+                    self.unmapped(prior.timeline(), activation)
                 }
             };
         }
         let local = match source {
-            AlignmentSource::Audible { frontier, .. } if frontier.warp_map().is_some() => {
+            AlignmentSource::Audible { frontier, .. }
+                if frontier.warp_map().is_some() && !self.applied.is_empty() =>
+            {
                 let lane = self
                     .applied
                     .iter()
@@ -380,6 +375,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             // member whose unplayed accepted grid could be mistaken for sound.
             _ if self.members.is_empty() => latch_at(&self.grid, activation)?,
             _ if matches!(self.grid.state(), BeatGridState::Unavailable(_)) => None,
+            AlignmentSource::Audible { .. } if self.applied.is_empty() => {
+                return self.unmapped(Timeline::Off, activation);
+            }
             AlignmentSource::Audible { frontier, .. } => {
                 return Err(self.unmatched_applied(frontier.warp_map()));
             }
@@ -395,6 +393,21 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             });
         };
         self.local_effect(local, activation)
+    }
+
+    /// Leaves for `timeline`, which carries no map, at `at`; nothing sounds
+    /// a map, so nothing is handed off.
+    fn unmapped(&self, timeline: Timeline, at: SessionFrame) -> Result<ModeEffect, SyncError> {
+        let grid = self.withdrawn_grid()?;
+        validate_successor(&self.grid, &grid, Withdrawal::Allowed)?;
+        let descent = ParentWithdrawal::new(grid.stamp(), at, None);
+        Ok(ModeEffect::Changed {
+            timeline,
+            grid,
+            descent: Box::new(ParentFact::Withdrawn(descent)),
+            at,
+            release: None,
+        })
     }
 
     fn unmatched_applied(&self, given: Option<kithara_warp::WarpMapRevision>) -> SyncError {

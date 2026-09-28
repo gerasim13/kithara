@@ -1141,6 +1141,24 @@ impl ProductHarness {
             .unwrap_or_else(|error| panic!("{}: seek the first deck: {error}", case.id));
     }
 
+    /// Renders until the first deck plays 0.06 to 0.12 s before one of its
+    /// track's beats, `beat` seconds apart.
+    async fn play_to_before_a_beat(&mut self, case: SyncCase, beat: f64) {
+        let blocks = 2 * usize::try_from(case.sample_rate).expect("sample rate fits usize")
+            / self.block_frames;
+        for _ in 0..blocks {
+            let ahead = beat - self.first_deck_position(case) % beat;
+            if (0.06..0.12).contains(&ahead) {
+                return;
+            }
+            let _ = self.render(case, self.block_frames).await;
+        }
+        panic!(
+            "{}: the first deck never played just before a beat",
+            case.id
+        );
+    }
+
     /// The first deck's playback position in seconds.
     fn first_deck_position(&self, case: SyncCase) -> f64 {
         self.decks[0]
@@ -2055,6 +2073,32 @@ enum Break {
     Pause,
 }
 
+/// What a listener hears of the output up to the latest rendered block.
+#[derive(Default)]
+struct Silence {
+    /// Seconds since the output last sounded.
+    quiet: f64,
+    /// Whether the latest block sounded.
+    sounding: bool,
+}
+
+impl Silence {
+    /// Hears one block lasting `seconds`; whether it starts a sound.
+    fn hear(&mut self, pcm: &[f32], seconds: f64) -> bool {
+        let audible = pcm.iter().any(|sample| sample.abs() > 0.0);
+        let onset = audible && !self.sounding;
+        self.sounding = audible;
+        self.quiet = if audible { 0.0 } else { self.quiet + seconds };
+        onset
+    }
+}
+
+/// The fixture beats a deck playing by hand from `from` seconds passes by
+/// `to`, less the 0.1 s its position may lag.
+fn beats_passed(from: f64, to: f64, beat: f64) -> f64 {
+    ((to - 0.1) / beat).floor() - (from / beat).ceil() + 1.0
+}
+
 #[kithara::test(
     native,
     tokio,
@@ -2102,6 +2146,7 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
             target
         }
         Break::Pause => {
+            harness.play_to_before_a_beat(case, beat).await;
             harness.pause_first_deck().await;
             harness.settle(case, 2).await;
             let paused_at = harness.first_deck_position(case);
@@ -2116,8 +2161,7 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
     };
     let resumed = harness.output_frames;
     let rate = f64::from(case.sample_rate);
-    let mut quiet = 0.0;
-    let mut sounding = false;
+    let mut silence = Silence::default();
     let mut pulses = 0_usize;
     let mut by_hand = 0_usize;
     let mut played = 0.0;
@@ -2126,17 +2170,11 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
         let pcm = harness.render(case, BLOCK_FRAMES).await;
         let before = played;
         played = (harness.output_frames - resumed) as f64 / rate;
-        let audible = pcm.iter().any(|sample| sample.abs() > 0.0);
-        let onset = audible && !sounding;
-        sounding = audible;
-        quiet = if audible {
-            0.0
-        } else {
-            quiet + (played - before)
-        };
+        let onset = silence.hear(&pcm, played - before);
         assert!(
-            quiet < beat + 0.1,
-            "the deck falls silent for {quiet:.3} s, {played:.3} s after the break"
+            silence.quiet < beat + 0.1,
+            "the deck falls silent for {:.3} s, {played:.3} s after the break",
+            silence.quiet
         );
         if aligned.is_some() {
             continue;
@@ -2169,8 +2207,11 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
         "the break releases the map before the deck aligns again"
     );
     let (aligned_at, by_hand_until) = aligned.expect("the fresh Host map held");
-    let passed =
-        ((resumed_at + by_hand_until - 0.1) / beat).floor() - (resumed_at / beat).ceil() + 1.0;
+    let passed = beats_passed(resumed_at, resumed_at + by_hand_until, beat);
+    assert!(
+        passed >= 1.0,
+        "the by-hand interval from {resumed_at:.3} s passes no fixture beat"
+    );
     assert!(
         pulses as f64 >= passed,
         "by hand the deck passes {passed} fixture beats from {resumed_at:.3} s, sounded {pulses}"
@@ -2178,6 +2219,120 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
     assert!(
         aligned_at > resumed_at + by_hand_until,
         "the fresh map enters where the deck plays, not at the old cue: {aligned_at:.3} s"
+    );
+    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(120))
+)]
+#[case::seek(Break::Seek)]
+#[case::pause(Break::Pause)]
+async fn off_during_a_break_leaves_the_deck_manual_and_playing_by_hand(#[case] cut: Break) {
+    let case = PUBLIC_SYNTHETIC_ENABLE;
+    let second = usize::try_from(case.sample_rate).expect("sample rate fits usize") / BLOCK_FRAMES;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    harness.settle_host_tempo(case, 124.0).await;
+    harness
+        .request_first_deck(SyncIntent::Enable)
+        .await
+        .expect("Host mode maps the sounding deck");
+    let _ = harness
+        .deck_state_when(
+            case,
+            |state| is_sounding(state.status) && at_bpm(state.applied_tempo, 124.0),
+            "the Host map",
+        )
+        .await;
+    harness.settle(case, second).await;
+
+    let beat = SECONDS_PER_MINUTE / START_BPM;
+    let (resumed_at, resumed) = match cut {
+        Break::Seek => {
+            let target = ((harness.first_deck_position(case) + 3.0) / beat).ceil() * beat - 0.05;
+            harness.seek_first_deck(case, target);
+            let resumed = harness.output_frames;
+            let _ = harness
+                .deck_state_when(case, |state| state.applied_tempo.is_none(), "the break")
+                .await;
+            harness
+                .request_first_deck(SyncIntent::Disable)
+                .await
+                .expect("OFF takes a deck that sounds no map");
+            (target, resumed)
+        }
+        Break::Pause => {
+            harness.pause_first_deck().await;
+            let _ = harness
+                .deck_state_when(case, |state| state.applied_tempo.is_none(), "the break")
+                .await;
+            let paused_at = harness.first_deck_position(case);
+            harness.settle(case, second).await;
+            harness.play_first_deck().await;
+            let resumed = harness.output_frames;
+            for _ in 0..second {
+                if harness.first_deck_position(case) > paused_at {
+                    break;
+                }
+                let _ = harness.render(case, BLOCK_FRAMES).await;
+            }
+            harness
+                .request_first_deck(SyncIntent::Disable)
+                .await
+                .expect("OFF takes a deck that plays by hand");
+            (paused_at, resumed)
+        }
+    };
+    let rate = f64::from(case.sample_rate);
+    let mut silence = Silence::default();
+    let mut pulses = 0_usize;
+    let mut played = (harness.output_frames - resumed) as f64 / rate;
+    let from = played;
+    while played < from + 2.0 {
+        let pcm = harness.render(case, BLOCK_FRAMES).await;
+        let before = played;
+        played = (harness.output_frames - resumed) as f64 / rate;
+        pulses += usize::from(silence.hear(&pcm, played - before));
+        assert!(
+            silence.quiet < beat + 0.1,
+            "the deck falls silent for {:.3} s, {played:.3} s after the break",
+            silence.quiet
+        );
+        let state = harness.first_deck_state(case).await;
+        assert_eq!(
+            state.mode,
+            SyncMode::Off,
+            "OFF with no sounding map leaves the deck manual"
+        );
+        assert!(
+            matches!(state.status, SyncStatusSnapshot::Off { .. }),
+            "the deck enters no Host map after OFF, got {:?}",
+            state.status
+        );
+        let position = harness.first_deck_position(case);
+        assert!(
+            (position - (resumed_at + played)).abs() < 0.1,
+            "the deck plays by hand from {resumed_at:.3} s, got {position:.3} s after \
+             {played:.3} s"
+        );
+    }
+    let passed = beats_passed(resumed_at + from, resumed_at + played, beat);
+    assert!(
+        pulses as f64 >= passed,
+        "by hand the deck passes {passed} fixture beats, sounded {pulses}"
     );
     assert!(harness.failures.is_empty(), "{:?}", harness.failures);
 }

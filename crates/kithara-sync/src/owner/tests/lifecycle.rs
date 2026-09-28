@@ -22,8 +22,8 @@ use super::{
 };
 use crate::{
     AlignmentSource, LoadGeneration, ReplanCause, SessionAxisUpdate, SourceChange, SyncAdmission,
-    SyncApplied, SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp,
-    SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
+    SyncApplied, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup,
+    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
     SyncPreparation, SyncReceipt, SyncStatusSnapshot, SyncTransition, TopologyOperation,
     TopologyRevision, TopologyStamp, owner::timeline::Custodian,
 };
@@ -2147,15 +2147,13 @@ fn a_discontinuity_ends_the_applied_proof_while_timing_keeps_it() {
             assert!(disabled.is_ok(), "{change:?}: {disabled:?}");
             assert_eq!(group.mode(), SyncMode::LocalSync);
         } else {
+            assert!(disabled.is_ok(), "{change:?}: {disabled:?}");
             assert_eq!(
-                disabled
-                    .expect_err("a discontinuous source is no sounding proof")
-                    .error(),
-                &SyncError::CapabilityUnavailable {
-                    capability: SyncCapability::Alignment,
-                }
+                group.mode(),
+                SyncMode::Off,
+                "a stale frontier is no sounding proof, so OFF leaves for manual Off"
             );
-            assert_eq!(group.mode(), SyncMode::HostSync);
+            assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
         }
     }
 }

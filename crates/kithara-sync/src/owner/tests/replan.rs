@@ -510,6 +510,17 @@ fn broken_sounding_deck() -> (Group, BeatGridId, SyncPreparation, SyncOperationI
     (group, track, entry, operation)
 }
 
+/// A track heard playing by hand from `source` at `output`.
+fn heard_by_hand(source: u64, output: i64) -> AlignmentSource {
+    AlignmentSource::Audible {
+        frontier: PresentationFrontier::builder()
+            .source(source)
+            .output(SessionFrame::new(output))
+            .build(),
+        speed: 1.0,
+    }
+}
+
 /// The Host's fresh observation of a track playing by hand from `source`
 /// at `output`.
 fn by_hand(
@@ -524,15 +535,72 @@ fn by_hand(
         operation,
         load: entry.stamp().load(),
         transport: entry.stamp().transport(),
-        source: AlignmentSource::Audible {
-            frontier: PresentationFrontier::builder()
-                .source(source)
-                .output(SessionFrame::new(output))
-                .build(),
-            speed: 1.0,
-        },
+        source: heard_by_hand(source, output),
         activation: SessionFrame::new(output + 2_048),
     }
+}
+
+/// OFF from a track heard playing by hand from `source` at `output`.
+fn off_by_hand(
+    deck: BeatGridId,
+    entry: &SyncPreparation,
+    source: u64,
+    output: i64,
+) -> SyncOperation<super::TestGroup> {
+    SyncOperation::Sync {
+        target: deck,
+        load: entry.stamp().load(),
+        transport: entry.stamp().transport(),
+        source: heard_by_hand(source, output),
+        activation: SessionFrame::new(output),
+        intent: SyncIntent::Disable,
+    }
+}
+
+#[kithara::test]
+fn off_while_a_break_waits_leaves_the_deck_manual() {
+    let (mut group, _, entry, operation) = broken_sounding_deck();
+    let deck = group.id();
+
+    let _ = transact(&mut group, off_by_hand(deck, &entry, 144_000, 144_000));
+
+    assert_eq!(
+        group.mode(),
+        SyncMode::Off,
+        "OFF with no sounding map leaves for manual Off"
+    );
+    assert!(
+        matches!(group.status(), SyncStatusSnapshot::Off { .. }),
+        "OFF ends the waiting break, got {:?}",
+        group.status()
+    );
+    assert_eq!(
+        group
+            .transact(by_hand(deck, operation, &entry, 146_048, 146_048))
+            .expect_err("nothing waits after OFF")
+            .error(),
+        &SyncError::NotReplanning { operation }
+    );
+}
+
+#[kithara::test]
+fn off_withdraws_the_entry_a_break_planned_before_it_sounds() {
+    let (mut group, _, entry, operation) = broken_sounding_deck();
+    let deck = group.id();
+    let output = activation(&entry) + BEAT_FRAMES;
+    let next = replanned(transact(
+        &mut group,
+        by_hand(deck, operation, &entry, 144_000, output),
+    ));
+    let _ = acknowledge(&mut group, SyncReceipt::Installed(next.stamp()));
+
+    let withdrawn = transition(transact(
+        &mut group,
+        off_by_hand(deck, &entry, 146_048, output + 2_048),
+    ));
+
+    assert_eq!(withdrawn.withdrawn(), [next.stamp()]);
+    assert_eq!(group.mode(), SyncMode::Off);
 }
 
 #[kithara::test]
