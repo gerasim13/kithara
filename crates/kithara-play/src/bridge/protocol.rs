@@ -17,6 +17,10 @@ pub enum PlayerCmd {
     },
     /// Unload a track by its queue-item identity.
     UnloadTrack { item_id: TrackId },
+    /// Unload a track only while it is still preloading. The audio thread may
+    /// have stitched it in at the end of the leading track before reading
+    /// this; a promoted track keeps playing.
+    CancelPreload { item_id: TrackId },
     /// Unload every track from the arena and reset the position/duration
     /// snapshot to zero. Sent when the queue is explicitly cleared.
     Clear,
@@ -47,6 +51,10 @@ impl fmt::Debug for PlayerCmd {
                 .finish_non_exhaustive(),
             Self::UnloadTrack { item_id } => f
                 .debug_struct("UnloadTrack")
+                .field("item_id", item_id)
+                .finish(),
+            Self::CancelPreload { item_id } => f
+                .debug_struct("CancelPreload")
                 .field("item_id", item_id)
                 .finish(),
             Self::Clear => f.write_str("Clear"),

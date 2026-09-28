@@ -4556,7 +4556,6 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "num-traits",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "thiserror 2.0.18",
@@ -4970,6 +4969,7 @@ name = "kithara-dsp"
 version = "0.0.1-alpha5"
 dependencies = [
  "assert_no_alloc",
+ "biquad",
  "criterion",
  "fast-interleave",
  "fearless_simd",
@@ -4978,6 +4978,8 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "num-traits",
+ "thiserror 2.0.18",
  "wasm-bindgen-test",
 ]
 
@@ -5712,6 +5714,7 @@ dependencies = [
  "kithara-apple",
  "kithara-bufpool",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",

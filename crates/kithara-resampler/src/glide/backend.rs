@@ -14,7 +14,7 @@ impl GlideBackend {
         Self {
             config: GlideConfig {
                 anti_alias: true,
-                interpolation: super::GlideInterpolation::Quadratic,
+                interpolation: kithara_dsp::interp::Interpolation::Quadratic,
             },
         }
     }

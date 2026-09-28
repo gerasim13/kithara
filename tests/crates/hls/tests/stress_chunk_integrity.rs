@@ -124,7 +124,7 @@ async fn audio_server(
     let segment_duration = consts::D.segment_size as f64
         / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
 
-    let server = HlsTestServer::new(HlsTestServerConfig {
+    HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
         segments_per_variant: consts::SEGMENT_COUNT,
         segment_size: consts::D.segment_size,
@@ -140,9 +140,7 @@ async fn audio_server(
         }],
         ..Default::default()
     })
-    .await;
-
-    server
+    .await
 }
 
 #[kithara::test(

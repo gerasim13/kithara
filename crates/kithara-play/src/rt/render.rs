@@ -460,7 +460,7 @@ fn render_active_tracks(
             if let Some(handoff) = handover
                 && handoff.offset < frames
             {
-                let offset = handoff.offset;
+                let mut offset = handoff.offset;
                 for (next_arena_idx, (next_handle, next_state)) in order.loaded.iter().enumerate() {
                     if *next_state != TrackState::Preloading || active_slots[next_arena_idx] {
                         continue;
@@ -475,7 +475,10 @@ fn render_active_tracks(
                     if let Some(snapshot) = outcome_position_duration(&outcome) {
                         leading_outcome_pos_dur = Some(snapshot);
                     }
-                    break;
+                    match next_handover(&outcome, offset) {
+                        Some(next) if next.offset < frames => offset = next.offset,
+                        _ => break,
+                    }
                 }
             }
         }

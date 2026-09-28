@@ -583,6 +583,130 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
     );
 }
 
+/// A stitched-in successor that ends before its stitch block does hands the
+/// rest of the block to the next preloaded track, as a longer one would at
+/// its own end: once it has ended, no leading track is left to stitch it.
+#[kithara::test(tokio)]
+async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_block(
+    constant_half: &'static [u8],
+) {
+    let (mut processor, mut control) = make_processor();
+    let leading_id = TrackId::allocate();
+    let short_preload_id = TrackId::allocate();
+    let preload_id = TrackId::allocate();
+    let frames = 1024usize;
+
+    for (src, secs, item_id) in [
+        ("leading.mp3", 0.01, leading_id),
+        ("short-preload.mp3", 0.005, short_preload_id),
+        ("preload.mp3", 60.0, preload_id),
+    ] {
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                load: kithara::sync::LoadGeneration::first(),
+                resource: create_mock_player_resource_with_duration(constant_half, src, secs),
+                item_id,
+            })
+            .ok();
+    }
+    processor.drain_commands();
+    processor
+        .track_mut(leading_id)
+        .expect("BUG: leading track must be loaded")
+        .play();
+
+    let mut out_l = vec![99.0f32; frames];
+    let mut out_r = vec![99.0f32; frames];
+    let inputs: [&[f32]; 0] = [];
+    let mut outputs = [&mut out_l[..], &mut out_r[..]];
+    let mut buffers = ProcBuffers {
+        inputs: &inputs,
+        outputs: &mut outputs,
+    };
+    let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
+
+    assert!(rendered);
+    assert!(
+        out_l
+            .iter()
+            .chain(&out_r)
+            .all(|sample| (*sample - 0.5).abs() < f32::EPSILON),
+        "the block is filled end to end"
+    );
+    assert_eq!(
+        processor.track(preload_id).map(|track| track.state()),
+        Some(TrackState::Playing)
+    );
+}
+
+/// The control side withdraws an armed successor without knowing whether the
+/// leading track has already ended and stitched it in. Only a successor still
+/// preloading leaves the arena; one already playing keeps playing.
+#[kithara::test(tokio)]
+#[case::stitched_in(0.01, Some(TrackState::Playing))]
+#[case::still_preloading(60.0, None)]
+async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
+    constant_half: &'static [u8],
+    #[case] leading_secs: f64,
+    #[case] after_cancel: Option<TrackState>,
+) {
+    let (mut processor, mut control) = make_processor();
+    let leading_id = TrackId::allocate();
+    let successor_id = TrackId::allocate();
+    let frames = 1024usize;
+
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            load: kithara::sync::LoadGeneration::first(),
+            resource: create_mock_player_resource_with_duration(
+                constant_half,
+                "leading.mp3",
+                leading_secs,
+            ),
+            item_id: leading_id,
+        })
+        .ok();
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::LoadTrack {
+            load: kithara::sync::LoadGeneration::first(),
+            resource: create_mock_player_resource(constant_half, "successor.mp3"),
+            item_id: successor_id,
+        })
+        .ok();
+    processor.drain_commands();
+    processor
+        .track_mut(leading_id)
+        .expect("BUG: leading track must be loaded")
+        .play();
+
+    let mut out_l = vec![0.0f32; frames];
+    let mut out_r = vec![0.0f32; frames];
+    let inputs: [&[f32]; 0] = [];
+    let mut outputs = [&mut out_l[..], &mut out_r[..]];
+    let mut buffers = ProcBuffers {
+        inputs: &inputs,
+        outputs: &mut outputs,
+    };
+    let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
+    assert!(rendered, "the leading track renders");
+
+    control
+        .cmd_tx
+        .try_push(PlayerCmd::CancelPreload {
+            item_id: successor_id,
+        })
+        .ok();
+    processor.drain_commands();
+
+    assert_eq!(
+        processor.track(successor_id).map(|track| track.state()),
+        after_cancel
+    );
+}
+
 #[kithara::test(tokio)]
 async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();

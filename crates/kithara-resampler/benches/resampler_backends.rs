@@ -7,7 +7,7 @@ use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_resampler::apple::AppleAudioConverterBackend;
 #[cfg(feature = "resample-glide")]
-use kithara_resampler::glide::GlideBackend;
+use kithara_resampler::glide::{GlideBackend, GlideResampler};
 #[cfg(feature = "resample-rubato")]
 use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 use kithara_resampler::{
@@ -49,6 +49,42 @@ fn resampler_backends(c: &mut Criterion) {
             }
         }
     }
+    group.finish();
+}
+
+#[cfg(feature = "resample-glide")]
+fn resampler_glide_paths(c: &mut Criterion) {
+    const BLOCK: usize = 1_024;
+    const CHANNELS: usize = 2;
+    const EXACT_OUTPUT: usize = 819;
+    const STEADY: &[(&str, f64)] = &[("steady_up", 1.25), ("steady_down", 0.8)];
+
+    let mut group = c.benchmark_group("resampler_glide_paths");
+    group.throughput(Throughput::Elements(BLOCK.to_u64().unwrap_or(u64::MAX)));
+    let input = input_buffers(CHANNELS, BLOCK);
+    for &(name, ratio) in STEADY {
+        let mut resampler = build_glide(ratio, BLOCK);
+        let mut output = output_buffers(CHANNELS, resampler.output_frames_next());
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let process = process_once(&mut resampler, CHANNELS, &input, &mut output);
+                std::hint::black_box(process);
+            });
+        });
+    }
+    let mut resampler = build_glide(1.0, BLOCK);
+    let mut output = output_buffers(CHANNELS, EXACT_OUTPUT);
+    group.bench_function("exact_span", |b| {
+        b.iter(|| {
+            let (left, right) = output.split_at_mut(1);
+            resampler
+                .process_exact_span(
+                    &[&input[0][..], &input[1][..]],
+                    &mut [&mut left[0][..], &mut right[0][..]],
+                )
+                .unwrap_or_else(|err| panic!("exact span should render: {err}"));
+        });
+    });
     group.finish();
 }
 
@@ -165,6 +201,23 @@ where
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
+#[cfg(feature = "resample-glide")]
+fn build_glide(initial_ratio: f64, block: usize) -> GlideResampler {
+    let settings = ResamplerSettings::builder()
+        .channels(non_zero_usize(2))
+        .mode(ResamplerMode::VariableRatio {
+            sample_rate: non_zero_u32(48_000),
+            initial_ratio,
+            glide: None,
+        })
+        .options(ResamplerOptions::builder().chunk_size(block).build())
+        .pools(pools())
+        .build();
+    GlideBackend::new()
+        .build(&settings)
+        .unwrap_or_else(|err| panic!("glide should build: {err}"))
+}
+
 fn input_buffers(channels: usize, frames: usize) -> Vec<Vec<f32>> {
     (0..channels)
         .map(|channel| {
@@ -217,5 +270,8 @@ fn process_once(
     }
 }
 
+#[cfg(feature = "resample-glide")]
+criterion_group!(benches, resampler_backends, resampler_glide_paths);
+#[cfg(not(feature = "resample-glide"))]
 criterion_group!(benches, resampler_backends);
 criterion_main!(benches);

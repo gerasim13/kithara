@@ -1,11 +1,13 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_test_fixtures::unit_fixtures::{
-    glide_alias, glide_quadratic, glide_transition, glide_unity,
+use kithara_dsp::interp::Interpolation;
+use kithara_test_fixtures::{
+    signal::Wave,
+    unit_fixtures::{glide_alias, glide_quadratic, glide_transition, glide_unity},
 };
 use kithara_test_utils::kithara;
 
-use super::{GlideBackend, GlideConfig, GlideInterpolation, resampler::GlideResampler};
+use super::{GlideBackend, GlideConfig, resampler::GlideResampler};
 use crate::{
     RatioGlide, Resampler, ResamplerBackend, ResamplerCapabilities, ResamplerConfig,
     ResamplerControl, ResamplerMode, ResamplerOptions, ResamplerSettings, create_resampler,
@@ -42,6 +44,75 @@ fn build_glide(source: u32, target: u32) -> GlideResampler {
         .settings(settings(fixed_mode(source, target)))
         .build();
     create_resampler(&config).unwrap_or_else(|err| panic!("glide resampler should build: {err}"))
+}
+
+/// Largest sample difference between two chunkings of one stream.
+const CHUNKING_TOLERANCE: f32 = 1.0e-4;
+/// A constant passes the anti-alias filter as the same constant.
+const CONSTANT_TOLERANCE: f32 = 1.0e-6;
+
+fn two_tones(frames: usize) -> Vec<f32> {
+    let low = Wave::Sine {
+        hz: 1_000.0,
+        peak: i16::MAX / 2,
+    };
+    let high = Wave::Sine {
+        hz: 30_000.0,
+        peak: i16::MAX / 2,
+    };
+    (0..frames)
+        .map(|frame| {
+            (f32::from(low.sample(frame, 96_000)) + f32::from(high.sample(frame, 96_000)))
+                / 32_768.0
+        })
+        .collect()
+}
+
+fn stream_through(chunk: usize, input: &[f32]) -> Vec<f32> {
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(fixed_mode(96_000, 48_000))
+        .options(ResamplerOptions::builder().chunk_size(1_024).build())
+        .pools(pools())
+        .build();
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let mut block = vec![0.0; resampler.output_frames_next()];
+    let mut output = Vec::new();
+    let mut offset = 0;
+    while input.len() - offset >= 2 {
+        let end = (offset + chunk).min(input.len());
+        let process = resampler
+            .process_into_buffer(&[&input[offset..end]], &mut [&mut block])
+            .unwrap_or_else(|err| panic!("stream process should succeed: {err}"));
+        output.extend_from_slice(&block[..process.output_frames]);
+        if process.input_frames == 0 {
+            break;
+        }
+        offset += process.input_frames;
+    }
+    output
+}
+
+/// Largest error of a method reproducing a straight line.
+const RAMP_TOLERANCE: f32 = 1.0e-5;
+
+/// `input[i] = i`: an interpolated sample reads back as its source position.
+fn ramp_input(frames: u16) -> Vec<f32> {
+    (0..frames).map(f32::from).collect()
+}
+
+/// Largest error of a glide position reading back from a ramp input.
+const POSITION_TOLERANCE: f64 = 1.0e-4;
+
+/// Rate of stream frame `frame` for a glide from `from` to `to` over
+/// `frames` frames: the old per-frame stepping, written out.
+fn glide_rate(frame: u32, from: f64, to: f64, frames: u32) -> f64 {
+    if frame < frames {
+        f64::from(frame).mul_add((to - from) / f64::from(frames), from)
+    } else {
+        to
+    }
 }
 
 #[kithara::test(native, flash(false))]
@@ -154,7 +225,7 @@ fn factory_output_exposes_glide_control_surface() {
 fn linear_mode_can_be_selected_by_config() {
     let backend = GlideBackend::with_config(
         GlideConfig::builder()
-            .interpolation(GlideInterpolation::Linear)
+            .interpolation(Interpolation::Linear)
             .build(),
     );
     let config = ResamplerConfig::builder()
@@ -328,4 +399,249 @@ fn extra_channel_storage_preserves_the_prepared_channel_shape(
     }
     assert_eq!(rendered, reference);
     assert_eq!(extra, [0.75; 4]);
+}
+
+#[kithara::test(native)]
+fn anti_alias_output_does_not_depend_on_chunking() {
+    let input = two_tones(4_096);
+    let small = stream_through(64, &input);
+    let large = stream_through(1_024, &input);
+    let frames = small.len().min(large.len());
+    assert!(
+        frames > 1_900,
+        "both chunkings render the stream: {} / {}",
+        small.len(),
+        large.len()
+    );
+    let worst = small[..frames]
+        .iter()
+        .zip(&large[..frames])
+        .map(|(small, large)| (small - large).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        worst <= CHUNKING_TOLERANCE,
+        "chunking changed the output by {worst}"
+    );
+}
+
+#[kithara::test(native)]
+fn entering_the_filter_keeps_a_constant_signal_constant() {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let mut resampler = GlideResampler::new("glide", GlideConfig::default(), &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = [0.5_f32; 16];
+    let mut output = [0.0_f32; 16];
+    resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("passthrough block should render: {err}"));
+    resampler
+        .set_ratio(2.0)
+        .unwrap_or_else(|err| panic!("ratio 2 is in range: {err}"));
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("filtered block should render: {err}"));
+
+    assert!(process.output_frames > 0);
+    assert!(
+        output[..process.output_frames]
+            .iter()
+            .all(|sample| (sample - 0.5).abs() < CONSTANT_TOLERANCE),
+        "the filter did not start in the steady state: {output:?}"
+    );
+}
+
+/// Positions in the last interval `[n, n + 1)` read the tail, which holds
+/// `after + 1` copies of the last input frame.
+#[kithara::test(native)]
+#[case::linear(Interpolation::Linear)]
+#[case::quadratic(Interpolation::Quadratic)]
+#[case::hermite(Interpolation::Hermite)]
+#[case::watte(Interpolation::Watte)]
+fn exact_span_keeps_a_constant_at_the_boundary_for_every_method(
+    #[case] interpolation: Interpolation,
+) {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let config = GlideConfig::builder().interpolation(interpolation).build();
+    let mut resampler = GlideResampler::new("glide", config, &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = [0.75; 15];
+    let mut output = [0.0; 20];
+
+    resampler
+        .process_exact_span(&[input.as_slice()], &mut [output.as_mut_slice()])
+        .unwrap_or_else(|err| panic!("exact span should render: {err}"));
+
+    assert!(
+        output
+            .iter()
+            .all(|sample| (*sample - 0.75).abs() < CONSTANT_TOLERANCE),
+        "{interpolation:?} changed a constant at the exact-span boundary: {output:?}"
+    );
+}
+
+/// Frames 0 and 1 read the seeded history, which a ramp does not continue.
+#[kithara::test(native)]
+#[case::linear(Interpolation::Linear)]
+#[case::quadratic(Interpolation::Quadratic)]
+#[case::hermite(Interpolation::Hermite)]
+#[case::watte(Interpolation::Watte)]
+fn every_interpolation_reproduces_a_ramp_through_the_factory(#[case] interpolation: Interpolation) {
+    let backend = GlideBackend::with_config(
+        GlideConfig::builder()
+            .interpolation(interpolation)
+            .anti_alias(false)
+            .build(),
+    );
+    let config = ResamplerConfig::builder()
+        .backend(backend)
+        .settings(settings(fixed_mode(44_100, 88_200)))
+        .build();
+    let mut resampler = create_resampler(&config)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = ramp_input(16);
+    let mut output = [0.0; 34];
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("ramp process should succeed: {err}"));
+
+    assert!(
+        process.output_frames > 2,
+        "{interpolation:?} rendered {} frames",
+        process.output_frames
+    );
+    for (sample, frame) in output[..process.output_frames].iter().zip(0_u16..).skip(2) {
+        let expected = f32::from(frame) * 0.5;
+        assert!(
+            (sample - expected).abs() < RAMP_TOLERANCE,
+            "{interpolation:?} frame {frame}: {sample} against {expected}"
+        );
+    }
+}
+
+/// A consumer offers `input_frames_next()` frames until the resampler takes
+/// some; a block no longer than the lookahead would never be taken.
+#[kithara::test(native)]
+#[case::linear(Interpolation::Linear)]
+#[case::quadratic(Interpolation::Quadratic)]
+#[case::hermite(Interpolation::Hermite)]
+#[case::watte(Interpolation::Watte)]
+fn every_interpolation_takes_frames_from_its_next_block_at_a_one_frame_chunk(
+    #[case] interpolation: Interpolation,
+) {
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(fixed_mode(44_100, 88_200))
+        .options(ResamplerOptions::builder().chunk_size(1).build())
+        .pools(pools())
+        .build();
+    let config = GlideConfig::builder().interpolation(interpolation).build();
+    let mut resampler = GlideResampler::new("glide", config, &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = vec![0.5; resampler.input_frames_next()];
+    let mut output = vec![0.0; resampler.output_frames_next()];
+
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("the next block should process: {err}"));
+
+    assert!(
+        process.input_frames > 0,
+        "{interpolation:?} took nothing from a block of {} frames",
+        input.len()
+    );
+}
+
+/// On a ramp input `output[k]` is the cursor of frame `k`, the running sum
+/// of the rates before it; after the glide the ratio is exactly the target.
+#[kithara::test(native)]
+fn glide_ramp_lands_on_its_target_rate() {
+    const FRAMES: u16 = 256;
+    const GLIDE_FRAMES: u32 = 24;
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: Some(RatioGlide {
+            frames: rate(GLIDE_FRAMES),
+            target_ratio: 1.5,
+        }),
+    };
+    let settings = ResamplerSettings::builder()
+        .channels(channels(1))
+        .mode(mode)
+        .options(
+            ResamplerOptions::builder()
+                .chunk_size(usize::from(FRAMES))
+                .build(),
+        )
+        .pools(pools())
+        .build();
+    let config = GlideConfig::builder()
+        .interpolation(Interpolation::Linear)
+        .anti_alias(false)
+        .build();
+    let mut resampler = GlideResampler::new("glide", config, &settings)
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = ramp_input(FRAMES);
+    let mut output = vec![0.0; usize::from(FRAMES)];
+    let process = resampler
+        .process_into_buffer(&[&input], &mut [&mut output])
+        .unwrap_or_else(|err| panic!("glide process should succeed: {err}"));
+
+    assert!(
+        process.output_frames > 24,
+        "the glide did not finish inside one block: {} frames",
+        process.output_frames
+    );
+    let mut cursor = 0.0_f64;
+    for (sample, frame) in output[..process.output_frames].iter().zip(0_u32..) {
+        assert!(
+            (f64::from(*sample) - cursor).abs() < POSITION_TOLERANCE,
+            "frame {frame}: {sample} against {cursor}"
+        );
+        cursor += glide_rate(frame, 1.0, 1.5, GLIDE_FRAMES);
+    }
+    assert_eq!(resampler.output_frames_for_input(3), 2);
+}
+
+/// `output[k]` reads the ramp at `k·n/m`; the last interval `[n − 1, n)`
+/// and beyond hold the last input frame.
+#[kithara::test(native)]
+#[case::downsample(16, 12)]
+#[case::upsample(15, 20)]
+#[case::sixfold(16, 96)]
+fn exact_span_lands_on_the_last_frame(#[case] source: u16, #[case] target: u16) {
+    let mode = ResamplerMode::VariableRatio {
+        sample_rate: rate(48_000),
+        initial_ratio: 1.0,
+        glide: None,
+    };
+    let config = GlideConfig::builder()
+        .interpolation(Interpolation::Linear)
+        .anti_alias(false)
+        .build();
+    let mut resampler = GlideResampler::new("glide", config, &settings(mode))
+        .unwrap_or_else(|err| panic!("glide resampler should build: {err}"));
+    let input = ramp_input(source);
+    let mut output = vec![0.0; usize::from(target)];
+
+    resampler
+        .process_exact_span(&[input.as_slice()], &mut [output.as_mut_slice()])
+        .unwrap_or_else(|err| panic!("exact span should render: {err}"));
+
+    let last = f64::from(source) - 1.0;
+    for (sample, frame) in output.iter().zip(0_u16..) {
+        let expected = (f64::from(frame) * f64::from(source) / f64::from(target)).min(last);
+        assert!(
+            (f64::from(*sample) - expected).abs() < 1.0e-5,
+            "{source}→{target} frame {frame}: {sample} against {expected}"
+        );
+    }
 }

@@ -106,7 +106,7 @@ where
         else {
             return Ok(false);
         };
-        self.phase.lock().set_resident((item_id, load));
+        self.lead_resident((item_id, load));
         edit.commit(SourceChange::Discontinuity);
         self.apply_start_position();
         Ok(true)
@@ -315,9 +315,20 @@ where
                 epoch,
             }))
         })?;
-        self.phase.lock().set_resident((item_id, load));
+        self.lead_resident((item_id, load));
         edit.commit(SourceChange::Discontinuity);
         Ok(())
+    }
+
+    /// Record the track a `FadeIn` just made leading as the resident. Every
+    /// cancel sent before it reaches the processor first, so no withdrawn
+    /// successor is left in question.
+    fn lead_resident(&self, resident: (TrackId, LoadGeneration)) {
+        let mut phase = self.phase.lock();
+        phase.set_resident(resident);
+        if let Some(loads) = phase.pending_loads_mut() {
+            loads.clear_withdrawn();
+        }
     }
 }
 

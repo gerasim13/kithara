@@ -33,9 +33,10 @@ The current built-in backends are exposed by explicit crate features:
 
 - `resample-rubato` enables the Rubato backend; its algorithm is selected by
   `rubato::RubatoConfig`, not by separate Kithara feature flags.
-- `resample-glide` enables the scalar Glide backend ported from the LSQ-era
-  renderer design. It supports fixed ratio, variable ratio, and ratio glide
-  through `glide::GlideConfig`.
+- `resample-glide` enables the Glide backend: fixed ratio, variable ratio and
+  ratio glide through `glide::GlideConfig`. Its anti-alias biquad,
+  interpolation (linear, quadratic, Hermite, Watte) and rate-ramp positions
+  run on `kithara-dsp`.
 
 Backend choice is part of the Rust type at the call site. Playback, analysis,
 and decoder integration carry `B: ResamplerBackend` through their own configs
@@ -44,8 +45,9 @@ contracts such as Apple AudioConverter live here and use concrete platform
 factories, while shared Apple ABI and safe AudioToolbox wrappers come from
 `kithara-apple`.
 
-The crate root denies unsafe code. The Apple backend uses `kithara-apple`
-wrappers instead of declaring local AudioToolbox or Accelerate bindings.
+The crate root denies unsafe code. The Apple AudioConverter backend uses
+`kithara-apple` wrappers instead of declaring local AudioToolbox bindings;
+Glide reaches Accelerate through `kithara-dsp`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-resampler) for the backend contract, allocation contract, and
 decoder integration rules.

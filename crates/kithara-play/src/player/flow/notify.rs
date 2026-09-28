@@ -2,7 +2,6 @@ use std::{ops::Deref, sync::atomic::Ordering};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
-use kithara_sync::SourceChange;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -44,6 +43,7 @@ where
         let emitted_any = item
             .as_ref()
             .is_some_and(|item| publish_notification(self, notification, item));
+        self.settle_withdrawal(slot_id, notification);
 
         match notification {
             PlayerNotification::Requested => {
@@ -78,34 +78,6 @@ where
                 }
             }
         }
-    }
-
-    fn finalize_handover_if_armed(&self) {
-        let pending = self.phase.lock().pending_mut().and_then(Option::take);
-        let Some(pending) = pending else {
-            return;
-        };
-
-        if pending.state.activated() {
-            return;
-        }
-
-        if pending.index >= self.item_count() {
-            return;
-        }
-        // The audio thread already stitched the successor in, so the change
-        // is reported, not held: nothing is left to abort.
-        let edit = self.core.engine.edit_source();
-        self.phase
-            .lock()
-            .set_resident((pending.item_id, pending.load));
-        match edit {
-            Ok(edit) => edit.commit(SourceChange::Discontinuity),
-            Err(error) => tracing::warn!(%error, "gapless promotion unreported to sync owner"),
-        }
-        let index = pending.index;
-        self.core.items.set_current(index);
-        self.announce_current_item(index);
     }
 
     fn handle_handover_requested(&self, item: Option<ItemRole>) {
