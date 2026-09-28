@@ -9,6 +9,7 @@ use crate::sync::Arc;
 /// and none can. Holding displaced values here makes every reader guard drop
 /// a pure decrement: frees run only in [`retire`](Self::retire), on the
 /// writer, whose `&mut` borrow is its serialization.
+#[derive_where::derive_where(Default)]
 pub struct Retired<T> {
     displaced: Vec<Arc<T>>,
 }
@@ -19,14 +20,6 @@ impl<T> Retired<T> {
     pub fn retire(&mut self, displaced: Arc<T>) {
         self.displaced.retain(|value| Arc::strong_count(value) > 1);
         self.displaced.push(displaced);
-    }
-}
-
-impl<T> Default for Retired<T> {
-    fn default() -> Self {
-        Self {
-            displaced: Vec::new(),
-        }
     }
 }
 
