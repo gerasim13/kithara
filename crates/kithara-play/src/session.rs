@@ -8,7 +8,7 @@ mod wire {
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_signal::FaderValue;
-    use kithara_sync::{ControlError, SyncError, SyncReceipt, SyncReceiptAck};
+    use kithara_sync::{CloseError, ControlError, SyncError, SyncReceipt, SyncReceiptAck};
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
@@ -39,6 +39,8 @@ mod wire {
         SyncControl(#[from] ControlError),
         #[error("sync control is busy with an audio claim")]
         SyncControlBusy,
+        #[error("sync session close: {0}")]
+        SyncClose(#[from] CloseError),
         #[error("invalid session sample rate: {0}")]
         InvalidSampleRate(u32),
         #[error("player identity space is exhausted")]

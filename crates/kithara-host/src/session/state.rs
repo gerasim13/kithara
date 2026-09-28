@@ -247,19 +247,12 @@ pub(crate) struct SessionState<T, S> {
     pub(super) sample_rate_hint: u32,
 }
 
-/// The stream outlives nothing: it is dropped before the context.
-///
-/// Firewheel hands the stream its processor and waits, on its own drop, for
-/// that processor to come back. Declaration order would drop the context
-/// first, leaving it to wait out its whole deactivation timeout for a
-/// processor this state still owns.
+/// A session dropped without its shutdown command shuts down here, and only
+/// logs how it failed.
 impl<T, S> Drop for SessionState<T, S> {
     fn drop(&mut self) {
-        self.stream.take();
-        self.ctx.take();
-        let (sync, mut port) = self.owner_parts();
-        if let Err(error) = sync.close(&mut port) {
-            warn!(%error, "sync: the session root closed with a failure");
+        if let Err(error) = self.shutdown() {
+            warn!(%error, "session shutdown failed");
         }
     }
 }
@@ -325,6 +318,25 @@ impl<T, S> SessionState<T, S> {
             requested_max_block_frames: self.requested_max_block_frames,
             sample_rate_hint: self.sample_rate_hint,
         }
+    }
+
+    /// Ends the session. The stream stops first: Firewheel hands the stream
+    /// its processor and waits, on the context's drop, for that processor
+    /// to come back, so dropping the context first would wait out its whole
+    /// deactivation timeout for a processor this state still owns. The sync
+    /// root then records what the callbacks left and closes. A session shut
+    /// down already has nothing left to end.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::SyncClose`] when the audio callback had not
+    /// quiesced or a final receipt was refused; the session ends all the
+    /// same.
+    pub(super) fn shutdown(&mut self) -> Result<(), SessionError> {
+        self.stream.take();
+        self.ctx.take();
+        let (sync, mut port) = self.owner_parts();
+        sync.close(&mut port).map_err(SessionError::from)
     }
 
     /// Splits the sync root from the session fields its owner cut reads, so

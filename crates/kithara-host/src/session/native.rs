@@ -83,15 +83,18 @@ impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
 }
 
 /// Disconnects queued callers before `PlayerRuntime::drop` takes its admission gate, since
-/// otherwise each side can wait on the other.
-fn complete_shutdown<T, S>(
+/// otherwise each side can wait on the other, then replies how the session ended.
+pub(super) fn complete_shutdown<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
-    state: SessionState<T, S>,
+    mut state: SessionState<T, S>,
     reply_tx: &mpsc::Sender<HostReply>,
 ) {
     drop(cmd_rx);
+    let reply = state
+        .shutdown()
+        .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok);
     drop(state);
-    if reply_tx.send(HostReply::Ok).is_err() {
+    if reply_tx.send(reply).is_err() {
         warn!("[KITHARA-ROUTE] native shutdown reply receiver dropped");
     }
 }

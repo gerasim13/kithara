@@ -94,8 +94,12 @@ where
         let HostCmdMsg { cmd, reply_tx } = message;
         if matches!(&cmd, HostCmd::Shutdown) {
             drop(self.cmd_rx.take());
-            self.state.take();
-            if reply_tx.send(HostReply::Ok).is_err() {
+            let reply = self
+                .state
+                .take()
+                .map_or(Ok(()), |mut state| state.shutdown())
+                .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok);
+            if reply_tx.send(reply).is_err() {
                 warn!("offline Host shutdown reply receiver dropped");
             }
             return TickResult::Done;

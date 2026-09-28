@@ -14,10 +14,12 @@ use kithara_platform::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread::{self, JoinHandle, spawn_named},
     time::{Duration, WallInstant},
 };
+use kithara_sync::CloseError;
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
@@ -26,12 +28,13 @@ use kithara_test_utils::{
 use super::{
     super::{
         dispatch::{idle_tick, run_cmd},
-        protocol::{Cmd, PlayerId, Reply, SessionStream},
+        native::complete_shutdown,
+        protocol::{Cmd, HostReply, PlayerId, Reply, SessionError, SessionStream},
         state::SessionState,
     },
     graph::{attach_player, state as test_state},
 };
-use crate::api::SlotId;
+use crate::{api::SlotId, error::PlayError};
 
 const BLOCK_FRAMES: usize = 128;
 
@@ -44,10 +47,16 @@ enum Callback {
     Silent,
 }
 
-/// The fixture device's audio thread. Dropping it stops the callback.
+/// Where a device that outlives its stream keeps the processor.
+type Kept = Arc<Mutex<Option<FirewheelProcessor>>>;
+
+/// The fixture device's audio thread. Dropping it stops the callback; a
+/// device given `kept` then keeps its processor there instead of handing it
+/// back.
 struct DeviceThread {
     running: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    thread: Option<JoinHandle<FirewheelProcessor>>,
+    kept: Option<Kept>,
 }
 
 /// A platform device runs its own callbacks.
@@ -56,8 +65,11 @@ impl SessionStream for DeviceThread {}
 impl Drop for DeviceThread {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if let Some(thread) = self.thread.take()
+            && let Ok(processor) = thread.join()
+            && let Some(kept) = &self.kept
+        {
+            *kept.lock() = Some(processor);
         }
     }
 }
@@ -65,7 +77,11 @@ impl Drop for DeviceThread {
 /// A platform device runs its callback on real time. The gate stays held
 /// through each callback, so none is in flight once the test changes it.
 #[kithara::flash(false)]
-fn run_device(mut processor: FirewheelProcessor, callback: &Mutex<Callback>, running: &AtomicBool) {
+fn run_device(
+    mut processor: FirewheelProcessor,
+    callback: &Mutex<Callback>,
+    running: &AtomicBool,
+) -> FirewheelProcessor {
     let mut output = [0.0_f32; BLOCK_FRAMES * 2];
     while running.load(Ordering::Acquire) {
         let gate = callback.lock();
@@ -91,14 +107,18 @@ fn run_device(mut processor: FirewheelProcessor, callback: &Mutex<Callback>, run
         drop(gate);
         thread::yield_now();
     }
+    processor
 }
 
 /// Starts a device whose callback runs on its own thread, as a platform
-/// device's does, gated by `callback`.
+/// device's does, gated by `callback`; with `kept`, the device keeps its
+/// processor there once its stream stops.
 fn threaded_device(
     callback: &Arc<Mutex<Callback>>,
+    kept: Option<&Kept>,
 ) -> impl FnMut(&mut FirewheelContext, u32) -> Result<DeviceThread, String> + Send + 'static {
     let callback = Arc::clone(callback);
+    let kept = kept.map(Arc::clone);
     move |ctx, sample_rate| {
         let sample_rate = NonZeroU32::new(sample_rate)
             .ok_or_else(|| "the fixture device needs a sample rate".to_owned())?;
@@ -122,6 +142,7 @@ fn threaded_device(
         Ok(DeviceThread {
             running,
             thread: Some(thread),
+            kept: kept.clone(),
         })
     }
 }
@@ -182,7 +203,7 @@ fn release(state: &mut TestState, player_id: PlayerId, slot: SlotId) {
 #[kithara::test]
 fn a_released_slot_retires_until_the_device_callback_hands_it_back() {
     let callback = Arc::new(Mutex::new(Callback::Runs));
-    let mut state = test_state(threaded_device(&callback));
+    let mut state = test_state(threaded_device(&callback, None));
     let (player_id, slot) = running_slot(&mut state);
 
     *callback.lock() = Callback::Silent;
@@ -214,7 +235,7 @@ fn a_released_slot_retires_until_the_device_callback_hands_it_back() {
 #[kithara::test]
 fn a_player_stop_reaps_the_slot_a_silent_callback_never_handed_back() {
     let callback = Arc::new(Mutex::new(Callback::Runs));
-    let mut state = test_state(threaded_device(&callback));
+    let mut state = test_state(threaded_device(&callback, None));
     let (player_id, slot) = running_slot(&mut state);
 
     *callback.lock() = Callback::Silent;
@@ -230,5 +251,34 @@ fn a_player_stop_reaps_the_slot_a_silent_callback_never_handed_back() {
     assert!(
         state.retiring.is_empty(),
         "dropping the stream hands the retiring processor back"
+    );
+}
+
+/// A device whose audio thread keeps its processor after the stream stops,
+/// as a callback the platform never returns from does, still holds a slot's
+/// receipt producer when the session closes. The shutdown still ends the
+/// session and returns, and its reply says the audio had not quiesced.
+#[kithara::test]
+fn a_shutdown_whose_callback_kept_its_processor_replies_it_was_not_quiesced() {
+    let callback = Arc::new(Mutex::new(Callback::Runs));
+    let kept = Kept::default();
+    let mut state = test_state(threaded_device(&callback, Some(&kept)));
+    let _slot = running_slot(&mut state);
+    let (_cmd_tx, cmd_rx) = mpsc::channel();
+    let (reply_tx, reply_rx) = mpsc::channel();
+
+    complete_shutdown(cmd_rx, state, &reply_tx);
+
+    match reply_rx.recv().expect("the shutdown replies") {
+        HostReply::Err(PlayError::Session(SessionError::SyncClose(CloseError::CallbackLive(
+            _,
+        )))) => {}
+        HostReply::Ok => panic!("a callback that kept its processor must not end in success"),
+        HostReply::Err(error) => panic!("the shutdown failed otherwise: {error}"),
+        _ => panic!("the shutdown returned an unexpected reply"),
+    }
+    assert!(
+        kept.lock().take().is_some(),
+        "the device kept its processor"
     );
 }

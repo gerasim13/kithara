@@ -495,10 +495,19 @@ where
 impl<S> Drop for Host<S> {
     fn drop(&mut self) {
         Platform::close(self.session.platform_mut(), self.id);
-        if self.owns_session
-            && let Err(error) = self.dispatcher.exec_host(HostCmd::Shutdown)
-        {
-            tracing::warn!(error = %PlayError::from(error), "host session shutdown failed");
+        if !self.owns_session {
+            return;
+        }
+        let shutdown = match self.dispatcher.exec_host(HostCmd::Shutdown) {
+            Ok(HostReply::Ok) => Ok(()),
+            Ok(HostReply::Err(error)) => Err(error),
+            Ok(_) => Err(PlayError::Internal(
+                "unexpected host reply for session shutdown".into(),
+            )),
+            Err(error) => Err(PlayError::from(error)),
+        };
+        if let Err(error) = shutdown {
+            tracing::warn!(%error, "host session shutdown failed");
         }
     }
 }

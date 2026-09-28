@@ -42,10 +42,12 @@ where
         match &self.host {
             SessionHost::Local { state } => {
                 if matches!(&cmd, HostCmd::Shutdown) {
-                    drop(state.lock().take());
+                    let taken = state.lock().take();
+                    let closed = taken.map_or(Ok(()), |mut state| state.shutdown());
                     WASM_SESSION_ACTIVE.with(|active| active.set(false));
                     reset_bridge_state();
-                    return Ok(HostReply::Ok);
+                    return Ok(closed
+                        .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok));
                 }
                 let mut state = state.lock();
                 match state.as_mut() {
