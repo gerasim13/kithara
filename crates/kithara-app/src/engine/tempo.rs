@@ -1,4 +1,5 @@
-use kithara::play::Tempo;
+use kithara::play::{PlayError, SessionError, Tempo};
+use tracing::error;
 
 /// The session tempo the engine asks the Host for, and what the Host did
 /// with it.
@@ -8,6 +9,8 @@ pub(crate) struct HostTempo {
     pub(crate) target: Tempo,
     /// Tempo the configuration starts the Host at.
     pub(crate) configured: Tempo,
+    /// Tempo the Host accepted last; `None` before the first.
+    accepted: Option<Tempo>,
     /// Tempo of the commit the Host's graph processed last; `None` before
     /// the first.
     pub(crate) processed: Option<Tempo>,
@@ -20,6 +23,7 @@ impl HostTempo {
         Self {
             configured,
             target: configured,
+            accepted: None,
             processed: None,
             is_refused: false,
         }
@@ -30,18 +34,16 @@ impl HostTempo {
         self.is_refused = false;
     }
 
-    pub(super) const fn refuse(&mut self) {
-        self.is_refused = true;
-    }
-
-    /// Whether the Host's graph has yet to process the target.
+    /// Whether the Host has yet to settle on the target: settled is one
+    /// observation in which the Host accepted it and its graph processed it.
     pub(crate) fn is_pending(&self) -> bool {
-        !self.is_refused && self.processed != Some(self.target)
+        !self.is_refused
+            && (self.accepted != Some(self.target) || self.processed != Some(self.target))
     }
 
-    /// Whether a graph that processed a tempo before has yet to process the
-    /// target. Before any graph processed one, the target waits for playback
-    /// to start one.
+    /// Whether a graph that processed a tempo before has yet to settle on
+    /// the target. Before any graph processed one, the target waits for
+    /// playback to start one.
     pub(super) fn is_settling(&self) -> bool {
         self.processed.is_some() && self.is_pending()
     }
@@ -54,8 +56,24 @@ impl HostTempo {
         accepted: Option<Tempo>,
         processed: Option<Tempo>,
     ) -> Option<Tempo> {
+        self.accepted = accepted;
         self.processed = processed;
         (!self.is_refused && accepted != Some(self.target)).then_some(self.target)
+    }
+
+    /// Takes in the Host's error to a tempo query or ask.
+    /// `TransportNotProcessed` — one commit held until the graph processed
+    /// it, or a route restart holding the session grid — leaves the target
+    /// for a later publish; any other error refuses it until it changes.
+    pub(super) fn hear(&mut self, error: &PlayError) {
+        if matches!(
+            error,
+            PlayError::Session(SessionError::TransportNotProcessed)
+        ) {
+            return;
+        }
+        error!(target = ?self.target, %error, "Host refused the session tempo");
+        self.is_refused = true;
     }
 }
 
@@ -75,6 +93,10 @@ mod tests {
         processed: Option<f64>,
     ) -> Option<Tempo> {
         tempo.observe(accepted.map(bpm), processed.map(bpm))
+    }
+
+    fn not_processed() -> PlayError {
+        PlayError::Session(SessionError::TransportNotProcessed)
     }
 
     #[kithara::test]
@@ -116,10 +138,63 @@ mod tests {
     }
 
     #[kithara::test]
+    fn returning_to_the_processed_tempo_stays_pending_while_another_commit_is_held() {
+        let mut tempo = HostTempo::new(bpm(120.0));
+        assert_eq!(observe(&mut tempo, Some(120.0), Some(120.0)), None);
+        assert!(!tempo.is_pending());
+
+        tempo.retarget(bpm(124.0));
+        assert_eq!(
+            observe(&mut tempo, Some(120.0), Some(120.0)),
+            Some(bpm(124.0))
+        );
+        assert_eq!(observe(&mut tempo, Some(124.0), Some(120.0)), None);
+
+        tempo.retarget(bpm(120.0));
+        assert!(
+            tempo.is_settling(),
+            "the graph is about to process 124, not the target"
+        );
+        assert_eq!(
+            observe(&mut tempo, Some(124.0), Some(120.0)),
+            Some(bpm(120.0))
+        );
+        tempo.hear(&not_processed());
+        assert_eq!(
+            observe(&mut tempo, Some(124.0), Some(124.0)),
+            Some(bpm(120.0))
+        );
+        assert!(tempo.is_settling());
+        assert_eq!(observe(&mut tempo, Some(120.0), Some(124.0)), None);
+        assert!(tempo.is_settling(), "the graph still plays 124");
+
+        assert_eq!(observe(&mut tempo, Some(120.0), Some(120.0)), None);
+        assert!(!tempo.is_pending());
+    }
+
+    #[kithara::test]
+    fn a_host_that_cannot_answer_yet_is_asked_again_on_a_later_publish() {
+        let mut tempo = HostTempo::new(bpm(120.0));
+        assert_eq!(observe(&mut tempo, Some(120.0), Some(120.0)), None);
+
+        tempo.retarget(bpm(124.0));
+        tempo.hear(&not_processed());
+        assert!(
+            tempo.is_settling(),
+            "a route restart leaves the target waiting"
+        );
+        assert_eq!(
+            observe(&mut tempo, Some(120.0), Some(120.0)),
+            Some(bpm(124.0)),
+            "the recovered Host is asked for the target"
+        );
+    }
+
+    #[kithara::test]
     fn a_refused_target_is_not_asked_for_again_until_the_target_changes() {
         let mut tempo = HostTempo::new(bpm(120.0));
         tempo.retarget(bpm(124.0));
-        tempo.refuse();
+        tempo.hear(&PlayError::Session(SessionError::TransportCommitRejected));
 
         assert_eq!(observe(&mut tempo, Some(120.0), Some(120.0)), None);
         assert!(!tempo.is_pending(), "a refused target waits for nothing");

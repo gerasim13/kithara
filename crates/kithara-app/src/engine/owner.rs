@@ -2,7 +2,7 @@ use arc_swap::ArcSwap;
 use kithara::{
     abr::{AbrHandle, AbrMode},
     effects::{GainDb, eq::EqBandConfig},
-    host::{PlayError, SyncIntent, SyncMode},
+    host::{SyncIntent, SyncMode},
     platform::{
         sync::Arc,
         time::Duration,
@@ -11,7 +11,6 @@ use kithara::{
             task,
         },
     },
-    play::SessionError,
     queue::Transition,
 };
 use tracing::{debug, error, info};
@@ -193,9 +192,8 @@ impl Engine {
     }
 
     /// Reads what the Host did with the session tempo and asks it for the
-    /// target it has not taken. The Host holds one commit until its graph
-    /// processed it and answers `TransportNotProcessed` meanwhile, so the
-    /// latest target waits for a later publish.
+    /// target it has not taken; `HostTempo::hear` decides whether an error
+    /// waits for a later publish or refuses the target.
     fn follow_host_tempo(&mut self) {
         let host = self.session.host();
         let ask = match host.tempo_state() {
@@ -204,20 +202,14 @@ impl Engine {
                 state.processed().map(|transport| transport.tempo()),
             ),
             Err(error) => {
-                error!(target = ?self.host_tempo.target, %error, "Host refused the session tempo");
-                self.host_tempo.refuse();
+                self.host_tempo.hear(&error);
                 None
             }
         };
-        let Some(tempo) = ask else {
-            return;
-        };
-        match host.set_tempo(tempo) {
-            Ok(()) | Err(PlayError::Session(SessionError::TransportNotProcessed)) => {}
-            Err(error) => {
-                error!(?tempo, %error, "Host refused the session tempo");
-                self.host_tempo.refuse();
-            }
+        if let Some(tempo) = ask
+            && let Err(error) = host.set_tempo(tempo)
+        {
+            self.host_tempo.hear(&error);
         }
     }
 
