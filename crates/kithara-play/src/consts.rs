@@ -57,6 +57,10 @@ pub(crate) const LOAD_ALPHA: f32 = 0.2;
 
 pub(crate) const MS_PER_SEC: f64 = 1000.0;
 
+pub(crate) const DEFAULT_EQ_BAND_COUNT: usize = 10;
+pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
+pub(crate) const DEFAULT_MAX_SLOTS: usize = 4;
+
 #[cfg(test)]
 pub(crate) const DROPPED_AFTER_CANCEL: u8 = 2;
 

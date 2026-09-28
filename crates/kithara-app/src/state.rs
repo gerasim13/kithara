@@ -424,8 +424,7 @@ pub(crate) async fn listen(
     let mut held = HeldAnalysis {
         analysis,
         queue: queue.clone(),
-        track: None,
-        rx: None,
+        held: None,
     };
     held.follow(&state).await;
     held.warm(&state).await;
@@ -466,9 +465,15 @@ pub(crate) async fn listen(
 struct HeldAnalysis {
     analysis: AnalysisHandle,
     queue: AppQueueControl,
-    /// The track the deck follows, whose grid the queue is handed.
-    track: Option<TrackId>,
-    rx: Option<watch::Receiver<Option<TrackArtifacts>>>,
+    held: Option<Held>,
+}
+
+/// The publication channel the deck observes, with the track and axis it was
+/// answered for.
+struct Held {
+    track: TrackId,
+    axis: NonZeroU32,
+    rx: watch::Receiver<Option<TrackArtifacts>>,
 }
 
 impl HeldAnalysis {
@@ -481,38 +486,49 @@ impl HeldAnalysis {
     }
 
     async fn changed(&mut self) -> bool {
-        match &mut self.rx {
-            Some(rx) => rx.changed().await.is_ok(),
+        match &mut self.held {
+            Some(held) => held.rx.changed().await.is_ok(),
             None => std::future::pending().await,
         }
     }
 
     async fn follow(&mut self, state: &Mutex<UiState>) {
-        let held = {
+        let shown = {
             let st = state.lock();
             st.current_track_index
                 .and_then(|index| st.tracks.get(index).map(|track| track.id))
         };
-        let track = held.and_then(|id| self.queue.track_source(id).map(|source| (id, source)));
-        self.track = track.as_ref().map(|(id, _)| *id);
-        self.rx = None;
-        self.rx = match (track, self.axis()) {
-            (Some((id, source)), Some(axis)) => {
-                self.analysis
+        let track = shown.and_then(|id| self.queue.track_source(id).map(|source| (id, source)));
+        let wanted = track.zip(self.axis());
+        let kept = matches!(
+            (&self.held, &wanted),
+            (Some(held), Some(((id, _), axis))) if held.track == *id && held.axis == *axis
+        );
+        if !kept {
+            self.held = None;
+            self.held = match wanted {
+                Some(((id, source), axis)) => self
+                    .analysis
                     .subscribe(self.queue.clone(), id, source, axis)
                     .await
-            }
-            _ => None,
-        };
+                    .map(|rx| Held {
+                        track: id,
+                        axis,
+                        rx,
+                    }),
+                None => None,
+            };
+        }
         self.mirror(state, true);
     }
 
     /// Show the followed track's latest artifacts, and hand the queue the
     /// grid they state, so the track's loads publish it to the Host.
     fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
-        let next = self.rx.as_ref().and_then(|rx| rx.borrow().clone());
+        let track = self.held.as_ref().map(|held| held.track);
+        let next = self.held.as_ref().and_then(|held| held.rx.borrow().clone());
         if !open {
-            self.rx = None;
+            self.held = None;
         }
         let mut st = state.lock();
         if same_revision(st.analysis.as_ref(), next.as_ref()) {
@@ -521,7 +537,7 @@ impl HeldAnalysis {
         let grid = next.as_ref().and_then(TrackArtifacts::grid).cloned();
         st.set_analysis(next);
         drop(st);
-        if let (Some(id), Some(grid)) = (self.track, grid)
+        if let (Some(id), Some(grid)) = (track, grid)
             && let Err(error) = self.queue.offer_beat_grid(id, Arc::new(grid))
         {
             debug!(track = ?id, %error, "analysis: the queue let go of the track before its grid");
@@ -662,7 +678,7 @@ mod tests {
             CancelToken,
             sync::{Arc, Mutex},
             time::{self, Duration},
-            tokio::{sync::mpsc, task},
+            tokio::{self, sync::mpsc, task},
         },
         play::{DjEvent, PlayerEvent},
         queue::QueueEvent,
@@ -670,15 +686,16 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        AnalysisEvent, BpmInfo, EngineEvent, Envelope, EventReceiver, MediaTime, NonZeroU32,
-        RangeSet, StretchControls, UiState, bpm_info_from_grid, codec_label,
-        consts::MEDIA_TIMESCALE, covered, frames_to_fractions, listen, unready_ranges,
+        BpmInfo, EngineEvent, EventReceiver, MediaTime, NonZeroU32, RangeSet, StretchControls,
+        UiState, bpm_info_from_grid, codec_label, consts::MEDIA_TIMESCALE, covered,
+        frames_to_fractions, listen, unready_ranges,
     };
     use crate::{
         analysis::{
             AnalysisHandle, Request, TrackArtifacts,
             fixtures::{
-                answer_subscribe, next_subscribe, queue_off, tone_mp3, track, wait_for_revision,
+                answer_subscribe, next_subscribe, queue_off, serve_subscribe, tone_mp3, track,
+                wait_for_revision,
             },
         },
         pools::AppQueueControl,
@@ -767,36 +784,61 @@ mod tests {
         host.close().await;
     }
 
+    /// A current-track announcement or an engine start for the track the deck
+    /// already observes on the engine's axis changes nothing it asked for, so
+    /// the deck keeps the channel it was answered on rather than asking again.
     #[kithara::test(native, tokio)]
-    async fn a_current_track_change_resubscribes_the_deck_and_mirrors_the_revisions() {
+    async fn a_repeated_follow_for_the_same_track_keeps_the_publication_channel() {
         let (host, queue) = queue_off().await;
         let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
 
-        let first = answer_subscribe(&mut requests, track_id).await;
+        let tx = answer_subscribe(&mut requests, track_id).await;
         let Some(Request::Warm { track_ids, .. }) = requests.recv().await else {
             panic!("the deck warms its library");
         };
         assert_eq!(track_ids, vec![track_id]);
-        first.send_replace(Some(progress(1)));
+        tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
         host.call(|(_, queue)| queue.set_eq_gain(0, -6.0).expect("set the deck EQ"))
             .await;
         state.lock().abr_mode = Some(AbrMode::manual(1));
-        queue.bus().publish(PlayerEvent::RateChanged { rate: 1.0 });
         queue
             .bus()
             .publish(QueueEvent::CurrentTrackChanged { id: Some(track_id) });
-        let second = answer_subscribe(&mut requests, track_id).await;
-        second.send_replace(Some(progress(2)));
+        queue.bus().publish(EngineEvent::Started);
+        // Last on the same bus: once the deck shows the rate, it has followed
+        // both events before it.
+        queue.bus().publish(PlayerEvent::RateChanged { rate: 1.0 });
+        let playing = async {
+            for _ in 0..2_000 {
+                if state.lock().playing {
+                    return true;
+                }
+                time::sleep(Duration::from_millis(1)).await;
+            }
+            false
+        };
+        tokio::select! {
+            biased;
+            _ = requests.recv() => panic!("the deck asked again for the track it observes"),
+            playing = playing => assert!(playing, "the rate event reaches the UI"),
+        }
+
+        assert_eq!(
+            tx.receiver_count(),
+            1,
+            "the deck still holds the channel it was answered on"
+        );
+        tx.send(Some(progress(2)))
+            .expect("the pass publishes on the channel the deck holds");
         wait_for_revision(&state, 2).await;
         assert_eq!(
             queue.eq_gain(0),
             Some(-6.0),
             "event mirrors preserve the deck EQ"
         );
-        assert!(state.lock().playing, "the rate event reaches the UI");
 
         controller_on(
             queue.clone(),
@@ -808,9 +850,8 @@ mod tests {
         assert_eq!(
             state.lock().abr_mode,
             None,
-            "a new track shows the mode of its own ladder"
+            "the deck shows the mode of its track's own ladder"
         );
-        drop(first);
         cancel.cancel();
         host.close().await;
     }
@@ -843,7 +884,11 @@ mod tests {
         let (host, queue) = queue_off().await;
         let (first_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let (state, mut requests, cancel) = deck(&queue);
-        let (_, reply) = next_subscribe(&mut requests).await;
+        let (asked, reply) = next_subscribe(&mut requests).await;
+        assert_eq!(
+            asked, first_id,
+            "the deck asks for the track its queue holds"
+        );
         let (_second_id, _) = track(&host, 2, "file:///tmp/track-2.mp3").await;
         for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
             queue
@@ -853,18 +898,29 @@ mod tests {
         let (first, first_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
         assert!(reply.send(first_rx).is_ok(), "the deck waits for the reply");
 
-        let again = time::timeout(
-            Duration::from_secs(2),
-            answer_subscribe(&mut requests, first_id),
-        )
+        time::timeout(Duration::from_secs(2), async {
+            loop {
+                match requests.recv().await {
+                    Some(Request::Warm { track_ids, .. }) if track_ids.len() == 2 => break,
+                    Some(Request::Warm { .. }) => {}
+                    Some(Request::Subscribe { .. }) => {
+                        panic!("the deck asked again for the track it observes")
+                    }
+                    None => panic!("the deck warms its library"),
+                }
+            }
+        })
         .await
-        .expect("the deck observes its track again after the lag");
+        .expect("the deck warms the library it read back after the lag");
         let st = state.lock();
         assert_eq!(st.tracks.len(), 2, "the list is read from the queue");
         assert_eq!(st.current_track_index, Some(0));
         drop(st);
-        drop(again);
-        drop(first);
+        assert_eq!(
+            first.receiver_count(),
+            1,
+            "the deck keeps observing the track it held through the lag"
+        );
         cancel.cancel();
         host.close().await;
     }
@@ -981,23 +1037,9 @@ mod tests {
     #[kithara::test(native, tokio, flash(false))]
     async fn the_deck_follows_the_grid_each_publication_states(tone_mp3: String) {
         let (host, queue) = queue_off().await;
-        let mut loading: EventReceiver<AnalysisEvent> = queue.subscribe();
+        let (state, requests, cancel) = deck(&queue);
         let (track_id, _source) = track(&host, 1, &tone_mp3).await;
-        // The tone loads for real and starts the engine, which the deck follows
-        // with a fresh subscription; the deck starts on the loaded track so the
-        // pass it subscribes to is the one publishing both revisions.
-        loop {
-            match loading.recv().await {
-                Ok(Envelope {
-                    event: AnalysisEvent::Engine(EngineEvent::Started),
-                    ..
-                }) => break,
-                Ok(_) => {}
-                Err(error) => panic!("the queue loads the tone: {error}"),
-            }
-        }
-        let (state, mut requests, cancel) = deck(&queue);
-        let tx = answer_subscribe(&mut requests, track_id).await;
+        let tx = serve_subscribe(requests, track_id).await;
         let controller = controller_on(
             queue.clone(),
             StretchControls::new(1.0),

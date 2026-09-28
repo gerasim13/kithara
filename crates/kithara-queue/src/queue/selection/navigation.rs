@@ -21,19 +21,35 @@ where
         reason: AdvanceReason,
     ) -> Result<Option<TrackId>, QueueError> {
         let Some(next) = self.next_selectable_entry(reason) else {
+            let current = self.current().map(|entry| entry.id);
+            let player_index = self.player.current_index();
             if matches!(
                 reason,
                 AdvanceReason::NaturalEof
                     | AdvanceReason::TrackFailed
                     | AdvanceReason::CrossfadePreArm
             ) {
+                debug!(
+                    ?reason,
+                    ?current,
+                    player_index,
+                    "navigation has no successor: the queue ends here"
+                );
                 self.lock_navigation_mut().finish();
                 self.bus.publish(QueueEvent::QueueEnded);
+            } else {
+                debug!(
+                    ?reason,
+                    ?current,
+                    player_index,
+                    "navigation has no successor: staying on the current track"
+                );
             }
             return Ok(None);
         };
         let id = next.id;
         self.select_with_reason(id, transition, reason)?;
+        self.commit_navigation_to(id);
         Ok(Some(id))
     }
 

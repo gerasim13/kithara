@@ -1,7 +1,4 @@
-use std::sync::atomic::Ordering;
-
-use kithara_platform::time::Duration;
-use portable_atomic::AtomicF32;
+use kithara_platform::{atomic::RelaxedAtomicF32, time::Duration};
 
 use crate::consts;
 
@@ -31,19 +28,19 @@ fn ewma(prev: f32, sample: f32) -> f32 {
 #[derive(Debug)]
 pub struct EngineLoad {
     /// Fraction of realtime spent producing (`busy / audio`, `0.05` = 5%).
-    load: AtomicF32,
+    load: RelaxedAtomicF32,
     /// Wall time spent per produced chunk, in milliseconds.
-    ms: AtomicF32,
+    ms: RelaxedAtomicF32,
     /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
-    realtime: AtomicF32,
+    realtime: RelaxedAtomicF32,
 }
 
 impl Default for EngineLoad {
     fn default() -> Self {
         Self {
-            realtime: AtomicF32::new(0.0),
-            load: AtomicF32::new(0.0),
-            ms: AtomicF32::new(0.0),
+            realtime: RelaxedAtomicF32::new(0.0),
+            load: RelaxedAtomicF32::new(0.0),
+            ms: RelaxedAtomicF32::new(0.0),
         }
     }
 }
@@ -62,27 +59,21 @@ impl EngineLoad {
             return;
         }
         let busy_secs = busy.as_secs_f64();
-        let load = ewma(
-            self.load.load(Ordering::Relaxed),
-            to_f32(busy_secs / audio_secs),
-        );
-        let ms = ewma(
-            self.ms.load(Ordering::Relaxed),
-            to_f32(busy_secs * consts::MS_PER_SEC),
-        );
+        let load = ewma(self.load.load(), to_f32(busy_secs / audio_secs));
+        let ms = ewma(self.ms.load(), to_f32(busy_secs * consts::MS_PER_SEC));
         let realtime = if load > 0.0 { 1.0 / load } else { 0.0 };
-        self.realtime.store(realtime, Ordering::Relaxed);
-        self.load.store(load, Ordering::Relaxed);
-        self.ms.store(ms, Ordering::Relaxed);
+        self.realtime.store(realtime);
+        self.load.store(load);
+        self.ms.store(ms);
     }
 
     /// Read a copyable snapshot (UI thread).
     #[must_use]
     pub fn snapshot(&self) -> EngineLoadSnapshot {
         EngineLoadSnapshot {
-            realtime: self.realtime.load(Ordering::Relaxed),
-            load: self.load.load(Ordering::Relaxed),
-            ms: self.ms.load(Ordering::Relaxed),
+            realtime: self.realtime.load(),
+            load: self.load.load(),
+            ms: self.ms.load(),
         }
     }
 }

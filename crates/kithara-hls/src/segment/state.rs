@@ -19,15 +19,17 @@ bitflags! {
     /// [`LOADED`](SlotFlags::LOADED), [`FAILED`](SlotFlags::FAILED) is set
     /// (none = `Missing`) because every transition `store`s a single state
     /// value. [`SLOW`](SlotFlags::SLOW) is an orthogonal flag OR-ed on top
-    /// while the in-flight fetch outlasts the downloader's `soft_timeout`.
-    /// A state `store` clears `SLOW` for free, so it is only ever observed
-    /// alongside `DOWNLOADING`.
+    /// while the in-flight fetch outlasts the downloader's `soft_timeout`, and
+    /// [`EVICTED`](SlotFlags::EVICTED) one OR-ed on top when the store drops
+    /// the resource before that fetch settles. A state `store` clears both for
+    /// free, so they are only ever observed alongside `DOWNLOADING`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct SlotFlags: u8 {
         const DOWNLOADING = 1 << 0;
         const LOADED      = 1 << 1;
         const FAILED      = 1 << 2;
         const SLOW        = 1 << 3;
+        const EVICTED     = 1 << 4;
     }
 }
 
@@ -37,7 +39,9 @@ bitflags! {
 /// path drives `Downloading -> Loaded` (success or "another writer already
 /// committed"), `Downloading -> Missing` (recoverable failure / cancel), and
 /// `Downloading -> Failed` (terminal: the downloader exhausted its retry
-/// budget). Eviction is the only producer of `Loaded -> Missing`.
+/// budget). Eviction is the only producer of `Loaded -> Missing`, and never
+/// takes a `Downloading` slot from its claim: the claim alone settles it, and
+/// an eviction that lands first turns its `Loaded` settle into `Missing`.
 ///
 /// `Failed` is terminal by construction: `try_claim` only CAS's from
 /// `Missing`, so a failed slot is never re-dispatched (no extra scheduler
@@ -46,8 +50,9 @@ bitflags! {
 ///
 /// The only mutators are the typed transitions on the phase-specific
 /// `impl FetchClaim<Downloading>` / `impl FetchClaim<Loaded>` blocks (plus
-/// the `on_slow` hook), so there is no silent fallback. Reads stay a plain
-/// atomic (no lock) because `download_head` scans every slot on the ABR tick.
+/// the `on_slow` hook and eviction), so there is no silent fallback. Reads
+/// stay a plain atomic (no lock) because `download_head` scans every slot on
+/// the ABR tick.
 #[derive(Debug)]
 pub(crate) struct SegmentSlotState {
     /// Whether a parked read needs the in-flight fetch's bytes. Set only
@@ -86,8 +91,39 @@ impl SegmentSlotState {
         self.settle(SlotFlags::FAILED);
     }
 
-    pub(crate) fn mark_loaded(&self) {
-        self.settle(SlotFlags::LOADED);
+    /// Settle `Loaded`, unless an eviction reached the slot while its fetch
+    /// was in flight: those bytes are gone, so the slot lands `Missing`.
+    /// Returns whether it landed `Loaded`.
+    pub(crate) fn mark_loaded(&self) -> bool {
+        let (Ok(prior) | Err(prior)) =
+            self.flags
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+                    let next = if SlotFlags::from_bits_truncate(bits).contains(SlotFlags::EVICTED) {
+                        SlotFlags::empty()
+                    } else {
+                        SlotFlags::LOADED
+                    };
+                    Some(next.bits())
+                });
+        self.reader_demand.store(false, Ordering::Release);
+        !SlotFlags::from_bits_truncate(prior).contains(SlotFlags::EVICTED)
+    }
+
+    /// The store dropped this slot's bytes. A settled slot returns to `Missing`;
+    /// an in-flight one stays with its claim, marked so the claim's `Loaded`
+    /// settle cannot publish bytes the eviction already took.
+    pub(crate) fn mark_evicted(&self) {
+        let _ = self
+            .flags
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |bits| {
+                let flags = SlotFlags::from_bits_truncate(bits);
+                let next = if flags.contains(SlotFlags::DOWNLOADING) {
+                    flags | SlotFlags::EVICTED
+                } else {
+                    SlotFlags::empty()
+                };
+                Some(next.bits())
+            });
     }
 
     pub(crate) fn mark_missing(&self) {

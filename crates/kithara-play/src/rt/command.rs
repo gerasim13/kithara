@@ -1,7 +1,5 @@
-use std::sync::atomic::Ordering;
-
 use kithara_events::TrackId;
-use kithara_platform::sync::Arc;
+use kithara_platform::sync::{Arc, atomic::Ordering};
 use kithara_sync::TrackDisposal;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
@@ -75,10 +73,10 @@ impl PlayerNodeProcessor {
         }
         self.sync.retire();
         self.tracks_transitions.clear();
-        self.playback.position.store(0.0, Ordering::Relaxed);
-        self.playback.frontier.store(0.0, Ordering::Relaxed);
-        self.playback.cached.store(0.0, Ordering::Relaxed);
-        self.playback.duration.store(0.0, Ordering::Relaxed);
+        self.playback.position.store(0.0);
+        self.playback.frontier.store(0.0);
+        self.playback.cached.store(0.0);
+        self.playback.duration.store(0.0);
         self.tracks.len() == 0 && self.sync.custody_cleared()
     }
 

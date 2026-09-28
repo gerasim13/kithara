@@ -1,20 +1,19 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_decode::GaplessMode;
 use kithara_platform::{
-    sync::{Arc, Mutex},
+    sync::{Arc, ExclusiveGate, Mutex},
     time::Duration,
 };
 use kithara_sync::{LoadGeneration, LoadedMedia, SourceChange};
-use kithara_warp::WarpConfig;
 use tracing::{debug, warn};
 
 use super::{
+    PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
-    state::{ItemQueue, PlayerParams, PlayerPhase, TrackGrid},
+    state::{ItemQueue, PlayerPhase, TrackGrid},
 };
 use crate::{
     api::{CrossfadeSettings, PlayerEvent, PlayerStatus, TrackId},
@@ -23,7 +22,7 @@ use crate::{
     error::PlayError,
     resource::Resource,
     session::SessionBinding,
-    worker::{EngineLoad, PlayWorker},
+    worker::EngineLoad,
 };
 
 type EnqueuedItem = (TrackId, LoadGeneration, Arc<str>, f64);
@@ -51,29 +50,24 @@ pub(crate) struct PlayerCore<S> {
     /// Host lifecycle explicitly detaches the engine session lane before the
     /// worker owner drops.
     pub(crate) engine: EngineImpl<S>,
-    pub(crate) gapless_mode: GaplessMode,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
+    /// Status kept explicit (not derived from phase): `set_status` emits
+    /// `StatusChanged` only on change and its values are not 1:1 with phase.
+    pub(crate) status: Mutex<PlayerStatus>,
+    /// Construction recipe and injected resources. Its worker drops after
+    /// the engine and undelivered items.
+    pub(crate) config: PlayerConfig<S>,
     /// Where the current item must start when it reaches a processor.
     /// Set by a seek that arrives before the player holds a slot, consumed
     /// by the load that starts playback.
     pub(crate) start_position: Mutex<Option<Duration>>,
-    /// Status kept explicit (not derived from phase): `set_status` emits
-    /// `StatusChanged` only on change and its values are not 1:1 with phase.
-    pub(crate) status: Mutex<PlayerStatus>,
-    pub(crate) response_budget_frames: Option<NonZeroUsize>,
-    /// Explicit shared playback worker. Declared after both resource owners.
-    pub(crate) worker: PlayWorker<S>,
-    pub(crate) params: PlayerParams,
     /// Executor of the preparations the player's group issues for its track.
     pub(crate) staging: SyncStaging,
     /// Last load accepted by this player's slot, across stops and reloads.
     pub(crate) last_load: Mutex<Option<LoadGeneration>>,
     /// Geometry this player publishes for the track it holds.
     pub(crate) track_grid: TrackGrid,
-    pub(crate) warp: WarpConfig,
-    /// Player-level underrun policy copied into every prepared resource.
-    pub(crate) block_on_underrun: bool,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -92,7 +86,9 @@ pub(crate) struct PlayerCore<S> {
 pub struct PlayerRuntime<S> {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore<S>,
-    pub(super) operations: Mutex<()>,
+    /// Admits one operation at a time. An operation waits on the session while
+    /// admitted, so a contender parks on the gate instead of blocking a lock.
+    pub(super) operations: ExclusiveGate,
     pub(super) lifecycle: PlayerLifecycle,
 }
 
@@ -311,7 +307,7 @@ impl<S> PlayerRuntime<S> {
             /// Pre-allocate empty slots so `replace_item` can fill them by index.
             pub fn reserve_slots(&self, count: usize);
         }
-        to self.core.worker {
+        to self.core.config.worker {
             /// Typed pool facade used for resources created by this player.
             #[must_use]
             pub fn pools(&self) -> &PoolRegion<S>;
@@ -321,17 +317,21 @@ impl<S> PlayerRuntime<S> {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
-    #[cfg(not(target_arch = "wasm32"))]
-    use std::sync::mpsc::{RecvTimeoutError, channel};
 
     use kithara_assets::AssetStore;
+    use kithara_config::Config as _;
     use kithara_decode::GaplessMode;
     use kithara_platform::{CancelToken, time::Duration};
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_platform::{
+        sync::mpsc::{self, TryRecvError},
+        thread,
+    };
     use kithara_test_utils::kithara;
 
     use super::{super::PlayerImpl, *};
     use crate::{
-        PlayWorkerConfig,
+        PlayWorker, PlayWorkerConfig,
         bridge::PlayerCmd,
         mock,
         player::{PlayerConfig, PlayerConfigPatch},
@@ -361,15 +361,68 @@ mod tests {
         )
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native)]
+    fn player_config_values_follow_live_controls() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(mock::session())
+                .gapless_mode(GaplessMode::Disabled)
+                .crossfade_duration(2.0)
+                .build(),
+        );
+
+        let values = player.core.config.values();
+        assert_eq!(values.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(values.crossfade_duration, 2.0);
+        assert_eq!(player.crossfade_duration(), 2.0);
+
+        player.set_crossfade_duration(3.0);
+        assert_eq!(player.crossfade_duration(), 3.0);
+        assert_eq!(player.core.config.values().crossfade_duration, 3.0);
+
+        player.set_auto_advance_enabled(false);
+        player.set_default_rate(0.75);
+        player.set_prefetch_duration(4.0);
+        player.set_volume(0.4);
+        player.set_muted(true);
+        let values = player.core.config.values();
+        assert!(!values.auto_advance_enabled);
+        assert_eq!(values.default_rate, 0.75);
+        assert_eq!(values.prefetch_duration, 4.0);
+        assert_eq!(values.volume, 0.4);
+        assert!(values.muted);
+    }
+
     #[kithara::test]
+    fn checked_crossfade_update_respects_closed_owner() {
+        let player = player();
+        player
+            .try_set_crossfade_duration(2.0)
+            .expect("idle player retains the next slot's setting");
+        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
+
+        player
+            .make_control()
+            .close()
+            .expect("fixture player closes");
+        assert!(matches!(
+            player.try_set_crossfade_duration(3.0),
+            Err(PlayError::Closed)
+        ));
+        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn close_waits_for_an_admitted_operation() {
         let player = player();
         let runtime = Arc::clone(&player.runtime);
         let control = player.make_control();
-        let (entered_tx, entered_rx) = channel();
-        let (release_tx, release_rx) = channel();
-        let operation = std::thread::spawn(move || {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let operation = thread::spawn(move || {
             runtime
                 .with_open(|_| {
                     entered_tx.send(()).expect("report admitted operation");
@@ -381,9 +434,9 @@ mod tests {
             .recv()
             .expect("operation entered the admission gate");
 
-        let (attempting_tx, attempting_rx) = channel();
-        let (closing_tx, closing_rx) = channel();
-        let closer = std::thread::spawn(move || {
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let (closing_tx, closing_rx) = mpsc::channel();
+        let closer = thread::spawn(move || {
             attempting_tx.send(()).expect("report close attempt");
             closing_tx
                 .send(control.close())
@@ -392,10 +445,8 @@ mod tests {
         attempting_rx
             .recv()
             .expect("close reached the admission gate");
-        assert!(matches!(
-            closing_rx.recv_timeout(Duration::from_millis(50)),
-            Err(RecvTimeoutError::Timeout)
-        ));
+        kithara_test_utils::test::wall_sleep(Duration::from_millis(50));
+        assert!(matches!(closing_rx.try_recv(), Err(TryRecvError::Empty)));
 
         release_tx.send(()).expect("release admitted operation");
         operation.join().expect("operation thread completed");
@@ -417,10 +468,10 @@ mod tests {
 
     /// The claim rests on the ordering, not on the wait: the operation
     /// is released only after the drop has been observed, so a drop that
-    /// queued behind it could never be observed at all. The bound below
-    /// is a backstop that turns that deadlock into a named failure.
+    /// queued behind it could never be observed at all. The test timeout
+    /// turns that deadlock into a named failure.
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn drop_does_not_wait_for_an_admitted_operation() {
         let player = player();
         let runtime = Arc::clone(&player.runtime);
@@ -430,9 +481,9 @@ mod tests {
             .cancel
             .expect("prepare_config must populate cancel")
             .child();
-        let (entered_tx, entered_rx) = channel();
-        let (release_tx, release_rx) = channel();
-        let operation = std::thread::spawn(move || {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let operation = thread::spawn(move || {
             runtime
                 .with_open(|_| {
                     entered_tx.send(()).expect("report admitted operation");
@@ -445,13 +496,13 @@ mod tests {
             .expect("operation entered the admission gate");
 
         let closed = Arc::clone(&player.runtime);
-        let (dropped_tx, dropped_rx) = channel();
-        let dropper = std::thread::spawn(move || {
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let dropper = thread::spawn(move || {
             drop(player);
             dropped_tx.send(()).expect("report completed drop");
         });
         dropped_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv()
             .expect("drop must not queue behind an admitted operation");
         assert!(closed.is_closed(), "drop must close the player at once");
         assert!(
@@ -474,7 +525,7 @@ mod tests {
         );
 
         let concurrent = Arc::clone(&lifecycle);
-        let result = std::thread::spawn(move || concurrent.begin_close())
+        let result = thread::spawn(move || concurrent.begin_close())
             .join()
             .expect("BUG: lifecycle probe thread panicked");
         assert!(matches!(result, Err(PlayError::Closed)));
@@ -586,7 +637,7 @@ mod tests {
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
-        assert!((player.core.warp.stretch().speed() - 0.75).abs() < f32::EPSILON);
+        assert!((player.core.config.warp.stretch().speed() - 0.75).abs() < f32::EPSILON);
         assert_eq!(player.rate(), 0.0);
     }
 
@@ -595,7 +646,7 @@ mod tests {
         let player = player();
         player.set_rate(2.0);
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert!((player.core.warp.stretch().speed() - 2.0).abs() < f32::EPSILON);
+        assert!((player.core.config.warp.stretch().speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -607,11 +658,11 @@ mod tests {
                 .session(mock::session())
                 .build(),
         );
-        let ptr_before = Arc::as_ptr(player.core.warp.stretch());
+        let ptr_before = Arc::as_ptr(player.core.config.warp.stretch());
         player.play();
         player.pause();
         player.play();
-        let ptr_after = Arc::as_ptr(player.core.warp.stretch());
+        let ptr_after = Arc::as_ptr(player.core.config.warp.stretch());
         assert_eq!(
             ptr_before, ptr_after,
             "timestretch controls must stay address-stable across transitions"

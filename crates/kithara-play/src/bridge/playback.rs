@@ -1,7 +1,8 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
+use kithara_platform::{
+    atomic::{RelaxedAtomicF32, RelaxedAtomicF64, RelaxedAtomicU32},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use kithara_sync::AppliedSource;
-use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
 
 use super::RtMetrics;
 
@@ -56,15 +57,15 @@ pub struct PlaybackShared {
     /// Whether playback is active.
     pub playing: AtomicBool,
     /// Cached span in seconds: how much of the source is on disk.
-    pub(crate) cached: AtomicF64,
+    pub(crate) cached: RelaxedAtomicF64,
     /// Total media duration in seconds; `0.0` when unknown.
-    pub(crate) duration: AtomicF64,
+    pub(crate) duration: RelaxedAtomicF64,
     /// Decoded-ahead frontier in seconds.
-    pub(crate) frontier: AtomicF64,
+    pub(crate) frontier: RelaxedAtomicF64,
     /// Playback position in seconds.
-    pub(crate) position: AtomicF64,
+    pub(crate) position: RelaxedAtomicF64,
     /// Current output sample rate.
-    pub sample_rate: AtomicU32,
+    pub sample_rate: RelaxedAtomicU32,
     /// Number of audio-thread process calls.
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
@@ -75,13 +76,13 @@ pub struct PlaybackShared {
     /// Source revision whose commands the callback applied and rendered.
     pub(crate) applied_source: AppliedSource,
     /// Effective media seconds consumed per output second; `0.0` while paused.
-    pub(crate) rate: AtomicF32,
+    pub(crate) rate: RelaxedAtomicF32,
     /// Last epoch handed to a `FadeIn`, accepted or not.
     issued_epoch: AtomicU64,
     /// Epoch of the last item the control side made leading.
     leading_epoch: AtomicU64,
     /// Duration the control side declared for that item.
-    leading_duration: AtomicF64,
+    leading_duration: RelaxedAtomicF64,
     /// Epoch of the leading item the audio thread has taken on; `position` and `duration`
     /// describe that item.
     adopted_epoch: AtomicU64,
@@ -117,16 +118,15 @@ impl PlaybackShared {
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1);
         send(epoch)?;
-        self.leading_duration
-            .store(duration.max(0.0), Ordering::Relaxed);
+        self.leading_duration.store(duration.max(0.0));
         self.leading_epoch.fetch_max(epoch, Ordering::AcqRel);
         Ok(())
     }
 
     /// Audio thread: take on the item `epoch` made leading, publishing its playhead with it.
     pub(crate) fn adopt(&self, epoch: u64, position: f64, duration: f64) {
-        self.position.store(position, Ordering::Relaxed);
-        self.duration.store(duration, Ordering::Relaxed);
+        self.position.store(position);
+        self.duration.store(duration);
         self.adopted_epoch.store(epoch, Ordering::Release);
     }
 
@@ -135,36 +135,34 @@ impl PlaybackShared {
     #[must_use]
     pub fn snapshot(&self) -> PlaybackSnapshot {
         let leading = self.leading_epoch.load(Ordering::Acquire);
-        let rate = self.rate.load(Ordering::Relaxed);
-        let sample_rate = self.sample_rate.load(Ordering::Relaxed);
+        let rate = self.rate.load();
+        let sample_rate = self.sample_rate.load();
         let playing = self.playing.load(Ordering::Relaxed);
         if self.adopted_epoch.load(Ordering::Acquire) < leading {
             return PlaybackSnapshot {
                 playing,
                 rate,
                 sample_rate,
-                duration: self.leading_duration.load(Ordering::Relaxed),
+                duration: self.leading_duration.load(),
                 ..PlaybackSnapshot::default()
             };
         }
-        let position = self.position.load(Ordering::Relaxed);
-        let frontier = self.frontier.load(Ordering::Relaxed).max(position);
+        let position = self.position.load();
+        let frontier = self.frontier.load().max(position);
         PlaybackSnapshot {
             position,
             frontier,
             playing,
             rate,
             sample_rate,
-            cached: self.cached.load(Ordering::Relaxed),
-            duration: self.duration.load(Ordering::Relaxed),
+            cached: self.cached.load(),
+            duration: self.duration.load(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -174,10 +172,10 @@ mod tests {
         let playback = PlaybackShared::default();
         assert!(!playback.playing.load(Ordering::Relaxed));
         assert_eq!(playback.seek_epoch.load(Ordering::Relaxed), 0);
-        assert_eq!(playback.position.load(Ordering::Relaxed), 0.0);
-        assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
-        assert_eq!(playback.rate.load(Ordering::Relaxed), 0.0);
-        assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
+        assert_eq!(playback.position.load(), 0.0);
+        assert_eq!(playback.duration.load(), 0.0);
+        assert_eq!(playback.rate.load(), 0.0);
+        assert_eq!(playback.sample_rate.load(), 0);
     }
 
     #[kithara::test]
@@ -192,11 +190,11 @@ mod tests {
     fn snapshot_reads_all_fields_at_once() {
         let playback = PlaybackShared::default();
         playback.playing.store(true, Ordering::Relaxed);
-        playback.position.store(12.0, Ordering::Relaxed);
-        playback.frontier.store(20.0, Ordering::Relaxed);
-        playback.duration.store(180.0, Ordering::Relaxed);
-        playback.rate.store(1.25, Ordering::Relaxed);
-        playback.sample_rate.store(48_000, Ordering::Relaxed);
+        playback.position.store(12.0);
+        playback.frontier.store(20.0);
+        playback.duration.store(180.0);
+        playback.rate.store(1.25);
+        playback.sample_rate.store(48_000);
 
         let snap = playback.snapshot();
         assert!(snap.playing);
@@ -230,8 +228,8 @@ mod tests {
     #[kithara::test]
     fn snapshot_frontier_never_trails_position() {
         let playback = PlaybackShared::default();
-        playback.position.store(0.917, Ordering::Relaxed);
-        playback.frontier.store(0.657, Ordering::Relaxed);
+        playback.position.store(0.917);
+        playback.frontier.store(0.657);
 
         let snap = playback.snapshot();
         assert!(

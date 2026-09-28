@@ -396,7 +396,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     let dur_at_seek = queue.duration_seconds().unwrap_or(0.0);
     let target = (dur_at_seek * ratio).clamp(0.0, dur_at_seek);
     let outcome = queue
-        .seek(target)
+        .run(move |queue| queue.seek(target))
+        .await
         .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
     if let kithara::play::SeekOutcome::PastEof {
         duration: reported_dur,

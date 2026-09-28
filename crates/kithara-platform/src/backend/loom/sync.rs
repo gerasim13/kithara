@@ -9,7 +9,7 @@ pub use super::{
 pub use crate::{
     common::{
         error::NotAvailable,
-        gate::{CondvarGate, ThreadGate, WaitGate},
+        gate::{CondvarGate, ExclusiveGate, ExclusiveGuard, ThreadGate, WaitGate},
     },
     loom::sync::{Arc, OnceLock, Weak, atomic},
 };

@@ -78,6 +78,8 @@ mod consts {
 
     pub(super) const MAX_FLIGHT_CHANNEL_BYTES: usize = 32 * 1024;
 
+    pub(super) const MAX_THREADS_BYTES: usize = 16 * 1024;
+
     pub(super) const MAX_JSON_EXPANSION: usize = 6;
 
     pub(super) const ENVELOPE_OVERHEAD_BYTES: usize = 16 * 1024;
@@ -87,7 +89,8 @@ mod consts {
         + MAX_DIAGNOSTIC_BYTES
         + MAX_CONTEXT_BYTES
         + MAX_FLASH_BYTES
-        + 2 * MAX_FLIGHT_CHANNEL_BYTES;
+        + 2 * MAX_FLIGHT_CHANNEL_BYTES
+        + MAX_THREADS_BYTES;
 }
 
 #[derive(Debug, Serialize)]
@@ -148,6 +151,11 @@ struct DumpEnvelope<'a> {
     /// duplicates, so this envelope is the only carrier of that context.
     flight_events: Vec<String>,
     flight_probes: Vec<String>,
+    /// One line per live OS thread. The engine dump names the thread holding a
+    /// quiescence credit; this says whether that thread is spinning, parked, or
+    /// already gone — a leaked credit is indistinguishable from a live holder
+    /// without it.
+    threads: Vec<String>,
     timestamp_ms: u128,
     pid: u32,
 }
@@ -242,6 +250,7 @@ fn serialize_envelope(mut envelope: DumpEnvelope<'_>) -> serde_json::Result<Opti
     envelope.flash = None;
     envelope.flight_events = Vec::new();
     envelope.flight_probes = Vec::new();
+    envelope.threads = Vec::new();
     envelope.context = Value::String(format!(
         "[kithara context and Flash omitted: encoded_bytes={encoded_bytes}]"
     ));
@@ -364,6 +373,7 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
             crate::flight::probes_tail(),
             consts::MAX_FLIGHT_CHANNEL_BYTES,
         ),
+        threads: bounded_tail(super::threads::snapshot(), consts::MAX_THREADS_BYTES),
     };
     let payload = match serialize_envelope(envelope) {
         Ok(Some(payload)) => payload,
@@ -590,6 +600,7 @@ mod tests {
             context: Value::Null,
             flight_events: vec!["DEBUG kithara_test: marker".to_owned()],
             flight_probes: Vec::new(),
+            threads: vec!["name=main tid=1 state=S cpu_ticks=0 wchan=do_wait".to_owned()],
         };
 
         let value = serde_json::to_value(envelope).expect("serialize hang envelope");
@@ -627,6 +638,10 @@ mod tests {
                 vec!["\0".repeat(consts::MAX_FLIGHT_CHANNEL_BYTES / 2); 3],
                 consts::MAX_FLIGHT_CHANNEL_BYTES,
             ),
+            threads: bounded_tail(
+                vec!["\0".repeat(consts::MAX_THREADS_BYTES / 2); 3],
+                consts::MAX_THREADS_BYTES,
+            ),
         };
 
         let payload = serialize_envelope(envelope)
@@ -652,6 +667,7 @@ mod tests {
             context: Value::Null,
             flight_events: vec!["evicted by the size fallback".to_owned()],
             flight_probes: Vec::new(),
+            threads: vec!["evicted by the size fallback".to_owned()],
         };
 
         let payload = serialize_envelope(envelope)

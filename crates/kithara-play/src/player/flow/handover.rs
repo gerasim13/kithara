@@ -888,7 +888,7 @@ mod tests {
             .engine
             .slot_playback(player.slot().expect("fixture slot"))
             .expect("fixture playback");
-        let before_position = playback.position.load(Ordering::Relaxed);
+        let before_position = playback.position.load();
 
         assert!(matches!(
             player.seek_seconds(0.25),
@@ -896,7 +896,7 @@ mod tests {
         ));
         assert_eq!(begins.load(Ordering::Relaxed), 0);
         assert_eq!(playback.seek_epoch.load(Ordering::SeqCst), 0);
-        assert_eq!(playback.position.load(Ordering::Relaxed), before_position);
+        assert_eq!(playback.position.load(), before_position);
     }
 
     fn armed_player() -> PlayerImpl<TestPools> {
@@ -937,8 +937,8 @@ mod tests {
             .slot()
             .and_then(|slot| player.core.engine.slot_playback(slot))
             .expect("the slot must carry playback state");
-        playback.position.store(62.3, Ordering::Relaxed);
-        playback.duration.store(64.295, Ordering::Relaxed);
+        playback.position.store(62.3);
+        playback.duration.store(64.295);
 
         assert_eq!(player.duration_seconds(), Some(162.0));
         assert_eq!(player.position_seconds(), Some(0.0));
@@ -954,8 +954,8 @@ mod tests {
             .slot()
             .and_then(|slot| player.core.engine.slot_playback(slot))
             .expect("the slot must carry playback state");
-        playback.position.store(62.3, Ordering::Relaxed);
-        playback.duration.store(64.295, Ordering::Relaxed);
+        playback.position.store(62.3);
+        playback.duration.store(64.295);
         while player.send_to_slot(PlayerCmd::SetPaused(false)).is_ok() {}
 
         assert!(matches!(

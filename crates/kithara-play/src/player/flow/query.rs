@@ -1,5 +1,6 @@
 use delegate::delegate;
 use kithara_events::{EventBus, EventReceiver, EventSet, TrackId};
+use kithara_platform::sync::atomic::Ordering;
 use kithara_sync::{LoadedMedia, ResidentLoadObservation, ResidentRender, ResidentStaging};
 
 use super::super::core::PlayerRuntime;
@@ -38,7 +39,7 @@ impl<S> PlayerRuntime<S> {
             ResidentLoadObservation::builder()
                 .item_id(item_id)
                 .load(load)
-                .requested_speed(f64::from(self.core.warp.stretch().speed()))
+                .requested_speed(f64::from(self.core.config.warp.stretch().speed()))
                 .render(render)
                 .source(source)
                 .staging(staging)
@@ -89,12 +90,11 @@ impl<S> PlayerRuntime<S> {
         let slot_id = self.slot()?;
         let shared = self.core.engine.slot_playback(slot_id)?;
         let snapshot = shared.snapshot();
-        let stalled = self.core.engine.suspended_at().is_some_and(|tick| {
-            shared
-                .process_count
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == tick
-        });
+        let stalled = self
+            .core
+            .engine
+            .suspended_at()
+            .is_some_and(|tick| shared.process_count.load(Ordering::Relaxed) == tick);
         Some(if stalled {
             snapshot.silenced()
         } else {
@@ -144,17 +144,19 @@ impl<S> PlayerRuntime<S> {
         self.core.engine.bus().subscribe()
     }
 
+    /// Shared playback worker configured for this Player.
+    #[must_use]
+    pub const fn worker(&self) -> &PlayWorker<S> {
+        &self.core.config.worker
+    }
+
     delegate! {
         to self.core {
             /// Get a reference to the underlying engine.
             #[field(&engine)]
             pub const fn engine(&self) -> &EngineImpl<S>;
-            /// Shared playback worker configured for this Player.
-            #[field(&worker)]
-            #[must_use]
-            pub const fn worker(&self) -> &PlayWorker<S>;
         }
-        to self.core.params {
+        to self.core.config {
             /// Whether the built-in linear auto-advance handler is enabled.
             #[must_use]
             pub fn auto_advance_enabled(&self) -> bool;

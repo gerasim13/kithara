@@ -148,9 +148,19 @@ mod tests {
             });
             rig.send("deck-a/wave", ControlAction::SetScalar(0.9));
             rig.pump();
+            // The advance this waits for is the first track reaching its own
+            // end, so the budget has to cover playing it. The deck already
+            // reported that length to the wait above, and reading it back is
+            // what keeps the fixture's duration in one place.
+            let plays_out = Rig::playout(
+                rig.queues[0]
+                    .duration_seconds()
+                    .and_then(|seconds| time::Duration::try_from_secs_f64(seconds).ok())
+                    .unwrap_or_default(),
+            );
             rig.until(
                 "the queue advances with no UI frame",
-                Rig::DEADLINE,
+                plays_out,
                 engine_tick,
                 |rig| rig.queues[0].current_index() == Some(1),
             );
