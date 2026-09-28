@@ -143,7 +143,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// member's last decision is forgotten with the source it was placed
     /// against. A discontinuity also ends the applied map's proof of where
     /// the member stands; a timing change keeps it, because a mapped lane
-    /// plays its map, not the speed.
+    /// plays its map, not the speed. A timing change also keeps a decision
+    /// waiting to be planned again: nothing is placed yet, and the Host plans
+    /// it from the source as it then plays.
     /// A discontinuity of a deck's track that sounded a map or was entering
     /// one while the deck follows a timeline leaves a decision that waits for
     /// the Host to plan the track again from where it then plays, as the next
@@ -190,13 +192,19 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 })
             })
             .transpose()?;
+        let withdrawn = |held: &Pending| {
+            held.member() == member
+                && (change == SourceChange::Discontinuity
+                    || !matches!(held, Pending::Replanning { .. }))
+        };
         let mut remaining = self.pending.clone();
-        remaining.retain(|pending| pending.member() != member);
+        remaining.retain(|pending| !withdrawn(pending));
         let transition = transition(&self.pending, &remaining);
         if let Some((custodian, prior)) = self.before_entry
-            && self.pending.iter().any(|held| {
-                held.member() == member && custodian == Custodian::Decision(held.operation())
-            })
+            && self
+                .pending
+                .iter()
+                .any(|held| withdrawn(held) && custodian == Custodian::Decision(held.operation()))
         {
             self.before_entry = Some((Custodian::Withdrawn(member), prior));
         }

@@ -33,10 +33,12 @@ pub enum SyncStatusSnapshot {
         activation: SessionFrame,
     },
     /// A decision waits for its Host to observe the track's source afresh
-    /// and plan it once more, for `cause`.
+    /// and plan it once more, for `cause`; only the track `load` can
+    /// satisfy it.
     Replanning {
         operation: SyncOperationId,
         topology: TopologyStamp,
+        load: LoadGeneration,
         cause: ReplanCause,
     },
     /// The latest decision ended without sounding, for `reason`; the track

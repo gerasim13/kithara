@@ -104,6 +104,7 @@ fn a_late_entry_waits_for_its_host_then_presents_at_the_next_beat() {
         SyncStatusSnapshot::Replanning {
             operation,
             topology: entry.stamp().topology(),
+            load: entry.stamp().load(),
             cause: ReplanCause::Missed(SyncExecutionReject::Late),
         }
     );
@@ -607,6 +608,38 @@ fn a_second_break_waits_in_place_of_the_first() {
         rejected.error(),
         &SyncError::NotReplanning { operation: first }
     );
+}
+
+#[kithara::test]
+fn a_speed_change_keeps_a_break_waiting() {
+    let (mut group, track, entry, operation) = broken_sounding_deck();
+    let deck = group.id();
+
+    let _ = transact(
+        &mut group,
+        SyncOperation::InvalidateSource {
+            target: track,
+            change: SourceChange::Timing,
+        },
+    );
+
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Replanning {
+            operation: waiting,
+            cause: ReplanCause::Break,
+            ..
+        } if waiting == operation
+    ));
+    let output = activation(&entry) + BEAT_FRAMES;
+    let next = replanned(transact(
+        &mut group,
+        by_hand(deck, operation, &entry, 144_000, output),
+    ));
+    assert!(matches!(
+        sound(&mut group, &next),
+        SyncStatusSnapshot::Locked { .. }
+    ));
 }
 
 #[kithara::test]

@@ -1036,6 +1036,50 @@ fn an_unobserved_broken_deck_stops_waiting_without_a_rejection() {
 }
 
 #[kithara::test]
+fn a_broken_deck_stops_waiting_once_another_track_is_loaded() {
+    let (mut root, deck, _) = broken_root();
+    let snapshot = rendered(
+        SessionFrame::new(4_096),
+        SessionEpoch::new(0),
+        TransportRevision::first(),
+        None,
+    );
+    let replaced = |_: &TestGroup| {
+        Some(
+            ResidentLoadObservation::builder()
+                .item_id(1_u32)
+                .load(
+                    LoadGeneration::first()
+                        .checked_next()
+                        .expect("a second load"),
+                )
+                .requested_speed(1.0)
+                .render(ResidentRender::Snapshot(snapshot.clone()))
+                .source(None)
+                .staging(ResidentStaging::Unavailable)
+                .build(),
+        )
+    };
+    let waiting = root.waiting(replaced);
+    let mut port = FakePort::default();
+
+    let entered = root.enter().expect("the owner is free");
+    let settled = entered
+        .run(&mut port, |cut, port| cut.replan_waiting(port, waiting))
+        .expect("the cut drains nothing");
+
+    assert_eq!(settled, Ok(()));
+    let status = root.group().with_group(deck, SyncGroup::status);
+    assert!(
+        !matches!(
+            status,
+            Some(SyncStatusSnapshot::Rejected { .. } | SyncStatusSnapshot::Replanning { .. })
+        ),
+        "{status:?}"
+    );
+}
+
+#[kithara::test]
 #[case::sounding_its_old_map(ResidentStaging::Available, Some(WarpMapRevision::first()))]
 #[case::unstaged(ResidentStaging::Unavailable, None)]
 fn a_broken_deck_waits_outside_the_owner_until_its_track_plays_by_hand(

@@ -2049,7 +2049,7 @@ async fn local_ticket_presents_after_an_unrelated_host_commit_and_rejected_reque
 /// How the user breaks the continuity of a deck that follows the Host.
 #[derive(Clone, Copy, Debug)]
 enum Break {
-    /// Seeks it past the cue its map entered at.
+    /// Seeks it three seconds on, just before one of its track's beats.
     Seek,
     /// Pauses it for a second while the Host clock runs on, then plays it.
     Pause,
@@ -2094,9 +2094,10 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
     let first = applied_operation(entered.status);
     harness.settle(case, second).await;
 
+    let beat = SECONDS_PER_MINUTE / START_BPM;
     let resumed_at = match cut {
         Break::Seek => {
-            let target = harness.first_deck_position(case) + 3.0;
+            let target = ((harness.first_deck_position(case) + 3.0) / beat).ceil() * beat - 0.05;
             harness.seek_first_deck(case, target);
             target
         }
@@ -2114,24 +2115,42 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
         }
     };
     let resumed = harness.output_frames;
-
-    let mut peak = 0.0_f32;
+    let rate = f64::from(case.sample_rate);
+    let mut quiet = 0.0;
+    let mut sounding = false;
+    let mut pulses = 0_usize;
     let mut by_hand = 0_usize;
     let mut played = 0.0;
-    let again = loop {
-        assert!(played < 3.0, "a fresh Host map after the break never held");
+    let mut aligned = None;
+    while aligned.is_none_or(|(_, at)| played < at + beat) {
         let pcm = harness.render(case, BLOCK_FRAMES).await;
-        peak = pcm.iter().fold(peak, |peak, sample| peak.max(sample.abs()));
+        let before = played;
+        played = (harness.output_frames - resumed) as f64 / rate;
+        let audible = pcm.iter().any(|sample| sample.abs() > 0.0);
+        let onset = audible && !sounding;
+        sounding = audible;
+        quiet = if audible {
+            0.0
+        } else {
+            quiet + (played - before)
+        };
+        assert!(
+            quiet < beat + 0.1,
+            "the deck falls silent for {quiet:.3} s, {played:.3} s after the break"
+        );
+        if aligned.is_some() {
+            continue;
+        }
+        assert!(played < 3.0, "a fresh Host map after the break never held");
         let state = harness.first_deck_state(case).await;
         if is_sounding(state.status)
             && applied_operation(state.status) != first
             && at_bpm(state.applied_tempo, 124.0)
         {
-            break state;
-        }
-        played = (harness.output_frames - resumed) as f64 / f64::from(case.sample_rate);
-        if state.applied_tempo.is_none() {
+            aligned = Some((harness.first_deck_position(case), before));
+        } else if state.applied_tempo.is_none() {
             by_hand += 1;
+            pulses += usize::from(onset);
             assert_eq!(
                 state.mode,
                 SyncMode::HostSync,
@@ -2144,15 +2163,20 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
                  {played:.3} s"
             );
         }
-    };
+    }
     assert!(
         by_hand > 0,
         "the break releases the map before the deck aligns again"
     );
-    assert!(peak > 0.0, "the deck sounds through the break");
-    let aligned_at = harness.first_deck_position(case);
+    let (aligned_at, by_hand_until) = aligned.expect("the fresh Host map held");
+    let passed =
+        ((resumed_at + by_hand_until - 0.1) / beat).floor() - (resumed_at / beat).ceil() + 1.0;
     assert!(
-        aligned_at > resumed_at + played,
+        pulses as f64 >= passed,
+        "by hand the deck passes {passed} fixture beats from {resumed_at:.3} s, sounded {pulses}"
+    );
+    assert!(
+        aligned_at > resumed_at + by_hand_until,
         "the fresh map enters where the deck plays, not at the old cue: {aligned_at:.3} s"
     );
     assert!(harness.failures.is_empty(), "{:?}", harness.failures);

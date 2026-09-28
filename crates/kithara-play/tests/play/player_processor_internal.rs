@@ -113,7 +113,7 @@ async fn load_track_propagates_host_sample_rate() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: player_resource,
             item_id: TrackId::allocate(),
         })
@@ -163,7 +163,7 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_duration_player_resource("track.mp3", Duration::from_secs(60)),
             item_id,
         })
@@ -209,7 +209,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
             item_id: first_id,
         })
@@ -229,7 +229,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
             item_id: second_id,
         })
@@ -266,7 +266,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource,
             item_id,
         })
@@ -346,7 +346,7 @@ async fn processor_track_command_scenarios(
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource(constant_half, "track1.mp3"),
             item_id,
         })
@@ -358,7 +358,7 @@ async fn processor_track_command_scenarios(
             control
                 .cmd_tx
                 .try_push(PlayerCmd::LoadTrack {
-                    load: kithara::sync::LoadGeneration::first(),
+                    load: kithara_sync::LoadGeneration::first(),
                     resource: create_mock_player_resource(constant_half, "track1.mp3"),
                     item_id,
                 })
@@ -400,7 +400,7 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource(constant_half, "track1.mp3"),
             item_id,
         })
@@ -440,7 +440,7 @@ async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource,
             item_id,
         })
@@ -465,7 +465,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
@@ -473,7 +473,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource(constant_half, "long.mp3"),
             item_id: long_id,
         })
@@ -524,7 +524,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
@@ -532,7 +532,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource(constant_half, "preload.mp3"),
             item_id: preload_id,
         })
@@ -595,7 +595,7 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                load: kithara::sync::LoadGeneration::first(),
+                load: kithara_sync::LoadGeneration::first(),
                 resource: create_mock_player_resource_with_duration(constant_half, src, secs),
                 item_id,
             })
@@ -650,7 +650,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource_with_duration(
                 constant_half,
                 "leading.mp3",
@@ -662,7 +662,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource(constant_half, "successor.mp3"),
             item_id: successor_id,
         })
@@ -709,7 +709,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
@@ -717,7 +717,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource(constant_half, "fading.mp3"),
             item_id: fading_id,
         })
@@ -725,7 +725,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource: create_mock_player_resource(constant_half, "preload.mp3"),
             item_id: preload_id,
         })

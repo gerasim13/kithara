@@ -408,10 +408,14 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
                 },
             ),
             Some(Pending::Replanning {
-                operation, cause, ..
+                operation,
+                load,
+                cause,
+                ..
             }) => SyncStatusSnapshot::Replanning {
                 operation: *operation,
                 topology,
+                load: *load,
                 cause: *cause,
             },
             Some(Pending::Waiting {

@@ -94,9 +94,11 @@ struct ObservedEntry {
 
 impl<G: SyncGroup<NestedGroup = G>> SyncRoot<G> {
     /// Every deck decision that waits for its Host, each with the
-    /// observation `observe` takes of the deck's track outside Control. A
-    /// decision a break left waits here, without entering the owner, while
-    /// its resident track does not play by hand yet.
+    /// observation `observe` takes of the deck's track outside Control. An
+    /// observation of another load than the one the decision waits for is
+    /// none of its track. A decision a break left waits here, without
+    /// entering the owner, while its resident track does not play by hand
+    /// yet.
     #[must_use]
     pub fn waiting<Id, F>(&self, observe: F) -> Vec<Waiting<Id>>
     where
@@ -107,8 +109,11 @@ impl<G: SyncGroup<NestedGroup = G>> SyncRoot<G> {
         self.cells()
             .iter()
             .filter_map(|entry| {
-                let (operation, cause) = replanning(root, entry.group())?;
-                let observation = root.with_group(entry.group(), &observe).flatten();
+                let (operation, load, cause) = replanning(root, entry.group())?;
+                let observation = root
+                    .with_group(entry.group(), &observe)
+                    .flatten()
+                    .filter(|resident| resident.load() == load);
                 if cause == ReplanCause::Break
                     && observation
                         .as_ref()
@@ -150,7 +155,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
     {
         let mut failure = None;
         for decision in waiting {
-            if replanning(self.group, decision.deck).map(|(operation, _)| operation)
+            if replanning(self.group, decision.deck).map(|(operation, ..)| operation)
                 != Some(decision.operation)
             {
                 continue;
@@ -321,15 +326,19 @@ fn plays_by_hand<Id: Copy>(resident: &ResidentLoadObservation<Id>) -> bool {
         )
 }
 
-/// The operation `deck` holds while it waits to be planned again, and why.
+/// The operation `deck` holds while it waits to be planned again, the load
+/// it waits for, and why.
 fn replanning<G: SyncGroup<NestedGroup = G>>(
     root: &GroupState<G>,
     deck: BeatGridId,
-) -> Option<(SyncOperationId, ReplanCause)> {
+) -> Option<(SyncOperationId, LoadGeneration, ReplanCause)> {
     match root.with_group(deck, SyncGroup::status)? {
         SyncStatusSnapshot::Replanning {
-            operation, cause, ..
-        } => Some((operation, cause)),
+            operation,
+            load,
+            cause,
+            ..
+        } => Some((operation, load, cause)),
         _ => None,
     }
 }

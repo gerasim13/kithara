@@ -84,7 +84,7 @@ fn load(control: &mut SlotControl, resource: Box<PlayerResource>) -> TrackId {
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
-            load: kithara::sync::LoadGeneration::first(),
+            load: kithara_sync::LoadGeneration::first(),
             resource,
             item_id,
         })
