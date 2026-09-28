@@ -4433,6 +4433,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-events",
  "kithara-platform",
  "kithara-resampler",

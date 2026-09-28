@@ -5,8 +5,8 @@ use kithara_test_utils::kithara;
 
 use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, correlate_f32,
-    deinterleave_pair_f32, interleave_pair_f32, linear_interpolate_f32, max_magnitude_f32,
-    multiply_f32, quadratic_interpolate_f32, sum_squares_f32,
+    deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32, linear_interpolate_f32,
+    max_magnitude_f32, multiply_f32, quadratic_interpolate_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -120,6 +120,13 @@ fn deinterleave_pair_reads_only_whole_pairs() {
     );
     assert_eq!(bits(left), bits([1.0, 2.0, 9.0, 9.0]));
     assert_eq!(bits(right), bits([-1.0, -2.0, 9.0, 9.0]));
+}
+
+#[kithara::test(native)]
+fn downmix_pair_averages_only_whole_pairs() {
+    let mut mono = [9.0_f32; 3];
+    assert_eq!(downmix_pair_f32(&[1.0, 3.0, -2.0, 2.0, 5.0], &mut mono), 2);
+    assert_eq!(bits(mono), bits([2.0, 0.0, 9.0]));
 }
 
 #[kithara::test(native)]

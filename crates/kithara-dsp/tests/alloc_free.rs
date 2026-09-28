@@ -176,3 +176,17 @@ fn sum_squares_never_allocates() {
         );
     });
 }
+
+#[kithara::test(native)]
+fn downmix_never_allocates_at_any_channel_count() {
+    let interleaved = vec![0.25_f32; TWELVE.get() * FRAMES];
+    let mut mono = vec![0.0_f32; FRAMES];
+    assert_no_alloc(|| {
+        for channels in [NonZeroUsize::MIN, TWO, SIX, TWELVE] {
+            assert_eq!(
+                kithara_dsp::downmix(&interleaved, channels, &mut mono),
+                FRAMES
+            );
+        }
+    });
+}

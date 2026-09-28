@@ -37,12 +37,14 @@ const SINE: Wave = Wave::Sine {
 };
 
 type DeinterleavePair = fn(&[f32], &mut [f32], &mut [f32]) -> usize;
+type DownmixPair = fn(&[f32], &mut [f32]) -> usize;
 type InterleavePair = fn(&[f32], &[f32], &mut [f32]) -> usize;
 
 /// One backend's pair kernels, so every check runs the same matrix on each.
 struct Pairs {
     name: &'static str,
     deinterleave_pair: DeinterleavePair,
+    downmix_pair: DownmixPair,
     interleave_pair: InterleavePair,
 }
 
@@ -51,17 +53,20 @@ fn pairs() -> Vec<Pairs> {
         Pairs {
             name: "portable-native",
             deinterleave_pair: portable::deinterleave_pair,
+            downmix_pair: portable::downmix_pair,
             interleave_pair: portable::interleave_pair,
         },
         Pairs {
             name: "portable-fallback",
             deinterleave_pair: |input, left, right| dispatch!(Level::fallback(), simd => portable::deinterleave_pair_kernel(simd, input, left, right)),
+            downmix_pair: |input, mono| dispatch!(Level::fallback(), simd => portable::downmix_pair_kernel(simd, input, mono)),
             interleave_pair: |left, right, output| dispatch!(Level::fallback(), simd => portable::interleave_pair_kernel(simd, left, right, output)),
         },
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         Pairs {
             name: "accelerate",
             deinterleave_pair: accelerate::deinterleave_pair,
+            downmix_pair: accelerate::downmix_pair,
             interleave_pair: accelerate::interleave_pair,
         },
     ])
@@ -140,6 +145,46 @@ fn deinterleave_pair_matches_the_oracle() {
                     bits(&got.1),
                     bits(&want.1),
                     "{name}: right, size {size}, offset {offset}"
+                );
+            }
+        }
+    }
+}
+
+/// `(l + r) · 0.5` bit for bit, the formula every analysis path used
+/// before `downmix`; a `NaN` payload is the backend's to choose.
+#[kithara::test]
+fn downmix_pair_matches_the_scalar_mean() {
+    for layout in pairs() {
+        let name = layout.name;
+        for size in SIZES {
+            for offset in OFFSETS {
+                let input = signal(
+                    size.saturating_mul(2)
+                        .saturating_add(offset)
+                        .saturating_add(1),
+                    SINE,
+                );
+                let input = input.split_at(offset).1;
+                let mut mono = vec![UNWRITTEN; size.saturating_add(2)];
+                assert_eq!(
+                    (layout.downmix_pair)(input, &mut mono),
+                    size,
+                    "{name}: frames, size {size}, offset {offset}"
+                );
+                for (index, (got, [left, right])) in
+                    mono.iter().zip(input.as_chunks::<2>().0).enumerate()
+                {
+                    assert!(
+                        same(*got, (left + right) * 0.5),
+                        "{name}: mean of {left} and {right} at {index}, size {size}, offset {offset}"
+                    );
+                }
+                assert!(
+                    mono.iter()
+                        .skip(size)
+                        .all(|value| value.to_bits() == UNWRITTEN.to_bits()),
+                    "{name}: wrote past {size}, offset {offset}"
                 );
             }
         }
@@ -243,6 +288,21 @@ fn a_short_side_bounds_every_pair_kernel() {
             bits(&[-1.0, -2.0, UNWRITTEN, UNWRITTEN]),
             "{name}"
         );
+
+        let mut mono = [UNWRITTEN; 3];
+        assert_eq!(
+            (layout.downmix_pair)(&[1.0, 3.0, -2.0, 2.0, 5.0], &mut mono),
+            2,
+            "{name}"
+        );
+        assert_eq!(bits(&mono), bits(&[2.0, 0.0, UNWRITTEN]), "{name}");
+        let mut mono = [UNWRITTEN; 1];
+        assert_eq!(
+            (layout.downmix_pair)(&[1.0, 3.0, 5.0, 7.0], &mut mono),
+            1,
+            "{name}"
+        );
+        assert_eq!(bits(&mono), bits(&[2.0]), "{name}");
     }
 }
 
@@ -625,7 +685,6 @@ fn vectors() -> Vec<Vectors> {
 }
 
 /// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
-#[cfg(feature = "spectrum")]
 fn same(got: f32, want: f32) -> bool {
     got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan())
 }

@@ -1,5 +1,4 @@
-#[cfg(feature = "spectrum")]
-use std::ops::Mul;
+use std::ops::{Add, Mul};
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
@@ -11,6 +10,11 @@ use super::simd::padded;
 use super::simd::zip_map;
 #[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) use super::spectrum::{Dft, Work, correlate};
+
+mod consts {
+    /// Scale that turns the sum of a pair into its mean.
+    pub(super) const PAIR_MEAN: f32 = 0.5;
+}
 
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => deinterleave_pair_kernel(simd, input, left, right))
@@ -90,6 +94,40 @@ pub(super) fn deinterleave_pair_kernel<S: Simd>(
     }
     for (slot, sample) in rights.into_remainder().iter_mut().zip(odd.as_slice()) {
         *slot = *sample;
+    }
+    frames
+}
+
+pub(crate) fn downmix_pair(input: &[f32], mono: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => downmix_pair_kernel(simd, input, mono))
+}
+
+#[inline(always)]
+pub(super) fn downmix_pair_kernel<S: Simd>(simd: S, input: &[f32], mono: &mut [f32]) -> usize {
+    let frames = (input.len() / 2).min(mono.len());
+    let (Some(pairs), Some(mono)) = (
+        input.as_chunks::<2>().0.get(..frames),
+        mono.get_mut(..frames),
+    ) else {
+        return 0;
+    };
+    let lanes = S::f32s::LEN;
+    let half = S::f32s::splat(simd, consts::PAIR_MEAN);
+    let mean = |lo: S::f32s, hi: S::f32s| {
+        let (left, right) = lo.deinterleave(hi);
+        left.add(right).mul(half)
+    };
+    let mut inputs = pairs.chunks_exact(lanes);
+    let mut outputs = mono.chunks_exact_mut(lanes);
+    for (block, out) in (&mut inputs).zip(&mut outputs) {
+        let (lo, hi) = block.as_flattened().split_at(lanes);
+        mean(S::f32s::from_slice(simd, lo), S::f32s::from_slice(simd, hi)).store_slice(out);
+    }
+    let tail = inputs.remainder().as_flattened();
+    let (lo, hi) = tail.split_at(tail.len().min(lanes));
+    let tail = mean(padded(simd, lo), padded(simd, hi));
+    for (slot, value) in outputs.into_remainder().iter_mut().zip(tail.as_slice()) {
+        *slot = *value;
     }
     frames
 }

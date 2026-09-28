@@ -1,8 +1,11 @@
-use std::{array, collections::BTreeMap};
+use std::{array, collections::BTreeMap, num::NonZeroUsize};
 
 use kithara_blob::{BlobError, Writer};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
-use kithara_dsp::spectrum::{Fft, Spectrum};
+use kithara_dsp::{
+    downmix,
+    spectrum::{Fft, Spectrum},
+};
 use kithara_signal::CoverageWrite;
 use num_traits::cast::ToPrimitive;
 use rangemap::RangeSet;
@@ -113,9 +116,9 @@ impl WaveformAnalyzer {
     where
         S: HasPool<f32>,
     {
-        if channels == 0 {
+        let Some(channels) = NonZeroUsize::new(channels) else {
             return Ok(());
-        }
+        };
         let frames = pcm.len() / channels;
         let Ok(span) = u64::try_from(frames) else {
             return Ok(());
@@ -124,12 +127,9 @@ impl WaveformAnalyzer {
             return Ok(());
         }
 
-        let inv_channels = 1.0 / channels.to_f32().unwrap_or(1.0);
         self.downmix.ensure_len(frames)?;
-        self.downmix.truncate(frames);
-        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
-            *dst = frame.iter().sum::<f32>() * inv_channels;
-        }
+        let written = downmix(pcm, channels, &mut self.downmix);
+        self.downmix.truncate(written);
 
         let mono = std::mem::replace(&mut self.downmix, pools.get::<f32>());
         let result = self.push_mono(pools, &mono, at, span);
