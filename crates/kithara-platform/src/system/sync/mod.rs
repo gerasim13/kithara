@@ -15,6 +15,9 @@ pub use notify::Notify;
 pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub use crate::{
-    common::gate::{CondvarGate, ThreadGate, WaitGate},
+    common::{
+        gate::{CondvarGate, ThreadGate, WaitGate},
+        retire::Retired,
+    },
     system::ownership::{Arc, OnceLock, Weak},
 };

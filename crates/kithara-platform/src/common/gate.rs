@@ -4,7 +4,7 @@ use arc_swap::ArcSwapOption;
 
 use crate::{
     sync::{
-        Arc, Condvar, Mutex, MutexGuard,
+        Arc, Condvar, Mutex, MutexGuard, Retired,
         atomic::{AtomicU64, Ordering},
     },
     thread::{self, GateBackend, Thread},
@@ -104,7 +104,7 @@ pub struct ThreadGate {
     state: AtomicU64,
     waiter_id: AtomicU64,
     backend: GateBackend,
-    retired_waiters: Mutex<Vec<Arc<Thread>>>,
+    retired_waiters: Mutex<Retired<Thread>>,
 }
 
 impl Default for ThreadGate {
@@ -113,7 +113,7 @@ impl Default for ThreadGate {
             backend: GateBackend::default(),
             state: AtomicU64::new(0),
             waiter: ArcSwapOption::empty(),
-            retired_waiters: Mutex::new(Vec::new()),
+            retired_waiters: Mutex::new(Retired::default()),
             waiter_id: AtomicU64::new(0),
         }
     }
@@ -143,9 +143,8 @@ impl ThreadGate {
     /// quiesced ones here, off the signal path.
     fn publish_waiter(&self) {
         let mut retired = self.retired_waiters.lock();
-        retired.retain(|waiter| Arc::strong_count(waiter) > 1);
         if let Some(displaced) = self.waiter.swap(Some(Arc::new(thread::current()))) {
-            retired.push(displaced);
+            retired.retire(displaced);
         }
     }
 
