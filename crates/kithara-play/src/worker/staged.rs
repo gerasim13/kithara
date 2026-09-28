@@ -111,74 +111,16 @@ pub(crate) struct StagedSlot(pub(super) PendingTask);
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_beat::{
-        BeatGridModel, BeatGridState as WireState, GridBeat, RawBeatGrid, SCHEMA_VERSION,
-    };
-    use kithara_signal::{SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
-    use kithara_warp::{
-        AssetAxis, AssetExtent, Beat, BeatAlignment, BeatGridId, BeatGridRevision,
-        BeatGridSnapshot, MapPoint, SessionAnchor, SessionBeat, WarpMap, WarpMapRevision,
-    };
 
     use super::*;
+    use crate::mock::entering_plan as plan;
 
     mod consts {
         /// Chunks the playback path preloads before a lane sounds.
         pub(super) const PRELOAD: usize = 2;
         /// Decode epoch the lane was positioned in.
         pub(super) const POSITIONED: u64 = 3;
-    }
-
-    /// A plan entering a 120 BPM recording one second into a session at the
-    /// same tempo, so the activation starts past the recording's first frame.
-    fn plan() -> WarpPlan {
-        let rate = NonZeroU32::new(48_000).expect("fixture rate");
-        let model = BeatGridModel::try_from(RawBeatGrid {
-            schema_version: SCHEMA_VERSION,
-            model_id: "readiness".to_owned(),
-            revision: 1,
-            state: WireState::Final,
-            duration: Some(10.0),
-            bpm: 120.0,
-            beats: [0.0, 0.5]
-                .into_iter()
-                .zip(0..)
-                .map(|(at, ordinal)| GridBeat {
-                    at,
-                    ordinal,
-                    confidence: Some(1.0),
-                })
-                .collect(),
-            downbeats: Vec::new(),
-            meter: None,
-        })
-        .expect("fixture model");
-        let asset = BeatGridSnapshot::model(
-            BeatGridId::allocate().expect("asset identity"),
-            BeatGridRevision::first(),
-            &model,
-            AssetAxis::new(rate, AssetExtent::Bounded(480_000)),
-        )
-        .expect("fixture asset grid");
-        let session = BeatGridSnapshot::session(
-            BeatGridId::allocate().expect("session identity"),
-            BeatGridRevision::first(),
-            SessionEpoch::new(0),
-            SessionAnchor::new(SessionFrame::new(0), SessionBeat::default(), 2.0, rate)
-                .expect("fixture tempo"),
-            None,
-        );
-        let cue = Beat::new(0.0).expect("fixture cue");
-        let alignment = BeatAlignment::new(
-            MapPoint::new(asset.stamp(), cue),
-            MapPoint::new(session.stamp(), cue),
-        );
-        let map = WarpMap::projected(asset, session, alignment, WarpMapRevision::first())
-            .expect("fixture projection");
-        WarpPlan::new(map, SessionFrame::new(48_000)).expect("fixture activation")
     }
 
     fn chunk(frame_offset: u64, revision: Option<NonZeroU64>) -> AudioChunkInfo {

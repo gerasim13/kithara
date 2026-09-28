@@ -211,16 +211,77 @@ impl<S> EngineImpl<S> {
                 } else if entry.control.cmd_tx.vacant_len() <= entry.reserved_cmds {
                     Err(PlayError::SlotChannelFull { slot })
                 } else {
-                    entry
+                    let breaks = cmd.breaks_sync_plans();
+                    let pushed = entry
                         .control
                         .cmd_tx
                         .try_push(cmd)
-                        .map_err(|_| PlayError::SlotChannelFull { slot })
+                        .map_err(|_| PlayError::SlotChannelFull { slot });
+                    if breaks && pushed.is_ok() {
+                        entry.control.leave_sync_plans();
+                    }
+                    pushed
                 }
             }
             None => Err(PlayError::SlotNotFound(slot)),
         };
         drop(slots);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::sync::Arc;
+    use kithara_test_utils::kithara;
+    use kithara_warp::{RenderPublisher, WarpMapRevision, WarpPlanSlot};
+
+    use super::*;
+    use crate::{
+        PlayWorker, PlayWorkerConfig, mock,
+        player::{PlayerConfig, PlayerImpl},
+        test_pools::pools,
+    };
+
+    #[kithara::test]
+    #[case::pause(PlayerCmd::SetPaused(true), true)]
+    #[case::resume(PlayerCmd::SetPaused(false), true)]
+    #[case::fade(PlayerCmd::SetFadeDuration(1.0), false)]
+    fn a_pause_or_resume_takes_the_slot_sync_lanes_off_their_plans(
+        #[case] cmd: PlayerCmd,
+        #[case] leaves: bool,
+    ) {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .session(mock::session())
+                .build(),
+        );
+        player.play();
+        let slot = player.slot().expect("play allocates a slot");
+        let engine = player.engine();
+        let lane = Arc::new(WarpPlanSlot::default());
+        lane.install(Some(Arc::new(mock::entering_plan())));
+        engine
+            .slots
+            .lock()
+            .entry_mut(slot)
+            .expect("allocated slot")
+            .control
+            .bind_sync_resource(
+                TrackId::allocate(),
+                LoadGeneration::first(),
+                WarpMapRevision::first(),
+                None,
+                RenderPublisher::default().reader(),
+                Some(Arc::clone(&lane)),
+            );
+
+        engine
+            .send_slot_cmd(slot, cmd)
+            .expect("slot takes the command");
+
+        assert_eq!(lane.load().is_none(), leaves);
     }
 }

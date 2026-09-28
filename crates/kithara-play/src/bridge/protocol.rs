@@ -36,6 +36,14 @@ pub enum PlayerCmd {
     SetPrefetchDuration(f32),
 }
 
+impl PlayerCmd {
+    /// Whether the resident stops or restarts at a frame no sync plan
+    /// predicted, so the slot's sync lanes play on by hand.
+    pub(crate) const fn breaks_sync_plans(&self) -> bool {
+        matches!(self, Self::SetPaused(_))
+    }
+}
+
 impl fmt::Debug for PlayerCmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

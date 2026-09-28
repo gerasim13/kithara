@@ -13,7 +13,7 @@ use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
     PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
-    supports_playback_rate,
+    WarpPlanSlot, supports_playback_rate,
 };
 use tracing::warn;
 
@@ -116,6 +116,9 @@ pub struct Resource {
     src: Arc<str>,
     #[field(get = event_bus)]
     bus: EventBus,
+    /// The plan a staged lane renders by; `None` for a resident, which plays
+    /// by hand.
+    lane_plan: Option<Arc<WarpPlanSlot>>,
     priority: Option<TrackPriority>,
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
@@ -235,6 +238,7 @@ impl Resource {
         let mut resource = Self {
             src,
             bus,
+            lane_plan: None,
             priority: None,
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
@@ -248,8 +252,8 @@ impl Resource {
         resource
     }
 
-    /// Keep the staged reader's existing publication, priority, and cancel
-    /// owners together when its concrete reader is erased.
+    /// Keep the staged reader's existing publication, priority, cancel and
+    /// plan owners together when its concrete reader is erased.
     pub(crate) fn from_staged_reader<R: AudioReader + 'static>(
         reader: R,
         src: Arc<str>,
@@ -257,13 +261,21 @@ impl Resource {
         priority: TrackPriority,
         cancel: CancelToken,
         stretch: Arc<StretchControls>,
+        plan: Arc<WarpPlanSlot>,
     ) -> Self {
         let mut resource = Self::from_reader(reader, Some(src));
         resource.render_publisher = Some(publisher);
         resource.priority = Some(priority);
         resource.reader.0 = CancelGuard(Some(cancel));
         resource.playback_rate = PlaybackRate::for_warp(stretch);
+        resource.lane_plan = Some(plan);
         resource
+    }
+
+    /// The plan this staged lane renders by, which returns it to playing by
+    /// hand once it holds no plan.
+    pub(crate) fn lane_plan(&self) -> Option<Arc<WarpPlanSlot>> {
+        self.lane_plan.clone()
     }
 
     /// Create a resource from a concrete stream-backed audio config.

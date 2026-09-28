@@ -393,6 +393,7 @@ impl PlayerResource {
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
             pub(crate) fn clear_render(&self);
+            pub(crate) fn lane_plan(&self) -> Option<Arc<kithara_warp::WarpPlanSlot>>;
             pub(crate) fn publish_render(
                 &self,
                 context: &RenderContext,

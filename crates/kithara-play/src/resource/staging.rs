@@ -196,6 +196,7 @@ where
     let slot: StagedSlot = worker.reserve_staged(cancel.clone())?;
     let warp = config.warp.entering(Arc::new(plan));
     let stretch = Arc::clone(warp.stretch());
+    let lane_plan = Arc::clone(warp.plan());
     config.cancel = Some(cancel.clone());
     config.bus = None;
     let src: Arc<str> = Arc::from(config.src.to_string());
@@ -213,6 +214,7 @@ where
                 priority,
                 cancel.clone(),
                 Arc::clone(&stretch),
+                Arc::clone(&lane_plan),
             )
         }
         SourceType::HlsStream(_) => {
@@ -228,6 +230,7 @@ where
                 priority,
                 cancel.clone(),
                 Arc::clone(&stretch),
+                Arc::clone(&lane_plan),
             )
         }
     };

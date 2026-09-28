@@ -12,7 +12,7 @@ use kithara_signal::AudioSpec;
 use kithara_sync::{
     ActivationAudio, ActivationControl, LoadGeneration, SyncGateBinding, SyncReceiptTx,
 };
-use kithara_warp::{RenderReader, RenderSnapshot, WarpMapRevision};
+use kithara_warp::{RenderReader, RenderSnapshot, WarpMapRevision, WarpPlanSlot};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -115,13 +115,26 @@ type RenderBinding = (
     LoadGeneration,
     Option<WarpMapRevision>,
     RenderReader,
+    Option<Arc<WarpPlanSlot>>,
 );
 
 impl SlotControl {
     /// Begin a seek on every track this slot holds, off the audio thread.
+    /// The seek breaks the source every sync plan maps, so the lanes leave
+    /// their plans first: a lane worker meeting the seek on its plan would
+    /// enter that plan's cue again instead of playing on from the target.
     pub fn begin_seek(&self, position: Duration) {
+        self.leave_sync_plans();
         for (_, handle) in &self.seek.0 {
             handle.begin(position);
+        }
+    }
+
+    /// Return every bound sync lane to playing by hand: the resident stops,
+    /// restarts or moves at a frame no plan predicted.
+    pub(crate) fn leave_sync_plans(&self) {
+        for plan in self.render.0.iter().filter_map(|(.., plan)| plan.as_ref()) {
+            plan.install(None);
         }
     }
 
@@ -131,7 +144,7 @@ impl SlotControl {
         load: LoadGeneration,
         reader: RenderReader,
     ) {
-        self.render.0.push((item_id, load, None, reader));
+        self.render.0.push((item_id, load, None, reader, None));
     }
 
     pub(crate) fn bind_sync_resource(
@@ -141,11 +154,12 @@ impl SlotControl {
         map: WarpMapRevision,
         seek: Option<Arc<dyn SeekBegin>>,
         reader: RenderReader,
+        plan: Option<Arc<WarpPlanSlot>>,
     ) {
         if let Some(seek) = seek {
             self.bind_seek(item_id, seek);
         }
-        self.render.0.push((item_id, load, Some(map), reader));
+        self.render.0.push((item_id, load, Some(map), reader, plan));
     }
 
     /// Read only the newest binding for this item, including its load identity.
@@ -154,7 +168,7 @@ impl SlotControl {
         item_id: TrackId,
     ) -> Option<(LoadGeneration, Option<RenderSnapshot>)> {
         let active = self.playback.active_sync_map.load(Ordering::Acquire);
-        let active_item = self.render.0.iter().find_map(|(id, _, map, _)| {
+        let active_item = self.render.0.iter().find_map(|(id, _, map, ..)| {
             map.is_some_and(|map| u64::from(map) == active)
                 .then_some(*id)
         });
@@ -162,7 +176,7 @@ impl SlotControl {
             .0
             .iter()
             .rev()
-            .find(|(bound_id, _, map, _)| {
+            .find(|(bound_id, _, map, ..)| {
                 *bound_id == item_id
                     && if active_item == Some(item_id) {
                         map.is_some_and(|map| u64::from(map) == active)
@@ -170,7 +184,7 @@ impl SlotControl {
                         map.is_none()
                     }
             })
-            .map(|(_, load, _, reader)| (*load, reader.load()))
+            .map(|(_, load, _, reader, _)| (*load, reader.load()))
     }
 
     /// Record the control half of a track's seek path.
@@ -180,21 +194,21 @@ impl SlotControl {
 
     pub(crate) fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {
         let active = self.playback.active_sync_map.load(Ordering::Acquire);
-        let active_item = self.render.0.iter().find_map(|(id, _, map, _)| {
+        let active_item = self.render.0.iter().find_map(|(id, _, map, ..)| {
             map.is_some_and(|map| u64::from(map) == active)
                 .then_some(*id)
         });
         self.render
             .0
             .iter()
-            .filter(|(item_id, _, map, _)| {
+            .filter(|(item_id, _, map, ..)| {
                 if map.is_some() {
                     map.is_some_and(|map| u64::from(map) == active)
                 } else {
                     active_item != Some(*item_id)
                 }
             })
-            .filter_map(|(_, _, _, reader)| reader.load())
+            .filter_map(|(_, _, _, reader, _)| reader.load())
             .max_by_key(|snapshot| {
                 let context = snapshot.context();
                 (
@@ -205,7 +219,7 @@ impl SlotControl {
     }
 
     pub(crate) fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
-        self.render.0.retain(|(bound_id, _, _, bound_reader)| {
+        self.render.0.retain(|(bound_id, _, _, bound_reader, _)| {
             *bound_id != item_id || bound_reader != reader
         });
     }
@@ -273,6 +287,30 @@ mod tests {
                 landed_at: position,
             }
         }
+    }
+
+    /// Counts the seeks that began once the watched plan was gone.
+    struct PlanAtSeek {
+        plan: Arc<WarpPlanSlot>,
+        by_hand: Arc<AtomicUsize>,
+    }
+
+    impl SeekBegin for PlanAtSeek {
+        fn begin(&self, position: Duration) -> SeekOutcome {
+            if self.plan.load().is_none() {
+                self.by_hand.fetch_add(1, Ordering::Relaxed);
+            }
+            SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            }
+        }
+    }
+
+    fn planned() -> Arc<WarpPlanSlot> {
+        let slot = Arc::new(WarpPlanSlot::default());
+        slot.install(Some(Arc::new(crate::mock::entering_plan())));
+        slot
     }
 
     fn published(end: i64) -> RenderReader {
@@ -343,7 +381,7 @@ mod tests {
         let load = LoadGeneration::first();
         let first_map = WarpMapRevision::first();
         control.bind_render(resident, load, published(512));
-        control.bind_sync_resource(resident, load, first_map, None, published(128));
+        control.bind_sync_resource(resident, load, first_map, None, published(128), None);
         control.bind_render(successor, load, RenderPublisher::default().reader());
 
         let before = control
@@ -390,12 +428,12 @@ mod tests {
         let sounding = WarpMapRevision::first();
         let pending = sounding.checked_next().expect("fixture map revision");
         control.bind_render(resident, load, published(64));
-        control.bind_sync_resource(resident, load, sounding, None, published(128));
+        control.bind_sync_resource(resident, load, sounding, None, published(128), None);
         control
             .playback
             .active_sync_map
             .store(u64::from(sounding), Ordering::Release);
-        control.bind_sync_resource(resident, load, pending, None, published(256));
+        control.bind_sync_resource(resident, load, pending, None, published(256), None);
 
         let observed = control
             .render_binding(resident)
@@ -431,7 +469,7 @@ mod tests {
         let begins = Arc::new(AtomicUsize::new(0));
         let handle: Arc<dyn SeekBegin> = Arc::new(CountSeek(Arc::clone(&begins)));
         let reader = published(128);
-        control.bind_sync_resource(resident, load, map, Some(Arc::clone(&handle)), reader);
+        control.bind_sync_resource(resident, load, map, Some(Arc::clone(&handle)), reader, None);
         control
             .playback
             .active_sync_map
@@ -443,5 +481,38 @@ mod tests {
         control.unbind_seek(resident, &handle);
         control.begin_seek(Duration::from_secs(2));
         assert_eq!(begins.load(Ordering::Relaxed), 1);
+    }
+
+    #[kithara::test]
+    fn a_seek_takes_the_bound_sync_lanes_off_their_plans_before_it_begins() {
+        let (_, mut control) = slot_channels(SharedEq::new(0));
+        let resident = TrackId::allocate();
+        let load = LoadGeneration::first();
+        let lane = planned();
+        let unbound = planned();
+        let by_hand = Arc::new(AtomicUsize::new(0));
+        let handle: Arc<dyn SeekBegin> = Arc::new(PlanAtSeek {
+            plan: Arc::clone(&lane),
+            by_hand: Arc::clone(&by_hand),
+        });
+        let reader = published(128);
+        control.bind_sync_resource(
+            resident,
+            load,
+            WarpMapRevision::first(),
+            Some(handle),
+            reader.clone(),
+            Some(Arc::clone(&lane)),
+        );
+
+        control.begin_seek(Duration::from_secs(1));
+        assert_eq!(by_hand.load(Ordering::Relaxed), 1);
+        assert!(lane.load().is_none());
+        assert!(unbound.load().is_some());
+
+        lane.install(Some(Arc::new(crate::mock::entering_plan())));
+        control.unbind_render(resident, &reader);
+        control.leave_sync_plans();
+        assert!(lane.load().is_some());
     }
 }

@@ -231,13 +231,14 @@ impl<S> EngineImpl<S> {
                 return Err(SyncExecutionReject::Geometry);
             };
             let seek = ticket.lane().seek_handle();
+            let plan = ticket.lane().lane_plan();
             let item_id = ticket.item();
             let load = ticket.load();
             let map = ticket.first().head().activation().revision();
             room.send(ticket);
             entry
                 .control
-                .bind_sync_resource(item_id, load, map, seek, reader);
+                .bind_sync_resource(item_id, load, map, seek, reader, plan);
             drop(slots);
             Ok(())
         }))

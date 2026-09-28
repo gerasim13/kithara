@@ -576,10 +576,12 @@ where
         ControlFlow::Continue(output)
     }
 
-    /// Discard renderer state after a source discontinuity.
+    /// Discard renderer state after a source discontinuity. A pending
+    /// backend transition ends with it: nothing it would drain survives.
     pub fn reset(&mut self) {
         self.projection.cursor = None;
         self.projection.output_frames = 0;
+        self.backend_transition_pending = false;
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;

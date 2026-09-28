@@ -1126,6 +1126,83 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
+    case::signalsmith(kithara_stretch::StretchKind::Signalsmith)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(kithara_stretch::StretchKind::Bungee)
+)]
+fn a_seek_while_a_withdrawn_projection_drains_plays_on_by_hand_from_the_target(
+    #[case] backend: kithara_stretch::StretchKind,
+) {
+    let controls = StretchControls::new(1.0);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .render_quantum_frames(NonZero::new(128).expect("quantum"))
+        .build();
+    config
+        .plan()
+        .install(Some(Arc::new(crate::test_grids::projected_plan(
+            120.0,
+            180.0,
+            spec().sample_rate,
+        ))));
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    let mut admitted = 0_u64;
+    for _ in 0..16 {
+        renderer.prepare(spec());
+        let meta = AudioChunkInfo {
+            spec: spec(),
+            frame_offset: admitted,
+            ..AudioChunkInfo::default()
+        };
+        let frames = renderer
+            .prepare_quantum(meta, 4096)
+            .expect("mapped request")
+            .get();
+        let mut input = chunk(&renderer.pools, &vec![0.25; frames * 2]);
+        input.meta.frame_offset = admitted;
+        renderer
+            .render_quantum(input)
+            .continue_value()
+            .expect("mapped source is prepared");
+        admitted += u64::try_from(frames).expect("admitted frames");
+    }
+    config.plan().install(None);
+    renderer.prepare(spec());
+    assert!(
+        renderer.transition_pending(),
+        "withdrawal drains the admitted projection"
+    );
+
+    renderer.reset();
+    renderer.prepare(spec());
+
+    assert!(
+        !renderer.transition_pending(),
+        "the seek discarded what the withdrawal would drain"
+    );
+    let target = 200_000_u64;
+    renderer.prepare(spec());
+    let mut input = chunk(&renderer.pools, &[0.5; 128]);
+    input.meta.frame_offset = target;
+    renderer
+        .prepare_quantum(input.meta, input.frames())
+        .expect("manual request");
+    let output = renderer
+        .render_quantum(input)
+        .continue_value()
+        .expect("manual source is prepared")
+        .expect("manual PCM");
+    assert_eq!(output.meta.mapping_revision, None);
+    assert_eq!(output.meta.frame_offset, target);
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
     case::signalsmith(crate::StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(crate::StretchKind::Bungee))]
