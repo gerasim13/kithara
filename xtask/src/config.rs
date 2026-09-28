@@ -20,12 +20,26 @@ pub(crate) struct KitharaExt {
     agent_hook: Option<AgentHookConfig>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiProjectConfig {
     pub(crate) pins: PathBuf,
     pub(crate) lanes: BTreeMap<String, CiLaneConfig>,
     pub(crate) verdict: CiVerdictConfig,
+    /// How long a lane slot keeps a build unit its builds stopped using,
+    /// counted back from the slot's latest use.
+    lane_unit_window_hours: u64,
+}
+
+impl Default for CiProjectConfig {
+    fn default() -> Self {
+        Self {
+            pins: PathBuf::new(),
+            lanes: BTreeMap::new(),
+            verdict: CiVerdictConfig::default(),
+            lane_unit_window_hours: consts::LANE_UNIT_WINDOW_HOURS,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -326,6 +340,12 @@ impl CiProjectConfig {
                 .any(|component| !matches!(component, Component::Normal(_)))
         {
             bail!("ext.ci.pins must be a project-relative file");
+        }
+        if self.lane_unit_window_hours == 0 {
+            bail!(
+                "ext.ci.lane_unit_window_hours must be at least one hour; at zero a lane slot \
+                 would keep only the unit its latest build touched last"
+            );
         }
         Ok(())
     }
@@ -1311,5 +1331,49 @@ typo = true
         let error = XtaskCacheConfig::load(&root).expect_err("cache typo fails");
 
         assert!(format!("{error:#}").contains("typo"));
+    }
+
+    #[test]
+    fn a_lane_slot_keeps_a_day_of_units_unless_the_project_says_otherwise() {
+        let unset = KitharaExt::from_ctx(&ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+"#,
+        ))
+        .expect("parse kithara extension");
+        let named = KitharaExt::from_ctx(&ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+lane_unit_window_hours = 6
+"#,
+        ))
+        .expect("parse kithara extension");
+
+        assert_eq!(unset.ci.lane_unit_window_hours, 24);
+        assert_eq!(named.ci.lane_unit_window_hours, 6);
+        named.ci.validate().expect("a window of hours is valid");
+    }
+
+    #[test]
+    fn a_lane_slot_window_of_zero_hours_is_refused() {
+        let ext = KitharaExt::from_ctx(&ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+lane_unit_window_hours = 0
+"#,
+        ))
+        .expect("parse kithara extension");
+
+        let error = ext
+            .ci
+            .validate()
+            .expect_err("a zero window keeps nothing but the latest build");
+        assert!(
+            error.to_string().contains("lane_unit_window_hours"),
+            "the error must name the key: {error}"
+        );
     }
 }

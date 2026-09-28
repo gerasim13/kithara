@@ -431,6 +431,10 @@ pub(crate) const SOURCES_FILE: &str = ".kithara-lane-sources";
 /// Stands for content a build the record did not see may have used.
 pub(crate) const UNKNOWN_BLOB: &str = "unknown";
 
+/// Hours a lane slot keeps a build unit its builds stopped using, unless the
+/// project config names another window.
+pub(crate) const LANE_UNIT_WINDOW_HOURS: u64 = 24;
+
 #[cfg(test)]
 pub(crate) const FIXTURE_FAILURE_EXIT_CODE: i32 = 7;
 
