@@ -12,13 +12,12 @@ use std::{
     },
 };
 
-use arc_swap::{ArcSwap, Guard};
+use arc_swap::ArcSwap;
 use dashmap::DashSet;
-use kithara_platform::sync::Arc;
+use kithara_platform::sync::{Arc, Mutex, Retired};
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
 
-use super::retire::Retired;
 use crate::{
     consts,
     error::AssetsResult,
@@ -85,18 +84,17 @@ pub(super) type Entry = Arc<ArcSwap<Availability>>;
 ///
 /// Structural changes (a new resource, a deletion) publish a rebuilt tree;
 /// range updates swap only the resource's own [`Entry`]. Both happen on
-/// download and deletion paths, never on the audio thread. Publication is
-/// only half of the contract: a reader racing a writer can end up the last
-/// owner of the replaced generation, and its guard drop would then free the
-/// tree on the audio thread. Produce-core reads therefore park their
-/// snapshots in [`Retired`] and the write side pays the frees when it drains.
+/// download and deletion paths, never on the audio thread. A reader racing a
+/// writer must never end up the last owner of a displaced generation, so
+/// writers hold what they displace in [`Retired`] lists until quiesced. An
+/// [`Entry`] shared across tree generations dies with the last tree holding
+/// it, on the writer: readers reach an entry only through a tree guard and
+/// drop the snapshot guard first.
 pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     pub(super) assets: ArcSwap<AssetTree>,
-    /// Snapshots parked by produce-core reads, freed by write-side drains.
-    pub(super) retired: Retired,
     /// `true` when the in-memory aggregate has uncommitted writes
     /// since the last successful flush.
     pub(super) dirty: AtomicBool,
@@ -114,6 +112,10 @@ pub(super) struct InnerIndex {
     /// `AvailabilityIndex::enable_persistence`. Native only.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) persist: OnceLock<super::disk::AvailabilityPersist>,
+    /// Resource snapshots displaced by range updates, held until quiesced.
+    retired_snapshots: Mutex<Retired<Availability>>,
+    /// Trees displaced by structural edits, held until quiesced.
+    retired_trees: Mutex<Retired<AssetTree>>,
 }
 
 impl AvailabilityIndex {
@@ -147,7 +149,6 @@ impl AvailabilityIndex {
     /// on disk — producing the HLS hang pinned by
     /// `red_test_delete_asset_strands_availability_index`.
     pub(crate) fn clear_root(&self, asset_root: &str) {
-        self.inner.retired.drain();
         let mut removed = false;
         self.edit_tree(|tree| removed = tree.remove(asset_root).is_some());
         if removed {
@@ -156,41 +157,32 @@ impl AvailabilityIndex {
     }
 
     /// Called from the decode produce path (`phase_at` cascade): reads the
-    /// snapshots in place and parks them instead of dropping, so a read
-    /// racing a writer never frees a replaced generation on the audio thread.
+    /// snapshots through guards only, since writers retire what they displace.
     pub(crate) fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
         if range.start >= range.end {
             return true;
         }
         let (root, path) = Self::resolve_refs(key);
         let tree = self.inner.assets.load();
-        let contains = tree
-            .get(root)
+        tree.get(root)
             .and_then(|asset| asset.get(path))
-            .is_some_and(|entry| {
-                let snapshot = entry.load();
-                let contains = snapshot.contains(&range);
-                self.inner
-                    .retired
-                    .retire_availability(Guard::into_inner(snapshot));
-                contains
-            });
-        self.inner.retired.retire_tree(Guard::into_inner(tree));
-        contains
+            .is_some_and(|entry| entry.load().contains(&range))
     }
 
-    /// Publish a structural change to the snapshot tree.
+    /// Publish a structural change to the snapshot tree and retire the tree
+    /// it displaced.
     ///
     /// Rebuilds under [`ArcSwap::rcu`]: readers keep loading complete trees
     /// throughout, and a racing edit re-runs against the tree that won. The
-    /// closure must therefore be idempotent — every caller here is (map
-    /// insert-if-absent and removals).
-    fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
-        self.inner.assets.rcu(|tree| {
+    /// closure must therefore be idempotent - every caller here is (map
+    /// inserts and removals).
+    pub(super) fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
+        let displaced = self.inner.assets.rcu(|tree| {
             let mut next = AssetTree::clone(tree);
             edit(&mut next);
             next
         });
+        self.inner.retired_trees.lock().retire(displaced);
     }
 
     fn entry(&self, asset_root: &str, path: &str) -> Option<Entry> {
@@ -202,23 +194,13 @@ impl AvailabilityIndex {
             .cloned()
     }
 
-    /// Also on the produce path — see [`Self::contains_range`].
+    /// Lock-free like [`Self::contains_range`]: guards only, never ownership.
     pub(crate) fn final_len(&self, key: &ResourceKey) -> Option<u64> {
         let (root, path) = Self::resolve_refs(key);
         let tree = self.inner.assets.load();
-        let len = tree
-            .get(root)
+        tree.get(root)
             .and_then(|asset| asset.get(path))
-            .and_then(|entry| {
-                let snapshot = entry.load();
-                let len = snapshot.final_len;
-                self.inner
-                    .retired
-                    .retire_availability(Guard::into_inner(snapshot));
-                len
-            });
-        self.inner.retired.retire_tree(Guard::into_inner(tree));
-        len
+            .and_then(|entry| entry.load().final_len)
     }
 
     /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
@@ -269,10 +251,9 @@ impl AvailabilityIndex {
     }
 
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
-        self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let entry = self.insert_or_get_entry(root, path);
-        if update(&entry, |next| next.mark_committed(final_len)) {
+        if self.update(&entry, |next| next.mark_committed(final_len)) {
             self.mark_dirty();
         }
     }
@@ -284,21 +265,18 @@ impl AvailabilityIndex {
         self.inner.pending_durability.insert(path);
     }
 
-    /// The write side performs the frees that the produce-core's reads left parked.
     pub(crate) fn record_write(&self, key: &ResourceKey, range: Range<u64>) {
         if range.start >= range.end {
             return;
         }
-        self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let entry = self.insert_or_get_entry(root, path);
-        if update(&entry, |next| next.insert(range.clone())) {
+        if self.update(&entry, |next| next.insert(range.clone())) {
             self.mark_dirty();
         }
     }
 
     pub(crate) fn remove(&self, key: &ResourceKey) {
-        self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let mut removed = false;
         self.edit_tree(|tree| {
@@ -346,22 +324,23 @@ impl AvailabilityIndex {
             self.mark_dirty();
         }
     }
-}
 
-/// Apply a mutation to one resource's availability and publish the result.
-///
-/// Clone-update-swap under [`ArcSwap::rcu`]: a racing writer makes the loser
-/// re-run against the winner's state, so no update is lost — the same
-/// guarantee the mutex gave, now without a lock for readers to block on.
-/// Returns what the mutation returned on its winning run.
-fn update(entry: &Entry, mut mutate: impl FnMut(&mut Availability) -> bool) -> bool {
-    let mut changed = false;
-    entry.rcu(|current| {
-        let mut next = Availability::clone(current);
-        changed = mutate(&mut next);
-        next
-    });
-    changed
+    /// Apply a mutation to one resource's availability, publish the result,
+    /// and retire the snapshot it displaced.
+    ///
+    /// Clone-update-swap under [`ArcSwap::rcu`]: a racing writer makes the
+    /// loser re-run against the winner's state, so no update is lost.
+    /// Returns what the mutation returned on its winning run.
+    fn update(&self, entry: &Entry, mut mutate: impl FnMut(&mut Availability) -> bool) -> bool {
+        let mut changed = false;
+        let displaced = entry.rcu(|current| {
+            let mut next = Availability::clone(current);
+            changed = mutate(&mut next);
+            next
+        });
+        self.inner.retired_snapshots.lock().retire(displaced);
+        changed
+    }
 }
 
 impl Flushable for InnerIndex {
@@ -394,12 +373,13 @@ impl Default for AvailabilityIndex {
         Self {
             inner: Arc::new(InnerIndex {
                 assets: ArcSwap::from_pointee(AssetTree::new()),
-                retired: Retired::new(consts::RETIRE_CAPACITY),
                 #[cfg(not(target_arch = "wasm32"))]
                 persist: OnceLock::new(),
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),
                 pending_durability: DashSet::new(),
+                retired_snapshots: Mutex::new(Retired::default()),
+                retired_trees: Mutex::new(Retired::default()),
             }),
         }
     }
@@ -616,30 +596,6 @@ mod tests {
         assert!(!idx.contains_range(&k, 0..10));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn a_read_parks_its_snapshots_for_the_write_side() {
-        let idx = AvailabilityIndex::new();
-        let k = ResourceKey::relative("test_asset", "file1");
-        idx.record_write(&k, 0..10);
-        assert!(idx.inner.retired.is_empty());
-
-        let _ = idx.contains_range(&k, 0..10);
-
-        assert!(!idx.inner.retired.is_empty());
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn a_write_drains_the_parked_snapshots() {
-        let idx = AvailabilityIndex::new();
-        let k = ResourceKey::relative("test_asset", "file1");
-        idx.record_write(&k, 0..10);
-        let _ = idx.contains_range(&k, 0..10);
-
-        idx.record_write(&k, 10..20);
-
-        assert!(idx.inner.retired.is_empty());
-    }
-
     /// A read never takes ownership of a generation, however long the write
     /// side stays quiet.
     ///
@@ -648,8 +604,6 @@ mod tests {
     /// stretch served from cache issues thousands of reads with no write in
     /// between. The burst is ten seconds of ticks over both snapshot reads.
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    #[ignore = "red until writers retire displaced generations: a read still \
-                takes ownership of the snapshots it loads"]
     fn a_read_burst_never_leaks_a_generation() {
         const TICKS_PER_SECOND: usize = 94;
         const BURST: usize = TICKS_PER_SECOND * 10;
@@ -685,12 +639,10 @@ mod tests {
         );
     }
 
-    /// A reader overlapping a range write is never the last owner of the
-    /// snapshot that write displaced: its guard drop leaves the snapshot to
-    /// the writer, and the next write frees it.
+    /// A reader overlapping range writes is never the last owner of a snapshot
+    /// they displaced: its guard drop leaves the snapshot to the writer, and
+    /// the first write after that drop frees it.
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    #[ignore = "red until writers retire displaced generations: a racing \
-                reader still frees the snapshot a write displaced"]
     fn displaced_snapshot_is_freed_by_the_writer() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -704,6 +656,7 @@ mod tests {
         let displaced: Weak<Availability> = Arc::downgrade(&reader);
 
         idx.record_write(&k, 10..20);
+        idx.record_write(&k, 20..30);
         drop(reader);
         drop(tree);
         assert!(
@@ -711,19 +664,17 @@ mod tests {
             "a reader guard drop never frees the displaced snapshot"
         );
 
-        idx.record_write(&k, 20..30);
+        idx.record_write(&k, 30..40);
         assert!(
             displaced.upgrade().is_none(),
             "the next write frees the quiesced snapshot"
         );
     }
 
-    /// A reader overlapping a structural edit is never the last owner of the
-    /// tree that edit displaced: its guard drop leaves the tree to the writer,
-    /// and the next edit frees it.
+    /// A reader overlapping structural edits is never the last owner of a tree
+    /// they displaced: its guard drop leaves the tree to the writer, and the
+    /// first edit after that drop frees it.
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    #[ignore = "red until writers retire displaced generations: a racing \
-                reader still frees the tree an edit displaced"]
     fn displaced_tree_is_freed_by_the_writer() {
         let idx = AvailabilityIndex::new();
         idx.record_write(&ResourceKey::relative("test_asset", "file1"), 0..10);
@@ -731,13 +682,14 @@ mod tests {
         let displaced: Weak<AssetTree> = Arc::downgrade(&reader);
 
         idx.record_write(&ResourceKey::relative("test_asset", "file2"), 0..10);
+        idx.record_write(&ResourceKey::relative("test_asset", "file3"), 0..10);
         drop(reader);
         assert!(
             displaced.upgrade().is_some(),
             "a reader guard drop never frees the displaced tree"
         );
 
-        idx.record_write(&ResourceKey::relative("test_asset", "file3"), 0..10);
+        idx.record_write(&ResourceKey::relative("test_asset", "file4"), 0..10);
         assert!(
             displaced.upgrade().is_none(),
             "the next edit frees the quiesced tree"
