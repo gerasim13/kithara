@@ -10,7 +10,7 @@ use super::simd::padded;
 #[cfg(feature = "spectrum")]
 use super::simd::zip_map;
 #[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
-pub(crate) use super::spectrum::{Dft, Work, correlate, magnitude};
+pub(crate) use super::spectrum::{Dft, Work, correlate};
 
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => deinterleave_pair_kernel(simd, input, left, right))

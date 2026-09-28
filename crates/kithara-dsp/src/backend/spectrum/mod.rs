@@ -4,4 +4,4 @@ mod kernels;
 mod tests;
 
 pub(crate) use dft::{Dft, Work};
-pub(crate) use kernels::{correlate, magnitude};
+pub(crate) use kernels::correlate;

@@ -1,10 +1,10 @@
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod accelerate;
+#[cfg(feature = "spectrum")]
+mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
 mod interpolate;
-#[cfg(feature = "spectrum")]
-mod phase;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
 mod simd;
@@ -20,7 +20,7 @@ mod tests;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use accelerate as platform;
 #[cfg(feature = "spectrum")]
-pub(crate) use phase::phase;
+pub(crate) use bins::{magnitude, phase};
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;

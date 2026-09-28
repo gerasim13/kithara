@@ -1,9 +1,7 @@
 use std::mem;
 
 use kithara_apple::accelerate::{DftError, RealDft};
-pub(crate) use kithara_apple::accelerate::{
-    correlate_f32 as correlate, magnitude_f32 as magnitude, multiply_f32 as multiply,
-};
+pub(crate) use kithara_apple::accelerate::{correlate_f32 as correlate, multiply_f32 as multiply};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 
 use super::deinterleave_pair;

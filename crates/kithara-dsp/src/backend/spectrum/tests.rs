@@ -4,11 +4,11 @@ use fearless_simd::{Level, dispatch};
 use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
-use super::{Dft, Work, correlate, kernels, magnitude};
+use super::{Dft, Work, correlate, kernels};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::backend::accelerate;
 use crate::{
-    backend::phase::{phase, phase_kernel},
+    backend::bins::{magnitude, magnitude_kernel, phase, phase_kernel},
     spectrum::{FftLen, SpectrumError, oracle},
 };
 
@@ -58,22 +58,19 @@ struct Kernel {
     run: BinKernel,
 }
 
-fn magnitudes() -> Vec<Kernel> {
-    Vec::from([
+/// Every platform reads the magnitude through one kernel, so its rows are
+/// the SIMD levels.
+fn magnitudes() -> [Kernel; 2] {
+    [
         Kernel {
-            name: "portable-native",
+            name: "native",
             run: magnitude,
         },
         Kernel {
-            name: "portable-fallback",
-            run: |re, im, output| dispatch!(Level::fallback(), simd => kernels::magnitude_kernel(simd, re, im, output)),
+            name: "fallback",
+            run: |re, im, output| dispatch!(Level::fallback(), simd => magnitude_kernel(simd, re, im, output)),
         },
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        Kernel {
-            name: "accelerate",
-            run: accelerate::magnitude,
-        },
-    ])
+    ]
 }
 
 /// Every platform reads the phase through one kernel, so its rows are the
@@ -119,7 +116,7 @@ fn angular_distance(a: f32, b: f32) -> f32 {
 }
 
 #[kithara::test]
-fn magnitude_tracks_hypot_on_every_backend() {
+fn magnitude_tracks_hypot_at_every_simd_level() {
     let (re, im) = points();
     for Kernel { name, run } in magnitudes() {
         let mut output = vec![UNWRITTEN; re.len()];

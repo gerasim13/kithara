@@ -9,5 +9,5 @@ pub(crate) use kithara_apple::accelerate::{
 };
 
 #[cfg(feature = "spectrum")]
-pub(crate) use self::spectrum::{Dft, Work, correlate, magnitude, multiply};
+pub(crate) use self::spectrum::{Dft, Work, correlate, multiply};
 pub(crate) use self::{cascade::Cascade, interpolate::interpolate};

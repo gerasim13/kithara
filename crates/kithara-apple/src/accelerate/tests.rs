@@ -5,8 +5,8 @@ use kithara_test_utils::kithara;
 
 use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, correlate_f32,
-    deinterleave_pair_f32, interleave_pair_f32, linear_interpolate_f32, magnitude_f32,
-    max_magnitude_f32, multiply_f32, quadratic_interpolate_f32, sum_squares_f32,
+    deinterleave_pair_f32, interleave_pair_f32, linear_interpolate_f32, max_magnitude_f32,
+    multiply_f32, quadratic_interpolate_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -20,8 +20,6 @@ const SPECIALS: [f32; 8] = [
     f32::NAN,
 ];
 const UNWRITTEN: f32 = -1.0;
-/// Largest `|z|` error against `hypot`, relative: two `f32` epsilons.
-const MAGNITUDE_PARITY: f32 = 2.0 * f32::EPSILON;
 
 /// `N` samples on the boundary `RealDft` takes its planes on.
 #[repr(C, align(64))]
@@ -257,21 +255,6 @@ fn multiply_writes_the_product_of_the_common_prefix() {
     );
     assert_eq!(bits(output), bits([3.0, -1.0, -1.0, UNWRITTEN]));
     assert_eq!(multiply_f32(&[], &[1.0], &mut output), 0);
-}
-
-#[kithara::test(native)]
-fn magnitude_reads_each_bin() {
-    let (re, im) = ([3.0_f32, 0.0, -1.0], [4.0_f32, -2.0, 0.0]);
-    let mut magnitude = [UNWRITTEN; 3];
-    assert_eq!(magnitude_f32(&re, &im, &mut magnitude), 3);
-    for ((got, y), x) in magnitude.iter().zip(im).zip(re) {
-        let want = x.hypot(y);
-        assert!(
-            (got - want).abs() <= MAGNITUDE_PARITY * want,
-            "|{x} + i{y}| = {got}, hypot {want}"
-        );
-    }
-    assert_eq!(magnitude_f32(&re, &[], &mut magnitude), 0);
 }
 
 #[kithara::test(native)]

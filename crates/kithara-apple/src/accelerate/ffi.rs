@@ -128,12 +128,4 @@ unsafe extern "C" {
         ic: VdspStride,
         n: VdspLength,
     );
-
-    pub(super) fn vDSP_zvabs(
-        a: *const DspSplitComplex,
-        ia: VdspStride,
-        c: *mut f32,
-        ic: VdspStride,
-        n: VdspLength,
-    );
 }

@@ -17,6 +17,22 @@ mod consts {
     pub(super) const TAN_PI_8: f32 = 0.414_213_57;
 }
 
+/// `√(re² + im²)` per bin: within two epsilons of `hypot` while the squares
+/// stay finite, that is below `1.8e19`.
+pub(crate) fn magnitude(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => magnitude_kernel(simd, re, im, output))
+}
+
+#[inline(always)]
+pub(super) fn magnitude_kernel<S: Simd>(
+    simd: S,
+    re: &[f32],
+    im: &[f32],
+    output: &mut [f32],
+) -> usize {
+    zip_map(simd, [re, im], output, |x, y| x.mul_add(x, y.mul(y)).sqrt())
+}
+
 /// `arg(re + i·im)` per bin in `[−π, π]`, within `1e-6` rad of `atan2`.
 pub(crate) fn phase(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => phase_kernel(simd, re, im, output))
