@@ -2,9 +2,6 @@
 
 use std::{ops::Range, path::Path, sync::atomic::Ordering};
 
-use arc_swap::Guard;
-use kithara_platform::sync::Arc;
-
 use crate::{
     StorageResult,
     backend::{resource::state::ResourceCore, traits::DriverIo},
@@ -28,10 +25,9 @@ impl<D: DriverIo> ResourceCore<D> {
         self.finish_inner(final_len, Publish::Snapshot)
     }
 
-    /// Called from the decode produce path (`phase_at` cascade), so the loaded
-    /// snapshot is parked rather than dropped here: a write publishes a new
-    /// generation on every chunk, and a read that races one would otherwise be
-    /// its last owner and free the range tree on the audio thread.
+    /// Called from the decode produce path (`phase_at` cascade). Reads the
+    /// snapshot through a guard only: writers retire what they displace, so
+    /// dropping the guard never frees a range tree on the audio thread.
     ///
     /// Takes a lock-free fast path once committed: a published snapshot always covers the whole
     /// `[0, committed_len)` since both drivers are linear with no eviction, so coverage reduces to
@@ -43,10 +39,7 @@ impl<D: DriverIo> ResourceCore<D> {
         if let Some(committed_len) = self.inner.driver.committed_len() {
             return range.end <= committed_len;
         }
-        let snap = self.inner.available_snapshot.load();
-        let covered = range_covered_by(&snap, &range);
-        self.inner.retired.retire(Guard::into_inner(snap));
-        covered
+        range_covered_by(&self.inner.available_snapshot.load(), &range)
     }
 
     pub(super) fn fail_inner(&self, reason: String) {
@@ -57,8 +50,8 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.gate.notify_all();
     }
 
-    /// The write side pays the frees that produce-core reads parked, rather than leaving them for
-    /// the reader that raced the write.
+    /// Seal or commit the driver, then publish the final availability; the displaced
+    /// snapshot is retired to the write side.
     fn finish_inner(&self, final_len: Option<u64>, publish: Publish) -> StorageResult<()> {
         self.check_health()?;
 
@@ -84,13 +77,11 @@ impl<D: DriverIo> ResourceCore<D> {
                         state.available.remove(window.end..len);
                     }
                 }
-                self.inner
-                    .available_snapshot
-                    .store(Arc::new(state.available.clone()));
+                self.inner.publish_available(&mut state);
             }
+            drop(state);
         }
         self.inner.gate.notify_all();
-        self.inner.retired.drain();
 
         if let Some(len) = final_len
             && let Some(observer) = self.inner.observer.as_ref()

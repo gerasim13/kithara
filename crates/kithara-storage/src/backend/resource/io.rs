@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -90,8 +89,8 @@ impl<D: DriverIo> ResourceCore<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
-    /// A write that replaces a generation a produce-core read may still own pays the frees that
-    /// read parked, transferring the ownership cost to the write side.
+    /// Every write publishes its availability and retires the snapshot it displaced,
+    /// so the frees stay on the write side.
     #[kithara::measure]
     pub(super) fn write_at_inner(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
@@ -130,12 +129,10 @@ impl<D: DriverIo> ResourceCore<D> {
                     state.available.remove(window.end..upper);
                 }
             }
-            self.inner
-                .available_snapshot
-                .store(Arc::new(state.available.clone()));
+            self.inner.publish_available(&mut state);
+            drop(state);
         }
         self.inner.gate.notify_all();
-        self.inner.retired.drain();
 
         if let Some(observer) = self.inner.observer.as_ref() {
             observer.on_write(range);
@@ -331,44 +328,12 @@ mod tests {
         }
     }
 
-    /// A `contains_range_inner` read runs on the audio thread, where freeing
-    /// the range tree is a real-time violation, so it must hand the snapshot it
-    /// loaded to the retire bin instead of dropping it.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn a_produce_core_read_parks_its_snapshot() {
-        let core = open_mem();
-        core.write_at_inner(0, b"hello world")
-            .expect("active write must succeed");
-        assert!(core.inner.retired.is_empty());
-
-        let _ = core.contains_range_inner(0..11);
-
-        assert!(!core.inner.retired.is_empty());
-    }
-
-    /// The other half of that contract: the write side — which publishes the
-    /// generations in the first place — pays the frees the read parked.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn a_write_drains_the_parked_snapshot() {
-        let core = open_mem();
-        core.write_at_inner(0, b"hello world")
-            .expect("active write must succeed");
-        let _ = core.contains_range_inner(0..11);
-
-        core.write_at_inner(11, b"!")
-            .expect("active write must succeed");
-
-        assert!(core.inner.retired.is_empty());
-    }
-
     /// A read never takes ownership of the snapshot, however long the write
     /// side stays quiet: the produce path reads at audio-tick cadence (~94
     /// ticks/s at 48 kHz with 512-frame blocks) while writes arrive at
     /// download cadence. The resource stays active, so every read of the
     /// ten-second burst answers from the snapshot.
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    #[ignore = "red until writers retire displaced snapshots: a read still \
-                takes ownership of the snapshot it loads"]
     fn a_read_burst_never_leaks_a_generation() {
         const TICKS_PER_SECOND: usize = 94;
         const BURST: usize = TICKS_PER_SECOND * 10;
@@ -394,12 +359,10 @@ mod tests {
         );
     }
 
-    /// A reader overlapping a write is never the last owner of the snapshot
-    /// that write displaced: its guard drop leaves the snapshot to the writer,
-    /// and the next write frees it.
+    /// A reader overlapping writes is never the last owner of a snapshot they
+    /// displaced: its guard drop leaves the snapshot to the writer, and the
+    /// first write after that drop frees it.
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    #[ignore = "red until writers retire displaced snapshots: a racing \
-                reader still frees the snapshot a write displaced"]
     fn displaced_snapshot_is_freed_by_the_writer() {
         let core = open_mem();
         core.write_at_inner(0, b"hello")
@@ -409,13 +372,15 @@ mod tests {
 
         core.write_at_inner(5, b" world")
             .expect("active write must succeed");
+        core.write_at_inner(11, b"!")
+            .expect("active write must succeed");
         drop(reader);
         assert!(
             displaced.upgrade().is_some(),
             "a reader guard drop never frees the displaced snapshot"
         );
 
-        core.write_at_inner(11, b"!")
+        core.write_at_inner(12, b"?")
             .expect("active write must succeed");
         assert!(
             displaced.upgrade().is_none(),

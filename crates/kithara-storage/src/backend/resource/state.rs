@@ -8,15 +8,13 @@ use std::{
 use arc_swap::ArcSwap;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, CondvarGate},
+    sync::{Arc, CondvarGate, Retired},
 };
 use rangemap::RangeSet;
 
-use super::retire::Retired;
 use crate::{
     StorageError, StorageResult,
     backend::traits::{AvailabilityObserver, Driver, DriverIo},
-    consts,
 };
 
 /// Common state tracked by `Resource<D>`.
@@ -25,6 +23,8 @@ pub(super) struct CommonState {
     pub(super) final_len: Option<u64>,
     pub(super) available: RangeSet<u64>,
     pub(super) committed: bool,
+    /// Snapshots displaced from `available_snapshot`, held until quiesced.
+    retired: Retired<RangeSet<u64>>,
 }
 
 /// Shared inner storage.
@@ -51,12 +51,18 @@ pub(super) struct Inner<D: DriverIo> {
     pub(super) gate: CondvarGate<CommonState>,
     pub(super) driver: D,
     pub(super) observer: Option<Arc<dyn AvailabilityObserver>>,
-    /// Snapshots parked by produce-core reads, freed by write-side drains —
-    /// see [`Retired`].
-    pub(super) retired: Retired,
 }
 
 impl<D: DriverIo> Inner<D> {
+    /// Publish `state.available` to lock-free readers and retire the snapshot
+    /// it displaces, so a read racing this write never frees it.
+    pub(super) fn publish_available(&self, state: &mut CommonState) {
+        let displaced = self
+            .available_snapshot
+            .swap(Arc::new(state.available.clone()));
+        state.retired.retire(displaced);
+    }
+
     /// Wake every parked `wait_range_inner`. Taking the gate lock first means a
     /// waiter that checked cancellation but has not parked yet cannot miss it.
     pub(super) fn wake_waiters(&self) {
@@ -130,12 +136,12 @@ impl<D: Driver> ResourceCore<D> {
                 committed: AtomicBool::new(is_committed),
                 stamp_on_drop: AtomicBool::new(true),
                 available_snapshot: ArcSwap::from_pointee(available.clone()),
-                retired: Retired::new(consts::RETIRE_CAPACITY),
                 gate: CondvarGate::new(CommonState {
                     final_len,
                     available,
                     failed: None,
                     committed: is_committed,
+                    retired: Retired::default(),
                 }),
             }),
         })
