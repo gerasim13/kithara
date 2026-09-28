@@ -4,6 +4,10 @@
 use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
+use kithara_dsp::{
+    filter::{Biquad, Coefficients, Hertz, Type},
+    interp::{InterpError, Interpolation, interpolate},
+};
 use kithara_test_utils::kithara;
 
 #[global_allocator]
@@ -15,7 +19,7 @@ const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
 const TWELVE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(11);
 const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn layout_and_sanitize_never_allocate() {
     let mut restored = vec![vec![0.25_f32; FRAMES]; SIX.get()];
     let stereo = vec![0.0_f32; TWO.get() * FRAMES];
@@ -28,7 +32,7 @@ fn layout_and_sanitize_never_allocate() {
     });
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn channel_major_layout_never_allocates_at_any_channel_count() {
     let mut planar = vec![0.25_f32; TWELVE.get() * PLANE.get()];
     let mut interleaved = vec![0.0_f32; TWELVE.get() * FRAMES];
@@ -49,5 +53,74 @@ fn channel_major_layout_never_allocates_at_any_channel_count() {
                 3..3 + FRAMES,
             );
         }
+    });
+}
+
+#[kithara::test(native)]
+fn biquad_never_allocates_after_construction() {
+    let four = NonZeroUsize::MIN.saturating_add(3);
+    let mut filter = Biquad::new(TWO, four).expect("filter builds");
+    let mut lookahead = Biquad::new(TWO, four).expect("filter builds");
+    let low_pass = Coefficients::from_params(
+        Type::LowPass,
+        Hertz::from_hz(48_000.0).expect("positive rate"),
+        Hertz::from_hz(4_000.0).expect("positive cutoff"),
+        std::f64::consts::FRAC_1_SQRT_2,
+    )
+    .expect("valid low-pass");
+    let mut planes = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    assert_no_alloc(|| {
+        for section in 0..four.get() {
+            filter.retune(section, low_pass).expect("section in range");
+            lookahead
+                .retune(section, low_pass)
+                .expect("section in range");
+        }
+        filter.settle(&[0.25, 0.25]).expect("one level per channel");
+        filter
+            .process(&mut planes, 0..FRAMES / 2)
+            .expect("shape matches");
+        lookahead.copy_state(&filter).expect("same shape");
+        lookahead
+            .process(&mut planes, FRAMES / 2..FRAMES)
+            .expect("shape matches");
+        for plane in &mut planes {
+            plane.fill(0.0);
+        }
+        filter
+            .process(&mut planes, 0..FRAMES)
+            .expect("shape matches");
+        for plane in &mut planes {
+            plane.fill(0.0);
+        }
+        filter
+            .process(&mut planes, 0..FRAMES)
+            .expect("silence resets");
+    });
+}
+
+#[kithara::test(native)]
+fn interpolation_never_allocates() {
+    let window = vec![0.25_f32; FRAMES + 4];
+    let positions: Vec<f32> = std::iter::successors(Some(1.5_f32), |position| Some(position + 1.0))
+        .take(FRAMES - 1)
+        .collect();
+    let mut output = vec![0.0_f32; FRAMES];
+    assert_no_alloc(|| {
+        for method in [
+            Interpolation::Linear,
+            Interpolation::Quadratic,
+            Interpolation::Hermite,
+            Interpolation::Watte,
+        ] {
+            assert_eq!(
+                interpolate(method, &window, &positions, &mut output),
+                Ok(FRAMES - 1)
+            );
+        }
+        assert_eq!(
+            interpolate(Interpolation::Linear, &window, &[f32::NAN], &mut output),
+            Err(InterpError::OutOfWindow)
+        );
     });
 }

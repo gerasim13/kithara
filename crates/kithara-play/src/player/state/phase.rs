@@ -1,10 +1,11 @@
-use kithara_platform::sync::Arc;
-
 #[cfg(test)]
 use super::super::PlayerImpl;
-use super::super::core::PlayerRuntime;
+use super::{
+    super::core::PlayerRuntime,
+    pending::{PendingLoads, PendingNext},
+};
 use crate::{
-    api::{PlayerEvent, SlotId, TimeControlStatus, TrackId, WaitingReason},
+    api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
     bridge::PlayerCmd,
     error::PlayError,
 };
@@ -14,35 +15,6 @@ use crate::{
 pub(crate) enum TransitionError {
     /// The requested action is not valid from the current phase.
     WrongPhase,
-}
-
-/// Whether the armed successor has been activated for the current handover.
-///
-/// Mirrors the pre-split `PendingNext::activated: bool`:
-/// - `Armed` ⇒ `activated == false` (armed, not yet committed).
-/// - `ActivatedReady` ⇒ `activated == true` (committed, leading slot).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PendingNextState {
-    Armed,
-    ActivatedReady,
-}
-
-impl PendingNextState {
-    pub(crate) const fn activated(self) -> bool {
-        matches!(self, Self::ActivatedReady)
-    }
-}
-
-/// Internal auto-advance state for the next queue item.
-///
-/// `Playlist` owns the current index; `PendingNext` only tracks the
-/// already-enqueued successor and whether it has been activated.
-pub(crate) struct PendingNext {
-    pub(crate) src: Arc<str>,
-    pub(crate) state: PendingNextState,
-    pub(crate) item_id: TrackId,
-    pub(crate) duration_seconds: f64,
-    pub(crate) index: usize,
 }
 
 /// Discriminant for [`PlayerPhase`] without its payload.
@@ -73,17 +45,17 @@ pub(crate) enum PlayerPhase {
     Loading {
         slot: SlotId,
         abr_handle: Option<kithara_abr::AbrHandle>,
-        pending: Option<PendingNext>,
+        pending: PendingLoads,
     },
     Playing {
         slot: SlotId,
         abr_handle: Option<kithara_abr::AbrHandle>,
-        pending: Option<PendingNext>,
+        pending: PendingLoads,
     },
     Paused {
         slot: SlotId,
         abr_handle: Option<kithara_abr::AbrHandle>,
-        pending: Option<PendingNext>,
+        pending: PendingLoads,
     },
     Stopped {
         slot: Option<SlotId>,
@@ -133,8 +105,8 @@ impl PlayerPhase {
                 pending,
                 ..
             } => (abr_handle, pending),
-            Self::Stopped { abr_handle, .. } => (abr_handle, None),
-            Self::Idle => (None, None),
+            Self::Stopped { abr_handle, .. } => (abr_handle, PendingLoads::default()),
+            Self::Idle => (None, PendingLoads::default()),
         };
         *self = Self::Loading {
             slot,
@@ -170,7 +142,7 @@ impl PlayerPhase {
             } => Self::Paused {
                 slot,
                 abr_handle,
-                pending: None,
+                pending: PendingLoads::default(),
             },
             phase => phase,
         };
@@ -203,7 +175,7 @@ impl PlayerPhase {
             } => Self::Playing {
                 slot,
                 abr_handle,
-                pending: None,
+                pending: PendingLoads::default(),
             },
             phase => phase,
         };
@@ -225,13 +197,13 @@ impl PlayerPhase {
         match self {
             Self::Loading { pending, .. }
             | Self::Playing { pending, .. }
-            | Self::Paused { pending, .. } => pending.as_ref(),
+            | Self::Paused { pending, .. } => pending.next.as_ref(),
             Self::Idle | Self::Stopped { .. } => None,
         }
     }
 
-    /// Mutable access to the armed-next slot for transition bookkeeping.
-    pub(crate) const fn pending_mut(&mut self) -> Option<&mut Option<PendingNext>> {
+    /// The successor loads of an active phase, for handover bookkeeping.
+    pub(crate) const fn pending_loads_mut(&mut self) -> Option<&mut PendingLoads> {
         match self {
             Self::Loading { pending, .. }
             | Self::Playing { pending, .. }
@@ -271,6 +243,10 @@ impl PlayerPhase {
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             #[call(into)]
             pub(crate) fn kind(&self) -> PlayerPhaseKind;
+            /// Mutable access to the armed-next slot for transition bookkeeping.
+            #[expr($.map(|loads| &mut loads.next))]
+            #[call(pending_loads_mut)]
+            pub(crate) fn pending_mut(&mut self) -> Option<&mut Option<PendingNext>>;
             /// The active slot, if any phase currently holds one.
             #[expr($.copied())]
             #[call(slot_ref)]
@@ -354,12 +330,6 @@ mod tests {
     use crate::{PlayWorker, PlayWorkerConfig, mock, player::PlayerConfig, test_pools::pools};
 
     #[kithara::test]
-    fn pending_next_state_maps_activated_bool() {
-        assert!(!PendingNextState::Armed.activated());
-        assert!(PendingNextState::ActivatedReady.activated());
-    }
-
-    #[kithara::test]
     fn player_phase_kind_exhaustive() {
         assert_eq!(PlayerPhase::Idle.kind(), PlayerPhaseKind::Idle);
         let slot = SlotId::new(0);
@@ -367,7 +337,7 @@ mod tests {
             PlayerPhase::Loading {
                 slot,
                 abr_handle: None,
-                pending: None,
+                pending: PendingLoads::default(),
             }
             .kind(),
             PlayerPhaseKind::Loading
@@ -376,7 +346,7 @@ mod tests {
             PlayerPhase::Playing {
                 slot,
                 abr_handle: None,
-                pending: None,
+                pending: PendingLoads::default(),
             }
             .kind(),
             PlayerPhaseKind::Playing
@@ -385,7 +355,7 @@ mod tests {
             PlayerPhase::Paused {
                 slot,
                 abr_handle: None,
-                pending: None,
+                pending: PendingLoads::default(),
             }
             .kind(),
             PlayerPhaseKind::Paused

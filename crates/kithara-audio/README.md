@@ -69,7 +69,7 @@ let mut audio = worker.open(audio_config).await?;
 
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder path via <code>kithara-decode/symphonia</code></td></tr>
 
-<tr><td><code>resample-rubato</code></td><td>yes</td><td>Rubato sample-rate conversion via <code>kithara-resampler/resample-rubato</code>; <code>resample-glide</code> selects the scalar backend instead</td></tr>
+<tr><td><code>resample-rubato</code></td><td>yes</td><td>Rubato sample-rate conversion via <code>kithara-resampler/resample-rubato</code>; <code>resample-glide</code> selects the Glide backend instead</td></tr>
 
 <tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the default HTTP backend selection to network-reaching deps</td></tr>
 

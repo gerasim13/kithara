@@ -7,5 +7,5 @@ mod resampler;
 mod tests;
 
 pub use backend::GlideBackend;
-pub use config::{GlideConfig, GlideInterpolation};
+pub use config::GlideConfig;
 pub use resampler::GlideResampler;

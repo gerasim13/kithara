@@ -274,7 +274,8 @@ where
     }
 
     /// Make `item_id` leading: once the processor accepts its `FadeIn`, the playhead reads
-    /// describe it, not only once the audio thread has taken it on.
+    /// describe it, not only once the audio thread has taken it on, and no withdrawn
+    /// successor is left in question.
     fn start_playback_with(
         &self,
         item_id: TrackId,
@@ -287,12 +288,17 @@ where
         else {
             return;
         };
-        let _ = playback.lead(duration_seconds, |epoch| {
+        let led = playback.lead(duration_seconds, |epoch| {
             self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
                 item_id,
                 settings,
                 epoch,
             }))
         });
+        if led.is_ok()
+            && let Some(loads) = self.phase.lock().pending_loads_mut()
+        {
+            loads.clear_withdrawn();
+        }
     }
 }
