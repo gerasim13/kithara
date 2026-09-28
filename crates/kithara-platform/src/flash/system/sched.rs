@@ -265,38 +265,24 @@ impl Core {
     ///
     /// Cooperative yielders outrank pure thread parks, whose deadlines are poll
     /// intervals rather than events, so a spin loop gets its turn before the
-    /// clock spends time on one. That turn is taken ONCE per virtual instant:
-    /// releasing yielders costs no time, so an unbounded precedence lets a loop
-    /// that cannot progress starve every timed waiter forever — a stress wedge
-    /// held one advance against 3.19e9 releases while a 250us park never fired.
-    /// A yielder that comes back to an unmoved clock has shown it needs time,
-    /// and the advance wakes it too, exactly as `yielders` documents.
+    /// clock spends time on one. That turn is skipped ONLY when this call is
+    /// about to move the clock anyway: releasing yielders costs no time, so an
+    /// unbounded precedence lets a loop that cannot progress starve every timed
+    /// waiter forever — a stress wedge held one advance against 3.19e9 releases
+    /// while a 250us park never fired. A yielder that comes back to an unmoved
+    /// clock has shown it needs time, and the advance wakes it too, exactly as
+    /// `yielders` documents. When no deadline exists, or real transit holds the
+    /// pace back, the clock cannot move and there is nothing to starve, so the
+    /// yielders go out instead of waiting on an advance that will not come.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0 || (!paced && self.registry.pinning_async() != 0) {
             self.sched.advance_counts.blocked += 1;
             return WakeBatch(Vec::new());
         }
-        let now = clock.now_nanos();
-        if !self.sched.yielders.is_empty()
-            && self.sched.yield_released_at != Some(now)
-            && self
-                .sched
-                .timed
-                .values()
-                .all(|e| matches!(e.kind, WaitKind::Thread(_)))
-        {
-            let woken: Vec<Wake> = std::mem::take(&mut self.sched.yielders)
-                .into_values()
-                .collect();
-            self.sched.yield_released_at = Some(now);
-            self.sched.advance_counts.yield_releases += 1;
-            self.registry.account_woken(&woken);
-            return WakeBatch(woken);
-        }
         let Some((&(earliest, _), _)) = self.sched.timed.iter().next() else {
             self.sched.advance_counts.no_deadline += 1;
-            return WakeBatch(Vec::new());
+            return self.release_yielders();
         };
         let min = if paced {
             earliest
@@ -307,16 +293,26 @@ impl Core {
                 .find(|(_, e)| e.role != ParkRole::Backstop)
                 .map_or(earliest, |(&(deadline, _), _)| deadline)
         };
-        if paced {
-            if self.pace_owed(min) > 0 {
-                if let Some(t) = &self.sched.pacer_wake
-                    && t.id() != std::thread::current().id()
-                {
-                    t.unpark();
-                }
-                self.sched.advance_counts.paced_wait += 1;
-                return WakeBatch(Vec::new());
+        if paced && self.pace_owed(min) > 0 {
+            if let Some(t) = &self.sched.pacer_wake
+                && t.id() != std::thread::current().id()
+            {
+                t.unpark();
             }
+            self.sched.advance_counts.paced_wait += 1;
+            return self.release_yielders();
+        }
+        let now = clock.now_nanos();
+        if !self.sched.yielders.is_empty()
+            && self.sched.yield_released_at != Some(now)
+            && self
+                .sched
+                .timed
+                .values()
+                .all(|e| matches!(e.kind, WaitKind::Thread(_)))
+        {
+            self.sched.yield_released_at = Some(now);
+            return self.release_yielders();
         }
         debug_assert!(min >= now, "virtual clock must not move backward");
         clock.store(min);
@@ -335,6 +331,20 @@ impl Core {
         for (_, wake) in std::mem::take(&mut self.sched.yielders) {
             woken.push(wake);
         }
+        self.registry.account_woken(&woken);
+        WakeBatch(woken)
+    }
+
+    /// Hand every cooperative yielder back its turn, costing no virtual time.
+    /// Empty when none are parked, which every caller treats as "did nothing".
+    fn release_yielders(&mut self) -> WakeBatch {
+        if self.sched.yielders.is_empty() {
+            return WakeBatch(Vec::new());
+        }
+        let woken: Vec<Wake> = std::mem::take(&mut self.sched.yielders)
+            .into_values()
+            .collect();
+        self.sched.advance_counts.yield_releases += 1;
         self.registry.account_woken(&woken);
         WakeBatch(woken)
     }

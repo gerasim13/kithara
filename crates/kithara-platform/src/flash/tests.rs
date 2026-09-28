@@ -760,6 +760,46 @@ fn a_spinning_yielder_cannot_starve_a_thread_park() {
     );
 }
 
+/// The bound on that turn must not reach the case it was never about: with no
+/// timed waiter there is nothing to starve and no advance to wait for, so the
+/// SECOND yield at one virtual instant must still be granted. Capping the turn
+/// unconditionally stranded it and wedged three `kithara-audio` transition
+/// tests, each of which yields more than once before its first deadline.
+#[kithara::test(native, flash(false))]
+fn a_repeated_yield_at_one_instant_is_granted_without_a_deadline() {
+    const YIELDS: usize = 4;
+
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut task = Box::pin(participate(
+        async {
+            for _ in 0..YIELDS {
+                yield_now().await;
+            }
+        },
+        Location::caller(),
+    ));
+
+    // Each yield costs one poll to register and is granted on the gate-park
+    // edge that ends it, so the body needs exactly one poll more than it yields.
+    let mut ready_at = None;
+    for poll in 1..=YIELDS + 1 {
+        if task.as_mut().poll(&mut cx).is_ready() {
+            ready_at = Some(poll);
+            break;
+        }
+    }
+    assert_eq!(
+        ready_at,
+        Some(YIELDS + 1),
+        "a yield with no deadline to starve went ungranted"
+    );
+}
+
 #[kithara::test(native, flash(false))]
 fn real_io_defers_advance_past_real_pace() {
     let flash = FlashInner::new_arc();
