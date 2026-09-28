@@ -4,4 +4,6 @@ pub(crate) mod snapshot;
 mod verify;
 
 use client::required;
-pub(crate) use client::{CacheArgs, client_environment, current_client_environment, run};
+pub(crate) use client::{
+    CacheArgs, client_environment, current_client_environment, missing_defaults, run,
+};

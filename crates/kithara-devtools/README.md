@@ -65,8 +65,8 @@ allowed to declare are in [crate contracts](https://github.com/zvuk/kithara/wiki
 - **Hygiene** — formatting, typo and ast-grep wrappers, Cargo manifest checks,
   per-package orphan detection, and the ratcheted `arch` / `style` / `idioms`
   lint namespaces. *(feature `lint`)*
-- **Analysis** — recursive Rust type-shape and behavior similarity, workspace
-  health, public-surface comparison, feature-powerset checking, and the
+- **Analysis** — recursive Rust type-shape and behavior similarity, parallel
+  execution chains behind a fork, workspace health, public-surface comparison, feature-powerset checking, and the
   deterministic quality assessment plus the opt-in Quality Lab for heavyweight
   external analyzers.
 - **Execution** — workspace tests, the test-suite performance pipeline and its

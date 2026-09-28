@@ -14,7 +14,9 @@ use kithara_devtools::{Ctx, lease, lock::FileLock};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::{build_cache, config::CiConfig, lane_build::LaneBuild, run::CacheGroup};
+use super::{
+    build_cache, cache::missing_defaults, config::CiConfig, lane_build::LaneBuild, run::CacheGroup,
+};
 use crate::consts;
 
 struct SccacheSlot {
@@ -389,17 +391,7 @@ impl CiEnvironment {
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
         if let Some(sccache) = &sccache {
-            insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
-            insert(&mut vars, "SCCACHE_CACHE_SIZE", &sccache.paths.cache_size);
-            insert(&mut vars, "SCCACHE_DIR", &sccache.paths.directory);
-            insert(
-                &mut vars,
-                "SCCACHE_IDLE_TIMEOUT",
-                consts::SCCACHE_IDLE_TIMEOUT,
-            );
-            if let Some(server_uds) = &sccache.paths.server_uds {
-                insert(&mut vars, "SCCACHE_SERVER_UDS", server_uds);
-            }
+            insert_sccache_environment(&mut vars, &sccache.paths, &project_root);
         }
         insert(&mut vars, "SWIFTPM_CACHE_PATH", &swiftpm_cache);
         insert(&mut vars, "TMPDIR", &temp);
@@ -1058,6 +1050,14 @@ mod tests {
                     .map(OsString::as_os_str),
                 Some(OsStr::new(consts::SCCACHE_IDLE_TIMEOUT))
             );
+            // The host named its store and left the prefix out, as every
+            // Linux host file did: the server must still write under it.
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_S3_KEY_PREFIX"))
+                    .map(OsString::as_os_str),
+                Some(OsStr::new("sccache"))
+            );
+            assert!(!vars.contains_key(OsStr::new("SCCACHE_REGION")));
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());
             let fixture_lease = root.join("review/fixtures/.kithara-ci-leases/job-29");
@@ -1090,6 +1090,10 @@ mod tests {
             .env(consts::CACHE_ROOT, directory.path())
             .env("KITHARA_CI_CACHE_ROOT", directory.path())
             .env("KITHARA_CACHE_TRUST", "review")
+            .env("SCCACHE_BUCKET", "kithara-review")
+            .env("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000")
+            .env("SCCACHE_REGION", "us-east-1")
+            .env_remove("SCCACHE_S3_KEY_PREFIX")
             .env("GITLAB_CI", "true")
             .env("CI_RUNNER_ID", "999")
             .env("CI_CONCURRENT_ID", "1")
@@ -1464,6 +1468,26 @@ mod tests {
 /// Returns an error if the environment names a different home.
 /// The Android toolchain a mac host carries. Only that fleet builds for the
 /// device, and the paths are the host profile's rather than this crate's.
+/// sccache takes its configuration from the environment it starts in, so
+/// what the host left out of its store's environment is filled in here rather
+/// than trusted to every host file.
+fn insert_sccache_environment(
+    vars: &mut BTreeMap<OsString, OsString>,
+    paths: &SccachePaths,
+    project_root: &FsPath,
+) {
+    insert(vars, "SCCACHE_BASEDIRS", project_root);
+    insert(vars, "SCCACHE_CACHE_SIZE", &paths.cache_size);
+    insert(vars, "SCCACHE_DIR", &paths.directory);
+    insert(vars, "SCCACHE_IDLE_TIMEOUT", consts::SCCACHE_IDLE_TIMEOUT);
+    if let Some(server_uds) = &paths.server_uds {
+        insert(vars, "SCCACHE_SERVER_UDS", server_uds);
+    }
+    for (name, value) in missing_defaults(|name| env::var(name).ok()) {
+        insert(vars, name, value);
+    }
+}
+
 fn insert_android_environment(vars: &mut BTreeMap<OsString, OsString>, config: &CiConfig) {
     let android_user_home = config.host.host_root.join("toolchains/android-user");
     insert(vars, "ANDROID_HOME", &config.host.android_home);
