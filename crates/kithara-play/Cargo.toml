@@ -127,7 +127,6 @@ firewheel = { workspace = true }
 hex = { workspace = true }
 humantime-serde = { workspace = true }
 num-traits = { workspace = true }
-portable-atomic = { workspace = true }
 
 # Async & channels
 ringbuf = { workspace = true }

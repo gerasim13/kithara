@@ -5588,7 +5588,6 @@ dependencies = [
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
- "portable-atomic",
  "ringbuf",
  "serde",
  "serde_json",
