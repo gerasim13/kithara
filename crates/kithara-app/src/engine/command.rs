@@ -1,4 +1,5 @@
 use kithara::{effects::GainDb, play::Tempo, queue::TrackId, warp::BeatsPerMinute};
+use num_traits::cast::AsPrimitive;
 
 use crate::deck::{DeckId, EqMode, TempoPercent};
 
@@ -52,23 +53,24 @@ impl TempoChange {
         }
     }
 
-    /// The deck tempo this change asks the Host for: `accepted` scaled by one
-    /// detent's factor per step, so steps compose and a step back undoes a
-    /// step on, or the track's `native` BPM for a reset. `None` while the one
-    /// it needs is unknown.
+    /// The deck tempo this change asks the Host for: the same control the
+    /// manual owner moves — a percent of the track's `native` BPM, stepped and
+    /// clamped as [`manual`](Self::manual) does — read from the `accepted`
+    /// tempo. `None` while the one it needs is unknown.
     pub(crate) fn own(
         self,
         accepted: Option<BeatsPerMinute>,
         native: Option<f64>,
     ) -> Option<BeatsPerMinute> {
-        let bpm = match self {
-            Self::Step(steps) => {
-                let detent = f64::from(TempoPercent::from(TempoPercent::STEP).speed());
-                f64::from(accepted?) * detent.powf(f64::from(steps))
+        let native = native?;
+        let from = match self {
+            Self::Step(_) => {
+                let percent: f32 = ((f64::from(accepted?) / native - 1.0) * 100.0).as_();
+                TempoPercent::from(percent)
             }
-            Self::Reset => native?,
+            Self::Reset => TempoPercent::DEFAULT,
         };
-        BeatsPerMinute::try_from(bpm).ok()
+        BeatsPerMinute::try_from(native * f64::from(self.manual(from).speed())).ok()
     }
 }
 
@@ -120,29 +122,45 @@ mod tests {
     }
 
     #[kithara::test]
-    fn an_own_step_moves_the_accepted_tempo_and_a_reset_returns_to_the_track() {
+    fn an_own_step_moves_the_percent_of_the_track_and_a_reset_returns_to_the_track() {
         let step = TempoChange::Step(1.0).own(Some(bpm(124.0)), Some(120.0));
         assert!(
-            step.is_some_and(|tempo| (f64::from(tempo) - 125.86).abs() < 1e-4),
-            "one detent is 1.5 % of the accepted 124 BPM, got {step:?}"
+            step.is_some_and(|tempo| (f64::from(tempo) - 125.8).abs() < 1e-4),
+            "124 BPM is +3.33 % of the track's 120, one detent more is +4.83 %, got {step:?}"
         );
         assert_eq!(
             TempoChange::Reset.own(Some(bpm(124.0)), Some(120.0)),
             Some(bpm(120.0))
         );
         assert_eq!(TempoChange::Step(1.0).own(None, Some(120.0)), None);
+        assert_eq!(TempoChange::Step(1.0).own(Some(bpm(124.0)), None), None);
         assert_eq!(TempoChange::Reset.own(Some(bpm(124.0)), None), None);
+    }
+
+    #[kithara::test]
+    fn an_own_step_lands_where_the_manual_owner_lands_from_the_same_tempo() {
+        let native = 120.0;
+        for (from, detents) in [(0.0, 1.0), (3.0, -2.0), (0.0, 40.0), (-45.0, -10.0)] {
+            let manual = TempoChange::Step(detents).manual(TempoPercent::from(from));
+            let accepted = bpm(native * f64::from(TempoPercent::from(from).speed()));
+            let own = TempoChange::Step(detents).own(Some(accepted), Some(native));
+            let expected = native * f64::from(manual.speed());
+            assert!(
+                own.is_some_and(|tempo| (f64::from(tempo) - expected).abs() < 1e-3),
+                "from {from} % by {detents} detents: manual lands on {expected} BPM, own on {own:?}"
+            );
+        }
     }
 
     #[kithara::test]
     fn own_steps_compose_and_a_step_back_undoes_a_step_on() {
         let after = |start: f64, steps: &[f32]| {
             steps.iter().try_fold(bpm(start), |tempo, &detents| {
-                TempoChange::Step(detents).own(Some(tempo), None)
+                TempoChange::Step(detents).own(Some(tempo), Some(start))
             })
         };
         let near = |left: Option<::kithara::warp::BeatsPerMinute>, right: f64| {
-            left.is_some_and(|tempo| (f64::from(tempo) - right).abs() < 1e-9)
+            left.is_some_and(|tempo| (f64::from(tempo) - right).abs() < 1e-4)
         };
 
         assert!(

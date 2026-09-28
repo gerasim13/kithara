@@ -1127,7 +1127,7 @@ mod tests {
                 "the released deck steps off the tempo it kept",
                 ENTRY,
                 publish,
-                |rig| bpm(rig).as_deref() == Some("125.9"),
+                |rig| bpm(rig).as_deref() == Some("125.8"),
             );
 
             rig.send("deck-a/tempo", ControlAction::Activate);
