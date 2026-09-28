@@ -1,7 +1,6 @@
 use std::{num::NonZeroUsize, thread};
 
-use kithara_signal::sanitize_sample;
-use kithara_test_utils::kithara;
+use kithara::signal::sanitize_sample;
 
 const BLOCK: u32 = 1 << 16;
 const BLOCK_LEN: usize = 1 << 16;
@@ -25,7 +24,7 @@ fn check_blocks(first: usize, step: usize) {
         for (sample, bits) in samples.iter_mut().zip(patterns.clone()) {
             *sample = f32::from_bits(bits);
         }
-        kithara_dsp::sanitize(&mut samples);
+        kithara::dsp::sanitize(&mut samples);
         for (sample, bits) in samples.iter().zip(patterns) {
             let expected = sanitize_sample(f32::from_bits(bits));
             assert_eq!(sample.to_bits(), expected.to_bits(), "pattern {bits:#010x}");

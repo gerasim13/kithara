@@ -184,12 +184,12 @@ apple MODE="xcframework" *ARGS:
             ARCHS=arm64 \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO || exit 1
         selection=(-only-testing:KitharaDemoUnitTests_iOS/IntegrationRegressionsIOS)
-        log="$TMPDIR/kithara-integration-regressions.log"
+        log="${TMPDIR:-/tmp}/kithara-integration-regressions.log"
         if [[ -n "$only_test" ]]; then
           selection=(
             "-only-testing:KitharaDemoUnitTests_iOS/IntegrationRegressionsIOS/${only_test}()"
           )
-          log="$TMPDIR/kithara-integration-regressions-$only_test.log"
+          log="${TMPDIR:-/tmp}/kithara-integration-regressions-$only_test.log"
         fi
         rc=0
         KITHARA_LOCAL_DEV=1 TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \

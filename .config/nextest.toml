@@ -27,6 +27,7 @@ not (
     + binary_id(=kithara-platform::flash_spawn)
     + binary_id(=kithara-integration-tests)
     + package(kithara-ui)
+    + package(kithara-ui-gallery)
     + package(kithara-ui-input)
     + package(kithara-ui-shaping)
     + (package(kithara-app) & test(/^gui::/))
@@ -168,9 +169,9 @@ store-failure-output = true
 # Repeated per profile: nextest inherits settings from `default`, but not
 # override lists, so a lane on `ci` would otherwise run it beside the rest.
 [[profile.default.overrides]]
-filter = 'binary_id(=kithara-ui::ui_memory) and test(=checks::a_settled_page_stays_inside_its_budget_on_every_host)'
+filter = 'binary_id(=kithara-ui-gallery::ui_memory) and test(=checks::a_settled_page_stays_inside_its_budget_on_every_host)'
 threads-required = "num-test-threads"
 
 [[profile.ci.overrides]]
-filter = 'binary_id(=kithara-ui::ui_memory) and test(=checks::a_settled_page_stays_inside_its_budget_on_every_host)'
+filter = 'binary_id(=kithara-ui-gallery::ui_memory) and test(=checks::a_settled_page_stays_inside_its_budget_on_every_host)'
 threads-required = "num-test-threads"

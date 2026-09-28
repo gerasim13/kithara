@@ -38,18 +38,25 @@ fn lookup<'a>(lanes: &'a BTreeMap<String, CiLaneConfig>, name: &str) -> Result<&
     }
 }
 
-/// The one thing a lane is handed rather than works out: where this executor
-/// builds.
+/// What a lane is handed rather than works out: where this executor builds,
+/// and the kind of pipeline it runs in.
 ///
 /// A step spells its own build directory as `{target}`, and the checkout is
 /// the wrong answer wherever the executor named another one - Cargo would
 /// write where it was told while the lane looked for the binaries somewhere
-/// nothing had written. Nothing else is copied: a child already inherits this
-/// process's environment, and [`Process`] layers what it is given on top.
-fn executor_vars(target_dir: Option<OsString>) -> BTreeMap<OsString, OsString> {
-    target_dir
-        .map(|target| BTreeMap::from([(OsString::from("CARGO_TARGET_DIR"), target)]))
-        .unwrap_or_default()
+/// nothing had written. The kind arrives only as this process's argument, so a
+/// step that reads it - the weekly health report adds semver-checks - would
+/// otherwise never see it. Nothing else is copied: a child already inherits
+/// this process's environment, and [`Process`] layers what it is given on top.
+fn executor_vars(target_dir: Option<OsString>, kind: PipelineKind) -> BTreeMap<OsString, OsString> {
+    let mut vars = BTreeMap::from([(
+        OsString::from("KITHARA_PIPELINE_KIND"),
+        OsString::from(kind.name()),
+    )]);
+    if let Some(target) = target_dir {
+        vars.insert(OsString::from("CARGO_TARGET_DIR"), target);
+    }
+    vars
 }
 
 pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
@@ -68,7 +75,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<OsString>) -> Result<()
         (Some(dir), None) => Some(LaneBuild::claim(&ctx.root, Path::new(dir))?),
         _ => None,
     };
-    let process = Process::new(&ctx.root, executor_vars(target_dir));
+    let process = Process::new(&ctx.root, executor_vars(target_dir, args.kind));
     let outcome = crate::ci::run::journalled(&process, &args.lane, || {
         declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
     });
@@ -78,7 +85,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<OsString>) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs, path::Path};
+    use std::{env, ffi::OsStr, fs, path::Path};
 
     use super::*;
     use crate::ci::config::{fixture, workspace_root};
@@ -92,11 +99,34 @@ mod tests {
     fn a_lane_builds_where_the_executor_said() {
         let root = Path::new("/runner/_work/kithara/kithara");
 
-        let handed = Process::new(root, executor_vars(Some(OsString::from("/cache/target"))));
-        let bare = Process::new(root, executor_vars(None));
+        let handed = Process::new(
+            root,
+            executor_vars(Some(OsString::from("/cache/target")), PipelineKind::Branch),
+        );
+        let bare = Process::new(root, executor_vars(None, PipelineKind::Branch));
 
         assert_eq!(handed.target_dir(), Path::new("/cache/target"));
         assert_eq!(bare.target_dir(), root.join("target"));
+    }
+
+    /// The weekly health report runs semver-checks only when it reads the
+    /// weekly kind, and a GitHub job hands the kind to this process alone.
+    #[test]
+    fn a_lane_tells_its_steps_the_kind_it_runs_in() {
+        let process = Process::new(
+            Path::new("/runner/_work/kithara/kithara"),
+            executor_vars(None, PipelineKind::Weekly),
+        );
+
+        let command = process.command("just");
+
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "KITHARA_PIPELINE_KIND"
+                    && value == Some(OsStr::new("weekly"))),
+            "{command:?}"
+        );
     }
 
     // A lane name that is not in the catalog must answer with the catalog,

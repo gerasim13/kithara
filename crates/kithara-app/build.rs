@@ -24,11 +24,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[path = "src/document/bake.rs"]
-mod bake;
-#[path = "src/document/merge.rs"]
-mod merge;
-
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"));
@@ -52,7 +47,7 @@ fn main() {
     let env_map = load_env(&dotenv_path);
     let target_arch =
         env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH is set by cargo");
-    let baked = bake::bake(&target_arch, &yaml_src, &web_src, &env_map)
+    let baked = kithara_app_document::bake(&target_arch, &yaml_src, &web_src, &env_map)
         .unwrap_or_else(|e| panic!("bake the configuration document: {e}"));
     println!("cargo:rerun-if-env-changed=KITHARA_DRM_REQUIRE");
 

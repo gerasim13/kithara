@@ -6,10 +6,11 @@ use std::{
 use kithara_test_utils::kithara;
 
 use super::{
-    ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4MetadataError, Mp4Visitor, parse_data_box,
-    parse_elst, parse_itunsmpb, parse_mdhd, parse_mvhd_timescale, scan_mp4, sniff_mp4_codec,
+    ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4MetadataError, Mp4Visitor,
+    parse::{parse_data_box, parse_elst, parse_itunsmpb, parse_mdhd, parse_mvhd_timescale},
+    scan_mp4, sniff_mp4_codec,
 };
-use crate::test_pools::pools;
+use crate::{test_pools::pools, traits::DecoderInput};
 
 mod cursors {
 
@@ -132,7 +133,7 @@ impl Mp4Visitor for RecordingVisitor {
     }
 }
 
-fn record(reader: &mut dyn super::DecoderInput) -> RecordingVisitor {
+fn record(reader: &mut dyn DecoderInput) -> RecordingVisitor {
     let mut visitor = RecordingVisitor::default();
     scan_mp4(reader, &mut visitor, &pools()).expect("BUG: scan");
     visitor

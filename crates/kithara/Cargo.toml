@@ -50,6 +50,7 @@ all = [
     "decode",
     "download",
     "drm",
+    "dsp",
     "encode",
     "events",
     "fdk-aac",
@@ -89,6 +90,7 @@ bufpool = ["dep:kithara-bufpool"]
 decode = ["dep:kithara-decode"]
 download = ["dep:kithara-download"]
 drm = ["dep:kithara-drm"]
+dsp = ["dep:kithara-dsp"]
 effects = ["dep:kithara-effects"]
 encode = ["dep:kithara-encode"]
 events = ["dep:kithara-events"]
@@ -302,10 +304,12 @@ usdt = [
     "kithara-stream?/usdt",
     "kithara-sync?/usdt",
     "kithara-test-utils/usdt",
+    "kithara-warp?/usdt",
     "kithara-worker?/usdt",
 ]
 mock = [
     "kithara-abr?/mock",
+    "kithara-assets?/mock",
     "kithara-audio?/mock",
     "kithara-decode?/mock",
     "kithara-effects?/mock",
@@ -315,6 +319,7 @@ mock = [
     "kithara-stream?/mock",
     "kithara-sync?/mock",
     "kithara-test-utils/mock",
+    "kithara-warp?/mock",
 ]
 perf = [
     "kithara-audio?/perf",
@@ -396,6 +401,7 @@ kithara-bufpool = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true, default-features = false }
 kithara-download = { workspace = true, optional = true, default-features = false }
 kithara-drm = { workspace = true, optional = true }
+kithara-dsp = { workspace = true, optional = true }
 kithara-effects = { workspace = true, optional = true }
 kithara-encode = { workspace = true, optional = true, default-features = false }
 kithara-events = { workspace = true, optional = true }

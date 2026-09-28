@@ -10,6 +10,8 @@ mod error;
 mod event;
 pub mod index;
 mod layout;
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
 mod resource;
 mod store;
 #[cfg(not(target_arch = "wasm32"))]

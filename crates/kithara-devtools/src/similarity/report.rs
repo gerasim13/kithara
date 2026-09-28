@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::{
     Direction, Profile, Substitution,
     analysis::{AbstractionRef, AnalysisReport, Candidate, Recommendation},
+    chains::{self, ChainReport},
 };
 use crate::consts;
 
@@ -52,6 +53,7 @@ struct Manifest<'a> {
     abstractions: usize,
     cached_comparisons: usize,
     candidates: usize,
+    chains: usize,
     interned_shapes: usize,
     scanned_files: usize,
 }
@@ -63,11 +65,13 @@ pub(super) fn write(
     roots: &[String],
     include_default_excluded: bool,
     report: &AnalysisReport,
+    chains: &ChainReport,
 ) -> Result<ArtifactSet> {
     fs::create_dir_all(output)
         .with_context(|| format!("create similarity output: {}", output.display()))?;
     write_json(&output.join("report.json"), report)?;
     write_json(&output.join("graph.json"), &graph(report))?;
+    write_json(&output.join("chains.json"), chains)?;
     write_json(
         &output.join("manifest.json"),
         &Manifest {
@@ -75,8 +79,8 @@ pub(super) fn write(
             profile,
             roots,
             include_default_excluded,
-            schema_version: consts::COLLECT_SCHEMA_VERSION,
-            status: if report.candidates.is_empty() {
+            schema_version: consts::SIMILARITY_SCHEMA_VERSION,
+            status: if report.candidates.is_empty() && chains.chains.is_empty() {
                 "clean"
             } else {
                 "findings"
@@ -84,9 +88,11 @@ pub(super) fn write(
             scanned_files: report.scanned_files,
             abstractions: report.abstractions,
             candidates: report.candidates.len(),
+            chains: chains.chains.len(),
             interned_shapes: report.interned_shapes,
             cached_comparisons: report.cached_comparisons,
             files: BTreeMap::from([
+                ("chains", "chains.json"),
                 ("document", "report.md"),
                 ("graph", "graph.json"),
                 ("manifest", "manifest.json"),
@@ -95,7 +101,10 @@ pub(super) fn write(
         },
     )?;
     let document = output.join("report.md");
-    write_text(&document, &markdown(revision, profile, report))?;
+    let mut text = markdown(revision, profile, report);
+    text.push('\n');
+    text.push_str(&chains::markdown(chains));
+    write_text(&document, &text)?;
     Ok(ArtifactSet { document })
 }
 
@@ -109,7 +118,7 @@ fn graph(report: &AnalysisReport) -> Graph<'_> {
         }
     }
     Graph {
-        schema_version: consts::COLLECT_SCHEMA_VERSION,
+        schema_version: consts::SIMILARITY_SCHEMA_VERSION,
         nodes: nodes
             .into_iter()
             .map(|(id, abstraction)| GraphNode { abstraction, id })
@@ -349,18 +358,17 @@ fn write_text(path: &Path, value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::similarity::analysis::analyze_source;
+    use crate::similarity::{analysis::analyze_source, chains::ChainConfig};
 
     #[test]
     fn writes_revision_scoped_explainable_artifacts() {
-        let report = analyze_source(
-            "src/lib.rs",
-            r#"
+        let source = r#"
                 struct Left<T> { values: Vec<T> }
                 struct Right<U> { values: VecDeque<U> }
-            "#,
-        )
-        .expect("analysis report");
+            "#;
+        let report = analyze_source("src/lib.rs", source).expect("analysis report");
+        let sources = [("crates/demo/src/lib.rs".to_owned(), source.to_owned())];
+        let chains = chains::detect(&sources, &ChainConfig::default()).expect("chain report");
         let temp = tempfile::tempdir().expect("tempdir");
 
         let roots = vec!["crates/demo/src".to_owned()];
@@ -371,11 +379,18 @@ mod tests {
             &roots,
             false,
             &report,
+            &chains,
         )
         .expect("write artifacts");
 
         assert_eq!(artifacts.document, temp.path().join("report.md"));
-        for file in ["report.md", "report.json", "graph.json", "manifest.json"] {
+        for file in [
+            "report.md",
+            "report.json",
+            "graph.json",
+            "chains.json",
+            "manifest.json",
+        ] {
             assert!(temp.path().join(file).is_file(), "missing {file}");
         }
         let markdown = fs::read_to_string(&artifacts.document).expect("read Markdown report");
@@ -383,11 +398,12 @@ mod tests {
         assert!(markdown.contains("Right"));
         assert!(markdown.contains("Type substitutions"));
         assert!(markdown.contains("```mermaid"));
+        assert!(markdown.contains("## Parallel chains"));
         let manifest: serde_json::Value = serde_json::from_slice(
             &fs::read(temp.path().join("manifest.json")).expect("read manifest"),
         )
         .expect("manifest JSON");
-        assert_eq!(manifest["schema_version"], 2);
+        assert_eq!(manifest["schema_version"], 3);
         assert_eq!(manifest["roots"][0], "crates/demo/src");
         assert_eq!(manifest["include_default_excluded"], false);
     }

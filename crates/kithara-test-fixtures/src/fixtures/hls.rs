@@ -184,15 +184,15 @@ pub fn load_variant(input: &VariantInput) -> io::Result<Fmp4Package> {
     let relative_root = Path::new(asset.entry().path)
         .parent()
         .ok_or_else(|| Error::new(ErrorKind::NotFound, "HLS catalog has no namespace"))?;
-    Ok(Fmp4Package {
-        init_segment: fs::read(crate::store::file(&relative_root.join(&artifact.init))?)?,
-        media_segments: artifact
+    Ok(Fmp4Package::new(
+        fs::read(crate::store::file(&relative_root.join(&artifact.init))?)?,
+        artifact
             .media
             .iter()
             .map(|path| fs::read(crate::store::file(&relative_root.join(path))?))
             .collect::<io::Result<_>>()?,
-        segment_durations_secs: artifact.durations.clone(),
-    })
+        artifact.durations.clone(),
+    ))
 }
 
 /// Read a registered raw HLS WAV body.

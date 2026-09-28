@@ -1,10 +1,12 @@
 #[cfg(not(target_arch = "wasm32"))]
-#[path = "native.rs"]
-mod platform;
+mod native;
+#[cfg(not(target_arch = "wasm32"))]
+use native as platform;
 
 #[cfg(target_arch = "wasm32")]
-#[path = "wasm.rs"]
-mod platform;
+mod wasm;
+#[cfg(target_arch = "wasm32")]
+use wasm as platform;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod panic_dump;
@@ -12,14 +14,15 @@ mod panic_dump;
 mod shared;
 
 #[cfg(not(target_arch = "wasm32"))]
-#[path = "detector_native.rs"]
-mod detector;
+mod detector_native;
 
 #[cfg(target_arch = "wasm32")]
-#[path = "detector_wasm.rs"]
-mod detector;
+mod detector_wasm;
 
-pub use detector::HangDetector;
+#[cfg(not(target_arch = "wasm32"))]
+pub use detector_native::HangDetector;
+#[cfg(target_arch = "wasm32")]
+pub use detector_wasm::HangDetector;
 #[cfg(not(target_arch = "wasm32"))]
 pub use panic_dump::{install_panic_dump, suppress_expected_panic_dumps};
 #[doc(hidden)]

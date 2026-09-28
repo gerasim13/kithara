@@ -3,10 +3,9 @@ use std::ops::Range;
 use kithara_bufpool::HasPool;
 use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
 
-use super::HlsVariant;
-use crate::segment::PlannedFetch;
+use crate::{segment::PlannedFetch, variant::HlsVariant};
 
-pub(super) enum RangeGate {
+pub(in crate::variant) enum RangeGate {
     Eof,
     Metadata(SourcePhase),
     Pending,
@@ -20,7 +19,7 @@ where
     /// Reads the membership mirror rather than the queue lock, since this runs on the produce core
     /// inside `phase_at`, where a blocking lock would spin into `sched_yield` under planner
     /// contention in a real-time context.
-    pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
+    pub(in crate::variant) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
         self.flow.queue.planned(planned)
     }
 
@@ -54,7 +53,7 @@ where
         }
     }
 
-    pub(super) fn range_gate(&self, range: &Range<u64>) -> Option<RangeGate> {
+    pub(in crate::variant) fn range_gate(&self, range: &Range<u64>) -> Option<RangeGate> {
         self.range_gate_with(range, || {})
     }
 
@@ -84,7 +83,7 @@ where
     }
 
     /// Returns whether a resource covering `range` settled terminally.
-    pub(super) fn range_has_failed(&self, range: &Range<u64>) -> bool {
+    pub(in crate::variant) fn range_has_failed(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
         let end = if !uses_seek_alias && total > 0 {
@@ -266,7 +265,7 @@ where
     /// Wait phase of `range`; `on_demand` sees every planned or in-flight
     /// fetch the range still needs bytes from. The query itself is pure —
     /// only the wait filing in `wait_range` passes a writing visitor.
-    pub(super) fn range_wait_phase_with(
+    pub(in crate::variant) fn range_wait_phase_with(
         &self,
         range: &Range<u64>,
         on_demand: impl FnMut(PlannedFetch),

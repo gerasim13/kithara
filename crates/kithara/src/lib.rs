@@ -72,6 +72,11 @@ pub mod decode {
     pub use kithara_decode::*;
 }
 
+#[cfg(feature = "dsp")]
+pub mod dsp {
+    pub use kithara_dsp::*;
+}
+
 #[cfg(feature = "effects")]
 pub mod effects {
     pub use kithara_effects::*;

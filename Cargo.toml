@@ -6,6 +6,7 @@ members = [
     "crates/kithara-analysis",
     "crates/kithara-android",
     "crates/kithara-app",
+    "crates/kithara-app-document",
     "crates/kithara-apple",
     "crates/kithara-assets",
     "crates/kithara-audio",
@@ -25,6 +26,8 @@ members = [
     "crates/kithara-events",
     "crates/kithara-ffi",
     "crates/kithara-file",
+    "crates/kithara-fixture-gen",
+    "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
     "crates/kithara-mp4",
@@ -48,6 +51,7 @@ members = [
     "crates/kithara-ui",
     "crates/kithara-ui-capture",
     "crates/kithara-ui-draw",
+    "crates/kithara-ui-gallery",
     "crates/kithara-ui-input",
     "crates/kithara-ui-lottie",
     "crates/kithara-ui-shaping",
@@ -56,29 +60,22 @@ members = [
     "crates/kithara-worker",
     "crates/kithara-workspace-hack",
     "tests",
-    "tests/crates/abr",
     "tests/crates/analysis",
     "tests/crates/app",
-    "tests/crates/assets",
     "tests/crates/audio",
     "tests/crates/broadcast",
-    "tests/crates/bufpool",
     "tests/crates/core",
     "tests/crates/decode",
     "tests/crates/dsp",
     "tests/crates/effects",
-    "tests/crates/encode",
-    "tests/crates/events",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
-    "tests/crates/net",
-    "tests/crates/platform",
+    "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
-    "tests/crates/storage",
     "tests/crates/stream",
     "tests/crates/sync",
     "tests/crates/warp",
@@ -104,6 +101,8 @@ default-members = [
     "crates/kithara-encode",
     "crates/kithara-events",
     "crates/kithara-file",
+    "crates/kithara-fixture-gen",
+    "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
     "crates/kithara-derive",
@@ -128,6 +127,7 @@ default-members = [
     "crates/kithara-ui",
     "crates/kithara-ui-capture",
     "crates/kithara-ui-draw",
+    "crates/kithara-ui-gallery",
     "crates/kithara-ui-input",
     "crates/kithara-ui-lottie",
     "crates/kithara-ui-shaping",
@@ -135,29 +135,22 @@ default-members = [
     "crates/kithara-waveform",
     "crates/kithara-worker",
     "tests",
-    "tests/crates/abr",
     "tests/crates/analysis",
     "tests/crates/app",
-    "tests/crates/assets",
     "tests/crates/audio",
     "tests/crates/broadcast",
-    "tests/crates/bufpool",
     "tests/crates/core",
     "tests/crates/decode",
     "tests/crates/dsp",
     "tests/crates/effects",
-    "tests/crates/encode",
-    "tests/crates/events",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
-    "tests/crates/net",
-    "tests/crates/platform",
+    "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
-    "tests/crates/storage",
     "tests/crates/stream",
     "tests/crates/sync",
     "tests/crates/warp",
@@ -287,6 +280,7 @@ kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha5", default-f
 kithara-analysis = { path = "crates/kithara-analysis", version = "0.0.1-alpha5", default-features = false }
 kithara-android = { path = "crates/kithara-android", version = "0.0.1-alpha5" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
+kithara-app-document = { path = "crates/kithara-app-document" }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha5" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha5", default-features = false }
 kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha5", default-features = false }
@@ -307,6 +301,8 @@ kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha5", def
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha5", default-features = false }
 kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha5", default-features = false }
+kithara-fixture-gen = { path = "crates/kithara-fixture-gen", version = "0.0.1-alpha5", default-features = false }
+kithara-fixture-media = { path = "crates/kithara-fixture-media", version = "0.0.1-alpha5", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha5", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha5", default-features = false }
 kithara-integration-tests = { path = "tests", default-features = false }
@@ -659,25 +655,16 @@ strip = "none"
 # Product dependencies stay optimized; test packages spend their build in LLVM
 # and do not contain the runtime being measured. Cargo profile overrides require
 # exact workspace package names, so each test package is listed here.
-[profile.test-release.package.kithara-abr-tests]
-opt-level = 1
-
 [profile.test-release.package.kithara-analysis-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-app-tests]
 opt-level = 1
 
-[profile.test-release.package.kithara-assets-tests]
-opt-level = 1
-
 [profile.test-release.package.kithara-audio-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-broadcast-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-bufpool-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-core-test-fixtures]
@@ -690,12 +677,6 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-effects-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-encode-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-events-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-ffi-web-analysis-tests]
@@ -716,19 +697,13 @@ opt-level = 1
 [profile.test-release.package.kithara-integration-tests]
 opt-level = 1
 
-[profile.test-release.package.kithara-net-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-platform-tests]
+[profile.test-release.package.kithara-host-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-play-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-queue-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-storage-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-stream-tests]

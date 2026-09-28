@@ -6,6 +6,8 @@ pub(crate) mod keys;
 pub(crate) mod master;
 pub(crate) mod parse;
 pub(crate) mod playlist_cache;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod playlist_cache_tests;
 pub(crate) mod state;
 pub(crate) mod variant_playlist;
 

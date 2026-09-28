@@ -56,3 +56,12 @@ pub(crate) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
 pub(crate) const LOAD_ALPHA: f32 = 0.2;
 
 pub(crate) const MS_PER_SEC: f64 = 1000.0;
+
+#[cfg(test)]
+pub(crate) const DROPPED_AFTER_CANCEL: u8 = 2;
+
+#[cfg(test)]
+pub(crate) const DROPPED_BEFORE_CANCEL: u8 = 1;
+
+#[cfg(test)]
+pub(crate) const NOT_DROPPED: u8 = 0;

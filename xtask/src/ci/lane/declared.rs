@@ -105,12 +105,7 @@ fn restore_target_layer(
 ) -> Result<Option<String>> {
     let mc = process.resolve_program(tools.program("mc"))?;
     let cargo_home = process
-        .environment_path("CARGO_HOME")
-        .or_else(|| {
-            process
-                .environment_path("HOME")
-                .map(|home| home.join(".cargo"))
-        })
+        .cargo_home()
         .context("prepared CI environment has no CARGO_HOME")?;
     let started = Instant::now();
     let outcome =
@@ -224,7 +219,7 @@ fn is_source_publisher(kind: &str, trust: CacheTrust) -> bool {
 }
 
 fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBuf, PathBuf)> {
-    let cargo_home = process.environment_path("CARGO_HOME")?;
+    let cargo_home = process.cargo_home()?;
     match process.resolve_program(tools.program("mc")) {
         Ok(mc) => Some((cargo_home, mc)),
         Err(error) => {

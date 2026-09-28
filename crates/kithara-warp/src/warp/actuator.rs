@@ -7,9 +7,9 @@ use {
 
 use super::WarpConfig;
 #[cfg(feature = "render")]
-use super::WarpRenderer;
-#[cfg(feature = "render")]
 use crate::RenderReader;
+#[cfg(feature = "render")]
+use crate::WarpRenderer;
 use crate::{RenderPublisher, StretchControls};
 
 /// Resident warp actuator around one decoded-audio source.

@@ -1,0 +1,22 @@
+[package]
+name = "kithara-app-document"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Layer the application configuration document and bake the references it names."
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[dependencies]
+serde_yaml_ng = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+
+[lints]
+workspace = true

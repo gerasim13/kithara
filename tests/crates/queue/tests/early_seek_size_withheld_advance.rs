@@ -9,7 +9,7 @@
 //! is mid-seek into an in-range region.
 //!
 //! Determinism: no `sleep`, no real-time pacing. The
-//! [`PackagedTestServer`] withhold gate controls the seek-target segment's
+//! A packaged-ladder withhold gate controls the seek-target segment's
 //! **body** (GET parked); segment-aware fMP4 deliberately does not use startup
 //! HEAD size probes. The audio graph is pulled one block at a time via the
 //! product offline Host and the queue is ticked synchronously between
@@ -36,9 +36,10 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, TestTempDir, event::TestEvent, kithara,
-    offline::OfflineHostHarness,
+    CreatedHls, SegmentGateHandle, TestServerHelper, event::TestEvent, hls_server::packaged_ladder,
+    kithara, offline::OfflineHostHarness,
 };
+use kithara_test_utils::TestTempDir;
 
 use crate::bufpool_ext::{Pools, TestPools, pools};
 
@@ -187,8 +188,9 @@ enum Trigger {
 // pins — and is owned by the seek-stall workstream. Mixing it in would make
 // this otherwise-deterministic guard flaky.
 
-/// No eager exact size, body open: seek lands while only placeholder geometry
-/// is available.
+/// Size withheld: the seek lands while only placeholder geometry is
+/// available. Body withheld too: it lands on an undelivered segment, the
+/// closest model of the genuinely-immediate user seek.
 #[kithara::test(
     tokio,
     multi_thread,
@@ -197,45 +199,18 @@ enum Trigger {
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
-async fn immediate_seek_size_withheld(
-    #[future(awt)] gated_source: (PackagedTestServer, SegmentGateHandle),
+#[case::size_withheld(GateMode { withhold_head: true, withhold_body: false })]
+#[case::size_and_body_withheld(GateMode { withhold_head: true, withhold_body: true })]
+async fn immediate_seek(
+    #[future(awt)] gated_source: (CreatedHls, SegmentGateHandle),
+    #[case] mode: GateMode,
 ) {
-    run_case(
-        gated_source,
-        GateMode {
-            withhold_head: true,
-            withhold_body: false,
-        },
-    )
-    .await;
+    run_case(gated_source, mode).await;
 }
 
-/// Body withheld: seek lands on an undelivered segment — the closest model of
-/// the genuinely-immediate user seek.
-#[kithara::test(
-    tokio,
-    multi_thread,
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(1),
-    tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
-)]
-async fn immediate_seek_size_and_body_withheld(
-    #[future(awt)] gated_source: (PackagedTestServer, SegmentGateHandle),
-) {
-    run_case(
-        gated_source,
-        GateMode {
-            withhold_head: true,
-            withhold_body: true,
-        },
-    )
-    .await;
-}
-
-async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: GateMode) {
-    let (server, gate) = gated_source;
-    // `with_segment_gate` parks the body by default. Apply the requested mode.
+async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode) {
+    let (hls, gate) = gated_source;
+    // A registered gate parks the body by default. Apply the requested mode.
     if mode.withhold_head {
         gate.withhold_head();
     }
@@ -243,7 +218,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         gate.release();
     }
 
-    let master = server.url("/master.m3u8");
+    let master = hls.master_url();
     let temp = TestTempDir::new();
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -298,17 +273,13 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         .run(&queue, move |q| q.select(id0, Transition::None))
         .await
         .expect("select track 0");
-    harness
-        .run(&queue, kithara::queue::QueueControl::play)
-        .await;
+    harness.run(&queue, QueueControl::play).await;
     assert_eq!(queue.current_index(), Some(0), "starts on track 0");
 
     // Warm up: render some blocks so segment 0 decodes and the track is
     // genuinely playing before the seek arrives.
     for _ in 0..WARMUP_BLOCKS {
-        let _ = harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await;
+        let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
     }
     assert_eq!(
@@ -327,9 +298,7 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
     let mut trigger = Trigger::NoTerminal;
     let mut outcome = Outcome::HeldOnTrack;
     for _ in 0..OBSERVE_BLOCKS {
-        let _ = harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await;
+        let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let TestEvent::Player(pe) = ev {
@@ -386,11 +355,9 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
             // *in-withheld-window* contract only.)
         }
         Outcome::AutoAdvanced { new_index, trigger } => {
-            harness
-                .run(&queue, kithara::queue::QueueControl::clear)
-                .await;
+            harness.run(&queue, QueueControl::clear).await;
             drop(queue);
-            drop(server);
+            drop(hls);
             panic!(
                 "PRODUCTION CASCADE REPRODUCED (mode={mode:?}): an immediate seek to \
                  {SEEK_TARGET_SECS}s into a non-final segment that was not yet \
@@ -402,11 +369,9 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         }
     }
 
-    harness
-        .run(&queue, kithara::queue::QueueControl::clear)
-        .await;
+    harness.run(&queue, QueueControl::clear).await;
     drop(queue);
-    drop(server);
+    drop(hls);
     harness.close().await;
 }
 
@@ -434,6 +399,12 @@ async fn wait_loaded(
 }
 
 #[kithara::fixture]
-async fn gated_source() -> (PackagedTestServer, SegmentGateHandle) {
-    PackagedTestServer::with_segment_gate(GATED_VARIANT, GATED_SEGMENT).await
+async fn gated_source() -> (CreatedHls, SegmentGateHandle) {
+    let helper = TestServerHelper::new().await;
+    let hls = helper
+        .create_hls(packaged_ladder())
+        .await
+        .expect("create packaged ladder");
+    let gate = helper.register_segment_gate(hls.token(), GATED_VARIANT, GATED_SEGMENT);
+    (hls, gate)
 }

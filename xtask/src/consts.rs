@@ -180,16 +180,18 @@ pub(crate) const TARGET_HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
 // stale claim. A live helper refreshes this every 30 seconds.
 pub(crate) const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
-pub(crate) const CLIENT_KEYS: [&str; 8] = [
+/// What only the host can say about a scope's store: where it is, and the
+/// credentials its bucket policy admits. A cache client cannot run without
+/// these.
+pub(crate) const CACHE_HOST_KEYS: [&str; 4] = [
     "SCCACHE_BUCKET",
-    "SCCACHE_S3_KEY_PREFIX",
     "SCCACHE_ENDPOINT",
-    "SCCACHE_REGION",
-    "SCCACHE_S3_USE_SSL",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
-    "AWS_EC2_METADATA_DISABLED",
 ];
+
+/// The region every cache scope is provisioned in.
+pub(crate) const CACHE_REGION: &str = "us-east-1";
 
 /// Where sccache keeps its objects inside a scope's bucket.
 ///
@@ -559,7 +561,7 @@ pub(crate) const ELEMENT_PATH: &str = "clock-components/title";
 
 /// What a page of the gallery, and a shipped studio page, are allowed to
 /// differ by before the programme ends non-zero.
-pub(crate) const GALLERY_BUDGET: &str = "crates/kithara-ui/examples/gallery/parity-budget.txt";
+pub(crate) const GALLERY_BUDGET: &str = "crates/kithara-ui-gallery/parity-budget.txt";
 
 /// The sets this programme writes, cleared before it starts so a set left
 /// by an earlier run cannot be compared as if this run had taken it.

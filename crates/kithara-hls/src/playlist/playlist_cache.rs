@@ -144,7 +144,3 @@ where
         self.config.write().master_url = Some(url);
     }
 }
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "../../tests/support/playlist_cache.rs"]
-mod tests;

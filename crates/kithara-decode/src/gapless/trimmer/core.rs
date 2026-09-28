@@ -753,7 +753,3 @@ fn chunk_frames(chunk: &AudioChunk) -> u64 {
 fn usize_from_u64_saturating(value: u64) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

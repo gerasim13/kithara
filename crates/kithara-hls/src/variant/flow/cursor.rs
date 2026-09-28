@@ -3,8 +3,7 @@ use std::sync::atomic::Ordering;
 use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 
-use super::HlsVariant;
-use crate::consts;
+use crate::{consts, variant::HlsVariant};
 
 impl<S> HlsVariant<S>
 where
@@ -14,7 +13,7 @@ where
     /// look-ahead window, or [`NO_PREFETCH_DEFERRAL`](consts::NO_PREFETCH_DEFERRAL) when nothing is
     /// deferred. Written by [`HlsVariant::dispatch`] on every pass, so it
     /// always describes the decision the peer last took.
-    pub(super) fn defer_prefetch_until(&self, byte: u64) {
+    pub(in crate::variant) fn defer_prefetch_until(&self, byte: u64) {
         self.flow.prefetch_resume_at.store(byte, Ordering::Release);
     }
 

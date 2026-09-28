@@ -10,7 +10,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use tracing::info;
 
-use super::required;
+use super::{client::provisioned_environment, required};
 use crate::{
     ci::host::mac::{read_secret, write_secure},
     consts,
@@ -238,23 +238,7 @@ fn write_environment(
     password: &str,
 ) -> Result<()> {
     let mut file = tempfile::NamedTempFile::new_in(directory)?;
-    for (name, value) in [
-        ("SCCACHE_BUCKET", bucket),
-        ("SCCACHE_S3_KEY_PREFIX", consts::SCCACHE_PREFIX),
-        ("SCCACHE_ENDPOINT", endpoint),
-        ("SCCACHE_REGION", "us-east-1"),
-        (
-            "SCCACHE_S3_USE_SSL",
-            if endpoint.starts_with("https://") {
-                "true"
-            } else {
-                "false"
-            },
-        ),
-        ("AWS_ACCESS_KEY_ID", key),
-        ("AWS_SECRET_ACCESS_KEY", password),
-        ("AWS_EC2_METADATA_DISABLED", "true"),
-    ] {
+    for (name, value) in provisioned_environment(bucket, endpoint, key, password)? {
         writeln!(file, "{name}={value}")?;
     }
     file.persist(directory.join("cache.env"))?;

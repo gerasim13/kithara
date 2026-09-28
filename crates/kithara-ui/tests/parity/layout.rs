@@ -862,7 +862,7 @@ fn builtin_layouts_match_rect_fixtures() {
         let ui = compile(
             preset,
             &builtin::resolver(),
-            &crate::common::registry::player_registry(),
+            &kithara_ui::mock::player_registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
@@ -929,7 +929,7 @@ fn split_weights_reach_layout_as_f32() {
     let ui = compile(
         "fractional.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -997,7 +997,7 @@ fn a_padded_measuring_row_reads_its_bands_against_the_declared_box() {
     let ui = compile(
         "banded.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -1105,7 +1105,7 @@ const SCENE: &str = r#"(schema: "kithara.module", version: 1, id: "scene", chrom
 /// Where a placement's child ended up in the scene around it, measured against
 /// the marker that stands at the stage's own origin.
 fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     for category in [EndpointCategory::Model, EndpointCategory::Parameter] {
         registry.insert(category, "scene.at", EndpointDesc::new(ValueKind::Point));
     }
@@ -1152,20 +1152,21 @@ fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
 
 /// A placement moves the box its child is laid out in, so the immediate host
 /// puts the child where the document says rather than drawing it there and
-/// leaving the box that answers the pointer behind.
+/// leaving the box that answers the pointer behind. The point is the
+/// application's: the same compiled document lays the child out where the
+/// endpoint now answers.
 #[kithara::test]
-fn a_placement_lays_its_child_out_at_the_point_the_document_wrote() {
-    assert_eq!(scene_placement(&FixtureReads::default()), (40.0, 24.0));
-}
-
-/// And the point is the application's: the same compiled document lays the
-/// child out where the endpoint now answers.
-#[kithara::test]
-fn a_placement_lays_its_child_out_at_the_point_its_endpoint_answers() {
-    let reads = FixtureReads {
+#[case::the_document_wrote(FixtureReads::default(), (40.0, 24.0))]
+#[case::its_endpoint_answers(
+    FixtureReads {
         placed: Some(Pt { x: 120.0, y: 60.0 }),
         ..FixtureReads::default()
-    };
-
-    assert_eq!(scene_placement(&reads), (120.0, 60.0));
+    },
+    (120.0, 60.0)
+)]
+fn a_placement_lays_its_child_out_at_the_point(
+    #[case] reads: FixtureReads,
+    #[case] point: (f32, f32),
+) {
+    assert_eq!(scene_placement(&reads), point);
 }

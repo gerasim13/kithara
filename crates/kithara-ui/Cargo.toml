@@ -29,6 +29,8 @@ capture = [
     "dep:kithara-ui-capture",
 ]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "kithara-ui-input/masonry", "vello"]
+# Test doubles the integration suites share: a hand-filled endpoint registry.
+mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
 # Hand the no-block gate the platform layer the toolkit draws through, so a
@@ -114,10 +116,9 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
     "client-reqwest",
     "tls-rustls",
 ] }
-kithara-ui = { path = ".", default-features = false, features = ["usdt"] }
+kithara-ui = { path = ".", default-features = false, features = ["mock", "usdt"] }
 
 bitflags = { workspace = true }
-clap = { workspace = true }
 criterion = { workspace = true }
 futures-lite = { workspace = true }
 iced_renderer = { workspace = true }
@@ -129,52 +130,18 @@ ron = { workspace = true }
 serde_yaml_ng = { workspace = true }
 # The emitter is measured against the renderer it was written from.
 velato = { workspace = true }
-# The budget guard reads the renderer's bump allocators back, which vello only
-# does when this is on. A dev-dependency so a shipped build keeps the fast path
-# rather than a readback on every frame.
-vello = { workspace = true, features = ["debug_layers"] }
 
 [lints]
 workspace = true
-
-[[example]]
-name = "gallery"
-# The gallery photographs its own pages and compares two hosts, which is what
-# `capture` carries. A build without it has no gallery rather than a gallery
-# that cannot answer the question it exists for.
-required-features = ["capture"]
-# The gallery is the program; what checks it is `tests/gallery/main.rs`, which takes
-# these same modules by path. Building the example as a test target too would
-# run every one of those checks twice.
-test = false
 
 [[example]]
 name = "masonry_host"
 required-features = ["masonry"]
 test = true
 
-# Its own binary: the graphics device counts bytes for the whole process, so a
-# reading taken beside another drawing test would measure that test too.
-[[test]]
-name = "ui_memory"
-path = "tests/ui_memory/main.rs"
-required-features = ["capture"]
-
-# Its own binary for the same reason `ui_memory` is: it draws, and a drawing
-# test beside that one is counted into its readings.
-[[test]]
-name = "ui_buffers"
-path = "tests/ui_buffers/main.rs"
-required-features = ["capture", "masonry"]
-
 [[test]]
 name = "frame_perf"
 path = "perf/frame/main.rs"
-required-features = ["perf", "iced", "masonry"]
-
-[[test]]
-name = "page_perf"
-path = "perf/page/main.rs"
 required-features = ["perf", "iced", "masonry"]
 
 [[bench]]

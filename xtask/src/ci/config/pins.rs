@@ -455,8 +455,7 @@ mod tests {
             .collect()
     }
 
-    /// Every `.rs` under the executor, including the modules a `#[path]`
-    /// attribute pulls in from a file of their own.
+    /// Every `.rs` under the executor.
     fn executor_sources(directory: &Path) -> Vec<PathBuf> {
         let mut sources = Vec::new();
         for entry in fs::read_dir(directory).unwrap() {
@@ -474,12 +473,9 @@ mod tests {
     /// fixture says `/opt/homebrew` and the launch agents built from it are
     /// asserted against that. So the claim is about production text, and a
     /// module's tests are its tail, from `#[cfg(test)] mod tests` to the end
-    /// of the file. A test module living in a file of its own is named for it.
+    /// of the file. A test module living in a file of its own is `tests.rs`.
     fn production_text(source: &Path, text: &str) -> String {
-        if source
-            .file_stem()
-            .is_some_and(|stem| stem.to_string_lossy().ends_with("_tests"))
-        {
+        if source.file_stem().is_some_and(|stem| stem == "tests") {
             return String::new();
         }
         let lines: Vec<&str> = text.lines().collect();

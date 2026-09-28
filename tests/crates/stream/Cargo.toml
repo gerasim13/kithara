@@ -13,8 +13,8 @@ client-reqwest = ["kithara/client-reqwest"]
 client-wreq = ["kithara/client-wreq"]
 tls-rustls = ["kithara/tls-rustls"]
 tls-native = ["kithara/tls-native"]
-flash = ["kithara/flash"]
-no-block = ["kithara/no-block"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = [
@@ -25,10 +25,10 @@ kithara = { workspace = true, default-features = false, features = [
     "stream",
     "tokio-net",
 ] }
+kithara-integration-tests = { workspace = true, default-features = false, features = ["stream"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
-futures = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]
