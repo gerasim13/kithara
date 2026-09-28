@@ -38,7 +38,10 @@ pub(crate) enum WishStage {
     /// Asked for on each publish while the Host waits for beats the track's
     /// grid does not cover yet.
     WaitsForBeats,
-    /// The Host took the ask; its next answer speaks for it.
+    /// The Host took the ask. An ask for ON is done at the Host's next
+    /// answer; an ask for OFF is done once the mode leaves the Host timeline,
+    /// since the Host may take a release it cannot make yet and keep the
+    /// deck where it is.
     Admitted,
 }
 
@@ -94,12 +97,12 @@ impl DeckSync {
 
     /// Takes in the Host's answer and names the intent to ask it for: the
     /// ask, while the accepted mode does not meet it. An ask the mode meets,
-    /// or one the Host took, is done and the mode speaks from then on, so an
-    /// alignment the Host rejects later is not asked for again.
+    /// or an ask for ON the Host took, is done and the mode speaks from then
+    /// on, so an alignment the Host rejects later is not asked for again.
     pub(super) fn observe(&mut self, report: SyncReport) -> Option<SyncIntent> {
         self.reported = Some(report);
         let Wish { on, stage } = self.wish?;
-        if stage == WishStage::Admitted || on == (report.mode == SyncMode::HostSync) {
+        if (on && stage == WishStage::Admitted) || on == (report.mode == SyncMode::HostSync) {
             self.wish = None;
             return None;
         }
@@ -327,6 +330,34 @@ mod tests {
             "the Host answered the ask it took; its rejection is no call for a fresh one"
         );
         assert!(!sync.wants_on());
+    }
+
+    #[kithara::test]
+    fn a_release_the_host_took_but_deferred_is_asked_again_until_the_deck_leaves() {
+        let mut sync = DeckSync::default();
+        assert_eq!(
+            sync.observe(report(SyncMode::HostSync, SyncPhase::Locked)),
+            None
+        );
+        sync.request(false);
+        assert_eq!(
+            sync.observe(report(SyncMode::HostSync, SyncPhase::Locked)),
+            Some(SyncIntent::Disable)
+        );
+        sync.answer(consts::DECK, &Ok(()));
+
+        assert_eq!(
+            sync.observe(report(SyncMode::HostSync, SyncPhase::WaitingForGrid)),
+            Some(SyncIntent::Disable),
+            "a release the Host could not make yet keeps the deck on its timeline"
+        );
+        assert!(!sync.wants_on(), "the press stands");
+        sync.answer(consts::DECK, &Ok(()));
+        assert_eq!(
+            sync.observe(report(SyncMode::LocalSync, SyncPhase::Preparing)),
+            None
+        );
+        assert_eq!(sync.wish, None, "the deck left the Host timeline");
     }
 
     #[kithara::test]
