@@ -32,19 +32,19 @@ pub struct SyncGateBinding {
 impl SyncGateBinding {
     /// Bind the Host-owned arbiter to the cell of one attached member.
     #[must_use]
-    pub fn new(arbiter: Arc<SyncArbiter>, cell: Arc<PermitCell>) -> Self {
+    pub(crate) fn new(arbiter: Arc<SyncArbiter>, cell: Arc<PermitCell>) -> Self {
         Self { arbiter, cell }
     }
 
     /// Session arbiter shared with the audio callback.
     #[must_use]
-    pub fn arbiter(&self) -> &SyncArbiter {
+    pub(crate) fn arbiter(&self) -> &SyncArbiter {
         &self.arbiter
     }
 
     /// Stable cell for this player's track member.
     #[must_use]
-    pub fn cell(&self) -> &PermitCell {
+    pub(crate) fn cell(&self) -> &PermitCell {
         &self.cell
     }
 
@@ -179,7 +179,7 @@ impl Drop for SourceReservation {
 
 /// Stable per-member claim identity. The Host allocates and retains the cell;
 /// an RT ticket carries a reference to that same allocation.
-pub struct PermitCell {
+pub(crate) struct PermitCell {
     pub(super) member: BeatGridId,
     pub(super) permit_revision: AtomicU64,
     pub(super) retired: AtomicBool,
@@ -194,7 +194,7 @@ pub struct PermitCell {
 impl PermitCell {
     /// Allocate one cell for the lifetime of `member`'s Host registration.
     #[must_use]
-    pub const fn new(member: BeatGridId) -> Self {
+    pub(crate) const fn new(member: BeatGridId) -> Self {
         Self {
             member,
             permit_revision: AtomicU64::new(1),
@@ -206,7 +206,7 @@ impl PermitCell {
 
     /// Identity this cell was allocated for.
     #[must_use]
-    pub const fn member(&self) -> BeatGridId {
+    pub(crate) const fn member(&self) -> BeatGridId {
         self.member
     }
 }

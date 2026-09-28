@@ -12,9 +12,11 @@ pub use activation::{
     SyncCallback, SyncKind, SyncReturn, SyncTicket, TicketRoom, TrackDisposal, activation_channels,
 };
 pub use arbiter::{
-    AppliedSource, ArmPermit, ControlEnterError, ControlError, ControlGuard, PendingSourceChange,
-    PermitCell, PreparedRevocation, SourceReservation, SourceRevision, SyncArbiter,
+    AppliedSource, ArmPermit, ControlEnterError, ControlError, SourceReservation, SourceRevision,
     SyncGateBinding,
+};
+pub(crate) use arbiter::{
+    ControlGuard, PendingSourceChange, PermitCell, PreparedRevocation, SyncArbiter,
 };
 pub use command::SyncExecution;
 pub use executor::SyncExecutor;

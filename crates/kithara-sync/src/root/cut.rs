@@ -5,9 +5,9 @@ use kithara_warp::{BeatGrid, BeatGridId, BeatGridStamp, MapAxis};
 
 use super::{RegisteredCell, RootError, RootPort};
 use crate::{
-    ControlError, ControlGuard, GroupState, ParentGridUpdate, PermitCell, PreparedRevocation,
-    PublicOperation, SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncMode, SyncOperation,
-    SyncRejected, SyncTransition, TopologyOperation,
+    ControlError, GroupState, ParentGridUpdate, PublicOperation, SyncAdmission, SyncCapability,
+    SyncError, SyncGroup, SyncMode, SyncOperation, SyncRejected, SyncTransition, TopologyOperation,
+    execution::{ControlGuard, PermitCell, PreparedRevocation},
 };
 
 /// An owner cut that holds Control but has not yet heard the audio callback,
@@ -119,7 +119,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
         let Some(index) = self.cells.iter().position(|entry| entry.member() == member) else {
             return Ok(None);
         };
-        self.control.retire_cell(&self.cells[index].cell)?;
+        self.cells[index].cell.retire_cell(&self.control)?;
         Ok(Some(self.cells.remove(index).group))
     }
 
@@ -174,7 +174,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
 /// Revocations preflighted under the cut's Control for every cell an owner
 /// change may replace, before that change, and published after it commits.
 pub(super) struct Fence<'cut> {
-    prepared: Vec<(BeatGridId, PreparedRevocation<'cut, 'cut, 'cut>)>,
+    prepared: Vec<(BeatGridId, PreparedRevocation<'cut>)>,
 }
 
 impl<'cut> Fence<'cut> {
@@ -205,8 +205,7 @@ impl<'cut> Fence<'cut> {
         let prepared = cells
             .into_iter()
             .map(|cell| {
-                control
-                    .preflight_revoke(cell)
+                cell.preflight_revoke(control)
                     .map(|revoke| (cell.member(), revoke))
             })
             .collect::<Result<_, _>>()?;

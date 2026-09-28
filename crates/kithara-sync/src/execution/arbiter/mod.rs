@@ -5,10 +5,9 @@ mod gate;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use cell::PermitState;
-pub use cell::{
-    AppliedSource, ArmPermit, PermitCell, SourceReservation, SourceRevision, SyncGateBinding,
-};
-pub use control::{ControlError, ControlGuard, PendingSourceChange, PreparedRevocation};
-pub(crate) use gate::ClaimError;
-pub use gate::{ControlEnterError, SyncArbiter};
+pub use cell::{AppliedSource, ArmPermit, SourceReservation, SourceRevision, SyncGateBinding};
+pub(crate) use cell::{PermitCell, PermitState};
+pub use control::ControlError;
+pub(crate) use control::{ControlGuard, PendingSourceChange, PreparedRevocation};
+pub use gate::ControlEnterError;
+pub(crate) use gate::{ClaimError, SyncArbiter};

@@ -11,12 +11,11 @@ mod root;
 
 pub use execution::{
     ActivationAudio, ActivationControl, ActivationDeck, ActivationHead, ActivationResident,
-    AppliedSource, ArmPermit, BlockSource, ControlEnterError, ControlError, ControlGuard,
-    ExecutedGroup, LoadedMedia, PendingSourceChange, PermitCell, PreparedFirst, PreparedRevocation,
-    ReceiptSink, ReturnRoom, ReturnedTicket, SourceReservation, SourceRevision, StagePort, Staged,
-    SyncArbiter, SyncAttachment, SyncAttempt, SyncCallback, SyncExecution, SyncExecutor,
-    SyncGateBinding, SyncKind, SyncReceiptAck, SyncReceiptInbox, SyncReceiptTx, SyncReturn,
-    SyncTicket, TicketRoom, TrackDisposal, activation_channels, sync_receipts,
+    AppliedSource, ArmPermit, BlockSource, ControlEnterError, ControlError, ExecutedGroup,
+    LoadedMedia, PreparedFirst, ReceiptSink, ReturnRoom, ReturnedTicket, SourceReservation,
+    SourceRevision, StagePort, Staged, SyncAttachment, SyncAttempt, SyncCallback, SyncExecution,
+    SyncExecutor, SyncGateBinding, SyncKind, SyncReceiptAck, SyncReceiptInbox, SyncReceiptTx,
+    SyncReturn, SyncTicket, TicketRoom, TrackDisposal, activation_channels, sync_receipts,
 };
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{

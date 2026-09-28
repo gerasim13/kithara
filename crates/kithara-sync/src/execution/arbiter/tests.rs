@@ -55,11 +55,10 @@ fn audio_claim<'a, 'r>(
 }
 
 fn permit(binding: &SyncGateBinding) -> ArmPermit {
+    let control = binding.arbiter().try_control().expect("owner enters");
     binding
-        .arbiter()
-        .try_control()
-        .expect("owner enters")
-        .mint_permit(binding.cell(), stamp(binding.cell().member()))
+        .cell()
+        .mint_permit(&control, stamp(binding.cell().member()))
         .expect("permit")
 }
 
@@ -71,11 +70,11 @@ fn control_and_audio_claims_have_one_winner() {
     let (mut a_receipts, _a_inbox) = sync_receipts();
     let (mut b_receipts, _b_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
-    let a_permit = control
-        .mint_permit(&a, stamp(a.member()))
+    let a_permit = a
+        .mint_permit(&control, stamp(a.member()))
         .expect("a permit");
-    let b_permit = control
-        .mint_permit(&b, stamp(b.member()))
+    let b_permit = b
+        .mint_permit(&control, stamp(b.member()))
         .expect("b permit");
     assert!(arbiter.try_control().is_none());
     assert!(matches!(
@@ -102,13 +101,13 @@ fn revocation_is_affected_member_only() {
     let (mut a_receipts, _a_inbox) = sync_receipts();
     let (mut b_receipts, _b_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
-    let a_permit = control
-        .mint_permit(&a, stamp(a.member()))
+    let a_permit = a
+        .mint_permit(&control, stamp(a.member()))
         .expect("a permit");
-    let b_permit = control
-        .mint_permit(&b, stamp(b.member()))
+    let b_permit = b
+        .mint_permit(&control, stamp(b.member()))
         .expect("b permit");
-    control.preflight_revoke(&a).expect("preflight a").revoke();
+    a.preflight_revoke(&control).expect("preflight a").revoke();
     drop(control);
 
     assert!(matches!(
@@ -129,13 +128,13 @@ fn retired_member_cannot_rearm_while_another_member_claims() {
     let (mut b_receipts, _b_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
     let a_stamp = stamp(a.member());
-    let a_permit = control.mint_permit(&a, a_stamp).expect("a permit");
-    let b_permit = control
-        .mint_permit(&b, stamp(b.member()))
+    let a_permit = a.mint_permit(&control, a_stamp).expect("a permit");
+    let b_permit = b
+        .mint_permit(&control, stamp(b.member()))
         .expect("b permit");
-    control.retire_cell(&a).expect("a is quiescent");
+    a.retire_cell(&control).expect("a is quiescent");
     assert!(matches!(
-        control.mint_permit(&a, a_stamp),
+        a.mint_permit(&control, a_stamp),
         Err(ControlError::CellRetired)
     ));
     drop(control);
@@ -154,8 +153,8 @@ fn claim_releases_owner_only_after_explicit_receipt_completion() {
     let cell = cell();
     let (mut cell_receipts, _cell_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
-    let permit = control
-        .mint_permit(&cell, stamp(cell.member()))
+    let permit = cell
+        .mint_permit(&control, stamp(cell.member()))
         .expect("permit");
     drop(control);
     let claim = audio_claim(&arbiter, &permit, &cell, &mut cell_receipts).expect("audio claims");
@@ -170,8 +169,8 @@ fn the_owner_waits_until_the_claim_spends_its_receipt_pair() {
     let cell = cell();
     let (mut receipts, mut inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
-    let permit = control
-        .mint_permit(&cell, stamp(cell.member()))
+    let permit = cell
+        .mint_permit(&control, stamp(cell.member()))
         .expect("permit");
     assert!(matches!(
         audio_claim(&arbiter, &permit, &cell, &mut receipts),
@@ -205,7 +204,7 @@ fn revision_exhaustion_is_rejected_before_revocation() {
         .permit_revision
         .store(u64::MAX, Ordering::Release);
     assert!(matches!(
-        control.preflight_revoke(&permit_spent),
+        permit_spent.preflight_revoke(&control),
         Err(ControlError::RevisionExhausted)
     ));
 }
@@ -216,8 +215,8 @@ fn abandoned_claim_can_be_tombstoned_after_audio_quiesces() {
     let cell = cell();
     let (mut cell_receipts, _cell_inbox) = sync_receipts();
     let control = arbiter.try_control().expect("owner enters");
-    let permit = control
-        .mint_permit(&cell, stamp(cell.member()))
+    let permit = cell
+        .mint_permit(&control, stamp(cell.member()))
         .expect("permit");
     drop(control);
     let claim = audio_claim(&arbiter, &permit, &cell, &mut cell_receipts).expect("audio claims");
@@ -262,9 +261,9 @@ fn a_reserved_source_parks_its_claim_while_another_member_claims() {
         .expect("an unrelated member claims while a is reserved")
         .finish();
     let control = arbiter.try_control().expect("owner enters");
-    assert_eq!(control.source_change(a.cell()), None);
-    control
-        .retire_cell(b.cell())
+    assert_eq!(a.cell().source_change(&control), None);
+    b.cell()
+        .retire_cell(&control)
         .expect("retirement ignores reservations");
     drop(control);
     drop(reservation);
@@ -295,14 +294,16 @@ fn a_permit_minted_during_an_edit_waits_for_its_outcome() {
         Err(ClaimError::SourceParked)
     ));
     let control = arbiter.try_control().expect("owner enters");
-    let observed = control
-        .source_change(binding.cell())
+    let observed = binding
+        .cell()
+        .source_change(&control)
         .expect("the committed edit is pending");
-    control
-        .preflight_revoke(binding.cell())
+    binding
+        .cell()
+        .preflight_revoke(&control)
         .expect("preflight")
         .revoke();
-    control.acknowledge_source_change(binding.cell(), observed);
+    binding.cell().acknowledge_source_change(&control, observed);
     drop(control);
     assert_eq!(
         binding.permit_state(&stale),
@@ -323,8 +324,8 @@ fn an_unpublished_reservation_aborts_without_a_change() {
     assert_eq!(binding.source_revision(), before);
     assert_eq!(binding.permit_state(&permit), PermitState::Current);
     let control = arbiter.try_control().expect("owner enters");
-    assert_eq!(control.source_change(binding.cell()), None);
-    assert_eq!(control.current_source(binding.cell()), Ok(before));
+    assert_eq!(binding.cell().source_change(&control), None);
+    assert_eq!(binding.cell().current_source(&control), Ok(before));
     drop(control);
     audio_claim(&arbiter, &permit, binding.cell(), &mut binding_receipts)
         .expect("the unchanged source still claims")
@@ -355,8 +356,9 @@ fn a_published_change_coalesces_and_holds_the_old_permit_until_withdrawal() {
     ));
 
     let control = arbiter.try_control().expect("owner enters");
-    let observed = control
-        .source_change(binding.cell())
+    let observed = binding
+        .cell()
+        .source_change(&control)
         .expect("a committed change is pending");
     assert_eq!(
         observed.change(),
@@ -364,17 +366,21 @@ fn a_published_change_coalesces_and_holds_the_old_permit_until_withdrawal() {
         "a later timing change cannot hide the jump"
     );
     assert!(matches!(
-        control.mint_permit(binding.cell(), stamp(binding.cell().member())),
+        binding
+            .cell()
+            .mint_permit(&control, stamp(binding.cell().member())),
         Err(ControlError::SourceChanged)
     ));
-    control
-        .preflight_revoke(binding.cell())
+    binding
+        .cell()
+        .preflight_revoke(&control)
         .expect("preflight")
         .revoke();
-    control.acknowledge_source_change(binding.cell(), observed);
+    binding.cell().acknowledge_source_change(&control, observed);
     assert_eq!(binding.permit_state(&permit), PermitState::Withdrawn);
-    let fresh = control
-        .mint_permit(binding.cell(), stamp(binding.cell().member()))
+    let fresh = binding
+        .cell()
+        .mint_permit(&control, stamp(binding.cell().member()))
         .expect("the reconciled source mints again");
     drop(control);
     audio_claim(&arbiter, &fresh, binding.cell(), &mut binding_receipts)
@@ -407,23 +413,27 @@ fn an_acknowledgement_keeps_a_change_committed_after_its_read() {
         .expect("reserve")
         .publish(SourceChange::Discontinuity);
     let control = arbiter.try_control().expect("owner enters");
-    let observed = control
-        .source_change(binding.cell())
+    let observed = binding
+        .cell()
+        .source_change(&control)
         .expect("the first change is pending");
     binding
         .reserve_source()
         .expect("a player reserves while the owner reconciles")
         .publish(SourceChange::Discontinuity);
-    control.acknowledge_source_change(binding.cell(), observed);
+    binding.cell().acknowledge_source_change(&control, observed);
     assert_eq!(
-        control
-            .source_change(binding.cell())
+        binding
+            .cell()
+            .source_change(&control)
             .map(PendingSourceChange::change),
         Some(SourceChange::Discontinuity),
         "the change committed after the read is still pending"
     );
     assert!(matches!(
-        control.mint_permit(binding.cell(), stamp(binding.cell().member())),
+        binding
+            .cell()
+            .mint_permit(&control, stamp(binding.cell().member())),
         Err(ControlError::SourceChanged)
     ));
 }

@@ -188,7 +188,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
         self.cells
             .iter()
             .find(|entry| entry.member() == member && entry.group == group)
-            .map(|entry| self.control.current_source(&entry.cell))
+            .map(|entry| entry.cell.current_source(&self.control))
     }
 
     /// Validates `resident`, observed for `member` of the deck `target`,

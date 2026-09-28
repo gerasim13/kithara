@@ -30,7 +30,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
                     .iter()
                     .find(|entry| entry.member() == member)
                     .ok_or(RootError::MemberNotRegistered(member))?;
-                match self.control.mint_permit(&entry.cell, stamp) {
+                match entry.cell.mint_permit(&self.control, stamp) {
                     Ok(permit) => Some(permit),
                     Err(ControlError::SourceChanged) => {
                         queue_gate_failure(self.cells, receipt)?;
@@ -105,7 +105,7 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
     /// reconciliation.
     fn reconcile_sources<P: RootPort<G>>(&mut self, port: &P) -> Result<(), RootError> {
         for entry in self.cells.iter() {
-            let Some(observed) = self.control.source_change(&entry.cell) else {
+            let Some(observed) = entry.cell.source_change(&self.control) else {
                 continue;
             };
             let member = entry.member();
@@ -121,8 +121,9 @@ impl<G: SyncGroup<NestedGroup = G>> RootCut<'_, G> {
                 Err(rejected) => return Err(rejected.error().clone().into()),
             }
             fence.commit(|_| true);
-            self.control
-                .acknowledge_source_change(&entry.cell, observed);
+            entry
+                .cell
+                .acknowledge_source_change(&self.control, observed);
             port.publish(self.group);
         }
         Ok(())

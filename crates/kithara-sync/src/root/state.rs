@@ -4,8 +4,9 @@ use tracing::{debug, warn};
 
 use super::{EnteredCut, InboxAt, RootCut, RootError, RootPort, inputs::queue_gate_failure};
 use crate::{
-    ControlEnterError, GroupState, PermitCell, SyncArbiter, SyncError, SyncGateBinding, SyncGroup,
-    SyncReceipt, SyncReceiptAck, SyncReceiptInbox,
+    ControlEnterError, GroupState, SyncError, SyncGateBinding, SyncGroup, SyncReceipt,
+    SyncReceiptAck, SyncReceiptInbox,
+    execution::{PermitCell, SyncArbiter},
 };
 
 /// How long entering the root waits for an audio claim in flight before it

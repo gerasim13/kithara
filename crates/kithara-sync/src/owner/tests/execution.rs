@@ -20,10 +20,10 @@ use super::{
 };
 use crate::{
     ActivationHead, AlignmentSource, ExecutedGroup, LoadGeneration, LoadedMedia, ParentFact,
-    PermitCell, PreparedFirst, ReceiptSink, StagePort, Staged, SyncAdmission, SyncApplied,
-    SyncArbiter, SyncAttachment, SyncCapability, SyncEffect, SyncError, SyncExecutionReject,
-    SyncExecutionStamp, SyncExecutor, SyncGateBinding, SyncGroup, SyncIntent, SyncOperation,
-    SyncReceipt, SyncReceiptAck, SyncTicket,
+    PreparedFirst, ReceiptSink, StagePort, Staged, SyncAdmission, SyncApplied, SyncAttachment,
+    SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor,
+    SyncGateBinding, SyncGroup, SyncIntent, SyncOperation, SyncReceipt, SyncReceiptAck, SyncTicket,
+    execution::{PermitCell, SyncArbiter},
 };
 
 /// The first session frame no caller can use.
@@ -126,8 +126,9 @@ impl ReceiptSink for Owner {
             (Answer::RefuseInstalled, SyncReceipt::Installed(_)) => SyncReceiptAck::Refused,
             (_, SyncReceipt::Installed(stamp)) => {
                 let control = self.arbiter.try_control().expect("fake owner enters");
-                let permit = control
-                    .mint_permit(&self.cell, stamp)
+                let permit = self
+                    .cell
+                    .mint_permit(&control, stamp)
                     .expect("exact permit");
                 SyncReceiptAck::Installed(permit)
             }

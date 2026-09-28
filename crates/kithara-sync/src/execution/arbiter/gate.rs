@@ -9,7 +9,7 @@ use crate::execution::mailbox::ReceiptReservation;
 
 /// Arbitrates one session's owner mutations and audio claims without owning
 /// the synchronization ledger. The Host owns this value for the session.
-pub struct SyncArbiter {
+pub(crate) struct SyncArbiter {
     pub(super) phase: AtomicU64,
     /// Owner entries waiting for an in-progress claim; each blocks new claims.
     pub(super) owner_waiting: AtomicU64,
@@ -24,7 +24,7 @@ impl Default for SyncArbiter {
 impl SyncArbiter {
     /// Create an open session arbiter before attaching any member.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             phase: AtomicU64::new(consts::OPEN),
             owner_waiting: AtomicU64::new(0),
@@ -33,7 +33,7 @@ impl SyncArbiter {
 
     /// Enter the owner phase with one attempt. A busy owner may retry off RT.
     #[must_use]
-    pub fn try_control(&self) -> Option<ControlGuard<'_>> {
+    pub(crate) fn try_control(&self) -> Option<ControlGuard<'_>> {
         self.phase
             .compare_exchange(
                 consts::OPEN,

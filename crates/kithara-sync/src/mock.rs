@@ -6,8 +6,8 @@ use kithara_warp::BeatGridId;
 
 pub use crate::execution::ReceiptSinkMock;
 use crate::{
-    ArmPermit, ControlEnterError, ControlGuard, PendingSourceChange, PermitCell, RootError,
-    SourceChange, SyncArbiter, SyncExecutionStamp, SyncGateBinding,
+    ArmPermit, ControlEnterError, RootError, SourceChange, SyncExecutionStamp, SyncGateBinding,
+    execution::{ControlGuard, PendingSourceChange, PermitCell, SyncArbiter},
 };
 
 /// The owner of one member behind its own gate. It enters the gate as a
@@ -50,8 +50,10 @@ impl MemberOwner {
     /// Returns `Enter(Busy)` while an audio claim holds the gate.
     pub fn pending_change(&self) -> Result<Option<SourceChange>, RootError> {
         let control = self.enter()?;
-        Ok(control
-            .source_change(self.gate.cell())
+        Ok(self
+            .gate
+            .cell()
+            .source_change(&control)
             .map(PendingSourceChange::change))
     }
 
@@ -63,10 +65,12 @@ impl MemberOwner {
     /// Returns `Enter(Busy)` while an audio claim holds the gate.
     pub fn reconcile(&self) -> Result<Option<SourceChange>, RootError> {
         let control = self.enter()?;
-        let Some(observed) = control.source_change(self.gate.cell()) else {
+        let Some(observed) = self.gate.cell().source_change(&control) else {
             return Ok(None);
         };
-        control.acknowledge_source_change(self.gate.cell(), observed);
+        self.gate
+            .cell()
+            .acknowledge_source_change(&control, observed);
         Ok(Some(observed.change()))
     }
 
@@ -78,7 +82,7 @@ impl MemberOwner {
     /// cell's refusal once it is retired or its revisions are spent.
     pub fn revoke(&self) -> Result<(), RootError> {
         let control = self.enter()?;
-        control.preflight_revoke(self.gate.cell())?.revoke();
+        self.gate.cell().preflight_revoke(&control)?.revoke();
         Ok(())
     }
 
@@ -92,7 +96,7 @@ impl MemberOwner {
     /// retired, or its source changed unreconciled.
     pub fn mint(&self, stamp: SyncExecutionStamp) -> Result<ArmPermit, RootError> {
         let control = self.enter()?;
-        Ok(control.mint_permit(self.gate.cell(), stamp)?)
+        Ok(self.gate.cell().mint_permit(&control, stamp)?)
     }
 
     fn enter(&self) -> Result<ControlGuard<'_>, RootError> {

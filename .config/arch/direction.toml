@@ -65,7 +65,7 @@ crates = ["kithara-analysis", "kithara-play"]
 [[layer]]
 index = 9
 name = "queue"
-crates = ["kithara-queue"]
+crates = ["kithara-host", "kithara-queue"]
 
 [[layer]]
 index = 10
