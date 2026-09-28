@@ -26,11 +26,27 @@ use crate::RequestId;
 /// Created once at the application level, then shared (via [`Clone`]) across
 /// protocol configs. Owns the [`HttpClient`] and the runtime handle.
 /// Protocols obtain a [`PeerHandle`] via [`register`](Self::register) and
-/// issue fetches through [`PeerHandle::execute`].
+/// issue fetches through [`PeerHandle::execute`]. The download loop runs while
+/// any clone or [`PeerHandle`] is alive, and stops when the last one drops.
 #[derive(Clone, derive_more::Debug)]
 pub struct Downloader {
     #[debug(skip)]
     inner: Arc<DownloaderInner>,
+    #[debug(skip)]
+    _owner: Arc<LoopOwner>,
+}
+
+/// Held by every user-facing handle, [`Downloader`] clones and [`PeerHandle`]s
+/// alike, and never by the download loop: when the last handle goes, the loop's
+/// own subtree is cancelled, so a loop can never keep itself running.
+struct LoopOwner {
+    cancel: CancelToken,
+}
+
+impl Drop for LoopOwner {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 /// Peer registration entry sent to the download loop.
@@ -123,6 +139,9 @@ impl Downloader {
         abr_settings.cancel = Some(cancel.clone());
         let abr = AbrController::new(abr_settings);
         Self {
+            _owner: Arc::new(LoopOwner {
+                cancel: cancel.clone(),
+            }),
             inner: Arc::new(DownloaderInner {
                 soft_timeout,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -149,8 +168,11 @@ impl Downloader {
         let Some(rx) = self.inner.register_rx.lock().take() else {
             return;
         };
-        let this = self.clone();
-        Self::spawn_run(&self.inner, this, rx);
+        Self::spawn_run(Arc::clone(&self.inner), rx);
+    }
+
+    pub(super) fn next_request_id(&self) -> RequestId {
+        self.inner.next_request_id()
     }
 
     /// Register a peer and return its [`PeerHandle`].
@@ -179,7 +201,7 @@ impl Downloader {
         self.inner.register_tx.send(entry).ok();
         PeerHandle::new(
             PeerInner::builder()
-                .pool(Arc::clone(&self.inner))
+                .downloader(self.clone())
                 .cancel(cancel)
                 .cmd_tx(cmd_tx)
                 .bus(bus)
@@ -209,14 +231,17 @@ impl Downloader {
     ///   forward motion this tick. Tick the watchdog; N consecutive
     ///   stalls across the timeout window → panic.
     #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
-    async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
+    async fn run(
+        inner: Arc<DownloaderInner>,
+        mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
         let mut registry = Registry::default();
 
         loop {
             let progress = tokio::select! {
                 biased;
-                () = self.inner.cancel.cancelled() => return,
-                p = registry.tick(&self.inner, &mut register_rx) => p,
+                () = inner.cancel.cancelled() => return,
+                p = registry.tick(&inner, &mut register_rx) => p,
             };
 
             match progress {
@@ -234,11 +259,7 @@ impl Downloader {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_run(
-        inner: &DownloaderInner,
-        this: Self,
-        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
-    ) {
+    fn spawn_run(inner: Arc<DownloaderInner>, rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let Some(handle) = inner
             .runtime
             .clone()
@@ -246,29 +267,17 @@ impl Downloader {
         else {
             return;
         };
-        task::spawn_on(&handle, async move { this.run(rx).await });
+        task::spawn_on(&handle, Self::run(inner, rx));
     }
 
     /// Runs the download loop on a dedicated Web Worker: the decoder blocks the engine worker in
     /// `wait_range` via `Atomics.wait`, so a `spawn_local` loop on that same worker would never be
     /// polled and its fetches would never complete the bytes the blocking read waits for.
     #[cfg(target_arch = "wasm32")]
-    fn spawn_run(
-        _inner: &DownloaderInner,
-        this: Self,
-        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
-    ) {
+    fn spawn_run(inner: Arc<DownloaderInner>, rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         spawn(move || {
             keep_worker_alive();
-            drop(task::spawn(async move {
-                this.run(rx).await;
-            }));
+            drop(task::spawn(Self::run(inner, rx)));
         });
-    }
-}
-
-impl Drop for DownloaderInner {
-    fn drop(&mut self) {
-        self.cancel.cancel();
     }
 }

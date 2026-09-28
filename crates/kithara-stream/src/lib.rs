@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod consts;
 mod error;
 mod hooks;
 mod media;

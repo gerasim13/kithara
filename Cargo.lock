@@ -5829,6 +5829,8 @@ dependencies = [
 name = "kithara-stream-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "delegate",
+ "futures",
  "kithara",
  "kithara-integration-tests",
  "kithara-test-dylib",

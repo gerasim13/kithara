@@ -63,7 +63,7 @@ fn bracketed_on<F: FnOnce()>(flash: &FlashInner, body: F) {
     // slot on the parent BEFORE the child runs, and `mark_dedicated()` claims it
     // `Running` on the child. The test has no spawn bracket, so it does both here.
     flash.pre_count_dedicated();
-    credit::mark_dedicated();
+    credit::mark_dedicated(Location::caller());
     body();
     flash.on_participant_exit();
 }
@@ -304,6 +304,82 @@ fn a_pinning_task_reports_the_polls_it_entered() {
 
     let dump = forward::dump();
     assert!(dump.contains("polls=1"), "{dump}");
+}
+
+/// The stress report reads a wedge from these five names: it masks their
+/// values as per-attempt noise so hangs cluster by shape, and what is left is
+/// the shape itself. A rename here would silently shatter every hang into its
+/// own cluster, so the header's vocabulary is pinned on this side of the
+/// crate boundary.
+#[kithara::test(native, flash(false))]
+fn the_dump_header_names_every_way_an_advance_can_end() {
+    let _g = guard();
+    reset();
+
+    let dump = forward::dump();
+    for key in [
+        "advances=",
+        "advance_blocked=",
+        "advance_no_deadline=",
+        "advance_yield_releases=",
+        "advance_paced_wait=",
+    ] {
+        assert!(dump.contains(key), "missing {key} in {dump}");
+    }
+}
+
+/// The holder line is the dump's only lead on a wedged engine, and a spawned
+/// job claims its credit on the CHILD thread: a `#[track_caller]` claim there
+/// names the platform shim, so every blocking job in the process reads the
+/// same and the dump cannot tell a decoder rebuild from a probe. The site is
+/// therefore taken on the PARENT at spawn and carried in the reservation.
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn a_spawned_holder_is_named_by_its_spawn_site_not_the_platform_shim() {
+    let _g = guard();
+    reset();
+
+    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let holder = crate::thread::spawn_named("dump-holder", move || {
+        claimed_tx.send(()).expect("announce the claim");
+        release_rx.recv().expect("await release");
+    });
+    claimed_rx.recv().expect("the holder must claim its credit");
+
+    let dump = forward::dump();
+    release_tx.send(()).expect("release the holder");
+    holder.join().expect("holder panicked");
+
+    assert!(
+        dump.contains(&format!("resumed_from={}:", file!())),
+        "the holder must be named by its spawn site, not by the shim\n{dump}"
+    );
+}
+
+/// The holder line's age is the dump's only measure of how long the engine has
+/// been pinned, and it used to be read off the VIRTUAL clock — the clock that
+/// holder is stopping. It therefore printed 0 in exactly the case it exists
+/// for: every wedge dump of the 2026-09-26 stress run said the pin was 0 ns
+/// old after minutes of real time. It is aged on the real clock instead.
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn a_pinning_holder_is_aged_on_the_real_clock_not_the_virtual_one_it_stops() {
+    let flash = FlashInner::new_arc();
+    flash.sync_holder_running(Location::caller());
+    flash.clock.advance(5 * consts::NANOS_PER_SEC);
+
+    let dump = flash.to_string();
+    let age: u64 = dump
+        .split("held_for_real_ns=")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .expect("the dump must age its active holder");
+    assert!(
+        age < consts::NANOS_PER_SEC,
+        "the pin's age must not follow the virtual clock it stops: {age} ns\n{dump}"
+    );
 }
 
 /// A dump lists EVERY parked waiter and says nothing about which one the clock
@@ -1095,6 +1171,47 @@ fn ambient_on_yield_now_is_engine_backed() {
     assert!(task.as_mut().poll(&mut cx).is_ready());
 }
 
+/// A yielder is a RUNNABLE participant, so every turn it asks for is handed to
+/// it. Rationing them — one per virtual instant, say — strands any task that
+/// yields more than once before its first deadline, and sends the clock to the
+/// farthest park it can find while that work is still in flight. Budgets on
+/// that path then expire on the virtual clock having spent no real seconds,
+/// and the hang detectors fire on a stall that never happened.
+#[kithara::test(native, flash(false))]
+fn repeated_yields_are_each_granted_never_rationed() {
+    const YIELDS: usize = 4;
+
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut task = Box::pin(participate(
+        async {
+            for _ in 0..YIELDS {
+                yield_now().await;
+            }
+        },
+        Location::caller(),
+    ));
+
+    // Each yield costs one poll to register and is granted on the gate-park
+    // edge that ends it, so the body needs exactly one poll more than it yields.
+    let mut ready_at = None;
+    for poll in 1..=YIELDS + 1 {
+        if task.as_mut().poll(&mut cx).is_ready() {
+            ready_at = Some(poll);
+            break;
+        }
+    }
+    assert_eq!(
+        ready_at,
+        Some(YIELDS + 1),
+        "a yield turn was rationed instead of granted"
+    );
+}
+
 /// An ambient `task::spawn_blocking` closure is REAL WORK IN FLIGHT: while it
 /// runs (between engine parks) the virtual clock must not advance, or a parked
 /// sibling sees `active == 0` and jumps its deadline against time the work never
@@ -1137,6 +1254,56 @@ fn ambient_blocking_closure_pins_virtual_clock() {
         waited >= Duration::from_millis(40),
         "virtual clock advanced past a 10ms deadline while an ambient blocking \
          closure was still running (park returned after {waited:?} real)"
+    );
+}
+
+/// The other half of what a pooled closure declares: `spin_loop` is work, a
+/// cooperative yield is the absence of it, and only the first may pin the
+/// clock. Both reach the engine as one dedicated credit, so until the yield
+/// told the engine apart from the work, the one thread able to freeze the
+/// clock held the one yield unable to thaw it — a spin that outlived every
+/// virtual deadline around it, which is how
+/// `test_seek_complete_emitted_only_after_output_commit[chunk]` reached an
+/// outer kill with its holder still on CPU.
+///
+/// Mirrors [`ambient_blocking_closure_pins_virtual_clock`]: same shape, same
+/// 50ms real release, opposite verdict on the sibling's 10ms virtual park.
+#[kithara::test(native, flash(false))]
+fn a_yielding_blocking_closure_releases_the_virtual_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let _rt = rt.enter();
+    let entered = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(AtomicUsize::new(0));
+    let entered_in = Arc::clone(&entered);
+    let release_in = Arc::clone(&release);
+    let handle = crate::tokio::task::spawn_blocking(move || {
+        entered_in.store(1, Ordering::Release);
+        while release_in.load(Ordering::Acquire) == 0 {
+            crate::thread::yield_now();
+        }
+    });
+    while entered.load(Ordering::Acquire) == 0 {
+        thread::yield_now();
+    }
+    let release_timer = Arc::clone(&release);
+    let releaser = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        release_timer.store(1, Ordering::Release);
+    });
+    let start = RealInstant::now();
+    forward::park_for(Duration::from_millis(10));
+    let waited = start.elapsed();
+    releaser.join().expect("releaser thread");
+    rt.block_on(handle).expect("blocking closure joined");
+    assert!(
+        waited < Duration::from_millis(40),
+        "a yielding blocking closure held the virtual clock for its whole real \
+         lifetime: a 10ms deadline took {waited:?} real to fire"
     );
 }
 

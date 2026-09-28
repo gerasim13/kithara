@@ -89,13 +89,6 @@ impl<S> FetchClaim<Downloading, S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    /// Consume the claim without touching slot state — used for a stale
-    /// (cancelled) settle whose resource already committed: the new epoch
-    /// owns the slot, so leaving it as-is is correct.
-    pub(crate) fn abandon(mut self) {
-        self.data.settled = true;
-    }
-
     /// Build the owned in-flight handle after [`SegmentSlotState::try_claim`]
     /// wins the `Missing -> Downloading` CAS. `slot` shares the just-flipped
     /// CAS cell so a terminal transition can settle it; `variant` is the
@@ -151,8 +144,7 @@ where
         if let Some(v) = self.data.variant.upgrade() {
             v.apply_commit(&loaded);
         }
-        self.data.slot.mark_loaded();
-        self.data.settled = true;
+        self.data.settle_loaded();
         loaded
     }
 
@@ -160,14 +152,23 @@ where
     /// committed by a racing writer but reported no `final_len`, so the
     /// existing layout estimate stands.
     pub(crate) fn into_loaded_no_apply(mut self) -> FetchClaim<Loaded, S> {
-        self.data.slot.mark_loaded();
-        self.data.settled = true;
+        self.data.settle_loaded();
         FetchClaim {
             data: LoadedProof {
                 planned: self.data.planned,
                 final_len: 0,
             },
             _schema: PhantomData,
+        }
+    }
+
+    /// `Downloading -> Loaded` on a commit another writer made while this
+    /// fetch ended without one: the bytes are there, at whatever length that
+    /// commit reported.
+    fn into_committed(self, final_len: Option<u64>) -> FetchClaim<Loaded, S> {
+        match final_len {
+            Some(n) => self.into_loaded(n),
+            None => self.into_loaded_no_apply(),
         }
     }
 
@@ -241,17 +242,47 @@ where
             return;
         }
         self.slot.mark_missing();
-        let requeued = self
-            .variant
-            .upgrade()
-            .is_some_and(|variant| variant.requeue_planned(self.planned, self.plan_revision));
-        self.signal.wake_peer();
+        let requeued = self.return_to_plan();
         debug!(
             target: "kithara_hls::settle",
             planned = ?self.planned,
             requeued,
             "Downloading claim dropped without settle — slot reverted to Missing"
         );
+    }
+}
+
+impl<S> DownloadClaim<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// Land the slot `Loaded`. An eviction that overtook this settle leaves it
+    /// `Missing` instead, and the fetch is owed again just as a dropped
+    /// claim's is.
+    fn settle_loaded(&mut self) {
+        self.settled = true;
+        if self.slot.mark_loaded() {
+            return;
+        }
+        let requeued = self.return_to_plan();
+        debug!(
+            target: "kithara_hls::settle",
+            planned = ?self.planned,
+            requeued,
+            "resource evicted before its fetch settled; slot returned to Missing"
+        );
+    }
+
+    /// Put the fetch back on the plan and wake the peer to take it: dispatch
+    /// popped the plan entry when it sent this fetch, so a `Missing` slot
+    /// alone describes work nobody holds.
+    fn return_to_plan(&self) -> bool {
+        let requeued = self
+            .variant
+            .upgrade()
+            .is_some_and(|variant| variant.requeue_planned(self.planned, self.plan_revision));
+        self.signal.wake_peer();
+        requeued
     }
 }
 
@@ -322,9 +353,9 @@ where
         signal.fire();
     }
 
-    /// Dropping after a newer epoch's writer commits is race-safe (skipped once state is
-    /// `Committed`). The work returns to the plan unstamped, since stamping would fail the next
-    /// writer's first `write_at`.
+    /// A cancelled fetch still owns its slot, since eviction never takes one from its claim, so it
+    /// settles it: a commit another writer made meanwhile is adopted. Otherwise the work returns
+    /// to the plan unstamped, since stamping would fail the next writer's first `write_at`.
     fn settle_cancelled(self, bytes_written: u64) {
         let Self {
             handle,
@@ -333,7 +364,8 @@ where
             signal,
             ..
         } = self;
-        let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
+        let status = reader.status();
+        let committed = matches!(status, ResourceStatus::Committed { .. });
         debug!(
             target: "kithara_hls::settle",
             planned = ?handle.planned(),
@@ -341,9 +373,9 @@ where
             committed,
             "stale (cancelled)"
         );
-        if committed {
+        if let ResourceStatus::Committed { final_len } = status {
             drop(writer);
-            handle.abandon();
+            handle.into_committed(final_len);
         } else {
             let planned = handle.planned();
             let plan_revision = handle.plan_revision();
@@ -370,15 +402,12 @@ where
             signal,
             ..
         } = self;
-        let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
+        let status = reader.status();
+        let committed = matches!(status, ResourceStatus::Committed { .. });
         debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
-        if committed {
+        if let ResourceStatus::Committed { final_len } = status {
             drop(writer);
-            if let ResourceStatus::Committed { final_len: Some(n) } = reader.status() {
-                handle.into_loaded(n);
-            } else {
-                handle.into_loaded_no_apply();
-            }
+            handle.into_committed(final_len);
         } else {
             writer.fail(e.to_string());
             if is_terminal_fetch_error(e) {

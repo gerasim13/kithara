@@ -6,11 +6,12 @@ use kithara::{
         CancelToken,
         sync::Arc,
         thread,
-        time::{Duration, Instant},
+        time::{Duration, Instant, WallInstant},
         tokio::sync::mpsc::{self, UnboundedReceiver},
     },
     ui::render::{ControlAction, ReadValue, Reads, UiEvent, Walk},
 };
+use kithara_test_utils::clock::real_clock_verdict;
 
 use super::{app::Kithara, message::Message, reads::ReadRoot, test_fixture, update::update};
 use crate::{
@@ -36,7 +37,20 @@ pub(crate) struct Rig {
 }
 
 impl Rig {
+    /// Budget for a wait the engine answers on its own: a command lands, a
+    /// snapshot publishes, a deck reports what it opened.
     pub(crate) const DEADLINE: Duration = Duration::from_secs(2);
+
+    /// Budget for a wait that only ends once a track reaches its own end.
+    ///
+    /// Playing the track out IS the wait, so the audio is not slack inside
+    /// [`DEADLINE`](Self::DEADLINE) — a fixture as long as that constant
+    /// leaves the engine no time at all to answer, and the assert fires on a
+    /// deadline no run could have met. The track's own length carries the
+    /// budget and `DEADLINE` is what remains for the answer.
+    pub(crate) const fn playout(track: Duration) -> Duration {
+        track.saturating_add(Self::DEADLINE)
+    }
 
     pub(crate) fn applied_seq(&self) -> u64 {
         self.snapshots.load().applied_seq
@@ -216,6 +230,13 @@ impl Rig {
         }
     }
 
+    /// Drive `step` until `done`, giving up after `within`.
+    ///
+    /// The budget rides the platform clock, which under `flash` the quiescence
+    /// engine advances in one step whenever every participant parks — so it can
+    /// run out with no real time spent. The verdict says which happened, in the
+    /// wording the hang detector uses, so both read as one cluster in a stress
+    /// report.
     pub(crate) fn until(
         &mut self,
         what: &str,
@@ -224,12 +245,17 @@ impl Rig {
         mut done: impl FnMut(&mut Self) -> bool,
     ) {
         let deadline = Instant::now() + within;
+        let started_real = WallInstant::now();
         loop {
             step(self);
             if done(self) {
                 return;
             }
-            assert!(Instant::now() < deadline, "{what}: not within {within:?}");
+            assert!(
+                Instant::now() < deadline,
+                "{what}: not within {within:?} | {}",
+                real_clock_verdict(started_real, within)
+            );
             thread::paced_backoff(Duration::from_millis(5));
         }
     }

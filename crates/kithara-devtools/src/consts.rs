@@ -517,8 +517,7 @@ pub(crate) const PROC_ROOT: &str = "/proc";
 
 /// The first line the flash engine writes into a hang dump.
 #[cfg(test)]
-pub(crate) const ENGINE_COUNTERS: &str =
-    "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0";
+pub(crate) const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0 advances=812 advance_blocked=419033 advance_no_deadline=0 advance_yield_releases=7 advance_paced_wait=0";
 
 #[cfg(test)]
 pub(crate) const STEADY: &str =
