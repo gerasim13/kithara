@@ -306,7 +306,7 @@ mod tests {
         super::super::{
             dispatch::run_cmd,
             protocol::{Cmd, Reply},
-            tests::graph::{running_slot, state as test_state},
+            tests::{graph::state as test_state, running::running_slot},
         },
         *,
     };
@@ -324,7 +324,8 @@ mod tests {
 
     /// Nothing but a render runs the offline callback, so the stop of one
     /// player hands its processors back through a zero-frame poll of its
-    /// own, while the other player keeps its slot and renders on.
+    /// own, while the other player keeps its slot, the callback keeps that
+    /// slot's processor, and it renders on.
     #[kithara::test]
     fn a_stopped_player_leaves_nothing_retiring_before_the_next_render() {
         let block_frames = NonZeroU32::new(128).expect("fixture block frames");
@@ -348,10 +349,14 @@ mod tests {
             .map(|deck| {
                 deck.slots
                     .iter()
-                    .map(|nodes| nodes.slot_id)
+                    .map(|nodes| (nodes.slot_id, !nodes.sync_receipts.is_producer_gone()))
                     .collect::<Vec<_>>()
             });
-        assert_eq!(live, Some(vec![slot]), "the other player keeps its slot");
+        assert_eq!(
+            live,
+            Some(vec![(slot, true)]),
+            "the other player keeps its slot, and the callback keeps its processor"
+        );
 
         render_block(&mut state, block_frames.get(), 0, &pools())
             .expect("the other player renders on after the stop");

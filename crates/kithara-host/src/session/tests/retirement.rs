@@ -28,7 +28,8 @@ use super::{
         protocol::{Cmd, HostReply, PlayerId, Reply, SessionError, SessionStream},
         state::SessionState,
     },
-    graph::{running_slot, state as test_state},
+    graph::state as test_state,
+    running::running_slot,
 };
 use crate::{api::SlotId, error::PlayError};
 
