@@ -72,8 +72,7 @@ error-level gate or owned by another guide; this file only points at the owner.
 
 - `Arc<Mutex<Collection>>`, god-maps, `Arc<Atomic*>` as glue - AGENTS.md red-flag
   gate; `arch.no-arc-mutex-collection`, `arch.no-arc-mutex-godmap`.
-- Fallback chains and sentinel values - AGENTS.md; `rust.no-fallback-*`,
-  `rust.no-sentinel-*`.
+- Fallback paths and sentinel values - AGENTS.md; `rust.no-sentinel-*`.
 - Direct time, sleep, or rng instead of the platform - `arch.no-direct-time`,
   `arch.no-implicit-sleep`, `arch.no-implicit-rng`.
 - `unwrap()` / `expect()` in production - AGENTS.md; `clippy::unwrap_used`=deny,

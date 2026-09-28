@@ -290,12 +290,6 @@ fn unit(
     for entry in Container::environment(runner) {
         write!(unit, " --env {entry}")?;
     }
-    write!(
-        unit,
-        " --env KITHARA_CACHE_TRUST={} --env-file {}",
-        runner.cache_trust.as_str(),
-        runner.sccache_s3_env_file.display()
-    )?;
     for (volume, target) in &job.mounts {
         let mount_type = Container::mount_type(volume);
         write!(
@@ -358,10 +352,7 @@ mod tests {
     use super::*;
     use crate::{
         Cli,
-        ci::{
-            config::fixture,
-            host::linux::{permissions, profile::tests::host_fixture},
-        },
+        ci::{config::fixture, host::linux::profile::tests::host_fixture},
     };
 
     /// The container must see as many cores as it was given, because that
@@ -497,67 +488,30 @@ mod tests {
         );
     }
 
+    /// The store's host file is completed where the runner starts, so the unit
+    /// must not hand it to docker as it is: a file written before a key existed
+    /// would reach the job without it.
     #[test]
-    fn a_unit_inherits_its_own_s3_cache_environment_and_trust() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let env_file = directory.path().join("cache.env");
-        std::fs::write(
-            &env_file,
-            "SCCACHE_BUCKET=cache\nSCCACHE_S3_KEY_PREFIX=sccache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
-        )
-        .expect("write cache environment");
-        permissions::set_mode(&env_file, consts::OWNER_ONLY).expect("restrict cache environment");
-
-        let mut host = host_fixture();
-        host.runners[0].sccache_s3_env_file = env_file.clone();
-        let pins = &fixture().pins;
+    fn a_unit_leaves_the_store_to_the_runtime_environment() {
+        let host = host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
         let text = unit(
             &host,
-            host.runner("kithara-ci-octocat").expect("runner"),
+            runner,
             "0,1,2",
-            pins,
+            &fixture().pins,
             "/usr/local/bin/kithara-ci",
         )
         .expect("the unit must render");
 
         assert!(
-            text.contains(&format!("--env-file {}", env_file.display())),
+            !text.contains(&runner.sccache_s3_env_file.display().to_string()),
             "{text}"
         );
-        assert!(text.contains("--env KITHARA_CACHE_TRUST=review"), "{text}");
-    }
-
-    #[test]
-    fn a_trusted_runner_marks_only_its_own_job_as_trusted() {
-        let mut host = host_fixture();
-        host.runners[0].cache_trust = crate::ci::environment::CacheTrust::Trusted;
-        let pins = &fixture().pins;
-        let trusted = unit(
-            &host,
-            host.runner("kithara-ci-octocat").expect("runner"),
-            "0,1,2",
-            pins,
-            "/usr/local/bin/kithara-ci",
-        )
-        .expect("the unit must render");
-        let review = unit(
-            &host,
-            host.runner("kithara-ci-hubot").expect("runner"),
-            "3,4,5",
-            pins,
-            "/usr/local/bin/kithara-ci",
-        )
-        .expect("the unit must render");
-
         assert!(
-            trusted.contains("--env KITHARA_CACHE_TRUST=trusted"),
-            "{trusted}"
+            text.contains(&format!("--env-file {}", env_file(runner))),
+            "{text}"
         );
-        assert!(
-            review.contains("--env KITHARA_CACHE_TRUST=review"),
-            "{review}"
-        );
-        assert!(!review.contains("KITHARA_CACHE_TRUST=trusted"), "{review}");
     }
 
     /// The whole fleet declares one runtime directory, so systemd must be told

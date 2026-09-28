@@ -9,8 +9,11 @@ checks, handoffs, or lint failures.
   cross-crate contract.
 - The patch creates parallel mutable sources of truth instead of a staged
   ownership transfer.
-- The patch hides state bugs with fallback, retry, sentinel, "try A, else B", or
-  workaround branches.
+- The patch answers a failure with a new fallback, retry, sentinel, or
+  workaround path instead of fixing the cause in its owner, so the code gains a
+  layer per failure. Ask of each new branch: what selects it, and does another
+  path already produce the same result? A branch selected by a sibling's
+  failure that recomputes that sibling's result is a fallback.
 - The patch introduces globals, item-level lazy state, or shared mutable god-maps
   in library crates.
 - The patch uses `Arc<Mutex<HashMap<_, _>>>`, `Arc<RwLock<_>>`, or `Arc<Atomic*>`
