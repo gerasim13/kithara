@@ -97,6 +97,7 @@ fn main() -> std::process::ExitCode {
 
 fn work() -> anyhow::Result<()> {
     let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_target(false)
         .without_time()
         .compact()

@@ -2,11 +2,11 @@
 
 use std::{
     env, fs,
-    io::{self, ErrorKind, Write},
+    io::{self, BufRead, BufReader, ErrorKind, Read, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::{Arc, Barrier},
+    sync::{Arc, Barrier, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -181,6 +181,12 @@ exit 98
     }
 
     fn cached_in(&self, root: &Path, args: &[&str], target: Option<&Path>) -> Result<Output> {
+        self.cached_command(root, args, target)?
+            .output()
+            .context("run cached xtask")
+    }
+
+    fn cached_command(&self, root: &Path, args: &[&str], target: Option<&Path>) -> Result<Command> {
         let fake_cargo = self.fake_bin.join("cargo");
         let mut command = Command::new(self.active_binary()?);
         command
@@ -196,7 +202,7 @@ exit 98
             Some(target) => command.env("CARGO_TARGET_DIR", target),
             None => command.env_remove("CARGO_TARGET_DIR"),
         };
-        command.output().context("run cached xtask")
+        Ok(command)
     }
 
     fn transport(&self, root: &Path) -> Result<Output> {
@@ -342,6 +348,50 @@ exec "$SELF_CACHE_TEST_XTASK" "$@"
         assert!(!self.cargo_log.exists(), "self-cache invoked Cargo");
         assert!(!self.git_log.exists(), "self-cache invoked Git");
     }
+}
+
+/// A command whose stdout is its answer keeps it clean while it waits: the
+/// wait is announced on stderr.
+#[test]
+fn a_waiting_command_announces_on_stderr_and_keeps_stdout_for_its_answer() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    let lease = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.active_generation()?.join("lease.lock"))?;
+    let cleanup = FileLock::try_exclusive(lease)
+        .ok()
+        .context("the generation lease is free before the command starts")?;
+    let mut child = fixture
+        .cached_command(
+            &fixture.root,
+            &["self-cache", "status"],
+            Some(&fixture.target),
+        )?
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let lines = stream_lines(&mut child)?;
+
+    let (stream, waiting) = lines_until(&lines, "waiting for self-cache generation")?;
+    assert_eq!(stream, Stream::Stderr, "{waiting}");
+    drop(cleanup);
+    let rest = lines.iter().collect::<Vec<_>>();
+    assert!(child.wait()?.success());
+
+    let answer = rest
+        .iter()
+        .filter(|(stream, _)| *stream == Stream::Stdout)
+        .map(|(_, line)| line.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(answer, ["current"]);
+    assert!(
+        rest.iter().any(|(stream, line)| *stream == Stream::Stderr
+            && line.contains("took self-cache generation")),
+        "{rest:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -1020,6 +1070,55 @@ fn assert_success(output: &Output) {
         "command failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+/// Every line the child prints, tagged with the stream it came on, until
+/// both streams close.
+fn stream_lines(child: &mut Child) -> Result<mpsc::Receiver<(Stream, String)>> {
+    let (sender, receiver) = mpsc::channel();
+    forward(
+        child.stdout.take().context("child stdout is not piped")?,
+        Stream::Stdout,
+        sender.clone(),
+    );
+    forward(
+        child.stderr.take().context("child stderr is not piped")?,
+        Stream::Stderr,
+        sender,
+    );
+    Ok(receiver)
+}
+
+fn forward<R: Read + Send + 'static>(
+    reader: R,
+    stream: Stream,
+    sender: mpsc::Sender<(Stream, String)>,
+) {
+    thread::spawn(move || {
+        for line in BufReader::new(reader)
+            .lines()
+            .map_while(std::result::Result::ok)
+        {
+            if sender.send((stream, line)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// The first line containing `needle`. The condition is the child's output,
+/// not the clock: an error means the child closed both streams first.
+fn lines_until(lines: &mpsc::Receiver<(Stream, String)>, needle: &str) -> Result<(Stream, String)> {
+    lines
+        .iter()
+        .find(|(_, line)| line.contains(needle))
+        .with_context(|| format!("the child closed its output without printing `{needle}`"))
 }
 
 /// Waits for `path` while `process` is still alive.
