@@ -114,6 +114,11 @@ where
             pub fn sample_rate(&self) -> u32;
         }
         to self.tracks {
+            /// The beat grid track `id` holds now — what a load of it read, or
+            /// what its owner offered — the grid its loads publish to the Host.
+            /// `None` while the track holds none, or is not queued.
+            #[must_use]
+            pub fn beat_grid(&self, id: TrackId) -> Option<Arc<BeatGridModel>>;
             /// Hand track `id` the beat grid its owner found, such as one a local
             /// analysis produced. The load playing the track now publishes it, and so
             /// does every later load of the track; a grid equal to the one held

@@ -23,7 +23,6 @@ use super::{
     tempo::HostTempo,
 };
 use crate::{
-    analysis::TrackArtifacts,
     broadcast::Broadcaster,
     catalog,
     config::AppConfig,
@@ -414,7 +413,9 @@ impl EngineDeck {
     /// Moves the deck's tempo through whoever owns it now: the deck's own
     /// rate while it plays off the Host's timelines, the Host for a deck it
     /// released onto a timeline of its own. A deck on the Host's timeline
-    /// follows the Host's tempo and takes no change of its own.
+    /// follows the Host's tempo and takes no change of its own. A reset reads
+    /// the grid the queue holds for the current track, the grid its loads
+    /// publish to the Host.
     fn change_tempo(&mut self, change: TempoChange, host: &AppHost, owned: &HostOwned<AppQueue>) {
         let state = match host.deck_sync_state(owned) {
             Ok(state) => state,
@@ -431,10 +432,12 @@ impl EngineDeck {
                     .set_rate(self.settings.tempo.speed());
             }
             SyncMode::LocalSync => {
-                let analysed = self
-                    .controller
-                    .read(|ui| ui.analysis.as_ref().and_then(TrackArtifacts::bpm));
-                let Some(tempo) = change.own(state.accepted_tempo, analysed) else {
+                let queue = self.controller.queue();
+                let native = queue
+                    .current()
+                    .and_then(|track| queue.beat_grid(track.id))
+                    .map(|grid| grid.as_raw().bpm);
+                let Some(tempo) = change.own(state.accepted_tempo, native) else {
                     debug!(
                         ?change,
                         "tempo change dropped: the tempo it moves from is not known yet"

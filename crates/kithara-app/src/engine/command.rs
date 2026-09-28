@@ -52,20 +52,21 @@ impl TempoChange {
         }
     }
 
-    /// The deck tempo this change asks the Host for: `accepted` moved by the
-    /// steps, or the track's `analysed` BPM for a reset. `None` while the one
+    /// The deck tempo this change asks the Host for: `accepted` scaled by one
+    /// detent's factor per step, so steps compose and a step back undoes a
+    /// step on, or the track's `native` BPM for a reset. `None` while the one
     /// it needs is unknown.
     pub(crate) fn own(
         self,
         accepted: Option<BeatsPerMinute>,
-        analysed: Option<f64>,
+        native: Option<f64>,
     ) -> Option<BeatsPerMinute> {
         let bpm = match self {
             Self::Step(steps) => {
-                f64::from(accepted?)
-                    * f64::from(TempoPercent::from(steps * TempoPercent::STEP).speed())
+                let detent = f64::from(TempoPercent::from(TempoPercent::STEP).speed());
+                f64::from(accepted?) * detent.powf(f64::from(steps))
             }
-            Self::Reset => analysed?,
+            Self::Reset => native?,
         };
         BeatsPerMinute::try_from(bpm).ok()
     }
@@ -131,6 +132,29 @@ mod tests {
         );
         assert_eq!(TempoChange::Step(1.0).own(None, Some(120.0)), None);
         assert_eq!(TempoChange::Reset.own(Some(bpm(124.0)), None), None);
+    }
+
+    #[kithara::test]
+    fn own_steps_compose_and_a_step_back_undoes_a_step_on() {
+        let after = |start: f64, steps: &[f32]| {
+            steps.iter().try_fold(bpm(start), |tempo, &detents| {
+                TempoChange::Step(detents).own(Some(tempo), None)
+            })
+        };
+        let near = |left: Option<::kithara::warp::BeatsPerMinute>, right: f64| {
+            left.is_some_and(|tempo| (f64::from(tempo) - right).abs() < 1e-9)
+        };
+
+        assert!(
+            near(after(124.0, &[10.0, -10.0]), 124.0),
+            "out and back returns to 124 BPM, got {:?}",
+            after(124.0, &[10.0, -10.0])
+        );
+        let whole = after(124.0, &[3.0]).map(f64::from).unwrap_or_default();
+        assert!(
+            near(after(124.0, &[1.0, 2.0]), whole),
+            "one move split across events lands where it lands whole"
+        );
     }
 
     #[kithara::test(native, tokio, flash(false))]

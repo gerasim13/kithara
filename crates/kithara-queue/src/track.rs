@@ -185,6 +185,12 @@ where
         slot.attach(observer);
     }
 
+    /// The beat grid track `id` holds now: what a load of it read, or what
+    /// its owner offered.
+    pub(crate) fn beat_grid(&self, id: TrackId) -> Option<Arc<BeatGridModel>> {
+        self.grid_slot(id)?.read().1
+    }
+
     /// The slot every load of this track publishes its beat grid into.
     pub(crate) fn grid_slot(&self, id: TrackId) -> Option<Arc<PreparedGrid>> {
         self.lock()
@@ -558,9 +564,12 @@ mod tests {
             .offer_beat_grid(TrackId(2), grid())
             .expect("the track is queued");
 
-        let held = |id| tracks.grid_slot(id).expect("the track is queued").read().1;
-        assert_eq!(held(TrackId(2)).as_deref(), Some(&*grid()));
-        assert_eq!(held(TrackId(1)), None, "another track holds no grid");
+        assert_eq!(tracks.beat_grid(TrackId(2)).as_deref(), Some(&*grid()));
+        assert_eq!(
+            tracks.beat_grid(TrackId(1)),
+            None,
+            "another track holds no grid"
+        );
     }
 
     #[kithara::test]
@@ -571,6 +580,7 @@ mod tests {
             tracks.offer_beat_grid(TrackId(3), grid()),
             Err(QueueError::UnknownTrackId(TrackId(3)))
         ));
+        assert_eq!(tracks.beat_grid(TrackId(3)), None);
     }
 
     fn token() -> CancelToken {
