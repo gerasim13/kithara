@@ -77,9 +77,8 @@ impl<D: DriverIo> ResourceCore<D> {
                         state.available.remove(window.end..len);
                     }
                 }
-                self.inner.publish_available(&mut state);
+                self.inner.publish_available(state);
             }
-            drop(state);
         }
         self.inner.gate.notify_all();
 

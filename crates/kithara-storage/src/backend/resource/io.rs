@@ -129,8 +129,7 @@ impl<D: DriverIo> ResourceCore<D> {
                     state.available.remove(window.end..upper);
                 }
             }
-            self.inner.publish_available(&mut state);
-            drop(state);
+            self.inner.publish_available(state);
         }
         self.inner.gate.notify_all();
 
@@ -386,6 +385,40 @@ mod tests {
             displaced.upgrade().is_none(),
             "the next write frees the quiesced snapshot"
         );
+    }
+
+    /// A write frees what it retires only after releasing the gate, so a
+    /// produce-core read that takes the gate never waits on those frees. The
+    /// test holds the retire list: the write publishes and then parks on it,
+    /// and a gated read of the still active resource must answer meanwhile.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_gated_read_never_waits_on_retired_frees() {
+        let core = open_mem();
+        let retired = core.inner.retired.lock();
+
+        let writer = core.clone();
+        let (written_tx, written_rx) = mpsc::channel();
+        thread::spawn(move || {
+            written_tx.send(writer.write_at_inner(0, b"hello")).ok();
+        });
+        while !core.contains_range_inner(0..5) {
+            thread::yield_now();
+        }
+
+        let reader = core.clone();
+        let (len_tx, len_rx) = mpsc::channel();
+        thread::spawn(move || {
+            len_tx.send(reader.len_inner()).ok();
+        });
+        len_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("a gated read waited on the frees of a write");
+        drop(retired);
+
+        written_rx
+            .recv()
+            .expect("the writer reports its write")
+            .expect("active write must succeed");
     }
 
     /// Fill `[0, len)` with `value` in multiple `write_at_inner` calls so a
