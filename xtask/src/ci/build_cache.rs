@@ -14,6 +14,7 @@ use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::info;
 
+use super::lane_build;
 use crate::consts;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -174,12 +175,12 @@ fn still_there(metadata: io::Result<fs::Metadata>) -> io::Result<Option<fs::Meta
 }
 
 fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
-    if !target_dir.is_absolute() || target_dir.parent().is_none() {
+    let Some(parent) = target_dir.parent().filter(|_| target_dir.is_absolute()) else {
         bail!(
             "refusing to inspect unsafe build cache path {}",
             target_dir.display()
         );
-    }
+    };
     let metadata = fs::symlink_metadata(target_dir)
         .with_context(|| format!("reading build cache metadata for {}", target_dir.display()))?;
     if !metadata.file_type().is_dir() {
@@ -198,6 +199,9 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         active: lease_is_held(target_dir, FileLock::try_exclusive),
         locks: Vec::new(),
     };
+    let (held, lock) = slot_lock(parent)?;
+    contents.active |= held;
+    contents.locks.extend(lock);
     for entry in entries {
         let entry = entry
             .with_context(|| format!("reading an entry in build cache {}", target_dir.display()))?;
@@ -221,6 +225,8 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         let modified = metadata
             .modified()
             .with_context(|| format!("reading modification time for {}", path.display()))?;
+        let (slot_held, slot) = slot_lock(&path)?;
+        contents.locks.extend(slot);
         let scan = scan_directory(&path)?;
         contents.locks.extend(scan.locks);
         let entry = CacheEntry {
@@ -228,7 +234,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             size_bytes: scan.bytes,
             modified: scan.last_used.map_or(modified, |used| used.max(modified)),
         };
-        if scan.active {
+        if scan.active || slot_held {
             contents.held.push(entry);
         } else {
             contents.entries.push(entry);
@@ -311,11 +317,32 @@ fn cargo_lock(path: &Path) -> Result<(bool, Option<FileLock>)> {
         .write(true)
         .open(path)
         .with_context(|| format!("opening Cargo build lock {}", path.display()))?;
+    held_lock(file, path, "Cargo build lock")
+}
+
+/// The lock beside a lane slot. Held, a job builds in the slot; free, the pass
+/// takes it so no job starts in a slot the pass may remove. A directory without
+/// one is no lane slot.
+fn slot_lock(slot: &Path) -> Result<(bool, Option<FileLock>)> {
+    let path = lane_build::lock_of(slot);
+    let file = match OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((false, None)),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("opening lane slot lock {}", path.display()));
+        }
+    };
+    held_lock(file, &path, "lane slot lock")
+}
+
+/// Whether another holder has the lock, or the lock itself when nobody does.
+fn held_lock(file: File, path: &Path, what: &str) -> Result<(bool, Option<FileLock>)> {
     match FileLock::try_exclusive(file) {
         Ok(lock) => Ok((false, Some(lock))),
         Err(TryLockError::WouldBlock) => Ok((true, None)),
         Err(TryLockError::Error(error)) => {
-            Err(error).with_context(|| format!("checking Cargo build lock {}", path.display()))
+            Err(error).with_context(|| format!("checking {what} {}", path.display()))
         }
     }
 }
@@ -840,6 +867,93 @@ mod tests {
 
         drop(held);
         assert!(!candidate_entries(directory.path()).unwrap().active);
+    }
+
+    /// A slot's lock sits beside the slot, where no scan of the slot finds it.
+    /// A pass that removed a free slot while a job claimed it would leave the
+    /// job building into a tree being deleted.
+    #[test]
+    fn a_slot_whose_lock_a_job_holds_is_kept_and_a_free_one_is_locked_for_the_pass() {
+        let lanes = tempfile::tempdir().unwrap();
+        let busy = lanes.path().join("review-lane-test-0");
+        let free = lanes.path().join("review-lane-test-1");
+        fs::create_dir_all(busy.join("debug")).unwrap();
+        fs::create_dir_all(free.join("debug")).unwrap();
+        let open = |slot: &Path| {
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(lane_build::lock_of(slot))
+                .unwrap()
+        };
+        let job = FileLock::try_exclusive(open(&busy)).unwrap();
+        fs::write(lane_build::lock_of(&free), b"").unwrap();
+
+        let contents = candidate_entries(lanes.path()).unwrap();
+
+        assert!(
+            contents.held.iter().any(|entry| entry.path == busy),
+            "the slot a job holds was not charged as live"
+        );
+        assert!(
+            contents.entries.iter().all(|entry| entry.path != busy),
+            "the slot a job holds was offered for eviction"
+        );
+        assert!(
+            contents.entries.iter().any(|entry| entry.path == free),
+            "a slot nobody holds stayed out of the candidates"
+        );
+        assert!(
+            matches!(
+                FileLock::try_exclusive(open(&free)),
+                Err(TryLockError::WouldBlock)
+            ),
+            "a job could start in the slot this pass may remove"
+        );
+        drop(contents);
+        assert!(
+            FileLock::try_exclusive(open(&free)).is_ok(),
+            "the pass kept the free slot's lock after it ended"
+        );
+        drop(job);
+    }
+
+    /// On GitLab the pass starts inside the slot, at its `cargo` directory, and
+    /// the slot's lock is beside the slot, one level up.
+    #[test]
+    fn a_gitlab_slot_is_active_while_its_job_holds_the_lock_beside_it() {
+        let slots = tempfile::tempdir().unwrap();
+        let slot = slots.path().join("review-macos-aarch64-lane-apple-lint-0");
+        let cargo = slot.join("cargo");
+        fs::create_dir_all(cargo.join("debug")).unwrap();
+        let open = || {
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(lane_build::lock_of(&slot))
+                .unwrap()
+        };
+        let job = FileLock::try_exclusive(open()).unwrap();
+
+        assert!(
+            candidate_entries(&cargo).unwrap().active,
+            "the slot a job holds was offered for eviction"
+        );
+
+        drop(job);
+        let contents = candidate_entries(&cargo).unwrap();
+        assert!(!contents.active, "a slot no job holds stays reclaimable");
+        assert!(
+            matches!(
+                FileLock::try_exclusive(open()),
+                Err(TryLockError::WouldBlock)
+            ),
+            "a job could start in the slot this pass may reclaim"
+        );
     }
 
     /// The stress lane builds into a directory of its own, and a build cache no

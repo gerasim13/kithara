@@ -15,4 +15,4 @@ mod pool;
 mod prune;
 
 pub(crate) use claim::LaneBuild;
-pub(crate) use pool::SlotPool;
+pub(crate) use pool::{SlotPool, lock_of};
