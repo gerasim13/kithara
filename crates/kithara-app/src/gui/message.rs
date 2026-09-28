@@ -1,4 +1,7 @@
-use kithara::ui::render::{UiEvent, WindowCommand};
+use kithara::{
+    play::Tempo,
+    ui::render::{UiEvent, WindowCommand},
+};
 
 use crate::{
     deck::{DeckId, EqMode},
@@ -23,6 +26,8 @@ pub(crate) enum Message {
     SetEqMode(EqMode),
     /// Session-mix edit (crossfader, trim).
     Mix(MixCmd),
+    /// Ask the Host for this session tempo.
+    SetHostTempo(Tempo),
     /// Delete the current track of the focused deck (keyboard shortcut;
     /// the subscription has no access to the focus).
     DeleteFocusedTrack,

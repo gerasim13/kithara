@@ -38,9 +38,11 @@ struct Heard {
 async fn transport(harness: &ProductHarness, case: SyncCase) -> SessionTransportSnapshot {
     harness
         .host
-        .with(|host| host.session_transport())
+        .with(|host| host.tempo_state())
         .await
         .unwrap_or_else(|error| panic!("{}: read the Host transport: {error}", case.id()))
+        .processed()
+        .unwrap_or_else(|| panic!("{}: the Host graph processed no transport", case.id()))
 }
 
 /// Syncs the muted deck onto the Host, renders to [`REMOVED_AT`] once its

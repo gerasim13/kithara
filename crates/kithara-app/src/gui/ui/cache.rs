@@ -1,13 +1,13 @@
 use std::collections::BTreeSet;
 
 use kithara::{analysis::Waveform, ui::render::WaveBucket};
-use num_traits::cast::ToPrimitive;
+use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};
 use crate::{
     analysis::{TrackArtifacts, WaveformId},
     catalog::{Catalog, CatalogEntry, is_loaded},
-    engine::{DeckSnapshot, EngineSnapshot},
+    engine::{DeckSnapshot, EngineSnapshot, HostTempo},
     gui::view::track_subtitle,
 };
 
@@ -38,6 +38,10 @@ pub(in crate::gui) struct StageView {
     pub(in crate::gui) window: (f32, f32),
     pub(in crate::gui) preset: u32,
     pub(in crate::gui) host_bpm: Option<f32>,
+    /// The Host BPM field: the processed tempo, and where the target is
+    /// headed while the Host has yet to process it.
+    pub(in crate::gui) host_text: String,
+    pub(in crate::gui) host_state: String,
 }
 
 impl Default for StageView {
@@ -46,6 +50,8 @@ impl Default for StageView {
             preset: 0,
             window: (0.0, 1.0),
             host_bpm: None,
+            host_text: String::new(),
+            host_state: String::new(),
         }
     }
 }
@@ -60,6 +66,20 @@ impl StageView {
             Self::BPM_FLOOR + self.window.0 * span,
             Self::BPM_FLOOR + self.window.1 * span,
         )
+    }
+
+    fn refresh_host(&mut self, tempo: &HostTempo) {
+        self.host_bpm = tempo
+            .processed
+            .map(|processed| processed.beats_per_minute().as_());
+        self.host_text = format_bpm(self.host_bpm, 1.0);
+        self.host_state = if tempo.is_refused {
+            "REFUSED".to_owned()
+        } else if tempo.is_pending() {
+            format!("TO {:.1}", tempo.target.beats_per_minute())
+        } else {
+            String::new()
+        };
     }
 
     pub(in crate::gui) fn set_edge(&mut self, edge: WindowEdge, at: f32) {
@@ -228,7 +248,7 @@ impl ViewCache {
             cache.refresh(deck);
         }
         self.deck_marks.refresh(&snapshot.decks, catalog);
-        self.stage.host_bpm = snapshot.host_bpm;
+        self.stage.refresh_host(&snapshot.host_tempo);
         self.window.refresh(self.layout, &self.modules);
     }
 

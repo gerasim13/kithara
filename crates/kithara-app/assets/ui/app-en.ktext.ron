@@ -3,6 +3,7 @@
     schema: "kithara.text",
     version: 1,
     entries: {
+        "bar.host_tempo": "HOST BPM",
         "menu.modules": "Modules",
         "menu.layout.single": "1 DECK",
         "menu.layout.dual": "2 DECKS",

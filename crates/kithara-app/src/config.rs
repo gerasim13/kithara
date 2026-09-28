@@ -12,7 +12,7 @@ use kithara::{
     hls::HlsConfigPatch,
     net::Headers,
     platform::{CancelToken, sync::Arc},
-    play::{PlayerConfigPatch, policy::DomainKeyPolicy},
+    play::{PlayerConfigPatch, Tempo, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
     queue::QueueConfigPatch,
     worker::{DispatcherConfigPatch, Worker},
@@ -164,6 +164,10 @@ pub struct AppConfig {
     /// Band count of the EQ layout every deck's player graph is built with.
     #[builder(default = 3)]
     pub eq_bands: usize,
+    /// Session tempo the Host takes when the app starts, and the one the Host
+    /// BPM field returns to.
+    #[builder(default)]
+    pub host_tempo: Tempo,
     /// Output rate this application asks its audio session for. `None` leaves
     /// `HostConfig`'s own default standing: the Host owns the product default
     /// and refuses a player whose rate disagrees, so this names an override
@@ -222,6 +226,7 @@ impl fmt::Debug for AppConfig {
             .field("broadcast", &self.broadcast)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)
+            .field("host_tempo", &self.host_tempo)
             .field("sample_rate", &self.sample_rate)
             .field("output_block_frames", &self.output_block_frames)
             .field("beat_analysis", &self.beat_analysis)

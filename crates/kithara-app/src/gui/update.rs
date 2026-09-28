@@ -36,6 +36,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             handle_deck(state, id, &msg);
             Task::none()
         }
+        Message::SetHostTempo(tempo) => {
+            state.send(Command::App(AppCmd::SetHostTempo(tempo)));
+            Task::none()
+        }
         Message::ToggleDeckSync(deck) => {
             state.send(Command::ToggleDeckSync(deck));
             Task::none()

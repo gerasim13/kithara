@@ -18,6 +18,26 @@
                 ],
             )),
             WindowDrag(id: "drag"),
+            Row(
+                id: "host-tempo-group",
+                gap: 0.0,
+                size: (w: Shrink, h: Fill),
+                children: [
+                    Divider(id: "before-host-tempo"),
+                    Row(
+                        id: "host-tempo",
+                        gap: 6.0,
+                        pad: 11.0,
+                        size: (w: Shrink, h: Fill),
+                        write: Command(id: "tempo.host_step"),
+                        children: [
+                            Text(id: "host-tempo-label", style: MicroLabel, label: "@bar.host_tempo"),
+                            Text(id: "host-tempo-value", style: Section, read: Telemetry(id: "tempo.host")),
+                            Text(id: "host-tempo-state", style: Telemetry, read: Telemetry(id: "tempo.host_state")),
+                        ],
+                    ),
+                ],
+            ),
             Reveal(from: 1120.0, child: Row(
                 gap: 0.0,
                 size: (w: Shrink, h: Fill),

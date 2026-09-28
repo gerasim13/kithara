@@ -2,7 +2,7 @@ use arc_swap::ArcSwap;
 use kithara::{
     abr::{AbrHandle, AbrMode},
     effects::{GainDb, eq::EqBandConfig},
-    host::{SyncIntent, SyncMode},
+    host::{PlayError, SyncIntent, SyncMode},
     platform::{
         sync::Arc,
         time::Duration,
@@ -11,15 +11,16 @@ use kithara::{
             task,
         },
     },
+    play::SessionError,
     queue::Transition,
 };
-use num_traits::cast::AsPrimitive;
 use tracing::{debug, error, info};
 
 use super::{
     command::{AppCmd, Command, DeckCmd, Envelope, MixCmd},
     settings::DeckSettings,
     snapshot::{BroadcastPhase, DeckSnapshot, EngineSnapshot},
+    tempo::HostTempo,
 };
 use crate::{
     broadcast::Broadcaster,
@@ -41,6 +42,7 @@ pub(crate) struct Engine {
     has_shut_down: bool,
     drain: Option<UnboundedReceiver<Option<Duration>>>,
     decks: Vec<EngineDeck>,
+    host_tempo: HostTempo,
     applied_seq: u64,
 }
 
@@ -77,7 +79,8 @@ impl Engine {
                 }
             })
             .collect();
-        let engine = Self {
+        let mut engine = Self {
+            host_tempo: HostTempo::new(config.host_tempo),
             broadcast,
             config,
             session,
@@ -106,6 +109,7 @@ impl Engine {
     fn apply_app(&mut self, cmd: AppCmd) {
         match cmd {
             AppCmd::SetEqMode(mode) => self.set_eq_mode(mode),
+            AppCmd::SetHostTempo(tempo) => self.host_tempo.retarget(tempo),
             AppCmd::BroadcastToggle => self.toggle_broadcast(),
             AppCmd::Shutdown => self.shut_down(),
         }
@@ -134,7 +138,7 @@ impl Engine {
         const ACTIVE: Duration = Duration::from_millis(16);
         const IDLE: Duration = Duration::from_millis(500);
         let playing = self.snapshots.load().decks.iter().any(|deck| deck.playing);
-        if playing || self.broadcast.is_pending() {
+        if playing || self.broadcast.is_pending() || self.host_tempo.is_settling() {
             ACTIVE
         } else {
             IDLE
@@ -183,8 +187,38 @@ impl Engine {
         }
     }
 
-    pub(crate) fn publish(&self) {
+    pub(crate) fn publish(&mut self) {
+        self.follow_host_tempo();
         self.snapshots.store(Arc::new(self.snapshot()));
+    }
+
+    /// Reads what the Host did with the session tempo and asks it for the
+    /// target it has not taken. The Host holds one commit until its graph
+    /// processed it and answers `TransportNotProcessed` meanwhile, so the
+    /// latest target waits for a later publish.
+    fn follow_host_tempo(&mut self) {
+        let host = self.session.host();
+        let ask = match host.tempo_state() {
+            Ok(state) => self.host_tempo.observe(
+                state.accepted(),
+                state.processed().map(|transport| transport.tempo()),
+            ),
+            Err(error) => {
+                error!(target = ?self.host_tempo.target, %error, "Host refused the session tempo");
+                self.host_tempo.refuse();
+                None
+            }
+        };
+        let Some(tempo) = ask else {
+            return;
+        };
+        match host.set_tempo(tempo) {
+            Ok(()) | Err(PlayError::Session(SessionError::TransportNotProcessed)) => {}
+            Err(error) => {
+                error!(?tempo, %error, "Host refused the session tempo");
+                self.host_tempo.refuse();
+            }
+        }
     }
 
     fn rollback_eq_mode(changes: &[EqModeChange<'_>]) {
@@ -278,12 +312,7 @@ impl Engine {
             broadcast: BroadcastPhase::new(&self.broadcast),
             eq_mode: self.eq_mode,
             mix: self.session.mix().clone(),
-            host_bpm: self
-                .session
-                .host()
-                .session_transport()
-                .ok()
-                .map(|transport| transport.tempo().beats_per_minute().as_()),
+            host_tempo: self.host_tempo,
             applied_seq: self.applied_seq,
         }
     }
@@ -539,6 +568,99 @@ mod tests {
                         .position_seconds()
                         .is_some_and(|position| position >= duration * 0.8)
                 },
+            );
+        })
+        .await;
+        rig.close().await;
+    }
+
+    #[cfg(not(feature = "broadcast"))]
+    #[kithara::test(native, tokio, flash(false))]
+    async fn the_host_bpm_field_asks_the_host_and_shows_the_tempo_its_graph_processed(
+        tone_mp3: String,
+    ) {
+        use ::kithara::ui::render::ControlAction;
+
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::realtime()))
+            .await
+            .expect("rig fixture is infallible");
+        rig.call(move |rig| {
+            let accepted = |rig: &Rig| {
+                rig.engine
+                    .session
+                    .host()
+                    .tempo_state()
+                    .expect("the Host reports its tempo")
+                    .accepted()
+                    .map(|tempo| tempo.beats_per_minute())
+            };
+            let publish = |rig: &mut Rig| {
+                rig.engine.tick();
+                rig.engine.publish();
+                rig.frame();
+            };
+            let settled = |bpm: &'static str| {
+                move |rig: &mut Rig| {
+                    rig.text("tempo.host").as_deref() == Some(bpm)
+                        && rig.text("tempo.host_state").as_deref() == Some("")
+                }
+            };
+
+            rig.frame();
+            assert_eq!(
+                accepted(rig),
+                Some(120.0),
+                "the engine starts the Host at 120"
+            );
+            assert_eq!(
+                rig.text("tempo.host_state").as_deref(),
+                Some("TO 120.0"),
+                "no graph has processed it before playback"
+            );
+
+            rig.send("bar/host-tempo", ControlAction::StepScalar(4.0));
+            assert_eq!(
+                rig.text("tempo.host_state").as_deref(),
+                Some("TO 124.0"),
+                "the field shows the target before the Host has it"
+            );
+            rig.pump();
+            assert_eq!(
+                accepted(rig),
+                Some(124.0),
+                "the Host takes a tempo before its graph exists"
+            );
+
+            rig.queues[0]
+                .append(tone_mp3.as_str())
+                .expect("deck A takes the track");
+            rig.send("deck-a/play", ControlAction::Activate);
+            rig.pump();
+            rig.until(
+                "the graph starts at the stepped tempo",
+                Rig::DEADLINE,
+                publish,
+                settled("124.0"),
+            );
+
+            rig.send("bar/host-tempo", ControlAction::StepScalar(1.0));
+            rig.pump();
+            rig.send("bar/host-tempo", ControlAction::StepScalar(1.0));
+            rig.pump();
+            rig.until(
+                "the last step lands once the graph processed the one before",
+                Rig::DEADLINE,
+                publish,
+                settled("126.0"),
+            );
+
+            rig.send("bar/host-tempo", ControlAction::Activate);
+            rig.pump();
+            rig.until(
+                "the Host returns to the configured tempo",
+                Rig::DEADLINE,
+                publish,
+                settled("120.0"),
             );
         })
         .await;

@@ -892,9 +892,9 @@ impl ProductHarness {
             let _ = self.render(case, self.block_frames).await;
             if self
                 .host
-                .with(|host| host.session_transport())
+                .with(|host| host.tempo_state())
                 .await
-                .is_ok()
+                .is_ok_and(|transport| transport.processed().is_some())
             {
                 return;
             }
@@ -1061,10 +1061,12 @@ impl ProductHarness {
         case: SyncCase,
     ) -> kithara::signal::TransportRevision {
         self.host
-            .with(|host| host.session_transport())
+            .with(|host| host.tempo_state())
             .await
-            .map(|transport| transport.revision())
             .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id))
+            .processed()
+            .unwrap_or_else(|| panic!("{}: the Host graph processed no transport", case.id))
+            .revision()
     }
 
     pub(super) async fn request_sync(&mut self, case: SyncCase) {
@@ -1626,7 +1628,10 @@ async fn public_synthetic_enable_presents_matching_pcm() {
         .await
         .expect("Host tempo after the request");
     assert_eq!(
-        (requested.accepted(), requested.processed()),
+        (
+            requested.accepted(),
+            requested.processed().map(|transport| transport.tempo())
+        ),
         (Some(tempo(124.0)), Some(tempo(120.0))),
         "the Host accepts the new tempo before its graph processes it"
     );
@@ -1686,7 +1691,12 @@ async fn public_synthetic_enable_presents_matching_pcm() {
         .await
         .expect("Host tempo after the replacement");
     assert_eq!(
-        (processed_tempo.accepted(), processed_tempo.processed()),
+        (
+            processed_tempo.accepted(),
+            processed_tempo
+                .processed()
+                .map(|transport| transport.tempo())
+        ),
         (Some(tempo(124.0)), Some(tempo(124.0))),
         "the Host graph processed the tempo it accepted"
     );
@@ -1917,8 +1927,10 @@ async fn local_ticket_presents_after_an_unrelated_host_commit_and_rejected_reque
     );
     let processed = harness
         .host
-        .with(|host| host.session_transport())
+        .with(|host| host.tempo_state())
         .await
+        .expect("Host transport")
+        .processed()
         .expect("processed session transport");
     assert!(processed.revision() > before);
     assert_eq!(processed.tempo().beats_per_minute(), 124.0);
@@ -1995,8 +2007,10 @@ async fn host_drains_the_winning_pair_before_publishing_the_same_block_retarget(
     });
     let processed = harness
         .host
-        .with(|host| host.session_transport())
+        .with(|host| host.tempo_state())
         .await
+        .expect("Host transport")
+        .processed()
         .expect("processed session transport")
         .revision();
     assert!(processed > before);

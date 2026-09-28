@@ -1,8 +1,8 @@
-use kithara::platform::sync::Arc;
+use kithara::{platform::sync::Arc, play::Tempo};
 
 use crate::{
     deck::DeckId,
-    engine::{Command, DeckCmd, DeckSnapshot, EngineSnapshot, MixCmd},
+    engine::{AppCmd, Command, DeckCmd, DeckSnapshot, EngineSnapshot, MixCmd},
     mix::MixStrip,
 };
 
@@ -15,6 +15,7 @@ pub(crate) struct Overlay {
 enum Edit {
     Mix(MixCmd),
     Deck(DeckId, DeckCmd),
+    HostTempo(Tempo),
 }
 
 impl Overlay {
@@ -37,6 +38,7 @@ impl Overlay {
                 cmd:
                     cmd @ (DeckCmd::SetEqGain { .. } | DeckCmd::SetQuality(_) | DeckCmd::SetTempo(_)),
             } => Edit::Deck(*deck, *cmd),
+            Command::App(AppCmd::SetHostTempo(tempo)) => Edit::HostTempo(*tempo),
             Command::Deck { .. }
             | Command::LoadOntoDeck { .. }
             | Command::ToggleDeckSync(_)
@@ -55,6 +57,7 @@ impl Edit {
         match self {
             Self::Mix(cmd) => lay_mix(cmd, drawn),
             Self::Deck(id, cmd) => lay_deck(id, cmd, drawn),
+            Self::HostTempo(tempo) => drawn.host_tempo.retarget(tempo),
         }
     }
 }

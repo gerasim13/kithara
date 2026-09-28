@@ -198,15 +198,13 @@ pub(crate) fn snapshot<T, S>(
         .ok_or(SessionError::TransportNotProcessed)
 }
 
-/// The tempo the Host accepted beside the one its graph processed. Nothing
-/// is processed while no transport control runs.
+/// The tempo the Host accepted beside the transport its graph processed.
+/// Nothing is processed while no transport control runs.
 pub(crate) fn tempo_state<T, S>(
     state: &mut SessionState<T, S>,
 ) -> Result<SessionTempoState, SessionError> {
     let processed = match state.transport_control {
-        Some(_) => refresh_observation(state)?
-            .snapshot()
-            .map(|snapshot| snapshot.tempo()),
+        Some(_) => refresh_observation(state)?.snapshot(),
         None => None,
     };
     Ok(SessionTempoState::new(

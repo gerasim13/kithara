@@ -310,6 +310,24 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "tempo.host",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "tempo.host_state",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "tempo.host_step",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
         category: EndpointCategory::Model,
         id: "vis.preset",
         value: ValueKind::Scalar,

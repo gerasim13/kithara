@@ -10,7 +10,7 @@ use kithara_warp::{BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat};
 /// strands the transport with an active commit and no anchor.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, fieldwork::Fieldwork, Ranged)]
 #[fieldwork(get)]
-#[ranged(min = 1.0, max = 1_000.0)]
+#[ranged(min = 1.0, max = 1_000.0, default = 120.0)]
 pub struct Tempo(
     /// Returns the tempo in beats per minute.
     #[field(get = beats_per_minute, copy)]
@@ -51,9 +51,9 @@ pub struct TempoError {
     beats_per_minute: f64,
 }
 
-/// The session tempo the Host accepted and the one its audio graph
-/// processed, which differ while a tempo change waits for its render
-/// boundary.
+/// The session tempo the Host accepted and the transport its audio graph
+/// processed last, read in one observation; the two tempos differ while a
+/// tempo change waits for its render boundary.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
@@ -62,15 +62,15 @@ pub struct SessionTempoState {
     /// stream; `None` before any.
     #[field(get, copy)]
     accepted: Option<Tempo>,
-    /// Returns the tempo of the transport commit the audio graph processed
-    /// last; `None` before the first.
+    /// Returns the transport the audio graph processed last; `None` before
+    /// the first.
     #[field(get, copy)]
-    processed: Option<Tempo>,
+    processed: Option<SessionTransportSnapshot>,
 }
 
 impl SessionTempoState {
     #[must_use]
-    pub const fn new(accepted: Option<Tempo>, processed: Option<Tempo>) -> Self {
+    pub const fn new(accepted: Option<Tempo>, processed: Option<SessionTransportSnapshot>) -> Self {
         Self {
             accepted,
             processed,

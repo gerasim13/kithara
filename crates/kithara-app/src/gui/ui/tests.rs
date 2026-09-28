@@ -526,6 +526,7 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
                 ((0.0, None), "bar/menu/pop"),
                 ((1250.0, None), "bar/brand"),
                 ((0.0, None), "bar/drag"),
+                ((0.0, None), "bar/before-host-tempo"),
                 ((1120.0, None), "bar/cpu-block"),
                 ((0.0, None), "bar/broadcast-block"),
                 ((0.0, None), "bar/window-block"),

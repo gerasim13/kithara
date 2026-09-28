@@ -55,6 +55,8 @@ impl<'a, 'b: 'a> Node<'a> for &'a TempoNode<'b> {
                 min: self.view.window.0,
                 max: self.view.window.1,
             }),
+            "host" => ReadValue::Text(&self.view.host_text),
+            "host_state" => ReadValue::Text(&self.view.host_state),
             _ => return None,
         };
         Some(Box::new(Value(value)))

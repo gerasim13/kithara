@@ -5,8 +5,8 @@ use kithara_events::TrackId;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    PlayError, SessionBinding, SessionDispatcher, SessionTempoState, SessionTransportSnapshot,
-    Tempo, player::PlayerControlSource,
+    PlayError, SessionBinding, SessionDispatcher, SessionTempoState, Tempo,
+    player::PlayerControlSource,
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
@@ -309,24 +309,8 @@ impl<S> Host<S> {
         }
     }
 
-    /// Reads the processed Host tempo and transport, once its first commit
-    /// has reached the callback.
-    ///
-    /// # Errors
-    /// Returns an error while the transport has no processed observation or
-    /// when the session cannot answer the query.
-    pub fn session_transport(&self) -> Result<SessionTransportSnapshot, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySessionTransport)? {
-            Reply::SessionTransport(snapshot) => Ok(snapshot),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for session transport query".into(),
-            )),
-        }
-    }
-
-    /// Reads the tempo the Host accepted beside the one its audio graph
-    /// processed.
+    /// Reads the tempo the Host accepted beside the transport its audio graph
+    /// processed last, in one observation.
     ///
     /// # Errors
     /// Returns an error when the graph rejected the accepted commit or the

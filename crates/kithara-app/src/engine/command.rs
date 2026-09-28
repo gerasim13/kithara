@@ -1,4 +1,4 @@
-use kithara::{effects::GainDb, queue::TrackId};
+use kithara::{effects::GainDb, play::Tempo, queue::TrackId};
 
 use crate::deck::{DeckId, EqMode, TempoPercent};
 
@@ -45,6 +45,7 @@ pub(crate) enum MixCmd {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum AppCmd {
     SetEqMode(EqMode),
+    SetHostTempo(Tempo),
     BroadcastToggle,
     Shutdown,
 }

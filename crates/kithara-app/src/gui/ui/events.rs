@@ -1,5 +1,6 @@
 use kithara::{
     effects::GainDb,
+    play::Tempo,
     ui::render::{
         ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, Zoom, zoom_in, zoom_out,
     },
@@ -76,7 +77,7 @@ fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Me
     }
     match target {
         Route::MicroBar => micro_control(state, rest, action),
-        Route::Bar => bar_control(rest, action),
+        Route::Bar => bar_control(state, rest, action),
         Route::Mixer => mixer_control(state, rest, action),
         Route::Library => library_control(state, rest, action),
         Route::Overview => {
@@ -192,9 +193,17 @@ fn zoom_control(
     Some(())
 }
 
-fn bar_control(control: &str, action: &ControlAction) -> Option<Message> {
+fn bar_control(state: &Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    let host = &state.snapshot.host_tempo;
     match (control, action) {
         ("broadcast", ControlAction::Activate) => Some(Message::BroadcastToggle),
+        ("host-tempo", ControlAction::StepScalar(steps)) => Tempo::checked(
+            f64::from(*steps)
+                .mul_add(consts::HOST_TEMPO_STEP, host.target.beats_per_minute())
+                .clamp(f64::from(Tempo::MIN), f64::from(Tempo::MAX)),
+        )
+        .map(Message::SetHostTempo),
+        ("host-tempo", ControlAction::Activate) => Some(Message::SetHostTempo(host.configured)),
         _ => None,
     }
 }
@@ -309,6 +318,11 @@ fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -
         }
         _ => None,
     }
+}
+
+mod consts {
+    /// Host BPM travel per wheel step, in beats per minute.
+    pub(super) const HOST_TEMPO_STEP: f64 = 1.0;
 }
 
 fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {

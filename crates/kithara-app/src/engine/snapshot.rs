@@ -1,5 +1,5 @@
 use kithara::{
-    abr::AbrMode, effects::GainDb, platform::sync::Arc, prelude::EngineLoadSnapshot,
+    abr::AbrMode, effects::GainDb, platform::sync::Arc, play::Tempo, prelude::EngineLoadSnapshot,
     queue::TrackEntry,
 };
 use num_traits::cast::AsPrimitive;
@@ -8,7 +8,7 @@ use crate::{
     analysis::TrackArtifacts,
     broadcast::Broadcaster,
     deck::{DeckId, EqMode, TempoPercent},
-    engine::settings::DeckSettings,
+    engine::{HostTempo, settings::DeckSettings},
     mix::MixState,
     state::{AbrVariant, UiState},
 };
@@ -19,7 +19,7 @@ pub(crate) struct EngineSnapshot {
     pub(crate) eq_mode: EqMode,
     pub(crate) mix: MixState,
     pub(crate) decks: Vec<DeckSnapshot>,
-    pub(crate) host_bpm: Option<f32>,
+    pub(crate) host_tempo: HostTempo,
     pub(crate) applied_seq: u64,
 }
 
@@ -30,7 +30,7 @@ impl EngineSnapshot {
             eq_mode: EqMode::default(),
             mix: MixState::new(0),
             decks: Vec::new(),
-            host_bpm: None,
+            host_tempo: HostTempo::new(Tempo::DEFAULT),
             applied_seq: 0,
         }
     }

@@ -6,6 +6,7 @@ mod run;
 mod serve;
 mod settings;
 mod snapshot;
+mod tempo;
 #[cfg(not(target_arch = "wasm32"))]
 mod thread;
 
@@ -18,5 +19,6 @@ pub(crate) use serve::serve;
 #[cfg(test)]
 pub(crate) use settings::DeckSettings;
 pub(crate) use snapshot::{DeckSnapshot, EngineSnapshot};
+pub(crate) use tempo::HostTempo;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use thread::spawn;
