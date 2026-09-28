@@ -80,7 +80,7 @@ pub struct PlayerConfig<S> {
     /// player at construction, so it is not a document key.
     #[config(
         value(bool, self.auto_advance_enabled.load()),
-        builder(default = RelaxedAtomicBool::new(true), with = |value: bool| RelaxedAtomicBool::new(value)),
+        wrap(default = true, with = RelaxedAtomicBool::new),
         patch(skip),
         debug(skip)
     )]
@@ -102,16 +102,14 @@ pub struct PlayerConfig<S> {
     /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
     #[config(
         value(f32, self.crossfade_duration.load()),
-        builder(default = RelaxedAtomicF32::new(DEFAULT_CROSSFADE_DURATION), with = |value: f32| RelaxedAtomicF32::new(value)),
-        patch(wire = f32, from = RelaxedAtomicF32::new)
+        wrap(default = DEFAULT_CROSSFADE_DURATION, with = RelaxedAtomicF32::new, patch)
     )]
     pub crossfade_duration: RelaxedAtomicF32,
     /// Default playback-rate target (1.0 = normal). Default:
     /// [`DEFAULT_PLAYING_RATE`].
     #[config(
         value(f32, self.default_rate.load()),
-        builder(default = RelaxedAtomicF32::new(DEFAULT_PLAYING_RATE), with = |value: f32| RelaxedAtomicF32::new(value)),
-        patch(wire = f32, from = RelaxedAtomicF32::new)
+        wrap(default = DEFAULT_PLAYING_RATE, with = RelaxedAtomicF32::new, patch)
     )]
     pub default_rate: RelaxedAtomicF32,
     /// Capacity of each event topic when this player creates its root bus.
@@ -123,7 +121,7 @@ pub struct PlayerConfig<S> {
     /// not a document key.
     #[config(
         value(f32, self.prefetch_duration.load()),
-        builder(default = RelaxedAtomicF32::new(consts::DEFAULT_PREFETCH_DURATION), with = |value: f32| RelaxedAtomicF32::new(value)),
+        wrap(default = consts::DEFAULT_PREFETCH_DURATION, with = RelaxedAtomicF32::new),
         patch(skip),
         debug(skip)
     )]

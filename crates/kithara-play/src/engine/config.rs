@@ -51,7 +51,7 @@ pub struct EngineConfig<S> {
     /// custom layout through `PlayerImpl::set_eq_layout`.
     #[config(
         value(Vec<EqBandConfig>, self.eq_layout.lock().clone()),
-        builder(default = Mutex::new(generate_log_spaced_bands(10)), with = |layout: Vec<EqBandConfig>| Mutex::new(layout)),
+        wrap(default = generate_log_spaced_bands(10), with = Mutex::new),
         debug(skip)
     )]
     pub(crate) eq_layout: Mutex<Vec<EqBandConfig>>,

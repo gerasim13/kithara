@@ -56,7 +56,7 @@ where
     pub runtime: Option<RuntimeHandle>,
 
     /// Player owned and decorated by this queue.
-    #[config(skip = "player moves to the queue owner", builder(required, with = |value: PlayerImpl<S>| Some(value)), patch(skip), debug(skip))]
+    #[config(skip = "player moves to the queue owner", builder(required, with = Some), patch(skip), debug(skip))]
     pub(crate) player: Option<PlayerImpl<S>>,
 
     /// Lead time in seconds before EOF at which the next queued track is
@@ -89,8 +89,7 @@ where
     #[config(
         value(ActionAtItemEnd, self.action_at_item_end()),
         sdk,
-        builder(default = Mutex::new(ActionAtItemEnd::default()), with = |value: ActionAtItemEnd| Mutex::new(value)),
-        patch(wire = ActionAtItemEnd, from = Mutex::new),
+        wrap(default = ActionAtItemEnd::default(), with = Mutex::new, patch),
         debug(skip)
     )]
     pub(crate) action_at_item_end: Mutex<ActionAtItemEnd>,
@@ -99,8 +98,7 @@ where
     #[config(
         value(CrossfadeSettings, self.crossfade_settings()),
         sdk,
-        builder(default = Mutex::new(CrossfadeSettings::default()), with = |value: CrossfadeSettings| Mutex::new(value)),
-        patch(wire = CrossfadeSettings, from = Mutex::new),
+        wrap(default = CrossfadeSettings::default(), with = Mutex::new, patch),
         debug(skip)
     )]
     pub(crate) crossfade_settings: Mutex<CrossfadeSettings>,
