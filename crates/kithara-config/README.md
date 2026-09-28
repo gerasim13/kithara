@@ -22,6 +22,8 @@ or `skip = "reason"`. `value(Type, expression)` projects a borrowed or internal
 field into an owned public value. `#[config(default)]` derives a default through
 the builder. Existing `#[builder]`, `#[fieldwork]`, and `#[field]` options remain
 available. On a function or impl, `#[config]` wraps the corresponding bon builder.
+For a projected field stored in a wrapper, `wrap(default = value, with = Wrapper::new, patch)`
+derives the builder default, setter conversion, and optional patch conversion.
 
 `#[config(update)]` opts a retained configuration into typed runtime changes;
 each writable field also uses `#[config(value, update)]`. The macro emits a

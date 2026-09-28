@@ -148,7 +148,6 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs::SourceSeekAnchor" = 1
 
 [shared_state]
-"crates/kithara-queue/src/queue/state.rs" = 1
 
 [single_impl_size]
 "crates/kithara-abr/src/state/core.rs::impl AbrState" = 1

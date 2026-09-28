@@ -637,6 +637,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
@@ -729,7 +730,10 @@ async fn autoplay_queue(harness: &OfflinePlayer) -> QueueControl<TestPools> {
 ///
 /// Track A is quiet and served whole after a delay, track B is loud and local,
 /// so B is loaded first; if B preempted A the early window would carry B's level.
-#[kithara::test(tokio)]
+#[kithara::test(
+    tokio,
+    tracing("kithara_queue=debug,kithara_file=debug,kithara_storage=debug")
+)]
 async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;
 

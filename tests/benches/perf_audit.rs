@@ -502,7 +502,7 @@ fn bench_stretch_process(c: &mut Criterion) {
                     (renderer, chunk)
                 },
                 |(mut renderer, chunk): (WarpRenderer<TestPools>, AudioChunk)| {
-                    black_box(renderer.render(chunk));
+                    black_box(renderer.render(chunk))
                 },
                 BatchSize::SmallInput,
             );

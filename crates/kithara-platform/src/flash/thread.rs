@@ -1,3 +1,5 @@
+use std::panic::Location;
+
 use crate::flash::ids::ThreadKey;
 pub use crate::{
     backend::thread::{
@@ -65,14 +67,14 @@ pub(crate) fn gate_instant(backend: &GateBackend) -> crate::flash::Instant {
     }
 }
 
-fn propagated<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+fn propagated<F, T>(f: F, origin: &'static Location<'static>) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
     let active = crate::flash::flash_enabled();
-    let slot = ambient.then(crate::flash::system::credit::DedicatedSlot::reserve);
+    let slot = ambient.then(|| crate::flash::system::credit::DedicatedSlot::reserve(origin));
     move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         let _flash = crate::flash::enter_dynamic(active);
@@ -81,12 +83,13 @@ where
     }
 }
 
+#[track_caller]
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    crate::backend::thread::spawn(propagated(f))
+    crate::backend::thread::spawn(propagated(f, Location::caller()))
 }
 
 /// Under `flash`, a cooperative yield must relinquish the quiescence engine:
@@ -97,9 +100,17 @@ where
 /// advance, then wakes it on the next advance to re-check. Off the sim path
 /// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
 /// behaviour is unchanged. See `crate::flash::system::yield_until_advance`.
+///
+/// A DEDICATED participant takes the sim path even where the callstack itself
+/// is not a flash region. Its credit is what holds the clock still, and
+/// [`credit::DedicatedSlot::claim_pooled`](crate::flash::system::credit) states
+/// the term it is held on: an engine park releases it. A pooled
+/// `spawn_blocking` closure inherits the ambient gate and the credit but never
+/// pushes an active region, so `flash_enabled()` alone would hand the one
+/// thread that can freeze the engine the one yield that cannot thaw it.
 #[inline]
 pub fn yield_now() {
-    if crate::flash::flash_enabled() {
+    if crate::flash::flash_enabled() || crate::flash::ctx::dedicated() {
         crate::flash::system::yield_until_advance();
     } else {
         crate::backend::thread::yield_now();
@@ -114,13 +125,13 @@ pub fn yield_now() {
 /// `Running` pacer's `active` slot (wedging the engine). This makes
 /// participant accounting intrinsic to the platform spawn — no consumer
 /// registers anything. Off the sim path the credit half does not exist.
-fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+fn counted<F, T>(f: F, origin: &'static Location<'static>) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
-    let slot = crate::flash::system::credit::DedicatedSlot::reserve_named();
+    let slot = crate::flash::system::credit::DedicatedSlot::reserve_named(origin);
     move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         let _flash = crate::flash::enter_dynamic(true);
@@ -138,12 +149,13 @@ where
 /// # Panics
 ///
 /// Panics if the OS refuses to create the thread.
+#[track_caller]
 pub fn spawn_named<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    crate::backend::thread::spawn_named_uncounted(name, counted(f))
+    crate::backend::thread::spawn_named_uncounted(name, counted(f, Location::caller()))
 }
 
 /// Under `flash`, a sleep registers a pure timed waiter on the quiescence

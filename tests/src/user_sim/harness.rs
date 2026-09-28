@@ -304,8 +304,8 @@ impl SimHarness {
         let pre_pos = self.position();
 
         let outcome = self
-            .queue
-            .seek(target)
+            .run(move |queue| queue.seek(target))
+            .await
             .unwrap_or_else(|e| panic!("[{action_label}] queue.seek returned Err: {e}"));
 
         match outcome {

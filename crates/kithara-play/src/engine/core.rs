@@ -1,17 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
 use kithara_effects::eq::EqBandConfig;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
+    atomic::{Acquire, AtomicValue, RelaxedAtomicF32, Release},
     sync::{Arc, Mutex},
     time::Duration,
 };
 use kithara_signal::FaderValue;
 use kithara_warp::RenderSnapshot;
-use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
 use tracing::{debug, info};
 
@@ -29,18 +27,49 @@ type SlotHandle = SlotControl;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct EngineImpl<S> {
-    running: AtomicBool,
-    master_volume: AtomicF32,
+    running: AtomicValue<bool, Acquire, Release>,
+    master_volume: RelaxedAtomicF32,
     pub(super) config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
     pub(super) bus: EventBus,
-    pub(super) eq_layout: Mutex<Vec<EqBandConfig>>,
     pub(super) registration: Mutex<Option<RegisteredPlayer>>,
     slots: Mutex<SlotTable>,
     #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     #[field(get, vis = "pub(crate)")]
     pub(super) session: SessionHandle<S>,
+}
+
+#[cfg(test)]
+mod config_tests {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use kithara_config::Config as _;
+    use kithara_test_utils::kithara;
+    use kithara_warp::BeatGridId;
+
+    use super::*;
+    use crate::test_pools::{TestPools, pools};
+
+    #[kithara::test]
+    fn engine_config_remains_the_live_eq_layout_owner() {
+        let config: EngineConfig<TestPools> = EngineConfig::builder()
+            .grid_id(BeatGridId::allocate().expect("a grid identity"))
+            .pools(pools())
+            .sample_rate(NonZeroU32::new(48_000).expect("48000 is not zero"))
+            .response_budget_frames(NonZeroUsize::new(448).expect("448 is not zero"))
+            .max_slots(3)
+            .build();
+        let engine = EngineImpl::new(config, EventBus::new(32));
+
+        assert_eq!(engine.config.values().sample_rate.get(), 48_000);
+        assert_eq!(engine.config.values().max_slots, 3);
+        assert_eq!(engine.config.values().eq_layout.len(), 10);
+        engine
+            .set_master_eq_layout(kithara_effects::eq::generate_log_spaced_bands(4))
+            .expect("unregistered engine accepts its next layout");
+        assert_eq!(engine.config.values().eq_layout.len(), 4);
+    }
 }
 
 impl<S> EngineImpl<S> {
@@ -52,15 +81,13 @@ impl<S> EngineImpl<S> {
             .take()
             .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
-        let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         Self {
             config,
-            eq_layout,
             bus,
             session,
-            master_volume: AtomicF32::new(1.0),
+            master_volume: RelaxedAtomicF32::new(1.0),
             registration: Mutex::default(),
-            running: AtomicBool::new(false),
+            running: AtomicValue::<bool, Acquire, Release>::new(false),
             start_lock: Mutex::new(()),
             slots: Mutex::new(SlotTable::with_capacity(max_slots)),
         }
@@ -71,7 +98,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return Err(PlayError::EngineNotRunning);
         }
 
@@ -127,10 +154,10 @@ impl<S> EngineImpl<S> {
             return Ok(());
         };
 
-        if self.running.load(Ordering::Acquire) {
+        if self.running.load() {
             self.session.stop_player(player_id)?;
             self.slots.lock().clear();
-            self.running.store(false, Ordering::Release);
+            self.running.store(false);
             self.emit(EngineEvent::Stopped);
         }
 
@@ -142,7 +169,7 @@ impl<S> EngineImpl<S> {
     /// Store the desired gain without dispatching: the mixer batch already
     /// actuated the graph.
     pub(crate) fn commit_desired_master_volume(&self, level: f32) {
-        self.master_volume.store(level, Ordering::Relaxed);
+        self.master_volume.store(level);
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
@@ -176,11 +203,11 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn eq_band_count(&self) -> usize {
-        self.eq_layout.lock().len()
+        self.config.eq_layout.lock().len()
     }
 
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             debug!(
                 reason,
                 "audio route invalidation ignored while engine is stopped"
@@ -191,7 +218,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
+        self.running.load()
     }
 
     /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
@@ -201,7 +228,7 @@ impl<S> EngineImpl<S> {
     /// `make_sincs` runs while the resource is prepared (off the worker thread)
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return self.config.sample_rate.get();
         }
         self.session
@@ -210,7 +237,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn master_volume(&self) -> f32 {
-        self.master_volume.load(Ordering::Relaxed)
+        self.master_volume.load()
     }
 
     pub const fn max_slots(&self) -> usize {
@@ -229,7 +256,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return Err(PlayError::EngineNotRunning);
         }
 
@@ -298,7 +325,7 @@ impl<S> EngineImpl<S> {
             self.session
                 .set_player_eq_layout(player_id, eq_layout.clone())?;
         }
-        *self.eq_layout.lock() = eq_layout;
+        *self.config.eq_layout.lock() = eq_layout;
         Ok(())
     }
 
@@ -314,12 +341,12 @@ impl<S> EngineImpl<S> {
 
     pub fn start(&self) -> Result<(), PlayError> {
         let _start = self.start_lock.lock();
-        if self.running.load(Ordering::Acquire) {
+        if self.running.load() {
             return Err(PlayError::EngineAlreadyRunning);
         }
 
         let player_id = self.ensure_player_id()?;
-        let master_volume = self.master_volume.load(Ordering::Relaxed);
+        let master_volume = self.master_volume.load();
         self.session.start_player(
             player_id,
             master_volume,
@@ -327,7 +354,7 @@ impl<S> EngineImpl<S> {
             self.config.response_budget_frames,
         )?;
 
-        self.running.store(true, Ordering::Release);
+        self.running.store(true);
 
         info!(
             sample_rate = self.config.sample_rate.get(),
@@ -341,7 +368,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn stop(&self) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return Err(PlayError::EngineNotRunning);
         }
 
@@ -350,7 +377,7 @@ impl<S> EngineImpl<S> {
 
         self.slots.lock().clear();
 
-        self.running.store(false, Ordering::Release);
+        self.running.store(false);
         info!(player_id, "engine stopped");
         self.emit(EngineEvent::Stopped);
         Ok(())

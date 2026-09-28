@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU8, Ordering};
+use kithara_platform::sync::atomic::{AtomicU8, Ordering};
 
 use crate::PlayError;
 
@@ -44,7 +44,7 @@ impl PlayerLifecycle {
         self.state.load(Ordering::Acquire) != PlayerLifecycleState::Open as u8
     }
 
-    pub(super) const fn open() -> Self {
+    pub(super) fn open() -> Self {
         Self {
             state: AtomicU8::new(PlayerLifecycleState::Open as u8),
         }

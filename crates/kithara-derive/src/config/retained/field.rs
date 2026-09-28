@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Expr, Field, GenericParam, Generics, Lit, LitStr, Meta, Result, Token, Type, parenthesized,
-    parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
+    Expr, Field, GenericParam, Generics, Lit, LitStr, Meta, Path, Result, Token, Type,
+    parenthesized, parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
 use super::implementation::attributes;
@@ -26,6 +26,105 @@ pub(super) struct Update {
     pub(super) lower: TokenStream,
 }
 
+struct Wrap {
+    default: Expr,
+    with: Path,
+    patch: bool,
+}
+
+fn parse_wrap(arguments: TokenStream) -> Result<Wrap> {
+    let mut default = None;
+    let mut with = None;
+    let mut patch = false;
+    syn::meta::parser(|meta| {
+        if meta.path.is_ident("default") {
+            if default.replace(meta.value()?.parse()?).is_some() {
+                return Err(meta.error("duplicate wrap default"));
+            }
+        } else if meta.path.is_ident("with") {
+            if with.replace(meta.value()?.parse()?).is_some() {
+                return Err(meta.error("duplicate wrap constructor"));
+            }
+        } else if meta.path.is_ident("patch") && !patch && meta.input.is_empty() {
+            patch = true;
+        } else {
+            return Err(meta.error("expected default = expression, with = path, or patch"));
+        }
+        Ok(())
+    })
+    .parse2(arguments)?;
+    let default = default.ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "wrap requires default = expression",
+        )
+    })?;
+    let with = with.ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "wrap requires with = constructor",
+        )
+    })?;
+    Ok(Wrap {
+        default,
+        with,
+        patch,
+    })
+}
+
+fn finish_attributes(
+    field: &Field,
+    role: &Role,
+    forwarded: &[Path],
+    wrap: Option<Wrap>,
+    preserved: &mut Vec<syn::Attribute>,
+) -> Result<()> {
+    for path in forwarded {
+        if field.attrs.iter().any(|attr| attr.path() == path) {
+            return Err(syn::Error::new_spanned(
+                path,
+                "choose either a native field attribute or its config group",
+            ));
+        }
+    }
+    let Some(wrap) = wrap else {
+        return Ok(());
+    };
+    if forwarded.iter().any(|path| path.is_ident("builder"))
+        || field
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("builder"))
+    {
+        return Err(syn::Error::new_spanned(
+            field,
+            "wrap replaces the builder field attribute",
+        ));
+    }
+    let Role::Projection(projection) = role else {
+        return Err(syn::Error::new_spanned(
+            field,
+            "wrap requires value(Type, expression)",
+        ));
+    };
+    let constructor = &wrap.with;
+    let wire = &projection.0;
+    let default = &wrap.default;
+    preserved.push(syn::parse_quote!(#[builder(default = #constructor(#default), with = |value: #wire| #constructor(value))]));
+    if wrap.patch {
+        if forwarded.iter().any(|path| path.is_ident("patch"))
+            || field.attrs.iter().any(|attr| attr.path().is_ident("patch"))
+        {
+            return Err(syn::Error::new_spanned(
+                field,
+                "wrap(patch) replaces the patch field attribute",
+            ));
+        }
+        preserved.push(syn::parse_quote!(#[patch(wire = #wire, from = #constructor)]));
+    }
+    Ok(())
+}
+
 pub(super) fn expand(
     field: &mut Field,
     generics: &Generics,
@@ -36,16 +135,27 @@ pub(super) fn expand(
     let mut update = false;
     let mut sdk = false;
     let mut preserved: Vec<syn::Attribute> = Vec::new();
-    let mut forwarded: Vec<syn::Path> = Vec::new();
+    let mut forwarded: Vec<Path> = Vec::new();
+    let mut wrap = None;
     for attr in &field.attrs {
         if !attr.path().is_ident("config") {
             preserved.push(attr.clone());
             continue;
         }
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("wrap") {
+                if wrap.is_some() {
+                    return Err(meta.error("duplicate config field wrap"));
+                }
+                let content;
+                parenthesized!(content in meta.input);
+                wrap = Some(parse_wrap(content.parse()?)?);
+                return Ok(());
+            }
             if meta.path.is_ident("builder")
                 || meta.path.is_ident("field")
                 || meta.path.is_ident("patch")
+                || meta.path.is_ident("debug")
             {
                 if forwarded.contains(&meta.path) {
                     return Err(meta.error("duplicate config field attribute group"));
@@ -124,20 +234,8 @@ pub(super) fn expand(
             Ok(())
         })?;
     }
-    for path in &forwarded {
-        if field.attrs.iter().any(|attr| attr.path() == path) {
-            return Err(syn::Error::new_spanned(
-                path,
-                "choose either a native field attribute or its config group",
-            ));
-        }
-    }
-    let role = role.ok_or_else(|| {
-        syn::Error::new_spanned(
-            &*field,
-            "classify each config field as value, nested, or skip = reason",
-        )
-    })?;
+    let role = role.ok_or_else(|| syn::Error::new_spanned(&*field, "missing config field role"))?;
+    finish_attributes(field, &role, &forwarded, wrap, &mut preserved)?;
     validate_role(field, &role, update, sdk, snapshot, &preserved)?;
     field.attrs = preserved;
     if !snapshot {

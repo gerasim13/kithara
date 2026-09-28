@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
@@ -98,7 +96,7 @@ where
     /// flight would mark the index current early and make a later select skip re-enqueuing the
     /// arriving resource.
     pub fn play(&self) {
-        let rate = self.core.warp.stretch().speed();
+        let rate = self.core.config.warp.stretch().speed();
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -183,7 +181,7 @@ where
         }
 
         if matches!(outcome, SeekOutcome::Landed { .. }) {
-            playback.position.store(target_secs, Ordering::Relaxed);
+            playback.position.store(target_secs);
         }
 
         Ok(outcome)

@@ -17,6 +17,20 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Admission is the cursor's commit: the queue stands on the successor from
+    /// the moment its selection is accepted, even while the track is still
+    /// loading. Reading a successor never moves the cursor — a read that
+    /// committed would strand it on a track that never started, and the next
+    /// end-of-item would name a track the cursor had already left.
+    pub(in crate::queue) fn commit_navigation_to(&self, id: TrackId) {
+        let ids = self
+            .tracks()
+            .into_iter()
+            .map(|track| track.id)
+            .collect::<SmallVec<[_; 16]>>();
+        self.lock_navigation_mut().select(id, &ids);
+    }
+
     /// Select a track by id, applying the given [`Transition`]. If the
     /// track is still loading or pending, both the id and the
     /// transition are stashed and applied when loading finishes.
@@ -57,12 +71,7 @@ where
                 crossfade,
             },
         )?;
-        let ids = self
-            .tracks()
-            .into_iter()
-            .map(|track| track.id)
-            .collect::<SmallVec<[_; 16]>>();
-        self.lock_navigation_mut().select(id, &ids);
+        self.commit_navigation_to(id);
         self.bus.publish(QueueEvent::CurrentTrackAdvance {
             reason,
             id: Some(id),
@@ -90,10 +99,7 @@ where
         ) {
             self.autoplay_target.store(CrossfadeArm::Disarmed);
         }
-        let default = *self
-            .crossfade_settings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let default = self.config.crossfade_settings();
         let settings = transition.settings(default).validate()?;
         let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)
@@ -166,12 +172,7 @@ where
             } else {
                 self.player.pause();
             }
-            let ids = self
-                .tracks()
-                .into_iter()
-                .map(|track| track.id)
-                .collect::<SmallVec<[_; 16]>>();
-            self.lock_navigation_mut().select(id, &ids);
+            self.commit_navigation_to(id);
             self.bus.publish(QueueEvent::CurrentTrackAdvance {
                 reason,
                 id: Some(id),
@@ -241,10 +242,7 @@ mod tests {
         let queue = make_queue();
         let id = append(&queue, "https://example.com/a.mp3");
         let _ = queue.select(id, Transition::None);
-        let phase = *queue
-            .pending_select
-            .lock()
-            .expect("BUG: pending_select Mutex is not held across await");
+        let phase = *queue.pending_select.lock();
         match phase {
             SelectPhase::Pending(pending) => {
                 assert_eq!(pending.id, id);

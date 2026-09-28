@@ -482,7 +482,7 @@ mod tests {
             quote!(builder = false),
             quote! {
                 struct Settings {
-                    #[config(value, builder(default = Consts::MAX_BAR_RATIO), field(get, copy), patch(skip))]
+                    #[config(value, builder(default = Consts::MAX_BAR_RATIO), field(get, copy), patch(skip), debug(skip))]
                     ratio: f64,
                 }
             },
@@ -493,6 +493,7 @@ mod tests {
         assert!(expanded.contains("builder (default = Consts :: MAX_BAR_RATIO)"));
         assert!(expanded.contains("field (get , copy)"));
         assert!(expanded.contains("patch (skip)"));
+        assert!(expanded.contains("debug (skip)"));
         assert!(expanded.contains("pub ratio : f64"));
     }
 
@@ -569,6 +570,7 @@ mod tests {
             (quote!(#[builder(default)]), quote!(builder(default))),
             (quote!(#[field(get, copy)]), quote!(field(get, copy))),
             (quote!(#[patch(skip)]), quote!(patch(skip))),
+            (quote!(#[debug(skip)]), quote!(debug(skip))),
         ] {
             let error = expand(
                 quote!(builder = false),
@@ -597,6 +599,7 @@ mod tests {
             quote!(builder()),
             quote!(field),
             quote!(patch(skip =)),
+            quote!(debug()),
         ] {
             assert!(
                 expand(

@@ -61,17 +61,38 @@ pub(super) fn run_pass(
     recycle_all(slots);
 
     let report = produce_pass(slots, budgets, observer);
+    // A stalled pass repeats its counts unchanged, so the counts alone cannot
+    // say whether one task is stuck or the stuck one keeps changing hands. The
+    // report already picked the first backpressured task; carrying it names the
+    // holder without taking a reading of its own.
+    //
+    // USDT allows five payload slots and the counts fill them, so this takes
+    // the place of `done`: a finished task is unregistered on the same pass
+    // that reports it, so the count is zero on every pass that repeats. The
+    // waiting task keeps its own route into the record through the hang
+    // detector's context.
     kithara::probe_event!(
         scheduler_pass,
         active = report.active_tasks,
         progress = report.progress_tasks,
         waiting = report.waiting_tasks,
         backpressured = report.backpressured_tasks,
-        done = report.done_tasks
+        first_backpressured = task_field(report.first_backpressured_task)
     );
     remove_terminal(slots);
     report_outcome(observer, report);
     report
+}
+
+/// A task identifier as a probe field, with `0` standing for no task.
+///
+/// Identifiers are handed out from one upwards, so zero names nothing and a
+/// probe reader needs no companion flag to tell an absent task from task one.
+const fn task_field(task: Option<TaskId>) -> u64 {
+    match task {
+        Some(task) => task.get(),
+        None => 0,
+    }
 }
 
 fn cancel_and_drain(

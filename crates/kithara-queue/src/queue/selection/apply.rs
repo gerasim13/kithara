@@ -1,5 +1,3 @@
-use std::sync::PoisonError;
-
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_platform::tokio::task;
@@ -30,10 +28,7 @@ where
             return;
         }
 
-        let _apply = self
-            .select_apply
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _apply = self.lock_select_apply();
 
         if self.player.is_closed() {
             return;
@@ -80,10 +75,7 @@ where
         }
 
         let selection = {
-            let mut phase = self
-                .pending_select
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut phase = self.pending_select.lock();
             let selection = match *phase {
                 SelectPhase::Pending(pending) if pending.id == id => {
                     *phase = SelectPhase::Idle;

@@ -28,6 +28,7 @@ stretch-glide = ["dep:kithara-dsp", "dep:kithara-stretch", "kithara-stretch/stre
 [dependencies]
 kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true, optional = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-dsp = { workspace = true, optional = true }
 kithara-platform = { workspace = true }

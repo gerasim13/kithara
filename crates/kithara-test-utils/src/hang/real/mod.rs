@@ -11,6 +11,9 @@ use wasm as platform;
 #[cfg(not(target_arch = "wasm32"))]
 mod panic_dump;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod threads;
+
 mod shared;
 
 #[cfg(not(target_arch = "wasm32"))]
