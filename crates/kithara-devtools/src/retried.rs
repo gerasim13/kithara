@@ -95,7 +95,8 @@ impl Evidence {
     /// A [`ChildFailure`] with the lane's exit code when the lane is red or
     /// passed a test only on a retry that no `known` entry owns, naming the
     /// tests its report blames; an error when a green lane's profile declares
-    /// a report the lane did not leave.
+    /// a report the lane did not leave or that cannot be read. A red lane
+    /// keeps its code whatever its report holds.
     pub(crate) fn verdict(
         &self,
         lane_name: &str,
@@ -113,12 +114,22 @@ impl Evidence {
         };
         if failed {
             let detail = if path.is_file() {
-                named(&read_cases(path)?, known, path).unwrap_or_else(|| {
-                    format!(
-                        "nextest exited non-zero and its report at {} names no failed test; the cause is above",
-                        path.display()
-                    )
-                })
+                read_cases(path).map_or_else(
+                    |error| {
+                        format!(
+                            "its report at {} could not be read ({error:#}); the cause is above",
+                            path.display()
+                        )
+                    },
+                    |cases| {
+                        named(&cases, known, path).unwrap_or_else(|| {
+                            format!(
+                                "nextest exited non-zero and its report at {} names no failed test; the cause is above",
+                                path.display()
+                            )
+                        })
+                    },
+                )
             } else {
                 "the lane left no test report: it stopped before nextest recorded a test (a build error or an interruption); the cause is above".to_owned()
             };
@@ -468,6 +479,18 @@ mod tests {
         .to_string();
 
         assert!(error.contains("names no failed test"), "{error}");
+    }
+
+    #[test]
+    fn a_red_lane_whose_report_cannot_be_read_keeps_its_code() {
+        let temp = lane(consts::RETRYING_PROFILE, Some("<testsuites><testsuite"));
+
+        let error = judge(temp.path(), &[], CI, Some(100)).expect_err("the lane is red");
+
+        assert_eq!(exit_code(&error), Some(100));
+        let error = error.to_string();
+        assert!(error.contains("could not be read"), "{error}");
+        assert!(error.contains("junit.xml"), "{error}");
     }
 
     #[test]
