@@ -59,6 +59,7 @@ bench MODE="build":
     #!/usr/bin/env bash
     set -euo pipefail
     targets=(
+      "kithara-beat:spectral:dsp"
       "kithara-dsp:kernels:"
       "kithara-integration-tests:abr_estimator:"
       "kithara-integration-tests:bufpool:"
@@ -66,6 +67,7 @@ bench MODE="build":
       "kithara-integration-tests:refactor_hotpaths:"
       "kithara-integration-tests:rt_block_budget:"
       "kithara-resampler:resampler_backends:resample-glide,resample-rubato"
+      "kithara-waveform:analyzer:dsp"
     )
     bench() {
       local package bench features

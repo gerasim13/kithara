@@ -283,14 +283,12 @@ mod tests {
 #[cfg(test)]
 mod optimality {
     use kithara_bufpool::SampleBuffer;
-    use kithara_test_fixtures::unit_fixtures::{
-        click_silence_20s, clicks_120_20s, clicks_150_12s, clicks_change_24s, clicks_change_40s,
-    };
+    use kithara_test_fixtures::unit_fixtures::clicks_120_20s;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        dsp::{clicks, decode, period},
+        dsp::{decode, period},
         test_pools::pools,
     };
 

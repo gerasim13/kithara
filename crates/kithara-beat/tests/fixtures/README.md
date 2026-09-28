@@ -49,3 +49,16 @@ those windows, the whole-file goldens agree with the windowed runs at only F = 0
 
 Parity criterion: F-measure >= 0.85 at the +-70 ms MIR window, and a grid within 5% of the
 reference's tempo.
+
+## Spectral references
+
+`reference_spectral_beat.json`, `reference_spectral_track.json` and
+`reference_spectral_track_from7.json` pin the raw output of `SpectralBeats` on the windows
+`tests/degara.rs` cuts from `beat_test_mono_22050.f32le` and
+`track_excerpt_mono_22050.f32le` (the last from 7 s): one array per window of
+`[position bits, confidence]` pairs. Positions are compared as f32 bits, confidence within
+1e-3. Record them again only for an intended change of the detector:
+
+```bash
+KITHARA_BEAT_UPDATE_REFERENCE=1 just test run --lane=analysis -E 'test(spectral_beats)'
+```

@@ -58,6 +58,8 @@ unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+
+criterion = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
@@ -65,3 +67,8 @@ kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "spectral"
+harness = false
+required-features = ["dsp"]

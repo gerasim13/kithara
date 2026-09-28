@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Waveform model, byte codec, and progressive band analyzer for Kithara."
 keywords = ["audio", "waveform", "dsp", "analysis"]
 categories = ["multimedia::audio"]
+exclude = ["tests/**"]
 
 [features]
 default = []
@@ -37,8 +38,20 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 
+serde_json = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
+criterion = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 [lints]
 workspace = true
+
+[[bench]]
+name = "analyzer"
+harness = false
+required-features = ["dsp"]

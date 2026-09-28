@@ -12,6 +12,12 @@ use num_traits::cast::ToPrimitive;
 
 const MIN_F: f64 = 0.85;
 
+/// How far a beat's confidence may move and still match its reference.
+const CONFIDENCE_TOLERANCE: f32 = 1e-3;
+
+/// Set to record the spectral references instead of checking them.
+const UPDATE_REFERENCE: &str = "KITHARA_BEAT_UPDATE_REFERENCE";
+
 struct Pass;
 
 impl Pass {
@@ -25,6 +31,7 @@ struct Window {
     beats: Vec<f32>,
     at: f64,
     until: f64,
+    marks: Vec<(u32, f32)>,
 }
 
 fn seconds(frames: usize) -> f64 {
@@ -84,6 +91,11 @@ fn windows(pcm: &[f32], from: usize) -> Vec<Window> {
                 .iter()
                 .filter(|mark| mark.at.is_finite() && mark.at >= 0.0 && f64::from(mark.at) < kept)
                 .map(|mark| mark.at + start.to_f32().unwrap_or(f32::MAX))
+                .collect(),
+            marks: raw
+                .beats
+                .iter()
+                .map(|mark| (mark.at.to_bits(), mark.confidence))
                 .collect(),
         });
 
@@ -163,6 +175,47 @@ fn parity(pcm: &[f32], name: &str, from_seconds: usize) {
     );
 }
 
+/// Checks every window's raw beats against `name`: positions bit for bit,
+/// confidence within [`CONFIDENCE_TOLERANCE`]. With [`UPDATE_REFERENCE`] set it
+/// records the reference instead.
+fn reference(pcm: &[f32], name: &str, from_seconds: usize) {
+    let marks: Vec<Vec<(u32, f32)>> = windows(pcm, from_seconds * Pass::RATE)
+        .into_iter()
+        .map(|window| window.marks)
+        .collect();
+    let path = fixture(name);
+    if std::env::var_os(UPDATE_REFERENCE).is_some() {
+        let text = serde_json::to_string(&marks).expect("beat marks serialize");
+        std::fs::write(&path, text)
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+        return;
+    }
+
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("failed to read reference {}: {error}", path.display()));
+    let expected: Vec<Vec<(u32, f32)>> = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("failed to parse reference {}: {error}", path.display()));
+    assert_eq!(
+        marks.len(),
+        expected.len(),
+        "window count differs from {name}"
+    );
+    for (index, (got, want)) in marks.iter().zip(&expected).enumerate() {
+        let positions = |marks: &[(u32, f32)]| marks.iter().map(|(at, _)| *at).collect::<Vec<_>>();
+        assert_eq!(
+            positions(got),
+            positions(want),
+            "beat positions differ in window {index} of {name}"
+        );
+        for ((_, confidence), (_, recorded)) in got.iter().zip(want) {
+            assert!(
+                (confidence - recorded).abs() <= CONFIDENCE_TOLERANCE,
+                "confidence {confidence} differs from {recorded} in window {index} of {name}"
+            );
+        }
+    }
+}
+
 #[kithara::test(native, flash(false))]
 fn degara_parity(beat_pcm: Vec<f32>) {
     parity(&beat_pcm, "golden_degara_windowed.json", 0);
@@ -173,6 +226,22 @@ fn degara_parity(beat_pcm: Vec<f32>) {
 #[case::at_another_alignment("golden_degara_track_windowed_from7.json", 7)]
 fn degara_parity_holds(track_pcm: Vec<f32>, #[case] golden: &str, #[case] from_seconds: usize) {
     parity(&track_pcm, golden, from_seconds);
+}
+
+#[kithara::test(native)]
+fn spectral_beats_match_the_reference(beat_pcm: Vec<f32>) {
+    reference(&beat_pcm, "reference_spectral_beat.json", 0);
+}
+
+#[kithara::test(native)]
+#[case::the_track("reference_spectral_track.json", 0)]
+#[case::at_another_alignment("reference_spectral_track_from7.json", 7)]
+fn spectral_beats_on_the_track_match_the_reference(
+    track_pcm: Vec<f32>,
+    #[case] name: &str,
+    #[case] from_seconds: usize,
+) {
+    reference(&track_pcm, name, from_seconds);
 }
 
 #[kithara::fixture]

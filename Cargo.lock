@@ -4680,6 +4680,7 @@ name = "kithara-beat"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "criterion",
  "hex",
  "kithara-bufpool",
  "kithara-derive",
@@ -6181,6 +6182,7 @@ name = "kithara-waveform"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "criterion",
  "delegate",
  "fieldwork",
  "kithara-blob",
@@ -6188,12 +6190,14 @@ dependencies = [
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "rangemap",
  "realfft",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]
