@@ -262,13 +262,24 @@ impl Core {
     /// Quiescence requires both the sync and async participant counts at zero, except async slots
     /// no thread can currently poll (`pinning_async`), which do not block the advance while a paced
     /// op is in flight.
+    ///
+    /// Cooperative yielders outrank pure thread parks, whose deadlines are poll
+    /// intervals rather than events, so a spin loop gets its turn before the
+    /// clock spends time on one. That turn is taken ONCE per virtual instant:
+    /// releasing yielders costs no time, so an unbounded precedence lets a loop
+    /// that cannot progress starve every timed waiter forever — a stress wedge
+    /// held one advance against 3.19e9 releases while a 250us park never fired.
+    /// A yielder that comes back to an unmoved clock has shown it needs time,
+    /// and the advance wakes it too, exactly as `yielders` documents.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0 || (!paced && self.registry.pinning_async() != 0) {
             self.sched.advance_counts.blocked += 1;
             return WakeBatch(Vec::new());
         }
+        let now = clock.now_nanos();
         if !self.sched.yielders.is_empty()
+            && self.sched.yield_released_at != Some(now)
             && self
                 .sched
                 .timed
@@ -278,6 +289,7 @@ impl Core {
             let woken: Vec<Wake> = std::mem::take(&mut self.sched.yielders)
                 .into_values()
                 .collect();
+            self.sched.yield_released_at = Some(now);
             self.sched.advance_counts.yield_releases += 1;
             self.registry.account_woken(&woken);
             return WakeBatch(woken);
@@ -306,10 +318,7 @@ impl Core {
                 return WakeBatch(Vec::new());
             }
         }
-        debug_assert!(
-            min >= clock.now_nanos(),
-            "virtual clock must not move backward"
-        );
+        debug_assert!(min >= now, "virtual clock must not move backward");
         clock.store(min);
         self.sched.advance_counts.advances += 1;
         #[cfg(test)]

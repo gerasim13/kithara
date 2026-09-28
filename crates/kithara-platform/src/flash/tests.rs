@@ -3,7 +3,7 @@ use std::{
     panic::Location,
     sync::{
         Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Wake, Waker},
     thread,
@@ -691,6 +691,73 @@ fn first_park_bootstraps_and_self_advances() {
     );
     assert_eq!(flash.advance_log(), vec![base + 4 * consts::NANOS_PER_SEC]);
     assert_eq!(flash.active_count(), 0, "bootstrap balanced on exit");
+}
+
+/// A busy-poll loop that cannot progress must not starve a thread park. The
+/// yield branch of the advance rule hands cooperative yielders the instant
+/// before it spends time on a pure park, and releasing them costs no virtual
+/// time — so an unbounded precedence is a livelock: the spinner is re-released
+/// forever and the park's deadline never arrives. Regression for the flash-on
+/// stress wedge whose pre-kill dump read `advances=1` against
+/// `advance_yield_releases=3186539027` with one unserved 250us park.
+///
+/// The spinner is `bracketed_on` because the wedged thread was a dedicated
+/// participant, and the loop is bounded so a starved run fails on its own
+/// budget instead of hanging the binary; the park is released either way so a
+/// failure cannot leave the child wedged.
+#[kithara::test(native, flash(false))]
+fn a_spinning_yielder_cannot_starve_a_thread_park() {
+    const PARK_SECS: u64 = 1;
+    const STARVATION_SPINS: usize = 10_000;
+
+    let flash = FlashInner::new_arc();
+    let base = flash.clock.now_nanos();
+    let real_start = RealInstant::now();
+
+    let woke = Arc::new(AtomicBool::new(false));
+    let parked = {
+        let flash = Arc::clone(&flash);
+        let woke = Arc::clone(&woke);
+        thread::spawn(move || {
+            bracketed_on(&flash, || {
+                let me = super::ids::ThreadKey::of(thread::current().id());
+                flash.park_timed_unparkable(
+                    Duration::from_secs(PARK_SECS),
+                    me,
+                    super::system::ParkRole::Deadline,
+                );
+                woke.store(true, Ordering::Release);
+            });
+        })
+    };
+    let parked_key = super::ids::ThreadKey::of(parked.thread().id());
+
+    // The spinner's own dedicated credit holds the clock still until it yields,
+    // so the park cannot self-advance before the spin starts.
+    let mut spins = 0usize;
+    bracketed_on(&flash, || {
+        while flash.timed_count() != 1 {
+            thread::yield_now();
+        }
+        while !woke.load(Ordering::Acquire) && spins < STARVATION_SPINS {
+            spins += 1;
+            flash.yield_until_advance();
+        }
+    });
+
+    flash.unpark(parked_key);
+    parked.join().expect("parked thread panicked");
+
+    assert_fast(real_start);
+    assert!(
+        spins < STARVATION_SPINS,
+        "a yielder starved the park for {spins} turns"
+    );
+    assert_eq!(
+        flash.advance_log(),
+        vec![base + PARK_SECS * consts::NANOS_PER_SEC],
+        "the spinner's second turn spends time on the park it cannot outrun"
+    );
 }
 
 #[kithara::test(native, flash(false))]
