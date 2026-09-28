@@ -1,3 +1,8 @@
+use std::{
+    any::Any,
+    panic::{self, AssertUnwindSafe},
+};
+
 use kithara_platform::{
     sync::{Mutex, mpsc, mpsc::RecvTimeoutError},
     thread::spawn_named,
@@ -6,10 +11,14 @@ use kithara_platform::{
 };
 
 type Job<T> = Box<dyn FnOnce(&mut T) + Send>;
+/// What the owner thread died of, carried on its completion signal. A panic on
+/// the owner also closes the caller's channel, so a caller without this reports
+/// the closure and the panic that caused it reaches no test.
+type OwnerExit = Option<Box<dyn Any + Send>>;
 
 pub struct OffThread<T> {
     name: &'static str,
-    done: Mutex<Option<oneshot::Receiver<()>>>,
+    done: Mutex<Option<oneshot::Receiver<OwnerExit>>>,
     jobs: Mutex<mpsc::Sender<Job<T>>>,
 }
 
@@ -29,18 +38,22 @@ impl<T: 'static> OffThread<T> {
         let request = Box::new(move |value: &mut T| {
             drop(answer.send(job(value)));
         });
-        if self.jobs.lock().send(request).is_err() {
+        let accepted = self.jobs.lock().send(request).is_ok();
+        if !accepted {
+            self.settled().await;
             panic!(
                 "OffThread owner thread `{}` stopped before accepting a call",
                 self.name
             );
         }
-        receiver.await.unwrap_or_else(|_| {
+        let Ok(value) = receiver.await else {
+            self.settled().await;
             panic!(
                 "OffThread owner thread `{}` panicked before returning a call result",
                 self.name
-            )
-        })
+            );
+        };
+        value
     }
 
     /// Drops the job sender and waits for the owner to drop `T`.
@@ -56,9 +69,27 @@ impl<T: 'static> OffThread<T> {
             .lock()
             .take()
             .expect("OffThread completion receiver must remain present until close");
-        done.await.unwrap_or_else(|_| {
-            panic!("OffThread owner thread `{name}` panicked before teardown completed")
-        });
+        match done.await {
+            Ok(None) => {}
+            Ok(Some(payload)) => panic::resume_unwind(payload),
+            Err(_) => panic!("OffThread owner thread `{name}` panicked before teardown completed"),
+        }
+    }
+
+    /// Wait for the owner to finish, then re-raise whatever it died of.
+    ///
+    /// The owner reports its panic on the completion signal, so the wait is
+    /// what makes the payload readable: a caller that skipped it would race
+    /// the unwind and report a closed channel every time. Resuming the payload
+    /// keeps the original message and location, so the failure names the
+    /// assertion that broke rather than the thread that was serving it.
+    /// Returns when the owner left nothing to re-raise.
+    async fn settled(&self) {
+        let done = self.done.lock().take();
+        let Some(done) = done else { return };
+        if let Ok(Some(payload)) = done.await {
+            panic::resume_unwind(payload);
+        }
     }
 
     async fn serving<E, I, F>(name: &'static str, init: I, serve: F) -> Result<Self, E>
@@ -74,24 +105,30 @@ impl<T: 'static> OffThread<T> {
 
         drop(spawn_named(name, move || {
             let _runtime = runtime.enter();
-            let mut value = match init() {
-                Ok(value) => value,
-                Err(error) => {
-                    drop(ready.send(Err(error)));
+            let served = panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut value = match init() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        drop(ready.send(Err(error)));
+                        return;
+                    }
+                };
+                if ready.send(Ok(())).is_err() {
                     return;
                 }
-            };
-            if ready.send(Ok(())).is_err() {
-                return;
-            }
-            serve(&receiver, &mut value);
-            drop(value);
-            let _ = done.send(());
+                serve(&receiver, &mut value);
+                drop(value);
+            }));
+            let _ = done.send(served.err());
         }));
 
-        match ready_receiver.await.unwrap_or_else(|_| {
-            panic!("OffThread owner thread `{name}` panicked during initialization")
-        }) {
+        let Ok(ready) = ready_receiver.await else {
+            if let Ok(Some(payload)) = done_receiver.await {
+                panic::resume_unwind(payload);
+            }
+            panic!("OffThread owner thread `{name}` panicked during initialization");
+        };
+        match ready {
             Ok(()) => Ok(Self {
                 name,
                 jobs: Mutex::new(jobs),
@@ -206,6 +243,43 @@ mod tests {
             .await;
 
         assert_eq!(value, 42);
+        owner.close().await;
+    }
+
+    /// A panicking job must fail its caller with the panic it raised. The
+    /// owner's death reaches the caller only as a closed channel, so without
+    /// the payload the failure names the thread and never the assertion.
+    #[kithara::test(tokio)]
+    #[should_panic(expected = "the job's own panic")]
+    async fn call_reports_the_panic_its_job_raised() {
+        let owner = OffThread::spawn("off-thread-job-panic", || Ok::<_, ()>(0_u32))
+            .await
+            .expect("owner initialization must succeed");
+
+        let (): () = owner.call(|_| panic!("the job's own panic")).await;
+    }
+
+    /// A panicking tick has no caller of its own: it kills the owner between
+    /// calls, so teardown is the only place its panic can still be named.
+    #[kithara::test(tokio)]
+    #[should_panic(expected = "the tick's own panic")]
+    async fn close_reports_the_panic_a_tick_raised() {
+        let (ticked, ticking) = oneshot::channel();
+        let mut ticked = Some(ticked);
+        let owner = OffThread::spawn_paced(
+            "off-thread-tick-panic",
+            || Ok::<_, ()>(0_u32),
+            Duration::from_millis(1),
+            move |_| {
+                let ticked = ticked.take().expect("the first tick panics");
+                let _ = ticked.send(());
+                panic!("the tick's own panic");
+            },
+        )
+        .await
+        .expect("owner initialization must succeed");
+
+        ticking.await.expect("the owner must reach its first tick");
         owner.close().await;
     }
 

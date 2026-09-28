@@ -5,7 +5,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, ExclusiveGate, ExclusiveGuard, Mutex, MutexGuard},
     tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_play::{
@@ -45,8 +45,9 @@ where
     /// `TrackStatus::Cancelled`); without a single serialization point the completion
     /// can observe-not-cancelled then `select_item` *after* the superseding select
     /// committed, so the superseded track barges in. Held only across the synchronous
-    /// apply critical section — never across an `.await`.
-    pub(super) select_apply: Arc<Mutex<()>>,
+    /// apply critical section - never across an `.await`. That section waits on the
+    /// player's session, so a contender parks on the gate instead of blocking a lock.
+    pub(super) select_apply: ExclusiveGate,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
     /// `Arc<Tracks>`; every status transition goes through
@@ -76,8 +77,10 @@ where
     pub(super) shutdown: CancelToken,
     pub(super) bus: EventBus,
     pub(super) config: Arc<QueueConfig<S>>,
-    /// Serializes every state-changing command against terminal close.
-    pub(super) admission: Mutex<()>,
+    /// Serializes every state-changing command against terminal close. A command
+    /// waits on the player's session while admitted, so a contender parks on the
+    /// gate instead of blocking a lock.
+    pub(super) admission: ExclusiveGate,
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
@@ -181,11 +184,11 @@ where
             tracks,
             bus,
             config: Arc::new(config),
-            admission: Mutex::new(()),
+            admission: ExclusiveGate::default(),
             shutdown: cancel,
             navigation,
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
-            select_apply: Arc::new(Mutex::new(())),
+            select_apply: ExclusiveGate::default(),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
             autoplay_target: AtomicTrackId::disarmed(),
@@ -261,28 +264,6 @@ where
     }
 
     delegate::delegate! {
-        to self.admission {
-            #[call(lock)]
-            pub(in crate::queue) fn lock_admission(&self) -> MutexGuard<'_, ()>;
-        }
-        to self.navigation {
-            #[call(lock)]
-            pub(super) fn lock_navigation(&self) -> MutexGuard<'_, NavigationState>;
-            #[call(lock)]
-            pub(super) fn lock_navigation_mut(&self) -> MutexGuard<'_, NavigationState>;
-        }
-        to self.pending_select {
-            #[call(lock)]
-            pub(in crate::queue) fn lock_pending_select_mut(&self) -> MutexGuard<'_, SelectPhase>;
-        }
-        to self.select_apply {
-            /// Acquire the selection-apply serialization guard (see
-            /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
-            /// `navigation`/`player` in both `select` and the
-            /// `spawn_apply_after_load` completion, so the two cannot interleave.
-            #[call(lock)]
-            pub(in crate::queue) fn lock_select_apply(&self) -> MutexGuard<'_, ()>;
-        }
         to self.tracks {
             #[call(lock)]
             pub(super) fn lock_tracks(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
@@ -303,6 +284,28 @@ where
             pub(super) fn read_cached_position(&self) -> CachedPosition;
             #[call(store)]
             pub(super) fn write_cached_position(&self, pos: CachedPosition);
+        }
+        to self.admission {
+            #[call(lock)]
+            pub(in crate::queue) fn lock_admission(&self) -> ExclusiveGuard<'_>;
+        }
+        to self.navigation {
+            #[call(lock)]
+            pub(super) fn lock_navigation(&self) -> MutexGuard<'_, NavigationState>;
+            #[call(lock)]
+            pub(super) fn lock_navigation_mut(&self) -> MutexGuard<'_, NavigationState>;
+        }
+        to self.pending_select {
+            #[call(lock)]
+            pub(in crate::queue) fn lock_pending_select_mut(&self) -> MutexGuard<'_, SelectPhase>;
+        }
+        to self.select_apply {
+            /// Acquire the selection-apply serialization guard (see
+            /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
+            /// `navigation`/`player` in both `select` and the
+            /// `spawn_apply_after_load` completion, so the two cannot interleave.
+            #[call(lock)]
+            pub(in crate::queue) fn lock_select_apply(&self) -> ExclusiveGuard<'_>;
         }
     }
 }

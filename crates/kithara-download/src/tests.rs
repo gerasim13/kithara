@@ -420,6 +420,43 @@ async fn downloader_shutdown_cancels_queued_commands() {
     }
 }
 
+/// A downloader with no parent cancel is shut down by its last handle: the loop
+/// must not keep itself alive, or it strands every command it still queues and
+/// keeps its client and ABR controller for the life of the runtime.
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn dropping_the_last_handle_shuts_a_parentless_downloader_down() {
+    const COMMANDS: usize = 2;
+
+    let url = Url::parse("http://example.test/orphaned").expect("valid test URL");
+    let gate = CompletionGate::new(COMMANDS);
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(
+            (0..COMMANDS)
+                .map(|_| cancellation_cmd(&url, &gate, &errors))
+                .collect(),
+        )),
+        yielded: Notify::default(),
+    });
+    let dl = Downloader::new(DownloaderConfig {
+        max_concurrent: 0,
+        ..test_config()
+    });
+    let handle = dl.register(peer.clone());
+    peer.yielded.notified().await;
+
+    drop(handle);
+    drop(dl);
+    gate.wait().await;
+
+    let errors = errors.lock();
+    assert_eq!(errors.len(), COMMANDS);
+    for error in errors.iter() {
+        assert!(matches!(error, Some(FetchError::Cancelled)));
+    }
+}
+
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn streaming_without_writer_still_completes() {
     let app = Router::new().route("/data", get(|| async { "body" }));

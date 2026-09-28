@@ -18,7 +18,7 @@ use kithara_test_utils::kithara;
 use tracing::debug;
 
 use crate::{
-    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, consts,
     error::{SourceError, StreamError, StreamResult},
     playhead::PlayheadWrite,
     seek_state::{Activity, SeekControl, SeekObserve},
@@ -548,6 +548,12 @@ impl<T: StreamType> Stream<T> {
             Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                 Err(IoError::other(VariantChangeError))
             }
+            // No peer wake: the session that owned this read is gone, so
+            // there is nothing left to plan against it. The caller rebuilds
+            // and the new owner arms its own peer.
+            Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
+                Err(IoError::new(ErrorKind::Interrupted, reason))
+            }
             Err(StreamReadError::Source(e)) => Err(e),
         }
     }
@@ -636,8 +642,10 @@ impl<T: StreamType> Read for Stream<T> {
     /// Timeout and stall policy remain owned by the source.
     ///
     /// On an evicted `Retry` range, wakes the peer to trigger a re-fetch and re-loops, so the next
-    /// attempt parks in the event-driven `wait_range`.
+    /// attempt parks in the event-driven `wait_range`. Each re-aim starts a fresh source wait, so
+    /// only this loop can see that nothing arrives: returning is its only progress.
     #[kithara::flash(true)]
+    #[kithara::hang_watchdog(timeout = consts::READ_HANG_TIMEOUT)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             match self.try_read_with(buf, WaitMode::Block) {
@@ -646,6 +654,7 @@ impl<T: StreamType> Read for Stream<T> {
                 Ok(StreamReadOutcome::Pending(
                     PendingReason::NotReady(_) | PendingReason::Retry,
                 )) => {
+                    hang_tick!();
                     self.notify_peer_wake();
                 }
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
@@ -654,6 +663,11 @@ impl<T: StreamType> Read for Stream<T> {
                 }
                 Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                     return Err(IoError::other(VariantChangeError));
+                }
+                // Retirement never resolves by waiting: looping here would
+                // block on a session nobody owns any more.
+                Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
+                    return Err(IoError::new(ErrorKind::Interrupted, reason));
                 }
                 Err(StreamReadError::Source(e)) => return Err(e),
             }

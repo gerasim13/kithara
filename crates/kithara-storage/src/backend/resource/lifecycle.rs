@@ -59,12 +59,21 @@ impl<D: DriverIo> ResourceCore<D> {
 
     /// The write side pays the frees that produce-core reads parked, rather than leaving them for
     /// the reader that raced the write.
+    ///
+    /// The observer records the commit before the resource reports it: whoever sees `Committed`
+    /// may evict the resource and drop its record, and a record landing after that would revive
+    /// availability for a resource nobody can open.
     fn finish_inner(&self, final_len: Option<u64>, publish: Publish) -> StorageResult<()> {
         self.check_health()?;
 
         match publish {
             Publish::Snapshot => self.inner.driver.commit(final_len)?,
             Publish::Skip => self.inner.driver.seal(final_len)?,
+        }
+        if let Some(len) = final_len
+            && let Some(observer) = self.inner.observer.as_ref()
+        {
+            observer.on_commit(len);
         }
         self.inner.committed.store(true, Ordering::Release);
 
@@ -91,12 +100,6 @@ impl<D: DriverIo> ResourceCore<D> {
         }
         self.inner.gate.notify_all();
         self.inner.retired.drain();
-
-        if let Some(len) = final_len
-            && let Some(observer) = self.inner.observer.as_ref()
-        {
-            observer.on_commit(len);
-        }
 
         Ok(())
     }

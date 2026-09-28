@@ -260,6 +260,7 @@ where
                     AdvanceReason::RemovedCurrent,
                     playback,
                 )?;
+                self.commit_navigation_to(next);
             } else {
                 self.player.pause();
             }

@@ -21,6 +21,7 @@ use kithara::{
         tokio::{
             runtime::Handle,
             sync::{mpsc, oneshot, watch},
+            task,
         },
     },
     play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
@@ -394,6 +395,31 @@ pub(crate) async fn answer_subscribe(
     assert_eq!(track_id, expected, "for the track its queue holds");
     let (tx, rx) = watch::channel(None);
     assert!(reply.send(rx).is_ok(), "the deck waits for the reply");
+    tx
+}
+
+/// Answers every subscription for `expected` from one publication channel,
+/// the way the analysis service answers them from a track's entry.
+///
+/// A deck keeps the channel it holds while its track and axis hold, but a
+/// different track or axis still releases that receiver and asks again. A
+/// fixture that answers once leaves the deck holding nothing from that ask
+/// onwards: it mirrors no further revision, and the pass that publishes sees
+/// no receiver left. Serving every ask keeps the deck subscribed for as long
+/// as the caller holds the sender.
+pub(crate) async fn serve_subscribe(
+    mut requests: mpsc::Receiver<Request>,
+    expected: TrackId,
+) -> watch::Sender<Option<TrackArtifacts>> {
+    let tx = answer_subscribe(&mut requests, expected).await;
+    let sender = tx.clone();
+    task::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            if let Request::Subscribe { reply, .. } = request {
+                let _ = reply.send(sender.subscribe());
+            }
+        }
+    });
     tx
 }
 

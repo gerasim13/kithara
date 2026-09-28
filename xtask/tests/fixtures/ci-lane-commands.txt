@@ -2264,6 +2264,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / platforms
   <require os> linux
@@ -2273,6 +2275,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / merge-request
   <require os> linux
@@ -2282,6 +2286,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / quarantine
   <require os> linux
@@ -2291,6 +2297,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / main
   <require os> linux
@@ -2300,6 +2308,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / nightly
   <require os> linux
@@ -2309,6 +2319,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / weekly
   <require os> linux
@@ -2318,6 +2330,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / release
   <require os> linux
@@ -2327,6 +2341,8 @@
     CARGO_BUILD_JOBS=2
     CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / branch
   <require os> linux
