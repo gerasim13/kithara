@@ -187,9 +187,6 @@ mod tests {
         }
         .command();
         let args: Vec<_> = command.get_args().map(OsStr::to_string_lossy).collect();
-        assert!(
-            args.iter()
-                .any(|arg| arg == "kithara-ui/capture,kithara-ui/masonry")
-        );
+        assert!(args.iter().any(|arg| arg == "kithara-ui-gallery/masonry"));
     }
 }

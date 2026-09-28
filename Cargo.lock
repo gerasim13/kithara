@@ -5906,7 +5906,6 @@ dependencies = [
 name = "kithara-test-fixtures"
 version = "0.0.1-alpha5"
 dependencies = [
- "hex",
  "hls_m3u8",
  "kithara-analysis",
  "kithara-decode",
@@ -5925,7 +5924,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
  "tiny_http",
