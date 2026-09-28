@@ -15,13 +15,14 @@ ignored = ["unimock"]
 [features]
 default = []
 mock = ["dep:unimock"]
-usdt = ["kithara-warp/usdt"]
+usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt", "kithara-warp/usdt"]
 perf = ["kithara-warp/perf"]
 
 [dependencies]
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true, optional = true }
 kithara-warp = { workspace = true, default-features = false }
 
 bon = { workspace = true }

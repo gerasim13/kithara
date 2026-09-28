@@ -54,7 +54,8 @@ player, host, or queue.
 ## Features
 
 - `mock` — `mock::MemberOwner`, the owner of one member behind its own gate, and `ReceiptSinkMock`, for tests of the member side of the gate.
-- `usdt`, `perf` — forwarded to `kithara-warp`.
+- `usdt` — the executor's `sync_ticket_handed` probe, fired once a staged entry's ticket is handed to the audio thread; forwarded to `kithara-warp`.
+- `perf` — forwarded to `kithara-warp`.
 
 ## Integration
 

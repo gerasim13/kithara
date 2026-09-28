@@ -8,6 +8,7 @@ use kithara_platform::{
         task::{spawn_blocking_on, spawn_on},
     },
 };
+use kithara_test_macros as kithara;
 use kithara_warp::{BeatGridId, supports_playback_rate};
 use tracing::warn;
 
@@ -363,15 +364,20 @@ impl<P: StagePort> Shared<P> {
             drop(lane);
             Err(SyncExecutionReject::Cancelled)
         };
-        if let Err(reason) = result {
-            let mut state = self.state.lock();
-            let _ = state.commit(
-                Outcome {
-                    stamp,
-                    rejected: Some(reason),
-                },
-                &runtime,
-            );
+        match result {
+            Ok(()) => {
+                kithara::probe_event!(sync_ticket_handed, operation = u64::from(stamp.operation()));
+            }
+            Err(reason) => {
+                let mut state = self.state.lock();
+                let _ = state.commit(
+                    Outcome {
+                        stamp,
+                        rejected: Some(reason),
+                    },
+                    &runtime,
+                );
+            }
         }
     }
 

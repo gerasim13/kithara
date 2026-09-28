@@ -5,14 +5,15 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     signal::SessionFrame,
     sync::{
-        AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncOperation, SyncStatusSnapshot,
+        AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncOperation, SyncOperationId,
+        SyncStatusSnapshot,
     },
     warp::AssetFrame,
 };
-use kithara_integration_tests::{grid::Start, kithara};
+use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
 
 use super::sync_product_matrix::{
-    Audible, BLOCK_FRAMES, PUBLIC_SYNTHETIC_ENABLE, ProductHarness, synthetic_sources,
+    Audible, BLOCK_FRAMES, PUBLIC_SYNTHETIC_ENABLE, ProductHarness, SyncCase, synthetic_sources,
 };
 
 /// Output frames one beat of the 120 BPM Host lasts at 48 kHz.
@@ -24,11 +25,50 @@ const ENTRY_LEAD_FRAMES: i64 = 2_048;
 const WINDOW_BEATS: i64 = 5;
 /// The activation of the entry whose every admissible beat has passed.
 const MISSED_FROM: i64 = BEAT_FRAMES;
-/// Output the Host renders after the missed entry's request, at most.
-const REPLAN_FRAMES: usize = 4 * 48_000;
+/// The Host beat the fresh observation lands just ahead of. Eight beats are
+/// a whole number of render blocks, and the missed entry's window is over.
+const LEAD_BEAT: i64 = 8 * BEAT_FRAMES;
+/// Where the Host observes the deck afresh: within the entry lead before
+/// [`LEAD_BEAT`], so only the lead moves the entry on to the next beat.
+const OBSERVED: i64 = LEAD_BEAT - ENTRY_LEAD_FRAMES / 2;
+/// Output the Host renders after the replanned entry's ticket, at most.
+const PRESENT_FRAMES: usize = 4 * 48_000;
+/// Probe fired once a staged entry's ticket is handed to the audio thread.
+const TICKET_HANDED: &str = "sync_ticket_handed";
 
 fn block() -> i64 {
     i64::try_from(BLOCK_FRAMES).expect("render block fits i64")
+}
+
+fn host_frame(harness: &ProductHarness) -> i64 {
+    i64::try_from(harness.host.position()).expect("Host frame fits i64")
+}
+
+async fn status(harness: &ProductHarness) -> SyncStatusSnapshot {
+    let deck = Arc::clone(&harness.decks[0]);
+    harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("deck state")
+        .status
+}
+
+/// Waits, without rendering, until `operation`'s staged ticket is handed to
+/// the audio thread, so the next block is the first that can judge it.
+async fn handed(trace: &usdt_trace::Scope, operation: SyncOperationId) {
+    let operation = u64::from(operation);
+    trace
+        .wait_for(|events| {
+            events.iter().any(|event| {
+                event.probe == TICKET_HANDED && event.field("operation") == Some(operation)
+            })
+        })
+        .await;
+}
+
+async fn render_block(harness: &mut ProductHarness, case: SyncCase) {
+    let _ = harness.render(case, BLOCK_FRAMES).await;
 }
 
 #[kithara::test(
@@ -50,18 +90,20 @@ async fn a_late_deck_entry_sounds_on_the_next_beat_the_host_plans_itself() {
         BLOCK_FRAMES,
     )
     .await;
-    let passed =
-        u64::try_from(MISSED_FROM + (WINDOW_BEATS + 1) * BEAT_FRAMES).expect("positive frame");
-    while harness.host.position() < passed {
-        let _ = harness.render(case, BLOCK_FRAMES).await;
+    let trace = usdt_trace::scope();
+    let requested = OBSERVED - block();
+    assert!(requested >= MISSED_FROM + (WINDOW_BEATS + 1) * BEAT_FRAMES);
+    while host_frame(&harness) < requested {
+        render_block(&mut harness, case).await;
     }
+    assert_eq!(host_frame(&harness), requested, "blocks reach the request");
 
     let deck = Arc::clone(&harness.decks[0]);
     let target = deck.id();
     let heard = deck.playback_view().position.unwrap_or(0.0) * f64::from(case.sample_rate);
     let cue = AssetFrame::new(heard).expect("finite cue");
     let transport = harness.transport_revision(case).await;
-    harness
+    let _ = harness
         .host
         .with(move |host| {
             host.transact(SyncOperation::Sync {
@@ -75,76 +117,63 @@ async fn a_late_deck_entry_sounds_on_the_next_beat_the_host_plans_itself() {
         })
         .await
         .expect("a caller may ask for an entry whose beats have passed");
-    let state = harness
-        .host
-        .with(move |host| host.deck_sync_state(&deck))
-        .await
-        .expect("accepted deck state");
+    let issued = status(&harness).await;
     let SyncStatusSnapshot::Prepared {
         operation: missed,
         activation: missed_at,
         ..
-    } = state.status
+    } = issued
     else {
-        panic!("Enable issues one entry, got {:?}", state.status);
+        panic!("Enable issues one entry, got {issued:?}");
     };
-    let requested = i64::try_from(harness.host.position()).expect("Host frame fits i64");
     assert!(
         i64::from(missed_at) < requested,
         "the entry's beat passed before any audio could claim it"
     );
+    handed(&trace, missed).await;
 
-    let mut replanned = None;
-    let mut presented = None;
-    let mut last = state.status;
-    for _ in 0..REPLAN_FRAMES / BLOCK_FRAMES {
-        let rendered = i64::try_from(harness.host.position()).expect("Host frame fits i64");
-        let _ = harness.render(case, BLOCK_FRAMES).await;
-        let deck = Arc::clone(&harness.decks[0]);
-        last = harness
-            .host
-            .with(move |host| host.deck_sync_state(&deck))
-            .await
-            .expect("deck state")
-            .status;
-        match last {
-            SyncStatusSnapshot::Prepared {
-                operation,
-                activation,
-                ..
-            } if operation != missed => {
-                replanned.get_or_insert((operation, activation, rendered));
-            }
+    render_block(&mut harness, case).await;
+    assert_eq!(host_frame(&harness), OBSERVED);
+    let replanned = status(&harness).await;
+    let SyncStatusSnapshot::Prepared {
+        operation,
+        activation,
+        ..
+    } = replanned
+    else {
+        panic!(
+            "the block that misses the entry lets the Host plan it once more, got {replanned:?}"
+        );
+    };
+    assert!(operation > missed, "the Host plans a new decision");
+    assert_eq!(
+        i64::from(activation),
+        LEAD_BEAT + BEAT_FRAMES,
+        "the replanned entry takes the first beat after the Host's lead"
+    );
+    handed(&trace, operation).await;
+
+    let mut last = None;
+    for _ in 0..PRESENT_FRAMES / BLOCK_FRAMES {
+        render_block(&mut harness, case).await;
+        match status(&harness).await {
             SyncStatusSnapshot::Converging { applied, .. }
             | SyncStatusSnapshot::Locked { applied, .. } => {
-                presented = Some(applied);
-                break;
+                assert_eq!(applied.stamp().operation(), operation);
+                assert_eq!(
+                    applied.frontier().output(),
+                    SessionFrame::new(i64::from(activation) + 1),
+                    "the replanned entry sounds from its own activation"
+                );
+                assert!(
+                    harness.failures.is_empty(),
+                    "the missed entry reported no harness failure: {:?}",
+                    harness.failures
+                );
+                return;
             }
-            _ => {}
+            state => last = Some(state),
         }
     }
-
-    let applied = presented.unwrap_or_else(|| {
-        panic!("rendering alone must sound the missed entry, last state {last:?}")
-    });
-    let (operation, activation, rendered) =
-        replanned.expect("the Host plans the missed entry once more");
-    assert!(operation > missed);
-    assert_eq!(applied.stamp().operation(), operation);
-    assert_eq!(
-        applied.frontier().output(),
-        SessionFrame::new(i64::from(activation) + 1),
-        "the replanned entry sounds from its own activation"
-    );
-    let earliest = rendered + ENTRY_LEAD_FRAMES;
-    assert!(
-        (earliest..earliest + block() + BEAT_FRAMES).contains(&i64::from(activation)),
-        "the replanned entry takes the next beat after the Host's lead: \
-         rendered {rendered}, activation {activation:?}"
-    );
-    assert!(
-        harness.failures.is_empty(),
-        "the missed entry reported no harness failure: {:?}",
-        harness.failures
-    );
+    panic!("rendering alone must sound the replanned entry, last state {last:?}");
 }
