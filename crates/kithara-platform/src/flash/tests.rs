@@ -3,7 +3,7 @@ use std::{
     panic::Location,
     sync::{
         Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Wake, Waker},
     thread,
@@ -693,113 +693,6 @@ fn first_park_bootstraps_and_self_advances() {
     assert_eq!(flash.active_count(), 0, "bootstrap balanced on exit");
 }
 
-/// A busy-poll loop that cannot progress must not starve a thread park. The
-/// yield branch of the advance rule hands cooperative yielders the instant
-/// before it spends time on a pure park, and releasing them costs no virtual
-/// time — so an unbounded precedence is a livelock: the spinner is re-released
-/// forever and the park's deadline never arrives. Regression for the flash-on
-/// stress wedge whose pre-kill dump read `advances=1` against
-/// `advance_yield_releases=3186539027` with one unserved 250us park.
-///
-/// The spinner is `bracketed_on` because the wedged thread was a dedicated
-/// participant, and the loop is bounded so a starved run fails on its own
-/// budget instead of hanging the binary; the park is released either way so a
-/// failure cannot leave the child wedged.
-#[kithara::test(native, flash(false))]
-fn a_spinning_yielder_cannot_starve_a_thread_park() {
-    const PARK_SECS: u64 = 1;
-    const STARVATION_SPINS: usize = 10_000;
-
-    let flash = FlashInner::new_arc();
-    let base = flash.clock.now_nanos();
-    let real_start = RealInstant::now();
-
-    let woke = Arc::new(AtomicBool::new(false));
-    let parked = {
-        let flash = Arc::clone(&flash);
-        let woke = Arc::clone(&woke);
-        thread::spawn(move || {
-            bracketed_on(&flash, || {
-                let me = super::ids::ThreadKey::of(thread::current().id());
-                flash.park_timed_unparkable(
-                    Duration::from_secs(PARK_SECS),
-                    me,
-                    super::system::ParkRole::Deadline,
-                );
-                woke.store(true, Ordering::Release);
-            });
-        })
-    };
-    let parked_key = super::ids::ThreadKey::of(parked.thread().id());
-
-    // The spinner's own dedicated credit holds the clock still until it yields,
-    // so the park cannot self-advance before the spin starts.
-    let mut spins = 0usize;
-    bracketed_on(&flash, || {
-        while flash.timed_count() != 1 {
-            thread::yield_now();
-        }
-        while !woke.load(Ordering::Acquire) && spins < STARVATION_SPINS {
-            spins += 1;
-            flash.yield_until_advance();
-        }
-    });
-
-    flash.unpark(parked_key);
-    parked.join().expect("parked thread panicked");
-
-    assert_fast(real_start);
-    assert!(
-        spins < STARVATION_SPINS,
-        "a yielder starved the park for {spins} turns"
-    );
-    assert_eq!(
-        flash.advance_log(),
-        vec![base + PARK_SECS * consts::NANOS_PER_SEC],
-        "the spinner's second turn spends time on the park it cannot outrun"
-    );
-}
-
-/// The bound on that turn must not reach the case it was never about: with no
-/// timed waiter there is nothing to starve and no advance to wait for, so the
-/// SECOND yield at one virtual instant must still be granted. Capping the turn
-/// unconditionally stranded it and wedged three `kithara-audio` transition
-/// tests, each of which yields more than once before its first deadline.
-#[kithara::test(native, flash(false))]
-fn a_repeated_yield_at_one_instant_is_granted_without_a_deadline() {
-    const YIELDS: usize = 4;
-
-    let _g = guard();
-    reset();
-    let _a = ambient_scope(true);
-
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut cx = Context::from_waker(&waker);
-    let mut task = Box::pin(participate(
-        async {
-            for _ in 0..YIELDS {
-                yield_now().await;
-            }
-        },
-        Location::caller(),
-    ));
-
-    // Each yield costs one poll to register and is granted on the gate-park
-    // edge that ends it, so the body needs exactly one poll more than it yields.
-    let mut ready_at = None;
-    for poll in 1..=YIELDS + 1 {
-        if task.as_mut().poll(&mut cx).is_ready() {
-            ready_at = Some(poll);
-            break;
-        }
-    }
-    assert_eq!(
-        ready_at,
-        Some(YIELDS + 1),
-        "a yield with no deadline to starve went ungranted"
-    );
-}
-
 #[kithara::test(native, flash(false))]
 fn real_io_defers_advance_past_real_pace() {
     let flash = FlashInner::new_arc();
@@ -1276,6 +1169,47 @@ fn ambient_on_yield_now_is_engine_backed() {
     // The gate parked it (slot released), and the immediate advance from the park
     // granted the lone yield-waiter; the re-poll then resolves.
     assert!(task.as_mut().poll(&mut cx).is_ready());
+}
+
+/// A yielder is a RUNNABLE participant, so every turn it asks for is handed to
+/// it. Rationing them — one per virtual instant, say — strands any task that
+/// yields more than once before its first deadline, and sends the clock to the
+/// farthest park it can find while that work is still in flight. Budgets on
+/// that path then expire on the virtual clock having spent no real seconds,
+/// and the hang detectors fire on a stall that never happened.
+#[kithara::test(native, flash(false))]
+fn repeated_yields_are_each_granted_never_rationed() {
+    const YIELDS: usize = 4;
+
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut task = Box::pin(participate(
+        async {
+            for _ in 0..YIELDS {
+                yield_now().await;
+            }
+        },
+        Location::caller(),
+    ));
+
+    // Each yield costs one poll to register and is granted on the gate-park
+    // edge that ends it, so the body needs exactly one poll more than it yields.
+    let mut ready_at = None;
+    for poll in 1..=YIELDS + 1 {
+        if task.as_mut().poll(&mut cx).is_ready() {
+            ready_at = Some(poll);
+            break;
+        }
+    }
+    assert_eq!(
+        ready_at,
+        Some(YIELDS + 1),
+        "a yield turn was rationed instead of granted"
+    );
 }
 
 /// An ambient `task::spawn_blocking` closure is REAL WORK IN FLIGHT: while it

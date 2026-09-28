@@ -214,11 +214,6 @@ pub(in crate::flash) struct Scheduler {
     /// entry is a parked async task whose `active_async` slot the spawn gate
     /// releases while it waits. Keyed by id.
     pub(super) yielders: BTreeMap<WaiterId, Wake>,
-    /// Virtual instant whose cooperative-yield turn is already spent, set by
-    /// the yield branch of [`Core::try_advance`] and naturally invalidated by
-    /// the next clock store. `None` means no turn has been taken at the current
-    /// instant yet.
-    pub(super) yield_released_at: Option<u64>,
     /// Thread ids whose `unpark` arrived while not parked: the next
     /// `park_timed_unparkable` for that id consumes the flag and returns at once.
     pub(super) unpark_pending: BTreeSet<ThreadKey>,
@@ -330,7 +325,6 @@ impl Core {
                 timed: BTreeMap::new(),
                 indef: BTreeMap::new(),
                 yielders: BTreeMap::new(),
-                yield_released_at: None,
                 unpark_pending: BTreeSet::new(),
                 notify_permits: BTreeSet::new(),
                 real_io: 0,
