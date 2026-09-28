@@ -19,22 +19,53 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Every exit is reported: a pre-arm that declines leaves no trace in the
+    /// event stream, and the next thing anyone sees is an end-of-item that
+    /// advances nothing.
     pub(super) fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
-        if self.action_at_item_end() != ActionAtItemEnd::Advance {
+        let track = current_id.as_u64();
+        let action = self.action_at_item_end();
+        if action != ActionAtItemEnd::Advance {
+            debug!(
+                track,
+                ?action,
+                "pre-arm declined: the queue does not advance"
+            );
             return;
         }
         let Some(next) = self.next_selectable_entry(AdvanceReason::CrossfadePreArm) else {
+            debug!(
+                track,
+                current = ?self.current().map(|entry| entry.id),
+                player_index = self.player.current_index(),
+                "pre-arm declined: navigation offers no successor"
+            );
             return;
         };
         if !matches!(next.status, TrackStatus::Loaded) {
+            debug!(
+                track,
+                next = next.id.as_u64(),
+                status = ?next.status,
+                current = ?self.current().map(|entry| entry.id),
+                player_index = self.player.current_index(),
+                "pre-arm declined: the successor is not loaded"
+            );
             return;
         }
 
         let before_index = self.player.current_index();
-        if self
-            .select_with_reason(next.id, transition, AdvanceReason::CrossfadePreArm)
-            .is_err()
+        if let Err(error) =
+            self.select_with_reason(next.id, transition, AdvanceReason::CrossfadePreArm)
         {
+            debug!(
+                %error,
+                track,
+                next = next.id.as_u64(),
+                current = ?self.current().map(|entry| entry.id),
+                player_index = self.player.current_index(),
+                "pre-arm declined: the successor would not select"
+            );
             return;
         }
         if self.player.current_index() != before_index {
@@ -74,6 +105,37 @@ where
         if lagged {
             self.handle_current_item_changed();
         }
+    }
+
+    /// The gates an end-of-item report must clear before the queue acts on it.
+    /// The player names the item it finished with, which is not necessarily the
+    /// one being heard, and the queue may have moved on or been paused since.
+    /// Every refusal is logged: a drop here is otherwise invisible, and all the
+    /// report shows afterwards is silence.
+    fn end_of_item_is_actionable(&self, item: &ItemRole, pos: f64, dur: f64) -> bool {
+        let track = item.track();
+        let current = self.current().map(|entry| entry.id);
+        if current != Some(track.id) {
+            debug!(
+                %track,
+                ?current,
+                player_index = self.player.current_index(),
+                "the end names a track the cursor has left: not advancing"
+            );
+            return false;
+        }
+        if self.is_paused() {
+            debug!(%track, pos, dur, "paused: not auto-advancing");
+            return false;
+        }
+        if self.consume_armed_advance(track.id, pos, dur) {
+            return false;
+        }
+        if !item.is_leading() {
+            debug!(%track, pos, dur, ?item, "not the leading item: not advancing");
+            return false;
+        }
+        true
     }
 
     pub(super) fn handle_current_item_changed(&self) {
@@ -116,18 +178,7 @@ where
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%track, pos, dur, %fault, "ItemDidFail received — track aborted mid-stream");
-        if self.current().is_none_or(|current| current.id != track.id) {
-            return;
-        }
-        if self.is_paused() {
-            debug!(%track, "paused: not auto-advancing on ItemDidFail");
-            return;
-        }
-        if self.consume_armed_advance(track.id, pos, dur) {
-            return;
-        }
-        if !item.is_leading() {
-            debug!(%track, pos, dur, ?item, "not the leading item: not failing the queue entry");
+        if !self.end_of_item_is_actionable(item, pos, dur) {
             return;
         }
         let reason = format!("mid-stream engine failure: {fault}");
@@ -162,18 +213,7 @@ where
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%track, pos, dur, "ItemDidPlayToEnd received");
-        if self.current().is_none_or(|current| current.id != track.id) {
-            return;
-        }
-        if self.is_paused() {
-            debug!(%track, pos, dur, "paused: not auto-advancing on ItemDidPlayToEnd");
-            return;
-        }
-        if self.consume_armed_advance(track.id, pos, dur) {
-            return;
-        }
-        if !item.is_leading() {
-            debug!(%track, pos, dur, ?item, "not the leading item: not advancing");
+        if !self.end_of_item_is_actionable(item, pos, dur) {
             return;
         }
         match self.action_at_item_end() {
