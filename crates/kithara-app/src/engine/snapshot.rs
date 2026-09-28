@@ -8,7 +8,7 @@ use crate::{
     analysis::TrackArtifacts,
     broadcast::Broadcaster,
     deck::{DeckId, EqMode, TempoPercent},
-    engine::{HostTempo, settings::DeckSettings},
+    engine::{DeckSync, HostTempo, settings::DeckSettings},
     mix::MixState,
     state::{AbrVariant, UiState},
 };
@@ -66,6 +66,7 @@ pub(crate) struct DeckSnapshot {
     pub(crate) engine_load: EngineLoadSnapshot,
     pub(crate) current_track_index: Option<usize>,
     pub(crate) tempo: TempoPercent,
+    pub(crate) sync: DeckSync,
     pub(crate) playing: bool,
     pub(crate) duration: f64,
     pub(crate) position: f64,
@@ -89,7 +90,12 @@ pub(crate) struct AnalysisView {
 }
 
 impl DeckSnapshot {
-    pub(crate) fn new(id: DeckId, state: &UiState, settings: &DeckSettings) -> Self {
+    pub(crate) fn new(
+        id: DeckId,
+        state: &UiState,
+        settings: &DeckSettings,
+        sync: DeckSync,
+    ) -> Self {
         Self {
             id,
             analysis: AnalysisView::new(state),
@@ -99,6 +105,7 @@ impl DeckSnapshot {
             tracks: state.tracks.clone(),
             engine_load: state.engine_load,
             tempo: settings.tempo,
+            sync,
             current_track_index: state.current_track_index,
             duration: state.duration,
             position: state.position,

@@ -152,7 +152,7 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 kithara-app-document = { workspace = true }
 
 [dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["usdt", "download", "offline", "ui-capture"] }
+kithara = { workspace = true, default-features = false, features = ["usdt", "download", "offline", "sync", "ui-capture"] }
 kithara-app = { path = ".", default-features = false, features = ["usdt"] }
 kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }

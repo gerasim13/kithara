@@ -13,7 +13,7 @@ pub(crate) enum Command {
     Deck { deck: DeckId, cmd: DeckCmd },
     Mix(MixCmd),
     LoadOntoDeck { deck: DeckId, source: String },
-    ToggleDeckSync(DeckId),
+    SetDeckSync { deck: DeckId, on: bool },
     App(AppCmd),
 }
 

@@ -16,6 +16,7 @@ enum Edit {
     Mix(MixCmd),
     Deck(DeckId, DeckCmd),
     HostTempo(Tempo),
+    Sync(DeckId, bool),
 }
 
 impl Overlay {
@@ -39,10 +40,8 @@ impl Overlay {
                     cmd @ (DeckCmd::SetEqGain { .. } | DeckCmd::SetQuality(_) | DeckCmd::SetTempo(_)),
             } => Edit::Deck(*deck, *cmd),
             Command::App(AppCmd::SetHostTempo(tempo)) => Edit::HostTempo(*tempo),
-            Command::Deck { .. }
-            | Command::LoadOntoDeck { .. }
-            | Command::ToggleDeckSync(_)
-            | Command::App(_) => return,
+            Command::SetDeckSync { deck, on } => Edit::Sync(*deck, *on),
+            Command::Deck { .. } | Command::LoadOntoDeck { .. } | Command::App(_) => return,
         };
         self.pending.push((seq, edit));
     }
@@ -58,6 +57,11 @@ impl Edit {
             Self::Mix(cmd) => lay_mix(cmd, drawn),
             Self::Deck(id, cmd) => lay_deck(id, cmd, drawn),
             Self::HostTempo(tempo) => drawn.host_tempo.retarget(tempo),
+            Self::Sync(id, on) => {
+                if let Some(deck) = deck_mut(drawn, id) {
+                    deck.sync.request(on);
+                }
+            }
         }
     }
 }
@@ -150,6 +154,40 @@ mod tests {
             assert!(
                 (rig.scalar("mix.crossfader") - 1.0).abs() < f64::EPSILON,
                 "the echoed snapshot keeps the position"
+            );
+        })
+        .await;
+        rig.close().await;
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_second_sync_press_before_the_echo_takes_the_first_back() {
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
+            .await
+            .expect("rig fixture is infallible");
+        rig.call(|rig| {
+            let word = |rig: &Rig| rig.text("deck.playback.sync_state@deck=a");
+
+            rig.send("deck-a/sync", ControlAction::Activate);
+            assert_eq!(
+                word(rig).as_deref(),
+                Some("WAITS FOR PLAY"),
+                "the press draws its ask before the engine applies it"
+            );
+
+            rig.send("deck-a/sync", ControlAction::Activate);
+            assert_eq!(
+                word(rig).as_deref(),
+                Some(""),
+                "the second press reads the drawn ask and takes it back"
+            );
+
+            rig.pump();
+            rig.frame();
+            assert_eq!(word(rig).as_deref(), Some(""));
+            assert!(
+                !rig.flag("deck.playback.synced@deck=a"),
+                "the deck never left manual"
             );
         })
         .await;

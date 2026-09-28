@@ -1,15 +1,23 @@
 use std::collections::BTreeSet;
 
-use kithara::{analysis::Waveform, ui::render::WaveBucket};
+use kithara::{
+    analysis::Waveform,
+    host::{SyncExecutionReject, SyncMode},
+    ui::render::WaveBucket,
+};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};
 use crate::{
     analysis::{TrackArtifacts, WaveformId},
     catalog::{Catalog, CatalogEntry, is_loaded},
-    engine::{DeckSnapshot, EngineSnapshot, HostTempo},
+    engine::{DeckSnapshot, DeckSync, EngineSnapshot, HostTempo, SyncPhase},
     gui::view::track_subtitle,
 };
+
+mod consts {
+    pub(super) const EM_DASH: char = '\u{2014}';
+}
 
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -197,6 +205,7 @@ pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) quality: String,
     pub(in crate::gui) remain: String,
     pub(in crate::gui) subtitle: String,
+    pub(in crate::gui) sync_state: &'static str,
     pub(in crate::gui) tempo: String,
     pub(in crate::gui) wave: Vec<WaveBucket>,
     pub(in crate::gui) wave_revision: u64,
@@ -296,8 +305,8 @@ impl ViewCache {
 
 impl DeckCache {
     fn refresh(&mut self, deck: &DeckSnapshot) {
-        self.tempo = format!("{:+.1}%", f32::from(deck.tempo));
-        self.bpm = format_bpm(deck.analysis.bpm, deck.tempo.speed());
+        (self.tempo, self.bpm) = format_tempo(deck);
+        self.sync_state = format_sync(&deck.sync, deck.playing);
         self.remain = format_remain(deck);
         self.subtitle = track_subtitle(deck);
         self.quality = format_quality(deck);
@@ -374,9 +383,72 @@ fn format_quality(deck: &DeckSnapshot) -> String {
 }
 
 fn format_bpm(source: Option<f32>, speed: f32) -> String {
-    const EM_DASH: char = '\u{2014}';
+    source.map_or_else(
+        || consts::EM_DASH.to_string(),
+        |bpm| format!("{:.1}", bpm * speed),
+    )
+}
 
-    source.map_or_else(|| EM_DASH.to_string(), |bpm| format!("{:.1}", bpm * speed))
+/// The deck's tempo and BPM texts: the manual tempo off the Host's timeline,
+/// else the tempo the deck's map sounds at, against the analysed BPM.
+fn format_tempo(deck: &DeckSnapshot) -> (String, String) {
+    let Some(report) = deck
+        .sync
+        .reported
+        .filter(|report| report.mode != SyncMode::Off)
+    else {
+        return (
+            format!("{:+.1}%", f32::from(deck.tempo)),
+            format_bpm(deck.analysis.bpm, deck.tempo.speed()),
+        );
+    };
+    let Some(applied) = report.applied_tempo.map(f64::from) else {
+        return (consts::EM_DASH.to_string(), consts::EM_DASH.to_string());
+    };
+    let tempo = deck.analysis.bpm.map_or_else(
+        || consts::EM_DASH.to_string(),
+        |analysed| format!("{:+.1}%", (applied / f64::from(analysed) - 1.0) * 100.0),
+    );
+    (tempo, format!("{applied:.1}"))
+}
+
+/// The word a deck names its SYNC by: a pending ask first, then the Host's
+/// answer.
+fn format_sync(sync: &DeckSync, playing: bool) -> &'static str {
+    if sync.is_refused {
+        return "REFUSED";
+    }
+    match sync.wish() {
+        Some(true) if playing => return "SYNCING",
+        Some(true) => return "WAITS FOR PLAY",
+        Some(false) if sync.is_synced() => return "RELEASING",
+        Some(false) | None => {}
+    }
+    let Some(report) = sync.reported else {
+        return "";
+    };
+    match (report.mode, report.phase) {
+        (_, SyncPhase::Rejected(reason)) => format_reject(reason),
+        (SyncMode::HostSync, SyncPhase::WaitingForGrid) => "WAITS FOR BEATS",
+        (SyncMode::HostSync, SyncPhase::Preparing) => "SYNCING",
+        (SyncMode::HostSync, SyncPhase::Converging) => "ALIGNING",
+        (SyncMode::HostSync, SyncPhase::Locked) => "LOCKED",
+        (SyncMode::LocalSync, SyncPhase::WaitingForGrid | SyncPhase::Preparing) => "RELEASING",
+        _ => "",
+    }
+}
+
+/// Why the deck's latest alignment ended without sounding.
+const fn format_reject(reason: SyncExecutionReject) -> &'static str {
+    match reason {
+        SyncExecutionReject::Geometry => "CANNOT STRETCH",
+        SyncExecutionReject::Late => "MISSED THE BEAT",
+        SyncExecutionReject::Capacity => "NO FREE VOICE",
+        SyncExecutionReject::ControlBusy => "ENGINE BUSY",
+        SyncExecutionReject::Cancelled => "INTERRUPTED",
+        SyncExecutionReject::Media => "TRACK UNREADABLE",
+        _ => "SYNC FAILED",
+    }
 }
 
 fn format_remain(deck: &DeckSnapshot) -> String {
@@ -406,6 +478,7 @@ mod tests {
             sync::{Arc, Mutex},
             tokio::task,
         },
+        warp::BeatsPerMinute,
     };
     use kithara_test_utils::kithara;
 
@@ -413,7 +486,7 @@ mod tests {
     use crate::{
         analysis::{AnalysisHandle, fixtures},
         deck::DeckId,
-        engine::DeckSettings,
+        engine::{DeckSettings, SyncReport},
         state::{AbrVariant, UiState, listen},
         waveform::TrackAnalysis,
     };
@@ -517,7 +590,127 @@ mod tests {
     }
 
     fn shown(ui: &UiState, settings: &DeckSettings) -> DeckSnapshot {
-        DeckSnapshot::new(DeckId(0), ui, settings)
+        DeckSnapshot::new(DeckId(0), ui, settings, DeckSync::default())
+    }
+
+    fn asked(on: bool) -> DeckSync {
+        let mut sync = DeckSync::default();
+        sync.request(on);
+        sync
+    }
+
+    fn answered(mode: SyncMode, phase: SyncPhase, applied: Option<f64>) -> DeckSync {
+        let mut sync = DeckSync::default();
+        sync.reported = Some(SyncReport {
+            mode,
+            phase,
+            applied_tempo: applied
+                .map(|bpm| BeatsPerMinute::try_from(bpm).expect("fixture tempo is positive")),
+        });
+        sync
+    }
+
+    fn refused() -> DeckSync {
+        let mut sync = DeckSync::default();
+        sync.is_refused = true;
+        sync
+    }
+
+    #[kithara::test]
+    #[case::no_answer_yet(DeckSync::default(), false, "")]
+    #[case::asked_on_paused(asked(true), false, "WAITS FOR PLAY")]
+    #[case::asked_on_playing(asked(true), true, "SYNCING")]
+    #[case::asked_off_while_manual(asked(false), true, "")]
+    #[case::refused(refused(), true, "REFUSED")]
+    #[case::waits_for_beats(
+        answered(SyncMode::HostSync, SyncPhase::WaitingForGrid, None),
+        true,
+        "WAITS FOR BEATS"
+    )]
+    #[case::preparing(
+        answered(SyncMode::HostSync, SyncPhase::Preparing, None),
+        true,
+        "SYNCING"
+    )]
+    #[case::converging(
+        answered(SyncMode::HostSync, SyncPhase::Converging, Some(124.0)),
+        true,
+        "ALIGNING"
+    )]
+    #[case::locked(
+        answered(SyncMode::HostSync, SyncPhase::Locked, Some(124.0)),
+        true,
+        "LOCKED"
+    )]
+    #[case::rejected(
+        answered(SyncMode::Off, SyncPhase::Rejected(SyncExecutionReject::Late), None),
+        true,
+        "MISSED THE BEAT"
+    )]
+    #[case::released(
+        answered(SyncMode::LocalSync, SyncPhase::Preparing, Some(124.0)),
+        true,
+        "RELEASING"
+    )]
+    #[case::on_its_own_timeline(
+        answered(SyncMode::LocalSync, SyncPhase::Locked, Some(124.0)),
+        true,
+        ""
+    )]
+    #[case::manual(answered(SyncMode::Off, SyncPhase::Off, None), true, "")]
+    fn the_deck_names_its_sync_by_the_pending_ask_then_the_host_answer(
+        #[case] sync: DeckSync,
+        #[case] playing: bool,
+        #[case] word: &str,
+    ) {
+        assert_eq!(format_sync(&sync, playing), word);
+    }
+
+    #[kithara::test]
+    fn a_pending_release_is_named_only_on_a_deck_the_host_holds() {
+        let mut sync = answered(SyncMode::HostSync, SyncPhase::Locked, Some(124.0));
+        sync.request(false);
+
+        assert_eq!(format_sync(&sync, true), "RELEASING");
+    }
+
+    #[kithara::test]
+    #[case::manual(DeckSync::default(), Some(120.0), "+0.0%", "120.0")]
+    #[case::manual_under_a_map_the_host_dropped(
+        answered(SyncMode::Off, SyncPhase::Off, Some(124.0)),
+        Some(120.0),
+        "+0.0%",
+        "120.0"
+    )]
+    #[case::mapped(
+        answered(SyncMode::HostSync, SyncPhase::Locked, Some(124.0)),
+        Some(120.0),
+        "+3.3%",
+        "124.0"
+    )]
+    #[case::mapped_without_analysis(
+        answered(SyncMode::HostSync, SyncPhase::Locked, Some(124.0)),
+        None,
+        "\u{2014}",
+        "124.0"
+    )]
+    #[case::no_map_sounds_yet(
+        answered(SyncMode::HostSync, SyncPhase::Preparing, None),
+        Some(120.0),
+        "\u{2014}",
+        "\u{2014}"
+    )]
+    fn a_deck_on_a_timeline_shows_the_tempo_its_map_sounds_at(
+        #[case] sync: DeckSync,
+        #[case] analysed: Option<f32>,
+        #[case] tempo: &str,
+        #[case] bpm: &str,
+    ) {
+        let mut deck = shown(&UiState::empty(), &DeckSettings::new(0));
+        deck.analysis.bpm = analysed;
+        deck.sync = sync;
+
+        assert_eq!(format_tempo(&deck), (tempo.to_owned(), bpm.to_owned()));
     }
 
     fn ladder() -> Vec<AbrVariant> {

@@ -14,8 +14,8 @@ mod session;
 pub mod wasm;
 
 pub use api::{
-    CrossfaderBus, DeckSyncState, HostLevel, SyncIntent, SyncMode, SyncStatusSnapshot,
-    crossfader_gain,
+    CrossfaderBus, DeckSyncState, HostLevel, SyncError, SyncExecutionReject, SyncIntent, SyncMode,
+    SyncStatusSnapshot, crossfader_gain,
 };
 pub use error::PlayError;
 pub use host::{Host, HostConfig, HostOwned, PlayerMember};

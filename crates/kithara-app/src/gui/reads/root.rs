@@ -119,7 +119,7 @@ mod tests {
     use crate::{
         catalog::Catalog,
         deck::{DeckId, EqMode},
-        engine::{DeckSettings, DeckSnapshot},
+        engine::{DeckSettings, DeckSnapshot, DeckSync},
         gui::ui::{
             cache::{
                 CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView, StageView,
@@ -213,7 +213,9 @@ mod tests {
             self.decks
                 .iter()
                 .enumerate()
-                .map(|(at, (ui, settings, _))| DeckSnapshot::new(DeckId(at), ui, settings))
+                .map(|(at, (ui, settings, _))| {
+                    DeckSnapshot::new(DeckId(at), ui, settings, DeckSync::default())
+                })
                 .collect()
         }
     }

@@ -50,6 +50,27 @@
                         style: Transport,
                         write: Command(id: "deck.transport.next", with: { "deck": "$deck" }),
                     ),
+                    Button(
+                        id: "sync",
+                        size: (w: Fixed(58.0), h: Fill),
+                        label: "@deck.transport.sync",
+                        style: Transport,
+                        read: Telemetry(id: "deck.playback.synced", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.toggle_sync", with: { "deck": "$deck" }),
+                    ),
+                    Row(
+                        id: "sync-state",
+                        gap: 0.0,
+                        pad_x: 11.0,
+                        size: (w: Shrink, h: Fill),
+                        children: [
+                            Text(
+                                id: "sync-word",
+                                style: MicroLabel,
+                                read: Telemetry(id: "deck.playback.sync_state", with: { "deck": "$deck" }),
+                            ),
+                        ],
+                    ),
                     Slot(id: "gap", size: (w: Fill, h: Fill)),
                     Button(
                         id: "zoom-out",

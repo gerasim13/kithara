@@ -24,6 +24,7 @@ use crate::{
 };
 
 pub(crate) struct Rig {
+    pub(crate) config: AppConfig,
     pub(crate) snapshots: Arc<ArcSwap<EngineSnapshot>>,
     pub(crate) engine: Engine,
     pub(crate) ui: Kithara,
@@ -70,6 +71,7 @@ impl Rig {
         );
         let ui = Kithara::mounted(boot, Id::unique());
         Self {
+            config: config.clone(),
             snapshots,
             engine,
             ui,

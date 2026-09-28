@@ -2,7 +2,6 @@ use arc_swap::ArcSwap;
 use kithara::{
     abr::{AbrHandle, AbrMode},
     effects::{GainDb, eq::EqBandConfig},
-    host::{SyncIntent, SyncMode},
     platform::{
         sync::Arc,
         time::Duration,
@@ -19,6 +18,7 @@ use super::{
     command::{AppCmd, Command, DeckCmd, Envelope, MixCmd},
     settings::DeckSettings,
     snapshot::{BroadcastPhase, DeckSnapshot, EngineSnapshot},
+    sync::{DeckSync, SyncReport},
     tempo::HostTempo,
 };
 use crate::{
@@ -48,6 +48,7 @@ pub(crate) struct Engine {
 struct EngineDeck {
     controller: StateController,
     settings: DeckSettings,
+    sync: DeckSync,
 }
 
 struct EqModeChange<'a> {
@@ -75,6 +76,7 @@ impl Engine {
                 EngineDeck {
                     controller,
                     settings,
+                    sync: DeckSync::default(),
                 }
             })
             .collect();
@@ -99,7 +101,7 @@ impl Engine {
             Command::Deck { deck, cmd } => self.apply_deck(deck, cmd),
             Command::Mix(cmd) => self.apply_mix(cmd),
             Command::LoadOntoDeck { deck, source } => self.load(deck, &source),
-            Command::ToggleDeckSync(deck) => self.toggle_sync(deck),
+            Command::SetDeckSync { deck, on } => self.set_sync(deck, on),
             Command::App(cmd) => self.apply_app(cmd),
         }
         self.applied_seq = envelope.seq;
@@ -188,6 +190,7 @@ impl Engine {
 
     pub(crate) fn publish(&mut self) {
         self.follow_host_tempo();
+        self.follow_deck_sync();
         self.snapshots.store(Arc::new(self.snapshot()));
     }
 
@@ -287,6 +290,24 @@ impl Engine {
         self.has_shut_down = true;
     }
 
+    fn follow_deck_sync(&mut self) {
+        let host = self.session.host();
+        for (deck, engine_deck) in self.session.decks().iter().zip(&mut self.decks) {
+            let state = match host.deck_sync_state(&deck.queue) {
+                Ok(state) => state,
+                Err(error) => {
+                    debug!(deck = deck.id.0, %error, "Host answers the deck SYNC state later");
+                    continue;
+                }
+            };
+            if let Some(intent) = engine_deck.sync.observe(SyncReport::from(&state))
+                && let Err(error) = host.request_deck_sync(&deck.queue, intent)
+            {
+                engine_deck.sync.hear(deck.id, &error);
+            }
+        }
+    }
+
     fn snapshot(&self) -> EngineSnapshot {
         let decks = self
             .session
@@ -294,9 +315,9 @@ impl Engine {
             .iter()
             .zip(&self.decks)
             .map(|(deck, engine_deck)| {
-                engine_deck
-                    .controller
-                    .read(|state| DeckSnapshot::new(deck.id, state, &engine_deck.settings))
+                engine_deck.controller.read(|state| {
+                    DeckSnapshot::new(deck.id, state, &engine_deck.settings, engine_deck.sync)
+                })
             })
             .collect();
         EngineSnapshot {
@@ -318,23 +339,13 @@ impl Engine {
         }
     }
 
-    fn toggle_sync(&self, id: DeckId) {
-        let Some(deck) = self.session.deck(id) else {
+    fn set_sync(&mut self, id: DeckId, on: bool) {
+        let Some(deck) = self.deck_mut(id) else {
             error!(deck = id.0, "deck SYNC target is unavailable");
             return;
         };
-        let host = self.session.host();
-        let result = host.deck_sync_state(&deck.queue).and_then(|snapshot| {
-            let intent = if snapshot.mode == SyncMode::HostSync {
-                SyncIntent::Disable
-            } else {
-                SyncIntent::Enable
-            };
-            host.request_deck_sync(&deck.queue, intent)
-        });
-        if let Err(error) = result {
-            error!(deck = id.0, %error, "deck SYNC request failed");
-        }
+        deck.sync.request(on);
+        self.follow_deck_sync();
     }
 
     fn toggle_broadcast(&mut self) {
@@ -441,12 +452,13 @@ mod tests {
     use ::kithara::platform::{CancelToken, time::Instant};
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
-    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig, pools::AppQueueControl};
     #[cfg(not(feature = "broadcast"))]
     use crate::{
+        analysis::fixtures::rhythm_a_mp3,
         deck::DeckId,
         engine::{Command, DeckCmd, Envelope},
     };
+    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig, pools::AppQueueControl};
 
     fn close(rig: &mut Rig) {
         rig.close_window();
@@ -654,6 +666,103 @@ mod tests {
                 publish,
                 settled("120.0"),
             );
+        })
+        .await;
+        rig.close().await;
+    }
+
+    #[cfg(not(feature = "broadcast"))]
+    #[kithara::test(native, tokio)]
+    async fn the_sync_button_puts_a_deck_on_the_host_timeline_and_takes_it_off(
+        rhythm_a_mp3: String,
+    ) {
+        use ::kithara::{
+            platform::{sync::Arc, time::Duration},
+            prelude::{ArtifactSource, ResourceSrc},
+            ui::render::ControlAction,
+        };
+
+        use crate::{
+            analysis::fixtures::rhythm_grid,
+            pools::{AppResourceConfig, AppTrackSource},
+        };
+
+        /// Two bars at 124 BPM, the latest a musical entry lands, and the
+        /// output's start.
+        const ENTRY: Duration = Duration::from_secs(5);
+
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::realtime()))
+            .await
+            .expect("rig fixture is infallible");
+        rig.call(move |rig| {
+            let publish = |rig: &mut Rig| {
+                rig.engine.tick();
+                rig.engine.publish();
+                rig.frame();
+            };
+            let synced = |rig: &Rig| rig.flag("deck.playback.synced@deck=a");
+            let word = |rig: &Rig| rig.text("deck.playback.sync_state@deck=a");
+
+            let config = &rig.config;
+            let track = AppResourceConfig::for_src(
+                ResourceSrc::parse(&rhythm_a_mp3).expect("fixture url parses"),
+            )
+            .downloader(config.downloader.clone())
+            .worker(config.worker.clone())
+            .store(config.store.clone())
+            .audio(config.audio.clone())
+            .hls(config.hls.clone())
+            .file(config.file.clone())
+            .beat_grid(ArtifactSource::from(Arc::new(rhythm_grid())))
+            .build();
+            rig.queues[0]
+                .append(AppTrackSource::Config(Box::new(track)))
+                .expect("deck A takes the track");
+            rig.until(
+                "the track loads",
+                Rig::DEADLINE,
+                |rig| {
+                    let _ = rig.queues[0].tick();
+                },
+                |rig| rig.queues[0].duration_seconds().is_some(),
+            );
+            rig.send("bar/host-tempo", ControlAction::StepScalar(4.0));
+            rig.pump();
+
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.frame();
+            assert_eq!(
+                word(rig).as_deref(),
+                Some("WAITS FOR PLAY"),
+                "a deck that renders nothing has no beat to align on"
+            );
+            assert!(!synced(rig), "the Host has not taken the deck");
+
+            rig.send("deck-a/play", ControlAction::Activate);
+            rig.pump();
+            rig.until(
+                "the deck plays at the Host's tempo",
+                ENTRY,
+                publish,
+                |rig| {
+                    synced(rig) && rig.text("deck.playback.bpm@deck=a").as_deref() == Some("124.0")
+                },
+            );
+            assert!(
+                matches!(
+                    word(rig).as_deref(),
+                    Some("SYNCING" | "ALIGNING" | "LOCKED")
+                ),
+                "the deck names its alignment, not {:?}",
+                word(rig)
+            );
+
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.until("the deck leaves the Host", ENTRY, publish, |rig| {
+                !synced(rig)
+            });
         })
         .await;
         rig.close().await;

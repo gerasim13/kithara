@@ -880,10 +880,11 @@ fn every_eq_bank_carries_its_pointer_menu() {
 
 #[kithara::test]
 fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
-    const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
+    const SINGLE_HOSTED_CLAIMS: [(&str, &str); 16] = [
         ("deck-a/next", "activation"),
         ("deck-a/play", "activation"),
         ("deck-a/prev", "activation"),
+        ("deck-a/sync", "activation"),
         ("deck-a/wave", "hero-wave"),
         ("deck-a/zoom-in", "activation"),
         ("deck-a/zoom-out", "activation"),
@@ -898,16 +899,18 @@ fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
         ("overview/a/wave", "wave"),
     ];
 
-    const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
+    const DUAL_HOSTED_CLAIMS: [(&str, &str); 33] = [
         ("deck-a/next", "activation"),
         ("deck-a/play", "activation"),
         ("deck-a/prev", "activation"),
+        ("deck-a/sync", "activation"),
         ("deck-a/wave", "hero-wave"),
         ("deck-a/zoom-in", "activation"),
         ("deck-a/zoom-out", "activation"),
         ("deck-b/next", "activation"),
         ("deck-b/play", "activation"),
         ("deck-b/prev", "activation"),
+        ("deck-b/sync", "activation"),
         ("deck-b/wave", "hero-wave"),
         ("deck-b/zoom-in", "activation"),
         ("deck-b/zoom-out", "activation"),

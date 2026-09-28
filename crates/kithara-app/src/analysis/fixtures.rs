@@ -227,6 +227,32 @@ pub(crate) fn served_grid() -> BeatGridModel {
     .expect("the served fixture grid holds together")
 }
 
+/// The grid the rhythm fixtures were rendered on: 12 seconds at 120 BPM, the
+/// first beat on the first frame.
+pub(crate) fn rhythm_grid() -> BeatGridModel {
+    const BEATS: u32 = 24;
+    const SPACING: f64 = 0.5;
+
+    BeatGridModel::try_from(RawBeatGrid {
+        schema_version: GRID_SCHEMA_VERSION,
+        model_id: "rhythm".to_owned(),
+        revision: 1,
+        state: BeatGridState::Final,
+        duration: None,
+        bpm: 120.0,
+        beats: (0..BEATS)
+            .map(|ordinal| GridBeat {
+                at: f64::from(ordinal) * SPACING,
+                ordinal: i64::from(ordinal),
+                confidence: Some(1.0),
+            })
+            .collect(),
+        downbeats: Vec::new(),
+        meter: None,
+    })
+    .expect("the rhythm beats form a valid grid")
+}
+
 /// A waveform the caller hands over.
 pub(crate) fn served_waveform() -> Waveform {
     Waveform::try_from(vec![Bucket::new(0.25, 0.5, 0.75); 8]).expect("fixture bands are in range")

@@ -138,6 +138,7 @@ fn deck_control(
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,
         ("next", ControlAction::Activate) => DeckMsg::Next,
+        ("sync", ControlAction::Activate) => return Some(Message::ToggleDeckSync(id)),
         _ => return None,
     };
     Some(Message::Deck(id, msg))

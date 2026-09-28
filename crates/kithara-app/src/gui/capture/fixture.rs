@@ -198,6 +198,7 @@ fn text(endpoint: &str) -> &'static str {
         "library.breadcrumb" => "LOCAL \u{b7} 2",
         "library.query" => "",
         "deck.playback.remain" => "-03:42",
+        "deck.playback.sync_state" => "LOCKED",
         "deck.playback.tempo" => "+0.0%",
         "deck.stream.quality" => "320 kbps",
         "broadcast.url" => "OFF AIR",

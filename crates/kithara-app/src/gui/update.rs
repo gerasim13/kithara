@@ -41,7 +41,13 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::ToggleDeckSync(deck) => {
-            state.send(Command::ToggleDeckSync(deck));
+            if let Some(on) = state
+                .snapshot
+                .deck(deck)
+                .map(|shown| !shown.sync.wants_on())
+            {
+                state.send(Command::SetDeckSync { deck, on });
+            }
             Task::none()
         }
         Message::SetEqMode(mode) => {

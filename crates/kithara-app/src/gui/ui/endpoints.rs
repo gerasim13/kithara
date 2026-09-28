@@ -47,6 +47,18 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
+        id: "deck.playback.synced",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.playback.sync_state",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
         id: "deck.focused",
         value: ValueKind::Bool,
         scopes: Endpoint::DECK,
@@ -114,6 +126,12 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.next",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.transport.toggle_sync",
         value: ValueKind::Trigger,
         scopes: Endpoint::DECK,
     },

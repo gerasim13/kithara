@@ -3,7 +3,7 @@ pub use kithara_play::{
     SessionBeat, SessionDuckingMode, SessionTempoState, SessionTransportSnapshot, SlotId, Tempo,
     TempoError, TransportRevision,
 };
-pub use kithara_sync::{SyncIntent, SyncMode, SyncStatusSnapshot};
+pub use kithara_sync::{SyncError, SyncExecutionReject, SyncIntent, SyncMode, SyncStatusSnapshot};
 use kithara_warp::{BeatGridId, BeatsPerMinute};
 
 use crate::error::PlayError;
