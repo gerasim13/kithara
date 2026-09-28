@@ -5863,6 +5863,7 @@ dependencies = [
  "fieldwork",
  "kithara-platform",
  "kithara-signal",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
@@ -5870,6 +5871,7 @@ dependencies = [
  "ringbuf",
  "thiserror 2.0.18",
  "tracing",
+ "unimock",
 ]
 
 [[package]]

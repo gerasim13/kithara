@@ -9,14 +9,19 @@ description = "Recursive synchronization-group ownership and control-plane proto
 keywords = ["audio", "beatgrid", "dj", "synchronization", "topology"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+ignored = ["unimock"]
+
 [features]
 default = []
+mock = ["dep:unimock"]
 usdt = ["kithara-warp/usdt"]
 perf = ["kithara-warp/perf"]
 
 [dependencies]
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
+kithara-test-macros = { workspace = true }
 kithara-warp = { workspace = true, default-features = false }
 
 bon = { workspace = true }
@@ -27,12 +32,15 @@ num-traits = { workspace = true }
 ringbuf = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+unimock = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
+
+unimock = { workspace = true }
 
 [lints]
 workspace = true

@@ -152,6 +152,7 @@ kithara-audio = { workspace = true, features = ["usdt", "mock"] }
 kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-play = { path = ".", default-features = false, features = ["mock", "usdt"] }
+kithara-sync = { workspace = true, features = ["mock"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 

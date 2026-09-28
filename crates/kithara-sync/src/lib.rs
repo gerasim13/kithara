@@ -3,6 +3,8 @@
 //! Recursive synchronization-group ownership and its control-plane protocol.
 
 mod execution;
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
 mod owner;
 mod protocol;
 mod root;

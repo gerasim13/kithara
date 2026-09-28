@@ -294,7 +294,7 @@ mod tests {
     use kithara_events::{Envelope, EventBus};
     use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
-    use kithara_sync::{PermitCell, SyncArbiter, SyncGateBinding};
+    use kithara_sync::mock::MemberOwner;
     use kithara_test_utils::kithara;
     use kithara_warp::{BeatGrid, BeatGridId};
     use unimock::{MockFn, Unimock, matching};
@@ -720,16 +720,13 @@ mod tests {
 
     #[kithara::test]
     fn an_accepted_resident_unload_reports_its_change_when_the_replacement_is_refused() {
-        let gate = SyncGateBinding::new(
-            Arc::new(SyncArbiter::new()),
-            Arc::new(PermitCell::new(BeatGridId::allocate().expect("member id"))),
-        );
+        let owner = MemberOwner::new(BeatGridId::allocate().expect("member id"));
         let (session, mock_session) = mock::session_with_drain();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(session.with_sync_gate(gate.clone()))
+                .session(session.with_sync_gate(owner.gate()))
                 .build(),
         );
         for src in ["first", "second", "third"] {
@@ -738,11 +735,7 @@ mod tests {
         player.play();
         player.arm_next(1).expect("preload accepted");
         player.commit_next(1).expect("handover accepted");
-        let control = gate.arbiter().try_control().expect("owner enters");
-        if let Some(observed) = control.source_change(gate.cell()) {
-            control.acknowledge_source_change(gate.cell(), observed);
-        }
-        drop(control);
+        let _ = owner.reconcile().expect("owner enters");
         mock_session.drain_commands();
         for _ in 0..29 {
             player
@@ -759,15 +752,11 @@ mod tests {
             Err(PlayError::SlotChannelFull { .. })
         ));
 
-        let control = gate.arbiter().try_control().expect("owner enters");
         assert_eq!(
-            control
-                .source_change(gate.cell())
-                .map(|observed| observed.change()),
+            owner.pending_change().expect("owner enters"),
             Some(SourceChange::Discontinuity),
             "the audio thread holds the resident's unload"
         );
-        drop(control);
         mock_session.drain_commands();
         player
             .select_item_with_crossfade(2, transition)

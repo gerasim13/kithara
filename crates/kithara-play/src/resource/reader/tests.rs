@@ -38,7 +38,7 @@ use crate::{
     consts,
     rt::{
         PlayerNodeProcessor, StreamShape,
-        sync_owner_fixture::{entry_ticket, fresh_gate},
+        sync_owner_fixture::{entry_ticket, fresh_owner},
         track::{PlayerResource, PlayerTrack, RtSink},
     },
     test_pools::{TestPools, pools},
@@ -732,7 +732,7 @@ fn a_starved_suffix_keeps_the_evidence_of_a_claimed_first_frame(half: Vec<f32>) 
     let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate");
     let (incoming, evidence) = starving_resource(&half, 0);
     let (ticket, _) = entry_ticket(
-        fresh_gate(),
+        fresh_owner(),
         kithara_sync::LoadedMedia::new(TrackId::allocate(), kithara_sync::LoadGeneration::first()),
         incoming,
         [0.25; 2],

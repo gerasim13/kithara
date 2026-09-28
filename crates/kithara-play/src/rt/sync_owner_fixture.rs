@@ -25,10 +25,11 @@ use kithara_platform::{
 use kithara_signal::{AudioSpec, SessionEpoch, SessionFrame, SourceSpan, TransportRevision};
 use kithara_sync::{
     ActivationHead, AlignmentSource, ExecutedGroup, GroupState, LoadedMedia, ParentFact,
-    ParentGridUpdate, PermitCell, ReceiptSink, StagePort, Staged, SyncAdmission, SyncArbiter,
-    SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGateBinding, SyncGroup,
-    SyncGroupSnapshot, SyncIntent, SyncMember, SyncMode, SyncOperation, SyncReceipt,
-    SyncReceiptAck, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
+    ParentGridUpdate, StagePort, Staged, SyncAdmission, SyncError, SyncExecutionReject,
+    SyncExecutionStamp, SyncExecutor, SyncGateBinding, SyncGroup, SyncGroupSnapshot, SyncIntent,
+    SyncMember, SyncMode, SyncOperation, SyncReceipt, SyncReceiptAck, SyncRejected, SyncStaged,
+    SyncStatusSnapshot, SyncTransition,
+    mock::{MemberOwner, ReceiptSinkMock},
 };
 use kithara_warp::{
     AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatGrid, BeatGridId, BeatGridRevision,
@@ -167,39 +168,37 @@ impl StagePort for FixturePort {
     }
 }
 
-/// The group owner of the fixture: it mints the permit of an installed
-/// lane through the gate its ticket carries, and a rejection ends the
-/// test's wait.
-struct FixtureOwner {
-    gate: SyncGateBinding,
-    entered: mpsc::UnboundedSender<Entered>,
-}
-
-impl ReceiptSink for FixtureOwner {
-    fn acknowledge(&self, receipt: SyncReceipt) -> SyncReceiptAck {
-        let SyncReceipt::Installed(stamp) = receipt else {
-            let _ = self.entered.send(Err(receipt));
-            return SyncReceiptAck::Recorded;
-        };
-        let owner = self.gate.arbiter().try_control().expect("owner phase");
-        let permit = owner
-            .mint_permit(self.gate.cell(), stamp)
-            .expect("exact permit");
-        SyncReceiptAck::Installed(permit)
-    }
-
-    fn is_bound(&self) -> bool {
-        true
-    }
+/// The group owner of the fixture: `member_owner` mints the permit of an
+/// installed lane, and a rejection ends the test's wait. The executor drops
+/// its sink on whichever thread lets go of it last, so the sink does not
+/// verify in drop; a ticket handed over proves both clauses were called.
+fn fixture_sink(member_owner: MemberOwner, entered: mpsc::UnboundedSender<Entered>) -> Unimock {
+    Unimock::new((
+        ReceiptSinkMock::is_bound
+            .each_call(matching!())
+            .returns(true),
+        ReceiptSinkMock::acknowledge
+            .each_call(matching!(_))
+            .answers_arc(Arc::new(move |_, receipt| match receipt {
+                SyncReceipt::Installed(stamp) => {
+                    SyncReceiptAck::Installed(member_owner.mint(stamp).expect("exact permit"))
+                }
+                receipt => {
+                    let _ = entered.send(Err(receipt));
+                    SyncReceiptAck::Recorded
+                }
+            })),
+    ))
+    .no_verify_in_drop()
 }
 
 /// The ticket the executor hands over for `lane`, loaded as `media`, after
 /// one public owner Enable at output frame 32 prepared from source frame
 /// `cue`, decoding `stereo` at its head; with the stamp of that
-/// preparation. The member is the one `gate` claims for, and its owner
-/// mints the permit through `gate`.
+/// preparation. The member is the one `member_owner` holds, and it mints
+/// the permit.
 pub(crate) fn entry_ticket(
-    gate: SyncGateBinding,
+    member_owner: MemberOwner,
     media: LoadedMedia<TrackId>,
     lane: Box<PlayerResource>,
     stereo: [f32; 2],
@@ -210,12 +209,10 @@ pub(crate) fn entry_ticket(
     let fixture_runtime = Builder::new_current_thread()
         .build()
         .expect("fixture runtime");
-    let member = gate.cell().member();
+    let member = member_owner.member();
+    let gate = member_owner.gate();
     let (entered, mut entries) = mpsc::unbounded_channel();
-    let sink = FixtureOwner {
-        gate: gate.clone(),
-        entered: entered.clone(),
-    };
+    let sink = fixture_sink(member_owner, entered.clone());
     let executor = SyncExecutor::new(member, Some(Arc::new(sink)), CancelScope::new(None).token());
     let lane = Arc::new(Mutex::new(Some(lane)));
     let runtime = fixture_runtime.handle().clone();
@@ -290,13 +287,9 @@ pub(crate) fn entry_ticket(
     }
 }
 
-/// The gate of a fresh member, its permits controlled by a fresh arbiter.
-pub(crate) fn fresh_gate() -> SyncGateBinding {
-    let member = BeatGridId::allocate().expect("fixture member identity");
-    SyncGateBinding::new(
-        Arc::new(SyncArbiter::new()),
-        Arc::new(PermitCell::new(member)),
-    )
+/// The owner of a fresh member behind a fresh gate.
+pub(crate) fn fresh_owner() -> MemberOwner {
+    MemberOwner::new(BeatGridId::allocate().expect("fixture member identity"))
 }
 
 /// What a fixture reader answers to every read.

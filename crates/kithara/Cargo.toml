@@ -313,6 +313,7 @@ mock = [
     "kithara-play?/mock",
     "kithara-storage?/mock",
     "kithara-stream?/mock",
+    "kithara-sync?/mock",
     "kithara-test-utils/mock",
 ]
 perf = [

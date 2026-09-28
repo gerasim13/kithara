@@ -323,8 +323,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::sync::Arc;
-    use kithara_sync::{PermitCell, SourceChange, SyncArbiter, SyncGateBinding};
+    use kithara_sync::{SourceChange, mock::MemberOwner};
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
 
@@ -337,84 +336,82 @@ mod tests {
         test_pools::{TestPools, pools},
     };
 
-    fn gated_player() -> (PlayerImpl<TestPools>, SyncGateBinding) {
-        let gate = SyncGateBinding::new(
-            Arc::new(SyncArbiter::new()),
-            Arc::new(PermitCell::new(BeatGridId::allocate().expect("member id"))),
-        );
+    fn gated_player() -> (PlayerImpl<TestPools>, MemberOwner) {
+        let owner = MemberOwner::new(BeatGridId::allocate().expect("member id"));
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-                .session(mock::session().with_sync_gate(gate.clone()))
+                .session(mock::session().with_sync_gate(owner.gate()))
                 .build(),
         );
-        (player, gate)
+        (player, owner)
     }
 
     /// Reconcile what the player reported so far, as the Host does.
-    fn reconcile(gate: &SyncGateBinding) -> Option<SourceChange> {
-        let control = gate.arbiter().try_control().expect("owner enters");
-        let observed = control.source_change(gate.cell())?;
-        control.acknowledge_source_change(gate.cell(), observed);
-        Some(observed.change())
+    fn reconcile(owner: &MemberOwner) -> Option<SourceChange> {
+        owner.reconcile().expect("owner enters")
     }
 
     #[kithara::test]
     fn a_seek_the_audio_thread_holds_reports_a_discontinuity() {
-        let (player, gate) = gated_player();
+        let (player, owner) = gated_player();
         player.play();
         assert_eq!(
-            reconcile(&gate),
+            reconcile(&owner),
             Some(SourceChange::Discontinuity),
             "resuming restarts the source at an unplanned frame"
         );
-        let before = gate.source_revision();
+        let before = owner.gate().source_revision();
 
         Player::seek_seconds(&player, 1.0).expect("the slot admits the seek");
 
-        assert_ne!(gate.source_revision(), before);
-        assert_eq!(reconcile(&gate), Some(SourceChange::Discontinuity));
+        assert_ne!(owner.gate().source_revision(), before);
+        assert_eq!(reconcile(&owner), Some(SourceChange::Discontinuity));
         drop(
-            gate.reserve_source()
+            owner
+                .gate()
+                .reserve_source()
                 .expect("the committed seek released the source"),
         );
     }
 
     #[kithara::test]
     fn a_seek_the_audio_thread_cannot_hold_changes_nothing() {
-        let (player, gate) = gated_player();
+        let (player, owner) = gated_player();
         player.play();
-        let _ = reconcile(&gate);
+        let _ = reconcile(&owner);
         while player.send_to_slot(PlayerCmd::SetFadeDuration(0.0)).is_ok() {}
-        let before = gate.source_revision();
+        let before = owner.gate().source_revision();
 
         assert!(matches!(
             Player::seek_seconds(&player, 1.0),
             Err(PlayError::SlotChannelFull { .. })
         ));
 
-        assert_eq!(gate.source_revision(), before);
-        assert_eq!(reconcile(&gate), None);
+        assert_eq!(owner.gate().source_revision(), before);
+        assert_eq!(reconcile(&owner), None);
         drop(
-            gate.reserve_source()
+            owner
+                .gate()
+                .reserve_source()
                 .expect("the refused seek released the source"),
         );
     }
 
     #[kithara::test]
     fn pause_and_speed_report_their_change() {
-        let (player, gate) = gated_player();
+        let (player, owner) = gated_player();
         player.play();
-        let _ = reconcile(&gate);
+        let _ = reconcile(&owner);
 
         player.set_rate(1.5);
-        assert_eq!(reconcile(&gate), Some(SourceChange::Timing));
+        assert_eq!(reconcile(&owner), Some(SourceChange::Timing));
         player.pause();
-        assert_eq!(reconcile(&gate), Some(SourceChange::Discontinuity));
+        assert_eq!(reconcile(&owner), Some(SourceChange::Discontinuity));
         player.set_default_rate(0.8);
         assert_eq!(
-            reconcile(&gate),
+            reconcile(&owner),
             Some(SourceChange::Timing),
             "a paused rate change still moves where playback resumes"
         );
@@ -422,18 +419,18 @@ mod tests {
 
     #[kithara::test]
     fn a_closed_player_seeks_without_touching_the_source() {
-        let (mut player, gate) = gated_player();
+        let (mut player, owner) = gated_player();
         player.play();
-        let _ = reconcile(&gate);
+        let _ = reconcile(&owner);
         Player::close(&mut player).expect("close");
-        let before = gate.source_revision();
+        let before = owner.gate().source_revision();
 
         assert!(matches!(
             Player::seek_seconds(&player, 1.0),
             Err(PlayError::Closed)
         ));
 
-        assert_eq!(gate.source_revision(), before);
-        assert_eq!(reconcile(&gate), None);
+        assert_eq!(owner.gate().source_revision(), before);
+        assert_eq!(reconcile(&owner), None);
     }
 }

@@ -4,6 +4,10 @@ use kithara_warp::WarpPlan;
 use super::{ActivationHead, Staged, SyncTicket};
 use crate::{ArmPermit, SyncExecutionReject, SyncGateBinding, SyncReceipt};
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 /// Opens the staged lanes of one load of a member's media and hands each
 /// installed lane to the member's audio path.
 pub trait StagePort: Clone + Send + 'static {
@@ -55,6 +59,7 @@ pub enum SyncReceiptAck {
 }
 
 /// The group owner an executor reports the outcome of each staged lane to.
+#[kithara::mock(api = ReceiptSinkMock)]
 pub trait ReceiptSink: Send + Sync {
     /// Whether an owner is bound to take receipts at all.
     fn is_bound(&self) -> bool;

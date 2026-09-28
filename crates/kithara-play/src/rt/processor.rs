@@ -483,8 +483,8 @@ mod tests {
         OutputContext, SessionEpoch, SessionFrame, SourceSpan, TransportRevision,
     };
     use kithara_sync::{
-        LoadGeneration, LoadedMedia, SyncExecutionReject, SyncExecutionStamp, SyncGateBinding,
-        SyncReceipt, SyncReceiptTx, sync_receipts,
+        LoadGeneration, LoadedMedia, SyncExecutionReject, SyncExecutionStamp, SyncReceipt,
+        SyncReceiptTx, mock::MemberOwner, sync_receipts,
     };
     use kithara_warp::{RenderContext, WarpMapRevision};
     use ringbuf::traits::{Consumer, Producer};
@@ -495,7 +495,7 @@ mod tests {
             SharedEq, slot_channels,
             sync::{SyncReturn, SyncTicket},
         },
-        rt::sync_owner_fixture::{ReaderMode, entry_ticket, fresh_gate, resource},
+        rt::sync_owner_fixture::{ReaderMode, entry_ticket, fresh_owner, resource},
         test_pools::pools,
     };
 
@@ -585,13 +585,13 @@ mod tests {
         track
     }
 
-    /// A ticket for `item_id` with the stamp its permit carries and the gate
-    /// its owner controls.
-    fn pending_ticket(item_id: TrackId) -> (SyncTicket, SyncExecutionStamp, SyncGateBinding) {
+    /// A ticket for `item_id` with the stamp its permit carries and the
+    /// owner of its member.
+    fn pending_ticket(item_id: TrackId) -> (SyncTicket, SyncExecutionStamp, MemberOwner) {
         let rate = NonZeroU32::new(44_100).expect("fixture rate");
-        let gate = fresh_gate();
+        let owner = fresh_owner();
         let (ticket, stamp) = entry_ticket(
-            gate.clone(),
+            owner.clone(),
             LoadedMedia::new(item_id, LoadGeneration::first()),
             resource(ReaderMode::Silence, rate, false, false, None),
             [0.0; 2],
@@ -599,7 +599,7 @@ mod tests {
             rate,
             Some(TransportRevision::first()),
         );
-        (ticket, stamp, gate)
+        (ticket, stamp, owner)
     }
 
     #[kithara::test]
@@ -702,13 +702,10 @@ mod tests {
         );
 
         let withdrawn_id = TrackId::allocate();
-        let (withdrawn, _, gate) = pending_ticket(withdrawn_id);
-        let owner = gate.arbiter().try_control().expect("owner phase");
+        let (withdrawn, _, owner) = pending_ticket(withdrawn_id);
         owner
-            .preflight_revoke(gate.cell())
-            .expect("fixture permit revision")
-            .revoke();
-        drop(owner);
+            .revoke()
+            .expect("the owner revokes a live permit outside an audio claim");
         control
             .sync
             .room()
@@ -779,7 +776,7 @@ mod tests {
         assert!(processor.tracks.insert(track).is_none());
         processor.playback.playing.store(true, Ordering::SeqCst);
         let (ticket, stamp) = entry_ticket(
-            fresh_gate(),
+            fresh_owner(),
             LoadedMedia::new(item_id, load),
             resource(ReaderMode::Silence, rate, true, true, None),
             [0.0; 2],

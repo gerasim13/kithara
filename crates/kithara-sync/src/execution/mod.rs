@@ -20,4 +20,6 @@ pub use command::SyncExecution;
 pub use executor::SyncExecutor;
 pub use group::{ExecutedGroup, SyncAttachment};
 pub use mailbox::{SyncReceiptInbox, SyncReceiptTx, sync_receipts};
+#[cfg(any(test, feature = "mock"))]
+pub use port::ReceiptSinkMock;
 pub use port::{ReceiptSink, StagePort, SyncReceiptAck};

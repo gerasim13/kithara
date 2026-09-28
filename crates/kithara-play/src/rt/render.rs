@@ -564,18 +564,14 @@ mod sync_tests {
 
     use kithara_platform::sync::Arc;
     use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
-    use kithara_sync::{
-        LoadedMedia, PermitCell, SyncArbiter, SyncGateBinding, SyncReceipt, activation_channels,
-        sync_receipts,
-    };
+    use kithara_sync::{LoadedMedia, SyncReceipt, activation_channels, sync_receipts};
     use kithara_test_utils::kithara;
-    use kithara_warp::BeatGridId;
     use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
     use crate::{
         bridge::PlaybackShared,
-        rt::sync_owner_fixture::{ReaderMode, entry_ticket, resource},
+        rt::sync_owner_fixture::{ReaderMode, entry_ticket, fresh_owner, resource},
     };
 
     fn activation_with_output(
@@ -595,25 +591,17 @@ mod sync_tests {
         let new_duration_required = new_read_required && matches!(new_mode, ReaderMode::Silence);
         let item_id = TrackId::allocate();
         let load = LoadGeneration::first();
-        let member = BeatGridId::allocate().expect("member id");
-        let arbiter = Arc::new(SyncArbiter::new());
-        let cell = Arc::new(PermitCell::new(member));
+        let owner = fresh_owner();
         let revoke: Option<Arc<dyn Fn() + Send + Sync>> = revoke_during_prefix.then(|| {
-            let arbiter = Arc::clone(&arbiter);
-            let cell = Arc::clone(&cell);
+            let owner = owner.clone();
             Arc::new(move || {
-                let owner = arbiter
-                    .try_control()
-                    .expect("prefix runs before an audio claim");
                 owner
-                    .preflight_revoke(&cell)
-                    .expect("fixture permit revision")
-                    .revoke();
+                    .revoke()
+                    .expect("prefix runs before an audio claim, on a live permit");
             }) as Arc<dyn Fn() + Send + Sync>
         });
-        let gate = SyncGateBinding::new(arbiter, cell);
         let (ticket, _) = entry_ticket(
-            gate,
+            owner,
             LoadedMedia::new(item_id, load),
             resource(
                 new_mode,
