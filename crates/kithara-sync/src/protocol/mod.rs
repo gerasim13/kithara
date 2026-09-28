@@ -11,7 +11,7 @@ mod transition;
 
 pub use applied::{SyncApplied, SyncExecutionReject, SyncReceipt};
 pub use facts::{ParentFact, ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate};
-pub use group::{SyncError, SyncGroup, SyncStatusSnapshot};
+pub use group::{ReplanCause, SyncError, SyncGroup, SyncStatusSnapshot};
 pub use member::SyncMember;
 pub use operation::{
     AlignmentSource, PublicOperation, SourceChange, SyncAdmission, SyncCapability, SyncIntent,

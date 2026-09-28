@@ -15,9 +15,9 @@ use super::{
     preparation::asset_grid,
 };
 use crate::{
-    AlignmentSource, GroupState, SourceChange, SyncAdmission, SyncError, SyncExecutionReject,
-    SyncGroup, SyncIntent, SyncMember, SyncMode, SyncOperation, SyncPreparation, SyncReceipt,
-    SyncStatusSnapshot, owner::timeline::Custodian,
+    AlignmentSource, GroupState, ReplanCause, SourceChange, SyncAdmission, SyncError,
+    SyncExecutionReject, SyncGroup, SyncIntent, SyncMember, SyncMode, SyncOperation,
+    SyncOperationId, SyncPreparation, SyncReceipt, SyncStatusSnapshot, owner::timeline::Custodian,
 };
 
 /// Output frames one beat of the 120 BPM parent lasts at 48 kHz.
@@ -104,6 +104,7 @@ fn a_late_entry_waits_for_its_host_then_presents_at_the_next_beat() {
         SyncStatusSnapshot::Replanning {
             operation,
             topology: entry.stamp().topology(),
+            cause: ReplanCause::Missed(SyncExecutionReject::Late),
         }
     );
     assert_eq!(group.mode(), SyncMode::HostSync);
@@ -475,4 +476,155 @@ fn a_withdrawn_track_takes_its_rejection_along() {
     );
 
     assert!(matches!(group.status(), SyncStatusSnapshot::Off { .. }));
+}
+
+/// A deck sounding its Host through `entry`, and the operation of the
+/// decision a discontinuity of its track then leaves waiting.
+fn broken_sounding_deck() -> (Group, BeatGridId, SyncPreparation, SyncOperationId) {
+    let (mut group, track, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let entry = replanned(transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)),
+    ));
+    let _ = sound(&mut group, &entry);
+    let _ = transact(
+        &mut group,
+        SyncOperation::InvalidateSource {
+            target: track,
+            change: SourceChange::Discontinuity,
+        },
+    );
+    let SyncStatusSnapshot::Replanning {
+        operation,
+        cause: ReplanCause::Break,
+        ..
+    } = group.status()
+    else {
+        panic!(
+            "a broken deck waits to be planned again, got {:?}",
+            group.status()
+        );
+    };
+    (group, track, entry, operation)
+}
+
+/// The Host's fresh observation of a track playing by hand from `source`
+/// at `output`.
+fn by_hand(
+    deck: BeatGridId,
+    operation: SyncOperationId,
+    entry: &SyncPreparation,
+    source: u64,
+    output: i64,
+) -> SyncOperation<super::TestGroup> {
+    SyncOperation::Replan {
+        target: deck,
+        operation,
+        load: entry.stamp().load(),
+        transport: entry.stamp().transport(),
+        source: AlignmentSource::Audible {
+            frontier: PresentationFrontier::builder()
+                .source(source)
+                .output(SessionFrame::new(output))
+                .build(),
+            speed: 1.0,
+        },
+        activation: SessionFrame::new(output + 2_048),
+    }
+}
+
+#[kithara::test]
+fn a_break_of_a_sounding_deck_enters_afresh_from_where_it_plays_by_hand() {
+    let (mut group, track, entry, operation) = broken_sounding_deck();
+    let deck = group.id();
+
+    assert!(operation > entry.stamp().operation());
+    assert!(
+        group.applied_of(track).is_none(),
+        "the break released the map"
+    );
+    assert_eq!(group.mode(), SyncMode::HostSync);
+    let output = activation(&entry) + BEAT_FRAMES;
+    let next = replanned(transact(
+        &mut group,
+        by_hand(deck, operation, &entry, 144_000, output),
+    ));
+    assert!(matches!(
+        sound(&mut group, &next),
+        SyncStatusSnapshot::Locked { .. }
+    ));
+}
+
+#[kithara::test]
+fn a_timing_change_leaves_a_sounding_deck_on_its_map() {
+    let (mut group, track, _) = owning_deck_with_parent();
+    let deck = group.id();
+    let entry = replanned(transact(
+        &mut group,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)),
+    ));
+    let _ = sound(&mut group, &entry);
+
+    let _ = transact(
+        &mut group,
+        SyncOperation::InvalidateSource {
+            target: track,
+            change: SourceChange::Timing,
+        },
+    );
+
+    assert!(matches!(group.status(), SyncStatusSnapshot::Locked { .. }));
+    assert!(group.pending.is_empty());
+}
+
+#[kithara::test]
+fn a_second_break_waits_in_place_of_the_first() {
+    let (mut group, track, entry, first) = broken_sounding_deck();
+    let deck = group.id();
+
+    let _ = transact(
+        &mut group,
+        SyncOperation::InvalidateSource {
+            target: track,
+            change: SourceChange::Discontinuity,
+        },
+    );
+
+    let SyncStatusSnapshot::Replanning {
+        operation: second,
+        cause: ReplanCause::Break,
+        ..
+    } = group.status()
+    else {
+        panic!("the deck still waits after a second break");
+    };
+    assert!(second > first);
+    let rejected = group
+        .transact(by_hand(deck, first, &entry, 144_000, activation(&entry)))
+        .expect_err("the first break waits no longer");
+    assert_eq!(
+        rejected.error(),
+        &SyncError::NotReplanning { operation: first }
+    );
+}
+
+#[kithara::test]
+fn an_abandoned_break_leaves_the_deck_synced_without_a_rejection() {
+    let (mut group, _, _, operation) = broken_sounding_deck();
+    let deck = group.id();
+
+    let _ = transact(
+        &mut group,
+        SyncOperation::AbandonReplan {
+            operation,
+            target: deck,
+        },
+    );
+
+    assert!(!matches!(
+        group.status(),
+        SyncStatusSnapshot::Rejected { .. } | SyncStatusSnapshot::Replanning { .. }
+    ));
+    assert_eq!(group.mode(), SyncMode::HostSync);
 }

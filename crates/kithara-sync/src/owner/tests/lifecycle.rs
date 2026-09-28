@@ -21,9 +21,9 @@ use super::{
     refresh::{pending_members, prepared},
 };
 use crate::{
-    AlignmentSource, LoadGeneration, SessionAxisUpdate, SourceChange, SyncAdmission, SyncApplied,
-    SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup,
-    SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
+    AlignmentSource, LoadGeneration, ReplanCause, SessionAxisUpdate, SourceChange, SyncAdmission,
+    SyncApplied, SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp,
+    SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
     SyncPreparation, SyncReceipt, SyncStatusSnapshot, SyncTransition, TopologyOperation,
     TopologyRevision, TopologyStamp, owner::timeline::Custodian,
 };
@@ -1985,6 +1985,27 @@ fn audible_disable(
 }
 
 #[kithara::test]
+fn a_local_deck_keeps_its_break_through_a_tempo_change() {
+    let (mut group, track, first) = pending_public_entry();
+    let _ = sound(&mut group, &first);
+    let deck = group.id();
+    let _ = transact(&mut group, audible_disable(deck, &first, 48_000));
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+    let _ = invalidate(&mut group, track, SourceChange::Discontinuity);
+
+    let _ = commit_tempo(&mut group);
+
+    assert!(matches!(
+        group.status(),
+        SyncStatusSnapshot::Replanning {
+            cause: ReplanCause::Break,
+            ..
+        }
+    ));
+    assert_eq!(group.mode(), SyncMode::LocalSync);
+}
+
+#[kithara::test]
 fn a_source_change_before_entry_keeps_host_mode_and_disable_restores_off() {
     let (mut group, track, entry) = pending_public_entry();
     let deck = group.id();
@@ -1996,7 +2017,16 @@ fn a_source_change_before_entry_keeps_host_mode_and_disable_restores_off() {
         SyncMode::HostSync,
         "the accepted intent stays"
     );
-    assert!(group.pending.is_empty());
+    assert!(
+        matches!(
+            group.status(),
+            SyncStatusSnapshot::Replanning {
+                cause: ReplanCause::Break,
+                ..
+            }
+        ),
+        "the deck waits to enter afresh from where it plays after the break"
+    );
     assert_eq!(
         group.acknowledge(SyncReceipt::Installed(entry.stamp())),
         Err(SyncError::NoPreparedOperation),

@@ -9,18 +9,19 @@ use kithara_test_utils::kithara;
 use kithara_warp::{
     AssetAxis, AssetExtent, AssetFrame, BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot,
     BeatGridStamp, BeatsPerMinute, MapAxis, PresentationFrontier, RenderContext, RenderPublisher,
-    RenderSnapshot,
+    RenderSnapshot, WarpMapRevision,
 };
 
 use super::*;
 use crate::{
-    AlignmentSource, ControlEnterError, GroupState, LoadGeneration, PublicOperation, SourceChange,
-    SyncAdmission, SyncApplied, SyncError, SyncExecutionReject, SyncExecutionStamp,
+    AlignmentSource, ControlEnterError, GroupState, LoadGeneration, PublicOperation, ReplanCause,
+    SourceChange, SyncAdmission, SyncApplied, SyncError, SyncExecutionReject, SyncExecutionStamp,
     SyncGateBinding, SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
     SyncOperationId, SyncPreparation, SyncReceipt, SyncReceiptAck, SyncReceiptInbox,
     SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
     owner::tests::fixtures::{
-        TestGrid, TestGroup, deck_with_a_preparation, root_with_a_waiting_deck,
+        TestGrid, TestGroup, deck_with_a_preparation, root_with_a_broken_deck,
+        root_with_a_waiting_deck,
     },
     sync_receipts,
 };
@@ -160,6 +161,15 @@ fn waiting_root() -> (SyncRoot<TestGroup>, BeatGridId, SyncOperationId) {
     (root, deck, operation)
 }
 
+/// A root over one deck a seek broke while it sounded its Host, with the
+/// deck's track registered; with the deck and the waiting operation.
+fn broken_root() -> (SyncRoot<TestGroup>, BeatGridId, SyncOperationId) {
+    let (group, deck, track, operation) = root_with_a_broken_deck();
+    let mut root = SyncRoot::new(group, SyncRootConfig::builder().build());
+    let _ = root.register(deck, track).expect("registration");
+    (root, deck, operation)
+}
+
 /// A Host with no commit the root has not seen yet.
 fn committed_nothing(_: &mut RootCut<'_, TestGroup>, _: &mut FakePort) -> Result<(), SyncError> {
     Ok(())
@@ -171,11 +181,12 @@ fn unobserved(_: &TestGroup) -> Option<ResidentLoadObservation<u32>> {
 }
 
 /// Render evidence of one callback that rendered the output up to
-/// `rendered` at `epoch` and `revision`.
+/// `rendered` at `epoch` and `revision`, sounding `warp_map`.
 fn rendered(
     rendered: SessionFrame,
     epoch: SessionEpoch,
     revision: TransportRevision,
+    warp_map: Option<WarpMapRevision>,
 ) -> RenderSnapshot {
     let output = OutputContext::new(
         SessionFrame::new(0)..rendered,
@@ -186,12 +197,29 @@ fn rendered(
     .expect("fixture output");
     let context = RenderContext::new_linear(output, None).expect("fixture context");
     let frontier = PresentationFrontier::builder()
+        .maybe_warp_map(warp_map)
         .source(0)
         .output(rendered)
         .build();
     let publisher = RenderPublisher::default();
     publisher.publish(&context, frontier);
     publisher.reader().load().expect("a published snapshot")
+}
+
+/// The Host's observation of a deck's first load, rendered as `snapshot`,
+/// with no arbitrated source.
+fn resident(
+    snapshot: &RenderSnapshot,
+    staging: ResidentStaging<u32>,
+) -> ResidentLoadObservation<u32> {
+    ResidentLoadObservation::builder()
+        .item_id(0_u32)
+        .load(LoadGeneration::first())
+        .requested_speed(1.0)
+        .render(ResidentRender::Snapshot(snapshot.clone()))
+        .source(None)
+        .staging(staging)
+        .build()
 }
 
 /// An execution stamp of `member` for an operation the root never prepared.
@@ -746,7 +774,7 @@ fn an_entry_reads_the_host_clock_only_as_far_as_its_evidence_holds() {
     let (target, member, stranger) = (id(), id(), id());
     let gate = root.register(target, member).expect("registration");
     let (epoch, revision) = (SessionEpoch::new(3), TransportRevision::first());
-    let snapshot = rendered(SessionFrame::new(4_096), epoch, revision);
+    let snapshot = rendered(SessionFrame::new(4_096), epoch, revision, None);
     let transport = |epoch, revision, rate| {
         ProcessedTransport::builder()
             .revision(revision)
@@ -952,4 +980,77 @@ fn a_decision_that_stopped_waiting_is_left_alone() {
     assert_eq!(settled, Ok(()), "an ended decision is not ended again");
     assert_eq!(root.group().with_group(deck, SyncGroup::status), ended);
     assert_eq!(port.publishes.get(), 2, "each pass publishes the root once");
+}
+
+#[kithara::test]
+fn a_broken_deck_waits_while_its_host_has_processed_no_transport() {
+    let (mut root, deck, operation) = broken_root();
+    let snapshot = rendered(
+        SessionFrame::new(4_096),
+        SessionEpoch::new(0),
+        TransportRevision::first(),
+        None,
+    );
+    let waiting =
+        root.waiting(|_: &TestGroup| Some(resident(&snapshot, ResidentStaging::Available)));
+    let mut port = FakePort::default();
+
+    let entered = root.enter().expect("the owner is free");
+    let settled = entered
+        .run(&mut port, |cut, port| cut.replan_waiting(port, waiting))
+        .expect("the cut drains nothing");
+
+    assert_eq!(settled, Ok(()));
+    assert!(matches!(
+        root.group().with_group(deck, SyncGroup::status),
+        Some(SyncStatusSnapshot::Replanning {
+            operation: waiting,
+            cause: ReplanCause::Break,
+            ..
+        }) if waiting == operation
+    ));
+    assert_eq!(port.publishes.get(), 1);
+}
+
+#[kithara::test]
+fn an_unobserved_broken_deck_stops_waiting_without_a_rejection() {
+    let (mut root, deck, _) = broken_root();
+    let waiting = root.waiting(unobserved);
+    let mut port = FakePort::default();
+
+    let entered = root.enter().expect("the owner is free");
+    let settled = entered
+        .run(&mut port, |cut, port| cut.replan_waiting(port, waiting))
+        .expect("the cut drains nothing");
+
+    assert_eq!(settled, Ok(()));
+    let status = root.group().with_group(deck, SyncGroup::status);
+    assert!(
+        !matches!(
+            status,
+            Some(SyncStatusSnapshot::Rejected { .. } | SyncStatusSnapshot::Replanning { .. })
+        ),
+        "{status:?}"
+    );
+    assert!(root.waiting(unobserved).is_empty());
+}
+
+#[kithara::test]
+#[case::sounding_its_old_map(ResidentStaging::Available, Some(WarpMapRevision::first()))]
+#[case::unstaged(ResidentStaging::Unavailable, None)]
+fn a_broken_deck_waits_outside_the_owner_until_its_track_plays_by_hand(
+    #[case] staging: ResidentStaging<u32>,
+    #[case] warp_map: Option<WarpMapRevision>,
+) {
+    let (root, _, _) = broken_root();
+    let snapshot = rendered(
+        SessionFrame::new(4_096),
+        SessionEpoch::new(0),
+        TransportRevision::first(),
+        warp_map,
+    );
+
+    let waiting = root.waiting(|_: &TestGroup| Some(resident(&snapshot, staging)));
+
+    assert!(waiting.is_empty());
 }

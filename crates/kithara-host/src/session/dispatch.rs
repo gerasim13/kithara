@@ -150,7 +150,9 @@ pub(super) fn pump_before_work<T, S>(state: &mut SessionState<T, S>) -> Result<(
 /// Plans once more every deck decision that waits for its Host, without any
 /// caller asking: observes each waiting deck's track outside Control, then,
 /// in one owner cut, replans the decision that still waits from that
-/// observation, or ends it when the track cannot be observed afresh.
+/// observation, or ends it when the track cannot be observed afresh. A deck
+/// a pause, resume or seek broke keeps waiting until its track sounds by
+/// hand.
 ///
 /// # Errors
 /// Returns the first refusal to end a waiting decision; the next tick

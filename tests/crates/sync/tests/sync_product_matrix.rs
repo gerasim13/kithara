@@ -17,20 +17,20 @@ use kithara::{
 use kithara::{
     beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
     hls::AbrMode,
-    host::{HostConfig, HostOwned},
+    host::{DeckSyncState, HostConfig, HostOwned},
     platform::{
         sync::Arc,
         time::{self, Duration, Instant},
     },
     play::{
-        ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
-        ResourceSrc, Tempo,
+        ArtifactSource, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+        ResourceConfig, ResourceSrc, Tempo,
     },
     queue::{Queue, QueueConfig, QueueError, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
     sync::{
         AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncMode, SyncOperation,
-        SyncStatusSnapshot,
+        SyncOperationId, SyncStatusSnapshot,
     },
     warp::{AssetFrame, BeatsPerMinute, PresentationFrontier},
 };
@@ -1054,6 +1054,101 @@ impl ProductHarness {
         }
     }
 
+    /// The first deck's Sync state as the Host reports it now.
+    async fn first_deck_state(&self, case: SyncCase) -> DeckSyncState {
+        let deck = Arc::clone(&self.decks[0]);
+        self.host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .unwrap_or_else(|error| panic!("{}: query deck state: {error}", case.id))
+    }
+
+    /// Renders until the first deck's Sync state satisfies `holds`, and
+    /// panics with the last state after three seconds of output.
+    async fn deck_state_when(
+        &mut self,
+        case: SyncCase,
+        holds: impl Fn(&DeckSyncState) -> bool,
+        what: &str,
+    ) -> DeckSyncState {
+        let mut last = None;
+        let blocks = 3 * usize::try_from(case.sample_rate).expect("sample rate fits usize")
+            / self.block_frames;
+        for _ in 0..blocks {
+            let _ = self.render(case, self.block_frames).await;
+            let state = self.first_deck_state(case).await;
+            if holds(&state) {
+                return state;
+            }
+            last = Some(state);
+        }
+        panic!("{}: {what} never held, last state {last:?}", case.id);
+    }
+
+    /// Asks the Host to apply `intent` to the first deck from what it plays.
+    async fn request_first_deck(&mut self, intent: SyncIntent) -> Result<(), PlayError> {
+        #[cfg(not(target_os = "android"))]
+        self.mark(&format!("sync {intent:?}"));
+        let deck = Arc::clone(&self.decks[0]);
+        self.host
+            .with(move |host| host.request_deck_sync(&deck, intent))
+            .await
+    }
+
+    /// Sets the Host tempo and renders until its graph processed it.
+    async fn settle_host_tempo(&mut self, case: SyncCase, bpm: f64) {
+        #[cfg(not(target_os = "android"))]
+        self.mark(&format!("Host {bpm} BPM"));
+        self.set_tempo(case, bpm, true).await;
+        for _ in 0..16 {
+            let _ = self.render(case, self.block_frames).await;
+            let processed = self
+                .host
+                .with(|host| host.tempo_state())
+                .await
+                .unwrap_or_else(|error| panic!("{}: query Host tempo: {error}", case.id))
+                .processed()
+                .map(|transport| transport.tempo().beats_per_minute());
+            if processed == Some(bpm) {
+                return;
+            }
+        }
+        panic!("{}: the Host never processed {bpm} BPM", case.id);
+    }
+
+    /// Pauses the first deck.
+    async fn pause_first_deck(&mut self) {
+        #[cfg(not(target_os = "android"))]
+        self.mark("pause");
+        let control = self.decks[0].control().clone();
+        self.host.run(move || control.pause()).await;
+    }
+
+    /// Plays the first deck.
+    async fn play_first_deck(&mut self) {
+        #[cfg(not(target_os = "android"))]
+        self.mark("play");
+        let control = self.decks[0].control().clone();
+        self.host.run(move || control.play()).await;
+    }
+
+    /// Seeks the first deck to `seconds`.
+    fn seek_first_deck(&mut self, case: SyncCase, seconds: f64) {
+        #[cfg(not(target_os = "android"))]
+        self.mark(&format!("seek {seconds:.3} s"));
+        self.decks[0]
+            .seek(seconds)
+            .unwrap_or_else(|error| panic!("{}: seek the first deck: {error}", case.id));
+    }
+
+    /// The first deck's playback position in seconds.
+    fn first_deck_position(&self, case: SyncCase) -> f64 {
+        self.decks[0]
+            .playback_view()
+            .position
+            .unwrap_or_else(|| panic!("{}: the first deck reports no position", case.id))
+    }
+
     /// The transport revision the Host has processed.
     pub(super) async fn transport_revision(
         &self,
@@ -1491,6 +1586,23 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
         case.id,
         failures.join("\n"),
     );
+}
+
+/// Whether the deck's applied map sounds.
+const fn is_sounding(status: SyncStatusSnapshot) -> bool {
+    matches!(
+        status,
+        SyncStatusSnapshot::Converging { .. } | SyncStatusSnapshot::Locked { .. }
+    )
+}
+
+/// The operation whose map the deck sounds, if it sounds one.
+fn applied_operation(status: SyncStatusSnapshot) -> Option<SyncOperationId> {
+    match status {
+        SyncStatusSnapshot::Converging { applied, .. }
+        | SyncStatusSnapshot::Locked { applied, .. } => Some(applied.stamp().operation()),
+        _ => None,
+    }
 }
 
 /// Whether `tempo` is `beats_per_minute`, up to the rounding a beat rate
@@ -1932,6 +2044,118 @@ async fn local_ticket_presents_after_an_unrelated_host_commit_and_rejected_reque
     assert!(processed.revision() > before);
     assert_eq!(processed.tempo().beats_per_minute(), 124.0);
     assert!(harness.failures.is_empty());
+}
+
+/// How the user breaks the continuity of a deck that follows the Host.
+#[derive(Clone, Copy, Debug)]
+enum Break {
+    /// Seeks it past the cue its map entered at.
+    Seek,
+    /// Pauses it for a second while the Host clock runs on, then plays it.
+    Pause,
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(120))
+)]
+#[case::seek(Break::Seek)]
+#[case::pause(Break::Pause)]
+async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_again(
+    #[case] cut: Break,
+) {
+    let case = PUBLIC_SYNTHETIC_ENABLE;
+    let second = usize::try_from(case.sample_rate).expect("sample rate fits usize") / BLOCK_FRAMES;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    harness.settle_host_tempo(case, 124.0).await;
+    harness
+        .request_first_deck(SyncIntent::Enable)
+        .await
+        .expect("Host mode maps the sounding deck");
+    let entered = harness
+        .deck_state_when(
+            case,
+            |state| is_sounding(state.status) && at_bpm(state.applied_tempo, 124.0),
+            "the Host map",
+        )
+        .await;
+    let first = applied_operation(entered.status);
+    harness.settle(case, second).await;
+
+    let resumed_at = match cut {
+        Break::Seek => {
+            let target = harness.first_deck_position(case) + 3.0;
+            harness.seek_first_deck(case, target);
+            target
+        }
+        Break::Pause => {
+            harness.pause_first_deck().await;
+            harness.settle(case, 2).await;
+            let paused_at = harness.first_deck_position(case);
+            harness.settle(case, second).await;
+            assert!(
+                (harness.first_deck_position(case) - paused_at).abs() < 1e-9,
+                "a paused deck holds its position while the Host clock runs on"
+            );
+            harness.play_first_deck().await;
+            paused_at
+        }
+    };
+    let resumed = harness.output_frames;
+
+    let mut peak = 0.0_f32;
+    let mut by_hand = 0_usize;
+    let mut played = 0.0;
+    let again = loop {
+        assert!(played < 3.0, "a fresh Host map after the break never held");
+        let pcm = harness.render(case, BLOCK_FRAMES).await;
+        peak = pcm.iter().fold(peak, |peak, sample| peak.max(sample.abs()));
+        let state = harness.first_deck_state(case).await;
+        if is_sounding(state.status)
+            && applied_operation(state.status) != first
+            && at_bpm(state.applied_tempo, 124.0)
+        {
+            break state;
+        }
+        played = (harness.output_frames - resumed) as f64 / f64::from(case.sample_rate);
+        if state.applied_tempo.is_none() {
+            by_hand += 1;
+            assert_eq!(
+                state.mode,
+                SyncMode::HostSync,
+                "a break keeps the deck's wish to follow the Host"
+            );
+            let position = harness.first_deck_position(case);
+            assert!(
+                (position - (resumed_at + played)).abs() < 0.1,
+                "the deck plays by hand from {resumed_at:.3} s, got {position:.3} s after \
+                 {played:.3} s"
+            );
+        }
+    };
+    assert!(
+        by_hand > 0,
+        "the break releases the map before the deck aligns again"
+    );
+    assert!(peak > 0.0, "the deck sounds through the break");
+    let aligned_at = harness.first_deck_position(case);
+    assert!(
+        aligned_at > resumed_at + played,
+        "the fresh map enters where the deck plays, not at the old cue: {aligned_at:.3} s"
+    );
+    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
 }
 
 #[kithara::test(

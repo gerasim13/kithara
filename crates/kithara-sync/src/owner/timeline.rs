@@ -12,8 +12,9 @@ use super::{
     transaction::take_operation,
 };
 use crate::{
-    AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal, SyncAdmission,
-    SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperationId, consts,
+    AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal, ReplanCause,
+    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperationId,
+    consts,
 };
 
 /// The beat timeline one group follows, owned together with its mode.
@@ -202,13 +203,14 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Plans once more the decision a deck holds while it waits for its
     /// Host, from the source the Host observed afresh for the same load. The
     /// deck's mode stays. A missed decision is planned once only: its
-    /// successor missing again ends it.
+    /// successor missing again ends it. A catch-up or a break is planned
+    /// afresh each time.
     pub(super) fn transact_replan(
         &mut self,
         operation: SyncOperationId,
         entry: SyncEntry,
     ) -> Result<SyncAdmission, SyncError> {
-        let (member, load, missed) = self
+        let (member, load, cause) = self
             .pending
             .iter()
             .find_map(|held| match held {
@@ -216,9 +218,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                     member,
                     operation: waiting,
                     load,
-                    missed,
+                    cause,
                     ..
-                } if *waiting == operation => Some((*member, *load, *missed)),
+                } if *waiting == operation => Some((*member, *load, *cause)),
                 Pending::Replanning { .. } | Pending::Prepared { .. } | Pending::Waiting { .. } => {
                     None
                 }
@@ -232,7 +234,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             });
         }
         let admission = self.commit(ModeEffect::Unchanged, Some(entry))?;
-        if missed.is_some() {
+        if matches!(cause, ReplanCause::Missed(_)) {
             self.replanned = self
                 .pending
                 .iter()

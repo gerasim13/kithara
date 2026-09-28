@@ -191,8 +191,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             }
             SyncOperation::InvalidateSource { target, change } => {
                 self.reserve_operation().and_then(|operation| {
-                    let transition = self.invalidate_source(*target, *change)?;
-                    self.next_operation = operation.checked_next();
+                    let transition = self.invalidate_source(*target, *change, operation)?;
                     Ok(SyncAdmission::StateChanged {
                         operation,
                         topology: self.topology_stamp(),

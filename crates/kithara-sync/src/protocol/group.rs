@@ -33,10 +33,11 @@ pub enum SyncStatusSnapshot {
         activation: SessionFrame,
     },
     /// A decision waits for its Host to observe the track's source afresh
-    /// and plan it once more.
+    /// and plan it once more, for `cause`.
     Replanning {
         operation: SyncOperationId,
         topology: TopologyStamp,
+        cause: ReplanCause,
     },
     /// The latest decision ended without sounding, for `reason`; the track
     /// sounds on as it did before.
@@ -55,6 +56,19 @@ pub enum SyncStatusSnapshot {
         applied: SyncApplied,
         phase_error_frames: f64,
     },
+}
+
+/// Why a deck's decision waits for its Host to plan it once more.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ReplanCause {
+    /// It missed its boundary, for this transient reason.
+    Missed(SyncExecutionReject),
+    /// It sounded on a track grid refined since it was placed.
+    Refined,
+    /// A pause, resume or seek broke the source its map was placed on; the
+    /// deck plays by hand until it sounds again.
+    Break,
 }
 
 /// A synchronization operation violates the live group contract.

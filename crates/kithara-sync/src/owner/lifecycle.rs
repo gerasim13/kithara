@@ -1,3 +1,4 @@
+use kithara_signal::TransportRevision;
 use kithara_warp::{BeatGridId, BeatGridQuery, BeatGridStamp, WarpMapRevision, WarpPlan};
 use num_traits::ToPrimitive;
 
@@ -8,9 +9,9 @@ use super::{
     transaction::take_operation,
 };
 use crate::{
-    SourceChange, SyncAdmission, SyncApplied, SyncEffect, SyncError, SyncExecutionReject,
-    SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncReceipt,
-    SyncStatusSnapshot, SyncTransition,
+    LoadGeneration, ReplanCause, SourceChange, SyncAdmission, SyncApplied, SyncEffect, SyncError,
+    SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId,
+    SyncPreparation, SyncReceipt, SyncStatusSnapshot, SyncTransition,
 };
 
 /// The map one direct member sounds through, as its executor presented it.
@@ -135,7 +136,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     }
 
     /// Withdraws every decision placed against one member's source after the
-    /// player committed a change to that source.
+    /// player committed a change to that source, as `operation`.
     ///
     /// The accepted mode stays. An unpresented entry keeps its prior timeline
     /// in custody, because that timeline still sounds. A rejection of the
@@ -143,6 +144,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// against. A discontinuity also ends the applied map's proof of where
     /// the member stands; a timing change keeps it, because a mapped lane
     /// plays its map, not the speed.
+    /// A discontinuity of a deck's track that sounded a map or was entering
+    /// one while the deck follows a timeline leaves a decision that waits for
+    /// the Host to plan the track again from where it then plays, as the next
+    /// operation after `operation`.
     /// The Host has drained the member's receipts first, so an Armed
     /// preparation signals a broken receipt contract.
     ///
@@ -152,6 +157,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         &mut self,
         member: BeatGridId,
         change: SourceChange,
+        operation: SyncOperationId,
     ) -> Result<SyncTransition, SyncError> {
         if self.direct_grid(member).is_none() {
             return Err(SyncError::MemberNotFound {
@@ -169,6 +175,21 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 operation: pending.operation(),
             });
         }
+        let mut next_operation = operation.checked_next();
+        let broken = self
+            .broken_entry(member, change)
+            .map(|(load, transport)| {
+                take_operation(self.grid.id(), &mut next_operation).map(|operation| {
+                    Pending::Replanning {
+                        member,
+                        operation,
+                        load,
+                        transport,
+                        cause: ReplanCause::Break,
+                    }
+                })
+            })
+            .transpose()?;
         let mut remaining = self.pending.clone();
         remaining.retain(|pending| pending.member() != member);
         let transition = transition(&self.pending, &remaining);
@@ -179,6 +200,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         {
             self.before_entry = Some((Custodian::Withdrawn(member), prior));
         }
+        remaining.extend(broken);
         self.pending = remaining;
         self.rejection = self
             .rejection
@@ -186,9 +208,41 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         if change == SourceChange::Discontinuity {
             self.applied.retain(|lane| lane.member() != member);
         }
+        self.next_operation = next_operation;
         Ok(transition)
     }
 
+    /// The load and transport a deck's track was placed with when `change`
+    /// breaks it while the deck follows a timeline: those of the map it was
+    /// entering, or else of the map it sounded; `None` when nothing it
+    /// entered or sounded is broken.
+    fn broken_entry(
+        &self,
+        member: BeatGridId,
+        change: SourceChange,
+    ) -> Option<(LoadGeneration, TransportRevision)> {
+        if change != SourceChange::Discontinuity
+            || matches!(self.timeline, Timeline::Off)
+            || !matches!(self.members.as_slice(), [SyncMember::Grid { .. }])
+        {
+            return None;
+        }
+        let entering = self
+            .pending
+            .iter()
+            .find(|held| held.member() == member && held.enters_map());
+        match (entering, self.applied_of(member)) {
+            (Some(held), _) => Some((held.load(), held.transport())),
+            (None, Some(lane)) => {
+                let stamp = lane.applied().stamp();
+                Some((stamp.load(), stamp.transport()))
+            }
+            (None, None) => None,
+        }
+    }
+}
+
+impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Records one executor receipt for a preparation this group issued to a
     /// direct member.
     ///
@@ -303,7 +357,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                             operation,
                             load: expected.load(),
                             transport: expected.transport(),
-                            missed: Some(reason),
+                            cause: ReplanCause::Missed(reason),
                         };
                     }
                 } else {
@@ -337,7 +391,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                         operation: catch_up,
                         load: expected.load(),
                         transport: expected.transport(),
-                        missed: None,
+                        cause: ReplanCause::Refined,
                     });
                 }
                 self.rejection = None;
@@ -350,12 +404,13 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// Ends the decision a deck holds while it waits to be planned again,
     /// because its Host cannot observe the track afresh. A missed decision
     /// ends rejected for the reason it missed with; a catch-up leaves the
-    /// track sounding through the map it presented.
+    /// track sounding through the map it presented, and a break leaves it
+    /// playing by hand.
     pub(super) fn abandon_replan(
         &mut self,
         operation: SyncOperationId,
     ) -> Result<SyncAdmission, SyncError> {
-        let (index, member, missed) = self
+        let (index, member, cause) = self
             .pending
             .iter()
             .enumerate()
@@ -363,9 +418,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
                 Pending::Replanning {
                     member,
                     operation: waiting,
-                    missed,
+                    cause,
                     ..
-                } if *waiting == operation => Some((index, *member, *missed)),
+                } if *waiting == operation => Some((index, *member, *cause)),
                 Pending::Replanning { .. } | Pending::Prepared { .. } | Pending::Waiting { .. } => {
                     None
                 }
@@ -373,7 +428,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             .ok_or(SyncError::NotReplanning { operation })?;
         let reserved = self.reserve_operation()?;
         self.end_decision(index, operation)?;
-        if let Some(reason) = missed {
+        if let ReplanCause::Missed(reason) = cause {
             self.rejection = Some(Rejection {
                 member,
                 operation,

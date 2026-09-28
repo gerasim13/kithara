@@ -20,11 +20,12 @@ pub use execution::{
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{
     AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal,
-    PublicOperation, SessionAxisUpdate, SourceChange, SyncAdmission, SyncApplied, SyncCapability,
-    SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncMode,
-    SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
-    SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
+    PublicOperation, ReplanCause, SessionAxisUpdate, SourceChange, SyncAdmission, SyncApplied,
+    SyncCapability, SyncEffect, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup,
+    SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
+    SyncMemberSnapshot, SyncMode, SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt,
+    SyncRejected, SyncStatusSnapshot, SyncTransition, TopologyOperation, TopologyRevision,
+    TopologyStamp, TransportOperation,
 };
 pub use root::{
     ClockRefusal, CloseError, DEFAULT_OWNER_WAIT, EnteredCut, EntryPort, EntryRefusal, InboxAt,

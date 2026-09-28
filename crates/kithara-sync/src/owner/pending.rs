@@ -4,8 +4,8 @@ use kithara_signal::{SessionFrame, TransportRevision};
 use kithara_warp::{BeatGridId, MapRegion};
 
 use crate::{
-    AlignmentSource, LoadGeneration, SyncEffect, SyncExecutionReject, SyncOperationId,
-    SyncPreparation, SyncTransition,
+    AlignmentSource, LoadGeneration, ReplanCause, SyncEffect, SyncOperationId, SyncPreparation,
+    SyncTransition,
 };
 
 /// The one unapplied decision a group holds for a direct member.
@@ -26,15 +26,13 @@ pub(super) enum Pending {
         required: MapRegion,
     },
     /// The member's decision waits for its Host to observe the member's
-    /// source afresh and plan it once more: it missed its first boundary,
-    /// for the reason `missed` gives, or it sounded on a member grid refined
-    /// since.
+    /// source afresh and plan it once more, for `cause`.
     Replanning {
         member: BeatGridId,
         operation: SyncOperationId,
         load: LoadGeneration,
         transport: TransportRevision,
-        missed: Option<SyncExecutionReject>,
+        cause: ReplanCause,
     },
 }
 

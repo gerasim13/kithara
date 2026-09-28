@@ -6,15 +6,15 @@ use kithara_warp::{
 };
 
 use super::{
-    lifecycle::{acknowledge, pending_public_entry},
+    lifecycle::{acknowledge, pending_public_entry, sound, transact},
     modes::{attach_group, group_in, synced_deck},
     preparation::{asset_grid, attach_grid, cue, prepare},
 };
 use crate::{
-    GroupState, ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError,
-    SyncExecutionReject, SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation,
-    SyncOperationId, SyncPreparation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot,
-    SyncTransition,
+    GroupState, ParentFact, ParentGridUpdate, SessionAxisUpdate, SourceChange, SyncAdmission,
+    SyncError, SyncExecutionReject, SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode,
+    SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncRejected, SyncStaged,
+    SyncStatusSnapshot, SyncTransition,
 };
 
 /// Test-only recursive group that delegates to the real owner state.
@@ -179,4 +179,34 @@ pub(crate) fn root_with_a_waiting_deck() -> (
     let mut root = group_in(SyncMode::Off, SyncMemberKind::Group);
     attach_group(&mut root, deck);
     (root, id, track, entry.stamp().operation())
+}
+
+/// A root holding one Host-synced deck whose track a seek broke while it
+/// sounded, so a decision waits for its Host to plan it again; with the
+/// deck, its track and the waiting operation.
+pub(crate) fn root_with_a_broken_deck() -> (
+    GroupState<TestGroup>,
+    BeatGridId,
+    BeatGridId,
+    SyncOperationId,
+) {
+    let (mut deck, track, entry) = pending_public_entry();
+    let id = deck.id();
+    let _ = sound(&mut deck, &entry);
+    let _ = transact(
+        &mut deck,
+        SyncOperation::InvalidateSource {
+            target: track,
+            change: SourceChange::Discontinuity,
+        },
+    );
+    let SyncStatusSnapshot::Replanning { operation, .. } = deck.status() else {
+        panic!(
+            "the broken deck waits for its Host, got {:?}",
+            deck.status()
+        );
+    };
+    let mut root = group_in(SyncMode::Off, SyncMemberKind::Group);
+    attach_group(&mut root, deck);
+    (root, id, track, operation)
 }

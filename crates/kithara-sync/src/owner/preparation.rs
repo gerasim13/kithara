@@ -19,9 +19,9 @@ use super::{
     transaction::take_operation,
 };
 use crate::{
-    AlignmentSource, LoadGeneration, SyncAdmission, SyncCapability, SyncEffect, SyncError,
-    SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId, SyncPreparation, SyncTransition,
-    TopologyStamp,
+    AlignmentSource, LoadGeneration, ReplanCause, SyncAdmission, SyncCapability, SyncEffect,
+    SyncError, SyncExecutionStamp, SyncGroup, SyncMember, SyncOperationId, SyncPreparation,
+    SyncTransition, TopologyStamp,
 };
 
 /// The request one preparation answers.
@@ -390,7 +390,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     /// later beat, so the Local timeline and replacement map start together.
     /// A decision waiting to be planned again keeps waiting on the Host
     /// timeline, sounding or not, so only the Host's fresh observation plans
-    /// it once more.
+    /// it once more; one a break left keeps waiting on any timeline with
+    /// geometry, because its track plays by hand until then.
     /// A timeline without geometry withdraws every decision but a handoff,
     /// and a new axis withdraws everything, applied maps too.
     pub(super) fn refreshed(
@@ -422,8 +423,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             let decided = match (held, self.applied_of(member.id())) {
                 (Some(held), _) if held.armed() => Some(held.clone()),
                 (Some(held), _) if !live => handoff(held).cloned(),
-                (Some(replanning @ Pending::Replanning { .. }), _)
-                    if matches!(timeline, Timeline::Host) =>
+                (Some(replanning @ Pending::Replanning { cause, .. }), _)
+                    if matches!(timeline, Timeline::Host) || *cause == ReplanCause::Break =>
                 {
                     Some(replanning.clone())
                 }
