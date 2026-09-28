@@ -58,3 +58,4 @@ workspace = true
 [[bench]]
 name = "kernels"
 harness = false
+required-features = ["spectrum"]

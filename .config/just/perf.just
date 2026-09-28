@@ -60,7 +60,7 @@ bench MODE="build":
     set -euo pipefail
     targets=(
       "kithara-beat:spectral:dsp"
-      "kithara-dsp:kernels:"
+      "kithara-dsp:kernels:spectrum"
       "kithara-integration-tests:abr_estimator:"
       "kithara-integration-tests:bufpool:"
       "kithara-integration-tests:perf_audit:"
