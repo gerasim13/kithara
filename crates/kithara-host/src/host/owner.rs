@@ -4,8 +4,8 @@ use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    PlayError, SessionBinding, SessionDispatcher, SessionTransportSnapshot, Tempo,
-    player::PlayerControlSource,
+    PlayError, SessionBinding, SessionDispatcher, SessionTempoState, SessionTransportSnapshot,
+    Tempo, player::PlayerControlSource,
 };
 use kithara_signal::SessionEpoch;
 use kithara_sync::{
@@ -323,7 +323,24 @@ impl<S> Host<S> {
         }
     }
 
-    /// Reads one attached deck's accepted mode and actual executor evidence.
+    /// Reads the tempo the Host accepted beside the one its audio graph
+    /// processed.
+    ///
+    /// # Errors
+    /// Returns an error when the graph rejected the accepted commit or the
+    /// session cannot answer the query.
+    pub fn tempo_state(&self) -> Result<SessionTempoState, PlayError> {
+        match self.dispatcher.exec(Cmd::QuerySessionTempo)? {
+            Reply::SessionTempo(tempo) => Ok(tempo),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for session tempo query".into(),
+            )),
+        }
+    }
+
+    /// Reads one attached deck's accepted mode, tempo and actual executor
+    /// evidence.
     ///
     /// # Errors
     /// Returns an error for a foreign or detached deck, or when the canonical

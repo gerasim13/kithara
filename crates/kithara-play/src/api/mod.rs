@@ -16,5 +16,5 @@ pub use event::{
 };
 pub use kithara_signal::TransportRevision;
 pub use kithara_warp::SessionBeat;
-pub use transport::{SessionTransportSnapshot, Tempo, TempoError};
+pub use transport::{SessionTempoState, SessionTransportSnapshot, Tempo, TempoError};
 pub use types::{SessionDuckingMode, SlotId, TrackId};

@@ -12,7 +12,10 @@ mod wire {
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
-        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{
+            SessionBeat, SessionDuckingMode, SessionTempoState, SessionTransportSnapshot, SlotId,
+            Tempo,
+        },
         bridge::{MixTapWriter, SharedEq, SlotControl},
         rt::StreamShape,
     };
@@ -157,6 +160,7 @@ mod wire {
             target: SessionBeat,
         },
         QuerySessionTransport,
+        QuerySessionTempo,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -194,6 +198,7 @@ mod wire {
         Ok,
         PlayerRegistered(RegisteredPlayer),
         SessionTransport(SessionTransportSnapshot),
+        SessionTempo(SessionTempoState),
         SlotAllocated(Box<AllocatedSlot>),
         SyncAcknowledged(SyncReceiptAck),
         SampleRate(SessionSampleRate),

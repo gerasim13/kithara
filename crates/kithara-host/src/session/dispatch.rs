@@ -6,6 +6,7 @@ use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
+use kithara_signal::SessionFrame;
 use kithara_sync::{
     ControlEnterError, EntryRefusal, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
     SyncOperation, SyncReceiptAck, SyncRejected,
@@ -235,11 +236,17 @@ fn run_sync_cmd<S>(
             }
         }
         SyncCmd::QueryDeckState { target } => {
+            let output = port
+                .stream
+                .ctx
+                .map(|ctx| SessionFrame::new(ctx.audio_clock().samples.0));
             return cut
                 .group()
                 .with_group(target, |group| DeckSyncState {
                     mode: group.mode(),
                     status: group.status(),
+                    accepted_tempo: group.tempo(),
+                    applied_tempo: output.and_then(|output| group.applied_tempo_at(output)),
                 })
                 .map_or_else(
                     || {
@@ -388,6 +395,10 @@ where
         },
         Cmd::QuerySessionTransport => match transport::snapshot(state) {
             Ok(snapshot) => Reply::SessionTransport(snapshot),
+            Err(err) => Reply::Err(err),
+        },
+        Cmd::QuerySessionTempo => match transport::tempo_state(state) {
+            Ok(tempo) => Reply::SessionTempo(tempo),
             Err(err) => Reply::Err(err),
         },
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),

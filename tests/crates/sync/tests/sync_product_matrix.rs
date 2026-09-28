@@ -32,7 +32,7 @@ use kithara::{
         AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncMode, SyncOperation,
         SyncStatusSnapshot,
     },
-    warp::{AssetFrame, PresentationFrontier},
+    warp::{AssetFrame, BeatsPerMinute, PresentationFrontier},
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
@@ -1494,6 +1494,18 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     );
 }
 
+/// Whether `tempo` is `beats_per_minute`, up to the rounding a beat rate
+/// picks up on its way into minutes.
+fn at_bpm(tempo: Option<BeatsPerMinute>, beats_per_minute: f64) -> bool {
+    tempo.is_some_and(|tempo| {
+        (f64::from(tempo) - beats_per_minute).abs() <= beats_per_minute * f64::EPSILON
+    })
+}
+
+fn tempo(beats_per_minute: f64) -> Tempo {
+    Tempo::new(beats_per_minute).expect("fixture tempo")
+}
+
 #[kithara::test(
     native,
     tokio,
@@ -1513,6 +1525,17 @@ async fn public_synthetic_enable_presents_matching_pcm() {
         BLOCK_FRAMES,
     )
     .await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let free = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("free deck state");
+    assert_eq!(
+        (free.mode, free.accepted_tempo, free.applied_tempo),
+        (SyncMode::Off, None, None),
+        "a free deck claims no Sync tempo"
+    );
     let deck = Arc::clone(&harness.decks[0]);
     harness
         .host
@@ -1538,6 +1561,12 @@ async fn public_synthetic_enable_presents_matching_pcm() {
             state.status
         );
     };
+    assert!(
+        at_bpm(state.accepted_tempo, 120.0) && state.applied_tempo.is_none(),
+        "an entry not yet presented follows the Host without sounding a map, got {:?} and {:?}",
+        state.accepted_tempo,
+        state.applied_tempo
+    );
 
     let mut presented = None;
     let mut sounding_peak = 0.0_f32;
@@ -1557,6 +1586,12 @@ async fn public_synthetic_enable_presents_matching_pcm() {
                 applied.frontier().output(),
                 SessionFrame::new(i64::from(activation) + 1),
                 "Presented must name the first consumed mapped PCM frame"
+            );
+            assert!(
+                at_bpm(state.accepted_tempo, 120.0) && at_bpm(state.applied_tempo, 120.0),
+                "the presented map sounds the Host tempo the deck follows, got {:?} and {:?}",
+                state.accepted_tempo,
+                state.applied_tempo
             );
             presented = Some(applied);
         }
@@ -1585,8 +1620,19 @@ async fn public_synthetic_enable_presents_matching_pcm() {
 
     let first = presented.expect("first mapped presentation");
     harness.set_tempo(case, 124.0, true).await;
+    let requested = harness
+        .host
+        .with(|host| host.tempo_state())
+        .await
+        .expect("Host tempo after the request");
+    assert_eq!(
+        (requested.accepted(), requested.processed()),
+        (Some(tempo(124.0)), Some(tempo(120.0))),
+        "the Host accepts the new tempo before its graph processes it"
+    );
     let mut replacement = None;
     let mut pending = None;
+    let mut lagging = 0_usize;
     let mut last_status = state.status;
     for _ in 0..(4 * 48_000 / BLOCK_FRAMES) {
         let _ = harness.render(case, BLOCK_FRAMES).await;
@@ -1609,15 +1655,41 @@ async fn public_synthetic_enable_presents_matching_pcm() {
             | SyncStatusSnapshot::Locked { applied, .. }
                 if applied.stamp().group().revision() > first.stamp().group().revision() =>
             {
-                replacement = Some(applied);
+                replacement = Some((applied, state.applied_tempo));
                 break;
             }
             _ => {}
         }
+        assert!(
+            at_bpm(state.applied_tempo, 120.0),
+            "the deck sounds its first map until the replacement presents, got {:?}",
+            state.applied_tempo
+        );
+        if at_bpm(state.accepted_tempo, 124.0) {
+            lagging += 1;
+        }
     }
-    let retargeted = replacement.unwrap_or_else(|| {
+    let (retargeted, applied_tempo) = replacement.unwrap_or_else(|| {
         panic!("processed Host tempo must present a replacement, last state {last_status:?}")
     });
+    assert!(
+        lagging > 0,
+        "the deck follows the processed Host tempo for at least one block before its replacement presents"
+    );
+    assert!(
+        at_bpm(applied_tempo, 124.0),
+        "the replacement map sounds the processed Host tempo, got {applied_tempo:?}"
+    );
+    let processed_tempo = harness
+        .host
+        .with(|host| host.tempo_state())
+        .await
+        .expect("Host tempo after the replacement");
+    assert_eq!(
+        (processed_tempo.accepted(), processed_tempo.processed()),
+        (Some(tempo(124.0)), Some(tempo(124.0))),
+        "the Host graph processed the tempo it accepted"
+    );
     let (operation, activation) = pending.expect("Host retarget issues a future preparation");
     assert_eq!(retargeted.stamp().operation(), operation);
     assert_eq!(

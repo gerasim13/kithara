@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
-use kithara_signal::SessionEpoch;
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
+use kithara_signal::{SessionEpoch, SessionFrame};
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, BeatsPerMinute};
 
 use super::SyncExecution;
 use crate::{
@@ -75,6 +75,21 @@ impl<G: SyncGroup> ExecutedGroup<G> {
     #[must_use]
     pub const fn new(group: G, execution: SyncExecution) -> Self {
         Self { group, execution }
+    }
+}
+
+impl<G: SyncGroup<NestedGroup = G>> ExecutedGroup<GroupState<G>> {
+    delegate::delegate! {
+        to self.group {
+            /// Returns the tempo the group's own or inherited timeline
+            /// approaches.
+            #[must_use]
+            pub fn tempo(&self) -> Option<BeatsPerMinute>;
+            /// Returns the tempo the latest map a member sounds through
+            /// carries at `output`.
+            #[must_use]
+            pub fn applied_tempo_at(&self, output: SessionFrame) -> Option<BeatsPerMinute>;
+        }
     }
 }
 

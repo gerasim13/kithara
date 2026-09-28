@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
+    api::{SessionBeat, SessionTempoState, SessionTransportSnapshot, Tempo, TransportRevision},
     session::{
         SessionError,
         dispatch::{stream_died, with_owner_cut},
@@ -196,6 +196,23 @@ pub(crate) fn snapshot<T, S>(
     refresh_observation(state)?
         .snapshot()
         .ok_or(SessionError::TransportNotProcessed)
+}
+
+/// The tempo the Host accepted beside the one its graph processed. Nothing
+/// is processed while no transport control runs.
+pub(crate) fn tempo_state<T, S>(
+    state: &mut SessionState<T, S>,
+) -> Result<SessionTempoState, SessionError> {
+    let processed = match state.transport_control {
+        Some(_) => refresh_observation(state)?
+            .snapshot()
+            .map(|snapshot| snapshot.tempo()),
+        None => None,
+    };
+    Ok(SessionTempoState::new(
+        state.transport.configured_tempo(),
+        processed,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

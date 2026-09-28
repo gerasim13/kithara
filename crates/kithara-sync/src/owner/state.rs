@@ -1,9 +1,9 @@
 use std::num::NonZeroU32;
 
-use kithara_signal::SessionEpoch;
+use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-    BeatsPerMinute, MapAxis, SessionAxis, WarpMapRevision,
+    BeatGrid, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
+    BeatGridState, BeatsPerMinute, MapAxis, SessionAxis, WarpMapRevision,
 };
 
 use super::{
@@ -79,6 +79,20 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     pub fn tempo(&self) -> Option<BeatsPerMinute> {
         self.timeline
             .tempo(self.parent.and_then(Parent::segment).as_ref())
+    }
+
+    /// Returns the tempo the latest map a member sounds through carries at
+    /// `output`.
+    ///
+    /// A group whose members sound through no map claims no applied tempo,
+    /// and neither does a map whose frozen target cannot answer at `output`.
+    #[must_use]
+    pub fn applied_tempo_at(&self, output: SessionFrame) -> Option<BeatsPerMinute> {
+        let BeatGridQuery::Resolved(tempo) = self.latest_applied()?.plan().target_tempo_at(output)
+        else {
+            return None;
+        };
+        Some(tempo)
     }
 
     /// Publishes the session trajectory of a group in [`SyncMode::Off`] from
@@ -292,14 +306,17 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             .map(|held| (Custodian::Decision(held.operation()), prior))
     }
 
+    /// The latest map a member sounds through.
+    fn latest_applied(&self) -> Option<&Applied> {
+        self.applied
+            .iter()
+            .max_by_key(|lane| lane.applied().stamp().operation())
+    }
+
     /// The state of the latest map a member sounds through: locked while it
     /// follows the current group grid, converging while the grid moved on.
     fn applied_status(&self, topology: TopologyStamp) -> SyncStatusSnapshot {
-        let Some(lane) = self
-            .applied
-            .iter()
-            .max_by_key(|lane| lane.applied().stamp().operation())
-        else {
+        let Some(lane) = self.latest_applied() else {
             return SyncStatusSnapshot::Off { topology };
         };
         let (applied, phase_error_frames) = (lane.applied(), lane.phase_error_frames());

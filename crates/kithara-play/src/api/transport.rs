@@ -51,6 +51,33 @@ pub struct TempoError {
     beats_per_minute: f64,
 }
 
+/// The session tempo the Host accepted and the one its audio graph
+/// processed, which differ while a tempo change waits for its render
+/// boundary.
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get)]
+#[non_exhaustive]
+pub struct SessionTempoState {
+    /// Returns the tempo the Host accepted last, with or without an output
+    /// stream; `None` before any.
+    #[field(get, copy)]
+    accepted: Option<Tempo>,
+    /// Returns the tempo of the transport commit the audio graph processed
+    /// last; `None` before the first.
+    #[field(get, copy)]
+    processed: Option<Tempo>,
+}
+
+impl SessionTempoState {
+    #[must_use]
+    pub const fn new(accepted: Option<Tempo>, processed: Option<Tempo>) -> Self {
+        Self {
+            accepted,
+            processed,
+        }
+    }
+}
+
 /// The last session transport position processed by the audio graph.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]

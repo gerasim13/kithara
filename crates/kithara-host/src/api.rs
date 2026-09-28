@@ -1,10 +1,10 @@
 use kithara_dsp::fade::FadeCurve;
 pub use kithara_play::{
-    SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TempoError,
-    TransportRevision,
+    SessionBeat, SessionDuckingMode, SessionTempoState, SessionTransportSnapshot, SlotId, Tempo,
+    TempoError, TransportRevision,
 };
 pub use kithara_sync::{SyncIntent, SyncMode, SyncStatusSnapshot};
-use kithara_warp::BeatGridId;
+use kithara_warp::{BeatGridId, BeatsPerMinute};
 
 use crate::error::PlayError;
 
@@ -17,6 +17,12 @@ pub struct DeckSyncState {
     pub mode: SyncMode,
     /// Preparation or mapped execution evidence currently held by the owner.
     pub status: SyncStatusSnapshot,
+    /// Tempo the deck's own or inherited timeline approaches; `None` while
+    /// the deck is off.
+    pub accepted_tempo: Option<BeatsPerMinute>,
+    /// Tempo the map the deck sounds through carries at the Host's last
+    /// processed output frame; `None` while no map sounds.
+    pub applied_tempo: Option<BeatsPerMinute>,
 }
 
 /// One canonical Host member's desired linear mix level.

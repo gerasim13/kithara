@@ -1,12 +1,13 @@
 use std::fmt;
 
 use kithara_events::TrackId;
+use kithara_signal::SessionFrame;
 use kithara_sync::{
     ExecutedGroup, GroupState, ParentFact, ResidentLoadObservation, SyncAdmission, SyncAttachment,
     SyncError, SyncGroup, SyncGroupSnapshot, SyncMode, SyncOperation, SyncReceipt, SyncRejected,
     SyncStaged, SyncStatusSnapshot, SyncTransition,
 };
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
+use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, BeatsPerMinute};
 
 use super::HeldPlayer;
 
@@ -29,6 +30,16 @@ impl PlayerMember {
     }
 
     delegate::delegate! {
+        to self.group {
+            /// Returns the tempo the deck's own or inherited timeline
+            /// approaches.
+            #[must_use]
+            pub(crate) fn tempo(&self) -> Option<BeatsPerMinute>;
+            /// Returns the tempo the map the deck sounds through carries at
+            /// `output`.
+            #[must_use]
+            pub(crate) fn applied_tempo_at(&self, output: SessionFrame) -> Option<BeatsPerMinute>;
+        }
         to self.player {
             /// Commits the Host-applied level after its graph batch succeeds.
             pub(crate) fn commit_host_level(&self, level: f32);
