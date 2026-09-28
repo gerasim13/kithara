@@ -77,6 +77,7 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 A leaf analysis crate: it takes whole-track mono f32 PCM at 22 050 Hz and
 returns raw beat / downbeat positions in seconds. It owns no decoder, resampler,
 or I/O — the consumer (`kithara-analysis`) handles decode, downmix, resample, and
-grid cleanup.
+grid cleanup. The `dsp` backend takes its spectrum and autocorrelation from
+`kithara-dsp`: Accelerate on Apple, `fearless_simd` elsewhere.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-beat) for detailed contracts, invariants, and internals.

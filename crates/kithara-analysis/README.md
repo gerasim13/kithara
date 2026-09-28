@@ -40,7 +40,7 @@ consumer (currently `kithara-app`).
 
 <tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>client-reqwest</code> + <code>tls-rustls</code> for the supplied decoded-reader dependency closure</td></tr>
 
-<tr><td><code>analysis-waveform</code></td><td>no</td><td>RealFFT waveform analyzer</td></tr>
+<tr><td><code>analysis-waveform</code></td><td>no</td><td>Waveform analyzer on <code>kithara-dsp</code>'s FFT</td></tr>
 
 <tr><td><code>analysis-beat</code></td><td>no</td><td>Beat-analysis pipeline with a caller-selected mono resampler backend</td></tr>
 
