@@ -138,7 +138,7 @@ pub(super) fn expand(
             "classify each config field as value, nested, or skip = reason",
         )
     })?;
-    validate_role(field, &role, update, sdk, snapshot, &preserved)?;
+    validate_role(field, &role, update, sdk, snapshot)?;
     field.attrs = preserved;
     if !snapshot {
         return Ok(None);
@@ -189,7 +189,6 @@ fn validate_role(
     update: bool,
     sdk: bool,
     snapshot: bool,
-    preserved: &[syn::Attribute],
 ) -> Result<()> {
     if sdk && !matches!(role, Role::Value | Role::Projection(_)) {
         return Err(syn::Error::new_spanned(
@@ -215,25 +214,7 @@ fn validate_role(
             "construction inputs do not produce projected values",
         ));
     }
-    if update {
-        for attribute in preserved {
-            if patch_skips(attribute)? {
-                return Err(syn::Error::new_spanned(
-                    field,
-                    "runtime update cannot use patch(skip): the generated Patch field is absent",
-                ));
-            }
-        }
-    }
     Ok(())
-}
-
-fn patch_skips(attribute: &syn::Attribute) -> Result<bool> {
-    if !attribute.path().is_ident("patch") {
-        return Ok(false);
-    }
-    let options = attribute.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-    Ok(options.iter().any(|option| option.path().is_ident("skip")))
 }
 
 fn update_tokens(
@@ -251,15 +232,15 @@ fn update_tokens(
     let clear = optional.map(|_| quote! { Clear, });
     let reset = default.as_ref().map(|_| quote! { Reset, });
     let set = if optional.is_some() {
-        quote! { patch.#name = ::core::option::Option::Some(::core::option::Option::Some(value)); }
+        quote! { target.#name = ::core::option::Option::Some(value); }
     } else {
-        quote! { patch.#name = ::core::option::Option::Some(value); }
+        quote! { target.#name = value; }
     };
     let clear_lower = optional.map(|_| {
-        quote! { #enum_name::Clear => { patch.#name = ::core::option::Option::Some(::core::option::Option::None); } }
+        quote! { #enum_name::Clear => { target.#name = ::core::option::Option::None; } }
     });
     let reset_lower = default.map(|default| {
-        quote! { #enum_name::Reset => { patch.#name = ::core::option::Option::Some(#default); } }
+        quote! { #enum_name::Reset => { target.#name = #default; } }
     });
     Ok(Update {
         declaration: quote! {

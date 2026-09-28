@@ -3,6 +3,8 @@ use quote::{format_ident, quote};
 use syn::{Attribute, Fields, Item, ItemEnum, ItemStruct, Result, parse::Parser as _, parse_quote};
 
 use super::field;
+#[cfg(feature = "patch")]
+use crate::config::patch::{Check, validation};
 
 pub(crate) fn expand(attributes: TokenStream, input: TokenStream) -> Result<TokenStream> {
     let item: Item = syn::parse2(input)?;
@@ -234,12 +236,6 @@ fn retained(options: TokenStream, mut item: ItemStruct) -> Result<TokenStream> {
             "`#[config(update)]` requires at least one `#[config(value, update)]` field",
         ));
     }
-    if runtime_update && !has_derive(&item.attrs, "Patch")? {
-        return Err(syn::Error::new_spanned(
-            name,
-            "runtime updates require `#[derive(Patch)]` on the retained config",
-        ));
-    }
     let values = format_ident!("{name}Values");
     let visibility = values_vis.as_ref().unwrap_or(&item.vis);
     let gates = attributes(&item.attrs, false)?;
@@ -341,6 +337,51 @@ fn has_derive(attributes: &[Attribute], expected: &str) -> Result<bool> {
     Ok(false)
 }
 
+/// Every update lowers onto `target`. A configuration that judges itself
+/// stages the change and commits only what its declared check accepts, the
+/// same gate a document merge holds; any other takes the change in place.
+#[cfg(feature = "patch")]
+fn apply_update(
+    item: &ItemStruct,
+    visibility: &syn::Visibility,
+    update: &syn::Ident,
+    lowers: &[TokenStream],
+) -> Result<TokenStream> {
+    let Some(Check { with, error }) = validation(&item.attrs, item.ident.span())? else {
+        return Ok(quote! {
+            #visibility fn apply_update(&mut self, update: #update) {
+                let target = self;
+                #(#lowers)*
+            }
+        });
+    };
+    Ok(quote! {
+        #visibility fn apply_update(
+            &mut self,
+            update: #update,
+        ) -> ::core::result::Result<(), #error> {
+            let mut staged = ::core::clone::Clone::clone(&*self);
+            let target = &mut staged;
+            #(#lowers)*
+            *self = #with(staged)?;
+            ::core::result::Result::Ok(())
+        }
+    })
+}
+
+#[cfg(not(feature = "patch"))]
+fn apply_update(
+    item: &ItemStruct,
+    _: &syn::Visibility,
+    _: &syn::Ident,
+    _: &[TokenStream],
+) -> Result<TokenStream> {
+    Err(syn::Error::new_spanned(
+        &item.ident,
+        "runtime updates require the kithara-derive `patch` feature",
+    ))
+}
+
 fn runtime_updates(
     item: &ItemStruct,
     visibility: &syn::Visibility,
@@ -350,39 +391,9 @@ fn runtime_updates(
 ) -> Result<TokenStream> {
     let name = &item.ident;
     let update = format_ident!("{name}Update");
-    let patch = format_ident!("{name}Patch");
-    let error = format_ident!("{name}PatchError");
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let gates = attributes(&item.attrs, false)?;
-    #[cfg(feature = "patch")]
-    let fallible = crate::config::patch::is_fallible(&item.attrs, name.span())?;
-    #[cfg(not(feature = "patch"))]
-    let fallible = {
-        return Err(syn::Error::new_spanned(
-            name,
-            "runtime updates require the kithara-derive `patch` feature",
-        ));
-    };
-    let apply = if fallible {
-        quote! {
-            #visibility fn apply_update(
-                &mut self,
-                update: #update,
-            ) -> ::core::result::Result<(), #error> {
-                let mut patch = #patch::default();
-                #(#lowers)*
-                self.apply(patch)
-            }
-        }
-    } else {
-        quote! {
-            #visibility fn apply_update(&mut self, update: #update) {
-                let mut patch = #patch::default();
-                #(#lowers)*
-                self.apply(patch);
-            }
-        }
-    };
+    let apply = apply_update(item, visibility, &update, lowers)?;
     Ok(quote! {
         #(#declarations)*
         #(#gates)*
@@ -648,32 +659,6 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn runtime_update_cannot_lower_through_a_skipped_patch_field() {
-        for declaration in [
-            quote!(#[config(value, update, patch(skip))]),
-            quote!(#[patch(skip)] #[config(value, update)]),
-        ] {
-            let error = expand(
-                quote!(builder = false, update),
-                quote! {
-                    #[derive(Patch)]
-                    struct Settings {
-                        #declaration
-                        value: u32,
-                    }
-                },
-            )
-            .expect_err("the update target must exist in Patch");
-            assert!(
-                error
-                    .to_string()
-                    .contains("runtime update cannot use patch(skip)"),
-                "{error}"
-            );
-        }
-    }
-
-    #[kithara::test(native, flash(false))]
     fn delegated_operations_require_a_named_sdk_property() {
         let expanded = expand(
             quote!(delegate = "eq_layout", sdk),
@@ -774,21 +759,6 @@ mod tests {
         assert_eq!(
             missing.to_string(),
             "field runtime updates require `#[config(update)]` on the struct"
-        );
-
-        let patch = expand(
-            quote!(update),
-            quote! {
-                struct Settings {
-                    #[config(value, update)]
-                    value: usize,
-                }
-            },
-        )
-        .expect_err("runtime lowering requires the existing Patch owner");
-        assert_eq!(
-            patch.to_string(),
-            "runtime updates require `#[derive(Patch)]` on the retained config"
         );
     }
 }
