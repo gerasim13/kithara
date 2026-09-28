@@ -2384,6 +2384,78 @@ async fn off_during_a_break_leaves_the_deck_manual_and_playing_by_hand(#[case] c
     assert!(harness.failures.is_empty(), "{:?}", harness.failures);
 }
 
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(90))
+)]
+async fn a_released_deck_re_enters_after_a_seek_at_its_own_tempo() {
+    let case = PUBLIC_SYNTHETIC_ENABLE;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    harness.settle_host_tempo(case, 124.0).await;
+    harness
+        .request_first_deck(SyncIntent::Enable)
+        .await
+        .expect("Host mode maps the sounding deck");
+    let _ = harness
+        .deck_state_when(
+            case,
+            |state| is_sounding(state.status) && at_bpm(state.applied_tempo, 124.0),
+            "the Host map",
+        )
+        .await;
+    harness
+        .request_first_deck(SyncIntent::Disable)
+        .await
+        .expect("public Disable accepts the sounding deck");
+    let released = harness
+        .deck_state_when(
+            case,
+            |state| {
+                state.mode == SyncMode::LocalSync
+                    && is_sounding(state.status)
+                    && at_bpm(state.applied_tempo, 124.0)
+            },
+            "the released map at the Host's last tempo",
+        )
+        .await;
+    let released = applied_operation(released.status);
+
+    harness.settle_host_tempo(case, 128.0).await;
+    let beat = SECONDS_PER_MINUTE / START_BPM;
+    harness.play_past_a_host_beat(case).await;
+    let target = ((harness.first_deck_position(case) + 3.0) / beat).ceil() * beat - 0.05;
+    harness.seek_first_deck(case, target);
+    let re_entered = harness
+        .deck_state_when(
+            case,
+            |state| {
+                state.mode == SyncMode::LocalSync
+                    && is_sounding(state.status)
+                    && applied_operation(state.status) != released
+            },
+            "a fresh map of the deck's own after the seek",
+        )
+        .await;
+    assert!(
+        at_bpm(re_entered.applied_tempo, 124.0),
+        "a released deck re-enters at its own 124 BPM, not the Host's 128, got {:?}",
+        re_entered.applied_tempo
+    );
+    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
+}
+
 /// A track opened without a grid covers no entry on the Host timeline, and
 /// the grid its queue is handed after the load is the grid the Host aligns by.
 #[kithara::test(
