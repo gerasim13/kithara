@@ -1972,19 +1972,16 @@ timeout_minutes = 90
 # nothing - integration suites cover behaviour, not lines, so a mutant either
 # survives every one of them or is caught by fifty at once.
 #
-# Mutation testing is scoped by `.config/mutation-suites.toml`: ten suites,
-# each naming one package, the production files it may mutate, and the nextest
-# filters that must kill the mutants. A workspace-wide run was measured at
-# three days and killed nothing - integration suites cover behaviour, not
-# lines, so a mutant either survives every one of them or is caught by fifty
-# at once.
+# The suites cost hours, so no pipeline runs them unasked: neither a push nor
+# the weekly schedule starts this role. `dispatch.yml` starts it when a run
+# sets `mutants`, or names a lane below in `only`; the weekly membership only
+# makes these lanes reachable by name.
 #
-# One lane for all ten was too long to finish: on 2026-09-18 it reached the
-# ninth suite at 100 minutes and was cut at its timeout with `ui-size` eight
-# mutants in and `queue-track` unread. The suites now run as one lane per
-# group, so a lane builds only the packages its own suites name and a group
-# that came back clean is not re-run because another one is still red. The
-# timeouts are unchanged and stay headroom for a hung mutant.
+# One lane per group, so a lane builds only the packages its own suites name
+# and a group that came back clean is not re-run because another one is still
+# red. The UI group is one suite of 128 mutants that each rebuild a heavy
+# crate: six shards of it filled the machine for an hour, so it runs as one
+# lane whose timeout covers the whole suite, about five hours.
 
 [ext.ci.lanes.deep-mutants-stream]
 cache_group = "linux"
@@ -2058,7 +2055,7 @@ queue = "heavy-linux"
 artifact = { name = "mutants-analysis", path = "target/mutants-ci" }
 timeout_minutes = 60
 
-[ext.ci.lanes.deep-mutants-ui-0]
+[ext.ci.lanes.deep-mutants-ui]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2073,146 +2070,14 @@ steps = [
     "4",
     "--group",
     "ui",
-    "--shard",
-    "0/6",
-  ], label = "ui mutation suites, shard 0 of 6" },
+  ], label = "ui mutation suites" },
 ]
 role = "mutants"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
-artifact = { name = "mutants-ui-0", path = "target/mutants-ci" }
-timeout_minutes = 60
-
-[ext.ci.lanes.deep-mutants-ui-1]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just"]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "mutants",
-    "run-all",
-    "--jobs",
-    "4",
-    "--group",
-    "ui",
-    "--shard",
-    "1/6",
-  ], label = "ui mutation suites, shard 1 of 6" },
-]
-role = "mutants"
-kinds = []
-kinds_github = ["weekly"]
-queue = "heavy-linux"
-artifact = { name = "mutants-ui-1", path = "target/mutants-ci" }
-timeout_minutes = 60
-
-[ext.ci.lanes.deep-mutants-ui-2]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just"]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "mutants",
-    "run-all",
-    "--jobs",
-    "4",
-    "--group",
-    "ui",
-    "--shard",
-    "2/6",
-  ], label = "ui mutation suites, shard 2 of 6" },
-]
-role = "mutants"
-kinds = []
-kinds_github = ["weekly"]
-queue = "heavy-linux"
-artifact = { name = "mutants-ui-2", path = "target/mutants-ci" }
-timeout_minutes = 60
-
-[ext.ci.lanes.deep-mutants-ui-3]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just"]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "mutants",
-    "run-all",
-    "--jobs",
-    "4",
-    "--group",
-    "ui",
-    "--shard",
-    "3/6",
-  ], label = "ui mutation suites, shard 3 of 6" },
-]
-role = "mutants"
-kinds = []
-kinds_github = ["weekly"]
-queue = "heavy-linux"
-artifact = { name = "mutants-ui-3", path = "target/mutants-ci" }
-timeout_minutes = 60
-
-[ext.ci.lanes.deep-mutants-ui-4]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just"]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "mutants",
-    "run-all",
-    "--jobs",
-    "4",
-    "--group",
-    "ui",
-    "--shard",
-    "4/6",
-  ], label = "ui mutation suites, shard 4 of 6" },
-]
-role = "mutants"
-kinds = []
-kinds_github = ["weekly"]
-queue = "heavy-linux"
-artifact = { name = "mutants-ui-4", path = "target/mutants-ci" }
-timeout_minutes = 60
-
-[ext.ci.lanes.deep-mutants-ui-5]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just"]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "mutants",
-    "run-all",
-    "--jobs",
-    "4",
-    "--group",
-    "ui",
-    "--shard",
-    "5/6",
-  ], label = "ui mutation suites, shard 5 of 6" },
-]
-role = "mutants"
-kinds = []
-kinds_github = ["weekly"]
-queue = "heavy-linux"
-artifact = { name = "mutants-ui-5", path = "target/mutants-ci" }
-timeout_minutes = 60
+artifact = { name = "mutants-ui", path = "target/mutants-ci" }
+timeout_minutes = 360
 
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
