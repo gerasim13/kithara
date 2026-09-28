@@ -8,8 +8,8 @@
 //! `filter` holds biquad cascades with a silence rule that keeps denormals out.
 //! `interp` reads a window at fractional positions with one of four methods
 //! and places the positions of a rate ramp. `spectrum` takes the real FFT of
-//! a Hann-windowed frame and reads the magnitude and phase of its bins (the
-//! `spectrum` feature).
+//! a Hann-windowed frame, reads the magnitude and phase of its bins and
+//! autocorrelates a frame (the `spectrum` feature).
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -32,7 +32,8 @@ mod layout;
 /// type of the same name without touching consumers.
 pub mod param;
 /// Real FFT lengths every backend runs; with the `spectrum` feature, the real
-/// FFT over a Hann window and the magnitude and phase of its bins.
+/// FFT over a Hann window, the magnitude and phase of its bins, and the
+/// autocorrelation of a frame.
 pub mod spectrum;
 
 pub use backend::sanitize;

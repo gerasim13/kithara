@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
-use kithara_dsp::spectrum::{Fft, FftLen, magnitude, phase};
+use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
@@ -22,6 +22,8 @@ const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
 const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
 const TWELVE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(11);
 const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
+#[cfg(feature = "spectrum")]
+const LAGS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(511);
 
 #[kithara::test(native)]
 fn layout_and_sanitize_never_allocate() {
@@ -149,5 +151,17 @@ fn spectrum_never_allocates_after_construction() {
             phase(spectrum.re(), spectrum.im(), &mut bins),
             FRAMES / 2 + 1
         );
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
+fn autocorrelation_never_allocates_after_construction() {
+    let mut acf = Autocorrelation::new(LAGS, &pools()).expect("the padding fits the region");
+    let frame = vec![0.25_f32; LAGS.get()];
+    let mut output = vec![0.0_f32; LAGS.get()];
+    assert_no_alloc(|| {
+        assert_eq!(acf.process(&frame, &mut output), LAGS.get());
+        assert_eq!(acf.process(&frame[..100], &mut output), LAGS.get());
     });
 }

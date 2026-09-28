@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_dsp::spectrum::FftLen;
 
 /// Analysis window, 46.4 ms.
@@ -33,6 +35,12 @@ pub(super) const TEMPO_TOLERANCE_SECONDS: f32 = 0.025;
 
 /// Periodicity window, 512 detection-function frames (5.94 s).
 pub(super) const PERIOD_ACF_FRAME: usize = 512;
+
+/// The periodicity window as the autocorrelation length.
+pub(super) const PERIOD_ACF_LEN: NonZeroUsize = match NonZeroUsize::new(PERIOD_ACF_FRAME) {
+    Some(len) => len,
+    None => unreachable!(),
+};
 
 /// One beat-period estimate every 128 frames (1.49 s), a 75% overlap.
 pub(super) const PERIOD_ACF_STEP: usize = 128;

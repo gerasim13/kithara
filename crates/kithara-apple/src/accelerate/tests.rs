@@ -4,9 +4,9 @@ use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
 use kithara_test_utils::kithara;
 
 use super::{
-    BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, deinterleave_pair_f32,
-    interleave_pair_f32, linear_interpolate_f32, magnitude_f32, max_magnitude_f32, multiply_f32,
-    quadratic_interpolate_f32,
+    BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, correlate_f32,
+    deinterleave_pair_f32, interleave_pair_f32, linear_interpolate_f32, magnitude_f32,
+    max_magnitude_f32, multiply_f32, quadratic_interpolate_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -230,4 +230,30 @@ fn magnitude_reads_each_bin() {
         );
     }
     assert_eq!(magnitude_f32(&re, &[], &mut magnitude), 0);
+}
+
+#[kithara::test(native)]
+fn correlate_slides_the_kernel_along_the_signal() {
+    let signal = [1.0_f32, 2.0, 3.0, 4.0, 5.0];
+    let kernel = [1.0_f32, 0.5, -1.0];
+    let mut output = [UNWRITTEN; 4];
+    assert_eq!(correlate_f32(&signal, &kernel, &mut output), 3);
+    assert_eq!(output, [-1.0, -0.5, 0.0, UNWRITTEN]);
+    let mut short = [UNWRITTEN; 2];
+    assert_eq!(
+        correlate_f32(&signal, &kernel, &mut short),
+        2,
+        "as many lags as the output holds"
+    );
+    assert_eq!(short, [-1.0, -0.5]);
+    assert_eq!(
+        correlate_f32(&kernel, &signal, &mut output),
+        0,
+        "a kernel longer than the signal"
+    );
+    assert_eq!(
+        correlate_f32(&signal, &[], &mut output),
+        0,
+        "an empty kernel"
+    );
 }

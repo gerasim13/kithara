@@ -1,6 +1,6 @@
 use std::ptr;
 
-use super::ffi::{DspSplitComplex, vDSP_maxmgv, vDSP_vmul, vDSP_zvabs};
+use super::ffi::{DspSplitComplex, vDSP_conv, vDSP_maxmgv, vDSP_vmul, vDSP_zvabs};
 
 /// The largest `|x|` in `samples`; `0.0` for an empty slice.
 #[must_use]
@@ -45,4 +45,36 @@ pub fn magnitude_f32(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
     // SAFETY: output holds len writable floats and, as an exclusive borrow, overlaps neither plane.
     unsafe { vDSP_zvabs(ptr::from_ref(&split), 1, output.as_mut_ptr(), 1, len) };
     len
+}
+
+/// `output[k] = Σ_j signal[k + j]·kernel[j]` for every lag `k` at which the
+/// kernel fits inside `signal`, as many as `output` holds; returns the lag
+/// count.
+#[must_use]
+pub fn correlate_f32(signal: &[f32], kernel: &[f32], output: &mut [f32]) -> usize {
+    let taps = kernel.len();
+    let lags = signal
+        .len()
+        .saturating_add(1)
+        .saturating_sub(taps)
+        .min(output.len());
+    if taps == 0 || lags == 0 {
+        return 0;
+    }
+    // SAFETY: signal holds lags + taps − 1 readable floats, kernel taps, output lags writable ones.
+    // SAFETY: a positive kernel stride makes vDSP_conv correlate rather than convolve.
+    // SAFETY: output is an exclusive borrow, so it overlaps neither input.
+    unsafe {
+        vDSP_conv(
+            signal.as_ptr(),
+            1,
+            kernel.as_ptr(),
+            1,
+            output.as_mut_ptr(),
+            1,
+            lags,
+            taps,
+        );
+    }
+    lags
 }

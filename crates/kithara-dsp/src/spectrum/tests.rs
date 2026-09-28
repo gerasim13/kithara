@@ -1,11 +1,14 @@
-use std::f32::consts::TAU;
+use std::{f32::consts::TAU, num::NonZeroUsize};
 
 use kithara_test_utils::{
     bufpool::{pools, pools_with_budget},
     kithara,
 };
+use num_traits::ToPrimitive;
 
-use super::{Fft, FftLen, Spectrum, SpectrumError, fft::hann, magnitude, oracle, phase};
+use super::{
+    Autocorrelation, Fft, FftLen, Spectrum, SpectrumError, fft::hann, magnitude, oracle, phase,
+};
 
 const VALID: [usize; 9] = [16, 32, 48, 64, 80, 240, 1024, 3072, 4096];
 const INVALID: [usize; 10] = [0, 1, 2, 8, 12, 17, 24, 40, 112, 144];
@@ -15,6 +18,9 @@ const SHORT: usize = 700;
 const UNWRITTEN: f32 = -1.0;
 /// The coefficient of the window novelty tabulated for itself.
 const NOVELTY_A0: f32 = 0.5;
+/// The periodicity window of beat's period stage.
+const LAGS: usize = 512;
+const SHORT_LAGS: usize = 300;
 
 fn fft(len: usize) -> Fft {
     Fft::new(FftLen::new(len).expect("the test lengths are FFT lengths"))
@@ -193,4 +199,80 @@ fn an_fft_moves_and_shares_across_threads() {
     fn send_and_sync<T: Send + Sync>() {}
     send_and_sync::<Fft>();
     send_and_sync::<Spectrum>();
+}
+
+fn autocorrelation() -> Autocorrelation {
+    Autocorrelation::new(
+        NonZeroUsize::new(LAGS).expect("a positive length"),
+        &pools(),
+    )
+    .expect("the padding fits the region")
+}
+
+/// Lag `k` is `Σ x[k + j]·x[j] / (N − k)` within the reduction bound
+/// `(N + 1)·ε·Σ|terms| / (N − k)`; a short frame is zero-extended, a long
+/// one cut to `N`, and a reused instance forgets the frame before.
+#[kithara::test]
+fn autocorrelation_tracks_the_unbiased_f64_estimate() {
+    let mut acf = autocorrelation();
+    let long = oracle::mix(LAGS.saturating_mul(2));
+    let frames = [
+        ("whole", oracle::mix(LAGS)),
+        ("short", oracle::mix(SHORT_LAGS)),
+        ("long", long.clone()),
+    ];
+    let reach = LAGS.saturating_add(1).to_f64().unwrap_or(f64::NAN) * f64::from(f32::EPSILON);
+    for (name, frame) in frames {
+        let seen: Vec<f32> = frame.iter().copied().take(LAGS).collect();
+        let mut output = vec![UNWRITTEN; LAGS.saturating_add(1)];
+        assert_eq!(acf.process(&frame, &mut output), LAGS, "{name}: lag count");
+        for (lag, got) in output.iter().take(LAGS).enumerate() {
+            let (sum, size) =
+                seen.iter()
+                    .skip(lag)
+                    .zip(&seen)
+                    .fold((0.0_f64, 0.0_f64), |(sum, size), (x, y)| {
+                        let term = f64::from(*x) * f64::from(*y);
+                        (sum + term, size + term.abs())
+                    });
+            let count = LAGS.saturating_sub(lag).to_f64().unwrap_or(f64::NAN);
+            assert!(
+                (f64::from(*got) - sum / count).abs() <= reach * size / count,
+                "{name}: lag {lag}: {got}, f64 {}",
+                sum / count
+            );
+        }
+        assert_eq!(
+            output.last().map(|value| value.to_bits()),
+            Some(UNWRITTEN.to_bits()),
+            "{name}: wrote past {LAGS} lags"
+        );
+    }
+    let mut fewer = [UNWRITTEN; 3];
+    assert_eq!(
+        acf.process(&long, &mut fewer),
+        3,
+        "as many lags as the output holds"
+    );
+}
+
+#[kithara::test]
+fn an_autocorrelation_takes_its_padding_from_the_callers_region() {
+    let len = NonZeroUsize::new(LAGS).expect("a positive length");
+    let padding = LAGS
+        .saturating_mul(2)
+        .saturating_sub(1)
+        .saturating_mul(size_of::<f32>());
+    let region = pools();
+    let before = region.stats().allocated_bytes;
+    let taken = Autocorrelation::new(len, &region).expect("the padding fits the region");
+    assert!(
+        region.stats().allocated_bytes >= before.saturating_add(padding),
+        "the region accounts for the padding"
+    );
+    drop(taken);
+    assert!(
+        Autocorrelation::new(len, &pools_with_budget(padding / 2)).is_err(),
+        "a region without room for the padding refuses the autocorrelation"
+    );
 }

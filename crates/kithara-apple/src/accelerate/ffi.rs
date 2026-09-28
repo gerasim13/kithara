@@ -68,6 +68,17 @@ unsafe extern "C" {
         channels: VdspLength,
     );
 
+    pub(super) fn vDSP_conv(
+        a: *const f32,
+        ia: VdspStride,
+        f: *const f32,
+        filter_stride: VdspStride,
+        c: *mut f32,
+        ic: VdspStride,
+        n: VdspLength,
+        p: VdspLength,
+    );
+
     pub(super) fn vDSP_ctoz(
         c: *const DspComplex,
         ic: VdspStride,

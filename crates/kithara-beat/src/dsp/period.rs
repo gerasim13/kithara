@@ -1,4 +1,5 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_dsp::spectrum::Autocorrelation;
 use num_traits::cast::ToPrimitive;
 
 use super::{buffer::collected, consts, tempo::Tempo};
@@ -24,15 +25,13 @@ where
     adaptive_threshold(&mut onsets, consts::PERIOD_SMOOTH_HALF, pools)?;
 
     let weights = rayleigh_weights(tempo, pools)?;
-    let mut window = pools.get_with_len::<f32>(consts::PERIOD_ACF_FRAME)?;
+    let mut acf = Autocorrelation::new(consts::PERIOD_ACF_LEN, pools)?;
     let mut autocorrelation = pools.get_with_len::<f32>(consts::PERIOD_ACF_FRAME)?;
     let mut saliences: Vec<SampleBuffer> = Vec::new();
     let mut start = 0;
     loop {
         let end = (start + consts::PERIOD_ACF_FRAME).min(onsets.len());
-        window.fill(0.0);
-        window[..end - start].copy_from_slice(&onsets[start..end]);
-        correlate(&window, &mut autocorrelation);
+        let _ = acf.process(&onsets[start..end], &mut autocorrelation);
         let mut salience = comb(&autocorrelation, &weights, pools)?;
         adaptive_threshold(&mut salience, consts::PERIOD_SMOOTH_HALF, pools)?;
         salience[..tempo.search_floor()].fill(0.0);
@@ -151,18 +150,6 @@ where
         index = back[step * lags + index];
     }
     Ok(out)
-}
-
-fn correlate(frame: &[f32], out: &mut [f32]) {
-    let count = frame.len().to_f32().unwrap_or(1.0);
-    for (lag, slot) in out.iter_mut().enumerate() {
-        let sum: f32 = frame[lag..]
-            .iter()
-            .zip(frame.iter())
-            .map(|(a, b)| a * b)
-            .sum();
-        *slot = sum / (count - lag.to_f32().unwrap_or(0.0));
-    }
 }
 
 /// Comb filterbank under the tempo preference curve. Each element's width
