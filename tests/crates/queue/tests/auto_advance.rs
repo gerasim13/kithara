@@ -637,6 +637,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
