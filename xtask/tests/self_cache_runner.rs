@@ -480,6 +480,58 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     Ok(())
 }
 
+/// The host's cache cleanup holds a job's build target lease exclusively
+/// while it decides whether to evict. A job arriving then says so instead of
+/// sitting silent, and starts its command only once it holds the lease.
+#[test]
+fn ci_public_just_runner_announces_a_wait_for_the_build_target_lease() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.install_fake_transport()?;
+    let cache = fixture._temp.path().join("cache");
+    let ready = fixture._temp.path().join("ready");
+    let release = fixture._temp.path().join("release");
+    let target = fixture._temp.path().join("private-target");
+    fs::create_dir_all(&target)?;
+    let lease = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(target.join(".kithara-job-lease"))?;
+    let cleanup = FileLock::try_exclusive(lease)
+        .ok()
+        .context("the build target lease is free before the job starts")?;
+    let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
+    command
+        .env("CI", "true")
+        .env("CI_CONCURRENT_ID", "0")
+        .env("CI_JOB_ID", "lease-test")
+        .env("KITHARA_CACHE_TRUST", "review")
+        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env("CARGO_TARGET_DIR", &target)
+        .env("SELF_CACHE_READY", &ready)
+        .env("SELF_CACHE_RELEASE", &release)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let lines = stream_lines(&mut child)?;
+
+    let (stream, waiting) = lines_until(&lines, "waiting for the CI build target lease")?;
+    assert_eq!(stream, Stream::Stderr, "{waiting}");
+    assert!(
+        !ready.exists(),
+        "the command ran before the lease was taken"
+    );
+    drop(cleanup);
+    let (stream, took) = lines_until(&lines, "took the CI build target lease")?;
+    assert_eq!(stream, Stream::Stderr, "{took}");
+    wait_for_file(&ready, &mut child)?;
+    fs::write(&release, [])?;
+    assert!(child.wait()?.success());
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn ci_public_just_runner_leases_the_bootstrap_before_mac_environment_setup() -> Result<()> {
