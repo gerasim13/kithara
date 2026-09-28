@@ -1,9 +1,16 @@
+#[cfg(feature = "spectrum")]
+use std::ops::Mul;
+
 use fearless_simd::{Level, dispatch, prelude::*};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use super::cascade::Cascade;
 pub(crate) use super::interpolate::interpolate;
 use super::simd::padded;
+#[cfg(feature = "spectrum")]
+use super::simd::zip_map;
+#[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) use super::spectrum::{Dft, Work, magnitude};
 
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => deinterleave_pair_kernel(simd, input, left, right))
@@ -100,4 +107,15 @@ pub(super) fn peak_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
     }
     peak.max(padded(simd, blocks.remainder()).abs())
         .reduce_max()
+}
+
+#[cfg(feature = "spectrum")]
+pub(crate) fn multiply(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => multiply_kernel(simd, a, b, output))
+}
+
+#[cfg(feature = "spectrum")]
+#[inline(always)]
+pub(super) fn multiply_kernel<S: Simd>(simd: S, a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
+    zip_map(simd, [a, b], output, Mul::mul)
 }

@@ -4,8 +4,9 @@ use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
 use kithara_test_utils::kithara;
 
 use super::{
-    BiquadError, MultichannelBiquad, OutOfWindow, deinterleave_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, max_magnitude_f32, quadratic_interpolate_f32,
+    BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, deinterleave_pair_f32,
+    interleave_pair_f32, linear_interpolate_f32, magnitude_f32, max_magnitude_f32, multiply_f32,
+    quadratic_interpolate_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -19,6 +20,8 @@ const SPECIALS: [f32; 8] = [
     f32::NAN,
 ];
 const UNWRITTEN: f32 = -1.0;
+/// Largest `|z|` error against `hypot`, relative: two `f32` epsilons.
+const MAGNITUDE_PARITY: f32 = 2.0 * f32::EPSILON;
 
 fn bits<const N: usize>(values: [f32; N]) -> [u32; N] {
     values.map(f32::to_bits)
@@ -160,4 +163,71 @@ fn max_magnitude_reads_the_largest_absolute_value() {
         2.0_f32.to_bits()
     );
     assert_eq!(max_magnitude_f32(&[]).to_bits(), 0.0_f32.to_bits());
+}
+
+#[kithara::test(native)]
+fn real_dft_of_an_impulse_is_flat_and_doubled() {
+    let dft = RealDft::new(16).unwrap_or_else(|err| panic!("vDSP setup: {err}"));
+    let even = [1.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let odd = [0.0_f32; 8];
+    let (mut re, mut im) = ([UNWRITTEN; 8], [UNWRITTEN; 8]);
+    assert_eq!(dft.execute([&even, &odd], [&mut re, &mut im]), Ok(()));
+    assert_eq!(re, [2.0; 8], "every bin of an impulse is one, doubled");
+    assert_eq!(
+        im,
+        [2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "the Nyquist bin rides in im[0]; the rest is real"
+    );
+}
+
+#[kithara::test(native)]
+#[case::empty(0)]
+#[case::single(1)]
+#[case::odd(17)]
+#[case::too_few_twos(24)]
+fn real_dft_refuses_a_length_vdsp_has_no_setup_for(#[case] len: usize) {
+    assert_eq!(RealDft::new(len).err(), Some(DftError::Setup));
+}
+
+#[kithara::test(native)]
+fn real_dft_refuses_planes_of_another_length() {
+    let dft = RealDft::new(32).unwrap_or_else(|err| panic!("vDSP setup: {err}"));
+    let (even, odd, short) = ([0.0_f32; 16], [0.0_f32; 16], [0.0_f32; 8]);
+    let (mut re, mut im) = ([0.0_f32; 16], [0.0_f32; 16]);
+    let mut short_im = [0.0_f32; 15];
+    assert_eq!(
+        dft.execute([&even, &short], [&mut re, &mut im]),
+        Err(DftError::Shape)
+    );
+    assert_eq!(
+        dft.execute([&even, &odd], [&mut re, &mut short_im]),
+        Err(DftError::Shape)
+    );
+    assert_eq!(dft.execute([&even, &odd], [&mut re, &mut im]), Ok(()));
+}
+
+#[kithara::test(native)]
+fn multiply_writes_the_product_of_the_common_prefix() {
+    let mut output = [UNWRITTEN; 4];
+    assert_eq!(
+        multiply_f32(&[1.5, -2.0, 4.0], &[2.0, 0.5, -0.25, 8.0], &mut output),
+        3
+    );
+    assert_eq!(bits(output), bits([3.0, -1.0, -1.0, UNWRITTEN]));
+    assert_eq!(multiply_f32(&[], &[1.0], &mut output), 0);
+}
+
+#[kithara::test(native)]
+fn magnitude_reads_each_bin() {
+    let (re, im) = ([3.0_f32, 0.0, -1.0], [4.0_f32, -2.0, 0.0]);
+    let mut magnitude = [UNWRITTEN; 3];
+    assert_eq!(magnitude_f32(&re, &im, &mut magnitude), 3);
+    for ((got, y), x) in magnitude.iter().zip(im).zip(re) {
+        let want = x.hypot(y);
+        assert!(
+            (got - want).abs() <= MAGNITUDE_PARITY * want,
+            "|{x} + i{y}| = {got}, hypot {want}"
+        );
+    }
+    assert_eq!(magnitude_f32(&re, &[], &mut magnitude), 0);
 }

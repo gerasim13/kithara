@@ -4,10 +4,14 @@
 use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
+#[cfg(feature = "spectrum")]
+use kithara_dsp::spectrum::{Fft, FftLen, magnitude, phase};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
 };
+#[cfg(feature = "spectrum")]
+use kithara_test_utils::bufpool::pools;
 use kithara_test_utils::kithara;
 
 #[global_allocator]
@@ -121,6 +125,29 @@ fn interpolation_never_allocates() {
         assert_eq!(
             interpolate(Interpolation::Linear, &window, &[f32::NAN], &mut output),
             Err(InterpError::OutOfWindow)
+        );
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
+fn spectrum_never_allocates_after_construction() {
+    let fft =
+        Fft::new(FftLen::new(FRAMES).expect("1024 is an FFT length")).expect("the FFT builds");
+    let mut spectrum = fft.spectrum(&pools()).expect("the planes fit the region");
+    let frame = vec![0.25_f32; FRAMES];
+    let mut bins = vec![0.0_f32; FRAMES / 2 + 1];
+    assert_no_alloc(|| {
+        fft.forward(&frame, &mut spectrum).expect("the frame fits");
+        fft.forward(&frame[..FRAMES / 2], &mut spectrum)
+            .expect("a short frame fits");
+        assert_eq!(
+            magnitude(spectrum.re(), spectrum.im(), &mut bins),
+            FRAMES / 2 + 1
+        );
+        assert_eq!(
+            phase(spectrum.re(), spectrum.im(), &mut bins),
+            FRAMES / 2 + 1
         );
     });
 }

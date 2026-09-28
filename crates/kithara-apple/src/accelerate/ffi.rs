@@ -1,4 +1,5 @@
 pub(super) type VdspBiquadmSetup = *mut std::ffi::c_void;
+pub(super) type VdspDftSetup = *mut std::ffi::c_void;
 pub(super) type VdspLength = usize;
 pub(super) type VdspStride = isize;
 
@@ -18,6 +19,22 @@ pub(super) struct DspSplitComplex {
 
 #[link(name = "Accelerate", kind = "framework")]
 unsafe extern "C" {
+    pub(super) fn vDSP_DFT_DestroySetup(setup: VdspDftSetup);
+
+    pub(super) fn vDSP_DFT_Execute(
+        setup: *const std::ffi::c_void,
+        ir: *const f32,
+        ii: *const f32,
+        or: *mut f32,
+        oi: *mut f32,
+    );
+
+    pub(super) fn vDSP_DFT_zrop_CreateSetup(
+        previous: VdspDftSetup,
+        length: VdspLength,
+        direction: i32,
+    ) -> VdspDftSetup;
+
     pub(super) fn vDSP_biquadm(
         setup: VdspBiquadmSetup,
         x: *mut *const f32,
@@ -71,6 +88,16 @@ unsafe extern "C" {
         m: VdspLength,
     );
 
+    pub(super) fn vDSP_vmul(
+        a: *const f32,
+        ia: VdspStride,
+        b: *const f32,
+        ib: VdspStride,
+        c: *mut f32,
+        ic: VdspStride,
+        n: VdspLength,
+    );
+
     pub(super) fn vDSP_vqint(
         a: *const f32,
         b: *const f32,
@@ -85,6 +112,14 @@ unsafe extern "C" {
         split: *const DspSplitComplex,
         split_stride: VdspStride,
         c: *mut DspComplex,
+        ic: VdspStride,
+        n: VdspLength,
+    );
+
+    pub(super) fn vDSP_zvabs(
+        a: *const DspSplitComplex,
+        ia: VdspStride,
+        c: *mut f32,
         ic: VdspStride,
         n: VdspLength,
     );

@@ -587,6 +587,70 @@ fn peak_matches_the_scalar_maximum_on_every_backend() {
     }
 }
 
+#[cfg(feature = "spectrum")]
+type Multiply = fn(&[f32], &[f32], &mut [f32]) -> usize;
+
+/// One backend's element-wise kernels, so every check runs the same matrix
+/// on each.
+#[cfg(feature = "spectrum")]
+struct Vectors {
+    name: &'static str,
+    multiply: Multiply,
+}
+
+#[cfg(feature = "spectrum")]
+fn vectors() -> Vec<Vectors> {
+    Vec::from([
+        Vectors {
+            name: "portable-native",
+            multiply: portable::multiply,
+        },
+        Vectors {
+            name: "portable-fallback",
+            multiply: |a, b, output| dispatch!(Level::fallback(), simd => portable::multiply_kernel(simd, a, b, output)),
+        },
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Vectors {
+            name: "accelerate",
+            multiply: accelerate::multiply,
+        },
+    ])
+}
+
+/// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
+#[cfg(feature = "spectrum")]
+fn same(got: f32, want: f32) -> bool {
+    got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan())
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test]
+fn multiply_matches_the_scalar_product_on_every_backend() {
+    for row in vectors() {
+        let name = row.name;
+        for size in SIZES {
+            let a = signal(size, SINE);
+            let b = signal(size.saturating_add(1), Wave::Sawtooth);
+            let mut output = vec![UNWRITTEN; size.saturating_add(2)];
+            assert_eq!(
+                (row.multiply)(&a, &b, &mut output),
+                size,
+                "{name}: count at {size}"
+            );
+            for (index, ((got, x), y)) in output.iter().zip(&a).zip(&b).enumerate() {
+                assert!(same(*got, x * y), "{name}: {x} · {y} at {index} of {size}");
+            }
+            assert!(
+                output
+                    .iter()
+                    .skip(size)
+                    .all(|value| value.to_bits() == UNWRITTEN.to_bits()),
+                "{name}: wrote past {size}"
+            );
+        }
+    }
+}
+
 /// Largest interpolation error against the `f64` oracle, relative to the
 /// window peak: four `f32` epsilons.
 const INTERP_PARITY: f64 = 4.768_371_582_031_25e-7;

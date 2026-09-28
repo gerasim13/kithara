@@ -26,10 +26,12 @@ where
     S: HasPool<f32>,
 {
     /// # Errors
-    /// [`PoolError`] when the analysis window does not fit the region.
-    pub fn new(pools: PoolRegion<S>, tempo: Tempo) -> Result<Self, PoolError> {
+    /// [`BeatDetectError::Init`] when no backend runs the novelty transform.
+    pub fn new(pools: PoolRegion<S>, tempo: Tempo) -> Result<Self, BeatDetectError> {
         Ok(Self {
-            novelty: Novelty::new(pools.clone())?,
+            novelty: Novelty::new(pools.clone()).map_err(|error| BeatDetectError::Init {
+                reason: error.to_string(),
+            })?,
             pools,
             tempo,
         })
@@ -102,15 +104,14 @@ mod tests {
     use crate::{dsp::clicks, test_pools::pools};
 
     fn tracker() -> SpectralBeats<impl HasPool<f32>> {
-        SpectralBeats::new(pools(), Tempo::default())
-            .expect("a fresh region has room for the window")
+        SpectralBeats::new(pools(), Tempo::default()).expect("the novelty FFT length is supported")
     }
 
     /// The tempo of a click train, read from the marks the tracker returns.
     fn reported_bpm(tempo: Tempo, pcm: &[f32]) -> f32 {
         let beats: Vec<f32> = SpectralBeats::new(pools(), tempo)
-            .expect("a fresh region has room for the window")
-            .analyze(&pcm)
+            .expect("the novelty FFT length is supported")
+            .analyze(pcm)
             .expect("the analysis fits the region")
             .beats
             .into_iter()
@@ -150,7 +151,7 @@ mod tests {
 
     fn detect(pcm: &[f32]) -> Vec<f32> {
         tracker()
-            .analyze(&pcm)
+            .analyze(pcm)
             .expect("the analysis fits the region")
             .beats
             .into_iter()
@@ -235,13 +236,13 @@ mod tests {
         };
 
         let reused = SpectralBeats::new(region.clone(), Tempo::default())
-            .expect("a fresh region has room for the window");
+            .expect("the novelty FFT length is supported");
         let first = marks(&reused, &pcm);
         let _ = marks(&reused, &clicks_150_12s);
         let again = marks(&reused, &pcm);
         let fresh = marks(
             &SpectralBeats::new(region.clone(), Tempo::default())
-                .expect("a fresh region has room for the window"),
+                .expect("the novelty FFT length is supported"),
             &pcm,
         );
 
@@ -327,7 +328,7 @@ mod optimality {
         let region = pools();
         let pcm = clicks_120_20s;
         let curve = Novelty::new(region.clone())
-            .expect("a fresh region has room for the window")
+            .expect("the novelty FFT length is supported")
             .curve(&pcm)
             .expect("the curve fits the region");
         let periods = period::periods(&curve, Tempo::default(), &region)

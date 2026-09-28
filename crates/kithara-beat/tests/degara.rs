@@ -57,8 +57,8 @@ fn between(beats: &[f32], from: f64, until: f64) -> Vec<f32> {
 }
 
 fn windows(pcm: &[f32], from: usize) -> Vec<Window> {
-    let detector = SpectralBeats::new(pools(), Tempo::default())
-        .expect("a fresh region has room for the window");
+    let detector =
+        SpectralBeats::new(pools(), Tempo::default()).expect("the novelty FFT length is supported");
     let mut out = Vec::new();
     let mut at = from;
     while at < pcm.len() {
@@ -150,7 +150,7 @@ fn parity(pcm: &[f32], name: &str, from_seconds: usize) {
         golden.downbeats.is_empty(),
         "this reference records beats alone"
     );
-    let windows = windows(&pcm, from_seconds * Pass::RATE);
+    let windows = windows(pcm, from_seconds * Pass::RATE);
     let covered = windows.last().map_or(0.0, |window| window.until);
 
     let detected: Vec<f32> = windows

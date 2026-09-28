@@ -226,8 +226,8 @@ mod tests {
     fn track_bpm(pcm: &[f32]) -> SampleBuffer {
         let pools = pools();
         let curve = Novelty::new(pools.clone())
-            .expect("a fresh region has room for the window")
-            .curve(&pcm)
+            .expect("the novelty FFT length is supported")
+            .curve(pcm)
             .expect("the curve fits the region");
         periods(&curve, Tempo::default(), &pools).expect("the estimates fit the region")
     }
@@ -294,7 +294,7 @@ mod tests {
     fn every_period_stays_inside_the_searched_range(clicks_120_20s: Vec<f32>) {
         let pools = pools();
         let curve = Novelty::new(pools.clone())
-            .expect("a fresh region has room for the window")
+            .expect("the novelty FFT length is supported")
             .curve(&clicks_120_20s)
             .expect("the curve fits the region");
         let reported =
@@ -313,8 +313,8 @@ mod tests {
     fn tempo_change_lags(drift: f32, pcm: &[f32]) -> SampleBuffer {
         let pools = pools();
         let curve = Novelty::new(pools.clone())
-            .expect("a fresh region has room for the window")
-            .curve(&pcm)
+            .expect("the novelty FFT length is supported")
+            .curve(pcm)
             .expect("the curve fits the region");
         let tempo = Tempo::builder()
             .drift(drift)
@@ -388,7 +388,7 @@ mod tests {
     fn silence_has_no_period_to_report(click_silence_half: Vec<f32>) {
         let pools = pools();
         let curve = Novelty::new(pools.clone())
-            .expect("a fresh region has room for the window")
+            .expect("the novelty FFT length is supported")
             .curve(&click_silence_half)
             .expect("the curve fits the region");
         assert!(

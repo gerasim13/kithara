@@ -18,7 +18,7 @@ ignored = ["kithara-workspace-hack", "unimock"]
 [features]
 default = []
 nn = ["dep:rten", "dep:rten-tensor"]
-dsp = ["dep:kithara-platform", "dep:realfft"]
+dsp = ["dep:kithara-dsp", "kithara-dsp/spectrum"]
 embed-model = []
 embed-small-model = ["nn", "embed-model"]
 embed-full-model = ["nn", "embed-model"]
@@ -28,12 +28,11 @@ mock = ["dep:unimock"]
 [dependencies]
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "patch"] }
-kithara-platform = { workspace = true, optional = true }
+kithara-dsp = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
 num-traits = { workspace = true }
-realfft = { workspace = true, optional = true }
 rten = { workspace = true, optional = true }
 rten-tensor = { workspace = true, optional = true }
 serde = { workspace = true }

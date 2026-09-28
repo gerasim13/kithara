@@ -1,3 +1,5 @@
+use kithara_dsp::spectrum::FftLen;
+
 /// Analysis window, 46.4 ms.
 pub(super) const FRAMES_FRAME: usize = 1024;
 
@@ -7,7 +9,11 @@ pub(super) const FRAMES_HOP: usize = 256;
 /// The rate the crate contract fixes.
 pub(super) const FRAMES_RATE: f32 = 22_050.0;
 
-pub(super) const NOVELTY_HANN_A0: f32 = 0.5;
+/// The novelty transform: one [`FRAMES_FRAME`] window.
+pub(super) const NOVELTY_FFT: FftLen = match FftLen::new(FRAMES_FRAME) {
+    Ok(len) => len,
+    Err(_) => unreachable!(),
+};
 
 /// Analysis stride, 23.2 ms: the rate the difference is actually
 /// measured at.

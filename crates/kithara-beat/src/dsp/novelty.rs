@@ -1,7 +1,5 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
-use kithara_platform::sync::Arc;
-use num_traits::cast::ToPrimitive;
-use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
+use kithara_dsp::spectrum::{self, Fft, Spectrum, SpectrumError};
 
 use super::consts;
 
@@ -10,31 +8,28 @@ pub(crate) struct Novelty<S>
 where
     S: HasPool<f32>,
 {
-    fft: Arc<dyn RealToComplex<f32>>,
+    fft: Fft,
     pools: PoolRegion<S>,
-    hann: SampleBuffer,
 }
 
 /// What one curve needs while it runs. A spectrum is predicted from the frame
 /// before it, so these carry across frames within a call and nothing beyond it.
 struct Frames {
-    input: SampleBuffer,
+    spectrum: Spectrum,
+    observed: SampleBuffer,
+    angle: SampleBuffer,
     magnitude: SampleBuffer,
     phase: SampleBuffer,
     phase_step: SampleBuffer,
-    output: Vec<Complex<f32>>,
-    scratch: Vec<Complex<f32>>,
 }
 
 impl<S> Novelty<S>
 where
     S: HasPool<f32>,
 {
-    pub(crate) fn new(pools: PoolRegion<S>) -> Result<Self, PoolError> {
-        let fft = RealFftPlanner::<f32>::new().plan_fft_forward(consts::FRAMES_FRAME);
+    pub(crate) fn new(pools: PoolRegion<S>) -> Result<Self, SpectrumError> {
         Ok(Self {
-            hann: hann_window(&pools)?,
-            fft,
+            fft: Fft::new(consts::NOVELTY_FFT)?,
             pools,
         })
     }
@@ -50,25 +45,19 @@ where
         }
         let frames = (mono.len() - consts::FRAMES_FRAME) / consts::NOVELTY_STRIDE + 2;
         let mut coarse = self.pools.get_with_len::<f32>(frames)?;
-        let bins = self.fft.complex_len();
+        let bins = consts::NOVELTY_FFT.bins();
         let mut work = Frames {
-            input: self.pools.get_with_len::<f32>(consts::FRAMES_FRAME)?,
+            spectrum: self.fft.spectrum(&self.pools)?,
+            observed: self.pools.get_with_len::<f32>(bins)?,
+            angle: self.pools.get_with_len::<f32>(bins)?,
             magnitude: self.pools.get_with_len::<f32>(bins)?,
             phase: self.pools.get_with_len::<f32>(bins)?,
             phase_step: self.pools.get_with_len::<f32>(bins)?,
-            output: self.fft.make_output_vec(),
-            scratch: self.fft.make_scratch_vec(),
         };
         for (index, slot) in coarse.iter_mut().enumerate() {
             let at = index * consts::NOVELTY_STRIDE;
             let end = (at + consts::FRAMES_FRAME).min(mono.len());
-            let (signal, padding) = work.input.split_at_mut(end - at);
-            signal
-                .iter_mut()
-                .zip(mono[at..end].iter().zip(self.hann.iter()))
-                .for_each(|(sample_slot, (sample, window))| *sample_slot = sample * window);
-            padding.fill(0.0);
-            *slot = work.difference(&self.fft);
+            *slot = work.difference(&self.fft, &mono[at..end]);
         }
         let mut curve = self.pools.get_with_len::<f32>(
             (coarse.len() - 1) * (consts::NOVELTY_STRIDE / consts::FRAMES_HOP) + 1,
@@ -86,26 +75,28 @@ where
 }
 
 impl Frames {
-    fn difference(&mut self, fft: &Arc<dyn RealToComplex<f32>>) -> f32 {
-        if fft
-            .process_with_scratch(&mut self.input, &mut self.output, &mut self.scratch)
-            .is_err()
-        {
+    /// Distance between this frame's spectrum and the one predicted from the
+    /// two before it; `0.0` when the frame does not fit the transform.
+    fn difference(&mut self, fft: &Fft, frame: &[f32]) -> f32 {
+        if fft.forward(frame, &mut self.spectrum).is_err() {
             return 0.0;
         }
+        let (re, im) = (self.spectrum.re(), self.spectrum.im());
+        let _ = spectrum::magnitude(re, im, &mut self.observed);
+        let _ = spectrum::phase(re, im, &mut self.angle);
         let mut total = 0.0;
-        for (bin, ((magnitude, phase), step)) in self.output.iter().zip(
-            self.magnitude
-                .iter_mut()
-                .zip(self.phase.iter_mut())
-                .zip(self.phase_step.iter_mut()),
-        ) {
-            let (observed, angle) = (bin.norm(), bin.arg());
-            let predicted = Complex::from_polar(*magnitude, wrap(*phase + *step));
-            total += (bin - predicted).norm();
+        for ((((re, im), (observed, angle)), (magnitude, phase)), step) in re
+            .iter()
+            .zip(im)
+            .zip(self.observed.iter().zip(self.angle.iter()))
+            .zip(self.magnitude.iter_mut().zip(self.phase.iter_mut()))
+            .zip(self.phase_step.iter_mut())
+        {
+            let (sin, cos) = wrap(*phase + *step).sin_cos();
+            total += (re - *magnitude * cos).hypot(im - *magnitude * sin);
             *step = wrap(angle - *phase);
-            *phase = angle;
-            *magnitude = observed;
+            *phase = *angle;
+            *magnitude = *observed;
         }
         total
     }
@@ -116,24 +107,11 @@ fn wrap(angle: f32) -> f32 {
     angle - turn * (angle / turn).round()
 }
 
-fn hann_window<S>(pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
-where
-    S: HasPool<f32>,
-{
-    let mut hann = pools.get_with_len::<f32>(consts::FRAMES_FRAME)?;
-    let denom = (consts::FRAMES_FRAME - 1).to_f32().unwrap_or(1.0);
-    let scale = std::f32::consts::TAU / denom;
-    for (n, sample) in hann.iter_mut().enumerate() {
-        let phase = scale * n.to_f32().unwrap_or(0.0);
-        *sample = consts::NOVELTY_HANN_A0.mul_add(-phase.cos(), consts::NOVELTY_HANN_A0);
-    }
-    Ok(hann)
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_fixtures::unit_fixtures::{click_silence_4s, clicks_120_4s};
     use kithara_test_utils::kithara;
+    use num_traits::cast::ToPrimitive;
 
     use super::*;
     use crate::{
@@ -154,7 +132,7 @@ mod tests {
     fn clicks_raise_peaks_where_the_clicks_are(clicks_120_4s: Vec<f32>) {
         let pcm = clicks_120_4s;
         let curve = Novelty::new(pools())
-            .expect("a fresh region has room for the window")
+            .expect("the novelty FFT length is supported")
             .curve(&pcm)
             .expect("the curve fits the region");
 
@@ -185,7 +163,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn silence_is_flat(click_silence_4s: Vec<f32>) {
         let curve = Novelty::new(pools())
-            .expect("a fresh region has room for the window")
+            .expect("the novelty FFT length is supported")
             .curve(&click_silence_4s)
             .expect("the curve fits the region");
         assert!(!curve.is_empty(), "silence still yields a curve");
