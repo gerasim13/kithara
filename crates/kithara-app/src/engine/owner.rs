@@ -300,10 +300,10 @@ impl Engine {
                     continue;
                 }
             };
-            if let Some(intent) = engine_deck.sync.observe(SyncReport::from(&state))
-                && let Err(error) = host.request_deck_sync(&deck.queue, intent)
-            {
-                engine_deck.sync.hear(deck.id, &error);
+            if let Some(intent) = engine_deck.sync.observe(SyncReport::from(&state)) {
+                engine_deck
+                    .sync
+                    .answer(deck.id, &host.request_deck_sync(&deck.queue, intent));
             }
         }
     }

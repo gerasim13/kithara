@@ -11,7 +11,7 @@ use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::Windo
 use crate::{
     analysis::{TrackArtifacts, WaveformId},
     catalog::{Catalog, CatalogEntry, is_loaded},
-    engine::{DeckSnapshot, DeckSync, EngineSnapshot, HostTempo, SyncPhase},
+    engine::{DeckSnapshot, DeckSync, EngineSnapshot, HostTempo, SyncPhase, Wish, WishStage},
     gui::view::track_subtitle,
 };
 
@@ -418,11 +418,15 @@ fn format_sync(sync: &DeckSync, playing: bool) -> &'static str {
     if sync.is_refused {
         return "REFUSED";
     }
-    match sync.wish() {
-        Some(true) if playing => return "SYNCING",
-        Some(true) => return "WAITS FOR PLAY",
-        Some(false) if sync.is_synced() => return "RELEASING",
-        Some(false) | None => {}
+    match sync.wish {
+        Some(Wish {
+            on: true,
+            stage: WishStage::WaitsForBeats,
+        }) => return "WAITS FOR BEATS",
+        Some(Wish { on: true, .. }) if playing => return "SYNCING",
+        Some(Wish { on: true, .. }) => return "WAITS FOR PLAY",
+        Some(Wish { on: false, .. }) if sync.is_synced() => return "RELEASING",
+        Some(Wish { on: false, .. }) | None => {}
     }
     let Some(report) = sync.reported else {
         return "";
@@ -610,6 +614,15 @@ mod tests {
         sync
     }
 
+    fn waiting_for_beats() -> DeckSync {
+        let mut sync = DeckSync::default();
+        sync.wish = Some(Wish {
+            on: true,
+            stage: WishStage::WaitsForBeats,
+        });
+        sync
+    }
+
     fn refused() -> DeckSync {
         let mut sync = DeckSync::default();
         sync.is_refused = true;
@@ -622,6 +635,8 @@ mod tests {
     #[case::asked_on_playing(asked(true), true, "SYNCING")]
     #[case::asked_off_while_manual(asked(false), true, "")]
     #[case::refused(refused(), true, "REFUSED")]
+    #[case::asked_on_without_beats(waiting_for_beats(), true, "WAITS FOR BEATS")]
+    #[case::asked_on_without_beats_paused(waiting_for_beats(), false, "WAITS FOR BEATS")]
     #[case::waits_for_beats(
         answered(SyncMode::HostSync, SyncPhase::WaitingForGrid, None),
         true,
