@@ -5,3 +5,4 @@
 use kithara_test_dylib as _;
 
 mod source;
+mod stalled_read;

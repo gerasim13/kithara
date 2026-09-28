@@ -4,10 +4,14 @@ use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_derive::Patch;
-use kithara_platform::{CancelToken, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+    tokio::runtime::Handle as RuntimeHandle,
+};
 use kithara_play::{CrossfadeSettings, PlayerImpl};
 
-use crate::{ActionAtItemEnd, PlaybackOrder, consts};
+use crate::{ActionAtItemEnd, PlaybackOrder, consts, navigation::NavigationState};
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
@@ -17,6 +21,7 @@ use crate::{ActionAtItemEnd, PlaybackOrder, consts};
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
+#[kithara_config::config(builder = false)]
 #[derive(Builder, derive_more::Debug, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -24,67 +29,108 @@ pub struct QueueConfig<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    #[builder(default)]
-    pub action_at_item_end: ActionAtItemEnd,
-
-    #[builder(default)]
-    pub crossfade_settings: CrossfadeSettings,
+    /// The navigation owner attached when the queue is constructed.
+    #[config(skip = "navigation owns the live traversal order", builder(field = None), patch(skip), debug(skip))]
+    pub(crate) navigation: Option<Arc<Mutex<NavigationState>>>,
 
     /// Max concurrent background prefetch loads. Default: 3.
-    #[builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS)]
+    #[config(value, sdk, builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS))]
     pub max_concurrent_loads: NonZeroUsize,
 
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
-    #[patch(skip)]
-    #[debug(skip)]
+    #[config(skip = "injected cancellation resource", patch(skip), debug(skip))]
     pub cancel: Option<CancelToken>,
 
     /// Shared store used for bare URI track sources.
-    #[patch(skip)]
-    #[debug(skip)]
+    #[config(skip = "injected asset store", patch(skip), debug(skip))]
     pub store: Option<AssetStore<S>>,
-
-    #[builder(default)]
-    pub playback_order: PlaybackOrder,
 
     /// Runtime the queue runs its loads and load completions on. `None`
     /// takes the runtime current where the queue is built; an embedding
     /// that drives the queue from threads without one (FFI hosts) passes
     /// its own.
-    #[patch(skip)]
-    #[debug(skip)]
+    #[config(skip = "injected runtime", patch(skip), debug(skip))]
     pub runtime: Option<RuntimeHandle>,
 
     /// Player owned and decorated by this queue.
-    #[patch(skip)]
-    #[debug(skip)]
-    pub player: PlayerImpl<S>,
+    #[config(skip = "player moves to the queue owner", builder(required, with = Some), patch(skip), debug(skip))]
+    pub(crate) player: Option<PlayerImpl<S>>,
+
+    /// Lead time in seconds before EOF at which the next queued track is
+    /// preloaded into the audio processor. Default: 3.5. Stays `f32`
+    /// seconds rather than the campaign's `humantime` duration convention:
+    /// the value already reaches 10 setter and 14 read call sites as a bare
+    /// `f32`, and converting the type would only churn those for a
+    /// formatting preference.
+    #[config(value, sdk, builder(default = consts::DEFAULT_PREFETCH_DURATION))]
+    pub prefetch_duration: f32,
 
     /// Whether the queue starts playback by itself once the first track
     /// appended to a queue with nothing selected finishes loading. Off by
     /// default: the embedding decides when playback starts. A document cannot
     /// name it, because starting playback is the embedding's choice.
-    #[builder(default = false)]
-    #[patch(skip)]
+    #[config(value, sdk, builder(default = false), patch(skip))]
     pub should_autoplay: bool,
-
-    /// Lead time in seconds before EOF at which the next queued track
-    /// is preloaded into the audio processor. Default: 3.5. Stays `f32`
-    /// seconds rather than the campaign's `humantime` duration convention:
-    /// the value already reaches 10 setter and 14 read call sites as a bare
-    /// `f32`, and converting the type would only churn those for a
-    /// formatting preference.
-    #[builder(default = consts::DEFAULT_PREFETCH_DURATION)]
-    pub prefetch_duration: f32,
 
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
-    #[builder(default = 100)]
+    #[config(value, sdk, builder(default = 100))]
     pub max_history_size: usize,
+
+    /// Initial queue traversal order; subsequent changes belong to navigation.
+    #[config(value(PlaybackOrder, self.live_playback_order()), sdk, builder(default))]
+    pub playback_order: PlaybackOrder,
+
+    /// Initial action when the current item ends.
+    #[config(
+        value(ActionAtItemEnd, self.action_at_item_end()),
+        sdk,
+        wrap(default = ActionAtItemEnd::default(), with = Mutex::new, patch),
+        debug(skip)
+    )]
+    pub(crate) action_at_item_end: Mutex<ActionAtItemEnd>,
+
+    /// Initial transition settings for the next item.
+    #[config(
+        value(CrossfadeSettings, self.crossfade_settings()),
+        sdk,
+        wrap(default = CrossfadeSettings::default(), with = Mutex::new, patch),
+        debug(skip)
+    )]
+    pub(crate) crossfade_settings: Mutex<CrossfadeSettings>,
+}
+
+impl<S> QueueConfig<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(crate) fn action_at_item_end(&self) -> ActionAtItemEnd {
+        *self.action_at_item_end.lock()
+    }
+
+    pub(crate) fn crossfade_settings(&self) -> CrossfadeSettings {
+        *self.crossfade_settings.lock()
+    }
+
+    fn live_playback_order(&self) -> PlaybackOrder {
+        self.navigation
+            .as_ref()
+            .map_or(self.playback_order, |navigation| {
+                navigation.lock().playback_order()
+            })
+    }
+
+    pub(crate) fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
+        *self.action_at_item_end.lock() = action;
+    }
+
+    pub(crate) fn set_crossfade_settings(&self, settings: CrossfadeSettings) {
+        *self.crossfade_settings.lock() = settings;
+    }
 }
 
 #[cfg(test)]

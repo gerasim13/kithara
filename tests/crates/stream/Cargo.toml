@@ -29,6 +29,8 @@ kithara-integration-tests = { workspace = true, default-features = false, featur
 kithara-test-dylib = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
+delegate = { workspace = true }
+futures = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

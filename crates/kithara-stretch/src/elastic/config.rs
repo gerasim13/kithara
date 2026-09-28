@@ -11,14 +11,17 @@ use crate::{StretchKind, consts};
 /// Signalsmith preparation geometry.
 ///
 /// [`SignalsmithConfigPatch`] is what a configuration document may say about it.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct SignalsmithConfig {
     /// Custom analysis block size in source frames; absent selects the native preset.
+    #[config(value)]
     block_frames: Option<NonZeroUsize>,
     /// Custom analysis interval in source frames; absent selects the native preset.
+    #[config(value)]
     interval_frames: Option<NonZeroUsize>,
 }
 
@@ -39,6 +42,7 @@ impl SignalsmithConfig {
 /// Bungee native synthesis geometry.
 ///
 /// [`BungeeConfigPatch`] is what a configuration document may say about it.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
@@ -46,7 +50,7 @@ impl SignalsmithConfig {
 #[derive(kithara_derive::BuiltDefault)]
 pub struct BungeeConfig {
     /// Base-two synthesis-hop adjustment passed to the native stretcher.
-    #[builder(default)]
+    #[config(value, builder(default))]
     log2_synthesis_hop_adjust: i32,
 }
 
@@ -54,16 +58,15 @@ pub struct BungeeConfig {
 ///
 /// [`ElasticBackendConfigPatch`] is what a configuration document may say
 /// about it.
+#[kithara_config::config(builder = false)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct ElasticBackendConfig {
-    #[builder(default)]
-    #[patch(nested)]
+    #[config(nested, builder(default), patch(nested))]
     bungee: BungeeConfig,
-    #[builder(default)]
-    #[patch(nested)]
+    #[config(nested, builder(default), patch(nested))]
     signalsmith: SignalsmithConfig,
 }
 

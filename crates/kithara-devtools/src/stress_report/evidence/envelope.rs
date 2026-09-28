@@ -46,6 +46,10 @@ struct AttemptEnvelope {
     flight_events: Vec<String>,
     #[serde(default)]
     flight_probes: Vec<String>,
+    /// One OS reading per live thread, absent in envelopes written before the
+    /// reading existed and on targets without `/proc`.
+    #[serde(default)]
+    threads: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +178,9 @@ pub(super) fn append(
                 dossier.event_tail =
                     newest_groups(fold_flight_tail(&envelope.flight_events, input.budgets));
             }
+            if dossier.threads.is_empty() {
+                dossier.threads = thread_census(&envelope.threads);
+            }
         }
         add_signature(
             &mut clusters,
@@ -238,6 +245,63 @@ pub(super) fn append(
         );
     }
     invalid == 0 && !files.limit_exceeded && missing.is_empty()
+}
+
+/// Fold a dump's per-thread OS readings into one entry per thread name.
+///
+/// The engine names a quiescence holder by a hashed thread id that nothing
+/// outside the engine can look up, so the reading is joined to it by name.
+/// Per-name state counts answer what the holder line cannot: the name is
+/// missing entirely (its thread exited and the credit leaked), every instance
+/// is parked (`S`/`D`, so nothing is spinning), or one is runnable (`R`).
+/// Thread ids and tick counters are volatile and stay in the raw artifact.
+///
+/// A parked thread is counted with what it is parked on, because a wedge
+/// leaves every thread parked and the state letter alone then separates
+/// nothing. The kernel's wait channel does: a holder on a futex is inside a
+/// lock it took without releasing its credit, one on the reactor is waiting
+/// for real I/O, and one on a timer is sleeping out a real deadline. A
+/// runnable thread is on CPU and has no channel to report.
+fn thread_census(lines: &[String]) -> Vec<String> {
+    let mut census: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    for line in lines {
+        let Some((name, state, wait)) = thread_reading(line) else {
+            continue;
+        };
+        let state = match wait {
+            Some(wait) => format!("{state} on {wait}"),
+            None => state,
+        };
+        let count = census.entry(name).or_default().entry(state).or_default();
+        *count = count.saturating_add(1);
+    }
+    census
+        .into_iter()
+        .map(|(name, states)| {
+            let counts = states
+                .into_iter()
+                .map(|(state, count)| format!("{count} {state}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{name}: {counts}")
+        })
+        .collect()
+}
+
+/// The name, scheduler state, and wait channel of one
+/// `tid=... name=... state=... wchan=...` reading.
+///
+/// The channel is absent for a thread that is not waiting on one: a runnable
+/// thread reports `0`, and a dump taken where the kernel does not publish the
+/// channel omits the field.
+fn thread_reading(line: &str) -> Option<(String, String, Option<String>)> {
+    let field = |key: &str| {
+        line.split_whitespace()
+            .find_map(|part| part.strip_prefix(key))
+            .map(str::to_owned)
+    };
+    let wait = field("wchan=").filter(|wait| wait != "0" && !wait.is_empty());
+    Some((field("name=")?, field("state=")?, wait))
 }
 
 /// Cluster the flight-recorder tails of one envelope. Both lanes share the
@@ -455,11 +519,39 @@ fn read_envelope(path: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_census_counts_scheduler_states_per_thread_name() {
+        let lines = [
+            "name=tokio-rt-worker tid=7 state=S cpu_ticks=3 wchan=futex_wait",
+            "name=tokio-rt-worker tid=8 state=R cpu_ticks=62000 wchan=0",
+            "name=tokio-rt-worker tid=9 state=S cpu_ticks=1 wchan=futex_wait",
+            "name=tokio-rt-worker tid=10 state=S cpu_ticks=1 wchan=ep_poll",
+            "name=main tid=1 state=S cpu_ticks=0 wchan=do_wait",
+        ]
+        .map(str::to_owned);
+
+        // The two parked on a futex are inside a lock and the one on the
+        // reactor is waiting for I/O. Folding them together would report four
+        // threads asleep and name nothing they are asleep on.
+        assert_eq!(
+            thread_census(&lines),
+            vec![
+                "main: 1 S on do_wait".to_owned(),
+                "tokio-rt-worker: 1 R, 1 S on ep_poll, 2 S on futex_wait".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reading_without_both_fields_is_not_counted() {
+        let lines = ["tid=7 cpu_ticks=3".to_owned(), "name=lone tid=8".to_owned()];
+        assert!(thread_census(&lines).is_empty());
+    }
+
     fn evidence() -> StressEvidenceConfig {
         StressEvidenceConfig {
             envelope_schema: Some("demo.hang.v1".to_owned()),
             envelope_text_field: Some("wait_graph".to_owned()),
-            dump_marker: Some("[wait dump]".to_owned()),
             primitive_marker: Some("created_at=".to_owned()),
             holder_marker: Some("held by".to_owned()),
             wait_marker: Some("WAITING:".to_owned()),

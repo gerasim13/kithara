@@ -84,25 +84,25 @@ impl NavigationState {
         self.current.or_else(|| self.history.back().copied())
     }
 
+    /// Choose the successor without moving the cursor onto it. A caller reads
+    /// this to decide, and the decision can still fall through — the successor
+    /// may not be loaded, or the player may refuse it. Moving the cursor here
+    /// would strand it on a track that never started while the player stayed
+    /// where it was, and the next end-of-item arrives naming a track the cursor
+    /// has already left. [`Self::select`] is the commit.
     pub(crate) fn next(
         &mut self,
         tracks: &[TrackId],
         allow_repeat_one: bool,
         allow_wrap: bool,
     ) -> Option<TrackId> {
-        let current = self.current;
         if allow_repeat_one && self.repeat_mode == RepeatMode::One {
-            return current.filter(|id| tracks.contains(id));
+            return self.current.filter(|id| tracks.contains(id));
         }
-        let next = match self.playback_order {
+        match self.playback_order {
             PlaybackOrder::Sequential => self.next_sequential(tracks, allow_wrap),
             PlaybackOrder::Shuffle => self.next_shuffle(tracks, allow_wrap),
-        }?;
-        if let Some(current) = current.filter(|id| *id != next) {
-            self.push_history(current);
         }
-        self.current = Some(next);
-        Some(next)
     }
 
     fn next_sequential(&self, tracks: &[TrackId], allow_wrap: bool) -> Option<TrackId> {
@@ -116,6 +116,9 @@ impl NavigationState {
             .or_else(|| allow_wrap.then(|| tracks.first().copied()).flatten())
     }
 
+    /// Reads the bag without taking from it: refilling an exhausted bag is part
+    /// of choosing, and the chosen item leaves it in [`Self::select`], which
+    /// retains it out.
     fn next_shuffle(&mut self, tracks: &[TrackId], allow_wrap: bool) -> Option<TrackId> {
         self.bag.retain(|id| tracks.contains(id));
         if self.bag.is_empty() {
@@ -124,7 +127,7 @@ impl NavigationState {
             }
             self.fresh_cycle(tracks, self.current);
         }
-        self.bag.pop()
+        self.bag.last().copied()
     }
 
     pub(crate) fn peek_next(&self, tracks: &[TrackId]) -> Option<TrackId> {
@@ -226,7 +229,9 @@ mod tests {
         let tracks = ids();
         let mut nav = nav();
         assert_eq!(nav.next(&tracks, true, false), Some(tracks[0]));
+        nav.select(tracks[0], &tracks);
         assert_eq!(nav.next(&tracks, true, false), Some(tracks[1]));
+        nav.select(tracks[1], &tracks);
         assert_eq!(nav.prev(&tracks), Some(tracks[0]));
         nav.set_repeat(RepeatMode::One);
         assert_eq!(nav.next(&tracks, true, false), Some(tracks[0]));
@@ -238,12 +243,17 @@ mod tests {
         let tracks = ids();
         let mut nav = nav();
         nav.set_playback_order(PlaybackOrder::Shuffle, &tracks);
-        let first: Vec<_> = (0..tracks.len())
-            .map(|_| nav.next(&tracks, false, true).expect("cycle item"))
-            .collect();
-        let second: Vec<_> = (0..tracks.len())
-            .map(|_| nav.next(&tracks, false, true).expect("cycle item"))
-            .collect();
+        let cycle = |nav: &mut NavigationState| {
+            (0..tracks.len())
+                .map(|_| {
+                    let id = nav.next(&tracks, false, true).expect("cycle item");
+                    nav.select(id, &tracks);
+                    id
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = cycle(&mut nav);
+        let second = cycle(&mut nav);
         let mut first_unique = first.clone();
         first_unique.sort_by_key(|id| id.as_u64());
         first_unique.dedup();
@@ -272,6 +282,7 @@ mod tests {
 
         let only = [TrackId(9)];
         assert_eq!(nav.next(&only, false, true), Some(only[0]));
+        nav.select(only[0], &only);
         assert_eq!(nav.next(&only, false, false), None);
         assert_eq!(nav.next(&only, false, true), Some(only[0]));
     }
@@ -282,7 +293,9 @@ mod tests {
         let mut nav = nav();
         nav.set_playback_order(PlaybackOrder::Shuffle, &tracks);
         let first = nav.next(&tracks, false, true).expect("first item");
+        nav.select(first, &tracks);
         let second = nav.next(&tracks, false, true).expect("second item");
+        nav.select(second, &tracks);
         assert_ne!(first, second);
         assert_eq!(nav.prev(&tracks), Some(first));
         assert_eq!(nav.prev(&tracks), None);
@@ -293,8 +306,38 @@ mod tests {
         let tracks = ids();
         let mut nav = nav();
         nav.set_playback_order(PlaybackOrder::Shuffle, &tracks[..2]);
-        let _ = nav.next(&tracks[..2], false, true);
+        let first = nav.next(&tracks[..2], false, true).expect("cycle item");
+        nav.select(first, &tracks[..2]);
         nav.insert(tracks[2]);
         assert!(nav.bag.contains(&tracks[2]));
+    }
+
+    /// Reading the successor is not choosing it: the caller can still refuse,
+    /// and the cursor must stay on the track that is actually sounding until
+    /// `select` commits. Otherwise the next end-of-item names a track the
+    /// cursor has already left, and the advance is dropped in silence.
+    #[kithara::test]
+    fn a_successor_the_caller_never_commits_leaves_the_cursor_where_it_was() {
+        let tracks = ids();
+        for order in [PlaybackOrder::Sequential, PlaybackOrder::Shuffle] {
+            let mut nav = nav();
+            nav.set_playback_order(order, &tracks);
+            nav.select(tracks[0], &tracks);
+
+            let chosen = nav.next(&tracks, false, true).expect("a successor");
+            assert_eq!(
+                nav.next(&tracks, false, true),
+                Some(chosen),
+                "{order:?}: a second read must offer the same successor"
+            );
+            assert_eq!(
+                nav.current(),
+                Some(tracks[0]),
+                "{order:?}: reading a successor must not move the cursor"
+            );
+
+            nav.select(chosen, &tracks);
+            assert_eq!(nav.current(), Some(chosen), "{order:?}: select commits");
+        }
     }
 }

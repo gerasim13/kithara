@@ -147,26 +147,29 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc,
+    use std::{
+        ops::Range,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
     };
 
     use kithara_platform::{
         CancelToken,
-        sync::{Arc, Weak},
+        sync::{Arc, Mutex, Weak},
         thread,
         time::Duration,
     };
     use rangemap::RangeSet;
 
     use crate::{
-        WaitOutcome,
+        ResourceStatus, WaitOutcome,
         backend::{
             memory::driver::{MemDriver, MemOptions},
             mmap::driver::{MmapDriver, MmapOptions},
             resource::state::ResourceCore,
-            traits::DriverIo,
+            traits::{AvailabilityObserver, DriverIo},
         },
         test_pools::{byte_buffer, pools},
     };
@@ -197,6 +200,57 @@ mod tests {
     enum Backend {
         Mem,
         Mmap,
+    }
+
+    /// Reads back the status of the resource it observes at the moment that
+    /// resource records its commit.
+    #[derive(Default)]
+    struct CommitWitness {
+        core: Mutex<Option<ResourceCore<MemDriver>>>,
+        seen: Mutex<Option<ResourceStatus>>,
+    }
+
+    impl AvailabilityObserver for CommitWitness {
+        fn on_commit(&self, _final_len: u64) {
+            let status = self.core.lock().as_ref().map(ResourceCore::status_inner);
+            *self.seen.lock() = status;
+        }
+
+        fn on_write(&self, _range: Range<u64>) {}
+    }
+
+    /// The commit record must land before the resource reports `Committed`:
+    /// a byte-capped cache that sees `Committed` may evict the resource and drop
+    /// its record, and a record landing after that revives the availability of a
+    /// resource nobody can open any more.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_commit_is_recorded_before_it_is_published() {
+        let pools = pools();
+        let witness = Arc::new(CommitWitness::default());
+        let core: ResourceCore<MemDriver> = ResourceCore::open_with_observer(
+            CancelToken::never(),
+            MemOptions::builder().buffer(byte_buffer(&pools)).build(),
+            Some(Arc::clone(&witness) as Arc<dyn AvailabilityObserver>),
+        )
+        .expect("open mem must succeed");
+        *witness.core.lock() = Some(core.clone());
+        core.write_at_inner(0, b"hello world")
+            .expect("active write must succeed");
+
+        core.commit_inner(Some(11)).expect("commit must succeed");
+        let seen = witness.seen.lock().take();
+        witness.core.lock().take();
+
+        assert!(
+            matches!(seen, Some(ResourceStatus::Active)),
+            "the commit was already visible when it was recorded: {seen:?}"
+        );
+        assert!(matches!(
+            core.status_inner(),
+            ResourceStatus::Committed {
+                final_len: Some(11)
+            }
+        ));
     }
 
     /// A committed resource's `read_at_inner` must complete WITHOUT taking the

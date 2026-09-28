@@ -69,6 +69,40 @@ impl<S> CondvarGate<S> {
     }
 }
 
+/// Exclusive section whose holder may wait on other threads. A contended
+/// [`lock`](Self::lock) parks on the platform condvar, so under `flash` the
+/// contender does not hold the virtual clock; use [`Mutex`] for bounded sections.
+#[derive(Default)]
+pub struct ExclusiveGate {
+    held: CondvarGate<bool>,
+}
+
+impl ExclusiveGate {
+    /// Enter the section, parking while another guard holds it.
+    pub fn lock(&self) -> ExclusiveGuard<'_> {
+        let mut held = self.held.lock();
+        while *held {
+            held = self.held.wait(held);
+        }
+        *held = true;
+        drop(held);
+        ExclusiveGuard { gate: self }
+    }
+}
+
+/// Holds an [`ExclusiveGate`] until dropped.
+#[must_use = "the section is held only while the guard lives"]
+pub struct ExclusiveGuard<'a> {
+    gate: &'a ExclusiveGate,
+}
+
+impl Drop for ExclusiveGuard<'_> {
+    fn drop(&mut self) {
+        *self.gate.held.lock() = false;
+        self.gate.held.notify_all();
+    }
+}
+
 impl WaitGate for CondvarGate<u64> {
     fn current(&self) -> u64 {
         *self.lock()
@@ -446,5 +480,42 @@ mod tests {
         gate.signal();
         waiter.join().expect("spin waiter thread");
         signaller.join().expect("spin signaller thread");
+    }
+
+    #[cfg(feature = "flash")]
+    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    fn a_contended_section_lets_the_clock_reach_its_holders_wait() {
+        let _ambient = crate::flash::ambient_scope(true);
+        let section = Arc::new(ExclusiveGate::default());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (contending_tx, contending_rx) = mpsc::channel();
+        let (left_tx, left_rx) = mpsc::channel();
+
+        let holder_section = Arc::clone(&section);
+        let holder = thread::spawn_named("exclusive-gate-holder", move || {
+            let _held = holder_section.lock();
+            entered_tx.send(()).expect("report the held section");
+            // Waits for the contender to exist: a spawned thread counts as
+            // running until it parks, so the clock cannot pass this sleep
+            // before the contender has reached the section.
+            contending_rx.recv().expect("contender spawned");
+            thread::sleep(Duration::from_secs(3600));
+        });
+        entered_rx.recv().expect("holder entered the section");
+
+        let contender_section = Arc::clone(&section);
+        let contender = thread::spawn_named("exclusive-gate-contender", move || {
+            drop(contender_section.lock());
+            left_tx.send(()).expect("report the contended entry");
+        });
+        contending_tx
+            .send(())
+            .expect("release the holder into its wait");
+
+        left_rx
+            .recv()
+            .expect("contender entered after the holder left");
+        holder.join().expect("holder thread");
+        contender.join().expect("contender thread");
     }
 }

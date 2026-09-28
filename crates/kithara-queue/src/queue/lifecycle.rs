@@ -1,5 +1,3 @@
-use std::sync::PoisonError;
-
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_play::SelectionPlayback;
@@ -85,10 +83,7 @@ where
             self.player.remove_all_items();
             ids
         };
-        *self
-            .player_rx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = self.bus.subscribe();
+        *self.player_rx.lock() = self.bus.subscribe();
         for id in ids {
             self.bus.publish(QueueEvent::TrackRemoved { id });
         }
@@ -123,7 +118,7 @@ where
             self.override_pending_select(PendingSelect {
                 id,
                 settings: Transition::None.settings(self.crossfade_settings()),
-                playback: if self.should_autoplay {
+                playback: if self.config.should_autoplay {
                     SelectionPlayback::Play
                 } else {
                     SelectionPlayback::Pause
@@ -265,6 +260,7 @@ where
                     AdvanceReason::RemovedCurrent,
                     playback,
                 )?;
+                self.commit_navigation_to(next);
             } else {
                 self.player.pause();
             }

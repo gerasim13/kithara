@@ -52,12 +52,21 @@ impl<D: DriverIo> ResourceCore<D> {
 
     /// Seal or commit the driver, then publish the final availability; the displaced
     /// snapshot is retired to the write side.
+    ///
+    /// The observer records the commit before the resource reports it: whoever sees `Committed`
+    /// may evict the resource and drop its record, and a record landing after that would revive
+    /// availability for a resource nobody can open.
     fn finish_inner(&self, final_len: Option<u64>, publish: Publish) -> StorageResult<()> {
         self.check_health()?;
 
         match publish {
             Publish::Snapshot => self.inner.driver.commit(final_len)?,
             Publish::Skip => self.inner.driver.seal(final_len)?,
+        }
+        if let Some(len) = final_len
+            && let Some(observer) = self.inner.observer.as_ref()
+        {
+            observer.on_commit(len);
         }
         self.inner.committed.store(true, Ordering::Release);
 
@@ -81,12 +90,6 @@ impl<D: DriverIo> ResourceCore<D> {
             }
         }
         self.inner.gate.notify_all();
-
-        if let Some(len) = final_len
-            && let Some(observer) = self.inner.observer.as_ref()
-        {
-            observer.on_commit(len);
-        }
 
         Ok(())
     }

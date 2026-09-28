@@ -1,16 +1,15 @@
-use std::{
-    ops::Deref,
-    sync::{Mutex, PoisonError},
-};
+use core::ops::Deref;
 
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{
-    CancelScope, CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle,
+    CancelScope, CancelToken,
+    sync::{Arc, ExclusiveGate, ExclusiveGuard, Mutex, MutexGuard},
+    tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_play::{
-    CrossfadeSettings, PlayError, PlayerImpl,
+    PlayError, PlayerImpl,
     player::{PlayerControl, PlayerControlSource},
 };
 
@@ -21,7 +20,7 @@ use super::{
 use crate::{
     config::QueueConfig,
     loader::Loader,
-    navigation::{ActionAtItemEnd, NavigationState},
+    navigation::NavigationState,
     track::{TrackRecord, Tracks},
 };
 
@@ -46,8 +45,9 @@ where
     /// `TrackStatus::Cancelled`); without a single serialization point the completion
     /// can observe-not-cancelled then `select_item` *after* the superseding select
     /// committed, so the superseded track barges in. Held only across the synchronous
-    /// apply critical section — never across an `.await`.
-    pub(super) select_apply: Arc<Mutex<()>>,
+    /// apply critical section - never across an `.await`. That section waits on the
+    /// player's session, so a contender parks on the gate instead of blocking a lock.
+    pub(super) select_apply: ExclusiveGate,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
     /// `Arc<Tracks>`; every status transition goes through
@@ -76,15 +76,15 @@ where
     /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
     pub(super) bus: EventBus,
-    pub(super) action_at_item_end: Mutex<ActionAtItemEnd>,
-    /// Serializes every state-changing command against terminal close.
-    pub(super) admission: Mutex<()>,
-    pub(super) crossfade_settings: Mutex<CrossfadeSettings>,
+    pub(super) config: Arc<QueueConfig<S>>,
+    /// Serializes every state-changing command against terminal close. A command
+    /// waits on the player's session while admitted, so a contender parks on the
+    /// gate instead of blocking a lock.
+    pub(super) admission: ExclusiveGate,
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     pub(super) player_rx: Mutex<EventReceiver<PlayerBusEvent>>,
-    pub(super) should_autoplay: bool,
 }
 
 /// Cloneable queue command capability without beat-grid identity or topology.
@@ -140,20 +140,19 @@ where
     /// The queue takes ownership of the supplied [`PlayerImpl`]; all access to
     /// the decorated player then goes through this facade.
     #[must_use]
-    pub fn new(config: QueueConfig<S>) -> Self {
-        let QueueConfig {
-            player,
-            runtime,
-            store,
-            cancel: config_cancel,
-            max_concurrent_loads,
-            max_history_size,
-            prefetch_duration,
-            should_autoplay,
-            playback_order,
-            action_at_item_end,
-            crossfade_settings,
-        } = config;
+    pub fn new(mut config: QueueConfig<S>) -> Self {
+        let player = config
+            .player
+            .take()
+            .unwrap_or_else(|| unreachable!("QueueConfig builder requires a player"));
+        let runtime = config.runtime.take();
+        let store = config.store.take();
+        let config_cancel = config.cancel.take();
+        let max_concurrent_loads = config.max_concurrent_loads;
+        let max_history_size = config.max_history_size;
+        let prefetch_duration = config.prefetch_duration;
+        let playback_order = config.playback_order;
+        let crossfade_settings = config.crossfade_settings();
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
             AssetStore::builder(player.pools().clone())
@@ -178,18 +177,18 @@ where
         let player_rx = player.subscribe();
         let mut navigation = NavigationState::new(max_history_size);
         navigation.set_playback_order(playback_order, &[]);
+        let navigation = Arc::new(Mutex::new(navigation));
+        config.navigation = Some(Arc::clone(&navigation));
         let runtime = Arc::new(QueueRuntime {
             loader,
             tracks,
             bus,
-            should_autoplay,
-            admission: Mutex::new(()),
+            config: Arc::new(config),
+            admission: ExclusiveGate::default(),
             shutdown: cancel,
-            navigation: Arc::new(Mutex::new(navigation)),
-            action_at_item_end: Mutex::new(action_at_item_end),
-            crossfade_settings: Mutex::new(crossfade_settings),
+            navigation,
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
-            select_apply: Arc::new(Mutex::new(())),
+            select_apply: ExclusiveGate::default(),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: AtomicTrackId::disarmed(),
             autoplay_target: AtomicTrackId::disarmed(),
@@ -243,42 +242,6 @@ where
         self.shutdown.is_cancelled() || self.player.is_closed()
     }
 
-    pub(in crate::queue) fn lock_admission(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.admission
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(super) fn lock_navigation(&self) -> std::sync::MutexGuard<'_, NavigationState> {
-        self.navigation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(super) fn lock_navigation_mut(&self) -> std::sync::MutexGuard<'_, NavigationState> {
-        self.navigation
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(in crate::queue) fn lock_pending_select_mut(
-        &self,
-    ) -> std::sync::MutexGuard<'_, SelectPhase> {
-        self.pending_select
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Acquire the selection-apply serialization guard (see
-    /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
-    /// `navigation`/`player` in both `select` and the
-    /// `spawn_apply_after_load` completion, so the two cannot interleave.
-    pub(in crate::queue) fn lock_select_apply(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.select_apply
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
     pub(in crate::queue) fn with_open<T>(
         &self,
         operation: impl FnOnce(&Self) -> T,
@@ -303,9 +266,9 @@ where
     delegate::delegate! {
         to self.tracks {
             #[call(lock)]
-            pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
+            pub(super) fn lock_tracks(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
             #[call(lock)]
-            pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
+            pub(super) fn lock_tracks_mut(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
             pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
         }
         to self.crossfade_armed_for {
@@ -322,6 +285,28 @@ where
             #[call(store)]
             pub(super) fn write_cached_position(&self, pos: CachedPosition);
         }
+        to self.admission {
+            #[call(lock)]
+            pub(in crate::queue) fn lock_admission(&self) -> ExclusiveGuard<'_>;
+        }
+        to self.navigation {
+            #[call(lock)]
+            pub(super) fn lock_navigation(&self) -> MutexGuard<'_, NavigationState>;
+            #[call(lock)]
+            pub(super) fn lock_navigation_mut(&self) -> MutexGuard<'_, NavigationState>;
+        }
+        to self.pending_select {
+            #[call(lock)]
+            pub(in crate::queue) fn lock_pending_select_mut(&self) -> MutexGuard<'_, SelectPhase>;
+        }
+        to self.select_apply {
+            /// Acquire the selection-apply serialization guard (see
+            /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
+            /// `navigation`/`player` in both `select` and the
+            /// `spawn_apply_after_load` completion, so the two cannot interleave.
+            #[call(lock)]
+            pub(in crate::queue) fn lock_select_apply(&self) -> ExclusiveGuard<'_>;
+        }
     }
 }
 
@@ -336,16 +321,16 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use core::sync::atomic::{AtomicU64, Ordering};
-    use std::{
-        sync::mpsc::{self, RecvTimeoutError},
-        thread,
-    };
-
     use kithara_audio::ConsumerWakeMode;
+    use kithara_config::Config;
     use kithara_events::{Envelope, EventReceiver};
     use kithara_platform::{
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+            mpsc::{self, TryRecvError},
+        },
+        thread,
         time::{Duration, Instant, timeout},
     };
     use kithara_play::{
@@ -360,6 +345,7 @@ pub(crate) mod tests {
     use crate::{
         consts,
         event::QueueEvent,
+        navigation::{ActionAtItemEnd, PlaybackOrder},
         test_pools::{TestPools, pools},
     };
 
@@ -498,7 +484,7 @@ pub(crate) mod tests {
         assert!(queue.is_empty());
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn close_waits_for_an_admitted_queue_mutation() {
         let queue = make_queue();
         let mutation_control = queue.control.clone();
@@ -519,23 +505,23 @@ pub(crate) mod tests {
         entered_rx
             .recv()
             .expect("mutation must enter the queue admission gate");
+        let (close_started_tx, close_started_rx) = mpsc::channel();
         let (close_tx, close_rx) = mpsc::channel();
         let close = thread::spawn(move || {
+            close_started_tx
+                .send(())
+                .expect("test receiver remains alive");
             close_tx
                 .send(close_control.close())
                 .expect("test receiver remains alive");
         });
 
-        // Every other wait here is on the event itself: under Miri the threads
-        // run two orders of magnitude slower, and a one-second budget made the
-        // test report a scheduling contract it had merely outrun. This one
-        // stays a timer because it asserts the absence of an event, which no
-        // amount of waiting can observe directly.
+        close_started_rx
+            .recv()
+            .expect("close thread must reach the admission attempt");
+        kithara_test_utils::test::wall_sleep(Duration::from_millis(50));
         assert!(
-            matches!(
-                close_rx.recv_timeout(Duration::from_millis(50)),
-                Err(RecvTimeoutError::Timeout)
-            ),
+            matches!(close_rx.try_recv(), Err(TryRecvError::Empty)),
             "close must not overtake an admitted queue mutation"
         );
         release_tx.send(()).expect("mutation thread remains alive");
@@ -566,6 +552,24 @@ pub(crate) mod tests {
         );
 
         assert!((queue.player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn retained_config_follows_live_queue_controls() {
+        let queue = make_queue();
+        queue.set_action_at_item_end(ActionAtItemEnd::Pause);
+        queue.set_playback_order(PlaybackOrder::Shuffle);
+        let mut crossfade = queue.crossfade_settings();
+        crossfade.duration = 2.0;
+        queue
+            .set_crossfade_settings(crossfade)
+            .expect("valid crossfade settings");
+
+        let values = queue.config.values();
+        assert_eq!(values.action_at_item_end, ActionAtItemEnd::Pause);
+        assert_eq!(values.playback_order, PlaybackOrder::Shuffle);
+        assert_eq!(values.crossfade_settings, crossfade);
+        assert_eq!(queue.player.crossfade_duration(), crossfade.duration);
     }
 
     #[kithara::test]
