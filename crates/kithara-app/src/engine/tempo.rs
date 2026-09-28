@@ -1,5 +1,5 @@
 use kithara::play::{PlayError, SessionError, Tempo};
-use tracing::error;
+use tracing::{debug, error};
 
 /// The session tempo the engine asks the Host for, and what the Host did
 /// with it.
@@ -29,8 +29,12 @@ impl HostTempo {
         }
     }
 
+    /// Asks for `target` from now on. What the Host accepted was read for
+    /// the old target, so the new one stays pending until an observation
+    /// made after the retarget shows it settled.
     pub(crate) const fn retarget(&mut self, target: Tempo) {
         self.target = target;
+        self.accepted = None;
         self.is_refused = false;
     }
 
@@ -61,15 +65,24 @@ impl HostTempo {
         (!self.is_refused && accepted != Some(self.target)).then_some(self.target)
     }
 
-    /// Takes in the Host's error to a tempo query or ask.
-    /// `TransportNotProcessed` — one commit held until the graph processed
-    /// it, or a route restart holding the session grid — leaves the target
-    /// for a later publish; any other error refuses it until it changes.
+    /// Takes in the Host's error to a tempo query or ask. The Host answers
+    /// for the transport, not for the tempo, when it holds one commit until
+    /// the graph processed it or a route restart holds the session grid
+    /// (`TransportNotProcessed`), when the render boundary rejected a commit
+    /// on its timing and the Host fell back to the processed transport
+    /// (`TransportCommitRejected`), or when its control was busy past the
+    /// bounded wait (`SyncControlBusy`): the target waits for a later
+    /// publish. Any other error refuses the target until it changes.
     pub(super) fn hear(&mut self, error: &PlayError) {
         if matches!(
             error,
-            PlayError::Session(SessionError::TransportNotProcessed)
+            PlayError::Session(
+                SessionError::TransportNotProcessed
+                    | SessionError::TransportCommitRejected
+                    | SessionError::SyncControlBusy
+            )
         ) {
+            debug!(target = ?self.target, %error, "Host takes the session tempo later");
             return;
         }
         error!(target = ?self.target, %error, "Host refused the session tempo");
@@ -173,20 +186,43 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_host_that_cannot_answer_yet_is_asked_again_on_a_later_publish() {
+    fn a_retarget_reads_pending_until_the_host_is_observed_again() {
         let mut tempo = HostTempo::new(bpm(120.0));
         assert_eq!(observe(&mut tempo, Some(120.0), Some(120.0)), None);
 
         tempo.retarget(bpm(124.0));
-        tempo.hear(&not_processed());
+        assert_eq!(
+            observe(&mut tempo, Some(120.0), Some(120.0)),
+            Some(bpm(124.0))
+        );
+        tempo.retarget(bpm(120.0));
         assert!(
             tempo.is_settling(),
-            "a route restart leaves the target waiting"
+            "the Host may have taken 124 since it was last observed"
         );
+        assert_eq!(
+            observe(&mut tempo, Some(124.0), Some(120.0)),
+            Some(bpm(120.0))
+        );
+    }
+
+    #[kithara::test]
+    #[case::held_or_restarting(SessionError::TransportNotProcessed)]
+    #[case::rejected_on_its_timing(SessionError::TransportCommitRejected)]
+    #[case::control_busy(SessionError::SyncControlBusy)]
+    fn a_host_answering_for_its_transport_is_asked_again_on_a_later_publish(
+        #[case] answer: SessionError,
+    ) {
+        let mut tempo = HostTempo::new(bpm(120.0));
+        assert_eq!(observe(&mut tempo, Some(120.0), Some(120.0)), None);
+
+        tempo.retarget(bpm(124.0));
+        tempo.hear(&PlayError::Session(answer));
+        assert!(tempo.is_settling(), "the target keeps waiting");
         assert_eq!(
             observe(&mut tempo, Some(120.0), Some(120.0)),
             Some(bpm(124.0)),
-            "the recovered Host is asked for the target"
+            "the Host is asked for the target again"
         );
     }
 
@@ -194,7 +230,9 @@ mod tests {
     fn a_refused_target_is_not_asked_for_again_until_the_target_changes() {
         let mut tempo = HostTempo::new(bpm(120.0));
         tempo.retarget(bpm(124.0));
-        tempo.hear(&PlayError::Session(SessionError::TransportCommitRejected));
+        tempo.hear(&PlayError::Session(
+            SessionError::TransportRevisionExhausted,
+        ));
 
         assert_eq!(observe(&mut tempo, Some(120.0), Some(120.0)), None);
         assert!(!tempo.is_pending(), "a refused target waits for nothing");
