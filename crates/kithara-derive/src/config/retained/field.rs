@@ -138,7 +138,7 @@ pub(super) fn expand(
             "classify each config field as value, nested, or skip = reason",
         )
     })?;
-    validate_role(field, &role, update, sdk, snapshot)?;
+    validate_role(field, &role, update, sdk, snapshot, &preserved)?;
     field.attrs = preserved;
     if !snapshot {
         return Ok(None);
@@ -189,6 +189,7 @@ fn validate_role(
     update: bool,
     sdk: bool,
     snapshot: bool,
+    preserved: &[syn::Attribute],
 ) -> Result<()> {
     if sdk && !matches!(role, Role::Value | Role::Projection(_)) {
         return Err(syn::Error::new_spanned(
@@ -214,7 +215,25 @@ fn validate_role(
             "construction inputs do not produce projected values",
         ));
     }
+    if update {
+        for attribute in preserved {
+            if patch_skips(attribute)? {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "runtime update cannot use patch(skip): the generated Patch field is absent",
+                ));
+            }
+        }
+    }
     Ok(())
+}
+
+fn patch_skips(attribute: &syn::Attribute) -> Result<bool> {
+    if !attribute.path().is_ident("patch") {
+        return Ok(false);
+    }
+    let options = attribute.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+    Ok(options.iter().any(|option| option.path().is_ident("skip")))
 }
 
 fn update_tokens(

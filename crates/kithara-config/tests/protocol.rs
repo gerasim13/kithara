@@ -31,6 +31,30 @@ impl Bounded {
     }
 }
 
+#[kithara::test]
+fn a_judged_update_commits_whole_or_not_at_all() {
+    let mut bounded = Bounded::default();
+    assert!(
+        bounded
+            .apply_update(BoundedUpdate {
+                level: BoundedLevelUpdate::Set { value: 7 },
+                ..BoundedUpdate::default()
+            })
+            .is_err()
+    );
+    assert_eq!(bounded.level(), 2);
+    assert_eq!(bounded.values().limit, Some(4));
+
+    bounded
+        .apply_update(BoundedUpdate {
+            level: BoundedLevelUpdate::Set { value: 7 },
+            limit: BoundedLimitUpdate::Clear,
+        })
+        .expect("a cleared limit admits any level");
+    assert_eq!(bounded.level(), 7);
+    assert_eq!(bounded.values().limit, None);
+}
+
 #[config]
 struct Session<'a> {
     #[config(skip = "borrowed construction resource")]
@@ -55,28 +79,4 @@ fn retained_values_are_owned_and_resources_stay_private() {
     assert_eq!(values.levels.level, 7);
     assert_eq!(values.levels.limit, None);
     assert_eq!(session.resource, "injected");
-}
-
-#[kithara::test]
-fn a_judged_update_commits_whole_or_not_at_all() {
-    let mut bounded = Bounded::default();
-    assert!(
-        bounded
-            .apply_update(BoundedUpdate {
-                level: BoundedLevelUpdate::Set { value: 7 },
-                ..BoundedUpdate::default()
-            })
-            .is_err()
-    );
-    assert_eq!(bounded.level(), 2);
-    assert_eq!(bounded.values().limit, Some(4));
-
-    bounded
-        .apply_update(BoundedUpdate {
-            level: BoundedLevelUpdate::Set { value: 7 },
-            limit: BoundedLimitUpdate::Clear,
-        })
-        .expect("a cleared limit admits any level");
-    assert_eq!(bounded.level(), 7);
-    assert_eq!(bounded.values().limit, None);
 }
