@@ -19,8 +19,7 @@ use kithara::{
         SourceError, SourcePhase, SourceProbe, Stream, StreamError, StreamResult, StreamType,
     },
 };
-
-use crate::memory_source::MemorySource;
+use kithara_integration_tests::memory_source::MemorySource;
 
 /// A reader parked on a range nobody will fetch: every blocking wait sits out
 /// its re-aim interval and reports the budget spent, and no bytes ever arrive.
