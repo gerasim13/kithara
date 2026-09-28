@@ -389,6 +389,7 @@ source = "git+https://github.com/example/firewheel#0000000"
 "#;
 
 pub(crate) const SIMILARITY_CONFIG_REL: &str = ".config/similarity.toml";
+pub(crate) const SIMILARITY_SCHEMA_VERSION: u32 = 3;
 pub(crate) const CONFIG_INSTALL_HINT: &str = "cargo install similarity-rs";
 
 /// Hands the run's repeat count to a lane that performs its own repeats.

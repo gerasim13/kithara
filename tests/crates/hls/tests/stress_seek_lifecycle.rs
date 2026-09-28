@@ -10,10 +10,9 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    TestTempDir, Xorshift64, abr_fast, auto,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, abr_fast, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     hls_test_helpers::pin_abr_variant,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -21,6 +20,7 @@ use kithara_test_fixtures::hls_fixtures::{
     hls_header_forty, hls_pcm_forty, hls_pcm_forty_descending, hls_pcm_forty_shifted,
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
+use kithara_test_utils::{TestTempDir, Xorshift64};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -97,7 +97,7 @@ async fn audio_server(
     hls_pcm_forty: Vec<u8>,
     hls_pcm_forty_descending: Vec<u8>,
     hls_pcm_forty_shifted: Vec<u8>,
-) -> HlsTestServer {
+) -> CreatedHls {
     let init_segment = Arc::new(hls_header_forty);
     let v0_pcm = Arc::new(hls_pcm_forty);
     let v1_pcm = Arc::new(hls_pcm_forty_descending);
@@ -115,31 +115,34 @@ async fn audio_server(
         "Test data generated"
     );
 
-    HlsTestServer::new(HlsTestServerConfig {
-        variant_count: consts::VARIANT_COUNT,
-        segments_per_variant: consts::SEGMENT_COUNT,
-        segment_size: consts::D.segment_size,
-        segment_duration_secs: segment_duration,
-        custom_data_per_variant: Some(vec![
-            Arc::clone(&v0_pcm),
-            Arc::clone(&v1_pcm),
-            Arc::clone(&v2_pcm),
-        ]),
-        init_data_per_variant: Some(vec![
-            Arc::clone(&init_segment),
-            Arc::clone(&init_segment),
-            Arc::clone(&init_segment),
-        ]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000, 500_000]),
-        delay_rules: vec![DelayRule {
-            variant: Some(0),
-            segment_gte: Some(3),
-            delay_ms: 500,
-            ..Default::default()
-        }],
-        ..Default::default()
-    })
-    .await
+    TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(consts::VARIANT_COUNT)
+                .segments_per_variant(consts::SEGMENT_COUNT)
+                .segment_size(consts::D.segment_size)
+                .segment_duration_secs(segment_duration)
+                .custom_data_per_variant(vec![
+                    Arc::clone(&v0_pcm),
+                    Arc::clone(&v1_pcm),
+                    Arc::clone(&v2_pcm),
+                ])
+                .init_data_per_variant(vec![
+                    Arc::clone(&init_segment),
+                    Arc::clone(&init_segment),
+                    Arc::clone(&init_segment),
+                ])
+                .variant_bandwidths(vec![5_000_000, 1_000_000, 500_000])
+                .delay_rules(vec![DelayRule {
+                    variant: Some(0),
+                    segment_gte: Some(3),
+                    delay_ms: 500,
+                    ..Default::default()
+                }]),
+        )
+        .await
+        .expect("create HLS fixture")
 }
 
 #[kithara::test(
@@ -154,14 +157,14 @@ async fn audio_server(
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
 async fn stress_seek_lifecycle_with_zero_reset(
-    #[future(awt)] audio_server: HlsTestServer,
+    #[future(awt)] audio_server: CreatedHls,
     #[case] ephemeral: bool,
     abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = audio_server;
-    let segment_duration = server.config().segment_duration_secs;
+    let segment_duration = server.spec().segment_duration_secs;
     let total_secs = segment_duration * consts::SEGMENT_COUNT as f64;
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     info!(%url, "HLS server ready");
 
     let temp_dir = TestTempDir::new();

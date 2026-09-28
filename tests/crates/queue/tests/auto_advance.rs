@@ -9,22 +9,21 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{
+        LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_loaded, asset_source,
+    },
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::assets;
 
-use crate::{
-    append_loaded,
-    bufpool_ext::TestPools,
-    loader_fixture::{source, wait_loaded},
-};
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const MAX_BLOCKS: usize = 1024;
 
-fn queue_config(harness: &OfflinePlayerHarness, duration: f32) -> QueueConfig<TestPools> {
+fn queue_config(harness: &OfflinePlayer, duration: f32) -> QueueConfig<TestPools> {
     QueueConfig::builder()
         .player(harness.take_player())
         .crossfade_settings(kithara::play::CrossfadeSettings {
@@ -61,12 +60,12 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 /// concatenated stereo-interleaved PCM.
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
-        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
+        let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         pcm.extend(block);
     }
@@ -77,7 +76,7 @@ async fn render_loop(
 async fn crossfade_started_requires_a_live_predecessor() {
     const CROSSFADE_SECS: f32 = 0.2;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
@@ -108,9 +107,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 
     let mut saw_playing = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await;
+        let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         let is_playing = queue.is_playing();
         saw_playing |= is_playing;
@@ -124,7 +121,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
     );
     assert!(!queue.is_playing(), "the predecessor must reach EOF");
     harness
-        .run(&queue, kithara::queue::QueueControl::tick)
+        .run(&queue, QueueControl::tick)
         .await
         .expect("process predecessor EOF");
 
@@ -151,7 +148,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 
 #[kithara::test(tokio)]
 async fn repeat_one_natural_advance_keeps_current_track() {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -191,7 +188,7 @@ async fn repeat_one_natural_advance_keeps_current_track() {
 /// transport is the explicit selection.
 #[kithara::test(tokio)]
 async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -222,7 +219,7 @@ async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
 
 #[kithara::test(tokio)]
 async fn repeat_all_natural_advance_wraps_last_track_to_first() {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -250,9 +247,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         })
     ));
     for _ in 0..MAX_BLOCKS {
-        let _ = harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await;
+        let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         if queue.current().is_some_and(|entry| entry.id == first) {
             break;
@@ -272,7 +267,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     const TRACK_A_VALUE: f32 = 0.10;
     const TRACK_B_VALUE: f32 = 0.80;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -344,7 +339,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     const TRACK_A_VALUE: f32 = 0.10;
     const TRACK_B_VALUE: f32 = 0.80;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
@@ -421,7 +416,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 
     const CROSSFADE_SECS: f32 = 0.2;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
@@ -447,9 +442,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     let mut item_end_seen = false;
 
     for _ in 0..MAX_BLOCKS {
-        let _ = harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await;
+        let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
 
         loop {
@@ -502,7 +495,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -535,7 +528,9 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("second select track A");
-    wait_loaded(&mut reload_events, id_a).await;
+    wait_for_loader_done_event(&mut reload_events, &queue, id_a, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("the fixture track loads");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -571,7 +566,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -592,9 +587,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 
     let mut saw_queue_ended = false;
     for _ in 0..MAX_BLOCKS {
-        let _ = harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await;
+        let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         loop {
             match rx.try_recv().map(|env| env.event) {
@@ -606,9 +599,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
         }
         if saw_queue_ended {
             for _ in 0..4 {
-                let _ = harness
-                    .run(&queue, kithara::queue::QueueControl::tick)
-                    .await;
+                let _ = harness.run(&queue, QueueControl::tick).await;
                 let _ = harness.render(BLOCK_FRAMES).await;
             }
             break;
@@ -644,7 +635,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     const LEVEL_B: f32 = 0.80;
     const LEVEL_C: f32 = 0.40;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
@@ -718,7 +709,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     harness.close().await;
 }
 
-async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPools> {
+async fn autoplay_queue(harness: &OfflinePlayer) -> QueueControl<TestPools> {
     harness
         .insert_control(Queue::new(
             QueueConfig::builder()
@@ -745,7 +736,7 @@ async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPool
 async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -770,7 +761,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
         })
         .child_url("throttled-a.wav")
         .to_string();
-    let source_b = source(&assets::constant_wav_loud_0_4s());
+    let source_b = asset_source(&assets::constant_wav_loud_0_4s());
     let (id_a, id_b) = harness
         .run(&queue, move |q| {
             (
@@ -779,13 +770,17 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
             )
         })
         .await;
-    wait_loaded(&mut events, id_b).await;
+    wait_for_loader_done_event(&mut events, &queue, id_b, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("the fixture track loads");
     assert_ne!(
         queue.track(id_a).map(|entry| entry.status),
         Some(TrackStatus::Loaded),
         "the throttled first track must still be loading when the second loads"
     );
-    wait_loaded(&mut events, id_a).await;
+    wait_for_loader_done_event(&mut events, &queue, id_a, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("the fixture track loads");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
 
@@ -819,7 +814,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
 async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_SECS: f64 = 0.4;
 
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),

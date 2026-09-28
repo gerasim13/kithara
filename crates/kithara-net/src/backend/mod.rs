@@ -11,16 +11,15 @@ pub(crate) mod host;
 pub use self::host::HttpClient;
 
 #[cfg(apple_backend)]
-#[path = "apple/mod.rs"]
-mod selected;
+mod apple;
 #[cfg(apple_backend)]
-pub use self::selected::HttpClient;
+pub use self::apple::HttpClient;
 
 #[cfg(reqwest_backend)]
-mod selected;
+mod reqwest;
 #[cfg(reqwest_backend)]
-pub use self::selected::HttpClient;
+pub use self::reqwest::HttpClient;
 #[cfg(reqwest_backend)]
-pub(crate) use self::selected::{
+pub(crate) use self::reqwest::{
     Client, RequestBuilder, Response, StatusCode, build_client, head_request, post_request,
 };

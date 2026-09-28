@@ -72,6 +72,8 @@ audio = [
     "kithara/tokio-rt-multi-thread",
     "kithara/warp",
 ]
+# Helpers used by `kithara-stream-tests`: the in-memory source only.
+stream = ["dep:kithara", "kithara/events", "kithara/platform", "kithara/storage", "kithara/stream"]
 # Browser targets deliberately name their closure instead of inheriting the
 # native default: native C++ decoder and stretch backends cannot compile there.
 wasm = [
@@ -115,17 +117,14 @@ usdt = ["dep:kithara", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara-derive = { workspace = true }
-kithara-encode = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "subscriber"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "http-server", "subscriber", "temp-dir"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
 
 # Async traits
 anyhow = { workspace = true }
-async-trait = { workspace = true }
 base64 = { workspace = true }
 
 # Misc

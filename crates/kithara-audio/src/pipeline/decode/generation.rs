@@ -21,14 +21,11 @@ use crate::pipeline::{
     seek::{ResumeState, SeekContext},
 };
 
-#[path = "generation_holdback.rs"]
-mod holdback;
-
 #[derive(Clone, Copy)]
-struct Holdback {
-    spec: AudioSpec,
-    join_frames: u64,
-    slots: usize,
+pub(super) struct Holdback {
+    pub(super) spec: AudioSpec,
+    pub(super) join_frames: u64,
+    pub(super) slots: usize,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -66,7 +63,7 @@ pub(crate) struct DecoderGeneration {
     seek_preparation: SeekPreparation,
     #[field(get, vis = "pub(crate)", copy)]
     gapless_profile: GaplessProfile,
-    gapless: GaplessStage,
+    pub(super) gapless: GaplessStage,
     #[field(get = is_finished, vis = "pub(crate)", copy)]
     finished: bool,
     /// The decoder consumed its source to the end while a variant transition
@@ -80,7 +77,7 @@ pub(crate) struct DecoderGeneration {
     /// before EOF finalizes.
     #[field(get = is_exhaustion_observed, vis = "pub(crate)", copy)]
     exhaustion_observed: bool,
-    holdback: Option<Holdback>,
+    pub(super) holdback: Option<Holdback>,
     /// Lower bound for the decoder's observed timeline gap after an exact
     /// variant splice. The overlap proof normalizes equal codec profiles to
     /// the larger gap; promotion transfers that normalization here so a later
@@ -89,7 +86,7 @@ pub(crate) struct DecoderGeneration {
     timeline_gap_floor: u64,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
-    staged: VecDeque<AudioChunk>,
+    pub(super) staged: VecDeque<AudioChunk>,
     #[cfg(test)]
     staged_scan_count: Cell<usize>,
     #[field(get, vis = "pub(crate)")]
@@ -128,6 +125,12 @@ impl DecoderGeneration {
             #[cfg(test)]
             staged_scan_count: Cell::new(0),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn record_staged_scan(&self) {
+        self.staged_scan_count
+            .set(self.staged_scan_count.get().saturating_add(1));
     }
 
     pub(crate) fn align_timeline_gap(&mut self, gap: u64) {
@@ -402,7 +405,7 @@ impl DecoderGeneration {
     }
 }
 
-fn chunk_range(chunk: &AudioChunk, spec: AudioSpec) -> Option<(u64, u64)> {
+pub(super) fn chunk_range(chunk: &AudioChunk, spec: AudioSpec) -> Option<(u64, u64)> {
     let channels = usize::from(spec.channels);
     if channels == 0 || chunk.spec() != spec || !chunk.samples.len().is_multiple_of(channels) {
         return None;
@@ -420,7 +423,7 @@ fn chunk_range(chunk: &AudioChunk, spec: AudioSpec) -> Option<(u64, u64)> {
     ))
 }
 
-fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFailure {
+pub(super) fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFailure {
     StageFailure {
         chunk,
         error: DecodeError::InvalidData { detail },

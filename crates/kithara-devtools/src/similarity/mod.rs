@@ -1,6 +1,7 @@
 mod analysis;
 mod behavior;
 mod catalog;
+mod chains;
 mod config;
 mod report;
 mod shape;

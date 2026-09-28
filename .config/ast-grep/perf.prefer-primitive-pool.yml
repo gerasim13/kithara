@@ -37,9 +37,12 @@ files:
 ignores:
   - crates/kithara-bufpool/**
   - crates/kithara-devtools/**
+  - crates/kithara-fixture-gen/**
+  - crates/kithara-fixture-media/**
   - crates/kithara-test-fixtures/**
   - crates/kithara-test-macros/**
   - crates/kithara-test-utils/**
+  - crates/kithara-ui-gallery/**
   - crates/kithara-workspace-hack/**
   - "**/tests/**"
   - "**/test_*.rs"

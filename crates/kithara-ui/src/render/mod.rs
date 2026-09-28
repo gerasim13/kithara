@@ -13,6 +13,8 @@ mod immediate;
 mod layer;
 #[cfg(feature = "masonry")]
 pub mod masonry;
+#[cfg(feature = "masonry")]
+mod masonry_widgets;
 pub mod model;
 mod owner;
 mod picker;
@@ -67,13 +69,6 @@ pub(crate) use {
         Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
         toggle_module, window,
     },
-};
-#[cfg(feature = "masonry")]
-pub(crate) use {
-    event::engine_value,
-    hosted::hosted_control_plan,
-    picker::PickerMenu,
-    window::{ControlsProgram, TitleProgram},
 };
 
 pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, Zoom, zoom_in, zoom_out};

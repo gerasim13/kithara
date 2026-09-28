@@ -62,7 +62,7 @@ fn compiles_micro_layout_end_to_end() {
     let ui = compile(
         "micro.klayout.ron",
         &resolver(),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -92,7 +92,7 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
                 write: Parameter(id: "mixer.xfade"),
             ))"#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Parameter,
         "mixer.xfade",
@@ -163,7 +163,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let ui = compile(
         "shader.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -191,7 +191,7 @@ fn malformed_shader_reports_the_resolved_source() {
     let error = compile(
         "shader.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -216,7 +216,7 @@ fn fs_main() -> @location(0) vec4<f32> {
 }
 "#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Telemetry,
         "player.output.levels",
@@ -256,7 +256,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         r#"(schema: "kithara.layout", version: 1, id: "bar",
             root: Module(instance: "bar", source: "bar.kmodule.ron"))"#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Telemetry,
         "engine.load",
@@ -321,7 +321,7 @@ fn vis_compiles_with_scalar_read_and_select_index_write() {
                 write: Parameter(id: "vis.preset"),
             ))"#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "vis.preset",
@@ -380,7 +380,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
                 write: Parameter(id: "vis.preset"),
             ))"#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "vis.preset",
@@ -447,7 +447,7 @@ fn table_accepts_arbitrary_text_columns() {
     compile(
         "table.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -463,7 +463,7 @@ fn a_column_list_may_arrive_as_an_include_parameter() {
         &parameterised_table_resolver(
             r#"[(id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true), (id: "note", label: "NOTE", style: Secondary, width: 200.0)]"#,
         ),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -479,7 +479,7 @@ fn a_parameterised_column_list_can_use_non_music_ids() {
         &parameterised_table_resolver(
             r#"[(id: "status", label: "STATUS", style: Badge, width: 80.0)]"#,
         ),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -503,7 +503,7 @@ fn table_compiles_typed_columns_and_optional_state_prefix() {
                 read: Model(id: "library.visible_tracks"),
             ))"##,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.table.columns.name",
@@ -567,7 +567,7 @@ fn a_table_column_label_resolves_through_the_catalog() {
     let ui = compile(
         "table.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -605,7 +605,7 @@ fn a_table_column_label_written_as_plain_text_stays_that_text() {
     let ui = compile(
         "table.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -642,7 +642,7 @@ fn a_table_column_naming_a_missing_key_is_a_compile_error() {
     let error = compile(
         "table.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -671,7 +671,7 @@ fn present_table_column_state_endpoint_must_be_bool() {
                 read: Model(id: "library.visible_tracks"),
             ))"#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.table.columns.name",
@@ -717,7 +717,7 @@ fn layout_module_size_override_wins_over_computed_size() {
     let ui = compile(
         "override.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -758,7 +758,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
     let ui = compile(
         "shell.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -833,7 +833,7 @@ fn module_footer_requires_a_text_read_endpoint() {
     let error = compile(
         "shell.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -863,7 +863,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
     let error = compile(
         "player.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -889,7 +889,7 @@ fn node_limit_is_enforced() {
     let error = compile(
         "micro.klayout.ron",
         &resolver(),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
@@ -918,7 +918,7 @@ fn layout_parameter_reference_is_unresolved() {
     let error = compile(
         "layout.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -951,7 +951,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
     let ui = compile(
         "literal.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -985,7 +985,7 @@ fn oversized_layout_source_is_rejected() {
     let error = compile(
         "large.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
@@ -1022,7 +1022,7 @@ fn fifty_empty_columns_exceed_node_limit() {
     let error = compile(
         "nested.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
@@ -1062,7 +1062,7 @@ fn knob_caption_is_document_text_and_optional() {
     let ui = compile(
         "knobs.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -1092,8 +1092,8 @@ fn knob_caption_is_document_text_and_optional() {
     assert_eq!(captions, vec![Some("LOW"), None]);
 }
 
-fn block_registry() -> crate::common::registry::TestRegistry {
-    let mut registry = crate::common::registry::player_registry();
+fn block_registry() -> kithara_ui::mock::TestRegistry {
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.block.hidden",
@@ -1282,61 +1282,43 @@ fn an_adaptive_measure_must_read_a_scalar() {
 }
 
 #[kithara::test]
-fn a_duplicate_block_id_is_rejected() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Knob(id: "low")),
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Knob(id: "high")),
-            ]))"#,
-    );
+#[case::two_blocks(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "low")),
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "high")),
+        ]))"#,
+    "eq"
+)]
+#[case::block_and_control(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "high")),
+            Knob(id: "low"),
+        ]))"#,
+    "low"
+)]
+#[case::controls_under_a_block(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Row(children: [
+                    Knob(id: "low"),
+                    Knob(id: "low"),
+                ])),
+        ]))"#,
+    "low"
+)]
+fn a_duplicate_id_in_a_module_is_rejected(#[case] module: &str, #[case] rejected: &str) {
+    let resolver = block_resolver(module);
 
     let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
 
     assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "eq"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn a_block_id_collides_with_a_control_id_in_the_same_module() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
-                    child: Knob(id: "high")),
-                Knob(id: "low"),
-            ]))"#,
-    );
-
-    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
-
-    assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn a_control_under_a_block_keeps_its_id_checked() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Row(children: [
-                        Knob(id: "low"),
-                        Knob(id: "low"),
-                    ])),
-            ]))"#,
-    );
-
-    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
-
-    assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low"),
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == rejected),
         "{error:?}"
     );
 }
@@ -1552,36 +1534,28 @@ fn an_optional_at_a_layout_root_is_rejected() {
 }
 
 #[kithara::test]
-fn an_optional_at_a_module_root_is_rejected() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                child: Knob(id: "low")))"#,
-    );
+#[case::at_the_module_root(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+            child: Knob(id: "low")))"#,
+    "eq"
+)]
+#[case::directly_under_an_optional(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "gain"))),
+        ]))"#,
+    "low"
+)]
+fn an_optional_is_rejected(#[case] module: &str, #[case] rejected: &str) {
+    let resolver = block_resolver(module);
 
     let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
 
     assert!(
-        matches!(&error, UiDocError::RootBlock { id, .. } if id == "eq"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn an_optional_directly_under_an_optional_is_rejected() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
-                        child: Knob(id: "gain"))),
-            ]))"#,
-    );
-
-    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
-
-    assert!(
-        matches!(&error, UiDocError::RootBlock { id, .. } if id == "low"),
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == rejected),
         "{error:?}"
     );
 }
@@ -1930,7 +1904,7 @@ fn compile_glyphs(resolver: &MemResolver) -> Result<CompiledUi, UiDocError> {
     compile(
         "menu.klayout.ron",
         resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2018,7 +1992,7 @@ fn one_template_reads_a_different_endpoint_per_include() {
                 Include(id: "two", source: "row.kmodule.ron", with: { "endpoint": "ui.prefs.autogain" }),
             ]))"#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     for id in ["ui.prefs.mono", "ui.prefs.autogain"] {
         registry.insert(
             EndpointCategory::Model,
@@ -2453,19 +2427,17 @@ fn stacked_round(index: usize) -> FrameCorners {
     *round
 }
 
+/// A module of a stacked split takes the window corners at its end of the
+/// stack, and a module between the ends stands at none.
 #[kithara::test]
-fn the_module_at_the_top_of_the_window_takes_the_top_corners() {
-    assert_eq!(stacked_round(0), FrameCorners::ALL.top());
-}
-
-#[kithara::test]
-fn the_module_at_the_bottom_of_the_window_takes_the_bottom_corners() {
-    assert_eq!(stacked_round(2), FrameCorners::ALL.bottom());
-}
-
-#[kithara::test]
-fn a_module_between_the_ends_of_a_split_stands_at_no_window_corner() {
-    assert_eq!(stacked_round(1), FrameCorners::EMPTY);
+#[case::top(0, FrameCorners::ALL.top())]
+#[case::middle(1, FrameCorners::EMPTY)]
+#[case::bottom(2, FrameCorners::ALL.bottom())]
+fn a_stacked_module_takes_the_window_corners_at_its_end(
+    #[case] index: usize,
+    #[case] corners: FrameCorners,
+) {
+    assert_eq!(stacked_round(index), corners);
 }
 
 #[kithara::test]
@@ -2493,7 +2465,7 @@ fn a_document_draws_from_the_pools_its_configuration_carries() {
     let ui = compile(
         "micro.klayout.ron",
         &resolver(),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &config,
@@ -2514,7 +2486,7 @@ fn a_document_compiled_after_the_first_joins_the_same_family() {
         compile(
             "micro.klayout.ron",
             &resolver(),
-            &crate::common::registry::player_registry(),
+            &kithara_ui::mock::player_registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             &config,
@@ -2550,7 +2522,7 @@ fn stage_resolver(children: &str) -> MemResolver {
 }
 
 fn compile_stage(children: &str) -> Result<CompiledUi, UiDocError> {
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "scene.at",
@@ -2670,7 +2642,7 @@ fn a_placement_outside_a_stage_is_rejected() {
     let error = compile(
         "scene.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2728,7 +2700,7 @@ fn tabbed_error(tabs: &str) -> UiDocError {
     compile(
         "tabbed.klayout.ron",
         &tabbed(tabs),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2744,7 +2716,7 @@ fn a_tabs_compiles_the_page_it_stands_at() {
     let ui = compile(
         "tabbed.klayout.ron",
         &tabbed(TABS),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2828,7 +2800,7 @@ fn a_page_binding_reads_whether_its_page_stands() {
     let ui = compile(
         "tabbed.klayout.ron",
         &tabbed(TABS),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2893,7 +2865,7 @@ fn a_page_may_be_a_split_of_modules() {
                 "two": Module(instance: "two", source: "two.kmodule.ron"),
             })"#,
         ),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -2928,7 +2900,7 @@ fn two_pages_may_name_the_same_instance() {
                 "two": Module(instance: "body", source: "two.kmodule.ron"),
             })"#,
         ),
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

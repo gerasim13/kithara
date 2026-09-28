@@ -182,7 +182,7 @@ impl Frame {
 /// (`wait_range` / `range_ready` / `read_at`) loads it without taking the
 /// lock — closing the contended frame-lock spin the `rtsan` lane flagged on the
 /// decode core.
-pub(super) struct Layout {
+pub(in crate::variant) struct Layout {
     /// Immutable published geometry. Readers `load` it lock-free and
     /// allocation-free; writers swap in a fresh `Arc<Frame>` under `write_lock`.
     frame: ArcSwap<Frame>,
@@ -205,7 +205,7 @@ pub(super) struct Layout {
 }
 
 impl Layout {
-    pub(super) fn new(init_size: u64, segments: &[Segment]) -> Self {
+    pub(in crate::variant) fn new(init_size: u64, segments: &[Segment]) -> Self {
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
         let mut frame = Frame {
             byte_shift: 0,
@@ -230,12 +230,16 @@ impl Layout {
     /// the post-store `init_size` to seed the recompute — so a reader never
     /// observes a new size against a stale offset table. The store runs under
     /// `write_lock` so it serializes with the frame mutation.
-    pub(super) fn apply_commit(&self, segments: &[Segment], store: impl FnOnce() -> u64) {
+    pub(in crate::variant) fn apply_commit(
+        &self,
+        segments: &[Segment],
+        store: impl FnOnce() -> u64,
+    ) {
         self.apply_commit_with(segments, store, || {});
     }
 
     #[cfg(test)]
-    pub(super) fn apply_commit_before_publish(
+    pub(in crate::variant) fn apply_commit_before_publish(
         &self,
         segments: &[Segment],
         store: impl FnOnce() -> u64,
@@ -278,7 +282,7 @@ impl Layout {
     /// settles this type cannot see. A shifted/shrunk/size-incomplete
     /// frame returns `false` — cross-variant and partial-download seeks
     /// keep their reset.
-    pub(super) fn is_canonical_complete(&self, segments: &[Segment]) -> bool {
+    pub(in crate::variant) fn is_canonical_complete(&self, segments: &[Segment]) -> bool {
         if !self.sizes_complete.load(Ordering::Acquire) {
             return false;
         }
@@ -315,7 +319,7 @@ impl Layout {
         self.finish_publication();
     }
 
-    pub(super) fn natural_offset(&self, idx: usize) -> Option<u64> {
+    pub(in crate::variant) fn natural_offset(&self, idx: usize) -> Option<u64> {
         self.frame.load().offsets.get(idx).copied()
     }
 
@@ -335,7 +339,7 @@ impl Layout {
     /// caller applies size stores deferred while the old byte space was
     /// live (see `HlsVariant::apply_commit`) and returns the post-store
     /// `init_size`, so the fresh frame and those sizes publish atomically.
-    pub(super) fn reset(&self, segments: &[Segment], store: impl FnOnce() -> u64) {
+    pub(in crate::variant) fn reset(&self, segments: &[Segment], store: impl FnOnce() -> u64) {
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
         self.mutate_frame(segments, store, |frame, init_size| {
             frame.byte_shift = 0;
@@ -355,21 +359,24 @@ impl Layout {
     /// Lock-free `sizes_complete` read for the produce-core EOF gates. `false`
     /// means at least one served segment's size is still unknown, so
     /// [`Self::total_bytes`] is a lower bound and must not mint EOF.
-    pub(super) fn sizes_complete(&self) -> bool {
+    pub(in crate::variant) fn sizes_complete(&self) -> bool {
         self.sizes_complete.load(Ordering::Acquire)
     }
 
     /// Lock-free `total_bytes` read for the produce-core. Returns the value
     /// published by the most recent write-lock mutation — never takes the
     /// frame lock, so it cannot spin on a concurrent activation/commit.
-    pub(super) fn total_bytes(&self) -> u64 {
+    pub(in crate::variant) fn total_bytes(&self) -> u64 {
         self.total.load(Ordering::Acquire)
     }
 
     /// Run one lock-free read against a stable layout publication. A writer
     /// in progress or a publication change returns `None`; callers keep their
     /// metadata gate closed and retry on the next tick.
-    pub(super) fn try_published<T>(&self, read: impl FnOnce() -> Option<T>) -> Option<T> {
+    pub(in crate::variant) fn try_published<T>(
+        &self,
+        read: impl FnOnce() -> Option<T>,
+    ) -> Option<T> {
         let before = self.publication_seq.load(Ordering::Acquire);
         if before & 1 != 0 {
             return None;
@@ -382,17 +389,17 @@ impl Layout {
 
     delegate::delegate! {
         to self.frame.load() {
-            pub(super) fn bisect_left(&self, byte: u64) -> usize;
+            pub(in crate::variant) fn bisect_left(&self, byte: u64) -> usize;
             #[call(find_virtual)]
-            pub(super) fn find_at_offset(
+            pub(in crate::variant) fn find_at_offset(
                 &self,
                 byte_virtual: u64,
                 segments: &[Segment],
             ) -> Option<(u32, u64, u64)>;
-            pub(super) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)>;
-            pub(super) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
+            pub(in crate::variant) fn find_natural(&self, byte: u64, segments: &[Segment]) -> Option<(u32, u64, u64)>;
+            pub(in crate::variant) fn segment_byte_offset(&self, idx: u32) -> Option<u64>;
             #[field]
-            pub(super) fn served_from(&self) -> u32;
+            pub(in crate::variant) fn served_from(&self) -> u32;
         }
     }
 }

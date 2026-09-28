@@ -9,7 +9,6 @@ use kithara_drm::DecryptContext;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::{StreamResult, needs_exact_byte_sizes};
 
-use super::{HlsVariant, PlanCtx};
 use crate::{
     HlsResult, consts,
     handle::ResourceHandle,
@@ -18,13 +17,14 @@ use crate::{
         Downloading, FetchClaim, InitSegment, Segment, SegmentContent, SegmentSize,
         SegmentSlotState,
     },
+    variant::{HlsVariant, PlanCtx},
 };
 
 impl<S> HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(super) fn build_init_cmd(
+    pub(in crate::variant) fn build_init_cmd(
         self: &Arc<Self>,
         ctx: &PlanCtx<S>,
         handle: FetchClaim<Downloading, S>,
@@ -62,7 +62,7 @@ where
     /// expects `ftyp` ("`re_mp4`: ftyp not found") or wedges with no progress. `None`
     /// is the old `VariantInit::NotApplicable`: no `#EXT-X-MAP`, or a
     /// byte-range-embedded init living in segment 0's byte range.
-    pub(super) fn build_init_entry(
+    pub(in crate::variant) fn build_init_entry(
         playlist_state: &PlaylistState,
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
@@ -91,7 +91,7 @@ where
 
     /// Committed on-disk length of the (separately fetched) init segment, as
     /// [`committed_final_len`](Self::committed_final_len) for media.
-    pub(super) fn init_committed_final_len(&self) -> Option<u64> {
+    pub(in crate::variant) fn init_committed_final_len(&self) -> Option<u64> {
         self.segments
             .init
             .as_ref()?
@@ -99,14 +99,14 @@ where
     }
 
     /// Whether every byte in `range` is present on disk for the init segment.
-    pub(super) fn init_contains(&self, range: Range<u64>) -> bool {
+    pub(in crate::variant) fn init_contains(&self, range: Range<u64>) -> bool {
         self.segments
             .init
             .as_ref()
             .is_some_and(|seg| seg.size().is_exact() && seg.contains(&self.segments.scope, range))
     }
 
-    pub(super) fn init_downloading(&self) -> bool {
+    pub(in crate::variant) fn init_downloading(&self) -> bool {
         self.segments
             .init
             .as_ref()
@@ -124,7 +124,7 @@ where
     /// Read `range` of the init segment into `dst` via the [`Segment`]
     /// cascade. `Ok(None)` when there is no init or its bytes are not on disk
     /// yet.
-    pub(super) fn init_read_at(
+    pub(in crate::variant) fn init_read_at(
         &self,
         range: Range<u64>,
         dst: &mut [u8],
@@ -152,7 +152,7 @@ where
     /// Whether the next dispatch should issue the separate init fetch
     /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
     /// non-zero init segment that hasn't been loaded yet.
-    pub(super) fn needs_init_fetch(&self) -> bool {
+    pub(in crate::variant) fn needs_init_fetch(&self) -> bool {
         self.segments
             .init
             .as_ref()
@@ -169,7 +169,7 @@ where
             /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
             /// atom. `None` for a variant with no separate init.
             #[call(as_ref)]
-            pub(super) const fn init(&self) -> Option<&Segment>;
+            pub(in crate::variant) const fn init(&self) -> Option<&Segment>;
             /// Narrow disk handle for the variant's separately fetched init segment,
             /// or `None` for a variant with no `#EXT-X-MAP` init.
             #[expr(Some($?.resource(&self.segments.scope)))]
@@ -177,7 +177,7 @@ where
             fn init_handle(&self) -> Option<ResourceHandle<'_, S>>;
             #[expr($.map_or(0, Segment::len))]
             #[call(as_ref)]
-            pub(super) fn init_route_size(&self) -> u64;
+            pub(in crate::variant) fn init_route_size(&self) -> u64;
             #[expr($.map_or(0, Segment::read_len))]
             #[call(as_ref)]
             pub(crate) fn init_size(&self) -> u64;

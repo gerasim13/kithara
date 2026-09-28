@@ -84,21 +84,7 @@ fn analyze_source_with_config(
     analyze_sources(&[(path.to_string(), source.to_string())], config, false)
 }
 
-pub(super) fn analyze_files(
-    paths: &[(String, std::path::PathBuf)],
-    config: &SimilarityConfig,
-    include_tests: bool,
-) -> Result<AnalysisReport> {
-    let mut sources = Vec::with_capacity(paths.len());
-    for (relative, path) in paths {
-        let source = std::fs::read_to_string(path)
-            .with_context(|| format!("read Rust source for similarity: {}", path.display()))?;
-        sources.push((relative.clone(), source));
-    }
-    analyze_sources(&sources, config, include_tests)
-}
-
-fn analyze_sources(
+pub(super) fn analyze_sources(
     sources: &[(String, String)],
     config: &SimilarityConfig,
     include_tests: bool,

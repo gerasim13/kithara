@@ -2,13 +2,13 @@ use kithara_bufpool::HasPool;
 use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
 use tracing::trace;
 
-use super::{HlsVariant, probe::SizeDemand};
-use crate::segment::PlannedFetch;
+use super::probe::SizeDemand;
+use crate::{segment::PlannedFetch, variant::HlsVariant};
 
 #[derive(Clone, Copy)]
-pub(super) struct ExactSeekDemand {
-    pub(super) segment: u32,
-    pub(super) anchor: u64,
+pub(in crate::variant) struct ExactSeekDemand {
+    pub(in crate::variant) segment: u32,
+    pub(in crate::variant) anchor: u64,
 }
 
 impl<S> HlsVariant<S>
@@ -29,18 +29,18 @@ where
     }
 
     /// RT-reachable: a lock-free, alloc-free store of the none sentinel.
-    pub(super) fn clear_exact_byte_seek(&self) {
+    pub(in crate::variant) fn clear_exact_byte_seek(&self) {
         self.seek.exact_byte_seek.store(None);
     }
 
-    pub(super) fn clear_exact_seek(&self) {
+    pub(in crate::variant) fn clear_exact_seek(&self) {
         self.seek.exact_seek.clear();
     }
 
     /// Keeps the demand live until the reader moves, since a committed body may revise an
     /// already-exact prefix size and every metadata poll must be able to refresh this projection
     /// before the first byte is consumed.
-    pub(super) fn complete_exact_seek_if_ready(&self) {
+    pub(in crate::variant) fn complete_exact_seek_if_ready(&self) {
         let Some(entry) = self.seek.exact_seek.load() else {
             return;
         };
@@ -69,7 +69,7 @@ where
         }
     }
 
-    pub(super) fn exact_byte_metadata_phase(&self) -> Option<SourcePhase> {
+    pub(in crate::variant) fn exact_byte_metadata_phase(&self) -> Option<SourcePhase> {
         let byte = self.seek.exact_byte_seek.load()?;
         if self.exact_byte_position_ready(byte) {
             self.clear_exact_byte_seek();
@@ -120,7 +120,7 @@ where
             .is_some_and(|prefix| prefix.iter().all(|segment| segment.size().is_exact()))
     }
 
-    pub(super) fn exact_seek_metadata_phase(&self) -> Option<SourcePhase> {
+    pub(in crate::variant) fn exact_seek_metadata_phase(&self) -> Option<SourcePhase> {
         self.seek.exact_seek.load()?;
         self.complete_exact_seek_if_ready();
         let entry = self.seek.exact_seek.load()?;
@@ -191,7 +191,7 @@ where
         }
     }
 
-    pub(super) fn set_exact_byte_seek_demand(&self, byte: u64) {
+    pub(in crate::variant) fn set_exact_byte_seek_demand(&self, byte: u64) {
         if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
             || self.all_sizes_complete()
         {
@@ -209,7 +209,7 @@ where
     /// Skips registering an exact-size demand when the container resolves ranges by segment index,
     /// or every served size and the init are already exact, avoiding an unnecessary O(prefix)
     /// re-scan.
-    pub(super) fn set_exact_seek_demand(&self, anchor: u64, segment: u32) {
+    pub(in crate::variant) fn set_exact_seek_demand(&self, anchor: u64, segment: u32) {
         if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
             || self.all_sizes_complete()
         {

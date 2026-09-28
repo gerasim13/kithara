@@ -1,4 +1,4 @@
-use std::{fs, path::Path, process};
+use std::{fmt::Write as _, fs, path::Path, process};
 
 use anyhow::{Context, Result, bail};
 use reqwest::{
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::profile::{LinuxHost, LinuxRunner, WindowsGuest};
-use crate::consts;
+use crate::{ci::cache::client_environment, consts};
 
 #[derive(Deserialize)]
 struct Registration {
@@ -86,10 +86,35 @@ pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path)
 
     write_secret(
         env_file,
-        &format!("ACTIONS_RUNNER_JITCONFIG={}\n", config.encoded_jit_config),
+        &runtime_environment(runner, &config.encoded_jit_config)?,
     )?;
     info!(runner = runner.name, "runner configuration written");
     Ok(())
+}
+
+/// Everything a runner's container starts with that is not the same for every
+/// runner: its registration, its trust scope, and its scope's store.
+///
+/// The store's host file is read and completed here, on every start, rather
+/// than handed to docker as it is. A host file predates any key added after it
+/// was written, and the defaults for those keys live in this binary, so a
+/// container started from the raw file would miss them. Compose starts the
+/// same container from this file, so it gets the same store and scope.
+fn runtime_environment(runner: &LinuxRunner, jit_config: &str) -> Result<String> {
+    let mut contents = format!(
+        "ACTIONS_RUNNER_JITCONFIG={jit_config}\nKITHARA_CACHE_TRUST={}\n",
+        runner.cache_trust.as_str()
+    );
+    let store = client_environment(&runner.sccache_s3_env_file).with_context(|| {
+        format!(
+            "reading the S3 cache environment for Linux runner {}",
+            runner.name
+        )
+    })?;
+    for (name, value) in store {
+        writeln!(contents, "{name}={value}")?;
+    }
+    Ok(contents)
 }
 
 /// Mint the token a machine registers itself with, once.
@@ -219,7 +244,72 @@ fn write_secret(path: &Path, contents: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Registration, is_prunable};
+    use super::{Registration, is_prunable, runtime_environment};
+    use crate::{
+        ci::{environment::CacheTrust, host::linux::profile::tests::host_fixture},
+        consts,
+    };
+
+    /// The shape every Linux host file had: written before the prefix existed.
+    fn host_store(directory: &std::path::Path) -> std::path::PathBuf {
+        let path = directory.join("cache.env");
+        std::fs::write(
+            &path,
+            "SCCACHE_BUCKET=kithara-review\nSCCACHE_ENDPOINT=http://kithara-ci-cache:9000\n\
+             SCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\n\
+             AWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
+        )
+        .expect("write the host store");
+        super::super::permissions::set_mode(&path, consts::OWNER_ONLY)
+            .expect("restrict the host store");
+        path
+    }
+
+    /// A container starts from what its host file says and what this binary
+    /// fills in, so a host file that predates a key still yields it.
+    #[test]
+    fn a_runner_starts_with_its_completed_store() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut host = host_fixture();
+        host.runners[0].sccache_s3_env_file = host_store(directory.path());
+
+        let contents =
+            runtime_environment(&host.runners[0], "jit").expect("the environment must render");
+
+        for line in [
+            "ACTIONS_RUNNER_JITCONFIG=jit",
+            "SCCACHE_BUCKET=kithara-review",
+            "SCCACHE_S3_KEY_PREFIX=sccache",
+            "AWS_SECRET_ACCESS_KEY=secret",
+        ] {
+            assert!(
+                contents.lines().any(|entry| entry == line),
+                "{line}:\n{contents}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trusted_runner_marks_only_its_own_job_as_trusted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut host = host_fixture();
+        let store = host_store(directory.path());
+        for runner in &mut host.runners {
+            runner.sccache_s3_env_file.clone_from(&store);
+        }
+        host.runners[0].cache_trust = CacheTrust::Trusted;
+        host.runners[1].cache_trust = CacheTrust::Review;
+
+        let trusted = runtime_environment(&host.runners[0], "jit").unwrap();
+        let review = runtime_environment(&host.runners[1], "jit").unwrap();
+
+        assert!(
+            trusted.contains("KITHARA_CACHE_TRUST=trusted\n"),
+            "{trusted}"
+        );
+        assert!(review.contains("KITHARA_CACHE_TRUST=review\n"), "{review}");
+        assert!(!review.contains("KITHARA_CACHE_TRUST=trusted"), "{review}");
+    }
 
     fn runner(status: &str, busy: bool) -> Registration {
         Registration {

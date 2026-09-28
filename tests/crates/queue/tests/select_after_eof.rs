@@ -11,11 +11,11 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
-    offline::{OfflinePlayerHarness, mean_abs, offline_queue_fixture},
+    offline::{OfflinePlayer, append_loaded, offline_queue_fixture},
 };
-use kithara_test_fixtures::assets;
+use kithara_test_fixtures::{assets, signal::mean_abs};
 
-use crate::{bufpool_ext::TestPools, loader_fixture::append_loaded};
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -54,7 +54,7 @@ async fn wait_for_eof_advance(events: &mut EventReceiver<QueueEvent>, id: TrackI
 /// select, because the event is edge-triggered and never repeats.
 async fn wait_for_current_track(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     events: &mut EventReceiver<QueueEvent>,
     id: TrackId,
 ) {
@@ -91,12 +91,12 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(block_budget * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..block_budget {
-        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
+        let _ = harness.run(queue, QueueControl::tick).await;
         pcm.extend(harness.render(BLOCK_FRAMES).await);
     }
     pcm
@@ -189,11 +189,7 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
     let id_b = append_loaded(&harness, &queue, &source_b).await;
 
     match initial_start {
-        InitialStart::Play => {
-            harness
-                .run(&queue, kithara::queue::QueueControl::play)
-                .await
-        }
+        InitialStart::Play => harness.run(&queue, QueueControl::play).await,
         InitialStart::Select => harness
             .run(&queue, move |q| q.select(id_a, Transition::None))
             .await
@@ -248,9 +244,7 @@ async fn play_button_marks_current_loaded_track_consumed() {
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let _id_b = append_loaded(&harness, &queue, &source_b).await;
 
-    harness
-        .run(&queue, kithara::queue::QueueControl::play)
-        .await;
+    harness.run(&queue, QueueControl::play).await;
     let _ = render_loop(&queue, &harness, 8).await;
 
     assert_eq!(

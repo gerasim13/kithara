@@ -17,12 +17,14 @@ use kithara_storage::ResourceStatus;
 use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, StreamError, StreamResult};
 
 use super::{
-    cas_anchor::CasAnchorCell,
-    offsets::Layout,
-    plan_queue::PlanQueue,
-    probe::SizeDemandState,
+    flow::{
+        cas_anchor::CasAnchorCell,
+        plan_queue::PlanQueue,
+        probe::SizeDemandState,
+        seqlock::{AtomicOptU64, AtomicSeekAlias},
+    },
+    map::offsets::Layout,
     reader_runtime::ReaderRuntime,
-    seqlock::{AtomicOptU64, AtomicSeekAlias},
 };
 use crate::{
     HlsError, HlsEvent, HlsResult,

@@ -1,17 +1,16 @@
 //! Hostile custom layout output must be rejected at the scope/key boundary.
 
-#[cfg(all(test, target_os = "android"))]
-use kithara_test_dylib as _;
-
-#[path = "support/pools.rs"]
-mod support;
-
 use kithara_assets::{
     AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, AssetsError,
     StorageBackend,
 };
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_test_utils::{bufpool::TestPools, kithara};
+#[cfg(all(test, target_os = "android"))]
+use kithara_test_dylib as _;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 use tempfile::tempdir;
 use url::Url;
 
@@ -43,7 +42,7 @@ fn source() -> AssetSource {
 fn store(layout: HostileLayout) -> (tempfile::TempDir, AssetStore<TestPools>) {
     let dir = tempdir().expect("test cache directory");
     let layouts = AssetLayoutRegistry::default().with::<HostileProtocol>(Arc::new(layout));
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })

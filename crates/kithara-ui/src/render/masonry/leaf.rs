@@ -38,7 +38,7 @@ use crate::{
     solve::{Length, Size},
 };
 
-pub(super) enum Leaf {
+pub(in crate::render) enum Leaf {
     Empty,
     Control(Box<dyn MasonryControl>),
     Text {
@@ -65,7 +65,7 @@ pub(super) enum Leaf {
 /// The two leaves that need nothing but the size they were declared at.
 impl<Action> MasonryNode<Action> {
     /// A leaf that paints and handles the pointer itself.
-    pub(super) fn control_leaf(
+    pub(in crate::render) fn control_leaf(
         control: impl MasonryControl + 'static,
         declared: Size<Length>,
     ) -> Self {
@@ -80,7 +80,7 @@ impl<Action> MasonryNode<Action> {
     }
 
     /// A leaf that occupies its declared size and paints nothing.
-    pub(super) fn empty(declared: Size<Length>) -> Self {
+    pub(in crate::render) fn empty(declared: Size<Length>) -> Self {
         Self::document(
             NodeLayout::Leaf(Leaf::Empty),
             declared,
@@ -318,17 +318,17 @@ impl Leaf {
 /// One face a run of text shows: the role it is dressed in, and the colour that
 /// role resolves to.
 #[derive(Clone, Copy)]
-pub(super) struct TextFace {
-    pub(super) color: Rgba,
-    pub(super) role: TextRoleSkin,
+pub(in crate::render) struct TextFace {
+    pub(in crate::render) color: Rgba,
+    pub(in crate::render) role: TextRoleSkin,
 }
 
 /// The two faces a run of text shows, where the document named a flag to choose
 /// between them.
 #[derive(Clone, Copy)]
-pub(super) struct TextFaces {
-    pub(super) idle: TextFace,
-    pub(super) lit: TextFace,
+pub(in crate::render) struct TextFaces {
+    pub(in crate::render) idle: TextFace,
+    pub(in crate::render) lit: TextFace,
 }
 
 fn text_x(align: TextAlign, bounds: Rect, width: f32, padding_x: f32) -> f32 {

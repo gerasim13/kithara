@@ -132,3 +132,15 @@ pub(crate) const CHUNK_PAIRS: usize = 64;
 ))]
 #[cfg(test)]
 pub(crate) const LAG_FRAMES: u64 = 16 * 1024;
+
+/// Span the speed smoother measures its settle threshold against: the range
+/// a playback speed realistically travels over, from a heavy stretch back to
+/// unity and a little past it. The smoother reads it as a scale, not a bound,
+/// so a speed outside it still smooths — it just settles on the same relative
+/// terms as one inside.
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+pub(crate) const SPEED_SMOOTHING_SPAN: f32 = 2.0;

@@ -8,7 +8,7 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, NotReadyCause, PendingReason, SourcePhase,
     StreamPending,
 };
-use kithara_test_fixtures::assets::rhythm_mp3_deck_a_120bpm_48k;
+use kithara_test_fixtures::{assets::rhythm_mp3_deck_a_120bpm_48k, signal::rms};
 use kithara_test_utils::kithara;
 
 use super::{DecoderBackend, DecoderConfig, DecoderFactory};
@@ -84,7 +84,7 @@ impl Decoded {
         (first..)
             .map(|beat| beat * consts::BEAT_FRAMES + half)
             .take_while(|window| window + consts::BEAT_FRAMES <= to)
-            .map(|window| rms(&self.mono[window - self.start..][..consts::BEAT_FRAMES]))
+            .map(|window| f64::from(rms(&self.mono[window - self.start..][..consts::BEAT_FRAMES])))
             .collect()
     }
 
@@ -93,7 +93,7 @@ impl Decoded {
         let levels: Vec<f64> = self
             .mono
             .chunks_exact(consts::ONSET_WINDOW_FRAMES)
-            .map(rms)
+            .map(|window| f64::from(rms(window)))
             .collect();
         let threshold = levels.iter().copied().fold(0.0_f64, f64::max) / 2.0;
         levels
@@ -103,15 +103,6 @@ impl Decoded {
             .map(|(index, _)| self.start + (index + 1) * consts::ONSET_WINDOW_FRAMES)
             .collect()
     }
-}
-
-fn rms(samples: &[f32]) -> f64 {
-    let energy: f64 = samples
-        .iter()
-        .map(|&sample| f64::from(sample).powi(2))
-        .sum();
-    let count = f64::from(u32::try_from(samples.len()).expect("window length fits u32"));
-    (energy / count).sqrt()
 }
 
 fn mp3() -> MediaInfo {

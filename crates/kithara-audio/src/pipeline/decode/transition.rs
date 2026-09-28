@@ -1,6 +1,3 @@
-#[path = "transition_promotion.rs"]
-mod promotion;
-
 use std::num::NonZeroU32;
 
 use kithara_decode::DecoderChunkOutcome;
@@ -71,20 +68,20 @@ pub(crate) enum OutgoingFrontier {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct PreparedPromotion {
-    generation: DecoderGeneration,
-    join: PromotionJoin,
+    pub(super) generation: DecoderGeneration,
+    pub(super) join: PromotionJoin,
     #[field(get, vis = "pub(crate)", copy)]
-    transition: VariantTransition,
+    pub(super) transition: VariantTransition,
 }
 
 #[derive(Clone, Copy)]
-struct PromotionSpan {
-    overlap: OverlapSpan,
-    join: PromotionJoin,
+pub(super) struct PromotionSpan {
+    pub(super) overlap: OverlapSpan,
+    pub(super) join: PromotionJoin,
 }
 
 #[derive(Clone, Copy)]
-enum PromotionReadiness {
+pub(super) enum PromotionReadiness {
     Ready(PromotionSpan),
     NeedIncoming,
     AwaitingOutgoingFrontier,
@@ -92,7 +89,7 @@ enum PromotionReadiness {
 }
 
 #[derive(Clone, Copy)]
-enum PromotionJoin {
+pub(super) enum PromotionJoin {
     HardCut,
     Blend {
         frames: u64,
@@ -102,7 +99,7 @@ enum PromotionJoin {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct OverlapSpan {
+pub(super) struct OverlapSpan {
     incoming_first: u64,
     incoming_next: u64,
 }
@@ -490,7 +487,7 @@ impl super::core::ActiveDecode {
 
 /// Nothing exists past the cut on either side here: the outgoing ran out of source at the frontier,
 /// and the incoming ran out at or before it.
-fn promotion_readiness(
+pub(super) fn promotion_readiness(
     active: &DecoderGeneration,
     blender: &GaplessBlender,
     generation: &DecoderGeneration,
@@ -800,7 +797,7 @@ fn timeline_spec(sample_rate: u32) -> Option<AudioSpec> {
     NonZeroU32::new(sample_rate).map(|sample_rate| AudioSpec::new(1, sample_rate))
 }
 
-fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) -> bool {
+pub(super) fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) -> bool {
     let mut remaining = overlap.incoming_next.saturating_sub(overlap.incoming_first);
     if remaining == 0 {
         return generation.has_output();
@@ -816,7 +813,7 @@ fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) ->
     generation.has_output()
 }
 
-fn incoming_origin(
+pub(super) fn incoming_origin(
     active: &DecoderGeneration,
     incoming: &DecoderGeneration,
     mode: kithara_decode::GaplessMode,
@@ -855,7 +852,7 @@ fn incoming_origin_from(
     origin
 }
 
-fn shares_default_profile(
+pub(super) fn shares_default_profile(
     active: kithara_decode::GaplessProfile,
     incoming: kithara_decode::GaplessProfile,
 ) -> bool {

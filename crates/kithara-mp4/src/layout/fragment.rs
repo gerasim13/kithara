@@ -205,7 +205,3 @@ fn audio_track_timescale(mp4: &Mp4) -> Option<u32> {
         })
         .map(|trak| trak.mdia.mdhd.timescale)
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

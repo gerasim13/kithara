@@ -2,7 +2,7 @@ use kithara_assets::ResourceKey;
 use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 
-use super::HlsVariant;
+use crate::variant::HlsVariant;
 
 impl<S> HlsVariant<S>
 where

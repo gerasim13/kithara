@@ -5,7 +5,7 @@ use kithara_platform::time::Duration;
 use kithara_stream::{SegmentDescriptor, SourceError, StreamError, StreamResult};
 use kithara_test_utils::kithara;
 
-use super::HlsVariant;
+use crate::variant::HlsVariant;
 
 impl<S> HlsVariant<S>
 where

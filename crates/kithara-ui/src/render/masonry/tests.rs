@@ -259,14 +259,6 @@ impl Reads for PopoverReads {
     }
 }
 
-/// The endpoints the shipped presets name, owned by one file and shared with
-/// the integration tests that compile the same documents.
-mod preset_registry {
-    use crate as kithara_ui;
-
-    include!("../../../tests/common/registry.rs");
-}
-
 #[derive(Default)]
 struct FixtureRegistry {
     endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
@@ -651,7 +643,7 @@ impl CustomWidget for CaptureProbe {
 #[kithara::test]
 fn masonry_layout_rects_equal_snapped_neutral_rects() {
     let reads = FixtureReads;
-    let registry = preset_registry::player_registry();
+    let registry = crate::mock::player_registry();
     let skin = Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
         builtin::text_doc(),
