@@ -12,7 +12,7 @@ use tracing::{info, warn};
 
 use super::{
     config::CiConfig,
-    environment::CiEnvironment,
+    environment::{CiEnvironment, LaneTarget},
     process::{Process, Recording},
     verdict,
 };
@@ -297,7 +297,10 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             .lanes
             .get(&args.lane)
             .is_some_and(|lane| lane.target_snapshot.is_some()),
-        Some(args.lane.as_str()),
+        Some(LaneTarget {
+            name: &args.lane,
+            window: ext.ci.lane_unit_window(),
+        }),
     )?;
     info!(
         lane = %args.lane,

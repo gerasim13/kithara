@@ -8,6 +8,7 @@ use super::declared;
 use crate::{
     ci::{config::CiPins, lane_build::LaneBuild, process::Process, run::PipelineKind},
     config::{CiLaneConfig, KitharaExt},
+    consts,
 };
 
 /// Run one declared lane in the environment the executor already prepared.
@@ -48,22 +49,42 @@ fn lookup<'a>(lanes: &'a BTreeMap<String, CiLaneConfig>, name: &str) -> Result<&
 /// step that reads it - the weekly health report adds semver-checks - would
 /// otherwise never see it. Nothing else is copied: a child already inherits
 /// this process's environment, and [`Process`] layers what it is given on top.
-fn executor_vars(target_dir: Option<OsString>, kind: PipelineKind) -> BTreeMap<OsString, OsString> {
+///
+/// A directory the lane claimed also has nightly Cargo mark each unit it
+/// reuses, which is what the claim's pruning reads.
+fn executor_vars(
+    target_dir: Option<&Path>,
+    kind: PipelineKind,
+    claimed: bool,
+) -> BTreeMap<OsString, OsString> {
     let mut vars = BTreeMap::from([(
         OsString::from("KITHARA_PIPELINE_KIND"),
         OsString::from(kind.name()),
     )]);
     if let Some(target) = target_dir {
-        vars.insert(OsString::from("CARGO_TARGET_DIR"), target);
+        vars.insert(
+            OsString::from("CARGO_TARGET_DIR"),
+            target.as_os_str().to_owned(),
+        );
+    }
+    if claimed {
+        vars.insert(
+            OsString::from(consts::MTIME_ON_USE_ENV),
+            OsString::from("true"),
+        );
     }
     vars
 }
 
 pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
-    run_in(args, ctx, env::var_os("CARGO_TARGET_DIR"))
+    run_in(
+        args,
+        ctx,
+        env::var_os("CARGO_TARGET_DIR").as_deref().map(Path::new),
+    )
 }
 
-fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<OsString>) -> Result<()> {
+fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<&Path>) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
@@ -71,11 +92,14 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<OsString>) -> Result<()
     // Every lane but a snapshot restore builds in the directory named after
     // it, which checkouts of other content share; a snapshot lane is handed a
     // private one.
-    let build = match (&target_dir, &lane.target_snapshot) {
-        (Some(dir), None) => Some(LaneBuild::claim(&ctx.root, Path::new(dir))?),
+    let build = match (target_dir, &lane.target_snapshot) {
+        (Some(dir), None) => Some(LaneBuild::claim(&ctx.root, dir, ext.ci.lane_unit_window())?),
         _ => None,
     };
-    let process = Process::new(&ctx.root, executor_vars(target_dir, args.kind));
+    let process = Process::new(
+        &ctx.root,
+        executor_vars(target_dir, args.kind, build.is_some()),
+    );
     let outcome = crate::ci::run::journalled(&process, &args.lane, || {
         declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
     });
@@ -101,12 +125,38 @@ mod tests {
 
         let handed = Process::new(
             root,
-            executor_vars(Some(OsString::from("/cache/target")), PipelineKind::Branch),
+            executor_vars(
+                Some(Path::new("/cache/target")),
+                PipelineKind::Branch,
+                false,
+            ),
         );
-        let bare = Process::new(root, executor_vars(None, PipelineKind::Branch));
+        let bare = Process::new(root, executor_vars(None, PipelineKind::Branch, false));
 
         assert_eq!(handed.target_dir(), Path::new("/cache/target"));
         assert_eq!(bare.target_dir(), root.join("target"));
+    }
+
+    /// Pruning reads when a unit was last used, and only nightly Cargo told to
+    /// mark reuse says so: a unit reused unmarked would look abandoned.
+    #[test]
+    fn a_claimed_directory_has_cargo_mark_what_it_reuses() {
+        let claimed = executor_vars(
+            Some(Path::new("/cache/lanes/lane-test")),
+            PipelineKind::Branch,
+            true,
+        );
+        let named = executor_vars(Some(Path::new("/work/target")), PipelineKind::Branch, false);
+
+        assert_eq!(
+            claimed.get(OsStr::new(consts::MTIME_ON_USE_ENV)),
+            Some(&OsString::from("true"))
+        );
+        assert_eq!(
+            named.get(OsStr::new(consts::MTIME_ON_USE_ENV)),
+            None,
+            "a directory nobody prunes has no use for the marks"
+        );
     }
 
     /// The weekly health report runs semver-checks only when it reads the
@@ -115,7 +165,7 @@ mod tests {
     fn a_lane_tells_its_steps_the_kind_it_runs_in() {
         let process = Process::new(
             Path::new("/runner/_work/kithara/kithara"),
-            executor_vars(None, PipelineKind::Weekly),
+            executor_vars(None, PipelineKind::Weekly, false),
         );
 
         let command = process.command("just");
@@ -247,7 +297,7 @@ args = {step_args}
             .expect("run git init");
         assert!(status.success(), "git init");
 
-        run_in(&args, &ctx, Some(target.path().as_os_str().to_owned())).expect("lane runs");
+        run_in(&args, &ctx, Some(target.path())).expect("lane runs");
 
         assert!(
             target.path().join(".kithara-lane-sources").exists(),

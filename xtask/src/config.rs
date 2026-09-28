@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -200,6 +201,11 @@ pub(crate) struct CiLanePin {
 }
 
 impl CiProjectConfig {
+    /// How long a lane slot keeps a build unit its builds stopped using.
+    pub(crate) fn lane_unit_window(&self) -> Duration {
+        Duration::from_secs(self.lane_unit_window_hours.saturating_mul(60 * 60))
+    }
+
     fn validate_lanes(&self) -> Result<()> {
         for (name, lane) in &self.lanes {
             if !matches!(

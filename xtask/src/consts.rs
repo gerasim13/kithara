@@ -435,6 +435,17 @@ pub(crate) const UNKNOWN_BLOB: &str = "unknown";
 /// project config names another window.
 pub(crate) const LANE_UNIT_WINDOW_HOURS: u64 = 24;
 
+/// Makes nightly Cargo mark each unit it reuses as used, which a lane slot's
+/// pruning reads. Stable Cargo ignores it.
+pub(crate) const MTIME_ON_USE_ENV: &str = "CARGO_UNSTABLE_MTIME_ON_USE";
+
+/// Hex digits in the hash Cargo names a build unit's files with.
+pub(crate) const UNIT_HASH_LEN: usize = 16;
+
+/// The window lane slot tests prune by.
+#[cfg(test)]
+pub(crate) const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
 #[cfg(test)]
 pub(crate) const FIXTURE_FAILURE_EXIT_CODE: i32 = 7;
 

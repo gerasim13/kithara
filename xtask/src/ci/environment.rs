@@ -5,7 +5,7 @@ use std::{
     fs::{self, OpenOptions},
     path::{Path as FsPath, PathBuf},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -262,7 +262,7 @@ impl CiEnvironment {
         config: &CiConfig,
         cache_group: CacheGroup,
         isolated_target: bool,
-        lane: Option<&str>,
+        lane: Option<LaneTarget<'_>>,
     ) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
@@ -344,6 +344,9 @@ impl CiEnvironment {
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
         insert(&mut vars, "CARGO_TARGET_DIR", target);
+        if lane_build.is_some() {
+            insert(&mut vars, consts::MTIME_ON_USE_ENV, "true");
+        }
         // Same reasoning as the justfile's: the system git fetches a large
         // git history far faster, but it fetches with the machine's
         // credentials, and a Linux container has none for the challenge
@@ -518,12 +521,20 @@ fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
 }
 
-enum TargetOwner {
+/// A lane asking for a build directory of its own, and how long that directory
+/// keeps a build unit the lane stopped using.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LaneTarget<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) window: Duration,
+}
+
+enum TargetOwner<'a> {
     Checkout,
     Job(String),
     Slot(String, usize),
     /// The fleet's build root and the lane that builds in it.
-    Lane(PathBuf, String),
+    Lane(PathBuf, LaneTarget<'a>),
     /// A lane building in the executor cache, inside the job's trust scope.
     ///
     /// A runner slot is whichever job the runner picked up, so lanes with other
@@ -531,17 +542,21 @@ enum TargetOwner {
     /// each found the last one's build. Measured on the Mac host: `apple-lint`
     /// rebuilt 825-908 units after `apple-test` or `apple-msrv` held its slot,
     /// and about 70 after another `apple-lint`.
-    ScopedLane(String),
+    ScopedLane(LaneTarget<'a>),
 }
 
-fn target_owner(config: &CiConfig, isolated: bool, lane: Option<&str>) -> Result<TargetOwner> {
+fn target_owner<'a>(
+    config: &CiConfig,
+    isolated: bool,
+    lane: Option<LaneTarget<'a>>,
+) -> Result<TargetOwner<'a>> {
     if !is_gitlab() || cfg!(windows) {
         // A runner that mounts the fleet's build root lets the lane own its
         // build directory: the same lane asks for the same features, profile
         // and toolchain every run, so it finds that build warm on whichever
         // runner picked the job up.
         if let (Some(root), Some(lane)) = (env::var_os(consts::TARGET_ROOT_ENV), lane) {
-            return Ok(TargetOwner::Lane(PathBuf::from(root), lane.to_owned()));
+            return Ok(TargetOwner::Lane(PathBuf::from(root), lane));
         }
         return Ok(TargetOwner::Checkout);
     }
@@ -551,7 +566,7 @@ fn target_owner(config: &CiConfig, isolated: bool, lane: Option<&str>) -> Result
         ));
     }
     if let Some(lane) = lane {
-        return Ok(TargetOwner::ScopedLane(lane.to_owned()));
+        return Ok(TargetOwner::ScopedLane(lane));
     }
     Ok(TargetOwner::Slot(
         env::var("CI_CONCURRENT_ID")
@@ -564,18 +579,18 @@ fn build_target_dir(
     project_root: &FsPath,
     shared_root: &FsPath,
     target_scope: &str,
-    owner: TargetOwner,
+    owner: TargetOwner<'_>,
 ) -> Result<PathBuf> {
     let owner = match owner {
         TargetOwner::Checkout => return Ok(project_root.join("target")),
-        TargetOwner::Lane(root, lane) => return Ok(root.join(format!("lane-{lane}"))),
+        TargetOwner::Lane(root, lane) => return Ok(root.join(format!("lane-{}", lane.name))),
         TargetOwner::Job(job_id) => {
             format!("job-{}", parse_decimal_id("CI_JOB_ID", &job_id)?)
         }
         TargetOwner::Slot(concurrent_id, slots) => {
             format!("slot-{}", disposable_slot(Some(&concurrent_id), slots)?)
         }
-        TargetOwner::ScopedLane(lane) => format!("lane-{lane}"),
+        TargetOwner::ScopedLane(lane) => format!("lane-{}", lane.name),
     };
     Ok(shared_root
         .join(consts::TARGET_SLOT_CACHE_NAMESPACE)
@@ -589,15 +604,18 @@ fn prepare_build_target(
     target_scope: &str,
     config: &CiConfig,
     isolated_target: bool,
-    lane: Option<&str>,
+    lane: Option<LaneTarget<'_>>,
 ) -> Result<(PathBuf, Option<lease::Lease>, Option<LaneBuild>)> {
     let owner = target_owner(config, isolated_target, lane)?;
-    let shared_by_lane = matches!(owner, TargetOwner::Lane(..) | TargetOwner::ScopedLane(_));
+    let window = match &owner {
+        TargetOwner::Lane(_, lane) | TargetOwner::ScopedLane(lane) => Some(lane.window),
+        TargetOwner::Checkout | TargetOwner::Job(_) | TargetOwner::Slot(..) => None,
+    };
     let backing = build_target_dir(project_root, shared_root, target_scope, owner)?;
     fs::create_dir_all(&backing)
         .with_context(|| format!("creating CI build cache {}", backing.display()))?;
-    let lane_build = shared_by_lane
-        .then(|| LaneBuild::claim(project_root, &backing))
+    let lane_build = window
+        .map(|window| LaneBuild::claim(project_root, &backing, window))
         .transpose()?;
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
@@ -1120,9 +1138,17 @@ mod tests {
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let environment =
-                CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos, false, Some("apple-lint"))
-                    .unwrap();
+            let environment = CiEnvironment::prepare(
+                &ctx,
+                &config,
+                CacheGroup::Macos,
+                false,
+                Some(LaneTarget {
+                    name: "apple-lint",
+                    window: consts::DAY,
+                }),
+            )
+            .unwrap();
 
             let backing = root
                 .join(consts::TARGET_SLOT_CACHE_NAMESPACE)
@@ -1141,6 +1167,11 @@ mod tests {
                 )
                 .unwrap(),
                 fs::canonicalize(&backing).unwrap()
+            );
+            assert_eq!(
+                environment.vars().get(OsStr::new(consts::MTIME_ON_USE_ENV)),
+                Some(&OsString::from("true")),
+                "a claimed lane directory has Cargo mark what it reuses"
             );
             let lock = OpenOptions::new()
                 .read(true)
@@ -1349,7 +1380,13 @@ mod tests {
             FsPath::new("/runner/_work/kithara/kithara"),
             FsPath::new("/cache"),
             "review-linux-x86_64",
-            TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-test".to_owned()),
+            TargetOwner::Lane(
+                PathBuf::from("/cache/target"),
+                LaneTarget {
+                    name: "linux-test",
+                    window: consts::DAY,
+                },
+            ),
         )
         .unwrap();
 
@@ -1360,7 +1397,13 @@ mod tests {
                 FsPath::new("/runner/_work/kithara/kithara"),
                 FsPath::new("/cache"),
                 "review-linux-x86_64",
-                TargetOwner::Lane(PathBuf::from("/cache/target"), "linux-lint".to_owned()),
+                TargetOwner::Lane(
+                    PathBuf::from("/cache/target"),
+                    LaneTarget {
+                        name: "linux-lint",
+                        window: consts::DAY,
+                    },
+                ),
             )
             .unwrap()
         );
