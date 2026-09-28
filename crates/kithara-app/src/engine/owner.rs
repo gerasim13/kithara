@@ -635,7 +635,7 @@ mod tests {
 
     #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, tokio, flash(false))]
-    async fn the_host_bpm_field_asks_the_host_and_shows_the_tempo_its_graph_processed(
+    async fn the_host_bpm_field_shows_the_one_tempo_it_is_turned_to_and_the_graph_plays_it(
         tone_mp3: String,
     ) {
         use ::kithara::ui::render::ControlAction;
@@ -644,26 +644,32 @@ mod tests {
             .await
             .expect("rig fixture is infallible");
         rig.call(move |rig| {
-            let accepted = |rig: &Rig| {
+            let state = |rig: &Rig| {
                 rig.engine
                     .session
                     .host()
                     .tempo_state()
                     .expect("the Host reports its tempo")
-                    .accepted()
-                    .map(|tempo| tempo.beats_per_minute())
             };
+            let accepted = |rig: &Rig| state(rig).accepted().map(|tempo| tempo.beats_per_minute());
+            let processed = |rig: &Rig| {
+                state(rig)
+                    .processed()
+                    .map(|transport| transport.tempo().beats_per_minute())
+            };
+            let field = |rig: &Rig| {
+                (
+                    rig.text("tempo.host"),
+                    rig.text("tempo.host_state").unwrap_or_default(),
+                )
+            };
+            let shows = |bpm: &str| (Some(bpm.to_owned()), String::new());
             let publish = |rig: &mut Rig| {
                 rig.engine.tick();
                 rig.engine.publish();
                 rig.frame();
             };
-            let settled = |bpm: &'static str| {
-                move |rig: &mut Rig| {
-                    rig.text("tempo.host").as_deref() == Some(bpm)
-                        && rig.text("tempo.host_state").as_deref() == Some("")
-                }
-            };
+            let plays = |bpm: f64| move |rig: &mut Rig| processed(rig) == Some(bpm);
 
             rig.frame();
             assert_eq!(
@@ -672,16 +678,16 @@ mod tests {
                 "the engine starts the Host at 120"
             );
             assert_eq!(
-                rig.text("tempo.host_state").as_deref(),
-                Some("TO 120.0"),
-                "no graph has processed it before playback"
+                field(rig),
+                shows("120.0"),
+                "before playback the field shows the tempo alone"
             );
 
             rig.send("bar/host-tempo", ControlAction::StepScalar(4.0));
             assert_eq!(
-                rig.text("tempo.host_state").as_deref(),
-                Some("TO 124.0"),
-                "the field shows the target before the Host has it"
+                field(rig),
+                shows("124.0"),
+                "a turn shows the tempo it is turned to at once, and only it"
             );
             rig.pump();
             assert_eq!(
@@ -699,19 +705,26 @@ mod tests {
                 "the graph starts at the stepped tempo",
                 Rig::DEADLINE,
                 publish,
-                settled("124.0"),
+                plays(124.0),
             );
+            assert_eq!(field(rig), shows("124.0"));
 
             rig.send("bar/host-tempo", ControlAction::StepScalar(1.0));
             rig.pump();
             rig.send("bar/host-tempo", ControlAction::StepScalar(1.0));
+            assert_eq!(
+                field(rig),
+                shows("126.0"),
+                "a second turn before the graph processed the first shows where it is turned to"
+            );
             rig.pump();
             rig.until(
-                "the last step lands once the graph processed the one before",
+                "the graph plays the last step",
                 Rig::DEADLINE,
                 publish,
-                settled("126.0"),
+                plays(126.0),
             );
+            assert_eq!(field(rig), shows("126.0"));
 
             rig.send("bar/host-tempo", ControlAction::Activate);
             rig.pump();
@@ -719,8 +732,9 @@ mod tests {
                 "the Host returns to the configured tempo",
                 Rig::DEADLINE,
                 publish,
-                settled("120.0"),
+                plays(120.0),
             );
+            assert_eq!(field(rig), shows("120.0"));
         })
         .await;
         rig.close().await;

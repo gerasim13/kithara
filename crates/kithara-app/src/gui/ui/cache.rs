@@ -80,11 +80,9 @@ impl StageView {
         self.host_bpm = tempo
             .processed
             .map(|processed| processed.beats_per_minute().as_());
-        self.host_text = format_bpm(self.host_bpm, 1.0);
+        self.host_text = format!("{:.1}", tempo.target.beats_per_minute());
         self.host_state = if tempo.is_refused {
             "REFUSED".to_owned()
-        } else if tempo.is_pending() {
-            format!("TO {:.1}", tempo.target.beats_per_minute())
         } else {
             String::new()
         };

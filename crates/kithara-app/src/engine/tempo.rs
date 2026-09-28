@@ -40,7 +40,7 @@ impl HostTempo {
 
     /// Whether the Host has yet to settle on the target: settled is one
     /// observation in which the Host accepted it and its graph processed it.
-    pub(crate) fn is_pending(&self) -> bool {
+    fn is_pending(&self) -> bool {
         !self.is_refused
             && (self.accepted != Some(self.target) || self.processed != Some(self.target))
     }
