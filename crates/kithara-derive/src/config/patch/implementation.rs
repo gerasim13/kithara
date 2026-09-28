@@ -4,8 +4,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DeriveInput, Error, Field, Fields, Ident, Path, PathArguments, Result, Token,
-    Type, Visibility, parenthesized, parse_macro_input, parse_quote, punctuated::Punctuated,
+    Attribute, Data, DeriveInput, Error, Field, Fields, Ident, Meta, Path, PathArguments, Result,
+    Token, Type, Visibility, parenthesized, parse_macro_input, parse_quote, punctuated::Punctuated,
     spanned::Spanned,
 };
 
@@ -477,6 +477,45 @@ pub(crate) fn validation(
     Ok(refusal_from_attributes(attributes, span)?.and_then(|refusal| refusal.validate))
 }
 
+/// The patch options a struct or a field declares, spelled either as
+/// `#[patch(...)]` or as the `patch(...)` group of its `#[config(...)]`, which
+/// is where a configuration type keeps every facet. Only one spelling per item:
+/// two would be two lists of the same options that could disagree.
+fn patch_attributes(attributes: &[Attribute]) -> Result<Vec<Attribute>> {
+    let mut native: Vec<Attribute> = attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("patch"))
+        .cloned()
+        .collect();
+    let mut grouped: Vec<Attribute> = Vec::new();
+    for attribute in attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("config"))
+    {
+        let Meta::List(list) = &attribute.meta else {
+            continue;
+        };
+        for option in list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
+            if let Meta::List(group) = option
+                && group.path.is_ident("patch")
+            {
+                let options = group.tokens;
+                grouped.push(parse_quote!(#[patch(#options)]));
+            }
+        }
+    }
+    if let Some(attribute) = native.first()
+        && !grouped.is_empty()
+    {
+        return Err(Error::new_spanned(
+            attribute,
+            "choose either a native patch attribute or its config group",
+        ));
+    }
+    native.append(&mut grouped);
+    Ok(native)
+}
+
 fn refusal_from_attributes(
     attributes: &[Attribute],
     span: proc_macro2::Span,
@@ -485,7 +524,7 @@ fn refusal_from_attributes(
     let mut with: Option<Path> = None;
     let mut error: Option<Type> = None;
 
-    for attribute in attributes.iter().filter(|a| a.path().is_ident("patch")) {
+    for attribute in &patch_attributes(attributes)? {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("fallible") {
                 fallible = true;
@@ -528,7 +567,7 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
     let mut from: Option<Path> = None;
     let mut added: Vec<TokenStream2> = Vec::new();
 
-    for attribute in field.attrs.iter().filter(|a| a.path().is_ident("patch")) {
+    for attribute in &patch_attributes(&field.attrs)? {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("skip") {
                 skip = true;
@@ -1012,6 +1051,58 @@ mod tests {
             error.to_string().contains("needs `error = <type>`"),
             "{error}"
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_configuration_keeps_its_patch_options_in_its_config_groups() {
+        let input: DeriveInput = parse_quote! {
+            #[config(default, update, patch(validate = Self::validated, error = TempoError))]
+            pub struct Tempo {
+                #[config(value, patch(skip))]
+                backend: Backend,
+                #[config(value, update, builder(default = 2))]
+                low: f32,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert!(
+            expanded.contains("* self = Self :: validated (staged)"),
+            "the check in the type's config group gates the merge"
+        );
+        assert!(
+            !expanded.contains("backend"),
+            "a field's config group skips it like a native attribute"
+        );
+        assert!(expanded.contains("staged . low = value"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_native_patch_beside_its_config_group_is_refused() {
+        for input in [
+            parse_quote! {
+                #[patch(fallible)]
+                #[config(patch(validate = Self::validated, error = Refusal))]
+                struct Config { batch: usize }
+            },
+            parse_quote! {
+                struct Config {
+                    #[patch(skip)]
+                    #[config(value, patch(skip))]
+                    batch: usize,
+                }
+            },
+        ] {
+            let input: DeriveInput = input;
+            let error = derive(&input).expect_err("two spellings of the same options");
+            assert!(
+                error
+                    .to_string()
+                    .contains("choose either a native patch attribute or its config group"),
+                "{error}"
+            );
+        }
     }
 
     #[kithara::test(native, flash(false))]

@@ -49,7 +49,6 @@ kithara-sync = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 kithara-waveform = { workspace = true, default-features = false }
 
-bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }

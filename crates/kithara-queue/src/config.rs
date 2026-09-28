@@ -1,8 +1,8 @@
 use std::num::NonZeroUsize;
 
-use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{
     CancelToken,
@@ -21,9 +21,8 @@ use crate::{ActionAtItemEnd, PlaybackOrder, consts, navigation::NavigationState}
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
-#[kithara_config::config(builder = false)]
-#[derive(Builder, derive_more::Debug, Patch)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Patch, Config)]
+#[config(debug, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 pub struct QueueConfig<S>
 where
@@ -89,7 +88,8 @@ where
     #[config(
         value(ActionAtItemEnd, self.action_at_item_end()),
         sdk,
-        wrap(default = ActionAtItemEnd::default(), with = Mutex::new, patch),
+        wrap(default = ActionAtItemEnd::default(), with = Mutex::new),
+        patch(wire = ActionAtItemEnd, from = Mutex::new),
         debug(skip)
     )]
     pub(crate) action_at_item_end: Mutex<ActionAtItemEnd>,
@@ -98,7 +98,8 @@ where
     #[config(
         value(CrossfadeSettings, self.crossfade_settings()),
         sdk,
-        wrap(default = CrossfadeSettings::default(), with = Mutex::new, patch),
+        wrap(default = CrossfadeSettings::default(), with = Mutex::new),
+        patch(wire = CrossfadeSettings, from = Mutex::new),
         debug(skip)
     )]
     pub(crate) crossfade_settings: Mutex<CrossfadeSettings>,

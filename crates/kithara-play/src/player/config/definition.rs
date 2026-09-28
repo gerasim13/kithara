@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use bon::Builder;
 use kithara_abr::AbrController;
+use kithara_config::Config;
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
@@ -42,13 +42,10 @@ fn default_event_bus_capacity() -> NonZeroUsize {
 /// [`PlayerConfigPatch`] is what a configuration document may say about it.
 ///
 /// [`EngineConfig`]: crate::EngineConfig
-#[kithara_config::config(builder = false)]
-#[derive(Builder, Patch, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(opt_in, get)]
+#[derive(Patch, Config)]
+#[config(debug, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
-#[derive(derive_more::Debug)]
 pub struct PlayerConfig<S> {
     /// Live mute state, initially off.
     #[config(value(bool, self.muted.load()), builder(field = RelaxedAtomicBool::new(false)), patch(skip))]
@@ -102,14 +99,16 @@ pub struct PlayerConfig<S> {
     /// Crossfade duration in seconds. Default: [`DEFAULT_CROSSFADE_DURATION`].
     #[config(
         value(f32, self.crossfade_duration.load()),
-        wrap(default = DEFAULT_CROSSFADE_DURATION, with = RelaxedAtomicF32::new, patch)
+        wrap(default = DEFAULT_CROSSFADE_DURATION, with = RelaxedAtomicF32::new),
+        patch(wire = f32, from = RelaxedAtomicF32::new)
     )]
     pub crossfade_duration: RelaxedAtomicF32,
     /// Default playback-rate target (1.0 = normal). Default:
     /// [`DEFAULT_PLAYING_RATE`].
     #[config(
         value(f32, self.default_rate.load()),
-        wrap(default = DEFAULT_PLAYING_RATE, with = RelaxedAtomicF32::new, patch)
+        wrap(default = DEFAULT_PLAYING_RATE, with = RelaxedAtomicF32::new),
+        patch(wire = f32, from = RelaxedAtomicF32::new)
     )]
     pub default_rate: RelaxedAtomicF32,
     /// Capacity of each event topic when this player creates its root bus.
