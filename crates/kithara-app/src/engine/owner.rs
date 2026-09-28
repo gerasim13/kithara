@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "broadcast"))]
-    #[kithara::test(native, tokio)]
+    #[kithara::test(native, tokio, flash(false))]
     async fn the_sync_button_puts_a_deck_on_the_host_timeline_and_takes_it_off(
         rhythm_a_mp3: String,
     ) {
@@ -771,7 +771,7 @@ mod tests {
     /// A library track reaches its deck without a grid: the SYNC ask waits on
     /// beats until the deck's analysis states them, then locks on the Host.
     #[cfg(not(feature = "broadcast"))]
-    #[kithara::test(native, tokio)]
+    #[kithara::test(native, tokio, flash(false))]
     async fn the_sync_button_waits_for_the_analysed_grid_and_locks_on_it(rhythm_a_mp3: String) {
         use ::kithara::{
             platform::time::Duration, prelude::ResourceSrc, ui::render::ControlAction,
@@ -862,7 +862,7 @@ mod tests {
     /// the deck changes track, not revision, and the second copy still takes
     /// the grid and locks on the Host.
     #[cfg(not(feature = "broadcast"))]
-    #[kithara::test(native, tokio)]
+    #[kithara::test(native, tokio, flash(false))]
     async fn a_second_copy_of_an_analysed_track_locks_on_the_grid_already_shown(
         rhythm_a_mp3: String,
     ) {
