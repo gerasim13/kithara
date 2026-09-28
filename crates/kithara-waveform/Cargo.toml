@@ -12,13 +12,15 @@ exclude = ["tests/**"]
 
 [features]
 default = []
-# The FFT band analyzer. The model and its codec are available without it.
-dsp = ["dep:realfft"]
+# The FFT band analyzer. The model, its codec and the analysis parameters
+# are available without it.
+dsp = ["kithara-dsp/spectrum"]
 
 [dependencies]
 kithara-blob = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default"] }
+kithara-dsp = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 
@@ -27,7 +29,6 @@ delegate = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
 rangemap = { workspace = true }
-realfft = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

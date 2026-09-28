@@ -122,7 +122,6 @@ pub(super) fn multiply_kernel<S: Simd>(simd: S, a: &[f32], b: &[f32], output: &m
 
 /// `Σ a[i]·b[i]` over the common prefix: one multiply-add per lane, then
 /// the lanes summed.
-#[cfg(feature = "spectrum")]
 #[inline(always)]
 pub(super) fn dot<S: Simd>(simd: S, a: &[f32], b: &[f32]) -> f32 {
     let len = a.len().min(b.len());
@@ -138,4 +137,13 @@ pub(super) fn dot<S: Simd>(simd: S, a: &[f32], b: &[f32]) -> f32 {
     padded(simd, lefts.remainder())
         .mul_add(padded(simd, rights.remainder()), sum)
         .reduce_sum()
+}
+
+pub(crate) fn sum_squares(samples: &[f32]) -> f32 {
+    dispatch!(Level::new(), simd => sum_squares_kernel(simd, samples))
+}
+
+#[inline(always)]
+pub(super) fn sum_squares_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
+    dot(simd, samples, samples)
 }

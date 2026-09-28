@@ -589,30 +589,37 @@ fn peak_matches_the_scalar_maximum_on_every_backend() {
 
 #[cfg(feature = "spectrum")]
 type Multiply = fn(&[f32], &[f32], &mut [f32]) -> usize;
+type SumSquares = fn(&[f32]) -> f32;
 
 /// One backend's element-wise kernels, so every check runs the same matrix
 /// on each.
-#[cfg(feature = "spectrum")]
 struct Vectors {
     name: &'static str,
+    #[cfg(feature = "spectrum")]
     multiply: Multiply,
+    sum_squares: SumSquares,
 }
 
-#[cfg(feature = "spectrum")]
 fn vectors() -> Vec<Vectors> {
     Vec::from([
         Vectors {
             name: "portable-native",
+            #[cfg(feature = "spectrum")]
             multiply: portable::multiply,
+            sum_squares: portable::sum_squares,
         },
         Vectors {
             name: "portable-fallback",
+            #[cfg(feature = "spectrum")]
             multiply: |a, b, output| dispatch!(Level::fallback(), simd => portable::multiply_kernel(simd, a, b, output)),
+            sum_squares: |samples| dispatch!(Level::fallback(), simd => portable::sum_squares_kernel(simd, samples)),
         },
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         Vectors {
             name: "accelerate",
+            #[cfg(feature = "spectrum")]
             multiply: accelerate::multiply,
+            sum_squares: accelerate::sum_squares,
         },
     ])
 }
@@ -648,6 +655,42 @@ fn multiply_matches_the_scalar_product_on_every_backend() {
                 "{name}: wrote past {size}"
             );
         }
+    }
+}
+
+/// `Σx²` within the reduction bound `N·ε·Σx²` of the `f64` sum (spec,
+/// reduction level); a `NaN` or an infinity carries through.
+#[kithara::test]
+fn sum_squares_tracks_the_f64_sum_on_every_backend() {
+    for row in vectors() {
+        let name = row.name;
+        for size in SIZES {
+            let samples: Vec<f32> = signal(size.saturating_add(SPECIALS.len()), SINE)
+                .into_iter()
+                .skip(SPECIALS.len())
+                .collect();
+            let want: f64 = samples.iter().map(|x| f64::from(*x) * f64::from(*x)).sum();
+            let reach = size.to_f64().unwrap_or(f64::NAN) * f64::from(f32::EPSILON) * want;
+            let got = (row.sum_squares)(&samples);
+            assert!(
+                (f64::from(got) - want).abs() <= reach,
+                "{name}: {got}, f64 {want} at {size}"
+            );
+        }
+        assert_eq!(
+            (row.sum_squares)(&[]).to_bits(),
+            0.0_f32.to_bits(),
+            "{name}: an empty slice"
+        );
+        assert!(
+            (row.sum_squares)(&[1.0, f32::NAN, 2.0]).is_nan(),
+            "{name}: a NaN carries through"
+        );
+        assert_eq!(
+            (row.sum_squares)(&[1.0, f32::NEG_INFINITY]).to_bits(),
+            f32::INFINITY.to_bits(),
+            "{name}: an infinity carries through"
+        );
     }
 }
 

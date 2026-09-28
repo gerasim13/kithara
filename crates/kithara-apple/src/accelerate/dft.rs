@@ -25,6 +25,11 @@ pub enum DftError {
 /// its even and odd samples, `len / 2` of each; the output is bins
 /// `0..len / 2`, every one doubled, with the real Nyquist bin carried in
 /// `im[0]` beside the real DC bin in `re[0]`.
+///
+/// vDSP picks its algorithm by where the planes sit, and two algorithms round
+/// the same input differently. Every plane starts on [`Self::ALIGN`], where
+/// the placement no longer changes the pick, so the output is a function of
+/// the input alone.
 pub struct RealDft {
     setup: NonNull<c_void>,
     half: NonZeroUsize,
@@ -37,6 +42,9 @@ unsafe impl Send for RealDft {}
 unsafe impl Sync for RealDft {}
 
 impl RealDft {
+    /// The byte boundary every plane starts on.
+    pub const ALIGN: usize = 64;
+
     /// # Errors
     /// [`DftError::Setup`] when vDSP has no real DFT of `len` samples.
     pub fn new(len: usize) -> Result<Self, DftError> {
@@ -49,16 +57,18 @@ impl RealDft {
     }
 
     /// # Errors
-    /// [`DftError::Shape`] when a plane is not `len / 2` long.
+    /// [`DftError::Shape`] when a plane is not `len / 2` long or does not
+    /// start on [`Self::ALIGN`].
     pub fn execute(
         &self,
         [even, odd]: [&[f32]; 2],
         [re, im]: [&mut [f32]; 2],
     ) -> Result<(), DftError> {
         let half = self.half.get();
-        if [even.len(), odd.len(), re.len(), im.len()]
+        let planes = [even, odd, &*re, &*im];
+        if planes
             .iter()
-            .any(|&len| len != half)
+            .any(|plane| plane.len() != half || !plane.as_ptr().addr().is_multiple_of(Self::ALIGN))
         {
             return Err(DftError::Shape);
         }

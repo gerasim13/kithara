@@ -4,10 +4,11 @@ use std::{
 };
 
 use kithara_audio::{AudioReader, ChunkOutcome, SeekOutcome};
-use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
+use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::{AudioSpec, FrameCoverage};
+use kithara_waveform::AnalyzerError;
 use kithara_worker::TickResult;
 use rangemap::RangeSet;
 use tracing::{debug, warn};
@@ -211,7 +212,7 @@ where
         &mut self,
         builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
-    ) -> Result<bool, PoolError> {
+    ) -> Result<bool, AnalyzerError> {
         let scratch = self
             .scratch
             .get_or_insert_with(|| builder.pools().get::<f32>());
@@ -483,7 +484,7 @@ fn open<'a, B, S>(
     token: &AnalysisToken,
     revision: u64,
     demand: AnalysisDemand,
-) -> Result<&'a mut TrackAnalyzers<B, S>, PoolError>
+) -> Result<&'a mut TrackAnalyzers<B, S>, AnalyzerError>
 where
     B: ResamplerBackend,
     S: HasPool<f32> + Send + Sync + 'static,
@@ -494,7 +495,7 @@ where
         let analyzers = builder
             .build(rate, token.clone(), revision, demand)
             .inspect_err(|error| {
-                warn!(?error, "analysis: analyzer buffer initialization failed");
+                warn!(?error, "analysis: analyzer initialization failed");
             })?;
         Ok(slot.insert(analyzers))
     }

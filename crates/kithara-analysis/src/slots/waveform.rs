@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_waveform::WaveformResume;
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_waveform::{AnalyzerError, WaveformResume};
 use tracing::warn;
 
 use crate::{BlobError, Waveform, analyzer::WaveformPass};
@@ -15,7 +15,7 @@ impl<S> TryFrom<(usize, NonZeroU32, &PoolRegion<S>)> for Slot
 where
     S: HasPool<f32>,
 {
-    type Error = PoolError;
+    type Error = AnalyzerError;
 
     fn try_from(
         (buckets, rate, pools): (usize, NonZeroU32, &PoolRegion<S>),

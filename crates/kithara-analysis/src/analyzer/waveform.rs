@@ -1,5 +1,5 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_waveform::WaveformResume;
+use kithara_waveform::{AnalyzerError, WaveformResume};
 
 use crate::{AnalysisParams, BlobError, Waveform, WaveformAnalyzer};
 
@@ -13,7 +13,7 @@ impl WaveformPass {
         sample_rate: u32,
         buckets: usize,
         pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, AnalyzerError>
     where
         S: HasPool<f32>,
     {

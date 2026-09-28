@@ -1,6 +1,6 @@
 use std::ptr;
 
-use super::ffi::{DspSplitComplex, vDSP_conv, vDSP_maxmgv, vDSP_vmul, vDSP_zvabs};
+use super::ffi::{DspSplitComplex, vDSP_conv, vDSP_maxmgv, vDSP_svesq, vDSP_vmul, vDSP_zvabs};
 
 /// The largest `|x|` in `samples`; `0.0` for an empty slice.
 #[must_use]
@@ -77,4 +77,17 @@ pub fn correlate_f32(signal: &[f32], kernel: &[f32], output: &mut [f32]) -> usiz
         );
     }
     lags
+}
+
+/// `Σx²` over `samples`; `0.0` for an empty slice.
+#[must_use]
+pub fn sum_squares_f32(samples: &[f32]) -> f32 {
+    let mut sum = 0.0;
+    if samples.is_empty() {
+        return sum;
+    }
+    // SAFETY: samples points at samples.len() contiguous f32 values with stride one.
+    // SAFETY: sum is a valid f32 destination for the synchronous call.
+    unsafe { vDSP_svesq(samples.as_ptr(), 1, ptr::from_mut(&mut sum), samples.len()) };
+    sum
 }

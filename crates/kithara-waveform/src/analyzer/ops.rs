@@ -1,10 +1,10 @@
 use std::{array, collections::btree_map::Entry};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_dsp::sum_squares;
 use kithara_signal::FrameCoverage;
 use num_traits::cast::ToPrimitive;
 use rangemap::RangeSet;
-use realfft::num_complex::Complex;
 use tracing::debug;
 
 use super::{
@@ -41,16 +41,8 @@ impl WaveformAnalyzer {
         self.partial.len()
     }
 
-    fn reduce(&mut self, index: u64) {
-        let bands = if self
-            .fft
-            .process_with_scratch(
-                &mut self.fft_input,
-                &mut self.fft_output,
-                &mut self.fft_scratch,
-            )
-            .is_ok()
-        {
+    fn reduce(&mut self, index: u64, samples: &[f32]) {
+        let bands = if self.fft.forward(samples, &mut self.spectrum).is_ok() {
             self.window_bands()
         } else {
             [0.0; Band::COUNT]
@@ -74,15 +66,7 @@ impl WaveformAnalyzer {
         let Some(partial) = self.partial.remove(&index) else {
             return;
         };
-        for ((dst, &sample), &w) in self
-            .fft_input
-            .iter_mut()
-            .zip(partial.samples.iter())
-            .zip(self.hann.iter())
-        {
-            *dst = sample * w;
-        }
-        self.reduce(index);
+        self.reduce(index, &partial.samples);
     }
 
     pub(super) fn reduce_padded(&mut self, extent: u64) {
@@ -92,14 +76,10 @@ impl WaveformAnalyzer {
         let Some(partial) = self.partial.remove(&0) else {
             return;
         };
-        let covered = usize::try_from(extent).unwrap_or(usize::MAX);
-        for (i, dst) in self.fft_input.iter_mut().enumerate() {
-            *dst = match partial.samples.get(i).filter(|_| i < covered) {
-                Some(sample) => sample * self.hann[i],
-                None => 0.0,
-            };
-        }
-        self.reduce(0);
+        let covered = usize::try_from(extent)
+            .unwrap_or(usize::MAX)
+            .min(partial.samples.len());
+        self.reduce(0, &partial.samples[..covered]);
     }
 
     #[cfg(test)]
@@ -160,28 +140,20 @@ impl WaveformAnalyzer {
     }
 
     pub(super) fn size(&self) -> u64 {
-        u64::try_from(self.fft_input.len()).unwrap_or(0)
+        u64::try_from(self.window_size()).unwrap_or(0)
     }
 
-    /// Zeroes the DC bin so a constant offset never colors the low band.
+    /// Leaves the DC bin out so a constant offset never colors the low band;
+    /// a crossover at either end of the spectrum empties its band.
     fn window_bands(&self) -> [f32; Band::COUNT] {
-        let bins = &self.fft_output[1..];
-        let total: f32 = bins.iter().map(Complex::norm_sqr).sum();
-        let rms = (total / self.fft_input.len().to_f32().unwrap_or(1.0)).sqrt();
+        let (re, im) = (self.spectrum.re(), self.spectrum.im());
+        let [low, mid, high] = [1, self.low_mid_bin.max(1), self.mid_high_bin.max(1)];
+        let band = [low..mid, mid..high, high..re.len()]
+            .map(|bins| sum_squares(&re[bins.clone()]) + sum_squares(&im[bins]));
+        let total: f32 = band.iter().sum();
+        let rms = (total / self.window_size().to_f32().unwrap_or(1.0)).sqrt();
         if rms < self.params.energy_floor() {
             return [0.0; Band::COUNT];
-        }
-
-        let mut band = [0.0_f32; Band::COUNT];
-        for (i, c) in self.fft_output.iter().enumerate().skip(1) {
-            let energy = c.norm_sqr();
-            if i < self.low_mid_bin {
-                band[Band::Low.idx()] += energy;
-            } else if i < self.mid_high_bin {
-                band[Band::Mid.idx()] += energy;
-            } else {
-                band[Band::High.idx()] += energy;
-            }
         }
         array::from_fn(|i| band[i] * self.band_bin_inv[i])
     }
@@ -196,6 +168,6 @@ impl WaveformAnalyzer {
     }
 
     pub(super) fn window_size(&self) -> usize {
-        self.fft_input.len()
+        self.fft.size().get()
     }
 }

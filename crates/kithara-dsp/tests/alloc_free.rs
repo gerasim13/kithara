@@ -165,3 +165,14 @@ fn autocorrelation_never_allocates_after_construction() {
         assert_eq!(acf.process(&frame[..100], &mut output), LAGS.get());
     });
 }
+
+#[kithara::test(native)]
+fn sum_squares_never_allocates() {
+    let samples = vec![0.25_f32; FRAMES];
+    assert_no_alloc(|| {
+        assert_eq!(
+            kithara_dsp::sum_squares(&samples).to_bits(),
+            64.0_f32.to_bits()
+        );
+    });
+}

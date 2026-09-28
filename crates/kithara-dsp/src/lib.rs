@@ -9,7 +9,8 @@
 //! `interp` reads a window at fractional positions with one of four methods
 //! and places the positions of a rate ramp. `spectrum` takes the real FFT of
 //! a Hann-windowed frame, reads the magnitude and phase of its bins and
-//! autocorrelates a frame (the `spectrum` feature).
+//! autocorrelates a frame (the `spectrum` feature). `sum_squares` reduces a
+//! slice to the sum of its squares.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -35,6 +36,8 @@ pub mod param;
 /// FFT over a Hann window, the magnitude and phase of its bins, and the
 /// autocorrelation of a frame.
 pub mod spectrum;
+mod vector;
 
 pub use backend::sanitize;
 pub use layout::{deinterleave_channel_major, deinterleave_variable, interleave_channel_major};
+pub use vector::sum_squares;

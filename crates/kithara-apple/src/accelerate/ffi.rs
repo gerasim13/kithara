@@ -89,6 +89,8 @@ unsafe extern "C" {
 
     pub(super) fn vDSP_maxmgv(a: *const f32, ia: VdspStride, c: *mut f32, n: VdspLength);
 
+    pub(super) fn vDSP_svesq(a: *const f32, ia: VdspStride, c: *mut f32, n: VdspLength);
+
     pub(super) fn vDSP_vlint(
         a: *const f32,
         b: *const f32,

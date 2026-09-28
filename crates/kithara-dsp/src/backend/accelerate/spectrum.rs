@@ -9,6 +9,14 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use super::deinterleave_pair;
 use crate::spectrum::{FftLen, SpectrumError};
 
+mod consts {
+    use super::RealDft;
+
+    /// Samples a pool buffer may hold before its first `RealDft::ALIGN`
+    /// boundary: an `f32` sits on four bytes.
+    pub(super) const SLACK: usize = RealDft::ALIGN / size_of::<f32>() - 1;
+}
+
 /// `vDSP_DFT_zrop` behind the interface of the portable DFT.
 pub(crate) struct Dft {
     dft: RealDft,
@@ -16,15 +24,25 @@ pub(crate) struct Dft {
     half: usize,
 }
 
-/// The windowed frame and the even and odd samples `vDSP_DFT_zrop` reads.
+/// The windowed frame and the four planes `vDSP_DFT_zrop` reads and writes:
+/// the frame's even and odd samples and the packed bins.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, vis = "pub(crate)")]
 pub(crate) struct Work {
     /// the frame the next `forward` transforms
     #[field(get_mut, deref = "[f32]")]
     input: SampleBuffer,
-    even: SampleBuffer,
-    odd: SampleBuffer,
+    even: Plane,
+    odd: Plane,
+    re: Plane,
+    im: Plane,
+}
+
+/// A pool buffer with room for `len` samples from its first
+/// `RealDft::ALIGN` boundary on.
+struct Plane {
+    buffer: SampleBuffer,
+    len: usize,
 }
 
 impl TryFrom<FftLen> for Dft {
@@ -51,8 +69,10 @@ impl Dft {
     {
         Ok(Work {
             input: pools.get_with_len::<f32>(self.len)?,
-            even: pools.get_with_len::<f32>(self.half)?,
-            odd: pools.get_with_len::<f32>(self.half)?,
+            even: Plane::new(pools, self.half)?,
+            odd: Plane::new(pools, self.half)?,
+            re: Plane::new(pools, self.half)?,
+            im: Plane::new(pools, self.half)?,
         })
     }
 
@@ -64,22 +84,52 @@ impl Dft {
         work: &mut Work,
         [re, im]: [&mut [f32]; 2],
     ) -> Result<(), SpectrumError> {
-        let _ = deinterleave_pair(&work.input, &mut work.even, &mut work.odd);
-        let (Some((re_last, re_packed)), Some((im_last, im_packed))) =
+        let (even, odd) = (work.even.aligned()?, work.odd.aligned()?);
+        let _ = deinterleave_pair(&work.input, even, odd);
+        let (packed_re, packed_im) = (work.re.aligned()?, work.im.aligned()?);
+        self.dft
+            .execute([&*even, &*odd], [&mut *packed_re, &mut *packed_im])
+            .map_err(dft_error)?;
+        let (Some((re_last, re_bins)), Some((im_last, im_bins))) =
             (re.split_last_mut(), im.split_last_mut())
         else {
             return Err(SpectrumError::Shape);
         };
-        self.dft
-            .execute([&*work.even, &*work.odd], [re_packed, &mut *im_packed])
-            .map_err(dft_error)?;
-        let nyquist = im_packed
+        for ((bin_re, bin_im), (value_re, value_im)) in re_bins
+            .iter_mut()
+            .zip(im_bins.iter_mut())
+            .zip(packed_re.iter().zip(packed_im.iter()))
+        {
+            *bin_re = *value_re;
+            *bin_im = *value_im;
+        }
+        let nyquist = im_bins
             .first_mut()
             .map(mem::take)
             .ok_or(SpectrumError::Shape)?;
         *re_last = nyquist;
         *im_last = 0.0;
         Ok(())
+    }
+}
+
+impl Plane {
+    fn new<S>(pools: &PoolRegion<S>, len: usize) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        Ok(Self {
+            buffer: pools.get_with_len::<f32>(len.saturating_add(consts::SLACK))?,
+            len,
+        })
+    }
+
+    /// The `len` samples from the boundary on.
+    fn aligned(&mut self) -> Result<&mut [f32], SpectrumError> {
+        let start = self.buffer.as_ptr().align_offset(RealDft::ALIGN);
+        self.buffer
+            .get_mut(start..start.saturating_add(self.len))
+            .ok_or(SpectrumError::Shape)
     }
 }
 

@@ -1,4 +1,5 @@
 use bon::Builder;
+use kithara_dsp::spectrum::FftLen;
 
 use crate::{Band, consts};
 
@@ -27,5 +28,6 @@ pub struct AnalysisParams {
     mid_high_hz: f32,
     /// FFT window length (real input); band bins span `0..=fft_size/2`.
     #[builder(default = consts::FFT_SIZE)]
-    fft_size: usize,
+    #[field(get(copy))]
+    fft_size: FftLen,
 }
