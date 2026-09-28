@@ -18,6 +18,21 @@ struct Session<'a> {
     levels: Levels,
 }
 
+struct Wrapped<T>(T);
+
+impl<T> Wrapped<T> {
+    fn new(value: T) -> Self {
+        Self(value)
+    }
+}
+
+#[config]
+#[derive(Patch)]
+struct WrappedConfig {
+    #[config(value(u32, self.level.0), wrap(default = 2, with = Wrapped::new, patch))]
+    level: Wrapped<u32>,
+}
+
 #[kithara::test]
 fn retained_values_are_owned_and_resources_stay_private() {
     let mut levels = Levels::default();
@@ -34,4 +49,16 @@ fn retained_values_are_owned_and_resources_stay_private() {
     assert_eq!(values.levels.level, 7);
     assert_eq!(values.levels.limit, None);
     assert_eq!(session.resource, "injected");
+}
+
+#[kithara::test]
+fn wrapped_fields_keep_builder_defaults_setters_and_patch_conversion() {
+    let mut config = WrappedConfig::builder().build();
+    assert_eq!(config.values().level, 2);
+
+    let configured = WrappedConfig::builder().level(7).build();
+    assert_eq!(configured.values().level, 7);
+
+    config.apply(WrappedConfigPatch { level: Some(9) });
+    assert_eq!(config.values().level, 9);
 }

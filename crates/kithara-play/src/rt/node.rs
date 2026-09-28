@@ -1,6 +1,3 @@
-#[cfg(test)]
-use std::sync::atomic::Ordering;
-
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
@@ -12,6 +9,8 @@ use firewheel::{
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_dsp::param::SmootherConfig;
+#[cfg(test)]
+use kithara_platform::sync::atomic::Ordering;
 use kithara_platform::sync::{Arc, Mutex};
 
 use super::processor::{ContextRequirement, PlayerNodeProcessor, StreamShape};

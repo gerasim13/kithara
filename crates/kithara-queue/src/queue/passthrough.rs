@@ -18,7 +18,7 @@ where
 
     #[must_use]
     pub fn crossfade_settings(&self) -> CrossfadeSettings {
-        *self.crossfade_settings.lock()
+        self.config.crossfade_settings()
     }
 
     /// Drain pending player-side notifications. Called by FFI tick
@@ -42,8 +42,8 @@ where
     pub fn set_crossfade_settings(&self, settings: CrossfadeSettings) -> Result<(), PlayError> {
         let settings = settings.validate()?;
         self.with_open_result(|queue| {
-            *queue.crossfade_settings.lock() = settings;
-            queue.player.set_crossfade_duration(settings.duration);
+            queue.player.try_set_crossfade_duration(settings.duration)?;
+            queue.config.set_crossfade_settings(settings);
             queue
                 .bus
                 .publish(QueueEvent::CrossfadeSettingsChanged { settings });

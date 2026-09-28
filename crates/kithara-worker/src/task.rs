@@ -1,10 +1,5 @@
 use kithara_platform::{
-    CancelGroup, CancelToken,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
-    tokio::runtime::Handle,
+    CancelGroup, CancelToken, atomic::RelaxedAtomicU32, sync::Arc, tokio::runtime::Handle,
 };
 
 use crate::{
@@ -75,7 +70,7 @@ pub trait Task: 'static {
 /// Cloneable priority and wake control for an admitted task.
 #[derive(Clone)]
 pub struct TaskControl {
-    priority: Arc<AtomicU32>,
+    priority: Arc<RelaxedAtomicU32>,
     token: CancelToken,
     wake: Wake,
 }
@@ -85,7 +80,7 @@ impl TaskControl {
         Self {
             token,
             wake,
-            priority: Arc::new(AtomicU32::new(priority.get())),
+            priority: Arc::new(RelaxedAtomicU32::new(priority.get())),
         }
     }
 
@@ -98,12 +93,12 @@ impl TaskControl {
     /// Return the current scheduler priority.
     #[must_use]
     pub fn priority(&self) -> Priority {
-        Priority::new(self.priority.load(Ordering::Relaxed))
+        Priority::new(self.priority.load())
     }
 
     /// Publish a new priority and coalesce a scheduler pass.
     pub fn set_priority(&self, priority: Priority) {
-        self.priority.store(priority.get(), Ordering::Relaxed);
+        self.priority.store(priority.get());
         self.wake.defer();
     }
 
