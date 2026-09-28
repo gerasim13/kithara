@@ -1,3 +1,4 @@
+pub(super) type VdspBiquadmSetup = *mut std::ffi::c_void;
 pub(super) type VdspLength = usize;
 pub(super) type VdspStride = isize;
 
@@ -17,7 +18,38 @@ pub(super) struct DspSplitComplex {
 
 #[link(name = "Accelerate", kind = "framework")]
 unsafe extern "C" {
-    pub(super) fn cblas_scopy(n: i32, x: *const f32, inc_x: i32, y: *mut f32, inc_y: i32);
+    pub(super) fn vDSP_biquadm(
+        setup: VdspBiquadmSetup,
+        x: *mut *const f32,
+        ix: VdspStride,
+        y: *mut *mut f32,
+        iy: VdspStride,
+        n: VdspLength,
+    );
+
+    pub(super) fn vDSP_biquadm_CopyState(
+        destination: VdspBiquadmSetup,
+        source: *const std::ffi::c_void,
+    );
+
+    pub(super) fn vDSP_biquadm_CreateSetup(
+        coefficients: *const f64,
+        sections: VdspLength,
+        channels: VdspLength,
+    ) -> VdspBiquadmSetup;
+
+    pub(super) fn vDSP_biquadm_DestroySetup(setup: VdspBiquadmSetup);
+
+    pub(super) fn vDSP_biquadm_ResetState(setup: VdspBiquadmSetup);
+
+    pub(super) fn vDSP_biquadm_SetCoefficientsDouble(
+        setup: VdspBiquadmSetup,
+        coefficients: *const f64,
+        start_section: VdspLength,
+        start_channel: VdspLength,
+        sections: VdspLength,
+        channels: VdspLength,
+    );
 
     pub(super) fn vDSP_ctoz(
         c: *const DspComplex,
@@ -27,7 +59,7 @@ unsafe extern "C" {
         n: VdspLength,
     );
 
-    pub(super) fn vDSP_vclr(c: *mut f32, ic: VdspStride, n: VdspLength);
+    pub(super) fn vDSP_maxmgv(a: *const f32, ia: VdspStride, c: *mut f32, n: VdspLength);
 
     pub(super) fn vDSP_vlint(
         a: *const f32,
@@ -47,14 +79,6 @@ unsafe extern "C" {
         ic: VdspStride,
         n: VdspLength,
         m: VdspLength,
-    );
-
-    pub(super) fn vDSP_vramp(
-        a: *const f32,
-        b: *const f32,
-        c: *mut f32,
-        ic: VdspStride,
-        n: VdspLength,
     );
 
     pub(super) fn vDSP_ztoc(

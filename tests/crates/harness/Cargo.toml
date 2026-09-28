@@ -24,7 +24,7 @@ serial_test = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["mock", "offline", "signal"] }
+kithara = { workspace = true, features = ["mock", "offline", "signal", "stretch-glide", "warp"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 
 cochlea-features = { workspace = true }
