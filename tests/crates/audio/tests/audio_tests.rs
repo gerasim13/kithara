@@ -6,7 +6,8 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{
         AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ChunkOutcome,
-        DecoderBackend, DecoderChangeCause, DecoderEvent, ReadOutcome, SeekLifecycleStage,
+        ConsumerWakeMode, DecoderBackend, DecoderChangeCause, DecoderEvent, ReadOutcome,
+        SeekLifecycleStage,
     },
     decode::{GaplessMode, SilenceTrimParams},
     events::{EventBus, EventReceiver},
@@ -76,6 +77,15 @@ async fn await_seek_request_epoch(
 /// callers keep it alive for the lifetime of the test so the shared
 /// app cache at `env::temp_dir()/kithara` stays untouched, and the
 /// directory is auto-deleted when the test returns.
+///
+/// Every reader in this file pulls off the real-time thread — from a
+/// blocking pool thread or from the test task itself, never from a render
+/// callback — so the configuration says so. The default
+/// [`ConsumerWakeMode::RealtimeDeferred`] only arms a scheduler pass and
+/// leaves the producer's thread gate unsignalled, which is correct when a
+/// render callback runs that pass and a deadlock when nothing does: a
+/// producer parked on a full ring waits for a wake the reader never sends,
+/// and the reader polls an empty ring forever.
 fn test_wav_config(
     tmp: &NamedTempFile,
     worker: &PlayWorker<TestPools>,
@@ -92,6 +102,7 @@ fn test_wav_config(
         .pools(worker.pools().clone())
         .build();
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(file_config)
+        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .hint("wav".to_string())
         .build();
     (cache, config)
