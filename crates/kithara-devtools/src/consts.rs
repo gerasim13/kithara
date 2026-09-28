@@ -360,6 +360,23 @@ pub(crate) const RETRIED_PASS: &str = "\
 </testsuites>
 ";
 
+/// A run where one case failed on every attempt and another passed only on
+/// its retry.
+#[cfg(test)]
+pub(crate) const FAILED_AND_RETRIED: &str = "\
+<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<testsuites name=\"nextest-run\" tests=\"2\" failures=\"1\" errors=\"0\" uuid=\"1\" timestamp=\"t\" time=\"0.049\">
+    <testsuite name=\"kithara_queue\" tests=\"2\" disabled=\"0\" errors=\"0\" failures=\"1\">
+        <testcase name=\"stalled_target\" classname=\"kithara_queue\" time=\"0.011\">
+            <failure message=\"panicked at stalled.rs:4\" type=\"test failure with exit code 101\">assertion failed</failure>
+        </testcase>
+        <testcase name=\"delayed_target\" classname=\"kithara_queue\" time=\"0.019\">
+            <flakyFailure message=\"panicked at delayed.rs:9\" type=\"test failure with exit code 101\">assertion failed</flakyFailure>
+        </testcase>
+    </testsuite>
+</testsuites>
+";
+
 /// Environment variable naming the compiler-cache wrapper Cargo runs.
 pub(crate) const WRAPPER: &str = "RUSTC_WRAPPER";
 

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig},
-    consts, retried, sccache, touched,
+    consts,
+    retried::Evidence,
+    sccache, touched,
     verdict::ChildFailure,
 };
 
@@ -134,30 +136,50 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     run_lane(&project, root, lane_name, lane, &request)
 }
 
-/// Run every lane the branch touched, serially, without letting the first
-/// failure hide the rest: this exists to name which lane broke.
+/// Run every lane the branch touched.
 fn run_touched(project: &ProjectConfig, root: &Path, request: &TestRequest) -> Result<()> {
-    let test = &project.test;
-    let selected = touched::lanes(test, &request.lanes)?;
+    let selected = touched::lanes(&project.test, &request.lanes)?;
     if selected.is_empty() {
         println!("no owned path touched; the nightly sweep covers these lanes");
         return Ok(());
     }
-    let mut failed = Vec::new();
-    for lane_name in &selected {
-        let lane = test
+    run_each(project, root, request, &selected)
+}
+
+/// Run `selected` serially without letting the first failure hide the rest:
+/// the error names each red lane with its own reason and leaves with the
+/// first one's exit code.
+fn run_each(
+    project: &ProjectConfig,
+    root: &Path,
+    request: &TestRequest,
+    selected: &[String],
+) -> Result<()> {
+    let mut failures = Vec::new();
+    let mut code = None;
+    for lane_name in selected {
+        let lane = project
+            .test
             .lanes
             .get(lane_name)
             .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
         println!("=== {lane_name} ===");
-        if run_lane(project, root, lane_name, lane, request).is_err() {
-            failed.push(lane_name.clone());
+        if let Err(error) = run_lane(project, root, lane_name, lane, request) {
+            code.get_or_insert_with(|| {
+                error
+                    .downcast_ref::<ChildFailure>()
+                    .map_or(1, ChildFailure::exit_code)
+            });
+            failures.push(format!("{error:#}"));
         }
     }
-    if !failed.is_empty() {
-        bail!("touched test lanes failed: {}", failed.join(", "));
-    }
-    Ok(())
+    code.map_or(Ok(()), |code| {
+        Err(ChildFailure::explained(
+            "touched test lanes".to_owned(),
+            Some(code),
+            failures.join("\n"),
+        ))
+    })
 }
 
 /// Reports build time before the verdict rather than after it: a red lane is exactly when the
@@ -171,18 +193,14 @@ fn run_lane(
     request: &TestRequest,
 ) -> Result<()> {
     let mut cmd = lane_command(project, lane_name, lane, request)?;
+    let evidence = Evidence::of(root, &project.test, &cmd)?;
+    evidence.clear()?;
 
     let status = cmd
         .status()
         .with_context(|| format!("failed to run test lane `{lane_name}`: {}", lane.program))?;
     sccache::report_stats(project.tools.program("sccache"));
-    if !status.success() {
-        return Err(ChildFailure::inherited(
-            format!("test lane `{lane_name}`"),
-            status.code(),
-        ));
-    }
-    retried::verdict(lane_name, root, &project.test, &cmd)
+    evidence.verdict(lane_name, &project.test.known_flakes, status.code())
 }
 
 fn lane_command(
@@ -1493,6 +1511,87 @@ mod tests {
             .to_string();
 
         assert!(error.contains("declares no JUnit report"), "{error}");
+    }
+
+    #[cfg(unix)]
+    fn failing_lane(prefix_args: &[&str]) -> TestLaneConfig {
+        TestLaneConfig {
+            program: "false".to_owned(),
+            prefix_args: prefix_args.iter().map(|arg| (*arg).to_owned()).collect(),
+            default_flash: Some(false),
+            default_no_block: Some(false),
+            ..TestLaneConfig::default()
+        }
+    }
+
+    /// A red lane blames only what this run recorded: the report a previous
+    /// run left in a shared build directory must not name tests this one
+    /// never reached.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_that_fails_before_its_tests_does_not_inherit_the_previous_report() {
+        let temp = TempDir::new().expect("temp root");
+        fs::create_dir_all(temp.path().join(".config")).expect("create .config");
+        fs::write(
+            temp.path().join(".config").join("nextest.toml"),
+            consts::RETRYING_PROFILE,
+        )
+        .expect("write nextest config");
+        let store = temp.path().join("target").join("nextest").join("ci");
+        fs::create_dir_all(&store).expect("create store");
+        fs::write(store.join("junit.xml"), consts::FAILED_AND_RETRIED).expect("leave a report");
+        let mut project = synthetic_project();
+        project.test.nextest_config = ".config/nextest.toml".to_owned();
+        let lane = failing_lane(&["nextest", "run", "--profile", "ci"]);
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        let error = run_lane(&project, temp.path(), "broken", &lane, &request)
+            .expect_err("the lane exits non-zero")
+            .to_string();
+
+        assert!(error.contains("left no test report"), "{error}");
+        assert!(!error.contains("stalled_target"), "{error}");
+    }
+
+    /// The gate's last line names every red lane with its own reason, not
+    /// only that some failed.
+    #[cfg(unix)]
+    #[test]
+    fn every_red_touched_lane_keeps_its_own_error() {
+        let mut project = synthetic_project();
+        project
+            .test
+            .lanes
+            .insert("first".to_owned(), failing_lane(&[]));
+        project
+            .test
+            .lanes
+            .insert("second".to_owned(), failing_lane(&[]));
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        let error = run_each(
+            &project,
+            Path::new("."),
+            &request,
+            &["first".to_owned(), "second".to_owned()],
+        )
+        .expect_err("both lanes fail");
+
+        assert_eq!(
+            error
+                .downcast_ref::<ChildFailure>()
+                .map(ChildFailure::exit_code),
+            Some(1)
+        );
+        let error = error.to_string();
+        assert!(
+            error.contains("test lane `first` failed (exit code 1)"),
+            "{error}"
+        );
+        assert!(
+            error.contains("test lane `second` failed (exit code 1)"),
+            "{error}"
+        );
     }
 
     #[test]
