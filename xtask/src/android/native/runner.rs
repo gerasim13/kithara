@@ -97,7 +97,7 @@ pub(crate) fn run(session_path: &Path, binary: &Path, args: &[String]) -> Result
         "the Android device ({})",
         session.evidence.join("device.lock").display()
     );
-    let holder = crate::job::lock_holder()?;
+    let holder = crate::job::lock_holder();
     let _lock = FileLock::exclusive(
         lock,
         &Wait {

@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use toml::Value;
+use tracing::warn;
 
 use crate::{
     common::project::{KnownFlake, TestCommandConfig},
@@ -74,17 +75,21 @@ impl Evidence {
     /// Removes the report an earlier run left, so the report read after this
     /// run is this run's own. A shared build directory keeps another job's.
     ///
-    /// # Errors
-    ///
-    /// When the old report exists and cannot be removed.
-    pub(crate) fn clear(&self) -> Result<()> {
+    /// A report that cannot be removed is logged, not returned: nextest
+    /// overwrites it once it records a test, so only a lane that stopped
+    /// before that can read it, and such a lane is red whatever it names.
+    pub(crate) fn clear(&self) {
         let Self::Report { path, .. } = self else {
-            return Ok(());
+            return;
         };
-        match fs::remove_file(path) {
-            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error)
-                .with_context(|| format!("remove the previous JUnit report at {}", path.display())),
-            _ => Ok(()),
+        if let Err(error) = fs::remove_file(path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            warn!(
+                "the previous report at {} stays: {error}; a lane that stops before nextest \
+                 records a test may name its tests",
+                path.display()
+            );
         }
     }
 
@@ -500,11 +505,10 @@ mod tests {
             .expect("read the profile");
         let report = temp.path().join("target/nextest/ci/junit.xml");
 
-        evidence.clear().expect("remove the stale report");
+        evidence.clear();
         assert!(!report.exists());
-        evidence
-            .clear()
-            .expect("a report that is already gone is cleared");
+        evidence.clear();
+        assert!(!report.exists());
     }
 
     #[test]

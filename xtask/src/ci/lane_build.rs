@@ -49,7 +49,7 @@ impl LaneBuild {
             .open(dir.join(consts::LOCK_FILE))
             .with_context(|| format!("opening the lane build lock in {}", dir.display()))?;
         let subject = format!("the lane build directory {}", dir.display());
-        let holder = crate::job::lock_holder()?;
+        let holder = crate::job::lock_holder();
         let lock = FileLock::exclusive(
             lock,
             &Wait {

@@ -234,7 +234,7 @@ impl Ledger {
             .open(&self.lock_path)
             .with_context(|| format!("opening ledger lock {}", self.lock_path.display()))?;
         let subject = format!("bridge ledger {}", self.lock_path.display());
-        let holder = crate::job::lock_holder()?;
+        let holder = crate::job::lock_holder();
         let _lock = FileLock::exclusive(
             file,
             &Wait {

@@ -41,18 +41,25 @@ impl FileLock {
     /// records `wait.holder` in the file until the lock is released.
     ///
     /// `file` must be a lock file with no content of its own, open for
-    /// reading and writing.
+    /// reading and writing. A record that cannot be written is logged, not
+    /// returned: it only names the holder to a waiter, and a job never fails
+    /// for its diagnostics.
     ///
     /// # Errors
     ///
-    /// When the lock cannot be taken or the record cannot be written.
+    /// When the lock cannot be taken.
     pub fn exclusive(file: File, wait: &Wait<'_>) -> io::Result<Self> {
         acquire(&file, wait.subject, <File as FileExt>::try_lock)?;
         let lock = Self {
             file,
             recorded: true,
         };
-        lock.record(wait.holder)?;
+        if let Err(error) = lock.record(wait.holder) {
+            warn!(
+                "took {} without recording its holder, so a waiter cannot name it: {error}",
+                wait.subject
+            );
+        }
         Ok(lock)
     }
 
@@ -60,15 +67,16 @@ impl FileLock {
     ///
     /// `file` must be open for reading and writing: no exclusive holder
     /// exists while this lock is held, so a record in the file names one
-    /// that died holding it, and this clears it.
+    /// that died holding it, and this clears it. A record that cannot be
+    /// cleared is logged, not returned: a waiter reading it sees its `since`.
     ///
     /// # Errors
     ///
-    /// When the lock cannot be taken or a stale record cannot be cleared.
+    /// When the lock cannot be taken.
     pub fn shared(file: File, subject: &str) -> io::Result<Self> {
         acquire(&file, subject, <File as FileExt>::try_lock_shared)?;
-        if file.metadata()?.len() > 0 {
-            file.set_len(0)?;
+        if let Err(error) = clear_record(&file) {
+            warn!("took {subject}, but a dead holder's record stays in its lock file: {error}");
         }
         Ok(Self {
             file,
@@ -108,6 +116,14 @@ impl FileLock {
         file.seek(SeekFrom::Start(0))?;
         write!(file, "holder={holder}\nsince={}\n", unix_now())
     }
+}
+
+/// Empties a lock file of the record a holder left in it.
+fn clear_record(file: &File) -> io::Result<()> {
+    if file.metadata()?.len() > 0 {
+        file.set_len(0)?;
+    }
+    Ok(())
 }
 
 impl Drop for FileLock {
@@ -416,5 +432,46 @@ mod tests {
             still_held, 0,
             "a lock nobody holds must not read as held to the next asker"
         );
+    }
+
+    /// The record only names the holder to a waiter: a lock file this holder
+    /// cannot write still locks, and the job that took it works on.
+    #[test]
+    fn a_lock_it_cannot_record_in_still_holds() {
+        let directory = TempDir::new().expect("temp dir");
+        drop(open(&directory));
+        let read_only = File::open(directory.path().join("lock")).expect("open read-only");
+
+        let _held = FileLock::exclusive(
+            read_only,
+            &Wait {
+                subject: "the journal",
+                holder: "job-a",
+            },
+        )
+        .expect("the lock is taken without its record");
+
+        assert!(matches!(
+            FileLock::try_exclusive(open(&directory)),
+            Err(TryLockError::WouldBlock)
+        ));
+    }
+
+    /// Clearing a dead holder's record is housekeeping: a lock file this
+    /// reader cannot write still gives it the shared lock.
+    #[test]
+    fn a_stale_record_it_cannot_clear_still_gives_the_shared_lock() {
+        let directory = TempDir::new().expect("temp dir");
+        fs::write(directory.path().join("lock"), "holder=job-dead\nsince=1\n")
+            .expect("leave a record");
+        let read_only = File::open(directory.path().join("lock")).expect("open read-only");
+
+        let _reader = FileLock::shared(read_only, "the journal")
+            .expect("the shared lock is taken without clearing the record");
+
+        assert!(matches!(
+            FileLock::try_exclusive(open(&directory)),
+            Err(TryLockError::WouldBlock)
+        ));
     }
 }

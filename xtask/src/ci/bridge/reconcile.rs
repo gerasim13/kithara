@@ -33,7 +33,7 @@ impl ReconcileLock {
     fn acquire(state_dir: &Path) -> Result<Self> {
         let file = open_reconcile_lock(state_dir)?;
         let subject = format!("bridge state {}", state_dir.display());
-        let holder = crate::job::lock_holder()?;
+        let holder = crate::job::lock_holder();
         let lock = FileLock::exclusive(
             file,
             &Wait {

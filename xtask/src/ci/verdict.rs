@@ -109,7 +109,7 @@ impl JournalFile {
 
     fn update<T>(&self, operation: impl FnOnce(&mut Journal) -> Result<T>) -> Result<T> {
         let subject = format!("verdict journal {}", self.path.display());
-        let holder = crate::job::lock_holder()?;
+        let holder = crate::job::lock_holder();
         let _lock = FileLock::exclusive(
             self.open_lock()?,
             &Wait {

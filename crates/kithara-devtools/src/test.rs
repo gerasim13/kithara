@@ -194,7 +194,7 @@ fn run_lane(
 ) -> Result<()> {
     let mut cmd = lane_command(project, lane_name, lane, request)?;
     let evidence = Evidence::of(root, &project.test, &cmd)?;
-    evidence.clear()?;
+    evidence.clear();
 
     let status = cmd
         .status()
@@ -1551,6 +1551,42 @@ mod tests {
 
         assert!(error.contains("left no test report"), "{error}");
         assert!(!error.contains("stalled_target"), "{error}");
+    }
+
+    /// Removing the previous report only keeps the verdict honest: a report
+    /// the lane cannot remove must not stop the lane from running.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_whose_previous_report_cannot_be_removed_still_runs() {
+        let temp = TempDir::new().expect("temp root");
+        fs::create_dir_all(temp.path().join(".config")).expect("create .config");
+        fs::write(
+            temp.path().join(".config").join("nextest.toml"),
+            consts::RETRYING_PROFILE,
+        )
+        .expect("write nextest config");
+        let report = temp
+            .path()
+            .join("target")
+            .join("nextest")
+            .join("ci")
+            .join("junit.xml");
+        fs::create_dir_all(&report).expect("leave a report path no file removal clears");
+        let mut project = synthetic_project();
+        project.test.nextest_config = ".config/nextest.toml".to_owned();
+        let lane = failing_lane(&["nextest", "run", "--profile", "ci"]);
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        let error = run_lane(&project, temp.path(), "broken", &lane, &request)
+            .expect_err("the lane exits non-zero");
+
+        assert_eq!(
+            error
+                .downcast_ref::<ChildFailure>()
+                .map(ChildFailure::exit_code),
+            Some(1),
+            "{error:#}"
+        );
     }
 
     /// The gate's last line names every red lane with its own reason, not

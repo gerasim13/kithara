@@ -121,7 +121,7 @@ pub(crate) fn lease_current() -> Result<Option<GenerationLease>> {
 pub(super) fn refresh(root: &Path) -> Result<RefreshLock> {
     let (file, path) = open_refresh(root)?;
     let subject = format!("self-cache refresh {}", path.display());
-    let holder = crate::job::lock_holder()?;
+    let holder = crate::job::lock_holder();
     let lock = FileLock::exclusive(
         file,
         &Wait {

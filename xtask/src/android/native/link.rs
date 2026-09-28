@@ -117,7 +117,7 @@ fn bootstrap(config: &Config, context: &Path) -> Result<PathBuf> {
         .write(true)
         .open(config.objects.join(format!("{hash}.lock")))?;
     let subject = format!("ndk-context bootstrap object {hash}");
-    let holder = crate::job::lock_holder()?;
+    let holder = crate::job::lock_holder();
     let _lock = FileLock::exclusive(
         lock,
         &Wait {
