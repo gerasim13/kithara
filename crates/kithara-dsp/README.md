@@ -24,10 +24,11 @@ same backends; `downmix` folds interleaved frames to mono and `sum_squares`
 reduces a slice. The FFT, the bin kernels and the autocorrelation build only
 with the `spectrum` feature, off by default, so a build that runs no analysis
 compiles no FFT; `spectrum::FftLen` and `SpectrumError` are always
-available. No kernel panics; only `filter::Biquad::new` and
-`spectrum::Fft::new` allocate, and `Fft::spectrum` and
-`spectrum::Autocorrelation::new` take their planes from the caller's
-`kithara-bufpool` region.
+available. No kernel panics; only `filter::Biquad::new`,
+`spectrum::Fft::new` and, off Apple, `Fft::spectrum` allocate.
+`Fft::spectrum` takes its sample planes, and `spectrum::Autocorrelation::new`
+its padding, from the caller's `kithara-bufpool` region; off Apple the complex
+planes of the transform are the FFT library's own.
 
 ## Usage
 
@@ -78,7 +79,7 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>spectrum::FftLen</code></td><td>An FFT length <code>f·2ⁿ</code>, <code>f</code> in {1, 3, 5, 15}, <code>n ≥ 4</code>: the lengths vDSP's real DFT runs, held on every backend</td></tr>
 
-<tr><td><code>spectrum::Fft</code></td><td>Real FFT of a Hann-windowed frame into a <code>Spectrum</code> of <code>N/2 + 1</code> unscaled bins; a short frame is zero-padded; <code>new</code> allocates, <code>spectrum</code> takes its planes from the caller's pool region, <code>forward</code> does neither</td></tr>
+<tr><td><code>spectrum::Fft</code></td><td>Real FFT of a Hann-windowed frame into a <code>Spectrum</code> of <code>N/2 + 1</code> unscaled bins; a short frame is zero-padded; <code>new</code> allocates, <code>spectrum</code> takes its sample planes from the caller's pool region and, off Apple, allocates the complex ones, <code>forward</code> does neither</td></tr>
 
 <tr><td><code>spectrum::magnitude</code> / <code>spectrum::phase</code></td><td>Magnitude and phase (<code>atan2</code>) of each bin from its real and imaginary parts, through one <code>fearless_simd</code> kernel on every target</td></tr>
 
