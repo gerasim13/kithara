@@ -221,7 +221,7 @@ impl GitlabConfig {
                             .as_str()
                             .unwrap_or_else(|| panic!("`{rules_owner}` has a non-string rule key"));
                         assert!(
-                            matches!(key, "if" | "when" | "interruptible"),
+                            matches!(key, "if" | "when" | "allow_failure" | "interruptible"),
                             "`{rules_owner}` uses unsupported rule key `{key}`"
                         );
                     }
@@ -237,6 +237,11 @@ impl GitlabConfig {
                                         panic!("`{rules_owner}` has a non-string `when`")
                                     })
                                     .to_owned()
+                            }),
+                            allow_failure: rule.get("allow_failure").map(|allowed| {
+                                allowed.as_bool().unwrap_or_else(|| {
+                                    panic!("`{rules_owner}` has a non-boolean `allow_failure`")
+                                })
                             }),
                         });
                     }
@@ -298,6 +303,7 @@ impl GitlabConfig {
 
 struct RuleDecision {
     when: Option<String>,
+    allow_failure: Option<bool>,
 }
 
 fn yaml(path: impl AsRef<Path>) -> Value {
@@ -697,6 +703,42 @@ fn safari_stays_out_of_merge_requests_and_runs_nightly() {
         .decision_for_kind(".rules-nightly", "nightly")
         .expect("Safari runs nightly");
     assert_automatic_when(nightly.when.as_deref(), "apple:safari");
+}
+
+// The one deep lane a review may ask for by hand. Offered there, it must never
+// hold the pipeline: in `rules:`, `manual` blocks unless the rule allows the job
+// to fail, and the bridge reads a quarantine child still waiting on a job as a
+// failure. The nightly channel keeps running it unasked, and a failure there
+// still fails the night.
+#[test]
+fn the_apple_sanitizer_is_offered_to_review_pipelines_without_blocking_them() {
+    let config = GitlabConfig::load(workspace_root());
+    assert_eq!(
+        config.rules_owner("deep:rtsan").as_deref(),
+        Some("deep:rtsan")
+    );
+    assert_eq!(config.effective_value("deep:rtsan", "allow_failure"), None);
+    let nightly = config
+        .decision_for_kind("deep:rtsan", "nightly")
+        .expect("the nightly channel runs the sanitizer");
+    assert_automatic_when(nightly.when.as_deref(), "deep:rtsan");
+    assert_eq!(nightly.allow_failure, None);
+
+    for kind in ["branch", MERGE_REQUEST_KIND, "quarantine"] {
+        let review = config
+            .decision_for_kind("deep:rtsan", kind)
+            .unwrap_or_else(|| panic!("a {kind} pipeline is offered the sanitizer"));
+        assert_eq!(
+            review.when.as_deref(),
+            Some("manual"),
+            "a {kind} pipeline runs it only when asked"
+        );
+        assert_eq!(
+            review.allow_failure,
+            Some(true),
+            "and a {kind} pipeline neither waits on it nor fails with it"
+        );
+    }
 }
 
 // Membership is declared once, in the catalog. A GitLab job that admits a kind

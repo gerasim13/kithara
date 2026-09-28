@@ -6,9 +6,29 @@
   stage: deep
   needs: []
 
+# The only sanitizer run that sees inside Accelerate. The nightly channel runs
+# it against the default branch; a review ref is offered it by hand, so a
+# change that reaches vDSP from the audio thread can be checked before it
+# merges. In `rules:`, `manual` blocks the pipeline unless the rule allows the
+# job to fail, and a quarantine child still waiting on a job reaches the bridge
+# as a failure.
 deep:rtsan:
   extends: .deep-job
   timeout: 120 minutes
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+      when: manual
+      allow_failure: true
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
+      when: manual
+      allow_failure: true
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+      when: manual
+      allow_failure: true
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
   script:
     - just ci run deep-rtsan
 

@@ -1822,7 +1822,7 @@ steps = [
   ], label = "real-time sanitizer suite" },
 ]
 role = "gate"
-kinds = ["nightly"]
+kinds = ["branch", "merge-request", "quarantine", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-fast]
