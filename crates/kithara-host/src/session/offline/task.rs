@@ -294,3 +294,69 @@ pub(crate) enum OfflineSessionError {
     #[error("offline timeline overflow")]
     TimelineOverflow,
 }
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
+
+    use super::{
+        super::super::{
+            dispatch::run_cmd,
+            protocol::{Cmd, Reply},
+            tests::graph::{running_slot, state as test_state},
+        },
+        *,
+    };
+
+    fn offline_state(block_frames: NonZeroU32) -> SessionState<OfflineStream, TestPools> {
+        test_state(move |ctx, rate| {
+            let config = BackendConfig::builder()
+                .block_frames(block_frames)
+                .declared_latency(Duration::ZERO)
+                .sample_rate(NonZeroU32::new(rate).ok_or("fixture sample rate")?)
+                .build();
+            OfflineStream::start(ctx, config).map_err(|error| error.to_string())
+        })
+    }
+
+    /// Nothing but a render runs the offline callback, so the stop of one
+    /// player hands its processors back through a zero-frame poll of its
+    /// own, while the other player keeps its slot and renders on.
+    #[kithara::test]
+    fn a_stopped_player_leaves_nothing_retiring_before_the_next_render() {
+        let block_frames = NonZeroU32::new(128).expect("fixture block frames");
+        let mut state = offline_state(block_frames);
+        let (stopped, _) = running_slot(&mut state);
+        let (playing, slot) = running_slot(&mut state);
+
+        match run_cmd(&mut state, Cmd::StopPlayer { player_id: stopped }) {
+            Reply::Ok => {}
+            Reply::Err(error) => panic!("the player stop failed: {error}"),
+            _ => panic!("the player stop returned an unexpected reply"),
+        }
+        assert!(
+            state.retiring.is_empty(),
+            "the stop's zero-frame poll handed the stopped player's processors back"
+        );
+        let live = state
+            .graph
+            .decks()
+            .find(|deck| deck.player_id == playing)
+            .map(|deck| {
+                deck.slots
+                    .iter()
+                    .map(|nodes| nodes.slot_id)
+                    .collect::<Vec<_>>()
+            });
+        assert_eq!(live, Some(vec![slot]), "the other player keeps its slot");
+
+        render_block(&mut state, block_frames.get(), 0, &pools())
+            .expect("the other player renders on after the stop");
+        state
+            .shutdown()
+            .expect("a session whose callback returned everything closes cleanly");
+    }
+}

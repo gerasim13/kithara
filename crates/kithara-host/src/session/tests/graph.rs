@@ -1,9 +1,11 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::FirewheelContext;
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_effects::LimiterConfig;
+#[cfg(test)]
+use kithara_events::EventBus;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::Player;
@@ -22,9 +24,11 @@ use kithara_warp::BeatGridId;
 
 use super::super::{
     dispatch::{run_cmd, with_owner_cut},
-    protocol::{Cmd, Reply, SessionDispatcher, SessionStream},
+    protocol::{Cmd, PlayerId, Reply, SessionDispatcher, SessionStream},
     state::{RootView, SessionState},
 };
+#[cfg(test)]
+use crate::api::SlotId;
 use crate::{PlayerMember, host::HeldPlayer};
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
@@ -140,6 +144,49 @@ pub(crate) fn attach_player<T>(state: &mut SessionState<T, TestPools>) -> BeatGr
     let grid_id = BeatGridId::allocate().expect("fixture player grid id");
     attach_player_with_id(state, grid_id, pools());
     grid_id
+}
+
+/// Registers and starts a player on `state` and allocates it one slot.
+#[cfg(test)]
+pub(crate) fn running_slot<T: SessionStream>(
+    state: &mut SessionState<T, TestPools>,
+) -> (PlayerId, SlotId) {
+    let sample_rate = SessionState::<T, TestPools>::DEFAULT_SAMPLE_RATE;
+    let grid_id = attach_player(state);
+    let player_id = match run_cmd(
+        state,
+        Cmd::RegisterPlayer {
+            grid_id,
+            bus: EventBus::default(),
+            eq_layout: Vec::new(),
+            gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
+            pools: pools(),
+            sample_rate,
+        },
+    ) {
+        Reply::PlayerRegistered(registered) => registered.id,
+        Reply::Err(error) => panic!("player registration failed: {error}"),
+        _ => panic!("player registration returned an unexpected reply"),
+    };
+    match run_cmd(
+        state,
+        Cmd::StartPlayer {
+            player_id,
+            sample_rate,
+            render_quantum_frames: None,
+            response_budget_frames: NonZeroUsize::new(448),
+            master_volume: 1.0,
+        },
+    ) {
+        Reply::Ok => {}
+        Reply::Err(error) => panic!("player start failed: {error}"),
+        _ => panic!("player start returned an unexpected reply"),
+    }
+    match run_cmd(state, Cmd::AllocateSlot { player_id }) {
+        Reply::SlotAllocated(allocated) => (player_id, allocated.slot),
+        Reply::Err(error) => panic!("slot allocation failed: {error}"),
+        _ => panic!("slot allocation returned an unexpected reply"),
+    }
 }
 
 fn attach_player_with_id<T, S>(

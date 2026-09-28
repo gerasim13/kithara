@@ -2,14 +2,13 @@
 //! back, however long that callback stays silent, and never blocks the Host.
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use audioadapter_buffers::direct::InterleavedSlice;
 use firewheel::{
     ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
     processor::FirewheelProcessor,
 };
-use kithara_events::EventBus;
 use kithara_platform::{
     sync::{
         Arc, Mutex,
@@ -20,10 +19,7 @@ use kithara_platform::{
     time::{Duration, WallInstant},
 };
 use kithara_sync::CloseError;
-use kithara_test_utils::{
-    bufpool::{TestPools, pools},
-    kithara,
-};
+use kithara_test_utils::{bufpool::TestPools, kithara};
 
 use super::{
     super::{
@@ -32,7 +28,7 @@ use super::{
         protocol::{Cmd, HostReply, PlayerId, Reply, SessionError, SessionStream},
         state::SessionState,
     },
-    graph::{attach_player, state as test_state},
+    graph::{running_slot, state as test_state},
 };
 use crate::{api::SlotId, error::PlayError};
 
@@ -144,44 +140,6 @@ fn threaded_device(
             thread: Some(thread),
             kept: kept.clone(),
         })
-    }
-}
-
-fn running_slot(state: &mut TestState) -> (PlayerId, SlotId) {
-    let grid_id = attach_player(state);
-    let player_id = match run_cmd(
-        state,
-        Cmd::RegisterPlayer {
-            grid_id,
-            bus: EventBus::default(),
-            eq_layout: Vec::new(),
-            gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
-            pools: pools(),
-            sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-        },
-    ) {
-        Reply::PlayerRegistered(registered) => registered.id,
-        Reply::Err(error) => panic!("player registration failed: {error}"),
-        _ => panic!("player registration returned an unexpected reply"),
-    };
-    match run_cmd(
-        state,
-        Cmd::StartPlayer {
-            player_id,
-            sample_rate: TestState::DEFAULT_SAMPLE_RATE,
-            render_quantum_frames: None,
-            response_budget_frames: NonZeroUsize::new(448),
-            master_volume: 1.0,
-        },
-    ) {
-        Reply::Ok => {}
-        Reply::Err(error) => panic!("player start failed: {error}"),
-        _ => panic!("player start returned an unexpected reply"),
-    }
-    match run_cmd(state, Cmd::AllocateSlot { player_id }) {
-        Reply::SlotAllocated(allocated) => (player_id, allocated.slot),
-        Reply::Err(error) => panic!("slot allocation failed: {error}"),
-        _ => panic!("slot allocation returned an unexpected reply"),
     }
 }
 
