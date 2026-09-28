@@ -241,7 +241,7 @@ mod tests {
     use crate::{sync::Arc, thread};
 
     #[cfg(not(feature = "loom"))]
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn float_bits_and_clone_snapshot_are_preserved() {
         let value = RelaxedAtomicF32::new(f32::from_bits(0x7fc0_1234));
         let snapshot = value.clone();
@@ -263,7 +263,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "loom"))]
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn bool_clone_is_independent() {
         let value = RelaxedAtomicBool::new(false);
         let snapshot = value.clone();
@@ -273,7 +273,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "loom", not(target_arch = "wasm32")))]
-    #[kithara::test(native, loom, flash(false))]
+    #[kithara::test(native, loom)]
     fn loom_models_bool_publication_and_scalar_values() {
         let value = Arc::new(RelaxedAtomicF32::new(0.0));
         let wide = Arc::new(RelaxedAtomicF64::new(0.0));

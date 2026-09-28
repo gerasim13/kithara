@@ -1,12 +1,10 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
 use kithara_effects::eq::EqBandConfig;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
-    atomic::RelaxedAtomicF32,
+    atomic::{Acquire, AtomicValue, RelaxedAtomicF32, Release},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -29,7 +27,7 @@ type SlotHandle = SlotControl;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct EngineImpl<S> {
-    running: AtomicBool,
+    running: AtomicValue<bool, Acquire, Release>,
     master_volume: RelaxedAtomicF32,
     pub(super) config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
@@ -89,7 +87,7 @@ impl<S> EngineImpl<S> {
             session,
             master_volume: RelaxedAtomicF32::new(1.0),
             registration: Mutex::default(),
-            running: AtomicBool::new(false),
+            running: AtomicValue::<bool, Acquire, Release>::new(false),
             start_lock: Mutex::new(()),
             slots: Mutex::new(SlotTable::with_capacity(max_slots)),
         }
@@ -100,7 +98,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return Err(PlayError::EngineNotRunning);
         }
 
@@ -156,10 +154,10 @@ impl<S> EngineImpl<S> {
             return Ok(());
         };
 
-        if self.running.load(Ordering::Acquire) {
+        if self.running.load() {
             self.session.stop_player(player_id)?;
             self.slots.lock().clear();
-            self.running.store(false, Ordering::Release);
+            self.running.store(false);
             self.emit(EngineEvent::Stopped);
         }
 
@@ -209,7 +207,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             debug!(
                 reason,
                 "audio route invalidation ignored while engine is stopped"
@@ -220,7 +218,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
+        self.running.load()
     }
 
     /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
@@ -230,7 +228,7 @@ impl<S> EngineImpl<S> {
     /// `make_sincs` runs while the resource is prepared (off the worker thread)
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return self.config.sample_rate.get();
         }
         self.session
@@ -258,7 +256,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return Err(PlayError::EngineNotRunning);
         }
 
@@ -343,7 +341,7 @@ impl<S> EngineImpl<S> {
 
     pub fn start(&self) -> Result<(), PlayError> {
         let _start = self.start_lock.lock();
-        if self.running.load(Ordering::Acquire) {
+        if self.running.load() {
             return Err(PlayError::EngineAlreadyRunning);
         }
 
@@ -356,7 +354,7 @@ impl<S> EngineImpl<S> {
             self.config.response_budget_frames,
         )?;
 
-        self.running.store(true, Ordering::Release);
+        self.running.store(true);
 
         info!(
             sample_rate = self.config.sample_rate.get(),
@@ -370,7 +368,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub fn stop(&self) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
+        if !self.running.load() {
             return Err(PlayError::EngineNotRunning);
         }
 
@@ -379,7 +377,7 @@ impl<S> EngineImpl<S> {
 
         self.slots.lock().clear();
 
-        self.running.store(false, Ordering::Release);
+        self.running.store(false);
         info!(player_id, "engine stopped");
         self.emit(EngineEvent::Stopped);
         Ok(())

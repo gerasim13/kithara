@@ -1,12 +1,13 @@
-use std::sync::{
-    Mutex, PoisonError,
-    atomic::{AtomicU64, Ordering},
-};
-
 use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
-use kithara_platform::CancelToken;
+use kithara_platform::{
+    CancelToken,
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use kithara_play::{ResourceConfig, ResourceSrc};
 
 use crate::{
@@ -157,7 +158,7 @@ impl<S> Tracks<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(crate) const fn new(bus: EventBus) -> Self {
+    pub(crate) fn new(bus: EventBus) -> Self {
         Self {
             bus,
             inner: Mutex::new(Vec::new()),
@@ -246,8 +247,8 @@ where
     /// Lock the underlying `Vec<TrackRecord>` for direct read/write.
     /// Callers that only need to flip status should prefer
     /// [`Self::set_status`].
-    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>> {
+        self.inner.lock()
     }
 
     /// Attempt won its lane permit: flip the track to `Loading`. `false`
@@ -373,11 +374,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
-
     use kithara_assets::AssetStore;
     use kithara_audio::{AudioObserveError, AudioObserver};
-    use kithara_platform::sync::Arc;
+    use kithara_platform::sync::{Arc, atomic::AtomicUsize};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_test_utils::kithara;
 

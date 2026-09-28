@@ -289,13 +289,16 @@ impl<S> PlayerRuntime<S> {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
-    #[cfg(not(target_arch = "wasm32"))]
-    use std::sync::mpsc::{RecvTimeoutError, channel};
 
     use kithara_assets::AssetStore;
     use kithara_config::Config as _;
     use kithara_decode::GaplessMode;
     use kithara_platform::{CancelToken, time::Duration};
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_platform::{
+        sync::mpsc::{self, TryRecvError},
+        thread,
+    };
     use kithara_test_utils::kithara;
 
     use super::{super::PlayerImpl, *};
@@ -330,7 +333,7 @@ mod tests {
         )
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn player_config_values_follow_live_controls() {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
@@ -384,14 +387,14 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn close_waits_for_an_admitted_operation() {
         let player = player();
         let runtime = Arc::clone(&player.runtime);
         let control = player.make_control();
-        let (entered_tx, entered_rx) = channel();
-        let (release_tx, release_rx) = channel();
-        let operation = std::thread::spawn(move || {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let operation = thread::spawn(move || {
             runtime
                 .with_open(|_| {
                     entered_tx.send(()).expect("report admitted operation");
@@ -403,9 +406,9 @@ mod tests {
             .recv()
             .expect("operation entered the admission gate");
 
-        let (attempting_tx, attempting_rx) = channel();
-        let (closing_tx, closing_rx) = channel();
-        let closer = std::thread::spawn(move || {
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let (closing_tx, closing_rx) = mpsc::channel();
+        let closer = thread::spawn(move || {
             attempting_tx.send(()).expect("report close attempt");
             closing_tx
                 .send(control.close())
@@ -414,10 +417,8 @@ mod tests {
         attempting_rx
             .recv()
             .expect("close reached the admission gate");
-        assert!(matches!(
-            closing_rx.recv_timeout(Duration::from_millis(50)),
-            Err(RecvTimeoutError::Timeout)
-        ));
+        kithara_test_utils::test::wall_sleep(Duration::from_millis(50));
+        assert!(matches!(closing_rx.try_recv(), Err(TryRecvError::Empty)));
 
         release_tx.send(()).expect("release admitted operation");
         operation.join().expect("operation thread completed");
@@ -439,10 +440,10 @@ mod tests {
 
     /// The claim rests on the ordering, not on the wait: the operation
     /// is released only after the drop has been observed, so a drop that
-    /// queued behind it could never be observed at all. The bound below
-    /// is a backstop that turns that deadlock into a named failure.
+    /// queued behind it could never be observed at all. The test timeout
+    /// turns that deadlock into a named failure.
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn drop_does_not_wait_for_an_admitted_operation() {
         let player = player();
         let runtime = Arc::clone(&player.runtime);
@@ -452,9 +453,9 @@ mod tests {
             .cancel
             .expect("prepare_config must populate cancel")
             .child();
-        let (entered_tx, entered_rx) = channel();
-        let (release_tx, release_rx) = channel();
-        let operation = std::thread::spawn(move || {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let operation = thread::spawn(move || {
             runtime
                 .with_open(|_| {
                     entered_tx.send(()).expect("report admitted operation");
@@ -467,13 +468,13 @@ mod tests {
             .expect("operation entered the admission gate");
 
         let closed = Arc::clone(&player.runtime);
-        let (dropped_tx, dropped_rx) = channel();
-        let dropper = std::thread::spawn(move || {
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let dropper = thread::spawn(move || {
             drop(player);
             dropped_tx.send(()).expect("report completed drop");
         });
         dropped_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv()
             .expect("drop must not queue behind an admitted operation");
         assert!(closed.is_closed(), "drop must close the player at once");
         assert!(
@@ -496,7 +497,7 @@ mod tests {
         );
 
         let concurrent = Arc::clone(&lifecycle);
-        let result = std::thread::spawn(move || concurrent.begin_close())
+        let result = thread::spawn(move || concurrent.begin_close())
             .join()
             .expect("BUG: lifecycle probe thread panicked");
         assert!(matches!(result, Err(PlayError::Closed)));

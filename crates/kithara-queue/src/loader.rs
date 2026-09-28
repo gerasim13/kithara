@@ -366,14 +366,17 @@ mod tests {
         future::{self, Future},
         num::{NonZeroU16, NonZeroU32, NonZeroU64},
         pin::pin,
-        sync::atomic::{AtomicUsize, Ordering},
         task::{Context, Waker},
     };
 
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_download::RequestId;
     use kithara_events::EventBus;
-    use kithara_platform::{time::Duration, tokio::sync::oneshot};
+    use kithara_platform::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+        tokio::sync::oneshot,
+    };
     use kithara_play::{
         ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
         player::PlayerControlSource,

@@ -1,7 +1,5 @@
-use std::sync::atomic::Ordering;
-
 use kithara_events::TrackId;
-use kithara_platform::sync::Arc;
+use kithara_platform::sync::{Arc, atomic::Ordering};
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
 

@@ -1,6 +1,7 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-use kithara_platform::atomic::{RelaxedAtomicF32, RelaxedAtomicF64, RelaxedAtomicU32};
+use kithara_platform::{
+    atomic::{RelaxedAtomicF32, RelaxedAtomicF64, RelaxedAtomicU32},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use super::RtMetrics;
 
@@ -177,8 +178,6 @@ impl PlaybackShared {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
     use kithara_test_utils::kithara;
 
     use super::*;

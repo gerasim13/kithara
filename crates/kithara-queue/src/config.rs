@@ -1,13 +1,14 @@
-use std::{
-    num::NonZeroUsize,
-    sync::{Mutex, PoisonError},
-};
+use std::num::NonZeroUsize;
 
 use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_derive::Patch;
-use kithara_platform::{CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+    tokio::runtime::Handle as RuntimeHandle,
+};
 use kithara_play::{CrossfadeSettings, PlayerImpl};
 
 use crate::{ActionAtItemEnd, PlaybackOrder, consts, navigation::NavigationState};
@@ -29,7 +30,7 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     /// The navigation owner attached when the queue is constructed.
-    #[config(skip = "navigation owns the live traversal order", builder(field = None), patch(skip))]
+    #[config(skip = "navigation owns the live traversal order", builder(field = None), patch(skip), debug(skip))]
     pub(crate) navigation: Option<Arc<Mutex<NavigationState>>>,
 
     /// Max concurrent background prefetch loads. Default: 3.
@@ -89,7 +90,8 @@ where
         value(ActionAtItemEnd, self.action_at_item_end()),
         sdk,
         builder(default = Mutex::new(ActionAtItemEnd::default()), with = |value: ActionAtItemEnd| Mutex::new(value)),
-        patch(wire = ActionAtItemEnd, from = Mutex::new)
+        patch(wire = ActionAtItemEnd, from = Mutex::new),
+        debug(skip)
     )]
     pub(crate) action_at_item_end: Mutex<ActionAtItemEnd>,
 
@@ -98,7 +100,8 @@ where
         value(CrossfadeSettings, self.crossfade_settings()),
         sdk,
         builder(default = Mutex::new(CrossfadeSettings::default()), with = |value: CrossfadeSettings| Mutex::new(value)),
-        patch(wire = CrossfadeSettings, from = Mutex::new)
+        patch(wire = CrossfadeSettings, from = Mutex::new),
+        debug(skip)
     )]
     pub(crate) crossfade_settings: Mutex<CrossfadeSettings>,
 }
@@ -108,42 +111,27 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn action_at_item_end(&self) -> ActionAtItemEnd {
-        *self
-            .action_at_item_end
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *self.action_at_item_end.lock()
     }
 
     pub(crate) fn crossfade_settings(&self) -> CrossfadeSettings {
-        *self
-            .crossfade_settings
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *self.crossfade_settings.lock()
     }
 
     fn live_playback_order(&self) -> PlaybackOrder {
         self.navigation
             .as_ref()
             .map_or(self.playback_order, |navigation| {
-                navigation
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .playback_order()
+                navigation.lock().playback_order()
             })
     }
 
     pub(crate) fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
-        *self
-            .action_at_item_end
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = action;
+        *self.action_at_item_end.lock() = action;
     }
 
     pub(crate) fn set_crossfade_settings(&self, settings: CrossfadeSettings) {
-        *self
-            .crossfade_settings
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = settings;
+        *self.crossfade_settings.lock() = settings;
     }
 }
 

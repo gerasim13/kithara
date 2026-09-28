@@ -1,7 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
+use kithara_platform::sync::atomic::{AtomicU64, Ordering};
 pub use kithara_play::player::PlaybackView;
 use kithara_play::{CrossfadeSettings, ResourceSrc, SelectionPlayback};
 
@@ -159,7 +158,7 @@ impl AtomicTrackId {
             .is_ok()
     }
 
-    pub(super) const fn disarmed() -> Self {
+    pub(super) fn disarmed() -> Self {
         Self(AtomicU64::new(Self::NONE_BITS))
     }
 
@@ -214,7 +213,7 @@ impl AtomicCachedPosition {
         self.0.store(bits, Ordering::Release);
     }
 
-    pub(super) const fn unknown() -> Self {
+    pub(super) fn unknown() -> Self {
         Self(AtomicU64::new(f64::NAN.to_bits()))
     }
 }

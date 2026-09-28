@@ -24,9 +24,8 @@ SDK surfaces.
 ## Usage
 
 ```rust
-use std::sync::Arc;
-
 use kithara_bufpool::{OverallBudget, PoolConfig, PoolError, pool_schema};
+use kithara_platform::sync::Arc;
 use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, Transition};
 

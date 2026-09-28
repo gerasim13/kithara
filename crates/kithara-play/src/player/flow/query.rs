@@ -1,5 +1,6 @@
 use delegate::delegate;
 use kithara_events::{EventBus, EventReceiver, EventSet};
+use kithara_platform::sync::atomic::Ordering;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -53,12 +54,11 @@ impl<S> PlayerRuntime<S> {
         let slot_id = self.slot()?;
         let shared = self.core.engine.slot_playback(slot_id)?;
         let snapshot = shared.snapshot();
-        let stalled = self.core.engine.suspended_at().is_some_and(|tick| {
-            shared
-                .process_count
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == tick
-        });
+        let stalled = self
+            .core
+            .engine
+            .suspended_at()
+            .is_some_and(|tick| shared.process_count.load(Ordering::Relaxed) == tick);
         Some(if stalled {
             snapshot.silenced()
         } else {

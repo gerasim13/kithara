@@ -1,4 +1,5 @@
 use kithara_effects::{GainDb, eq::EqBandConfig};
+use kithara_platform::sync::atomic::Ordering;
 use kithara_test_macros as kithara;
 use kithara_warp::StretchControls;
 use tracing::warn;
@@ -50,11 +51,7 @@ impl<S> PlayerRuntime<S> {
             let tick = self
                 .slot()
                 .and_then(|slot| self.core.engine.slot_playback(slot))
-                .map_or(0, |shared| {
-                    shared
-                        .process_count
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                });
+                .map_or(0, |shared| shared.process_count.load(Ordering::Relaxed));
             self.core.engine.suspend_output(tick);
         }
         self.core

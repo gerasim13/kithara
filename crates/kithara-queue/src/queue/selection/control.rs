@@ -238,10 +238,7 @@ mod tests {
         let queue = make_queue();
         let id = append(&queue, "https://example.com/a.mp3");
         let _ = queue.select(id, Transition::None);
-        let phase = *queue
-            .pending_select
-            .lock()
-            .expect("BUG: pending_select Mutex is not held across await");
+        let phase = *queue.pending_select.lock();
         match phase {
             SelectPhase::Pending(pending) => {
                 assert_eq!(pending.id, id);
