@@ -3,10 +3,10 @@
 
 use kithara::{
     platform::{sync::Arc, time::Duration},
-    play::{PlayError, SessionError},
+    play::{PlayError, SessionError, SessionTransportSnapshot},
     sync::{SyncError, SyncGroup, SyncIntent, SyncStatusSnapshot},
 };
-use kithara_integration_tests::{grid::Start, kithara};
+use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
 
 use super::{
     sync_listening::render_frames,
@@ -14,6 +14,7 @@ use super::{
         Audible, PreparedSources, ProductHarness, RETIRED_BESIDE_PLAYBACK,
         RETIRED_BESIDE_PLAYBACK_CONTROL, SyncCase, synthetic_sources,
     },
+    sync_replan::handed,
 };
 
 /// The muted deck the Host syncs and, in the candidate run, removes.
@@ -26,25 +27,49 @@ const REMOVED_AT: u64 = 4 * 48_000;
 /// Output the free deck renders after the removal.
 const LISTEN_FRAMES: usize = 3 * 48_000;
 
-/// What the free deck played after the removal point, and where its own
-/// clock stood at the end.
+/// What the free deck played after the removal point, where its own clock
+/// stood at the end, and the Host transport it played against.
 struct Heard {
     pcm: Vec<f32>,
     position: Option<f64>,
+    transport: SessionTransportSnapshot,
 }
 
-/// Syncs the muted deck onto the Host, renders to [`REMOVED_AT`], removes
-/// that deck when `remove` holds, then hears the free deck on.
+async fn transport(harness: &ProductHarness, case: SyncCase) -> SessionTransportSnapshot {
+    harness
+        .host
+        .with(|host| host.session_transport())
+        .await
+        .unwrap_or_else(|error| panic!("{}: read the Host transport: {error}", case.id()))
+}
+
+/// Syncs the muted deck onto the Host, renders to [`REMOVED_AT`] once its
+/// entry is handed to the audio thread, removes that deck when `remove`
+/// holds, then hears the free deck on.
 async fn heard_after(case: SyncCase, sources: &PreparedSources, remove: bool) -> Heard {
     let mut harness =
         ProductHarness::new(case, sources, Start::Seconds(0.0), Audible::Deck(SOUNDING)).await;
-    let transport = harness.transport_revision(case).await;
+    let trace = usdt_trace::scope();
+    let revision = harness.transport_revision(case).await;
     harness
-        .request_deck_sync(case, RETIRED, transport, SyncIntent::Enable)
+        .request_deck_sync(case, RETIRED, revision, SyncIntent::Enable)
         .await;
+    let retired = Arc::clone(&harness.decks[RETIRED]);
+    let issued = {
+        let deck = Arc::clone(&retired);
+        harness
+            .host
+            .with(move |host| host.deck_sync_state(&deck))
+            .await
+            .unwrap_or_else(|error| panic!("{}: read the requested deck: {error}", case.id()))
+            .status
+    };
+    let SyncStatusSnapshot::Prepared { operation, .. } = issued else {
+        panic!("{}: Enable issues one entry, got {issued:?}", case.id());
+    };
+    handed(&trace, operation).await;
     let before = usize::try_from(REMOVED_AT - harness.host.position()).expect("fixture fits usize");
     let _ = render_frames(&mut harness, case, before).await;
-    let retired = Arc::clone(&harness.decks[RETIRED]);
     let synced = {
         let deck = Arc::clone(&retired);
         harness
@@ -63,6 +88,7 @@ async fn heard_after(case: SyncCase, sources: &PreparedSources, remove: bool) ->
         case.id()
     );
     let sounding = Arc::clone(&harness.decks[SOUNDING]);
+    let removal = transport(&harness, case).await;
     if remove {
         harness.decks.remove(RETIRED);
         let removed = Arc::clone(&retired);
@@ -104,6 +130,12 @@ async fn heard_after(case: SyncCase, sources: &PreparedSources, remove: bool) ->
             "{}: the removal renders nothing",
             case.id()
         );
+        assert_eq!(
+            transport(&harness, case).await,
+            removal,
+            "{}: the removal leaves the Host transport and its grid as they were",
+            case.id()
+        );
     }
     let pcm = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     assert!(
@@ -112,15 +144,38 @@ async fn heard_after(case: SyncCase, sources: &PreparedSources, remove: bool) ->
         case.id(),
         harness.failures
     );
+    let transport = transport(&harness, case).await;
+    assert_eq!(
+        (
+            transport.session_grid_stamp(),
+            transport.session_epoch(),
+            transport.revision()
+        ),
+        (
+            removal.session_grid_stamp(),
+            removal.session_epoch(),
+            removal.revision()
+        ),
+        "{}: the Host keeps its grid, epoch and transport configuration after the removal",
+        case.id()
+    );
     Heard {
         pcm,
         position: sounding.playback_view().position,
+        transport,
     }
 }
 
 /// Removing a deck the Host keeps in sync leaves the free deck beside it
 /// playing exactly what it plays when nothing is removed, on the same clock.
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(120))
+)]
 async fn removing_a_synced_deck_leaves_the_free_deck_playing_on() {
     let sources = synthetic_sources().await;
     let control = heard_after(RETIRED_BESIDE_PLAYBACK_CONTROL, &sources, false).await;
@@ -139,5 +194,10 @@ async fn removing_a_synced_deck_leaves_the_free_deck_playing_on() {
     assert_eq!(
         candidate.position, control.position,
         "the free deck's clock runs on as if nothing were removed"
+    );
+    assert_eq!(
+        candidate.transport.position(),
+        control.transport.position(),
+        "the Host beat runs on as if nothing were removed"
     );
 }

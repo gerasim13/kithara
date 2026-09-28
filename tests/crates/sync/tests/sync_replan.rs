@@ -56,7 +56,7 @@ async fn status(harness: &ProductHarness) -> SyncStatusSnapshot {
 
 /// Waits, without rendering, until `operation`'s staged ticket is handed to
 /// the audio thread, so the next block is the first that can judge it.
-async fn handed(trace: &usdt_trace::Scope, operation: SyncOperationId) {
+pub(super) async fn handed(trace: &usdt_trace::Scope, operation: SyncOperationId) {
     let operation = u64::from(operation);
     trace
         .wait_for(|events| {
