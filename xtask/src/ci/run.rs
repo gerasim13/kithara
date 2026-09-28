@@ -595,27 +595,17 @@ mod tests {
         assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
     }
 
-    /// A called workflow inherits no environment from its caller, so the three
-    /// that run a lane outside `lane.yml` must each name the build directory
-    /// themselves. Left unset, a lane builds in the checkout - which
-    /// `actions/checkout` wipes every run - and recompiles the workspace from
-    /// source, which is most of what these lanes cost.
+    /// Windows runs no `ci lane`: its guest keeps one build directory, and a
+    /// called workflow inherits no environment from its caller, so the workflow
+    /// names it. Left unset, the job builds in the checkout, which
+    /// `actions/checkout` wipes every run, and recompiles the workspace.
     #[test]
-    fn a_workflow_that_runs_a_lane_names_the_build_directory_it_keeps() {
-        for (workflow, target) in [
-            (
-                "android.yml",
-                "CARGO_TARGET_DIR: /cache/lanes/lane-android-test",
-            ),
-            ("ui.yml", "CARGO_TARGET_DIR: /cache/lanes/lane-deep-ui"),
-            ("windows.yml", r"CARGO_TARGET_DIR: C:\kithara-ci\target"),
-        ] {
-            let text = fs::read_to_string(repo().join(".github/workflows").join(workflow)).unwrap();
-            assert!(
-                text.contains(target),
-                "{workflow} builds in the checkout, which every run wipes"
-            );
-        }
+    fn the_windows_workflow_names_the_build_directory_it_keeps() {
+        let text = fs::read_to_string(repo().join(".github/workflows/windows.yml")).unwrap();
+        assert!(
+            text.contains(r"CARGO_TARGET_DIR: C:\kithara-ci\target"),
+            "windows.yml builds in the checkout, which every run wipes"
+        );
     }
 
     #[test]

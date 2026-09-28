@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn a_claimed_directory_has_cargo_mark_what_it_reuses() {
         let claimed = executor_vars(
-            Some(Path::new("/cache/lanes/lane-test")),
+            Some(Path::new("/cache/lanes/review-lane-test-0")),
             PipelineKind::Branch,
             true,
         );

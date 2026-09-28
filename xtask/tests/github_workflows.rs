@@ -1881,51 +1881,40 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     }
 }
 
-/// Every declared lane runs through this workflow, so where a lane builds is
-/// something this workflow says. Naming a directory inside the checkout names
-/// an empty one: the workspace is deleted before the lane starts, and the job
-/// then compiles the whole dependency tree and links every binary again. The
-/// store the fixtures are read from is already on a volume that outlives the
-/// job, and the build directory belongs on the same one.
-///
-/// It is named after the lane rather than shared by all of them: artefacts are
-/// valid only for the features, profile and toolchain that produced them, and a
-/// lane asks for the same ones every run. A lane has no affinity for a runner,
-/// so one directory per runner was cold whenever a lane moved.
+/// Where a lane builds is `ci lane`'s to choose: the first free slot of the
+/// lane's pool under the runner's build root. A workflow that names the build
+/// directory sends every job of the lane to one directory, where the lane
+/// build lock queues them one at a time. What a workflow still names is what
+/// runs before the lane: the xtask bootstrap outlives the checkout on the same
+/// volume as the fixture store.
 #[test]
-fn a_lane_builds_on_the_volume_that_outlives_it() {
-    let workflow = github_workflow("lane.yml");
-    let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
-        .as_mapping()
-        .expect("env is a mapping");
-    let target = mapping_field(env, "CARGO_TARGET_DIR")
-        .as_str()
-        .expect("the executor names where the lane builds");
-    let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
-        .as_str()
-        .expect("the executor names where the fixtures are read from");
-    let bootstrap = mapping_field(env, "KITHARA_CI_CACHE_ROOT")
-        .as_str()
-        .expect("the executor names where xtask is bootstrapped");
-
-    let cache_root = Path::new(fixtures)
-        .parent()
-        .expect("the fixture store has a mounted-volume parent")
-        .display()
-        .to_string();
-    assert!(
-        target.contains(&format!("'{cache_root}/lanes/lane-{{0}}'")),
-        "an ordinary lane must build in the directory named after it: {target}"
-    );
-    assert!(
-        target.contains(&format!("'{cache_root}/lanes/jobs/")),
-        "snapshot lanes need an empty job target: {target}"
-    );
-    assert_eq!(
-        bootstrap,
-        format!("{cache_root}/target/.kithara-ci"),
-        "xtask bootstrap must outlive the checkout"
-    );
+fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
+    for name in ["lane.yml", "ui.yml", "android.yml"] {
+        let workflow = github_workflow(name);
+        let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
+            .as_mapping()
+            .expect("env is a mapping");
+        assert!(
+            env.get("CARGO_TARGET_DIR").is_none(),
+            "{name} sends every job of its lane to one build directory"
+        );
+        let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
+            .as_str()
+            .expect("the executor names where the fixtures are read from");
+        let bootstrap = mapping_field(env, "KITHARA_CI_CACHE_ROOT")
+            .as_str()
+            .expect("the executor names where xtask is bootstrapped");
+        let cache_root = Path::new(fixtures)
+            .parent()
+            .expect("the fixture store has a mounted-volume parent")
+            .display()
+            .to_string();
+        assert_eq!(
+            bootstrap,
+            format!("{cache_root}/target/.kithara-ci"),
+            "{name}: the xtask bootstrap must outlive the checkout"
+        );
+    }
 }
 
 /// A step that reads what the lane built must ask where the lane builds.
@@ -1934,6 +1923,9 @@ fn a_lane_builds_on_the_volume_that_outlives_it() {
 /// moving the lane's build directory left that path pointing at nothing. The
 /// upload declares `if-no-files-found: error`, so the lane compiled and tested
 /// for twenty-five minutes and then failed on the artefact.
+///
+/// `ci lane` picks the slot as it runs and exports it as `KITHARA_LANE_TARGET`.
+/// A lane that stopped before it took one built nothing to upload.
 #[test]
 fn a_step_that_collects_build_output_reads_the_build_directory() {
     let workflow = github_workflow("lane.yml");
@@ -1957,8 +1949,16 @@ fn a_step_that_collects_build_output_reads_the_build_directory() {
         .and_then(Value::as_str)
         .expect("the upload names a path");
     assert!(
-        path.starts_with("${{ env.CARGO_TARGET_DIR }}"),
+        path.starts_with("${{ env.KITHARA_LANE_TARGET }}"),
         "the timing report must be read from where the lane built: {path}"
+    );
+    let condition = timings
+        .get("if")
+        .and_then(Value::as_str)
+        .expect("the upload is conditional");
+    assert!(
+        condition.contains("env.KITHARA_LANE_TARGET != ''"),
+        "a lane that stopped before it took a slot has nothing to upload: {condition}"
     );
 }
 
@@ -2217,10 +2217,9 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
             Some("${{ matrix.runner || '' }}"),
             "the fan-out loses the lane's runner affinity"
         );
-        assert_eq!(
-            mapping_field(with, "isolated-target").as_str(),
-            Some("${{ matrix.isolated_target }}"),
-            "the fan-out loses the lane's target isolation policy"
+        assert!(
+            with.get("isolated-target").is_none(),
+            "the fan-out still decides where a lane builds"
         );
     }
     assert_eq!(
