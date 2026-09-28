@@ -1,0 +1,92 @@
+[package]
+name = "kithara-fixture-gen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Build-time fixture generation: asset definitions, their dependency graph, and the accessors written for them."
+publish = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[features]
+# Families. Each one registers the assets declared in its own `src/defs` file;
+# a build that enables none registers only the synthetic PCM they all build on.
+encoded = ["wav"]
+# Packages its own segments from synthetic PCM; it fetches nothing.
+hls = ["dep:aes", "dep:cbc", "dep:hex", "dep:rayon", "packaged"]
+hls-inputs = ["hls"]
+# The verified download and the playlist hydrator are one transport module, so
+# the two fetching families ship together. `rhythm` then analyses each
+# downloaded track, as it does every whole audio track.
+library = ["dep:sha2", "remote", "rhythm"]
+packaged = ["dep:kithara-bufpool", "wav"]
+# Everything that reaches the network at build time: the HTTP client, the
+# playlist hydrator, and the one build outcome only a fetch can produce.
+remote = ["dep:bytes", "dep:hls_m3u8", "dep:kithara-drm", "dep:rayon", "dep:reqwest", "dep:url", "hls"]
+rhythm = [
+    "dep:cochlea-render",
+    "dep:cochlea-score",
+    "dep:futures-lite",
+    "dep:kithara-analysis",
+    "dep:kithara-audio",
+    "dep:kithara-decode",
+    "dep:kithara-events",
+    "dep:kithara-resampler",
+    "dep:kithara-signal",
+    "dep:kithara-test-utils",
+]
+signal = []
+wav = []
+
+[dependencies]
+kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"], optional = true }
+kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
+kithara-bufpool = { workspace = true, optional = true }
+kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "tls-rustls"], optional = true }
+kithara-drm = { workspace = true, optional = true }
+kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
+kithara-events = { workspace = true, optional = true }
+kithara-fixture-media = { workspace = true, features = ["native"] }
+kithara-platform = { workspace = true }
+kithara-resampler = { workspace = true, features = ["resample-rubato"], optional = true }
+kithara-signal = { workspace = true, optional = true }
+kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true, optional = true }
+
+aes = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+cbc = { workspace = true, optional = true }
+cochlea-render = { workspace = true, optional = true }
+cochlea-score = { workspace = true, optional = true }
+delegate = { workspace = true }
+derive_more = { workspace = true }
+futures-lite = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+hls_m3u8 = { workspace = true, optional = true }
+inventory = { workspace = true }
+num-traits = { workspace = true }
+rayon = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["blocking", "rustls"], optional = true }
+sha2 = { workspace = true, optional = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+url = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+# The playlist hydrator's tests serve a local playlist; `library` is the one
+# family that carries the hydrator, so the tests turn it on for themselves.
+kithara-fixture-gen = { path = ".", features = ["library"] }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+
+tempfile = { workspace = true }
+tiny_http = { workspace = true }
+
+[lints]
+workspace = true

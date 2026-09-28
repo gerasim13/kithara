@@ -85,10 +85,8 @@ schema_version = 1
 [mixed_entities]
 "crates/kithara-assets/src/index/availability/core.rs" = 1
 "crates/kithara-assets/src/index/lru/core.rs" = 1
-"crates/kithara-decode/src/composed.rs" = 1
 "crates/kithara-ffi/src/core/item.rs" = 1
 "crates/kithara-net/src/client.rs" = 1
-"crates/kithara-stream/src/stream.rs" = 1
 
 [module_fan_out]
 "crates/kithara-abr/src/controller/core.rs" = 1

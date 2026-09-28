@@ -17,12 +17,12 @@
   },
   {
     "label": "gallery: immediate (iced + wgpu)",
-    "command": "cargo run -p kithara-ui --release --features capture --example gallery -- --host immediate",
+    "command": "cargo run -p kithara-ui-gallery --release --bin gallery -- --host immediate",
     "use_new_terminal": true,
   },
   {
     "label": "gallery: retained (masonry + vello)",
-    "command": "cargo run -p kithara-ui --release --features capture,masonry --example gallery -- --host retained",
+    "command": "cargo run -p kithara-ui-gallery --release --features masonry --bin gallery -- --host retained",
     "use_new_terminal": true,
   },
   {

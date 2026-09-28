@@ -6,10 +6,10 @@ use kithara_storage::StorageError;
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
-use super::{HlsVariant, PlanCtx, PlanRevision};
 use crate::{
     consts,
     segment::{Downloading, FetchClaim, PlannedFetch, Segment},
+    variant::{HlsVariant, PlanCtx, PlanRevision},
 };
 
 /// The cancel pair one dispatch rides. `fetch` covers owed work — inits,

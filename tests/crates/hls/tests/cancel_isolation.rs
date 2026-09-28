@@ -10,10 +10,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 mod consts {
     pub(super) const NUM_SEGMENTS: usize = 6;

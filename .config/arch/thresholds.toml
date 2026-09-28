@@ -484,10 +484,12 @@ test_crates = [
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-fuzz",
-  # Build-time test assets. Its exports are consumed by code this scanner
-  # cannot read — accessors generated into OUT_DIR and its own build script —
-  # and a call it makes into a workspace API is a fixture, not a shipped
-  # caller.
+  # Build-time test assets and the two crates they are built from. Their
+  # exports are consumed by code this scanner cannot read — accessors
+  # generated into OUT_DIR — and a call they make into a workspace API is a
+  # fixture, not a shipped caller.
+  "kithara-fixture-gen",
+  "kithara-fixture-media",
   "kithara-test-fixtures",
 ]
 # Ignored as export owners: build tooling and the cargo-hakari workspace-hack

@@ -5,9 +5,10 @@ use kithara_integration_tests::{
     kithara,
     smoothing::{
         SmoothingCase, assert_step_is_ramped, consts, last_block_peak, layout, observe,
-        observe_until, peak, sine_queue,
+        observe_until, sine_queue,
     },
 };
+use kithara_test_fixtures::signal::peak;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn eq_gain_step_is_ramped() {

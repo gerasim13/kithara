@@ -13,6 +13,8 @@ pub(crate) mod engine;
 pub mod error;
 pub mod expand;
 pub mod ids;
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
 pub(crate) mod mount;
 pub mod registry;
 #[cfg(feature = "render")]
@@ -24,15 +26,12 @@ pub mod source;
 pub mod view;
 
 pub use doc::{envelope, layout, module, package, param, skin, text};
-#[cfg(feature = "render")]
-pub use kithara_ui_draw as draw;
 pub use kithara_ui_draw::geom;
 #[cfg(feature = "render")]
-pub use kithara_ui_input as interact;
-#[cfg(feature = "render")]
-pub use kithara_ui_lottie as lottie;
-#[cfg(feature = "render")]
-pub use kithara_ui_shaping as shaping;
+pub use {
+    kithara_ui_draw as draw, kithara_ui_input as interact, kithara_ui_lottie as lottie,
+    kithara_ui_shaping as shaping,
+};
 
 mod doc;
 mod require;

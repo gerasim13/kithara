@@ -7,10 +7,11 @@ use kithara_stream::{PendingReason, ReadOutcome, StreamError, StreamResult};
 use kithara_test_utils::kithara;
 use tracing::trace;
 
-use super::{HlsVariant, read::RangeGate};
+use super::read::RangeGate;
 use crate::{
     HlsError,
     segment::{PlannedFetch, Segment},
+    variant::HlsVariant,
 };
 
 impl<S> HlsVariant<S>
@@ -142,7 +143,7 @@ where
             | (u64::from(self.segment_failed(seg_idx)) << 2)
             | (u64::from(self.fetch_is_planned(PlannedFetch::Segment(seg_idx))) << 3)
     )]
-    pub(super) fn segment_has_demand(&self, seg_idx: u32) -> bool {
+    pub(in crate::variant) fn segment_has_demand(&self, seg_idx: u32) -> bool {
         self.segment_downloading(seg_idx) || self.fetch_is_planned(PlannedFetch::Segment(seg_idx))
     }
 

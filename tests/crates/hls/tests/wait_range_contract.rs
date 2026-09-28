@@ -10,10 +10,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, Xorshift64,
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
 };
+use kithara_test_utils::{TestTempDir, Xorshift64};
 
 mod consts {
     pub(super) const SEGMENT_SIZE: usize = 50_000;
@@ -29,13 +29,16 @@ mod consts {
 #[case::disk(false)]
 async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     let temp_dir = TestTempDir::new();
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        segment_size: consts::SEGMENT_SIZE,
-        segments_per_variant: consts::SEGMENT_COUNT,
-        ..Default::default()
-    })
-    .await;
-    let url = server.url("/master.m3u8");
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .segment_size(consts::SEGMENT_SIZE)
+                .segments_per_variant(consts::SEGMENT_COUNT),
+        )
+        .await
+        .expect("create HLS fixture");
+    let url = server.master_url();
 
     let backend = if ephemeral {
         StorageBackend::Memory
@@ -148,13 +151,16 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[cfg(not(target_arch = "wasm32"))]
 async fn ephemeral_small_cache_reads_entire_stream() {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        segment_size: 20_000,
-        segments_per_variant: 10,
-        ..Default::default()
-    })
-    .await;
-    let url = server.url("/master.m3u8");
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .segment_size(20_000)
+                .segments_per_variant(10),
+        )
+        .await
+        .expect("create HLS fixture");
+    let url = server.master_url();
     let total_bytes = server.total_bytes();
 
     let pools = pools();

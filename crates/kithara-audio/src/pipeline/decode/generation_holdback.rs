@@ -1,6 +1,6 @@
 use kithara_signal::{AudioChunk, AudioSpec};
 
-use super::{
+use super::generation::{
     DecoderGeneration, Holdback, StageFailure, StageOutput, StageProgress, StageResult,
     chunk_range, stage_failure,
 };
@@ -133,12 +133,6 @@ impl DecoderGeneration {
         }
         self.staged.push_back(chunk);
         None
-    }
-
-    #[cfg(test)]
-    pub(super) fn record_staged_scan(&self) {
-        self.staged_scan_count
-            .set(self.staged_scan_count.get().saturating_add(1));
     }
 
     fn validate_staged_holdback(&mut self, holdback: Holdback) -> Option<StageFailure> {

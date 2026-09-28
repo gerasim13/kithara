@@ -18,7 +18,7 @@ use super::seqlock::AnchorEntry;
 /// non-blocking analog of the original `Mutex`'s blocking wait. `active` is the present
 /// generation (0 = `None`), published *inside* the version critical section so two
 /// writers' publishes can never lost-update each other.
-pub(super) struct CasAnchorCell {
+pub(in crate::variant) struct CasAnchorCell {
     segment: AtomicU32,
     /// Seqlock version: even = stable, odd = a writer owns the body. Acquired
     /// with a CAS so two concurrent writers cannot both hold it.
@@ -32,7 +32,7 @@ pub(super) struct CasAnchorCell {
 }
 
 impl CasAnchorCell {
-    pub(super) const fn new() -> Self {
+    pub(in crate::variant) const fn new() -> Self {
         Self {
             version: AtomicU32::new(0),
             active: AtomicU64::new(0),
@@ -42,11 +42,11 @@ impl CasAnchorCell {
         }
     }
 
-    pub(super) fn clear(&self) {
+    pub(in crate::variant) fn clear(&self) {
         self.active.store(0, Ordering::Release);
     }
 
-    pub(super) fn clear_if_generation(&self, generation: u64) -> bool {
+    pub(in crate::variant) fn clear_if_generation(&self, generation: u64) -> bool {
         self.active
             .compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
@@ -55,7 +55,7 @@ impl CasAnchorCell {
     /// Bails early under a writer's demand gate instead of spinning, then validates a fenced,
     /// version-sandwiched snapshot: an unchanged version and matching generation reject torn reads
     /// or entries a concurrent `clear` retired.
-    pub(super) fn load(&self) -> Option<AnchorEntry> {
+    pub(in crate::variant) fn load(&self) -> Option<AnchorEntry> {
         let start = self.version.load(Ordering::Acquire);
         if start & 1 != 0 {
             return None;
@@ -102,7 +102,7 @@ impl CasAnchorCell {
     ///
     /// Stores `active` as 0 before writing `segment`/`anchor`, hiding the entry from `load` until
     /// the write completes, so a stale `take_if(old)` cannot observe a torn update.
-    pub(super) fn set(&self, segment: u32, anchor: u64) {
+    pub(in crate::variant) fn set(&self, segment: u32, anchor: u64) {
         let held = loop {
             let cur = self.version.load(Ordering::Acquire);
             if cur & 1 == 0

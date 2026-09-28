@@ -32,7 +32,7 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
     let ui = compile(
         "two_deck.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -111,7 +111,7 @@ fn block_ui() -> Result<CompiledUi, UiDocError> {
                     child: Knob(id: "low", read: Model(id: "deck.view.zoom"))),
             ]))"#,
     );
-    let mut registry = crate::common::registry::player_registry();
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.block.hidden",
@@ -168,8 +168,8 @@ fn a_hidden_block_renders_none_of_the_endpoints_below_it() {
     );
 }
 
-fn menu_registry() -> crate::common::registry::TestRegistry {
-    let mut registry = crate::common::registry::player_registry();
+fn menu_registry() -> kithara_ui::mock::TestRegistry {
+    let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
         "ui.menu.open",

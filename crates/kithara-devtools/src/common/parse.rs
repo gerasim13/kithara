@@ -57,6 +57,9 @@ pub fn type_weights(file: &File) -> BTreeMap<String, TypeWeight> {
 
 fn collect_local_types(items: &[Item], out: &mut BTreeMap<String, TypeWeight>) {
     for item in items {
+        if attrs_have_cfg_test(item_attrs(item)) {
+            continue;
+        }
         match item {
             Item::Struct(s) => {
                 out.entry(s.ident.to_string()).or_default();
@@ -82,6 +85,9 @@ fn collect_local_types(items: &[Item], out: &mut BTreeMap<String, TypeWeight>) {
 
 fn accumulate_impls(items: &[Item], local_types: &mut BTreeMap<String, TypeWeight>) {
     for item in items {
+        if attrs_have_cfg_test(item_attrs(item)) {
+            continue;
+        }
         match item {
             Item::Impl(im) => {
                 if let Some(name) = self_ty_name(&im.self_ty)
@@ -89,7 +95,9 @@ fn accumulate_impls(items: &[Item], local_types: &mut BTreeMap<String, TypeWeigh
                 {
                     w.impl_blocks += 1;
                     for it in &im.items {
-                        if let ImplItem::Fn(_) = it {
+                        if let ImplItem::Fn(f) = it
+                            && !attrs_have_cfg_test(&f.attrs)
+                        {
                             w.impl_fns += 1;
                         }
                     }
@@ -550,7 +558,7 @@ fn walk_items(items: &[Item], s: &mut ItemStats) {
 
 #[cfg(test)]
 mod tests {
-    use super::count_items;
+    use super::{count_items, type_weights};
 
     fn stats(source: &str) -> (usize, usize) {
         let file = syn::parse_file(source).expect("fixture parses");
@@ -586,5 +594,35 @@ fn under_either(&self) {}
 fn always(&self) {}
 ";
         assert_eq!(stats(source), (1, 0));
+    }
+
+    #[test]
+    fn test_items_do_not_weigh_on_production_types() {
+        let source = "\
+struct Real;
+impl Real {
+    fn one(&self) {}
+    #[cfg(test)]
+    fn only_under_test(&self) {}
+}
+#[cfg(test)]
+mod tests {
+    struct Fixture;
+    impl Fixture {
+        fn helper(&self) {}
+    }
+    impl Real {
+        fn test_only(&self) {}
+    }
+}
+";
+        let file = syn::parse_file(source).expect("fixture parses");
+        let weights = type_weights(&file);
+
+        assert_eq!(weights.keys().collect::<Vec<_>>(), ["Real"]);
+        assert_eq!(
+            (weights["Real"].impl_blocks, weights["Real"].impl_fns),
+            (1, 1)
+        );
     }
 }

@@ -19,28 +19,22 @@ tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
-apple-fused-src = ["kithara/apple-fused-src"]
 network = []
 network-manual = []
 
 [dependencies]
-kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-glide", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
-kithara-dsp = { workspace = true }
+kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "dsp", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "library", "packaged", "rhythm", "signal"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
 
 cochlea-features = { workspace = true }
 derive_more = { workspace = true }
-firewheel = { workspace = true }
 num-traits = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }
-ringbuf = { workspace = true }
-serde = { workspace = true }
 serial_test = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
@@ -56,10 +50,6 @@ workspace = true
 [[test]]
 name = "play"
 path = "tests/suite.rs"
-
-[[test]]
-name = "play_heavy"
-path = "tests/heavy.rs"
 
 [[test]]
 name = "play_stress"

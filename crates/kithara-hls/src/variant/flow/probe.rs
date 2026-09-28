@@ -7,20 +7,20 @@ use kithara_platform::{CancelToken, sync::Arc};
 use tracing::{debug, trace};
 use url::Url;
 
-use super::{HlsVariant, PlanCtx};
 use crate::{
     handle::{SegmentPeer, segment_peer::parse_size_headers},
     segment::SegmentContent,
+    variant::{HlsVariant, PlanCtx},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub(super) enum SizeDemand {
+pub(in crate::variant) enum SizeDemand {
     Init,
     Segment(u32),
 }
 
 #[derive(Default)]
-pub(super) struct SizeDemandState {
+pub(in crate::variant) struct SizeDemandState {
     inflight: BTreeSet<SizeDemand>,
     queued: BTreeSet<SizeDemand>,
     queue: VecDeque<SizeDemand>,
@@ -63,7 +63,7 @@ where
             .is_some_and(|n| self.apply_resolved_size(demand, n))
     }
 
-    pub(super) fn apply_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
+    pub(in crate::variant) fn apply_resolved_size(&self, demand: SizeDemand, len: u64) -> bool {
         let changed = self.store_resolved_size(demand, len);
         if changed {
             self.complete_exact_seek_if_ready();
@@ -128,7 +128,7 @@ where
         ))
     }
 
-    pub(super) fn dispatch_size_demands(
+    pub(in crate::variant) fn dispatch_size_demands(
         self: &Arc<Self>,
         ctx: &PlanCtx<S>,
         out: &mut Vec<FetchCmd>,
@@ -212,7 +212,7 @@ where
         self.apply_resolved_size(demand, size);
     }
 
-    pub(super) fn size_probe_allowed(&self, demand: SizeDemand) -> bool {
+    pub(in crate::variant) fn size_probe_allowed(&self, demand: SizeDemand) -> bool {
         match demand {
             SizeDemand::Init => self.segments.init.as_ref().is_some_and(|segment| {
                 !segment.size().is_exact() && matches!(segment.content(), SegmentContent::Plain)
@@ -263,7 +263,7 @@ where
             #[call(pop_dispatchable)]
             fn dispatchable_size_demand(&self) -> Option<SizeDemand>;
             #[call(enqueue)]
-            pub(super) fn enqueue_size_demand(&self, demand: SizeDemand);
+            pub(in crate::variant) fn enqueue_size_demand(&self, demand: SizeDemand);
             #[call(finish)]
             fn finish_size_demand(&self, demand: SizeDemand);
         }

@@ -185,8 +185,8 @@ impl Host for WaveHost<'_> {
     }
 }
 
-fn studio_registry() -> crate::common::registry::TestRegistry {
-    let mut registry = crate::common::registry::player_registry();
+fn studio_registry() -> kithara_ui::mock::TestRegistry {
+    let mut registry = kithara_ui::mock::player_registry();
     for (category, id, value) in [
         (
             EndpointCategory::Command,
@@ -244,7 +244,7 @@ fn mounted_wave(module: &str, source: &str, layout: &str, studio: bool) -> Vec<M
     let registry = if studio {
         studio_registry()
     } else {
-        crate::common::registry::player_registry()
+        kithara_ui::mock::player_registry()
     };
     let ui = compile(
         "wave-document.klayout.ron",

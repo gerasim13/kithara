@@ -627,9 +627,9 @@ mod tests {
         CancelToken,
         sync::{Arc, Notify},
         time::{Duration, timeout},
-        tokio::{join, net::TcpListener as TokioTcpListener, task::spawn as tokio_spawn},
+        tokio::{join, task::spawn as tokio_spawn},
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{TestHttpServer, kithara};
     use tempfile::tempdir;
 
     use super::*;
@@ -708,7 +708,7 @@ mod tests {
         registry
     }
 
-    async fn spawn_key_server_with_body(body: Bytes) -> (Url, Arc<AtomicUsize>) {
+    async fn spawn_key_server_with_body(body: Bytes) -> (TestHttpServer, Arc<AtomicUsize>) {
         let requests = Arc::new(AtomicUsize::new(0));
         let handler_requests = Arc::clone(&requests);
         let app = Router::new().route(
@@ -722,22 +722,16 @@ mod tests {
                 }
             }),
         );
-        let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        tokio_spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/key.bin")).expect("url");
-        (url, requests)
+        (TestHttpServer::new(app).await, requests)
     }
 
-    async fn spawn_key_server() -> Url {
+    async fn spawn_key_server() -> TestHttpServer {
         spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY))
             .await
             .0
     }
 
-    async fn spawn_domain_key_server() -> (Url, Url) {
+    async fn spawn_domain_key_server() -> (TestHttpServer, Url, Url) {
         let reversed = Bytes::from(consts::VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
         let masked = Bytes::from(
             consts::VALID_KEY
@@ -760,19 +754,15 @@ mod tests {
                     async move { Result::<_, Infallible>::Ok(Body::from(body)) }
                 }),
             );
-        let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let port = listener.local_addr().expect("local addr").port();
-        tokio_spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
+        let server = TestHttpServer::new(app).await;
+        let port = server.base_url().port().expect("server port");
         let localhost =
             Url::parse(&format!("http://localhost:{port}/reversed.key")).expect("localhost URL");
-        let loopback =
-            Url::parse(&format!("http://127.0.0.1:{port}/masked.key")).expect("loopback URL");
-        (localhost, loopback)
+        let loopback = server.url("/masked.key");
+        (server, localhost, loopback)
     }
 
-    async fn spawn_prepared_request_server() -> (Url, Url, Arc<AtomicUsize>) {
+    async fn spawn_prepared_request_server() -> (TestHttpServer, Url, Url, Arc<AtomicUsize>) {
         let requests = Arc::new(AtomicUsize::new(0));
         let handler_requests = Arc::clone(&requests);
         let reversed = Bytes::from(consts::VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
@@ -798,14 +788,10 @@ mod tests {
                 },
             ),
         );
-        let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        tokio_spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let original = Url::parse(&format!("http://{addr}/original.key")).expect("original URL");
-        let wire = Url::parse(&format!("http://{addr}/wire.key?session=fresh")).expect("wire URL");
-        (original, wire, requests)
+        let server = TestHttpServer::new(app).await;
+        let original = server.url("/original.key");
+        let wire = server.url("/wire.key?session=fresh");
+        (server, original, wire, requests)
     }
 
     /// The request crosses a real socket, so the bound is real time.
@@ -816,7 +802,8 @@ mod tests {
             .expect("the key server never received the key request");
     }
 
-    async fn spawn_gated_key_server() -> (Url, Arc<AtomicUsize>, Arc<Notify>, Arc<Notify>) {
+    async fn spawn_gated_key_server() -> (TestHttpServer, Arc<AtomicUsize>, Arc<Notify>, Arc<Notify>)
+    {
         let requests = Arc::new(AtomicUsize::new(0));
         let seen = Arc::new(Notify::default());
         let release = Arc::new(Notify::default());
@@ -837,13 +824,7 @@ mod tests {
                 }
             }),
         );
-        let listener = TokioTcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        tokio_spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/key.bin")).expect("url");
-        (url, requests, seen, release)
+        (TestHttpServer::new(app).await, requests, seen, release)
     }
 
     fn collect_events(events: &mut kithara_events::EventReceiver<TestEvent>) -> Vec<TestEvent> {
@@ -918,7 +899,8 @@ mod tests {
     async fn assert_failed_persistence_keeps_prefetched_key(
         registry: Option<KeyProcessorRegistry>,
     ) {
-        let (url, requests, seen, release) = spawn_gated_key_server().await;
+        let (server, requests, seen, release) = spawn_gated_key_server().await;
+        let url = server.url("/key.bin");
         let store_cancel = CancelToken::never();
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
@@ -963,7 +945,8 @@ mod tests {
         let mut events = bus.subscribe();
         let registry = registry_for("127.0.0.1", Arc::new(Ok::<Bytes, DrmError>));
         let store = make_store(&bus, CancelToken::never(), Some(registry));
-        let url = spawn_key_server().await;
+        let server = spawn_key_server().await;
+        let url = server.url("/key.bin");
 
         let key = store
             .get_raw_key(&url, None)
@@ -985,7 +968,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn domain_rules_apply_distinct_key_processors_end_to_end() {
-        let (localhost_url, loopback_url) = spawn_domain_key_server().await;
+        let (_server, localhost_url, loopback_url) = spawn_domain_key_server().await;
         let localhost_calls = Arc::new(AtomicUsize::new(0));
         let loopback_calls = Arc::new(AtomicUsize::new(0));
 
@@ -1026,7 +1009,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn prepared_request_rewrites_wire_url_and_forwards_headers() {
-        let (original_url, wire_url, requests) = spawn_prepared_request_server().await;
+        let (_server, original_url, wire_url, requests) = spawn_prepared_request_server().await;
         let mut registry = KeyProcessorRegistry::new();
         registry.register(Arc::new(FixedRequestResolver {
             headers: HashMap::from([("X-Key-Auth".to_string(), "authorized".to_string())]),
@@ -1049,8 +1032,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn persisted_final_key_does_not_prepare_fresh_request() {
-        let (url, requests) =
+        let (server, requests) =
             spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY)).await;
+        let url = server.url("/key.bin");
         let dir = tempdir().expect("tempdir");
         let assets = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
@@ -1127,7 +1111,8 @@ mod tests {
             Arc::new(|_bytes| Err(DrmError::KeyProcessing("fixture processor failed".into()))),
         );
         let store = make_store(&bus, CancelToken::never(), Some(registry));
-        let url = spawn_key_server().await;
+        let server = spawn_key_server().await;
+        let url = server.url("/key.bin");
 
         let err = store
             .get_raw_key(&url, None)
@@ -1170,7 +1155,8 @@ mod tests {
             }),
         );
         let store = make_store(&bus, CancelToken::never(), Some(registry));
-        let url = spawn_key_server().await;
+        let server = spawn_key_server().await;
+        let url = server.url("/key.bin");
 
         let _ = store
             .get_raw_key(&url, None)
@@ -1199,8 +1185,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn corrupt_persisted_plain_key_is_invalidated_and_refetched_once() {
-        let (url, requests) =
+        let (server, requests) =
             spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY)).await;
+        let url = server.url("/key.bin");
         let dir = tempdir().expect("tempdir");
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
@@ -1250,8 +1237,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn processed_key_repair_is_serialized_across_key_stores() {
-        let (url, requests) =
+        let (server, requests) =
             spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY)).await;
+        let url = server.url("/key.bin");
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(CancelToken::never())

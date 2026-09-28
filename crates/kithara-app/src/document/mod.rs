@@ -4,7 +4,6 @@ mod bake;
 mod env;
 mod layouts;
 mod load;
-mod merge;
 mod policy;
 mod schema;
 

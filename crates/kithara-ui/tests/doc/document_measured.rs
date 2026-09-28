@@ -168,7 +168,7 @@ fn measured() -> Measured {
     let ui = compile(
         "bank.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

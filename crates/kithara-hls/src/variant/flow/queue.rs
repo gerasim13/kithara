@@ -3,8 +3,10 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tracing::debug;
 
-use super::{HlsVariant, PlanCtx, PlanRevision};
-use crate::segment::PlannedFetch;
+use crate::{
+    segment::PlannedFetch,
+    variant::{HlsVariant, PlanCtx, PlanRevision},
+};
 
 impl<S> HlsVariant<S>
 where
@@ -30,7 +32,7 @@ where
     /// fully-cached seek. A partial cache returns `false` and rebuilds, so
     /// the prefetch tail is still re-aimed at the seek target whenever a
     /// fetch is actually outstanding.
-    pub(super) fn fetch_plan_satisfied(&self, from_seg: u32) -> bool {
+    pub(in crate::variant) fn fetch_plan_satisfied(&self, from_seg: u32) -> bool {
         if self.needs_init_fetch() {
             return false;
         }
@@ -50,7 +52,7 @@ where
     /// cover them either — nothing says a segment behind the new target is
     /// loaded — so skipping the rebuild while they linger keeps dispatching
     /// prefix fetches the seek target does not want.
-    pub(super) fn queue_matches_plan(&self, from_seg: u32) -> bool {
+    pub(in crate::variant) fn queue_matches_plan(&self, from_seg: u32) -> bool {
         if !self.fetch_plan_satisfied(from_seg) {
             return false;
         }
@@ -93,7 +95,7 @@ where
     }
 
     #[kithara::probe]
-    pub(super) fn rebuild_queue(&self, from_seg: u32, probe_seg: Option<u32>) {
+    pub(in crate::variant) fn rebuild_queue(&self, from_seg: u32, probe_seg: Option<u32>) {
         let segs_len = self.num_segments();
         let init = self
             .needs_init_fetch()

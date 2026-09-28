@@ -1,0 +1,55 @@
+[package]
+name = "kithara-fixture-media"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Synthetic signals, fMP4/HLS packaging and the content-addressed store shared by fixture generation and fixture accessors."
+publish = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[features]
+# The store, the muxer and the packaged-variant shapes: everything that reads
+# or writes the host filesystem. Without it only the portable signals compile.
+native = [
+    "dep:bon",
+    "dep:delegate",
+    "dep:fs4",
+    "dep:hex",
+    "dep:kithara-encode",
+    "dep:kithara-stream",
+    "dep:serde",
+    "dep:sha2",
+    "dep:thiserror",
+]
+
+[dependencies]
+num-traits = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-encode = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
+kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-encode = { workspace = true, default-features = false, optional = true }
+kithara-stream = { workspace = true, default-features = false, optional = true }
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+bon = { workspace = true, optional = true }
+delegate = { workspace = true, optional = true }
+fs4 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

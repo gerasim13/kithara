@@ -5,15 +5,10 @@ use kithara::events::TrackId;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
 
-#[path = "decode.rs"]
 mod decode;
-#[path = "decode_item.rs"]
 mod decode_item;
-#[path = "encode.rs"]
 mod encode;
-#[path = "encode_item.rs"]
 mod encode_item;
-#[path = "marshal.rs"]
 mod marshal;
 
 mod types {

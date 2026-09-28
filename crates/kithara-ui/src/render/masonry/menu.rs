@@ -15,7 +15,7 @@ use super::{custom::HostAction, picker::HostedEngine};
 use crate::{
     backends::VelloBackend,
     draw::replay,
-    render::{PickerMenu, Skin},
+    render::{Skin, picker::PickerMenu},
     shaping::TextContext,
 };
 

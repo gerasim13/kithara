@@ -4,31 +4,11 @@
 pub mod atomic;
 mod common;
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(feature = "flash"),
-    not(feature = "loom")
-))]
-#[path = "backend/system.rs"]
-mod backend;
-#[cfg(all(not(target_arch = "wasm32"), feature = "loom", not(feature = "flash")))]
-#[path = "backend/loom/mod.rs"]
-mod backend;
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash", not(feature = "loom")))]
-#[path = "backend/flash_system/mod.rs"]
-mod backend;
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash", feature = "loom"))]
-#[path = "backend/flash_loom/mod.rs"]
+#[cfg(not(target_arch = "wasm32"))]
 mod backend;
 #[cfg(all(not(target_arch = "wasm32"), feature = "loom"))]
 mod loom;
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash", feature = "loom"))]
-#[path = "system/flash_loom.rs"]
-mod system;
-#[cfg(all(not(target_arch = "wasm32"), feature = "flash", not(feature = "loom")))]
-#[path = "system/flash_system.rs"]
-mod system;
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod system;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 pub use backend::{logging, maybe_send, sync, thread, time, tokio};
@@ -45,14 +25,11 @@ pub use wasm::*;
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub mod flash;
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "flash")))]
-#[path = "common/flash_inert.rs"]
-pub mod flash;
+pub use common::flash_inert as flash;
 #[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
 pub mod no_block;
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "no-block")))]
-#[path = "common/no_block_inert.rs"]
-pub mod no_block;
-
+pub use common::no_block_inert as no_block;
 pub use common::{
     async_lock::{AsyncMutex, AsyncMutexGuard},
     cancel::{CancelGroup, CancelScope, CancelToken, CancelWakerGuard, Cancelled},

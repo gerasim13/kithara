@@ -1,0 +1,89 @@
+[package]
+name = "kithara-ui-gallery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Every page the UI toolkit draws, the demo host behind them, and the harnesses that photograph and compare two hosts."
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+ignored = ["kithara-workspace-hack"]
+
+[[bin]]
+name = "gallery"
+# The program opens the pages the library mounts; what checks them are the
+# suites below. Building the binary as a test target would run nothing.
+test = false
+
+[features]
+# The retained host beside the immediate one: the gallery opens either, and a
+# comparison needs both.
+masonry = ["kithara-ui/masonry"]
+# What the suites vary on the demo model that the gallery itself never does.
+mock = []
+# Frame and page timings through hotpath.
+perf = ["dep:hotpath", "hotpath/hotpath", "kithara-ui/perf"]
+
+[dependencies]
+kithara-platform = { workspace = true }
+# The gallery photographs its own pages and compares two hosts, which is what
+# `capture` carries. A gallery that cannot answer that question has no reason
+# to exist, so it is not optional here.
+kithara-ui = { workspace = true, features = ["capture", "iced"] }
+
+clap = { workspace = true }
+delegate = { workspace = true }
+derive_more = { workspace = true }
+fieldwork = { workspace = true }
+hotpath = { workspace = true, optional = true }
+iced = { workspace = true }
+kurbo = { workspace = true }
+num-traits = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
+kithara-ui-gallery = { path = ".", features = ["mock"] }
+
+futures-lite = { workspace = true }
+iced_renderer = { workspace = true }
+iced_runtime = { workspace = true }
+iced_tiny_skia = { workspace = true }
+iced_wgpu = { workspace = true }
+masonry = { workspace = true }
+# The budget guard reads the renderer's bump allocators back, which vello only
+# does when this is on. A dev-dependency so a shipped build keeps the fast path
+# rather than a readback on every frame.
+vello = { workspace = true, features = ["debug_layers"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "gallery"
+path = "tests/gallery/main.rs"
+
+# Its own binary: the graphics device counts bytes for the whole process, so a
+# reading taken beside another drawing test would measure that test too.
+[[test]]
+name = "ui_memory"
+path = "tests/ui_memory/main.rs"
+
+# Its own binary for the same reason `ui_memory` is: it draws, and a drawing
+# test beside that one is counted into its readings.
+[[test]]
+name = "ui_buffers"
+path = "tests/ui_buffers/main.rs"
+required-features = ["masonry"]
+
+[[test]]
+name = "page_perf"
+path = "tests/page_perf/main.rs"
+required-features = ["perf", "masonry"]

@@ -86,16 +86,11 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
     for pkg in &members {
         let role = classify(pkg, cfg);
         for target in targets_sorted(pkg) {
-            if target.kind.contains(&TargetKind::CustomBuild) {
-                continue;
-            }
-            let Some(root) = target.src_path.parent() else {
-                continue;
-            };
+            let build_script = target.kind.contains(&TargetKind::CustomBuild);
             let qualified_only = role == Role::Ignored;
             let base_in_test =
                 !qualified_only && (role == Role::TestOnly || target_is_testish(target));
-            for path in walk_rs(root.as_std_path()) {
+            for path in target_files(target) {
                 if !seen.insert(path.clone()) {
                     continue;
                 }
@@ -116,7 +111,7 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                 }
                 .visit_file(&file);
 
-                if role == Role::Prod && !file_in_test {
+                if role == Role::Prod && !file_in_test && !build_script {
                     let rel = path
                         .strip_prefix(ctx.workspace_root)
                         .unwrap_or(&path)
@@ -571,6 +566,20 @@ fn targets_sorted(pkg: &Package) -> Vec<&Target> {
     let mut ts: Vec<&Target> = pkg.targets.iter().collect();
     ts.sort_by_key(|t| u8::from(target_is_testish(t)));
     ts
+}
+
+/// The files a target's references are read from. A build script is read on
+/// its own: it calls into workspace crates like any other target, but its
+/// directory is the package root, which the other targets already cover.
+fn target_files(target: &Target) -> Vec<PathBuf> {
+    if target.kind.contains(&TargetKind::CustomBuild) {
+        return vec![target.src_path.clone().into_std_path_buf()];
+    }
+    target
+        .src_path
+        .parent()
+        .map(|root| walk_rs(root.as_std_path()))
+        .unwrap_or_default()
 }
 
 fn walk_rs(dir: &Path) -> Vec<PathBuf> {
@@ -1190,9 +1199,10 @@ mod tests {
         path::Path,
     };
 
+    use cargo_metadata::Target;
     use syn::visit::Visit;
 
-    use super::{RefCollector, Refs, mod_chain_gate};
+    use super::{RefCollector, Refs, mod_chain_gate, target_files};
     use crate::consts;
 
     fn collect_refs(src: &str, qualified_only: bool) -> Refs {
@@ -1396,6 +1406,35 @@ mod tests {
         assert!(
             gated(root, "flash/api.rs"),
             "2018 layout: `flash.rs` owning `flash/api.rs` must be resolved"
+        );
+    }
+
+    fn target(kind: &str, src_path: &Path) -> Target {
+        serde_json::from_value(serde_json::json!({
+            "name": "fixture",
+            "kind": [kind],
+            "crate_types": ["bin"],
+            "src_path": src_path,
+            "edition": "2024",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_build_script_is_read_alone_not_with_the_package_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "build.rs", "fn main() { kithara_devtools::bake(); }");
+        write(root, "src/lib.rs", "pub fn bake() {}");
+
+        assert_eq!(
+            target_files(&target("custom-build", &root.join("build.rs"))),
+            [root.join("build.rs")],
+            "a build script calls into workspace crates, so it is a reference source"
+        );
+        assert_eq!(
+            target_files(&target("lib", &root.join("src/lib.rs"))),
+            [root.join("src/lib.rs")]
         );
     }
 

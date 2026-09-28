@@ -87,7 +87,7 @@ fn four_deck_layout_instantiates_one_module_file_four_times() {
     let ui = compile(
         "four_deck.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -125,7 +125,7 @@ fn two_deck_layout_compiles() {
     compile(
         "two_deck.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -160,7 +160,7 @@ fn scoped_read_keys_address_each_deck() {
     let ui = compile(
         "two_deck.klayout.ron",
         &resolver,
-        &crate::common::registry::player_registry(),
+        &kithara_ui::mock::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),

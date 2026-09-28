@@ -1,8 +1,9 @@
 #[cfg(not(target_arch = "wasm32"))]
-#[path = "native.rs"]
-mod target;
+mod native;
 #[cfg(target_arch = "wasm32")]
-#[path = "wasm.rs"]
-mod target;
+mod wasm;
 
-pub(crate) use target::HeldPlayer;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use native::HeldPlayer;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use wasm::HeldPlayer;

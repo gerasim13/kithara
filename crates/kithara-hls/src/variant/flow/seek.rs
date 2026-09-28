@@ -4,8 +4,8 @@ use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_stream::{SourceSeekAnchor, StreamError, StreamResult, needs_exact_byte_sizes};
 
-use super::{HlsVariant, seqlock::AliasSnapshot, size::ExactSeekDemand};
-use crate::HlsError;
+use super::{seqlock::AliasSnapshot, size::ExactSeekDemand};
+use crate::{HlsError, variant::HlsVariant};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ResolvedSeekProjection {
@@ -99,7 +99,11 @@ where
 
     /// Off-RT, lock-free store of the resolved exact anchor onto the matching base, tagged with the
     /// base generation so a stale resolver cannot attach to a newer alias.
-    pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
+    pub(in crate::variant) fn resolve_seek_alias(
+        &self,
+        demand: ExactSeekDemand,
+        exact_anchor: u64,
+    ) {
         self.seek
             .alias
             .resolve(demand.segment, demand.anchor, exact_anchor);
@@ -159,7 +163,7 @@ where
         }
     }
 
-    pub(super) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
+    pub(in crate::variant) fn seek_alias_at(&self, byte: u64) -> Option<(u32, u64, u64)> {
         let alias = self.seek.alias.load()?;
         if byte < alias.anchor {
             return None;
@@ -172,7 +176,10 @@ where
         (byte < end).then_some((alias.segment, alias.anchor, size))
     }
 
-    pub(super) const fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
+    pub(in crate::variant) const fn seek_readahead_start_segment(
+        &self,
+        target_segment: u32,
+    ) -> u32 {
         if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
             target_segment
         } else {
@@ -203,7 +210,7 @@ where
         None
     }
 
-    pub(super) fn segment_aware_seek_tail_complete(&self) -> bool {
+    pub(in crate::variant) fn segment_aware_seek_tail_complete(&self) -> bool {
         if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
             return false;
         }
@@ -218,7 +225,7 @@ where
         !tail.is_empty() && tail.iter().all(|segment| segment.size().is_exact())
     }
 
-    pub(super) fn set_segment_aware_seek_tail(&self, segment: u32) {
+    pub(in crate::variant) fn set_segment_aware_seek_tail(&self, segment: u32) {
         if !needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
             self.seek
                 .segment_aware_tail
@@ -229,9 +236,9 @@ where
     delegate::delegate! {
         to self.seek.alias {
             #[call(clear)]
-            pub(super) fn clear_seek_alias(&self);
+            pub(in crate::variant) fn clear_seek_alias(&self);
             #[call(set)]
-            pub(super) fn set_seek_alias(&self, anchor: u64, segment: u32);
+            pub(in crate::variant) fn set_seek_alias(&self, anchor: u64, segment: u32);
         }
         to self {
             /// Seek reset is layout-only. Active body fetches stay live: segment-aware

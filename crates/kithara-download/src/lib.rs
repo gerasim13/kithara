@@ -19,7 +19,6 @@ mod response;
 /// and the tests that reach a server bind a real socket on 127.0.0.1, which
 /// `fcntl(F_SETFD)` refuses under Miri. A transport double would test the double.
 #[cfg(all(test, not(miri)))]
-#[path = "../tests/download.rs"]
 mod tests;
 
 pub use cmd::{

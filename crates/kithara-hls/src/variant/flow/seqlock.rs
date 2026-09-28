@@ -47,7 +47,7 @@ impl SeqVersion {
 /// the on-core SET path (single writer); `active` is the present generation
 /// (0 = `None`), which off-RT consumers may CAS to 0. Reads are lock-free and
 /// allocation-free on both produce-core and off-RT threads.
-pub(super) struct SeqAnchorCell {
+pub(in crate::variant) struct SeqAnchorCell {
     segment: AtomicU32,
     /// Present generation: 0 = absent, otherwise the current monotonic generation.
     active: AtomicU64,
@@ -58,14 +58,14 @@ pub(super) struct SeqAnchorCell {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct AnchorEntry {
-    pub(super) segment: u32,
-    pub(super) anchor: u64,
-    pub(super) generation: u64,
+pub(in crate::variant) struct AnchorEntry {
+    pub(in crate::variant) segment: u32,
+    pub(in crate::variant) anchor: u64,
+    pub(in crate::variant) generation: u64,
 }
 
 impl SeqAnchorCell {
-    pub(super) const fn new() -> Self {
+    pub(in crate::variant) const fn new() -> Self {
         Self {
             seq: SeqVersion::new(),
             active: AtomicU64::new(0),
@@ -75,7 +75,7 @@ impl SeqAnchorCell {
         }
     }
 
-    pub(super) fn clear(&self) {
+    pub(in crate::variant) fn clear(&self) {
         self.active.store(0, Ordering::Release);
     }
 
@@ -87,7 +87,7 @@ impl SeqAnchorCell {
 
     /// Coherent iff `active` still equals the snapshotted `generation` after the read; generations
     /// are monotonic, so there is no ABA.
-    pub(super) fn load(&self) -> Option<AnchorEntry> {
+    pub(in crate::variant) fn load(&self) -> Option<AnchorEntry> {
         loop {
             let generation = self.active.load(Ordering::Acquire);
             if generation == 0 {
@@ -129,7 +129,7 @@ impl SeqAnchorCell {
     /// On-core single-writer publish. Hides the demand (`active = 0`) for the
     /// duration of the body write so a racing off-RT reader never pairs a fresh
     /// generation with a half-written body.
-    pub(super) fn set(&self, segment: u32, anchor: u64) {
+    pub(in crate::variant) fn set(&self, segment: u32, anchor: u64) {
         let generation = self.next_gen();
         self.active.store(0, Ordering::Release);
         self.seq.begin();
@@ -144,7 +144,7 @@ impl SeqAnchorCell {
 /// is a single-writer [`SeqAnchorCell`] (on-core SET/CLEAR); `exact_anchor` is
 /// resolved off-RT and tagged with the base generation it belongs to, so a
 /// stale resolver can never attach an exact anchor to a newer alias base.
-pub(super) struct AtomicSeekAlias {
+pub(in crate::variant) struct AtomicSeekAlias {
     /// Resolved exact anchor (`u64::MAX` = none).
     exact_anchor: AtomicU64,
     /// Base generation `exact_anchor` belongs to (0 = none).
@@ -153,15 +153,15 @@ pub(super) struct AtomicSeekAlias {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct AliasSnapshot {
-    pub(super) exact_anchor: Option<u64>,
-    pub(super) segment: u32,
-    pub(super) anchor: u64,
-    pub(super) generation: u64,
+pub(in crate::variant) struct AliasSnapshot {
+    pub(in crate::variant) exact_anchor: Option<u64>,
+    pub(in crate::variant) segment: u32,
+    pub(in crate::variant) anchor: u64,
+    pub(in crate::variant) generation: u64,
 }
 
 impl AliasSnapshot {
-    pub(super) fn covers_position(self, pos: u64) -> bool {
+    pub(in crate::variant) fn covers_position(self, pos: u64) -> bool {
         pos == self.anchor || self.exact_anchor == Some(pos)
     }
 }
@@ -169,7 +169,7 @@ impl AliasSnapshot {
 impl AtomicSeekAlias {
     const NONE_ANCHOR: u64 = u64::MAX;
 
-    pub(super) const fn new() -> Self {
+    pub(in crate::variant) const fn new() -> Self {
         Self {
             base: SeqAnchorCell::new(),
             exact_anchor: AtomicU64::new(Self::NONE_ANCHOR),
@@ -177,14 +177,14 @@ impl AtomicSeekAlias {
         }
     }
 
-    pub(super) fn clear(&self) {
+    pub(in crate::variant) fn clear(&self) {
         self.base.clear();
         self.exact_gen.store(0, Ordering::Release);
         self.exact_anchor
             .store(Self::NONE_ANCHOR, Ordering::Relaxed);
     }
 
-    pub(super) fn clear_if_generation(&self, generation: u64) -> bool {
+    pub(in crate::variant) fn clear_if_generation(&self, generation: u64) -> bool {
         if !self.base.clear_if_generation(generation) {
             return false;
         }
@@ -196,7 +196,7 @@ impl AtomicSeekAlias {
 
     /// Accepts `exact_anchor` only when its tag matches the live base generation; a stale
     /// resolver's mismatching tag is ignored.
-    pub(super) fn load(&self) -> Option<AliasSnapshot> {
+    pub(in crate::variant) fn load(&self) -> Option<AliasSnapshot> {
         let base = self.base.load()?;
         let exact_anchor = if self.exact_gen.load(Ordering::Acquire) == base.generation {
             match self.exact_anchor.load(Ordering::Relaxed) {
@@ -217,7 +217,7 @@ impl AtomicSeekAlias {
     /// Off-RT: attach a resolved exact anchor to the matching base demand. A
     /// no-op if the base no longer matches; the generation tag makes a stale
     /// store harmless (the reader rejects a mismatching tag).
-    pub(super) fn resolve(&self, segment: u32, anchor: u64, exact_anchor: u64) {
+    pub(in crate::variant) fn resolve(&self, segment: u32, anchor: u64, exact_anchor: u64) {
         let Some(base) = self.base.load() else {
             return;
         };
@@ -230,7 +230,7 @@ impl AtomicSeekAlias {
 
     /// On-core single-writer publish of a fresh base; clears any prior exact
     /// anchor before the new generation goes live.
-    pub(super) fn set(&self, anchor: u64, segment: u32) {
+    pub(in crate::variant) fn set(&self, anchor: u64, segment: u32) {
         self.exact_gen.store(0, Ordering::Release);
         self.exact_anchor
             .store(Self::NONE_ANCHOR, Ordering::Relaxed);
@@ -241,7 +241,7 @@ impl AtomicSeekAlias {
 /// `Option<u64>` packed into a single atomic, `u64::MAX` reserved for `None`
 /// (a `2^64 - 1` byte offset is unreachable). Multi-writer-safe and
 /// allocation-free on both read and clear.
-pub(super) struct AtomicOptU64 {
+pub(in crate::variant) struct AtomicOptU64 {
     value: AtomicU64,
 }
 
@@ -249,20 +249,20 @@ impl AtomicOptU64 {
     /// Reserved `None` marker (see the struct doc above).
     const NONE_VALUE: u64 = u64::MAX;
 
-    pub(super) fn load(&self) -> Option<u64> {
+    pub(in crate::variant) fn load(&self) -> Option<u64> {
         match self.value.load(Ordering::Acquire) {
             Self::NONE_VALUE => None,
             value => Some(value),
         }
     }
 
-    pub(super) const fn none() -> Self {
+    pub(in crate::variant) const fn none() -> Self {
         Self {
             value: AtomicU64::new(Self::NONE_VALUE),
         }
     }
 
-    pub(super) fn store(&self, value: Option<u64>) {
+    pub(in crate::variant) fn store(&self, value: Option<u64>) {
         self.value
             .store(value.unwrap_or(Self::NONE_VALUE), Ordering::Release);
     }

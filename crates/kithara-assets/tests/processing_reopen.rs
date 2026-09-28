@@ -8,9 +8,6 @@ use kithara_test_dylib as _;
 
 mod support;
 
-#[path = "support/xor.rs"]
-mod xor;
-
 use aes::Aes128;
 use cbc::{
     Encryptor,
@@ -18,7 +15,7 @@ use cbc::{
 };
 use kithara_assets::{
     AcquisitionResult, AssetStore, ChunkSink, ProcessCtx, ReadSide, ResourceProcessor,
-    StorageBackend, WriteSide,
+    StorageBackend, WriteSide, mock::xor_processor,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::{sync::Arc, time::Duration};
@@ -26,7 +23,6 @@ use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
 use tempfile::tempdir;
-use xor::xor_processor;
 
 const ROOT: &str = "processed-asset";
 /// Stream `data` through a Pending writer and commit it.

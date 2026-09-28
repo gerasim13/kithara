@@ -55,7 +55,10 @@ pub(crate) struct Detent {
 }
 
 impl Detent {
-    pub(super) fn new(path: String, map_event: Rc<dyn Fn(UiEvent) -> HostAction>) -> Self {
+    pub(in crate::render) fn new(
+        path: String,
+        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    ) -> Self {
         Self {
             path,
             map_event,
@@ -148,7 +151,7 @@ pub(crate) struct Node {
 }
 
 impl Node {
-    pub(super) fn new(
+    pub(in crate::render) fn new(
         layout: NodeLayout,
         declared: Size<solve::Length>,
         children: Vec<WidgetPod<Self>>,
@@ -541,7 +544,7 @@ impl Node {
 impl Node {
     /// Whether this node draws through a pass of its own rather than into the
     /// scene, which is what makes it something the host has to declare.
-    pub(super) const fn is_native(&self) -> bool {
+    pub(in crate::render) const fn is_native(&self) -> bool {
         matches!(
             &self.layout,
             NodeLayout::Leaf(Leaf::Shader(_) | Leaf::Vis(_))
@@ -565,7 +568,7 @@ impl Node {
 
     /// What this node runs when it is pressed, and what it runs when it is
     /// pressed with the other button.
-    pub(super) fn set_actions(
+    pub(in crate::render) fn set_actions(
         &mut self,
         primary: Option<Box<dyn Fn() -> HostAction>>,
         secondary: Option<Box<dyn Fn() -> HostAction>>,
@@ -575,24 +578,24 @@ impl Node {
     }
 
     /// The stepping surface this flow is asked to carry over itself.
-    pub(super) fn set_detent(&mut self, detent: Detent) {
+    pub(in crate::render) fn set_detent(&mut self, detent: Detent) {
         self.detent = Some(detent);
     }
 
-    pub(super) fn set_engine(&mut self, engine: Rc<HostedEngine>) {
+    pub(in crate::render) fn set_engine(&mut self, engine: Rc<HostedEngine>) {
         self.engine = Some(engine);
     }
 
     /// Which of this node's corners are the window's own, and how far they are
     /// rounded. Both come from the mount: the corners from where the layout
     /// puts the node, the radius from the skin.
-    pub(super) const fn set_round(&mut self, round: FrameCorners, radius: f32) {
+    pub(in crate::render) const fn set_round(&mut self, round: FrameCorners, radius: f32) {
         self.round = round;
         self.radius = radius;
     }
 
     /// Where this placement of a stage stands, and what carries it.
-    pub(super) fn set_spot(&mut self, spot: Spot) {
+    pub(in crate::render) fn set_spot(&mut self, spot: Spot) {
         self.spot = Some(spot);
     }
 
