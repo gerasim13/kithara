@@ -269,7 +269,11 @@ impl<P: StagePort> Execute for Shared<P> {
 
 impl<P: StagePort> Shared<P> {
     /// Reports the outcome of the lane staged for `stamp`, unless that
-    /// preparation was superseded, withdrawn, or unloaded meanwhile.
+    /// preparation was superseded, withdrawn, or unloaded meanwhile. The
+    /// executor still owes the owner this outcome when something else
+    /// cancelled the lane's token, such as the lane's own drop: a refusal
+    /// keeps its reason, and a lane staged under a cancelled token is dropped
+    /// and reported cancelled.
     fn settle(
         self: &Arc<Self>,
         stamp: SyncExecutionStamp,
@@ -277,26 +281,27 @@ impl<P: StagePort> Shared<P> {
         outcome: Result<(P::Lane, PreparedFirst), SyncExecutionReject>,
     ) {
         let mut state = self.state.lock();
-        let Some(held) = state
-            .held
-            .as_mut()
-            .filter(|held| held.stamp == stamp && !cancel.is_cancelled())
-        else {
+        let Some(held) = state.held.as_mut().filter(|held| held.stamp == stamp) else {
             return;
         };
         let runtime = held.runtime.clone();
-        let rejected = match outcome {
-            Ok(lane) => {
+        let (rejected, dropped) = match outcome {
+            Ok(lane) if !cancel.is_cancelled() => {
                 held.lane = Some(lane);
-                None
+                (None, None)
+            }
+            Ok(lane) => {
+                state.held = None;
+                (Some(SyncExecutionReject::Cancelled), Some(lane))
             }
             Err(reason) => {
                 state.held = None;
-                Some(reason)
+                (Some(reason), None)
             }
         };
         let drain = state.commit(Outcome { stamp, rejected }, &runtime);
         drop(state);
+        drop(dropped);
         self.drain(drain);
     }
 

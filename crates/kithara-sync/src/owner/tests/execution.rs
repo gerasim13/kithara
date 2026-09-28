@@ -29,15 +29,34 @@ use crate::{
 /// The first session frame no caller can use.
 const OPEN_END: i64 = i64::MAX;
 
-/// A lane that reports when it is released.
-struct Lane(Option<oneshot::Sender<()>>);
+/// A lane that reports when it is released and, when it holds its staging
+/// token, cancels it on drop the way a player's lane does.
+struct Lane {
+    released: Option<oneshot::Sender<()>>,
+    cancel: Option<CancelToken>,
+}
 
 impl Drop for Lane {
     fn drop(&mut self) {
-        if let Some(released) = self.0.take() {
+        if let Some(released) = self.released.take() {
             let _ = released.send(());
         }
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
     }
+}
+
+/// What the fake port does with each plan it stages.
+#[derive(Clone, Copy)]
+enum Staging {
+    /// Decodes the frame the plan's head enters at.
+    AtHead,
+    /// Decodes the frame after the head into a lane that cancels its
+    /// staging token when dropped.
+    OffHead,
+    /// Cancels its staging token, then decodes the frame at the head.
+    CancelledMeanwhile,
 }
 
 /// The source interval of the one frame `head` enters at.
@@ -48,12 +67,13 @@ fn first_span(head: ActivationHead) -> SourceSpan {
         .with_mapping_revision(NonZeroU64::new(u64::from(cursor.revision())))
 }
 
-/// Stages every plan at once, decoding the frame its head enters at, and
-/// announces each staged lane.
+/// Stages every plan at once as `staging` says, and announces each staged
+/// lane.
 #[derive(Clone)]
 struct Port {
     runtime: Handle,
     gate: SyncGateBinding,
+    staging: Staging,
     staged: mpsc::UnboundedSender<oneshot::Receiver<()>>,
     installed: Arc<Mutex<Vec<Lane>>>,
 }
@@ -74,15 +94,37 @@ impl StagePort for Port {
         self,
         _plan: WarpPlan,
         head: ActivationHead,
-        _cancel: CancelToken,
+        cancel: CancelToken,
     ) -> impl MaybeSendFuture<Output = Result<Staged<Lane>, SyncExecutionReject>> + 'static {
         async move {
             let (released, release) = oneshot::channel();
             let _ = self.staged.send(release);
+            let at_head = first_span(head);
+            let (span, cancel) = match self.staging {
+                Staging::AtHead => (at_head, None),
+                Staging::OffHead => (
+                    SourceSpan::new(
+                        at_head.start() + 1,
+                        at_head.end() + 1,
+                        head.source_rate(),
+                        1,
+                    )
+                    .expect("one source frame")
+                    .with_mapping_revision(at_head.mapping_revision()),
+                    Some(cancel),
+                ),
+                Staging::CancelledMeanwhile => {
+                    cancel.cancel();
+                    (at_head, None)
+                }
+            };
             Ok(Staged::new(
-                Lane(Some(released)),
+                Lane {
+                    released: Some(released),
+                    cancel,
+                },
                 [0.0; 2],
-                first_span(head),
+                span,
             ))
         }
     }
@@ -149,6 +191,11 @@ impl Fixture {
     /// A synced deck whose loaded track the executor stages, reporting to
     /// an owner that answers with `answer`.
     fn new(answer: Answer, gate: Option<blocking::Receiver<()>>) -> Self {
+        Self::staging(Staging::AtHead, answer, gate)
+    }
+
+    /// As [`Self::new`], with a port that stages as `staging` says.
+    fn staging(staging: Staging, answer: Answer, gate: Option<blocking::Receiver<()>>) -> Self {
         let track = BeatGridId::allocate().expect("grid id");
         let (heard_tx, heard) = mpsc::unbounded_channel();
         let installed = Arc::new(Mutex::new(Vec::new()));
@@ -168,6 +215,7 @@ impl Fixture {
             Some(Port {
                 runtime: Handle::current(),
                 gate: slot_gate,
+                staging,
                 staged: staged_tx,
                 installed,
             }),
@@ -237,6 +285,37 @@ async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled()
         "an owner that kept the preparation pending hears that its lane is gone"
     );
     assert_eq!(released.await, Ok(()), "the refused lane is released");
+}
+
+#[kithara::test(tokio)]
+async fn an_off_head_lane_that_cancels_its_token_is_reported_by_its_geometry() {
+    let mut fixture = Fixture::staging(Staging::OffHead, Answer::Record, None);
+
+    let (stamp, released) = fixture.prepare(24_000).await;
+
+    assert_eq!(
+        fixture.next_receipt().await,
+        SyncReceipt::Rejected {
+            stamp,
+            reason: SyncExecutionReject::Geometry,
+        },
+        "dropping the lane cancels its token, but the owner still hears why"
+    );
+    assert_eq!(released.await, Ok(()), "the off-head lane is released");
+}
+
+#[kithara::test(tokio)]
+async fn a_lane_staged_under_a_token_cancelled_meanwhile_is_reported_cancelled() {
+    let mut fixture = Fixture::staging(Staging::CancelledMeanwhile, Answer::Record, None);
+
+    let (stamp, released) = fixture.prepare(24_000).await;
+
+    assert_eq!(
+        fixture.next_receipt().await,
+        cancelled(stamp),
+        "the owner's pending preparation hears that its lane is gone"
+    );
+    assert_eq!(released.await, Ok(()), "the cancelled lane is released");
 }
 
 #[kithara::test(tokio)]
