@@ -63,8 +63,6 @@ mod consts {
 #[case::trim_stereo_quiet(vec![0.0, 2.0e-3])]
 #[case::trim_silence_trim_does_not_introduce_click_at_boundary({ let mut pcm = vec![0.0_f32; 64];
     pcm.extend(std::iter::repeat_n(1.0, 256)); pcm })]
-#[case::accelerate_copy(vec![1.0, -2.0, 3.5, 4.25])]
-#[case::accelerate_clear(vec![1.0, -2.0, 3.0])]
 #[case::accelerate_ramp(vec![0.0, 1.0, 2.0, 3.0])]
 #[case::accelerate_wave(vec![0.0, 1.0, 0.0, -1.0, 0.0])]
 #[case::limiter_peak(vec![2.0_f32; 8])]

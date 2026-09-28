@@ -7,11 +7,11 @@ use kithara_platform::{sync::Arc, time::Duration};
 use super::super::PlayerImpl;
 use super::super::{
     core::PlayerRuntime,
-    state::{PendingNext, PendingNextState},
+    state::{PendingLoads, PendingNext, PendingNextState},
 };
 use crate::{
-    api::{EngineEvent, TrackId},
-    bridge::PlayerCmd,
+    api::{EngineEvent, SlotId, TrackId},
+    bridge::{PlayerCmd, PlayerNotification, TrackPlaybackStopReason},
     error::PlayError,
 };
 
@@ -20,8 +20,8 @@ use crate::{
 enum ArmDecision {
     /// The same index is already armed; return its src verbatim.
     AlreadyArmed(Arc<str>),
-    /// The slot was cleared; optionally unload the previous item.
-    Clear(Option<TrackId>),
+    /// The slot was cleared; optionally unload the previous pending track.
+    Clear(Option<PendingNext>),
 }
 
 struct ActivatedPending {
@@ -95,18 +95,14 @@ where
         }
 
         let mut phase = self.phase.lock();
-        let existing = phase.pending_mut().and_then(|slot| slot.as_ref());
-        let decision = match existing {
+        let decision = match phase.pending() {
             Some(existing) if existing.index == index => {
                 ArmDecision::AlreadyArmed(existing.src.clone())
             }
             Some(existing) => {
-                let unload = (!(existing.state.activated() && existing.index == current_index))
-                    .then_some(existing.item_id);
-                if let Some(slot) = phase.pending_mut() {
-                    *slot = None;
-                }
-                ArmDecision::Clear(unload)
+                let preserve = existing.state.activated() && existing.index == current_index;
+                let withdrawn = phase.pending_loads_mut().and_then(PendingLoads::withdraw);
+                ArmDecision::Clear(withdrawn.filter(|_| !preserve))
             }
             None => ArmDecision::Clear(None),
         };
@@ -116,8 +112,8 @@ where
             ArmDecision::AlreadyArmed(src) => return Ok(Some(src)),
             ArmDecision::Clear(unload) => unload,
         };
-        if let Some(item_id) = to_unload {
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
+        if let Some(pending) = to_unload {
+            self.unload_pending(&pending);
         }
 
         let Some((item_id, src, duration_seconds)) = self.enqueue_to_processor(index)? else {
@@ -186,8 +182,8 @@ where
 
     /// Drop the armed next slot without committing.
     ///
-    /// Sends `UnloadTrack` to the audio thread for the armed item and
-    /// clears the pending slot. Skips the unload if the armed slot has
+    /// Unloads the pending item from the audio thread and clears the
+    /// pending slot. Skips the unload if the armed slot has
     /// already been activated for the current index (the activated track
     /// is now the leading one — unloading would silence playback).
     fn unarm_next(&self) {
@@ -195,7 +191,11 @@ where
     }
 
     fn unarm_next_internal(&self, current_index_hint: Option<usize>) {
-        let pending = self.phase.lock().pending_mut().and_then(Option::take);
+        let pending = self
+            .phase
+            .lock()
+            .pending_loads_mut()
+            .and_then(PendingLoads::withdraw);
         let Some(pending) = pending else {
             return;
         };
@@ -208,9 +208,24 @@ where
                     .bus()
                     .publish(EngineEvent::CrossfadeCancelled);
             }
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack {
-                item_id: pending.item_id,
-            });
+            self.unload_pending(&pending);
+        }
+    }
+
+    /// Unload a pending track the handover no longer wants. An armed one may
+    /// already have been stitched in, so the processor drops it only while it
+    /// still preloads; the phase keeps it withdrawn until the processor
+    /// reports the track it played.
+    fn unload_pending(&self, pending: &PendingNext) {
+        let item_id = pending.item_id;
+        if pending.state.activated() {
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
+        } else if self
+            .send_to_slot(PlayerCmd::CancelPreload { item_id })
+            .is_err()
+            && let Some(loads) = self.phase.lock().pending_loads_mut()
+        {
+            loads.cancel_refused(item_id);
         }
     }
 }
@@ -232,6 +247,66 @@ where
         Handover::new(self).commit_next(index)
     }
 
+    /// Settle the successor when a track ends: an armed one now leads unless a
+    /// withdrawal is still in question, and an activated one is retired.
+    pub(crate) fn finalize_handover_if_armed(&self) {
+        let pending = self
+            .phase
+            .lock()
+            .pending_loads_mut()
+            .and_then(PendingLoads::take_at_end);
+        let Some(pending) = pending else {
+            return;
+        };
+
+        if pending.state.activated() {
+            return;
+        }
+
+        if pending.index >= self.item_count() {
+            return;
+        }
+        let index = pending.index;
+        self.core.items.set_current(index);
+        self.announce_current_item(index);
+    }
+
+    /// Settle a withdrawal still in question once the processor reports the
+    /// track it played, by its start or its natural or failed end: the queue
+    /// follows the successor stitched in, and one removed from the queue since
+    /// keeps playing unannounced. A withdrawn successor the processor reports
+    /// unloaded can no longer be stitched in and leaves the question.
+    pub(crate) fn settle_withdrawal(&self, slot_id: SlotId, notification: &PlayerNotification) {
+        if self.slot() != Some(slot_id) {
+            return;
+        }
+        let played = match notification {
+            PlayerNotification::PlaybackStarted { item_id, .. }
+            | PlayerNotification::PlaybackStopped {
+                reason: TrackPlaybackStopReason::Eof | TrackPlaybackStopReason::Failed(_),
+                item_id,
+                ..
+            } => *item_id,
+            PlayerNotification::Unloaded { item_id, .. } => {
+                if let Some(loads) = self.phase.lock().pending_loads_mut() {
+                    loads.retire(*item_id);
+                }
+                return;
+            }
+            _ => return,
+        };
+        let settled = self
+            .phase
+            .lock()
+            .pending_loads_mut()
+            .is_some_and(|loads| loads.settle_played(played));
+        let Some(index) = settled.then(|| self.core.items.index_of(played)).flatten() else {
+            return;
+        };
+        self.core.items.set_current(index);
+        self.announce_current_item(index);
+    }
+
     pub fn unarm_next(&self) {
         Handover::new(self).unarm_next();
     }
@@ -251,15 +326,20 @@ mod tests {
 
     use std::sync::atomic::Ordering;
 
-    use kithara_events::Envelope;
+    use kithara_audio::mock::{AudioControlMock, AudioReadMock, AudioSessionMock};
+    use kithara_events::{Envelope, EventBus};
+    use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
         PlayWorker, PlayWorkerConfig,
-        api::{EngineEvent, PlayerEvent},
+        api::{EngineEvent, PlayerEvent, SelectionPlayback},
+        bridge::PlaybackFault,
         mock,
         player::PlayerConfig,
+        resource::Resource,
         test_pools::{TestPools, pools},
     };
 
@@ -400,5 +480,252 @@ mod tests {
 
         assert_eq!(player.duration_seconds(), Some(64.295));
         assert_eq!(player.position_seconds(), Some(62.3));
+    }
+
+    fn resource(src: &str) -> Resource {
+        let reader = Unimock::new((
+            AudioSessionMock::event_bus
+                .each_call(matching!())
+                .answers(&|mock| mock.make_ref(EventBus::new(1))),
+            AudioSessionMock::duration
+                .each_call(matching!())
+                .returns(Some(Duration::from_secs(1))),
+            AudioReadMock::spec
+                .each_call(matching!())
+                .returns(AudioSpec::new(2, mock::SAMPLE_RATE)),
+            AudioControlMock::preload
+                .next_call(matching!())
+                .returns(Ok(())),
+        ));
+        Resource::from_reader(reader, Some(Arc::from(src)))
+    }
+
+    /// A deck playing `first` with `second` armed gaplessly behind it, every
+    /// command sent so far taken.
+    fn deck_with_armed_successor() -> (PlayerImpl<TestPools>, Arc<mock::SessionMock>, [TrackId; 3])
+    {
+        let (session, audio_thread) = mock::session_with_mock();
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .session(session)
+                .build(),
+        );
+        let ids = [
+            TrackId::allocate(),
+            TrackId::allocate(),
+            TrackId::allocate(),
+        ];
+        for (src, item_id) in ["first", "second", "third"].into_iter().zip(ids) {
+            player.insert(resource(src), item_id, None);
+        }
+        player.play();
+        player.arm_next(1).expect("preload accepted");
+        audio_thread.take_commands();
+        (player, audio_thread, ids)
+    }
+
+    fn unloaded(commands: &[PlayerCmd]) -> Vec<TrackId> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                PlayerCmd::UnloadTrack { item_id } => Some(*item_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn ended(src: &str, item_id: TrackId) -> PlayerNotification {
+        PlayerNotification::PlaybackStopped {
+            src: Arc::from(src),
+            item_id,
+            reason: TrackPlaybackStopReason::Eof,
+            seek_epoch: 0,
+        }
+    }
+
+    fn started(src: &str, item_id: TrackId) -> PlayerNotification {
+        PlayerNotification::PlaybackStarted {
+            src: Arc::from(src),
+            item_id,
+        }
+    }
+
+    /// Select `third` while the command ring has room only for the
+    /// selection's setting and the successor's withdrawal.
+    fn select_third_with_its_load_refused(player: &PlayerImpl<TestPools>) {
+        for _ in 0..30 {
+            player
+                .send_to_slot(PlayerCmd::SetPaused(true))
+                .expect("fixture leaves room for the setting and the withdrawal");
+        }
+        let _ = player.select_item(2, SelectionPlayback::Play);
+    }
+
+    /// The audio thread ends `first` and stitches `second` in, before it
+    /// reads anything sent since `second` was armed.
+    fn stitch_second_in(audio_thread: &mock::SessionMock, ids: [TrackId; 3]) {
+        audio_thread.notify(&ended("first", ids[0]));
+        audio_thread.notify(&started("second", ids[1]));
+    }
+
+    /// The new selection fades out a successor the audio thread already
+    /// stitched in; withdrawing that successor must not cut it off first.
+    #[kithara::test]
+    fn selecting_another_item_cancels_the_successor_preload_instead_of_unloading_it() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+
+        player
+            .select_item(2, SelectionPlayback::Play)
+            .expect("selection accepted");
+        let commands = audio_thread.take_commands();
+        assert_eq!(unloaded(&commands), []);
+        assert!(commands.iter().any(
+            |command| matches!(command, PlayerCmd::CancelPreload { item_id } if *item_id == ids[1])
+        ));
+
+        stitch_second_in(&audio_thread, ids);
+        player.process_notifications();
+
+        assert_eq!(
+            player.current_index(),
+            2,
+            "the selection leads over the successor it fades out"
+        );
+    }
+
+    /// A selection whose load the full command ring refuses leaves the
+    /// successor stitched in as the track that plays, so the track end must
+    /// report it.
+    #[kithara::test]
+    fn a_refused_selection_keeps_a_successor_already_stitched_in_and_reports_it() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+
+        select_third_with_its_load_refused(&player);
+        let commands = audio_thread.take_commands();
+        assert_eq!(unloaded(&commands), []);
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, PlayerCmd::LoadTrack { .. })),
+            "the ring refused the selection's load"
+        );
+
+        stitch_second_in(&audio_thread, ids);
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 1);
+    }
+
+    #[kithara::test]
+    fn re_arming_keeps_a_successor_already_stitched_in_and_reports_it() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+
+        player.arm_next(2).expect("re-arm accepted");
+        assert_eq!(unloaded(&audio_thread.take_commands()), []);
+
+        stitch_second_in(&audio_thread, ids);
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 1);
+        assert_eq!(player.armed_next(), Some(2));
+    }
+
+    /// The audio thread stitches in whichever preload it finds first, so the
+    /// withdrawn successor is not promoted just because no unload was seen.
+    #[kithara::test]
+    fn a_re_armed_successor_the_audio_thread_stitched_in_is_promoted() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        player.arm_next(2).expect("re-arm accepted");
+
+        audio_thread.notify(&ended("first", ids[0]));
+        audio_thread.notify(&started("third", ids[2]));
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.armed_next(), None);
+    }
+
+    /// A successor shorter than the rest of its stitch block ends before the
+    /// processor reports its start; its natural end still settles it.
+    #[kithara::test]
+    fn a_withdrawn_successor_that_ends_in_its_stitch_block_is_reported() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        select_third_with_its_load_refused(&player);
+
+        audio_thread.notify(&ended("first", ids[0]));
+        audio_thread.notify(&ended("second", ids[1]));
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 1);
+    }
+
+    /// A cancel the full ring refused never reached the processor, so the
+    /// successor stays preloaded behind the next leader and is reported when
+    /// that one ends and it is stitched in.
+    #[kithara::test]
+    fn a_successor_whose_cancel_the_ring_refused_is_reported_when_stitched_in_later() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        while player.send_to_slot(PlayerCmd::SetPaused(true)).is_ok() {}
+        player.unarm_next();
+        assert!(
+            !audio_thread
+                .take_commands()
+                .iter()
+                .any(|command| matches!(command, PlayerCmd::CancelPreload { .. })),
+            "the ring refused the cancel"
+        );
+
+        player
+            .select_item(2, SelectionPlayback::Play)
+            .expect("selection accepted");
+        audio_thread.notify(&ended("third", ids[2]));
+        audio_thread.notify(&started("second", ids[1]));
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 1);
+    }
+
+    /// A successor that fails on its first render never reports a start, but
+    /// its failed end still names the track the processor stitched in.
+    #[kithara::test]
+    fn a_re_armed_successor_that_fails_in_its_stitch_block_is_reported() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        player.arm_next(2).expect("re-arm accepted");
+
+        audio_thread.notify(&ended("first", ids[0]));
+        audio_thread.notify(&PlayerNotification::PlaybackStopped {
+            src: Arc::from("third"),
+            item_id: ids[2],
+            reason: TrackPlaybackStopReason::Failed(PlaybackFault::OutputRangeUnavailable),
+            seek_epoch: 0,
+        });
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.armed_next(), None);
+    }
+
+    /// The processor can evict a preload whose cancel the full ring refused;
+    /// once it reports the unload, that successor is out of question and the
+    /// next track end promotes the armed successor as usual.
+    #[kithara::test]
+    fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        while player.send_to_slot(PlayerCmd::SetPaused(true)).is_ok() {}
+        player.unarm_next();
+        audio_thread.take_commands();
+        player.arm_next(2).expect("re-arm accepted");
+
+        audio_thread.notify(&PlayerNotification::Unloaded {
+            src: Arc::from("second"),
+            item_id: ids[1],
+        });
+        audio_thread.notify(&ended("first", ids[0]));
+        player.process_notifications();
+
+        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.armed_next(), None);
     }
 }

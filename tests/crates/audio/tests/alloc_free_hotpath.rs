@@ -5,8 +5,9 @@ use kithara::{
     self,
     bufpool::{PoolConfig, SampleBuffer},
     resampler::{
-        Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
-        ResamplerSettings, create_resampler, rubato::RubatoBackend,
+        Resampler, ResamplerConfig, ResamplerControl, ResamplerMode, ResamplerOptions,
+        ResamplerQuality, ResamplerSettings, create_resampler, glide::GlideBackend,
+        rubato::RubatoBackend,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
     warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
@@ -151,6 +152,24 @@ fn build_resampler(pools: &Pools, source_rate: u32, target_rate: u32) -> impl Re
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
+fn build_glide(pools: &Pools) -> impl Resampler + ResamplerControl {
+    let settings = ResamplerSettings::builder()
+        .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
+        .mode(ResamplerMode::VariableRatio {
+            sample_rate: NonZeroU32::new(44_100).unwrap_or_else(|| panic!("test rate")),
+            initial_ratio: 1.0,
+            glide: None,
+        })
+        .options(ResamplerOptions::builder().chunk_size(4_096).build())
+        .pools(pools.clone())
+        .build();
+    let config = ResamplerConfig::builder()
+        .backend(GlideBackend::new())
+        .settings(settings)
+        .build();
+    create_resampler(&config).unwrap_or_else(|err| panic!("glide resampler should build: {err}"))
+}
+
 fn stereo_block(pools: &Pools, frames: usize) -> [SampleBuffer; 2] {
     std::array::from_fn(|channel| {
         let mut buffer = pools.get::<f32>();
@@ -210,6 +229,32 @@ fn resampler_process_is_allocation_free(
     assert_no_alloc(|| {
         let frames = process_planar(&mut resampler, &input, &mut output);
         assert!(frames > 0);
+    });
+}
+
+/// Leaving passthrough settles the filter; `1.25` and `0.8` retune it on
+/// both sides of unity.
+#[kithara::test]
+fn glide_resampler_process_is_allocation_free(allocation_planar: Vec<f32>) {
+    let pools = eager_pools(64, 16_384);
+
+    let (mut resampler, input, mut output) = permit_alloc(|| {
+        let mut resampler = build_glide(&pools);
+        let warm = planar_block(&pools, 4_096, &allocation_planar);
+        let mut warm_output = stereo_block(&pools, 8_192);
+        let _ = process_planar(&mut resampler, &warm, &mut warm_output);
+        let input = planar_block(&pools, 4_096, &allocation_planar);
+        let output = stereo_block(&pools, 8_192);
+        (resampler, input, output)
+    });
+
+    assert_no_alloc(|| {
+        for ratio in [1.25, 0.8] {
+            ResamplerControl::set_ratio(&mut resampler, ratio)
+                .unwrap_or_else(|err| panic!("ratio {ratio} should be accepted: {err}"));
+            let frames = process_planar(&mut resampler, &input, &mut output);
+            assert!(frames > 0, "ratio {ratio} rendered nothing");
+        }
     });
 }
 
