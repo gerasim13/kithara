@@ -11,13 +11,13 @@ pub use activation::{
     BlockSource, LoadedMedia, PreparedFirst, ReturnRoom, ReturnedTicket, Staged, SyncAttempt,
     SyncCallback, SyncKind, SyncReturn, SyncTicket, TicketRoom, TrackDisposal, activation_channels,
 };
+#[cfg(any(test, feature = "mock"))]
+pub(crate) use arbiter::PendingSourceChange;
 pub use arbiter::{
     AppliedSource, ArmPermit, ControlEnterError, ControlError, SourceReservation, SourceRevision,
     SyncGateBinding,
 };
-pub(crate) use arbiter::{
-    ControlGuard, PendingSourceChange, PermitCell, PreparedRevocation, SyncArbiter,
-};
+pub(crate) use arbiter::{ControlGuard, PermitCell, PreparedRevocation, SyncArbiter};
 pub use command::SyncExecution;
 pub use executor::SyncExecutor;
 pub use group::{ExecutedGroup, SyncAttachment};

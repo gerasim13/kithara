@@ -8,6 +8,8 @@ mod tests;
 pub use cell::{AppliedSource, ArmPermit, SourceReservation, SourceRevision, SyncGateBinding};
 pub(crate) use cell::{PermitCell, PermitState};
 pub use control::ControlError;
-pub(crate) use control::{ControlGuard, PendingSourceChange, PreparedRevocation};
+#[cfg(any(test, feature = "mock"))]
+pub(crate) use control::PendingSourceChange;
+pub(crate) use control::{ControlGuard, PreparedRevocation};
 pub use gate::ControlEnterError;
 pub(crate) use gate::{ClaimError, SyncArbiter};
