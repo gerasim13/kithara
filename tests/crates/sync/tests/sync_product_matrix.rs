@@ -32,7 +32,9 @@ use kithara::{
         AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncMode, SyncOperation,
         SyncOperationId, SyncStatusSnapshot,
     },
-    warp::{AssetFrame, BeatsPerMinute, PresentationFrontier},
+    warp::{
+        AssetFrame, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition, PresentationFrontier,
+    },
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
@@ -1159,6 +1161,27 @@ impl ProductHarness {
         );
     }
 
+    /// Renders until a Host beat has just passed, so the Host's next beat
+    /// lies most of a beat ahead.
+    async fn play_past_a_host_beat(&mut self, case: SyncCase) {
+        let blocks = 2 * usize::try_from(case.sample_rate).expect("sample rate fits usize")
+            / self.block_frames;
+        for _ in 0..blocks {
+            let grid = self.host.session_grid().await;
+            let frame = SessionFrame::new(
+                i64::try_from(self.output_frames).expect("offline render frame fits i64"),
+            );
+            if let BeatGridQuery::Resolved(beat) =
+                grid.beat_at(MapPoint::new(grid.stamp(), MapPosition::Session(frame)))
+                && f64::from(*beat.value().value()).fract() < 0.1
+            {
+                return;
+            }
+            let _ = self.render(case, self.block_frames).await;
+        }
+        panic!("{}: the Host never passed a beat", case.id);
+    }
+
     /// The first deck's playback position in seconds.
     fn first_deck_position(&self, case: SyncCase) -> f64 {
         self.decks[0]
@@ -2141,6 +2164,7 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
     let beat = SECONDS_PER_MINUTE / START_BPM;
     let resumed_at = match cut {
         Break::Seek => {
+            harness.play_past_a_host_beat(case).await;
             let target = ((harness.first_deck_position(case) + 3.0) / beat).ceil() * beat - 0.05;
             harness.seek_first_deck(case, target);
             target
@@ -2151,6 +2175,7 @@ async fn a_synced_deck_plays_on_by_hand_after_a_break_and_aligns_to_the_host_aga
             harness.settle(case, 2).await;
             let paused_at = harness.first_deck_position(case);
             harness.settle(case, second).await;
+            harness.play_past_a_host_beat(case).await;
             assert!(
                 (harness.first_deck_position(case) - paused_at).abs() < 1e-9,
                 "a paused deck holds its position while the Host clock runs on"

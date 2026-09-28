@@ -13,8 +13,8 @@ use super::{
 };
 use crate::{
     AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal, ReplanCause,
-    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMode, SyncOperationId,
-    consts,
+    SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMode,
+    SyncOperationId, consts,
 };
 
 /// The beat timeline one group follows, owned together with its mode.
@@ -319,8 +319,9 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
 
     /// Fixes the beat and tempo actually playing at `activation` as the
     /// group's own timeline, including mid-way through a tempo approach. A
-    /// group none of whose members sounds a map leaves for `Off` instead:
-    /// its track plays by hand, whatever a stale frontier still names.
+    /// deck whose sole track sounds no map leaves for `Off` instead: the
+    /// track plays by hand, whatever a stale frontier still names. A group
+    /// of groups owns no sounding map to latch.
     fn latch(
         &self,
         load: LoadGeneration,
@@ -375,7 +376,10 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             // member whose unplayed accepted grid could be mistaken for sound.
             _ if self.members.is_empty() => latch_at(&self.grid, activation)?,
             _ if matches!(self.grid.state(), BeatGridState::Unavailable(_)) => None,
-            AlignmentSource::Audible { .. } if self.applied.is_empty() => {
+            AlignmentSource::Audible { .. }
+                if self.applied.is_empty()
+                    && matches!(self.members.as_slice(), [SyncMember::Grid { .. }]) =>
+            {
                 return self.unmapped(Timeline::Off, activation);
             }
             AlignmentSource::Audible { frontier, .. } => {

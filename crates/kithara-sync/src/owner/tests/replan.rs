@@ -3,21 +3,22 @@ use kithara_test_utils::kithara;
 use kithara_warp::{AssetFrame, BeatGrid, BeatGridId, PresentationFrontier};
 
 use super::{
-    Accept,
+    Accept, TestGrid,
     lifecycle::{
         PublishingGrid, acknowledge, map, pending_public_entry, plan, presented, publish_next,
         raw_successor, sound, source_at, transact, transition,
     },
     modes::{
-        Group, anchor_at_rate, owning_deck_with_parent, parent_id, parent_stamp, parent_update,
-        rate, sync_at,
+        Group, anchor_at_rate, attach_group, group_in, nested, owning_deck_with_parent, parent_id,
+        parent_stamp, parent_update, rate, sync_at,
     },
     preparation::asset_grid,
 };
 use crate::{
-    AlignmentSource, GroupState, ReplanCause, SourceChange, SyncAdmission, SyncError,
-    SyncExecutionReject, SyncGroup, SyncIntent, SyncMember, SyncMode, SyncOperation,
-    SyncOperationId, SyncPreparation, SyncReceipt, SyncStatusSnapshot, owner::timeline::Custodian,
+    AlignmentSource, GroupState, ReplanCause, SourceChange, SyncAdmission, SyncCapability,
+    SyncError, SyncExecutionReject, SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode,
+    SyncOperation, SyncOperationId, SyncPreparation, SyncReceipt, SyncStatusSnapshot,
+    owner::timeline::Custodian,
 };
 
 /// Output frames one beat of the 120 BPM parent lasts at 48 kHz.
@@ -601,6 +602,69 @@ fn off_withdraws_the_entry_a_break_planned_before_it_sounds() {
 
     assert_eq!(withdrawn.withdrawn(), [next.stamp()]);
     assert_eq!(group.mode(), SyncMode::Off);
+}
+
+#[kithara::test]
+fn off_on_a_group_is_refused_while_its_nested_deck_sounds_a_map() {
+    let mut root = group_in(SyncMode::Off, SyncMemberKind::Group);
+    let mut middle = group_in(SyncMode::HostSync, SyncMemberKind::Group);
+    let middle_id = middle.id();
+    let deck = BeatGridId::allocate().expect("deck id");
+    let track = BeatGridId::allocate().expect("track id");
+    let leaf: Group = GroupState::owning(
+        deck,
+        rate(48_000),
+        SessionEpoch::new(0),
+        SyncMember::Grid {
+            alignment: None,
+            grid: Box::new(TestGrid(asset_grid(track, 480_000, 24_000))),
+        },
+    );
+    attach_group(&mut middle, leaf);
+    attach_group(&mut root, middle);
+    root.publish_session(parent_update(
+        parent_stamp(root.id(), 2),
+        anchor_at_rate(2.0, 48_000),
+    ))
+    .expect("the session reaches the Host-synced group");
+    let entry = replanned(transact(
+        &mut root,
+        sync_at(deck, SyncIntent::Enable, SessionFrame::new(2_048)),
+    ));
+    let _ = sound(&mut root, &entry);
+    let sounding = nested(&root, &[middle_id, deck], SyncGroup::status);
+    let heard = AlignmentSource::Audible {
+        frontier: PresentationFrontier::builder()
+            .warp_map(map(&entry))
+            .source(source_at(plan(&entry), 48_000))
+            .output(SessionFrame::new(48_000))
+            .build(),
+        speed: 1.0,
+    };
+
+    let refused = root
+        .transact(SyncOperation::Sync {
+            target: middle_id,
+            load: entry.stamp().load(),
+            transport: entry.stamp().transport(),
+            source: heard,
+            activation: SessionFrame::new(48_000),
+            intent: SyncIntent::Disable,
+        })
+        .expect_err("a group owns no sounding map of its own to latch");
+
+    assert_eq!(
+        refused.error(),
+        &SyncError::CapabilityUnavailable {
+            capability: SyncCapability::Alignment,
+        }
+    );
+    assert_eq!(nested(&root, &[middle_id], Group::mode), SyncMode::HostSync);
+    assert_eq!(
+        nested(&root, &[middle_id, deck], SyncGroup::status),
+        sounding,
+        "the nested deck keeps sounding its map"
+    );
 }
 
 #[kithara::test]
