@@ -1,12 +1,25 @@
-use std::{collections::BTreeMap, env, ffi::OsString, path::Path};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Args;
-use kithara_devtools::Ctx;
+use kithara_devtools::{Ctx, lease};
+use tracing::warn;
 
 use super::declared;
 use crate::{
-    ci::{config::CiPins, lane_build::LaneBuild, process::Process, run::PipelineKind},
+    ci::{
+        config::CiPins,
+        environment::{CacheTrust, process_var},
+        lane_build::{LaneBuild, SlotPool},
+        process::Process,
+        run::PipelineKind,
+    },
     config::{CiLaneConfig, KitharaExt},
     consts,
 };
@@ -76,35 +89,100 @@ fn executor_vars(
     vars
 }
 
-pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
-    run_in(
-        args,
-        ctx,
-        env::var_os("CARGO_TARGET_DIR").as_deref().map(Path::new),
-    )
+/// Where a lane builds, read from what the executor mounted. These are three
+/// environments, not three attempts: each has exactly one answer.
+#[derive(Debug)]
+enum Target {
+    /// A fleet runner: the first free slot of the lane's pool under its root.
+    Slot(SlotPool),
+    /// A fleet runner and a lane restoring a target snapshot: an empty
+    /// directory of this run's own.
+    Job(PathBuf),
+    /// No fleet root: wherever Cargo was told to build, or the checkout.
+    Named(Option<OsString>),
 }
 
-fn run_in(args: &LaneArgs, ctx: &Ctx, target_dir: Option<&Path>) -> Result<()> {
+fn target(
+    name: &str,
+    lane: &CiLaneConfig,
+    var: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<Target> {
+    let Some(root) = var(consts::TARGET_ROOT_ENV).map(PathBuf::from) else {
+        return Ok(Target::Named(var("CARGO_TARGET_DIR")));
+    };
+    if lane.target_snapshot.is_some() {
+        let run = github_value("GITHUB_RUN_ID", var)?;
+        let attempt = github_value("GITHUB_RUN_ATTEMPT", var)?;
+        return Ok(Target::Job(
+            root.join("jobs").join(format!("{run}-{attempt}-{name}")),
+        ));
+    }
+    Ok(Target::Slot(SlotPool::fleet(
+        &root,
+        CacheTrust::read(var)?,
+        name,
+    )))
+}
+
+fn github_value(name: &str, var: &dyn Fn(&str) -> Option<OsString>) -> Result<String> {
+    var(name)
+        .and_then(|value| value.into_string().ok())
+        .filter(|value| !value.is_empty())
+        .with_context(|| format!("{name} must name the GitHub run a snapshot lane restores into"))
+}
+
+pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
+    run_in(args, ctx, &process_var)
+}
+
+fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
-    // Every lane but a snapshot restore builds in the directory named after
-    // it, which checkouts of other content share; a snapshot lane is handed a
-    // private one.
-    let build = match (target_dir, &lane.target_snapshot) {
-        (Some(dir), None) => Some(LaneBuild::claim(&ctx.root, dir, ext.ci.lane_unit_window())?),
-        _ => None,
+    let (dir, build) = match target(&args.lane, lane, var)? {
+        Target::Slot(pool) => {
+            let build = LaneBuild::claim(&ctx.root, &pool, ext.ci.lane_unit_window())?;
+            announce(build.dir(), var);
+            (Some(build.dir().to_path_buf()), Some(build))
+        }
+        Target::Job(dir) => {
+            announce(&dir, var);
+            (Some(dir), None)
+        }
+        Target::Named(dir) => (dir.map(PathBuf::from), None),
     };
+    let _lease = dir.as_deref().and_then(lease::hold);
     let process = Process::new(
         &ctx.root,
-        executor_vars(target_dir, args.kind, build.is_some()),
+        executor_vars(dir.as_deref(), args.kind, build.is_some()),
     );
     let outcome = crate::ci::run::journalled(&process, &args.lane, || {
         declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
     });
     let settled = build.map_or(Ok(()), |build| build.settle(outcome.is_ok()));
     outcome.and(settled)
+}
+
+/// Tells the job's later steps where the lane built. GitHub reads `GITHUB_ENV`
+/// into every step after this one; an executor without it has no later step to
+/// tell. Only the upload of the build's timings reads it, so a lane that cannot
+/// tell builds on and the upload finds nothing to send.
+fn announce(dir: &Path, var: &dyn Fn(&str) -> Option<OsString>) {
+    let Some(env_file) = var("GITHUB_ENV").map(PathBuf::from) else {
+        return;
+    };
+    let written = OpenOptions::new()
+        .append(true)
+        .open(&env_file)
+        .and_then(|mut file| writeln!(file, "{}={}", consts::LANE_TARGET_ENV, dir.display()));
+    if let Err(error) = written {
+        warn!(
+            "later steps cannot find the lane build directory {}: writing {} failed: {error}",
+            dir.display(),
+            env_file.display()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -216,6 +294,28 @@ mod tests {
         );
     }
 
+    /// The executor's variables as `ci lane` reads them.
+    fn environment<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(*value))
+        }
+    }
+
+    fn git_init(root: &Path) {
+        let status = std::process::Command::new("git")
+            .current_dir(root)
+            .args(["init", "-q"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .expect("run git init");
+        assert!(status.success(), "git init");
+    }
+
     /// A workspace at `root` declaring one lane whose only step succeeds.
     fn trivial_lane(root: &Path) -> (Ctx, LaneArgs) {
         let (program, step_args) = if cfg!(windows) {
@@ -274,7 +374,7 @@ args = {step_args}
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let (ctx, args) = trivial_lane(temp.path());
 
-        let result = run_in(&args, &ctx, None);
+        let result = run_in(&args, &ctx, &environment(&[]));
 
         assert!(
             result.is_ok(),
@@ -282,27 +382,136 @@ args = {step_args}
         );
     }
 
-    /// A lane building in its shared directory records the content it built
-    /// from, which is what lets the next checkout of other content rebuild
-    /// instead of reusing these artifacts.
+    /// On the fleet a lane takes a slot of its own pool, records there what it
+    /// built from, and tells the job's later steps where that slot is.
     #[test]
-    fn a_lane_claims_the_shared_directory_it_builds_in() {
+    fn a_lane_on_the_fleet_builds_in_a_slot_and_tells_the_job_where() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
-        let target = tempfile::tempdir().expect("create lane build directory");
+        let lanes = tempfile::tempdir().expect("create the fleet's build root");
         let (ctx, args) = trivial_lane(temp.path());
-        let status = std::process::Command::new("git")
-            .current_dir(temp.path())
-            .args(["init", "-q"])
-            .status()
-            .expect("run git init");
-        assert!(status.success(), "git init");
+        git_init(temp.path());
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let root = lanes.path().to_str().expect("a UTF-8 build root");
+        let env_file = github_env.to_str().expect("a UTF-8 GITHUB_ENV path");
 
-        run_in(&args, &ctx, Some(target.path())).expect("lane runs");
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                (consts::TARGET_ROOT_ENV, root),
+                ("KITHARA_CACHE_TRUST", "trusted"),
+                ("GITHUB_ENV", env_file),
+            ]),
+        )
+        .expect("lane runs");
+
+        let slot = lanes.path().join("trusted-lane-trivial-0");
+        assert!(
+            slot.join(consts::SOURCES_FILE).exists(),
+            "the slot must record what it was built from"
+        );
+        assert_eq!(
+            fs::read_to_string(&github_env).expect("read GITHUB_ENV"),
+            format!("{}={}\n", consts::LANE_TARGET_ENV, slot.display())
+        );
+    }
+
+    /// Only the upload of the build's timings reads where the lane built, so a
+    /// job whose `GITHUB_ENV` cannot be written still runs its lane.
+    #[test]
+    fn a_lane_that_cannot_tell_the_job_where_it_built_still_runs() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let lanes = tempfile::tempdir().expect("create the fleet's build root");
+        let (ctx, args) = trivial_lane(temp.path());
+        git_init(temp.path());
+        let github_env = temp.path().join("missing/github-env");
+        let root = lanes.path().to_str().expect("a UTF-8 build root");
+        let env_file = github_env.to_str().expect("a UTF-8 GITHUB_ENV path");
+
+        let result = run_in(
+            &args,
+            &ctx,
+            &environment(&[(consts::TARGET_ROOT_ENV, root), ("GITHUB_ENV", env_file)]),
+        );
 
         assert!(
-            target.path().join(".kithara-lane-sources").exists(),
-            "the shared lane directory must record what it was built from"
+            result.is_ok(),
+            "a lane failed for the path only the timings upload reads: {result:?}"
         );
+        assert!(
+            lanes
+                .path()
+                .join("review-lane-trivial-0")
+                .join(consts::SOURCES_FILE)
+                .exists(),
+            "the lane must still build in its slot"
+        );
+    }
+
+    /// A snapshot restore needs an empty tree, so it never shares a slot.
+    #[test]
+    fn a_snapshot_lane_on_the_fleet_builds_in_a_directory_of_its_run() {
+        let lane = CiLaneConfig {
+            target_snapshot: Some("linux-test-release".to_owned()),
+            ..CiLaneConfig::default()
+        };
+
+        let found = target(
+            "deep-thing",
+            &lane,
+            &environment(&[
+                (consts::TARGET_ROOT_ENV, "/cache/lanes"),
+                ("GITHUB_RUN_ID", "7"),
+                ("GITHUB_RUN_ATTEMPT", "2"),
+            ]),
+        )
+        .unwrap();
+
+        match found {
+            Target::Job(dir) => assert_eq!(dir, Path::new("/cache/lanes/jobs/7-2-deep-thing")),
+            other => panic!("a snapshot lane restores into a directory of its run, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_snapshot_lane_without_its_run_is_a_broken_environment() {
+        let lane = CiLaneConfig {
+            target_snapshot: Some("linux-test-release".to_owned()),
+            ..CiLaneConfig::default()
+        };
+
+        let error = target(
+            "deep-thing",
+            &lane,
+            &environment(&[(consts::TARGET_ROOT_ENV, "/cache/lanes")]),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("GITHUB_RUN_ID"),
+            "the error must name what is missing: {error}"
+        );
+    }
+
+    #[test]
+    fn a_lane_off_the_fleet_builds_where_cargo_was_told() {
+        let lane = CiLaneConfig::default();
+
+        match target(
+            "trivial",
+            &lane,
+            &environment(&[("CARGO_TARGET_DIR", "/work/target")]),
+        )
+        .unwrap()
+        {
+            Target::Named(Some(dir)) => assert_eq!(dir, OsString::from("/work/target")),
+            other => panic!("a lane off the fleet builds where Cargo was told, not {other:?}"),
+        }
+        assert!(matches!(
+            target("trivial", &lane, &environment(&[])).unwrap(),
+            Target::Named(None)
+        ));
     }
 
     /// The test above cannot fail loudly enough alone: a resolution bug that

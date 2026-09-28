@@ -422,8 +422,8 @@ pub(crate) const APFS_LIST: &str = "\
 /// serialized on the host, so another CI lane cannot bind it concurrently.
 pub(crate) const TEST_SERVER_PORT: u16 = 3444;
 
-/// Held by the one job building in the directory.
-pub(crate) const LOCK_FILE: &str = ".kithara-lane.lock";
+/// Where `ci lane` tells the job's later steps its build directory is.
+pub(crate) const LANE_TARGET_ENV: &str = "KITHARA_LANE_TARGET";
 
 /// The content the directory's artifacts may have been built from.
 pub(crate) const SOURCES_FILE: &str = ".kithara-lane-sources";

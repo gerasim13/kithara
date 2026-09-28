@@ -15,7 +15,11 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{
-    build_cache, cache::missing_defaults, config::CiConfig, lane_build::LaneBuild, run::CacheGroup,
+    build_cache,
+    cache::missing_defaults,
+    config::CiConfig,
+    lane_build::{LaneBuild, SlotPool},
+    run::CacheGroup,
 };
 use crate::{consts, job::is_gitlab};
 
@@ -77,14 +81,22 @@ impl CacheTrust {
     pub(super) const ALL: [Self; 3] = [Self::Quarantine, Self::Review, Self::Trusted];
 
     pub(super) fn from_environment() -> Result<Self> {
-        match env::var("KITHARA_CACHE_TRUST")
-            .unwrap_or_else(|_| "review".into())
-            .as_str()
-        {
-            "quarantine" => Ok(Self::Quarantine),
-            "review" => Ok(Self::Review),
-            "trusted" => Ok(Self::Trusted),
-            value => bail!("unsupported KITHARA_CACHE_TRUST value: {value}"),
+        Self::read(&process_var)
+    }
+
+    /// The trust `KITHARA_CACHE_TRUST` names; `review` when it names none.
+    pub(super) fn read(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Self> {
+        let Some(value) = var("KITHARA_CACHE_TRUST") else {
+            return Ok(Self::Review);
+        };
+        match value.to_str() {
+            Some("quarantine") => Ok(Self::Quarantine),
+            Some("review") => Ok(Self::Review),
+            Some("trusted") => Ok(Self::Trusted),
+            _ => bail!(
+                "unsupported KITHARA_CACHE_TRUST value: {}",
+                value.to_string_lossy()
+            ),
         }
     }
 
@@ -281,6 +293,7 @@ impl CiEnvironment {
         let (target, target_lease, lane_build) = prepare_build_target(
             &project_root,
             &shared_root,
+            trust,
             &target_scope,
             config,
             isolated_target,
@@ -521,6 +534,11 @@ fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
 }
 
+/// The process environment, in the shape the readers of an environment take.
+pub(super) fn process_var(name: &str) -> Option<OsString> {
+    env::var_os(name)
+}
+
 /// A lane asking for a build directory of its own, and how long that directory
 /// keeps a build unit the lane stopped using.
 #[derive(Clone, Copy, Debug)]
@@ -575,48 +593,69 @@ fn target_owner<'a>(
     ))
 }
 
+/// Where a build goes: a directory of its own, or a pool of lane slots a claim
+/// takes one of.
+enum Target {
+    Dir(PathBuf),
+    Pool { pool: SlotPool, window: Duration },
+}
+
 fn build_target_dir(
     project_root: &FsPath,
     shared_root: &FsPath,
+    trust: CacheTrust,
     target_scope: &str,
     owner: TargetOwner<'_>,
-) -> Result<PathBuf> {
+) -> Result<Target> {
+    let slots = shared_root.join(consts::TARGET_SLOT_CACHE_NAMESPACE);
     let owner = match owner {
-        TargetOwner::Checkout => return Ok(project_root.join("target")),
-        TargetOwner::Lane(root, lane) => return Ok(root.join(format!("lane-{}", lane.name))),
+        TargetOwner::Checkout => return Ok(Target::Dir(project_root.join("target"))),
+        TargetOwner::Lane(root, lane) => {
+            return Ok(Target::Pool {
+                pool: SlotPool::fleet(&root, trust, lane.name),
+                window: lane.window,
+            });
+        }
+        TargetOwner::ScopedLane(lane) => {
+            return Ok(Target::Pool {
+                pool: SlotPool::executor(&slots, target_scope, lane.name),
+                window: lane.window,
+            });
+        }
         TargetOwner::Job(job_id) => {
             format!("job-{}", parse_decimal_id("CI_JOB_ID", &job_id)?)
         }
-        TargetOwner::Slot(concurrent_id, slots) => {
-            format!("slot-{}", disposable_slot(Some(&concurrent_id), slots)?)
+        TargetOwner::Slot(concurrent_id, count) => {
+            format!("slot-{}", disposable_slot(Some(&concurrent_id), count)?)
         }
-        TargetOwner::ScopedLane(lane) => format!("lane-{}", lane.name),
     };
-    Ok(shared_root
-        .join(consts::TARGET_SLOT_CACHE_NAMESPACE)
-        .join(format!("{target_scope}-{owner}"))
-        .join("cargo"))
+    Ok(Target::Dir(
+        slots.join(format!("{target_scope}-{owner}")).join("cargo"),
+    ))
 }
 
 fn prepare_build_target(
     project_root: &FsPath,
     shared_root: &FsPath,
+    trust: CacheTrust,
     target_scope: &str,
     config: &CiConfig,
     isolated_target: bool,
     lane: Option<LaneTarget<'_>>,
 ) -> Result<(PathBuf, Option<lease::Lease>, Option<LaneBuild>)> {
     let owner = target_owner(config, isolated_target, lane)?;
-    let window = match &owner {
-        TargetOwner::Lane(_, lane) | TargetOwner::ScopedLane(lane) => Some(lane.window),
-        TargetOwner::Checkout | TargetOwner::Job(_) | TargetOwner::Slot(..) => None,
-    };
-    let backing = build_target_dir(project_root, shared_root, target_scope, owner)?;
-    fs::create_dir_all(&backing)
-        .with_context(|| format!("creating CI build cache {}", backing.display()))?;
-    let lane_build = window
-        .map(|window| LaneBuild::claim(project_root, &backing, window))
-        .transpose()?;
+    let (backing, lane_build) =
+        match build_target_dir(project_root, shared_root, trust, target_scope, owner)? {
+            Target::Dir(dir) => {
+                fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating CI build cache {}", dir.display()))?;
+                (dir, None)
+            }
+            Target::Pool { pool, window } => {
+                let build = LaneBuild::claim(project_root, &pool, window)?;
+                (build.dir().to_path_buf(), Some(build))
+            }
+        };
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
     let lease = lease::hold(&backing);
@@ -842,13 +881,21 @@ fn insert(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use std::process::Command;
 
     #[cfg(unix)]
     use kithara_devtools::common::project::ProjectConfig;
 
     use super::*;
+
+    fn own_dir(target: Result<Target>) -> PathBuf {
+        match target.unwrap() {
+            Target::Dir(dir) => dir,
+            Target::Pool { pool, .. } => {
+                panic!("expected a directory of its own, got the pool {pool:?}")
+            }
+        }
+    }
 
     fn reclaim(root: &FsPath) -> usize {
         reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
@@ -1126,9 +1173,9 @@ mod tests {
         );
     }
 
-    /// A GitLab lane builds in its own directory inside the trust scope rather
-    /// than in the runner slot it happened to land on, and holds that
-    /// directory against a concurrent job of the same lane.
+    /// A GitLab lane builds in a slot of its own pool inside the trust scope
+    /// rather than in the runner slot it happened to land on, and holds the
+    /// lock beside that slot so a concurrent job of the lane takes the next.
     #[cfg(unix)]
     #[test]
     fn a_gitlab_lane_owns_its_build_directory_across_runner_slots() {
@@ -1150,14 +1197,13 @@ mod tests {
             )
             .unwrap();
 
-            let backing = root
-                .join(consts::TARGET_SLOT_CACHE_NAMESPACE)
-                .join(format!(
-                    "review-{}-{}-lane-apple-lint",
-                    env::consts::OS,
-                    env::consts::ARCH
-                ))
-                .join("cargo");
+            let slots = root.join(consts::TARGET_SLOT_CACHE_NAMESPACE);
+            let slot = format!(
+                "review-{}-{}-lane-apple-lint-0",
+                env::consts::OS,
+                env::consts::ARCH
+            );
+            let backing = slots.join(&slot).join("cargo");
             assert_eq!(
                 fs::canonicalize(
                     environment
@@ -1176,7 +1222,7 @@ mod tests {
             let lock = OpenOptions::new()
                 .read(true)
                 .write(true)
-                .open(backing.join(".kithara-lane.lock"))
+                .open(slots.join(format!("{slot}.lock")))
                 .unwrap();
             assert!(matches!(
                 FileLock::try_exclusive(lock),
@@ -1280,6 +1326,29 @@ mod tests {
         assert_eq!(CacheTrust::Trusted.as_str(), "trusted");
     }
 
+    #[test]
+    fn cache_trust_reads_review_when_unset_and_refuses_what_it_does_not_know() {
+        let named = |value: &'static str| {
+            move |name: &str| -> Option<OsString> {
+                (name == "KITHARA_CACHE_TRUST").then(|| OsString::from(value))
+            }
+        };
+
+        assert_eq!(
+            CacheTrust::read(&|_: &str| -> Option<OsString> { None }).unwrap(),
+            CacheTrust::Review
+        );
+        assert_eq!(
+            CacheTrust::read(&named("trusted")).unwrap(),
+            CacheTrust::Trusted
+        );
+        let error = CacheTrust::read(&named("public")).unwrap_err();
+        assert!(
+            error.to_string().contains("public"),
+            "the error must name the value: {error}"
+        );
+    }
+
     /// A host under a build spends a whole cleanup pass's worth of space before
     /// the next pass fires, so a job arriving in that window used to be refused
     /// while evictable caches sat beside it. The gate reclaims them itself now;
@@ -1372,84 +1441,86 @@ mod tests {
 
     /// The runner that mounts the fleet's build root hands reuse to the lane:
     /// the same lane asks for the same features, profile and toolchain every
-    /// run, so its directory is warm on whichever runner picked the job up. A
-    /// runner-owned directory made a moved lane compile the workspace again.
+    /// run, so its pool is warm on whichever runner picked the job up. Jobs of
+    /// one lane take a slot each rather than queueing for one directory.
     #[test]
-    fn a_lane_builds_in_its_own_directory_under_the_shared_root() {
-        let target = build_target_dir(
-            FsPath::new("/runner/_work/kithara/kithara"),
+    fn a_lane_builds_in_a_slot_of_its_own_pool_under_the_shared_root() {
+        let checkout = tempfile::tempdir().unwrap();
+        let status = Command::new("git")
+            .current_dir(checkout.path())
+            .args(["init", "-q"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git init");
+        let root = tempfile::tempdir().unwrap();
+        let claim = |name| match build_target_dir(
+            checkout.path(),
             FsPath::new("/cache"),
+            CacheTrust::Review,
             "review-linux-x86_64",
             TargetOwner::Lane(
-                PathBuf::from("/cache/target"),
+                root.path().to_path_buf(),
                 LaneTarget {
-                    name: "linux-test",
+                    name,
                     window: consts::DAY,
                 },
             ),
         )
-        .unwrap();
+        .unwrap()
+        {
+            Target::Pool { pool, window } => {
+                LaneBuild::claim(checkout.path(), &pool, window).unwrap()
+            }
+            Target::Dir(dir) => panic!(
+                "a lane on the fleet's root builds in {}, not in a slot",
+                dir.display()
+            ),
+        };
 
-        assert_eq!(target, FsPath::new("/cache/target/lane-linux-test"));
-        assert_ne!(
-            target,
-            build_target_dir(
-                FsPath::new("/runner/_work/kithara/kithara"),
-                FsPath::new("/cache"),
-                "review-linux-x86_64",
-                TargetOwner::Lane(
-                    PathBuf::from("/cache/target"),
-                    LaneTarget {
-                        name: "linux-lint",
-                        window: consts::DAY,
-                    },
-                ),
-            )
-            .unwrap()
+        let test = claim("linux-test");
+        let again = claim("linux-test");
+        let lint = claim("linux-lint");
+
+        assert_eq!(
+            test.dir(),
+            root.path().join("review-lane-linux-test-0").as_path()
+        );
+        assert_eq!(
+            again.dir(),
+            root.path().join("review-lane-linux-test-1").as_path()
+        );
+        assert_eq!(
+            lint.dir(),
+            root.path().join("review-lane-linux-lint-0").as_path()
         );
     }
 
     #[test]
     fn gitlab_targets_are_persistent_and_private_to_one_slot() {
-        let target = build_target_dir(
-            FsPath::new("/builds/disrupt/kithara"),
-            FsPath::new("/cache"),
-            "review-linux-aarch64",
-            TargetOwner::Slot("0".to_owned(), 2),
-        )
-        .unwrap();
+        let target = |owner| {
+            build_target_dir(
+                FsPath::new("/builds/disrupt/kithara"),
+                FsPath::new("/cache"),
+                CacheTrust::Review,
+                "review-linux-aarch64",
+                owner,
+            )
+        };
 
         assert_eq!(
-            target,
+            own_dir(target(TargetOwner::Slot("0".to_owned(), 2))),
             FsPath::new("/cache/target-slots/review-linux-aarch64-slot-0/cargo")
         );
         assert_ne!(
-            target,
-            build_target_dir(
-                FsPath::new("/builds/disrupt/kithara"),
-                FsPath::new("/cache"),
-                "review-linux-aarch64",
-                TargetOwner::Slot("1".to_owned(), 2),
-            )
-            .unwrap()
+            own_dir(target(TargetOwner::Slot("0".to_owned(), 2))),
+            own_dir(target(TargetOwner::Slot("1".to_owned(), 2)))
         );
-        assert!(
-            build_target_dir(
-                FsPath::new("/builds/disrupt/kithara"),
-                FsPath::new("/cache"),
-                "review-linux-aarch64",
-                TargetOwner::Slot("../trusted".to_owned(), 2),
-            )
-            .is_err()
-        );
+        assert!(target(TargetOwner::Slot("../trusted".to_owned(), 2)).is_err());
         assert_eq!(
-            build_target_dir(
-                FsPath::new("/builds/disrupt/kithara"),
-                FsPath::new("/cache"),
-                "review-linux-aarch64",
-                TargetOwner::Job("4711".to_owned()),
-            )
-            .unwrap(),
+            own_dir(target(TargetOwner::Job("4711".to_owned()))),
             FsPath::new("/cache/target-slots/review-linux-aarch64-job-4711/cargo")
         );
     }
@@ -1489,13 +1560,13 @@ mod tests {
 
     #[test]
     fn non_gitlab_targets_stay_with_the_checkout() {
-        let target = build_target_dir(
+        let target = own_dir(build_target_dir(
             FsPath::new("/work/kithara"),
             FsPath::new("/cache"),
+            CacheTrust::Review,
             "review-macos-aarch64",
             TargetOwner::Checkout,
-        )
-        .unwrap();
+        ));
 
         assert_eq!(target, FsPath::new("/work/kithara/target"));
     }
