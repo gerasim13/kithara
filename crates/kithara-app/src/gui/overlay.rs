@@ -36,8 +36,7 @@ impl Overlay {
             Command::Mix(cmd) => Edit::Mix(*cmd),
             Command::Deck {
                 deck,
-                cmd:
-                    cmd @ (DeckCmd::SetEqGain { .. } | DeckCmd::SetQuality(_) | DeckCmd::SetTempo(_)),
+                cmd: cmd @ (DeckCmd::SetEqGain { .. } | DeckCmd::SetQuality(_) | DeckCmd::Tempo(_)),
             } => Edit::Deck(*deck, *cmd),
             Command::App(AppCmd::SetHostTempo(tempo)) => Edit::HostTempo(*tempo),
             Command::SetDeckSync { deck, on } => Edit::Sync(*deck, *on),
@@ -81,7 +80,7 @@ fn lay_deck(id: DeckId, cmd: DeckCmd, drawn: &mut EngineSnapshot) {
             deck.stream.selected = variant;
             deck.stream.is_auto = variant.is_none();
         }
-        DeckCmd::SetTempo(tempo) => deck.tempo = tempo,
+        DeckCmd::Tempo(change) if deck.sync.is_manual() => deck.tempo = change.manual(deck.tempo),
         _ => {}
     }
 }
@@ -154,6 +153,33 @@ mod tests {
             assert!(
                 (rig.scalar("mix.crossfader") - 1.0).abs() < f64::EPSILON,
                 "the echoed snapshot keeps the position"
+            );
+        })
+        .await;
+        rig.close().await;
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_tempo_step_on_a_manual_deck_draws_before_the_echo() {
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
+            .await
+            .expect("rig fixture is infallible");
+        rig.call(|rig| {
+            let tempo = |rig: &Rig| rig.text("deck.playback.tempo@deck=a");
+
+            rig.send("deck-a/tempo", ControlAction::StepScalar(1.0));
+            assert_eq!(
+                tempo(rig).as_deref(),
+                Some("+1.5%"),
+                "the step draws before the engine applies it"
+            );
+
+            rig.pump();
+            rig.frame();
+            assert_eq!(
+                tempo(rig).as_deref(),
+                Some("+1.5%"),
+                "the echoed snapshot keeps the step"
             );
         })
         .await;

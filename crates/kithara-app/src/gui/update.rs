@@ -212,7 +212,7 @@ mod tests {
     use super::*;
     use crate::{
         deck::EqMode,
-        engine::Envelope,
+        engine::{Envelope, TempoChange},
         gui::{rig::Rig, ui::cache::DeckLayout},
     };
 
@@ -282,7 +282,7 @@ mod tests {
 
             apply(
                 rig,
-                Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0.into())),
+                Message::Deck(DeckId(0), DeckMsg::Tempo(TempoChange::Step(80.0))),
             );
             let deck = rig.ui.snapshot.deck(DeckId(0)).expect("deck A");
             assert_eq!(f32::from(deck.tempo), 50.0);

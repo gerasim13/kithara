@@ -72,6 +72,9 @@ pub(crate) struct TempoPercent(pub(crate) f32);
 
 #[cfg(feature = "gui")]
 impl TempoPercent {
+    /// What one wheel detent over the TEMPO block is worth, in percent.
+    pub(crate) const STEP: f32 = 1.5;
+
     pub(crate) fn speed(self) -> f32 {
         1.0 + self.0 / 100.0
     }

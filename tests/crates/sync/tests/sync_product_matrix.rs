@@ -1065,6 +1065,16 @@ impl ProductHarness {
         }
     }
 
+    /// Asks the Host to set the first deck's own tempo.
+    async fn set_deck_tempo(&mut self, tempo: BeatsPerMinute) -> Result<(), PlayError> {
+        #[cfg(not(target_os = "android"))]
+        self.mark(&format!("deck {} BPM", f64::from(tempo)));
+        let deck = Arc::clone(&self.decks[0]);
+        self.host
+            .with(move |host| host.set_deck_tempo(&deck, tempo))
+            .await
+    }
+
     /// The first deck's Sync state as the Host reports it now.
     async fn first_deck_state(&self, case: SyncCase) -> DeckSyncState {
         let deck = Arc::clone(&self.decks[0]);
@@ -2107,6 +2117,122 @@ async fn local_ticket_presents_after_an_unrelated_host_commit_and_rejected_reque
     assert!(processed.revision() > before);
     assert_eq!(processed.tempo().beats_per_minute(), 124.0);
     assert!(harness.failures.is_empty());
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(90))
+)]
+async fn a_released_deck_takes_its_own_tempo_and_holds_it_through_a_host_retarget() {
+    let case = PUBLIC_SYNTHETIC_ENABLE;
+    let sources = prepared_sources(Provider::Synthetic).await;
+    let mut harness = ProductHarness::new_for_block(
+        case,
+        &sources,
+        Start::Seconds(0.0),
+        Audible::Deck(0),
+        BLOCK_FRAMES,
+    )
+    .await;
+    let own = BeatsPerMinute::try_from(130.0).expect("fixture tempo");
+    let refused = harness.set_deck_tempo(own).await;
+    assert!(
+        matches!(
+            refused,
+            Err(PlayError::Session(SessionError::Sync(
+                SyncError::CapabilityUnavailable { .. }
+            )))
+        ),
+        "a deck without Sync keeps no tempo of its own, got {refused:?}"
+    );
+
+    harness
+        .request_first_deck(SyncIntent::Enable)
+        .await
+        .expect("Host mode maps the sounding deck");
+    let inherited = harness.set_deck_tempo(own).await;
+    assert!(
+        matches!(
+            inherited,
+            Err(PlayError::Session(SessionError::Sync(
+                SyncError::TempoInherited { .. }
+            )))
+        ),
+        "a deck under the Host inherits its tempo, got {inherited:?}"
+    );
+    let _ = harness
+        .deck_state_when(case, |state| is_sounding(state.status), "the Host map")
+        .await;
+
+    harness
+        .request_first_deck(SyncIntent::Disable)
+        .await
+        .expect("public Disable accepts the sounding deck");
+    let released = harness
+        .deck_state_when(
+            case,
+            |state| state.mode == SyncMode::LocalSync && is_sounding(state.status),
+            "the released map",
+        )
+        .await;
+    assert_ne!(released.applied_tempo, Some(own));
+
+    harness
+        .set_deck_tempo(own)
+        .await
+        .expect("a released deck takes a tempo of its own");
+    let deck = Arc::clone(&harness.decks[0]);
+    let accepted = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("accepted deck tempo");
+    assert_eq!(accepted.accepted_tempo, Some(own));
+    let stepped = harness
+        .deck_state_when(
+            case,
+            |state| is_sounding(state.status) && state.applied_tempo == Some(own),
+            "the deck's own tempo",
+        )
+        .await;
+    let stepped = applied_operation(stepped.status);
+
+    harness.settle_host_tempo(case, 124.0).await;
+    let deck = Arc::clone(&harness.decks[0]);
+    let held = harness
+        .host
+        .with(move |host| host.deck_sync_state(&deck))
+        .await
+        .expect("deck state after the Host retarget");
+    assert_eq!(held.mode, SyncMode::LocalSync);
+    assert_eq!(held.accepted_tempo, Some(own));
+    assert_eq!(held.applied_tempo, Some(own));
+
+    let beat = SECONDS_PER_MINUTE / START_BPM;
+    harness.play_past_a_host_beat(case).await;
+    let target = ((harness.first_deck_position(case) + 3.0) / beat).ceil() * beat - 0.05;
+    harness.seek_first_deck(case, target);
+    let re_entered = harness
+        .deck_state_when(
+            case,
+            |state| {
+                state.mode == SyncMode::LocalSync
+                    && is_sounding(state.status)
+                    && applied_operation(state.status) != stepped
+            },
+            "a fresh map of the deck's own after the seek",
+        )
+        .await;
+    assert_eq!(
+        re_entered.applied_tempo,
+        Some(own),
+        "the deck re-enters at the tempo it was given, not the Host's"
+    );
+    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
 }
 
 /// How the user breaks the continuity of a deck that follows the Host.

@@ -136,8 +136,8 @@ impl AnalysisView {
             bpm: state
                 .analysis
                 .as_ref()
-                .and_then(TrackArtifacts::grid)
-                .map(|grid| grid.as_raw().bpm.as_()),
+                .and_then(TrackArtifacts::bpm)
+                .map(AsPrimitive::as_),
             beats: Arc::clone(&state.beat_marks),
             downbeats: Arc::clone(&state.downbeat_marks),
             unready: Arc::clone(&state.unready_ranges),

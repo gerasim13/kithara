@@ -2,6 +2,7 @@ use arc_swap::ArcSwap;
 use kithara::{
     abr::{AbrHandle, AbrMode},
     effects::{GainDb, eq::EqBandConfig},
+    host::{HostOwned, SyncMode},
     platform::{
         sync::Arc,
         time::Duration,
@@ -15,17 +16,19 @@ use kithara::{
 use tracing::{debug, error, info};
 
 use super::{
-    command::{AppCmd, Command, DeckCmd, Envelope, MixCmd},
+    command::{AppCmd, Command, DeckCmd, Envelope, MixCmd, TempoChange},
     settings::DeckSettings,
     snapshot::{BroadcastPhase, DeckSnapshot, EngineSnapshot},
     sync::{DeckSync, SyncReport},
     tempo::HostTempo,
 };
 use crate::{
+    analysis::TrackArtifacts,
     broadcast::Broadcaster,
     catalog,
     config::AppConfig,
     deck::{Deck, DeckId, DeckSet, EqMode},
+    pools::{AppHost, AppQueue},
     state::StateController,
 };
 
@@ -117,9 +120,13 @@ impl Engine {
     }
 
     fn apply_deck(&mut self, id: DeckId, cmd: DeckCmd) {
-        let eq_mode = self.eq_mode;
-        if let Some(deck) = self.deck_mut(id) {
-            deck.apply(cmd, eq_mode);
+        let Some(at) = self.session.position(id) else {
+            return;
+        };
+        if let (Some(deck), Some(engine_deck)) =
+            (self.session.decks().get(at), self.decks.get_mut(at))
+        {
+            engine_deck.apply(cmd, self.eq_mode, self.session.host(), &deck.queue);
         }
     }
 
@@ -361,7 +368,13 @@ impl Engine {
 }
 
 impl EngineDeck {
-    fn apply(&mut self, cmd: DeckCmd, eq_mode: EqMode) {
+    fn apply(
+        &mut self,
+        cmd: DeckCmd,
+        eq_mode: EqMode,
+        host: &AppHost,
+        owned: &HostOwned<AppQueue>,
+    ) {
         let queue = self.controller.queue();
         match cmd {
             DeckCmd::Play => queue.play(),
@@ -393,11 +406,50 @@ impl EngineDeck {
                     error!(?track, error = %e, "remove failed");
                 }
             }
-            DeckCmd::SetTempo(tempo) => {
-                self.settings.tempo = tempo;
-                queue.set_rate(tempo.speed());
-            }
+            DeckCmd::Tempo(change) => self.change_tempo(change, host, owned),
             DeckCmd::SetQuality(variant) => self.set_quality(variant),
+        }
+    }
+
+    /// Moves the deck's tempo through whoever owns it now: the deck's own
+    /// rate while it plays off the Host's timelines, the Host for a deck it
+    /// released onto a timeline of its own. A deck on the Host's timeline
+    /// follows the Host's tempo and takes no change of its own.
+    fn change_tempo(&mut self, change: TempoChange, host: &AppHost, owned: &HostOwned<AppQueue>) {
+        let state = match host.deck_sync_state(owned) {
+            Ok(state) => state,
+            Err(error) => {
+                debug!(?change, %error, "tempo change dropped: the Host has no SYNC state for the deck");
+                return;
+            }
+        };
+        match state.mode {
+            SyncMode::Off => {
+                self.settings.tempo = change.manual(self.settings.tempo);
+                self.controller
+                    .queue()
+                    .set_rate(self.settings.tempo.speed());
+            }
+            SyncMode::LocalSync => {
+                let analysed = self
+                    .controller
+                    .read(|ui| ui.analysis.as_ref().and_then(TrackArtifacts::bpm));
+                let Some(tempo) = change.own(state.accepted_tempo, analysed) else {
+                    debug!(
+                        ?change,
+                        "tempo change dropped: the tempo it moves from is not known yet"
+                    );
+                    return;
+                };
+                if let Err(error) = host.set_deck_tempo(owned, tempo) {
+                    error!(?change, %error, "deck tempo rejected");
+                }
+            }
+            mode => debug!(
+                ?change,
+                ?mode,
+                "tempo change dropped: the deck follows the Host's tempo"
+            ),
         }
     }
 
@@ -962,6 +1014,131 @@ mod tests {
             rig.send("deck-a/sync", ControlAction::Activate);
             rig.pump();
             rig.until("the copy locks on the Host", ENTRY, publish, locked);
+        })
+        .await;
+        rig.close().await;
+    }
+
+    /// The deck's tempo control moves whoever owns the deck's tempo: nothing
+    /// while the deck follows the Host, the deck's own timeline once SYNC
+    /// releases it, and back to the track's tempo on a reset.
+    #[cfg(not(feature = "broadcast"))]
+    #[kithara::test(native, tokio, flash(false))]
+    async fn the_tempo_control_moves_whoever_owns_the_deck_tempo(rhythm_a_mp3: String) {
+        use ::kithara::{
+            platform::time::Duration, prelude::ResourceSrc, ui::render::ControlAction,
+        };
+
+        use crate::{
+            analysis::{
+                AnalysisHandle,
+                fixtures::{rhythm_analysis, serve_subscribe},
+            },
+            pools::{AppResourceConfig, AppTrackSource},
+        };
+
+        /// Two bars at 124 BPM, the latest a musical entry lands, and the
+        /// output's start.
+        const ENTRY: Duration = Duration::from_secs(5);
+
+        let (analysis, requests) = AnalysisHandle::channel();
+        let rig = OffThread::spawn("engine", move || {
+            Ok::<_, Infallible>(Rig::analysed(analysis))
+        })
+        .await
+        .expect("rig fixture is infallible");
+        let track_id = rig
+            .call(move |rig| {
+                let config = &rig.config;
+                let track = AppResourceConfig::for_src(
+                    ResourceSrc::parse(&rhythm_a_mp3).expect("fixture url parses"),
+                )
+                .downloader(config.downloader.clone())
+                .worker(config.worker.clone())
+                .store(config.store.clone())
+                .audio(config.audio.clone())
+                .hls(config.hls.clone())
+                .file(config.file.clone())
+                .build();
+                let track_id = rig.queues[0]
+                    .append(AppTrackSource::Config(Box::new(track)))
+                    .expect("deck A takes the track");
+                rig.until(
+                    "the track loads",
+                    Rig::DEADLINE,
+                    |rig| {
+                        let _ = rig.queues[0].tick();
+                    },
+                    |rig| rig.queues[0].duration_seconds().is_some(),
+                );
+                track_id
+            })
+            .await;
+        let artifacts = serve_subscribe(requests, track_id).await;
+        artifacts.send_replace(Some(rhythm_analysis().into()));
+        rig.call(move |rig| {
+            let publish = |rig: &mut Rig| {
+                rig.engine.tick();
+                rig.engine.publish();
+                rig.frame();
+            };
+            let synced = |rig: &Rig| rig.flag("deck.playback.synced@deck=a");
+            let bpm = |rig: &Rig| rig.text("deck.playback.bpm@deck=a");
+            let fader = |rig: &Rig| rig.scalar("deck.tempo.rate@deck=a");
+            let own_rate = |rig: &Rig| rig.queues[0].rate();
+
+            rig.send("bar/host-tempo", ControlAction::StepScalar(4.0));
+            rig.send("deck-a/play", ControlAction::Activate);
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.until(
+                "the deck plays at the Host's tempo",
+                ENTRY,
+                publish,
+                |rig| synced(rig) && bpm(rig).as_deref() == Some("124.0"),
+            );
+
+            rig.send("deck-a/tempo", ControlAction::StepScalar(1.0));
+            assert!(
+                (fader(rig) - 0.5).abs() < f64::EPSILON,
+                "a deck on the Host draws no step of its own"
+            );
+            rig.pump();
+            publish(rig);
+            assert!((fader(rig) - 0.5).abs() < f64::EPSILON);
+            assert!(
+                (own_rate(rig) - 1.0).abs() < f32::EPSILON,
+                "a deck on the Host keeps its own rate"
+            );
+            assert_eq!(bpm(rig).as_deref(), Some("124.0"));
+
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.until("the deck leaves the Host", ENTRY, publish, |rig| {
+                !synced(rig)
+            });
+
+            rig.send("deck-a/tempo", ControlAction::StepScalar(1.0));
+            rig.pump();
+            rig.until(
+                "the released deck steps off the tempo it kept",
+                ENTRY,
+                publish,
+                |rig| bpm(rig).as_deref() == Some("125.9"),
+            );
+
+            rig.send("deck-a/tempo", ControlAction::Activate);
+            rig.pump();
+            rig.until(
+                "the reset takes the deck back to its track's tempo",
+                ENTRY,
+                publish,
+                |rig| bpm(rig).as_deref() == Some("120.0"),
+            );
+            assert!(
+                (own_rate(rig) - 1.0).abs() < f32::EPSILON,
+                "the deck's own timeline moved, not its rate"
+            );
         })
         .await;
         rig.close().await;

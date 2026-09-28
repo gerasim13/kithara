@@ -39,6 +39,11 @@ impl TrackArtifacts {
         self.analysis.as_ref()
     }
 
+    /// The tempo the track's beat grid states.
+    pub(crate) fn bpm(&self) -> Option<f64> {
+        self.grid().map(|grid| grid.as_raw().bpm)
+    }
+
     /// The beat grid to paint and to clock against.
     pub(crate) fn grid(&self) -> Option<&BeatGridModel> {
         self.prepared

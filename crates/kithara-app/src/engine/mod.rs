@@ -12,7 +12,7 @@ mod tempo;
 mod thread;
 
 pub(crate) use build::build;
-pub(crate) use command::{AppCmd, Command, DeckCmd, Envelope, MixCmd};
+pub(crate) use command::{AppCmd, Command, DeckCmd, Envelope, MixCmd, TempoChange};
 pub(crate) use error::EngineError;
 pub(crate) use owner::Engine;
 pub(crate) use run::run;

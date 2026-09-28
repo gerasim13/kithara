@@ -392,17 +392,18 @@ fn format_bpm(source: Option<f32>, speed: f32) -> String {
 /// The deck's tempo and BPM texts: the manual tempo off the Host's timeline,
 /// else the tempo the deck's map sounds at, against the analysed BPM.
 fn format_tempo(deck: &DeckSnapshot) -> (String, String) {
-    let Some(report) = deck
-        .sync
-        .reported
-        .filter(|report| report.mode != SyncMode::Off)
-    else {
+    if deck.sync.is_manual() {
         return (
             format!("{:+.1}%", f32::from(deck.tempo)),
             format_bpm(deck.analysis.bpm, deck.tempo.speed()),
         );
-    };
-    let Some(applied) = report.applied_tempo.map(f64::from) else {
+    }
+    let Some(applied) = deck
+        .sync
+        .reported
+        .and_then(|report| report.applied_tempo)
+        .map(f64::from)
+    else {
         return (consts::EM_DASH.to_string(), consts::EM_DASH.to_string());
     };
     let tempo = deck.analysis.bpm.map_or_else(

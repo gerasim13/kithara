@@ -1,4 +1,4 @@
-use kithara::{effects::GainDb, play::Tempo, queue::TrackId};
+use kithara::{effects::GainDb, play::Tempo, queue::TrackId, warp::BeatsPerMinute};
 
 use crate::deck::{DeckId, EqMode, TempoPercent};
 
@@ -30,8 +30,45 @@ pub(crate) enum DeckCmd {
         gain: GainDb,
     },
     RemoveTrack(TrackId),
-    SetTempo(TempoPercent),
+    Tempo(TempoChange),
     SetQuality(Option<usize>),
+}
+
+/// How the user moves a deck's tempo, resolved by whoever owns it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum TempoChange {
+    /// `steps` wheel detents, each worth [`TempoPercent::STEP`].
+    Step(f32),
+    /// Back to the track's own tempo.
+    Reset,
+}
+
+impl TempoChange {
+    /// The manual tempo this change leaves `tempo` at, clamped to its travel.
+    pub(crate) fn manual(self, tempo: TempoPercent) -> TempoPercent {
+        match self {
+            Self::Step(steps) => TempoPercent::from(steps.mul_add(TempoPercent::STEP, tempo.0)),
+            Self::Reset => TempoPercent::DEFAULT,
+        }
+    }
+
+    /// The deck tempo this change asks the Host for: `accepted` moved by the
+    /// steps, or the track's `analysed` BPM for a reset. `None` while the one
+    /// it needs is unknown.
+    pub(crate) fn own(
+        self,
+        accepted: Option<BeatsPerMinute>,
+        analysed: Option<f64>,
+    ) -> Option<BeatsPerMinute> {
+        let bpm = match self {
+            Self::Step(steps) => {
+                f64::from(accepted?)
+                    * f64::from(TempoPercent::from(steps * TempoPercent::STEP).speed())
+            }
+            Self::Reset => analysed?,
+        };
+        BeatsPerMinute::try_from(bpm).ok()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,10 +94,43 @@ mod tests {
     use ::kithara::{effects::GainDb, ui::render::ControlAction};
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
-    use crate::gui::rig::Rig;
+    use super::TempoChange;
+    use crate::{deck::TempoPercent, gui::rig::Rig};
 
     mod consts {
         pub(super) const KNOB: f64 = 1e-4;
+    }
+
+    fn bpm(value: f64) -> ::kithara::warp::BeatsPerMinute {
+        ::kithara::warp::BeatsPerMinute::try_from(value).expect("fixture tempo")
+    }
+
+    #[kithara::test]
+    fn a_manual_step_moves_the_percent_by_its_detents_within_the_travel() {
+        let from = TempoPercent::from(3.0);
+
+        assert_eq!(TempoChange::Step(2.0).manual(from), TempoPercent::from(6.0));
+        assert_eq!(
+            TempoChange::Step(-1.0).manual(from),
+            TempoPercent::from(1.5)
+        );
+        assert_eq!(TempoChange::Step(80.0).manual(from), TempoPercent::MAX);
+        assert_eq!(TempoChange::Reset.manual(from), TempoPercent::DEFAULT);
+    }
+
+    #[kithara::test]
+    fn an_own_step_moves_the_accepted_tempo_and_a_reset_returns_to_the_track() {
+        let step = TempoChange::Step(1.0).own(Some(bpm(124.0)), Some(120.0));
+        assert!(
+            step.is_some_and(|tempo| (f64::from(tempo) - 125.86).abs() < 1e-4),
+            "one detent is 1.5 % of the accepted 124 BPM, got {step:?}"
+        );
+        assert_eq!(
+            TempoChange::Reset.own(Some(bpm(124.0)), Some(120.0)),
+            Some(bpm(120.0))
+        );
+        assert_eq!(TempoChange::Step(1.0).own(None, Some(120.0)), None);
+        assert_eq!(TempoChange::Reset.own(Some(bpm(124.0)), None), None);
     }
 
     #[kithara::test(native, tokio, flash(false))]

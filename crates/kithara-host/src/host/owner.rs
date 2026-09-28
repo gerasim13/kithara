@@ -15,7 +15,7 @@ use kithara_sync::{
     SyncOperation, SyncReceipt, SyncReceiptAck, SyncRejected, SyncStaged, SyncStatusSnapshot,
     SyncTransition, TopologyOperation,
 };
-use kithara_warp::{BeatGrid, BeatGridId, PresentationFrontier};
+use kithara_warp::{BeatGrid, BeatGridId, BeatsPerMinute, PresentationFrontier};
 
 #[cfg(feature = "offline")]
 use super::offline::OfflineRuntime;
@@ -390,6 +390,42 @@ impl<S> Host<S> {
             HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(
                 "unexpected host reply for deck sync request".into(),
+            )),
+        }
+    }
+
+    /// Asks the Host to set one deck's own tempo. The deck steps to `tempo`
+    /// at the next commit boundary of the Host's clock; the beat playing
+    /// there does not move.
+    ///
+    /// # Errors
+    /// Returns the owner's refusal when the deck is foreign or unavailable,
+    /// inherits the Host's tempo, or keeps no timeline of its own.
+    pub fn set_deck_tempo<P>(
+        &self,
+        deck: &HostOwned<P>,
+        tempo: BeatsPerMinute,
+    ) -> Result<(), PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        if deck.host_id != self.id {
+            return Err(PlayError::ForeignSession);
+        }
+        match self
+            .dispatcher
+            .exec_host(HostCmd::Sync(SyncCmd::SetDeckTempo {
+                target: deck.id(),
+                tempo,
+            }))? {
+            HostReply::Admission(Ok(_)) => Ok(()),
+            HostReply::Admission(Err(rejected)) => {
+                let (reason, _) = <(SyncError, SyncOperation<PlayerMember>)>::from(rejected);
+                Err(SessionError::Sync(reason).into())
+            }
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for deck tempo request".into(),
             )),
         }
     }

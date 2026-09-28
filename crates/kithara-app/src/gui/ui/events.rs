@@ -12,13 +12,9 @@ use super::{
     scope::{consts::MICRO_DECK, deck_index, eq_band},
 };
 use crate::{
-    deck::{DeckId, EqMode, TempoPercent},
-    engine::MixCmd,
-    gui::{
-        app::Kithara,
-        deck::{DeckMsg, consts::TEMPO_STEP},
-        message::Message,
-    },
+    deck::{DeckId, EqMode},
+    engine::{MixCmd, TempoChange},
+    gui::{app::Kithara, deck::DeckMsg, message::Message},
 };
 
 /// Translate a compiled-UI event into an app message, applying host-owned
@@ -131,10 +127,8 @@ fn deck_control(
                 Some(f64::from(f32::from(Zoom::from(zoom))));
             return None;
         }
-        ("tempo", ControlAction::StepScalar(steps)) => DeckMsg::SetTempo(TempoPercent::from(
-            steps.mul_add(TEMPO_STEP, f32::from(state.snapshot.deck(id)?.tempo)),
-        )),
-        ("tempo", ControlAction::Activate) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
+        ("tempo", ControlAction::StepScalar(steps)) => DeckMsg::Tempo(TempoChange::Step(*steps)),
+        ("tempo", ControlAction::Activate) => DeckMsg::Tempo(TempoChange::Reset),
         ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
         ("prev", ControlAction::Activate) => DeckMsg::Prev,
         ("next", ControlAction::Activate) => DeckMsg::Next,
@@ -485,8 +479,8 @@ mod tests {
 
         use super::super::translate;
         use crate::{
-            deck::{DeckId, EqMode, TempoPercent},
-            engine::MixCmd,
+            deck::{DeckId, EqMode},
+            engine::{MixCmd, TempoChange},
             gui::{app::Kithara, deck::DeckMsg, message::Message, rig::Rig},
             state::AbrVariant,
         };
@@ -504,10 +498,6 @@ mod tests {
         #[kithara::test(native, flash(false))]
         fn deck_and_bar_controls_translate_to_their_owned_messages() {
             let mut rig = Rig::offline();
-            rig.message(Message::Deck(
-                DeckId(0),
-                DeckMsg::SetTempo(TempoPercent::from(3.0)),
-            ));
             let state = &mut rig.ui;
 
             assert!(matches!(
@@ -533,8 +523,12 @@ mod tests {
                     "deck-a/tempo",
                     ControlAction::StepScalar(2.0)
                 ),
-                Some(Message::Deck(DeckId(0), DeckMsg::SetTempo(tempo)))
-                    if (f32::from(tempo) - 6.0).abs() < f32::EPSILON
+                Some(Message::Deck(DeckId(0), DeckMsg::Tempo(TempoChange::Step(steps))))
+                    if (steps - 2.0).abs() < f32::EPSILON
+            ));
+            assert!(matches!(
+                send(state, "deck-a/tempo", ControlAction::Activate),
+                Some(Message::Deck(DeckId(0), DeckMsg::Tempo(TempoChange::Reset)))
             ));
             assert!(matches!(
                 send(state, "bar/broadcast", ControlAction::Activate),

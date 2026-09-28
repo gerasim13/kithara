@@ -83,6 +83,13 @@ impl DeckSync {
         self.is_refused = false;
     }
 
+    /// Whether the deck plays off the Host's timelines, at its manual tempo:
+    /// the Host answered Off, or has not answered yet.
+    pub(crate) fn is_manual(&self) -> bool {
+        self.reported
+            .is_none_or(|report| report.mode == SyncMode::Off)
+    }
+
     /// Whether the Host holds the deck on its timeline.
     pub(crate) fn is_synced(&self) -> bool {
         self.reported

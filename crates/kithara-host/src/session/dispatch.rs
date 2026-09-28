@@ -7,8 +7,8 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 use kithara_sync::{
-    ControlEnterError, EntryRefusal, PublicOperation, RootCut, RootError, SyncError, SyncGroup,
-    SyncOperation, SyncReceiptAck, SyncRejected,
+    ControlEnterError, EntryPort, EntryRefusal, PublicOperation, RootCut, RootError, SyncError,
+    SyncGroup, SyncOperation, SyncReceiptAck, SyncRejected,
 };
 use kithara_warp::{BeatGridId, PresentationFrontier};
 use tracing::{debug, trace, warn};
@@ -212,6 +212,7 @@ fn control_failure_reply<S>(cmd: HostCmd<S>, failure: ControlEnterError) -> Host
         HostCmd::Shutdown => HostReply::Ok,
         HostCmd::Sync(SyncCmd::TransactCurrent(_))
         | HostCmd::Sync(SyncCmd::RequestDeckSync { .. })
+        | HostCmd::Sync(SyncCmd::SetDeckTempo { .. })
         | HostCmd::QueryDeckState { .. }
         | HostCmd::RegisterMember { .. }
         | HostCmd::RetireMember { .. }
@@ -260,6 +261,20 @@ fn run_sync_cmd<S>(
             match cut.requested_sync(port, target, member, intent, &resident) {
                 Ok(operation) => operation,
                 Err(refusal) => return HostReply::Err(entry_refusal(refusal)),
+            }
+        }
+        SyncCmd::SetDeckTempo { target, tempo } => {
+            if let Err(error) = transport::observe_commits(cut, port) {
+                return HostReply::Err(SessionError::from(error).into());
+            }
+            match port.commit_boundary() {
+                Ok(commit) => SyncOperation::Tempo {
+                    target,
+                    tempo,
+                    commit,
+                    smoothing: 0.0,
+                },
+                Err(refusal) => return HostReply::Err(transport::clock_error(refusal).into()),
             }
         }
         SyncCmd::Transact(operation) => match transport::observe_commits(cut, port) {

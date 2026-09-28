@@ -11,7 +11,7 @@ use kithara_sync::{
     ResidentLoadObservation, SyncAdmission, SyncError, SyncGateBinding, SyncIntent, SyncOperation,
     SyncRejected, TopologyOperation,
 };
-use kithara_warp::{BeatGridId, PresentationFrontier};
+use kithara_warp::{BeatGridId, BeatsPerMinute, PresentationFrontier};
 
 use crate::{
     PlayerMember,
@@ -72,6 +72,10 @@ pub(crate) enum SyncCmd {
         member: BeatGridId,
         intent: SyncIntent,
         observation: Option<Box<ResidentLoadObservation<TrackId>>>,
+    },
+    SetDeckTempo {
+        target: BeatGridId,
+        tempo: BeatsPerMinute,
     },
 }
 
