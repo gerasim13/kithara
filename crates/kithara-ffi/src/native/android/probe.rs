@@ -22,6 +22,8 @@ pub(super) enum ProbeError {
 }
 
 mod consts {
+    use super::jlong;
+
     pub(super) const FMT_F32: jlong = 0;
     pub(super) const FMT_F64: jlong = 9;
     pub(super) const FMT_I16: jlong = 1;
