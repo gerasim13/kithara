@@ -9,5 +9,6 @@ mod sync_listening;
 mod sync_oracle;
 mod sync_product_matrix;
 mod sync_replan;
+mod sync_retirement;
 mod sync_runtime_oracles;
 mod sync_staging;

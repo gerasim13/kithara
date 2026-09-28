@@ -362,6 +362,26 @@ pub(super) const STAGED_BESIDE_PLAYBACK_CONTROL: SyncCase = SyncCase::running(
 )
 .hold(120.0)
 .gridded();
+/// A muted deck synced to the Host beside a free deck that sounds: the deck
+/// the Host removes while the other plays on.
+pub(super) const RETIRED_BESIDE_PLAYBACK: SyncCase = SyncCase::running(
+    "retired-beside-playback",
+    2,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(120.0)
+.gridded();
+/// [`RETIRED_BESIDE_PLAYBACK`] with the synced deck kept: the PCM the free
+/// deck must keep.
+pub(super) const RETIRED_BESIDE_PLAYBACK_CONTROL: SyncCase = SyncCase::running(
+    "retired-beside-playback-control",
+    2,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.hold(120.0)
+.gridded();
 /// A sounding deck whose worker has no slot left for a staged lane.
 pub(super) const STAGED_WITHOUT_CAPACITY: SyncCase = SyncCase::running(
     "staged-without-capacity",
@@ -1056,52 +1076,57 @@ impl ProductHarness {
         self.mark(&format!("sync {intent:?}"));
         let transport = self.transport_revision(case).await;
         for index in 0..self.decks.len() {
-            {
-                let deck = &self.decks[index];
-                let playback = deck.playback_view();
-                let position = playback.position.unwrap_or(0.0);
-                let source = if playback.playing {
-                    AlignmentSource::Audible {
-                        frontier: PresentationFrontier::builder()
-                            .source((position * f64::from(case.sample_rate)).max(0.0) as u64)
-                            .output(SessionFrame::new(
-                                i64::try_from(self.output_frames).unwrap_or(i64::MAX),
-                            ))
-                            .build(),
-                        speed: f64::from(deck.rate()),
-                    }
-                } else {
-                    AlignmentSource::Prepared(
-                        AssetFrame::new((position * f64::from(case.sample_rate)).max(0.0))
-                            .unwrap_or_else(|error| {
-                                panic!("{}: cue deck {index}: {error:?}", case.id)
-                            }),
-                    )
-                };
-                let target = deck.id();
-                let activation =
-                    SessionFrame::new(i64::try_from(self.output_frames).unwrap_or(i64::MAX));
-                let _ = self
-                    .host
-                    .with(move |host| {
-                        host.transact(SyncOperation::Sync {
-                            target,
-                            load: LoadGeneration::first(),
-                            transport,
-                            source,
-                            activation,
-                            intent,
-                        })
-                    })
-                    .await
-                    .unwrap_or_else(|rejected| {
-                        panic!("{}: sync deck {index}: {rejected}", case.id)
-                    });
-            }
+            self.request_deck_sync(case, index, transport, intent).await;
             if matches!(case.order, OperationOrder::SequentialSync) {
                 let _ = self.render(case, self.block_frames).await;
             }
         }
+    }
+
+    /// Asks the Host to apply `intent` to deck `index` from what it plays
+    /// now, or from its cue while paused.
+    pub(super) async fn request_deck_sync(
+        &self,
+        case: SyncCase,
+        index: usize,
+        transport: kithara::signal::TransportRevision,
+        intent: SyncIntent,
+    ) {
+        let deck = &self.decks[index];
+        let playback = deck.playback_view();
+        let position = playback.position.unwrap_or(0.0);
+        let source = if playback.playing {
+            AlignmentSource::Audible {
+                frontier: PresentationFrontier::builder()
+                    .source((position * f64::from(case.sample_rate)).max(0.0) as u64)
+                    .output(SessionFrame::new(
+                        i64::try_from(self.output_frames).unwrap_or(i64::MAX),
+                    ))
+                    .build(),
+                speed: f64::from(deck.rate()),
+            }
+        } else {
+            AlignmentSource::Prepared(
+                AssetFrame::new((position * f64::from(case.sample_rate)).max(0.0))
+                    .unwrap_or_else(|error| panic!("{}: cue deck {index}: {error:?}", case.id)),
+            )
+        };
+        let target = deck.id();
+        let activation = SessionFrame::new(i64::try_from(self.output_frames).unwrap_or(i64::MAX));
+        let _ = self
+            .host
+            .with(move |host| {
+                host.transact(SyncOperation::Sync {
+                    target,
+                    load: LoadGeneration::first(),
+                    transport,
+                    source,
+                    activation,
+                    intent,
+                })
+            })
+            .await
+            .unwrap_or_else(|rejected| panic!("{}: sync deck {index}: {rejected}", case.id));
     }
 
     pub(super) async fn run_operations(&mut self, case: SyncCase) {

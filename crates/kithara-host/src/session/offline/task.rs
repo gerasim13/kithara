@@ -338,6 +338,16 @@ mod tests {
             Reply::Err(error) => panic!("the player stop failed: {error}"),
             _ => panic!("the player stop returned an unexpected reply"),
         }
+        let idle = state
+            .graph
+            .decks()
+            .find(|deck| deck.player_id == stopped)
+            .map(|deck| (deck.started, deck.slots.len()));
+        assert_eq!(
+            idle,
+            Some((false, 0)),
+            "the stopped player keeps its deck, idle and without slots"
+        );
         assert!(
             state.retiring.is_empty(),
             "the stop's zero-frame poll handed the stopped player's processors back"
