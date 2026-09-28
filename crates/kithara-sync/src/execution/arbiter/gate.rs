@@ -154,11 +154,28 @@ impl SyncArbiter {
         result
     }
 
-    /// Tombstone the session after its audio callback and owner work have
-    /// quiesced. This also closes a claim abandoned before both receipts.
-    pub(crate) fn close_quiescent(&self) {
-        self.phase.store(consts::CLOSED, Ordering::Release);
+    /// Tombstone the session once its audio callback and owner work have
+    /// quiesced, so no claim starts after it, and say what the gate held. A
+    /// claim abandoned before both receipts is closed too; the owner's own
+    /// phase closes like an open gate.
+    pub(crate) fn close(&self) -> GateClose {
+        match self.phase.swap(consts::CLOSED, Ordering::AcqRel) {
+            consts::AUDIO_CLAIMED => GateClose::AbandonedClaim,
+            consts::CLOSED => GateClose::AlreadyClosed,
+            _ => GateClose::Closed,
+        }
     }
+}
+
+/// What the session gate held when [`SyncArbiter::close`] tombstoned it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GateClose {
+    /// No audio claim was in flight.
+    Closed,
+    /// An audio claim never finished, so its receipts were never written.
+    AbandonedClaim,
+    /// An earlier close had already tombstoned the gate.
+    AlreadyClosed,
 }
 
 /// An owner entry failed before any group state was changed.

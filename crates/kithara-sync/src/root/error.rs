@@ -1,5 +1,6 @@
 use kithara_warp::BeatGridId;
 
+use super::InboxAt;
 use crate::{ControlEnterError, ControlError, SyncError};
 
 /// Why the session root refused an owner input or a cut.
@@ -34,4 +35,19 @@ pub enum RootError {
     /// The root group refused the owner.
     #[error(transparent)]
     Sync(#[from] SyncError),
+}
+
+/// Why closing the session root cannot vouch that the session ended with
+/// every audio change heard.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum CloseError {
+    /// An audio claim never finished, so its receipts were never written.
+    #[error("an audio claim was abandoned before its receipts were written")]
+    AbandonedClaim,
+    /// An audio callback still holds the receipt producer of this slot.
+    #[error("an audio callback still holds the receipt producer at {0:?}")]
+    CallbackLive(InboxAt),
+    /// The root group refused a final receipt.
+    #[error("the root refused a final receipt: {0}")]
+    ReceiptRefused(SyncError),
 }

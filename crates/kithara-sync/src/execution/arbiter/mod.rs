@@ -12,4 +12,4 @@ pub use control::ControlError;
 pub(crate) use control::PendingSourceChange;
 pub(crate) use control::{ControlGuard, PreparedRevocation};
 pub use gate::ControlEnterError;
-pub(crate) use gate::{ClaimError, SyncArbiter};
+pub(crate) use gate::{ClaimError, GateClose, SyncArbiter};

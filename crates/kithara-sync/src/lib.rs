@@ -27,7 +27,7 @@ pub use protocol::{
     SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
 };
 pub use root::{
-    ClockRefusal, DEFAULT_OWNER_WAIT, EnteredCut, EntryPort, EntryRefusal, InboxAt,
+    ClockRefusal, CloseError, DEFAULT_OWNER_WAIT, EnteredCut, EntryPort, EntryRefusal, InboxAt,
     ProcessedTransport, ResidentLoadObservation, ResidentRender, ResidentStaging, RootCut,
     RootError, RootPort, SyncRoot, SyncRootConfig, Waiting,
 };

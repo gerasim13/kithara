@@ -258,7 +258,9 @@ impl<T, S> Drop for SessionState<T, S> {
         self.stream.take();
         self.ctx.take();
         let (sync, mut port) = self.owner_parts();
-        sync.close(&mut port);
+        if let Err(error) = sync.close(&mut port) {
+            warn!(%error, "sync: the session root closed with a failure");
+        }
     }
 }
 

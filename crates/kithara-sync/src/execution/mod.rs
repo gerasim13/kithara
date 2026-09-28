@@ -17,7 +17,7 @@ pub use arbiter::{
     AppliedSource, ArmPermit, ControlEnterError, ControlError, SourceReservation, SourceRevision,
     SyncGateBinding,
 };
-pub(crate) use arbiter::{ControlGuard, PermitCell, PreparedRevocation, SyncArbiter};
+pub(crate) use arbiter::{ControlGuard, GateClose, PermitCell, PreparedRevocation, SyncArbiter};
 pub use command::SyncExecution;
 pub use executor::SyncExecutor;
 pub use group::{ExecutedGroup, SyncAttachment};

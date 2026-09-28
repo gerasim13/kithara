@@ -15,10 +15,10 @@ use kithara_warp::{
 use super::*;
 use crate::{
     AlignmentSource, ControlEnterError, GroupState, LoadGeneration, PublicOperation, SourceChange,
-    SyncAdmission, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncIntent,
-    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId, SyncReceipt,
-    SyncReceiptAck, SyncReceiptInbox, SyncStatusSnapshot, TopologyOperation, TopologyRevision,
-    TopologyStamp, TransportOperation,
+    SyncAdmission, SyncApplied, SyncError, SyncExecutionReject, SyncExecutionStamp,
+    SyncGateBinding, SyncGroup, SyncIntent, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
+    SyncOperationId, SyncPreparation, SyncReceipt, SyncReceiptAck, SyncReceiptInbox,
+    SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
     owner::tests::fixtures::{
         TestGrid, TestGroup, deck_with_a_preparation, root_with_a_waiting_deck,
     },
@@ -294,7 +294,7 @@ fn a_busy_owner_keeps_one_terminal_rejection_for_its_next_cut() {
 fn a_closed_root_fails_the_gate_of_every_receipt() {
     let mut root = root(DEFAULT_OWNER_WAIT);
     let mut port = FakePort::default();
-    root.close(&mut port);
+    assert_eq!(root.close(&mut port), Ok(()));
 
     let rejected = SyncReceipt::Rejected {
         stamp: stamp(&root, id()),
@@ -413,29 +413,152 @@ fn a_receipt_the_root_cannot_record_stays_in_its_inbox_and_the_body_does_not_run
     assert_eq!(port.publishes.get(), 0);
 }
 
-#[kithara::test]
-fn closing_drains_every_inbox_publishes_once_and_refuses_later_entry() {
-    let mut root = root(DEFAULT_OWNER_WAIT);
-    let rejected = SyncReceipt::Rejected {
-        stamp: stamp(&root, id()),
+/// A root over one deck with a preparation, the deck's track registered;
+/// with the track's gate and the preparation.
+fn prepared_root() -> (SyncRoot<TestGroup>, SyncGateBinding, SyncPreparation) {
+    let (deck, preparation) = deck_with_a_preparation();
+    let mut root = SyncRoot::new(deck, SyncRootConfig::builder().build());
+    let deck = root.group().id();
+    let gate = root
+        .register(deck, preparation.stamp().member().grid_id())
+        .expect("registration");
+    (root, gate, preparation)
+}
+
+/// The rejection of `preparation` a callback reports when its entry passed.
+fn late(preparation: &SyncPreparation) -> SyncReceipt {
+    SyncReceipt::Rejected {
+        stamp: preparation.stamp(),
         reason: SyncExecutionReject::Late,
-    };
-    let (_live_tx, mut live) = sync_receipts();
-    live.keep(rejected);
-    let (_retiring_tx, mut retiring) = sync_receipts();
-    retiring.keep(rejected);
+    }
+}
+
+/// Whether the root recorded the rejection [`late`] reports.
+fn recorded_late(root: &SyncRoot<TestGroup>) -> bool {
+    matches!(
+        root.group().status(),
+        SyncStatusSnapshot::Rejected {
+            reason: SyncExecutionReject::Late,
+            ..
+        }
+    )
+}
+
+/// An inbox holding `receipt`, if any, whose producer the callback let go.
+fn quiesced(receipt: Option<SyncReceipt>) -> SyncReceiptInbox {
+    let (_tx, mut inbox) = sync_receipts();
+    if let Some(receipt) = receipt {
+        inbox.keep(receipt);
+    }
+    inbox
+}
+
+#[kithara::test]
+fn closing_records_every_final_input_publishes_once_and_refuses_later_entry() {
+    let (mut root, _gate, preparation) = prepared_root();
     let mut port = FakePort {
-        live: vec![live],
-        retiring: vec![(id(), retiring)],
+        live: vec![quiesced(Some(late(&preparation)))],
+        retiring: vec![(id(), quiesced(None))],
         ..FakePort::default()
     };
 
-    root.close(&mut port);
+    assert_eq!(root.close(&mut port), Ok(()));
 
+    assert!(recorded_late(&root), "the final receipt is recorded");
     assert_eq!(port.live[0].next_receipt(), None);
-    assert_eq!(port.retiring[0].1.next_receipt(), None);
     assert_eq!(port.publishes.get(), 1);
     assert_eq!(root.enter().err(), Some(ControlEnterError::Closed));
+    assert_eq!(
+        root.close(&mut port),
+        Ok(()),
+        "a closed root has nothing left to record"
+    );
+    assert_eq!(port.publishes.get(), 1);
+}
+
+#[kithara::test]
+fn closing_over_an_abandoned_claim_reports_it_once_the_rest_is_recorded() {
+    let (mut root, gate, preparation) = prepared_root();
+    let control = gate.arbiter().try_control().expect("the owner enters");
+    let permit = gate
+        .cell()
+        .mint_permit(&control, preparation.stamp())
+        .expect("the owner mints the permit");
+    drop(control);
+    let applied = SyncApplied::builder()
+        .stamp(preparation.stamp())
+        .frontier(
+            PresentationFrontier::builder()
+                .source(0)
+                .output(SessionFrame::new(0))
+                .build(),
+        )
+        .build();
+    let (mut producer, _) = sync_receipts();
+    let reserved = producer
+        .reserve_pair(applied)
+        .expect("the mailbox has room for a pair");
+    let claim = gate
+        .arbiter()
+        .try_claim(&permit, gate.cell(), reserved)
+        .expect("the callback claims");
+    drop(claim);
+    let mut port = FakePort {
+        live: vec![quiesced(Some(late(&preparation)))],
+        ..FakePort::default()
+    };
+
+    assert_eq!(root.close(&mut port), Err(CloseError::AbandonedClaim));
+
+    assert!(recorded_late(&root), "the final receipt is still recorded");
+    assert_eq!(port.publishes.get(), 1);
+}
+
+#[kithara::test]
+fn closing_while_a_callback_holds_a_producer_reports_it_once_its_receipts_are_recorded() {
+    let (mut root, _gate, preparation) = prepared_root();
+    let (mut producer, inbox) = sync_receipts();
+    producer
+        .publish_rejected(preparation.stamp(), SyncExecutionReject::Late)
+        .expect("the mailbox has room");
+    let mut port = FakePort {
+        live: vec![inbox],
+        ..FakePort::default()
+    };
+
+    assert_eq!(
+        root.close(&mut port),
+        Err(CloseError::CallbackLive(InboxAt::Live { deck: 0, slot: 0 }))
+    );
+
+    assert!(recorded_late(&root), "what the producer wrote is recorded");
+    assert_eq!(port.publishes.get(), 1);
+    drop(producer);
+}
+
+#[kithara::test]
+fn a_final_receipt_the_root_refuses_is_reported_once_the_next_is_recorded() {
+    let (mut root, _gate, preparation) = prepared_root();
+    let foreign = SyncReceipt::Armed(stamp(&root, id()));
+    let mut port = FakePort {
+        live: vec![quiesced(Some(foreign))],
+        retiring: vec![(id(), quiesced(Some(late(&preparation))))],
+        ..FakePort::default()
+    };
+
+    let closed = root.close(&mut port);
+
+    assert!(
+        matches!(closed, Err(CloseError::ReceiptRefused(_))),
+        "{closed:?}"
+    );
+    assert_eq!(
+        port.live[0].next_receipt(),
+        None,
+        "the refused receipt is spent"
+    );
+    assert!(recorded_late(&root), "the next final receipt is recorded");
+    assert_eq!(port.publishes.get(), 1);
 }
 
 #[kithara::test]

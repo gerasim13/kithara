@@ -2,11 +2,13 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_warp::BeatGridId;
 use tracing::{debug, warn};
 
-use super::{EnteredCut, InboxAt, RootCut, RootError, RootPort, inputs::queue_gate_failure};
+use super::{
+    CloseError, EnteredCut, InboxAt, RootCut, RootError, RootPort, inputs::queue_gate_failure,
+};
 use crate::{
     ControlEnterError, GroupState, SyncError, SyncGateBinding, SyncGroup, SyncReceipt,
     SyncReceiptAck, SyncReceiptInbox,
-    execution::{PermitCell, SyncArbiter},
+    execution::{GateClose, PermitCell, SyncArbiter},
 };
 
 /// How long entering the root waits for an audio claim in flight before it
@@ -205,42 +207,78 @@ impl<G: SyncGroup<NestedGroup = G>> SyncRoot<G> {
     }
 
     /// The owner's last word, once the audio callback and every command have
-    /// quiesced: records what each inbox still holds and every kept gate
-    /// rejection, publishes the root once, and closes the gate for good. A
-    /// receipt the root refuses now is only logged, since nothing can retry
-    /// it.
-    pub fn close<P: RootPort<G>>(&mut self, port: &mut P) {
+    /// quiesced: tombstones the gate so no claim starts, records what each
+    /// inbox still holds and every kept gate rejection, and publishes the
+    /// root once. A root already closed has nothing left to record.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first way the session had not quiesced or a final input
+    /// was refused, after every input is recorded and the root published.
+    /// Nothing can retry a final input, so each later failure is only
+    /// logged.
+    pub fn close<P: RootPort<G>>(&mut self, port: &mut P) -> Result<(), CloseError> {
+        let mut failures: Vec<CloseError> = Vec::new();
+        match self.arbiter.close() {
+            GateClose::AlreadyClosed => return Ok(()),
+            GateClose::AbandonedClaim => failures.push(CloseError::AbandonedClaim),
+            GateClose::Closed => {}
+        }
         for deck in 0..port.decks() {
             for slot in 0..port.slots(deck) {
-                self.record_final(port.inbox(InboxAt::Live { deck, slot }));
+                let at = InboxAt::Live { deck, slot };
+                drain_final(&mut self.group, at, port.inbox(at), &mut failures);
             }
         }
         for index in 0..port.retiring_len() {
-            self.record_final(port.inbox(InboxAt::Retiring(index)));
+            let at = InboxAt::Retiring(index);
+            drain_final(&mut self.group, at, port.inbox(at), &mut failures);
         }
         for cell in &mut self.cells {
-            if let Some(receipt) = cell.pending_gate_receipt.take()
-                && let Err(error) = self.group.acknowledge(receipt)
-            {
-                warn!(
-                    ?error,
-                    ?receipt,
-                    "final gate rejection could not be recorded"
-                );
+            if let Some(receipt) = cell.pending_gate_receipt.take() {
+                record_final(&mut self.group, receipt, &mut failures);
             }
         }
         port.publish(&self.group);
-        self.arbiter.close_quiescent();
-    }
-
-    fn record_final(&mut self, inbox: Option<&mut SyncReceiptInbox>) {
-        let Some(inbox) = inbox else {
-            return;
-        };
-        while let Some(receipt) = inbox.next_receipt() {
-            if let Err(error) = self.group.acknowledge(receipt) {
-                warn!(?error, ?receipt, "final sync receipt could not be recorded");
-            }
+        let mut failures = failures.into_iter();
+        let first = failures.next();
+        for error in failures {
+            warn!(%error, "sync: the session closed with a further failure");
         }
+        first.map_or(Ok(()), Err)
+    }
+}
+
+/// Records every receipt the inbox at `at` still holds. A producer the
+/// audio callback still holds is a close failure, since it can write after
+/// this final drain.
+fn drain_final<G: SyncGroup<NestedGroup = G>>(
+    group: &mut GroupState<G>,
+    at: InboxAt,
+    inbox: Option<&mut SyncReceiptInbox>,
+    failures: &mut Vec<CloseError>,
+) {
+    let Some(inbox) = inbox else {
+        return;
+    };
+    if !inbox.is_producer_gone() {
+        failures.push(CloseError::CallbackLive(at));
+    }
+    while let Some(receipt) = inbox.next_receipt() {
+        record_final(group, receipt, failures);
+    }
+}
+
+/// Records one final input of a closing root; a refusal other than a
+/// superseded rejection is a close failure.
+fn record_final<G: SyncGroup<NestedGroup = G>>(
+    group: &mut GroupState<G>,
+    receipt: SyncReceipt,
+    failures: &mut Vec<CloseError>,
+) {
+    if let Err(error) = group.acknowledge(receipt)
+        && !error.is_superseded_rejection(receipt)
+    {
+        failures.push(CloseError::ReceiptRefused(error));
     }
 }

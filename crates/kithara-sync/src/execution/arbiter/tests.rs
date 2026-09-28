@@ -226,7 +226,8 @@ fn abandoned_claim_can_be_tombstoned_after_audio_quiesces() {
         arbiter.enter_host_control(DEFAULT_OWNER_WAIT),
         Err(ControlEnterError::Busy)
     ));
-    arbiter.close_quiescent();
+    assert_eq!(arbiter.close(), GateClose::AbandonedClaim);
+    assert_eq!(arbiter.close(), GateClose::AlreadyClosed);
     assert!(arbiter.try_control().is_none());
     assert!(matches!(
         arbiter.enter_host_control(DEFAULT_OWNER_WAIT),
