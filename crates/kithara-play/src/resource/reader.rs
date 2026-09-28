@@ -31,9 +31,9 @@ use crate::{
 /// The slot is the one the track's owner handed the configuration, else one
 /// of this load's own. The read is deliberately not awaited here. A track
 /// whose audio is ready becomes playable at once; its grid arrives when its
-/// own source answers, into the slot this load publishes. A load that is over
-/// has dropped its end of the slot, so a late answer reaches only what still
-/// holds it.
+/// own source answers, into the slot this load publishes. A read that answers
+/// after its load is over changes nothing: the slot outlives the load when the
+/// track's owner handed it over.
 fn prepared_grid<S, B>(config: &ResourceConfig<S, B>) -> Arc<PreparedGrid>
 where
     B: Default,
@@ -58,7 +58,7 @@ where
                     cancel.as_ref(),
                 );
                 match source.load(&fetch).await {
-                    Ok(model) => read.put(model),
+                    Ok(model) => read.answer(model, cancel.as_ref()),
                     Err(error) => warn!(%error, "resource: the prepared beat grid never arrived"),
                 }
             }));

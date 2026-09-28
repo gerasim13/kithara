@@ -524,23 +524,24 @@ impl HeldAnalysis {
 
     /// Show the followed track's latest artifacts, and hand the queue the
     /// grid they state, so the track's loads publish it to the Host.
+    ///
+    /// The hand-off does not ride the shown revision: another track can
+    /// answer with the very publication already shown, and its own loads
+    /// still need the grid. The queue keeps an equal grid as it is.
     fn mirror(&mut self, state: &Mutex<UiState>, open: bool) {
         let track = self.held.as_ref().map(|held| held.track);
         let next = self.held.as_ref().and_then(|held| held.rx.borrow().clone());
         if !open {
             self.held = None;
         }
-        let mut st = state.lock();
-        if same_revision(st.analysis.as_ref(), next.as_ref()) {
-            return;
-        }
-        let grid = next.as_ref().and_then(TrackArtifacts::grid).cloned();
-        st.set_analysis(next);
-        drop(st);
-        if let (Some(id), Some(grid)) = (track, grid)
-            && let Err(error) = self.queue.offer_beat_grid(id, Arc::new(grid))
+        if let (Some(id), Some(grid)) = (track, next.as_ref().and_then(TrackArtifacts::grid))
+            && let Err(error) = self.queue.offer_beat_grid(id, Arc::new(grid.clone()))
         {
             debug!(track = ?id, %error, "analysis: the queue let go of the track before its grid");
+        }
+        let mut st = state.lock();
+        if !same_revision(st.analysis.as_ref(), next.as_ref()) {
+            st.set_analysis(next);
         }
     }
 

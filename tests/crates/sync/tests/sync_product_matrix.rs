@@ -2430,7 +2430,19 @@ async fn a_grid_handed_to_the_queue_after_the_load_aligns_the_deck() {
             "the Host map over the handed grid",
         )
         .await;
-    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
+    let six_beats = (f64::from(case.sample_rate) * SECONDS_PER_MINUTE / 124.0 * 6.0).round();
+    let pcm = harness
+        .capture_frames(case, six_beats as usize, BLOCK_FRAMES)
+        .await;
+    let mut failures = synchronization_failures(
+        "a grid handed after the load",
+        &[pcm.as_slice()],
+        CHANNELS,
+        case.sample_rate,
+        124.0,
+    );
+    failures.extend(harness.failures);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[kithara::test(

@@ -858,6 +858,115 @@ mod tests {
         rig.close().await;
     }
 
+    /// The same file queued twice answers with the analysis already shown:
+    /// the deck changes track, not revision, and the second copy still takes
+    /// the grid and locks on the Host.
+    #[cfg(not(feature = "broadcast"))]
+    #[kithara::test(native, tokio)]
+    async fn a_second_copy_of_an_analysed_track_locks_on_the_grid_already_shown(
+        rhythm_a_mp3: String,
+    ) {
+        use ::kithara::{
+            platform::time::Duration,
+            prelude::ResourceSrc,
+            queue::{TrackStatus, Transition},
+            ui::render::ControlAction,
+        };
+
+        use crate::{
+            analysis::{
+                AnalysisHandle,
+                fixtures::{rhythm_analysis, serve_subscribe},
+            },
+            pools::{AppResourceConfig, AppTrackSource},
+        };
+
+        /// Two bars at 124 BPM, the latest a musical entry lands, and the
+        /// output's start.
+        const ENTRY: Duration = Duration::from_secs(5);
+
+        let (analysis, requests) = AnalysisHandle::channel();
+        let rig = OffThread::spawn("engine", move || {
+            Ok::<_, Infallible>(Rig::analysed(analysis))
+        })
+        .await
+        .expect("rig fixture is infallible");
+        let (first, second) = rig
+            .call(move |rig| {
+                let copy = |rig: &Rig| {
+                    let config = &rig.config;
+                    AppTrackSource::Config(Box::new(
+                        AppResourceConfig::for_src(
+                            ResourceSrc::parse(&rhythm_a_mp3).expect("fixture url parses"),
+                        )
+                        .downloader(config.downloader.clone())
+                        .worker(config.worker.clone())
+                        .store(config.store.clone())
+                        .audio(config.audio.clone())
+                        .hls(config.hls.clone())
+                        .file(config.file.clone())
+                        .build(),
+                    ))
+                };
+                let first = rig.queues[0]
+                    .append(copy(rig))
+                    .expect("deck A takes the track");
+                rig.until(
+                    "the first copy loads",
+                    Rig::DEADLINE,
+                    |rig| {
+                        let _ = rig.queues[0].tick();
+                    },
+                    |rig| rig.queues[0].duration_seconds().is_some(),
+                );
+                let second = rig.queues[0]
+                    .append(copy(rig))
+                    .expect("deck A takes its copy");
+                (first, second)
+            })
+            .await;
+        let artifacts = serve_subscribe(requests, first).await;
+        artifacts.send_replace(Some(rhythm_analysis().into()));
+        rig.call(move |rig| {
+            let publish = |rig: &mut Rig| {
+                let _ = rig.queues[0].tick();
+                rig.engine.tick();
+                rig.engine.publish();
+                rig.frame();
+            };
+            let synced = |rig: &Rig| rig.flag("deck.playback.synced@deck=a");
+            let locked = |rig: &mut Rig| {
+                synced(rig) && rig.text("deck.playback.bpm@deck=a").as_deref() == Some("124.0")
+            };
+
+            rig.send("bar/host-tempo", ControlAction::StepScalar(4.0));
+            rig.send("deck-a/play", ControlAction::Activate);
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.until("the first copy locks on the Host", ENTRY, publish, locked);
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.until("the deck leaves the Host", ENTRY, publish, |rig| {
+                !synced(rig)
+            });
+
+            rig.queues[0]
+                .select(second, Transition::None)
+                .expect("deck A holds the copy");
+            rig.until("the copy loads", Rig::DEADLINE, publish, |rig| {
+                rig.queues[0].current_index() == Some(1)
+                    && rig.queues[0].tracks().iter().any(|track| {
+                        track.id == second && matches!(track.status, TrackStatus::Consumed)
+                    })
+            });
+            rig.send("deck-a/sync", ControlAction::Activate);
+            rig.pump();
+            rig.until("the copy locks on the Host", ENTRY, publish, locked);
+        })
+        .await;
+        rig.close().await;
+    }
+
     #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, flash(false))]
     fn a_rung_picked_on_a_deck_without_a_ladder_publishes_the_ladder_mode() {
