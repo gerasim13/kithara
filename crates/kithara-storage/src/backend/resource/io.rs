@@ -156,7 +156,13 @@ mod tests {
         mpsc,
     };
 
-    use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration};
+    use kithara_platform::{
+        CancelToken,
+        sync::{Arc, Weak},
+        thread,
+        time::Duration,
+    };
+    use rangemap::RangeSet;
 
     use crate::{
         WaitOutcome,
@@ -353,6 +359,68 @@ mod tests {
             .expect("active write must succeed");
 
         assert!(core.inner.retired.is_empty());
+    }
+
+    /// A read never takes ownership of the snapshot, however long the write
+    /// side stays quiet: the produce path reads at audio-tick cadence (~94
+    /// ticks/s at 48 kHz with 512-frame blocks) while writes arrive at
+    /// download cadence. The resource stays active, so every read of the
+    /// ten-second burst answers from the snapshot.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[ignore = "red until writers retire displaced snapshots: a read still \
+                takes ownership of the snapshot it loads"]
+    fn a_read_burst_never_leaks_a_generation() {
+        const TICKS_PER_SECOND: usize = 94;
+        const BURST: usize = TICKS_PER_SECOND * 10;
+
+        let core = open_mem();
+        core.write_at_inner(0, b"hello world")
+            .expect("active write must succeed");
+        let snapshot = core.inner.available_snapshot.load_full();
+        let owners = Arc::strong_count(&snapshot);
+
+        let covered = (0..BURST)
+            .filter(|_| core.contains_range_inner(0..11))
+            .count();
+
+        assert_eq!(
+            covered, BURST,
+            "every read in the burst answers from the snapshot"
+        );
+        assert_eq!(
+            Arc::strong_count(&snapshot),
+            owners,
+            "{BURST} reads with no intervening write took ownership of the snapshot"
+        );
+    }
+
+    /// A reader overlapping a write is never the last owner of the snapshot
+    /// that write displaced: its guard drop leaves the snapshot to the writer,
+    /// and the next write frees it.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[ignore = "red until writers retire displaced snapshots: a racing \
+                reader still frees the snapshot a write displaced"]
+    fn displaced_snapshot_is_freed_by_the_writer() {
+        let core = open_mem();
+        core.write_at_inner(0, b"hello")
+            .expect("active write must succeed");
+        let reader = core.inner.available_snapshot.load();
+        let displaced: Weak<RangeSet<u64>> = Arc::downgrade(&reader);
+
+        core.write_at_inner(5, b" world")
+            .expect("active write must succeed");
+        drop(reader);
+        assert!(
+            displaced.upgrade().is_some(),
+            "a reader guard drop never frees the displaced snapshot"
+        );
+
+        core.write_at_inner(11, b"!")
+            .expect("active write must succeed");
+        assert!(
+            displaced.upgrade().is_none(),
+            "the next write frees the quiesced snapshot"
+        );
     }
 
     /// Fill `[0, len)` with `value` in multiple `write_at_inner` calls so a

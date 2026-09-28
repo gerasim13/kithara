@@ -56,12 +56,6 @@ impl Retired {
         self.trees.is_empty() && self.availabilities.is_empty()
     }
 
-    /// Whether a park has leaked a generation since the last drain.
-    #[cfg(test)]
-    pub(super) fn overflowed(&self) -> bool {
-        self.overflowed.load(Ordering::Acquire)
-    }
-
     pub(super) fn retire_availability(&self, availability: Arc<Availability>) {
         if let Err(availability) = self.availabilities.push(availability) {
             self.overflowed.store(true, Ordering::Release);

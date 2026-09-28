@@ -459,7 +459,7 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::Weak, time::Duration};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
 
@@ -640,45 +640,107 @@ mod tests {
         assert!(idx.inner.retired.is_empty());
     }
 
-    /// A read never leaks a generation, however long the write side stays quiet.
+    /// A read never takes ownership of a generation, however long the write
+    /// side stays quiet.
     ///
-    /// Every read parks two references - the tree and the resource snapshot -
-    /// so the free lands off the audio thread, and only the write side drains
-    /// them. The produce path reads at audio-tick cadence (~94 ticks/s at
-    /// 48 kHz with 512-frame blocks) while writes arrive at download cadence,
-    /// so a stretch served from cache issues thousands of reads with no drain
-    /// between them. The bin is bounded and overflow does not free, it
-    /// *forgets*: a forgotten generation is unreachable memory that no later
-    /// drain can recover.
-    ///
-    /// Measured in the field on 2026-08-20: 844 overflow warnings in two
-    /// minutes of HLS playback. The burst below is ten seconds of produce
-    /// ticks, deliberately not derived from `RETIRE_CAPACITY` - raising the
-    /// capacity moves the threshold, it does not bound the read:write ratio.
-    ///
-    /// `#[ignore]`d, not deleted: falsified locally at 940 reads. Removing the
-    /// leak means the reader stops taking ownership per read, which is a
-    /// redesign of the produce-path read contract, not a patch.
+    /// The produce path reads at audio-tick cadence (~94 ticks/s at 48 kHz
+    /// with 512-frame blocks) while writes arrive at download cadence, so a
+    /// stretch served from cache issues thousands of reads with no write in
+    /// between. The burst is ten seconds of ticks over both snapshot reads.
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    #[ignore = "pins real regression — a read parks two references while only \
-                writes drain the bounded bin, so ordinary playback overflows it \
-                and mem::forget leaks a generation for good; unignore when \
-                quiescent-state reclamation replaces the retire bin"]
+    #[ignore = "red until writers retire displaced generations: a read still \
+                takes ownership of the snapshots it loads"]
     fn a_read_burst_never_leaks_a_generation() {
         const TICKS_PER_SECOND: usize = 94;
         const BURST: usize = TICKS_PER_SECOND * 10;
 
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
+        idx.record_commit(&k, 10);
+        let tree = idx.inner.assets.load_full();
+        let snapshot = idx
+            .entry("test_asset", "file1")
+            .expect("a committed resource has an entry")
+            .load_full();
+        let tree_owners = Arc::strong_count(&tree);
+        let snapshot_owners = Arc::strong_count(&snapshot);
+
+        let resolved = (0..BURST)
+            .filter(|_| idx.contains_range(&k, 0..10) && idx.final_len(&k) == Some(10))
+            .count();
+
+        assert_eq!(
+            resolved, BURST,
+            "every read in the burst resolves the resource snapshot"
+        );
+        assert_eq!(
+            Arc::strong_count(&tree),
+            tree_owners,
+            "{BURST} reads with no intervening write took ownership of the tree"
+        );
+        assert_eq!(
+            Arc::strong_count(&snapshot),
+            snapshot_owners,
+            "{BURST} reads with no intervening write took ownership of the resource snapshot"
+        );
+    }
+
+    /// A reader overlapping a range write is never the last owner of the
+    /// snapshot that write displaced: its guard drop leaves the snapshot to
+    /// the writer, and the next write frees it.
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[ignore = "red until writers retire displaced generations: a racing \
+                reader still frees the snapshot a write displaced"]
+    fn displaced_snapshot_is_freed_by_the_writer() {
+        let idx = AvailabilityIndex::new();
+        let k = ResourceKey::relative("test_asset", "file1");
         idx.record_write(&k, 0..10);
+        let tree = idx.inner.assets.load();
+        let reader = tree
+            .get("test_asset")
+            .and_then(|asset| asset.get("file1"))
+            .expect("a written resource has an entry")
+            .load();
+        let displaced: Weak<Availability> = Arc::downgrade(&reader);
 
-        for _ in 0..BURST {
-            assert!(idx.contains_range(&k, 0..10));
-        }
-
+        idx.record_write(&k, 10..20);
+        drop(reader);
+        drop(tree);
         assert!(
-            !idx.inner.retired.overflowed(),
-            "{BURST} reads with no intervening write leaked a generation"
+            displaced.upgrade().is_some(),
+            "a reader guard drop never frees the displaced snapshot"
+        );
+
+        idx.record_write(&k, 20..30);
+        assert!(
+            displaced.upgrade().is_none(),
+            "the next write frees the quiesced snapshot"
+        );
+    }
+
+    /// A reader overlapping a structural edit is never the last owner of the
+    /// tree that edit displaced: its guard drop leaves the tree to the writer,
+    /// and the next edit frees it.
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[ignore = "red until writers retire displaced generations: a racing \
+                reader still frees the tree an edit displaced"]
+    fn displaced_tree_is_freed_by_the_writer() {
+        let idx = AvailabilityIndex::new();
+        idx.record_write(&ResourceKey::relative("test_asset", "file1"), 0..10);
+        let reader = idx.inner.assets.load();
+        let displaced: Weak<AssetTree> = Arc::downgrade(&reader);
+
+        idx.record_write(&ResourceKey::relative("test_asset", "file2"), 0..10);
+        drop(reader);
+        assert!(
+            displaced.upgrade().is_some(),
+            "a reader guard drop never frees the displaced tree"
+        );
+
+        idx.record_write(&ResourceKey::relative("test_asset", "file3"), 0..10);
+        assert!(
+            displaced.upgrade().is_none(),
+            "the next edit frees the quiesced tree"
         );
     }
 
