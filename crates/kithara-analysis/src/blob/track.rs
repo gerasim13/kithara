@@ -4,7 +4,8 @@ use kithara_platform::time::Duration;
 use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
 
 use crate::{
-    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, GridFit, TrackAnalysis, Waveform,
+    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, Coverage, GridFit, TrackAnalysis,
+    Waveform,
     blob::{BlobError, MAX_PREALLOC, Reader, Writer},
     consts,
 };
@@ -124,7 +125,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
 fn write_grid_fit(writer: &mut Writer<'_>, fit: GridFit) -> Result<(), BlobError> {
     writer.write_u64(u64::try_from(fit.residual.as_nanos()).map_err(|_| BlobError::TooLarge)?);
     writer.write_u32(fit.min_run_beats.get());
-    writer.write_f64(fit.min_coverage);
+    writer.write_f64(fit.min_coverage.into());
     Ok(())
 }
 
@@ -132,7 +133,7 @@ fn read_grid_fit(reader: &mut Reader<'_>) -> Result<GridFit, BlobError> {
     Ok(GridFit::builder()
         .residual(Duration::from_nanos(reader.read_u64()?))
         .min_run_beats(NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?)
-        .min_coverage(reader.read_f64()?)
+        .min_coverage(Coverage::checked(reader.read_f64()?).ok_or(BlobError::Corrupt)?)
         .build())
 }
 
@@ -276,7 +277,7 @@ mod tests {
         let fit = GridFit::builder()
             .residual(Duration::from_millis(12))
             .min_run_beats(NonZeroU32::new(16).expect("a non-zero run"))
-            .min_coverage(0.75)
+            .min_coverage(Coverage::checked(0.75).expect("a share"))
             .build();
         let mut coverage = RangeSet::new();
         coverage.insert(0..64);
@@ -292,6 +293,37 @@ mod tests {
         let got = TrackAnalysis::try_from((&encode(&want)[..], &active())).expect("decodes");
 
         assert_eq!(got.grid_fit(), fit);
+    }
+
+    /// A fit whose coverage is no share of the markers is no fit a pass
+    /// published under: the blob is corrupt, not a track without a grid.
+    #[kithara::test]
+    fn a_grid_fit_coverage_that_is_no_share_is_corrupt() {
+        let fit = GridFit::builder()
+            .min_coverage(Coverage::checked(0.75).expect("a share"))
+            .build();
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..64);
+        let mut bytes = encode(
+            &TrackAnalysis::builder()
+                .token(consts::TRACK_TOKEN.into())
+                .revision(3)
+                .source_sample_rate(rate())
+                .coverage(coverage)
+                .fingerprint(active())
+                .grid_fit(fit)
+                .build(),
+        );
+        let share = 0.75_f64.to_le_bytes();
+        let at = bytes
+            .windows(share.len())
+            .position(|window| window == share)
+            .expect("the blob carries the coverage");
+        bytes[at..at + share.len()].copy_from_slice(&f64::NAN.to_le_bytes());
+
+        let decoded = TrackAnalysis::try_from((&bytes[..], &active()));
+
+        assert!(matches!(decoded, Err(BlobError::Corrupt)), "{decoded:?}");
     }
 
     #[kithara::test]

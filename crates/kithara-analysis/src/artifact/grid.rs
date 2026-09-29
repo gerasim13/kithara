@@ -28,6 +28,8 @@ pub enum BeatGridUnavailable {
     Rejected(#[from] BeatGridError),
     #[error("the artifact carries {bpm} where a tempo would be")]
     Tempo { bpm: f64 },
+    #[error("the pass's beat markers do not strictly rise")]
+    Unordered,
     #[error("no run of the pass's beat markers keeps one tempo long enough to follow")]
     NoSteadyRun,
 }
@@ -40,7 +42,10 @@ pub enum BeatGridUnavailable {
 /// line through many of them is where the beats are. A beat a marker named
 /// carries that marker's confidence; one the line alone places carries none.
 /// Beat 0 is the beat of the line nearest the start of the track, so a
-/// revision that moves the line by a hair keeps every beat's number.
+/// revision that moves the line by a hair keeps every beat's number unless
+/// the line's beats stand half a beat either side of the start, where any
+/// count from the start turns over; a reader following beats across
+/// revisions knows a beat by where it stands.
 ///
 /// This is the only place source frames become media seconds: the artifact
 /// keeps frames, and the model has no sample rate to read them against.
@@ -59,6 +64,9 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
         let fit = analysis.grid_fit();
         let (times, confidences) =
             observed(artifact.beats(), artifact.beat_confidence(), rate, horizon);
+        if times.windows(2).any(|pair| pair[1] <= pair[0]) {
+            return Err(BeatGridUnavailable::Unordered);
+        }
         let run = fit
             .steady_run(&times, consts::SECONDS_PER_MINUTE / stated)
             .ok_or(BeatGridUnavailable::NoSteadyRun)?;
@@ -537,6 +545,25 @@ mod tests {
                 BeatState::Final,
             )),
             Err(BeatGridUnavailable::NoSteadyRun)
+        );
+    }
+
+    /// Markers that do not strictly rise are no pass's observations: the fit
+    /// is never asked to find a tempo in them.
+    #[kithara::test(native)]
+    fn markers_that_do_not_rise_state_no_grid() {
+        let mut repeated = on_beats(0..12);
+        repeated[6] = repeated[5];
+
+        assert_eq!(
+            BeatGridModel::try_from(&analysis(
+                consts::RATE_48,
+                &repeated,
+                &[],
+                None,
+                BeatState::Final,
+            )),
+            Err(BeatGridUnavailable::Unordered)
         );
     }
 

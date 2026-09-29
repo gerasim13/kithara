@@ -14,5 +14,5 @@ pub use grid::BeatGridUnavailable;
 #[cfg(feature = "analysis-beat")]
 pub(crate) use meter::voted_bar;
 pub use snapshot::{BeatSnapshot, BeatState};
-pub use steady::{GridFit, GridFitPatch};
+pub use steady::{Coverage, GridFit, GridFitPatch};
 pub use track::{AnalysisFingerprint, AnalysisToken, TrackAnalysis};

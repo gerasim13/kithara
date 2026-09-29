@@ -196,6 +196,7 @@ mod consts {
     /// Timescale the deck stamps a beat position with: the grid states seconds,
     /// and the DJ surface carries them as a rational media time.
     pub(super) const MEDIA_TIMESCALE: i32 = 600;
+    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
 }
 
 #[cfg(test)]
@@ -336,17 +337,18 @@ pub(crate) mod test_fixture {
 
 #[derive(Debug, Default)]
 struct BeatClockState {
-    /// The ordinal of the last beat announced, as the grid names it.
-    last_beat_number: Option<i64>,
+    /// Where the last beat announced stands, in media seconds.
+    last_beat_at: Option<f64>,
     published_track: Option<usize>,
 }
 
 impl StateController {
-    /// The grid numbers each beat by its ordinal, so a marker the pass could not place leaves a gap
-    /// in the numbering rather than renumbering its neighbours.
+    /// A beat is announced once, known by where it stands: a revision that
+    /// moves the grid by a hair can renumber every beat, and a beat within
+    /// half a beat of the last one announced is that one again.
     fn publish_dj_events(&self, state: &UiState) {
         let Some(current_index) = state.current_track_index else {
-            self.beat_clock.lock().last_beat_number = None;
+            self.beat_clock.lock().last_beat_at = None;
             return;
         };
         let Some(analysis) = state.analysis.as_ref() else {
@@ -370,7 +372,7 @@ impl StateController {
                 .bus()
                 .publish(DjEvent::BpmDetected { slot, info });
             beat_clock.published_track = Some(current_index);
-            beat_clock.last_beat_number = None;
+            beat_clock.last_beat_at = None;
         }
 
         if grid.beats.is_empty() {
@@ -378,10 +380,11 @@ impl StateController {
         }
 
         let crossed = grid.beats.partition_point(|beat| beat.at <= state.position);
-        let last = beat_clock.last_beat_number;
+        let half_beat = consts::SECONDS_PER_MINUTE / grid.bpm / 2.0;
+        let last = beat_clock.last_beat_at;
         for beat in grid.beats[..crossed]
             .iter()
-            .filter(|beat| last.is_none_or(|prev| beat.ordinal > prev))
+            .filter(|beat| last.is_none_or(|prev| beat.at - prev > half_beat))
         {
             let Some(beat_number) = beat.ordinal.to_u64() else {
                 continue;
@@ -391,7 +394,7 @@ impl StateController {
                 beat_number,
                 timestamp: MediaTime::with_seconds(beat.at, consts::MEDIA_TIMESCALE),
             });
-            beat_clock.last_beat_number = Some(beat.ordinal);
+            beat_clock.last_beat_at = Some(beat.at);
         }
     }
 }
@@ -1102,6 +1105,47 @@ mod tests {
                 .state,
             BeatGridState::Final,
             "the settled publication states a grid nothing will revise"
+        );
+        cancel.cancel();
+        host.close().await;
+    }
+
+    /// A revision that moves the grid by two milliseconds across the half
+    /// beat before the track starts numbers every beat one on; the deck
+    /// still announces each beat once.
+    #[kithara::test(native, tokio)]
+    async fn a_revision_that_renumbers_the_beats_announces_each_beat_once(tone_mp3: String) {
+        let (host, queue) = queue_off().await;
+        let (state, requests, cancel) = deck(&queue);
+        let (track_id, _source) = track(&host, 1, &tone_mp3).await;
+        let tx = serve_subscribe(requests, track_id).await;
+        let controller = controller_on(
+            queue.clone(),
+            StretchControls::new(1.0),
+            cancel.child(),
+            Arc::clone(&state),
+        );
+        let mut events = queue.bus().subscribe::<DjEvent>();
+
+        let first: Vec<u64> = (0..10).map(|beat| 10_981 + beat * 22_050).collect();
+        tx.send(Some(publication(1, BeatState::Provisional, &first).into()))
+            .expect("the pass publishes");
+        wait_for_revision(&state, 1).await;
+        controller.mutate(|st| st.position = 1.0);
+        controller.publish_dj_events(&controller.read(UiState::clone));
+        assert_eq!(ticks(&mut events), stamps(&first[..2]));
+
+        let then: Vec<u64> = (0..10).map(|beat| 11_069 + beat * 22_050).collect();
+        tx.send(Some(publication(2, BeatState::Final, &then).into()))
+            .expect("the pass publishes again");
+        wait_for_revision(&state, 2).await;
+        controller.mutate(|st| st.position = 2.0);
+        controller.publish_dj_events(&controller.read(UiState::clone));
+
+        assert_eq!(
+            ticks(&mut events),
+            stamps(&then[2..4]),
+            "the beat the revision moved by a hair is not announced again"
         );
         cancel.cancel();
         host.close().await;

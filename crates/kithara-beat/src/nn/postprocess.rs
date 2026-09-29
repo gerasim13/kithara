@@ -75,9 +75,10 @@ fn candidates<'a>(
 }
 
 /// Where the parabola through the logits at `index` and its two neighbours
-/// tops out, in fractional frames. A frame that wins its window is no lower
-/// than either neighbour, so the vertex stays within half a frame of it; a
-/// frame at the edge, or one level with both neighbours, stays where it is.
+/// tops out, in fractional frames. Only a frame no lower than either
+/// neighbour is refined, so the vertex stays within half a frame of it; a
+/// frame at the edge, one below a neighbour, or one level with both stays
+/// where it is.
 fn vertex(logits: &[f32], index: usize) -> f64 {
     let at: f64 = index.as_();
     let (Some(&before), Some(&after)) = (
@@ -92,7 +93,7 @@ fn vertex(logits: &[f32], index: usize) -> f64 {
         f64::from(after),
     );
     let curvature = before - 2.0 * peak + after;
-    if curvature >= 0.0 {
+    if before > peak || after > peak || curvature.is_nan() || curvature >= 0.0 {
         return at;
     }
     at + 0.5 * (before - after) / curvature
@@ -342,6 +343,18 @@ mod tests {
         assert!(
             (peaks[0].at - (2.0 + 1.0 / 6.0)).abs() < 1e-9,
             "the vertex of the parabola through the three frames: {peaks:?}"
+        );
+    }
+
+    /// A window no wider than its own frame lets a frame on a rising slope
+    /// win; the parabola through it tops out far past its neighbours.
+    #[kithara::test(native)]
+    fn a_frame_below_a_neighbour_keeps_its_place() {
+        let at = vertex(&[0.0, 1.0, 1.99], 1);
+
+        assert!(
+            (at - 1.0).abs() <= 0.5,
+            "the frame stays within half a frame of itself: {at}"
         );
     }
 

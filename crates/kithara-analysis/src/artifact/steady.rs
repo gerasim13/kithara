@@ -10,9 +10,10 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 ///
 /// A grid is one straight line of whole beats: the longest run of markers
 /// that stay within [`Self::residual`] of the least-squares line through
-/// them. A run shorter than [`Self::min_run_beats`], or holding less than
-/// [`Self::min_coverage`] of the markers, states no grid: the track keeps no
-/// tempo long enough to be followed on one.
+/// them. A run shorter than [`Self::min_run_beats`], holding less than
+/// [`Self::min_coverage`] of the markers, or leaving out a steady run of
+/// another tempo, states no grid: the track keeps no one tempo long enough to
+/// be followed on one.
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Patch)]
 #[non_exhaustive]
 #[derive(kithara_derive::BuiltDefault)]
@@ -24,10 +25,15 @@ pub struct GridFit {
     /// The fewest markers a steady run holds.
     #[builder(default = NonZeroU32::new(8).unwrap_or(NonZeroU32::MIN))]
     pub min_run_beats: NonZeroU32,
-    /// The share of the markers, from 0 to 1, a steady run holds.
-    #[builder(default = 0.5)]
-    pub min_coverage: f64,
+    /// The share of the markers a steady run holds.
+    #[builder(default = Coverage::DEFAULT)]
+    pub min_coverage: Coverage,
 }
+
+/// A share of a pass's beat markers, from none of them to all.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, kithara_derive::Ranged)]
+#[ranged(min = 0.0, max = 1.0, default = 0.5)]
+pub struct Coverage(f64);
 
 /// Beat `k` of a steady run, `origin + k * period` seconds into the track.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,7 +70,8 @@ pub(super) struct SteadyRun {
 
 impl SteadyRun {
     /// This run counted from the beat of its line nearest the start of the
-    /// track, so a refit that moves the line by a hair keeps every number.
+    /// track, so a refit that moves the line by a hair keeps every number
+    /// unless its beats stand half a beat either side of the start.
     fn numbered_from_start(self) -> Self {
         let zero = self.line.nearest(0.0).unwrap_or_default();
         Self {
@@ -123,18 +130,21 @@ impl GridFit {
     /// The longest steady run through `times`, ascending marker seconds, with
     /// beats first counted at `period` seconds apart and numbered from the
     /// beat nearest the start of the track; `None` when no run is long enough
-    /// to state a grid.
+    /// to state a grid, holds too few of the markers, or leaves out markers
+    /// that keep another tempo.
+    ///
+    /// A run is grown from every marker in turn, since a later one can start
+    /// a longer line than an earlier one whose shorter line took part of it,
+    /// until no later marker has enough markers left to beat the longest.
     pub(super) fn steady_run(&self, times: &[f64], period: f64) -> Option<SteadyRun> {
-        let mut claimed = vec![false; times.len()];
+        let least = self.run_beats().max(self.share(times.len()));
         let mut best: Option<SteadyRun> = None;
         for start in 0..times.len() {
-            if claimed[start] {
-                continue;
+            let left = times.len() - start;
+            if left < least || best.as_ref().is_some_and(|best| best.members.len() >= left) {
+                break;
             }
             let run = self.grow(times, start, period);
-            for &(_, index) in &run.members {
-                claimed[index] = true;
-            }
             if best
                 .as_ref()
                 .is_none_or(|best| run.members.len() > best.members.len())
@@ -142,15 +152,48 @@ impl GridFit {
                 best = Some(run);
             }
         }
-        let best = best?;
-        let held = best.members.len();
-        let observed: f64 = times.len().as_();
-        let needed = (self.min_coverage * observed)
+        best.filter(|run| run.members.len() >= least && !self.contradicted(times, period, run))
+            .map(SteadyRun::numbered_from_start)
+    }
+
+    fn run_beats(&self) -> usize {
+        self.min_run_beats.get().to_usize().unwrap_or(usize::MAX)
+    }
+
+    /// The fewest of `markers` that are [`Self::min_coverage`] of them.
+    fn share(&self, markers: usize) -> usize {
+        let markers: f64 = markers.as_();
+        (f64::from(self.min_coverage) * markers)
             .ceil()
             .to_usize()
-            .unwrap_or(usize::MAX);
-        let long_enough = held >= self.min_run_beats.get().to_usize().unwrap_or(usize::MAX);
-        (long_enough && held >= needed).then(|| best.numbered_from_start())
+            .unwrap_or(usize::MAX)
+    }
+
+    /// Whether the markers `run` leaves out keep a steady line of their own,
+    /// a tempo the track turns to for [`Self::min_run_beats`] markers that
+    /// one line through the whole track would contradict there. Each such
+    /// marker starts a line at the interval to the next one, when that is
+    /// from half to twice `period`: a phrase tracked on the off-beats keeps
+    /// the run's tempo, and its line holds the run's own markers instead.
+    fn contradicted(&self, times: &[f64], period: f64, run: &SteadyRun) -> bool {
+        let mut held = vec![false; times.len()];
+        for &(_, index) in &run.members {
+            held[index] = true;
+        }
+        let tempo = period / 2.0..=period * 2.0;
+        let least = self.run_beats();
+        times.windows(2).enumerate().any(|(start, pair)| {
+            let local = pair[1] - pair[0];
+            !held[start]
+                && tempo.contains(&local)
+                && self
+                    .grow(times, start, local)
+                    .members
+                    .iter()
+                    .filter(|&&(_, index)| !held[index])
+                    .count()
+                    >= least
+        })
     }
 
     /// The run a line through the marker at `start` gathers from there on.
@@ -160,16 +203,12 @@ impl GridFit {
     /// [`Self::min_run_beats`] its beats keep `period` apart, since a slope
     /// read off a few markers is mostly their jitter, and never fewer than
     /// two, which state no slope at all; from then on the line
-    /// is the one that fits them best. A marker the finished line no longer
-    /// holds is let go, and the line is fitted again without it.
+    /// is the one that fits them best. The markers the finished line no
+    /// longer holds are let go and the line is fitted again without them,
+    /// until it holds every marker left.
     fn grow(&self, times: &[f64], start: usize, period: f64) -> SteadyRun {
         let residual = self.residual.as_secs_f64();
-        let settled = self
-            .min_run_beats
-            .get()
-            .to_usize()
-            .unwrap_or(usize::MAX)
-            .max(2);
+        let settled = self.run_beats().max(2);
         let slope = |members: usize| (members < settled).then_some(period);
         let mut sums = Sums::default();
         sums.add(0, times[start]);
@@ -186,15 +225,19 @@ impl GridFit {
             members.push((ordinal, index));
             line = sums.line(slope(members.len()));
         }
-        members.retain(|&(ordinal, index)| (times[index] - line.at(ordinal)).abs() <= residual);
-        let mut sums = Sums::default();
-        for &(ordinal, index) in &members {
-            sums.add(ordinal, times[index]);
+        loop {
+            let held = members.len();
+            members.retain(|&(ordinal, index)| (times[index] - line.at(ordinal)).abs() <= residual);
+            if members.len() == held || members.is_empty() {
+                break;
+            }
+            let mut sums = Sums::default();
+            for &(ordinal, index) in &members {
+                sums.add(ordinal, times[index]);
+            }
+            line = sums.line(slope(members.len()));
         }
-        SteadyRun {
-            line: sums.line(slope(members.len())),
-            members,
-        }
+        SteadyRun { line, members }
     }
 }
 
@@ -244,6 +287,58 @@ mod tests {
             .collect();
 
         assert!(fit().steady_run(&times, consts::BEAT_SECONDS).is_none());
+    }
+
+    /// A track that turns to another steady tempo contradicts one line
+    /// through it, however many markers the first tempo holds and however
+    /// many of the new one land on its line by chance.
+    #[kithara::test(native)]
+    fn a_tempo_turning_inside_the_run_states_no_grid() {
+        let steady = (0..16).map(|beat| f64::from(beat) * 0.5);
+        let turned = (0..12).map(|beat| f64::from(beat).mul_add(0.6, 8.0));
+        let times: Vec<f64> = steady.chain(turned).collect();
+
+        assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
+    /// A run that starts at a later marker than the one before it is the
+    /// run, although the earlier marker's shorter line took some of it.
+    #[kithara::test(native)]
+    fn a_run_starting_inside_a_shorter_one_is_found() {
+        let times = [
+            0.195, 0.720, 1.235, 1.715, 2.205, 2.740, 3.210, 3.735, 4.205,
+        ];
+
+        let run = fit().steady_run(&times, 0.5).expect("a steady run");
+
+        assert_eq!(run.members.len(), 8);
+    }
+
+    /// Letting go of the markers a fitted line does not hold moves the line
+    /// again; the run is the markers the line it settles on holds.
+    #[kithara::test(native)]
+    fn every_member_of_a_run_sits_within_the_residual_of_its_line() {
+        let times: Vec<f64> = [
+            10_448, 33_792, 57_038, 80_969, 106_749, 130_453, 151_891, 177_103, 200_604, 223_849,
+            248_251,
+        ]
+        .into_iter()
+        .map(|frame: u32| f64::from(frame) / 48_000.0)
+        .collect();
+        let fit = fit();
+
+        let run = fit.steady_run(&times, 0.5).expect("a steady run");
+
+        let worst = run
+            .members
+            .iter()
+            .map(|&(ordinal, index)| (times[index] - run.line.at(ordinal)).abs())
+            .fold(0.0, f64::max);
+        assert!(
+            worst <= fit.residual.as_secs_f64(),
+            "a member {:.3} ms off its line",
+            worst * 1e3
+        );
     }
 
     /// A track that holds one tempo for a third of its markers and wanders
