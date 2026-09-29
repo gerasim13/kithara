@@ -272,7 +272,7 @@ impl<K: SyncKind> SyncCallback<K> {
             self.reject(SyncExecutionReject::Geometry);
             return SyncAttempt::None;
         };
-        if offset >= frames || self.tail.is_some() || !self.custody.ring_is_empty() {
+        if offset >= frames || self.tail.is_some() {
             self.reject(SyncExecutionReject::Capacity);
             return SyncAttempt::None;
         }

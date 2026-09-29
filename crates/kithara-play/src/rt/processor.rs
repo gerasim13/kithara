@@ -852,6 +852,46 @@ mod tests {
         );
     }
 
+    /// A claim hands nothing back through the return ring, so a return the
+    /// control thread has not drained yet does not cost the next entry its
+    /// frame.
+    #[kithara::test]
+    fn an_undrained_return_does_not_refuse_the_next_entry() {
+        let item_id = TrackId::allocate();
+        let load = LoadGeneration::first();
+        let (mut processor, mut control, mut receipt_rx) = playing_session_deck(item_id, load);
+        let superseded_owner = fresh_owner();
+        let (superseded, _) = session_entry(superseded_owner.clone(), item_id, load, false);
+        assert!(matches!(control.sync.hand(superseded), Ok(None)));
+        superseded_owner
+            .revoke()
+            .expect("the owner withdraws a live permit outside an audio claim");
+        let mut extra = session_extra();
+        process_session_block(&mut processor, &mut extra, -64);
+        let (replacement, stamp) = session_entry(fresh_owner(), item_id, load, true);
+        assert!(
+            matches!(control.sync.hand(replacement), Ok(None)),
+            "the deck let the superseded ticket go"
+        );
+
+        process_session_block(&mut processor, &mut extra, 0);
+
+        let receipts: Vec<SyncReceipt> = std::iter::from_fn(|| receipt_rx.next_receipt()).collect();
+        assert!(
+            matches!(
+                receipts.as_slice(),
+                [SyncReceipt::Armed(armed), SyncReceipt::Presented(applied)]
+                    if *armed == stamp && applied.stamp() == stamp
+            ),
+            "the replacement claims its entry frame: {receipts:?}"
+        );
+        assert_eq!(
+            control.sync.next_return().map(Returned::from),
+            Some(Returned::Ticket(item_id)),
+            "the superseded ticket still waits to be released"
+        );
+    }
+
     /// Quick tempo turns re-plan an entry faster than the deck lets the
     /// first ticket go: one waiting ticket the owner withdrew gives way to
     /// the newest and comes back, one it still expects keeps its place.

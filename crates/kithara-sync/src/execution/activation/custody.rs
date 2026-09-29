@@ -133,11 +133,6 @@ impl<K: SyncKind> ReturnCustody<K> {
         }
     }
 
-    /// Whether the ring holds nothing, so every return a claim causes fits.
-    pub(super) fn ring_is_empty(&self) -> bool {
-        self.ring.is_empty()
-    }
-
     pub(super) const fn held_is_empty(&self) -> bool {
         self.held.is_none()
     }
