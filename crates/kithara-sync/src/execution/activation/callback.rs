@@ -296,8 +296,9 @@ impl<K: SyncKind> SyncCallback<K> {
     /// new lane render after the claim is released.
     ///
     /// The one ticket is popped only after a won claim: popping earlier would
-    /// free the one-slot ring the control side reads as Capacity. The sole
-    /// consumer peeked it in this call, and nothing else can take it.
+    /// free the one-slot ring for the next ticket while this one can still
+    /// lose. The sole consumer peeked it in this call, and nothing else can
+    /// take it.
     fn claim<R: ActivationResident<K>>(
         &mut self,
         mut resident: R,

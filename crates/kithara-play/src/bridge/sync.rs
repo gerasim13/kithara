@@ -26,5 +26,8 @@ pub(crate) type SyncTicket = kithara_sync::SyncTicket<TrackId, Box<PlayerResourc
 /// Audio-owned objects returned to the control thread without RT destruction.
 pub(crate) type SyncReturn = kithara_sync::SyncReturn<PlayerSync>;
 
+/// What of an unclaimed ticket comes back for release.
+pub(crate) type ReturnedTicket = kithara_sync::ReturnedTicket<TrackId, Box<PlayerResource>>;
+
 /// The callback's owner of one deck's activation.
 pub(crate) type PlaySync = kithara_sync::SyncCallback<PlayerSync>;

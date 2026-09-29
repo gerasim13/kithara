@@ -9,7 +9,7 @@ mod port;
 pub use activation::{
     ActivationAudio, ActivationControl, ActivationDeck, ActivationHead, ActivationResident,
     BlockSource, LoadedMedia, PreparedFirst, ReturnRoom, ReturnedTicket, Staged, SyncAttempt,
-    SyncCallback, SyncKind, SyncReturn, SyncTicket, TicketRoom, TrackDisposal, activation_channels,
+    SyncCallback, SyncKind, SyncReturn, SyncTicket, TrackDisposal, activation_channels,
 };
 #[cfg(any(test, feature = "mock"))]
 pub(crate) use arbiter::PendingSourceChange;

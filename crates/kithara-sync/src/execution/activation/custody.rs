@@ -4,16 +4,19 @@ use ringbuf::{
 };
 
 use super::{ReturnedTicket, SyncKind, SyncTicket};
-use crate::consts;
+use crate::{SyncExecutionReject, consts, execution::arbiter::PermitState};
 
 /// The ticket one deck of kind `K` receives.
 type Ticket<K> = SyncTicket<<K as SyncKind>::Item, <K as SyncKind>::Lane>;
+
+/// What of an unclaimed ticket of kind `K` comes back for release.
+type Returned<K> = ReturnedTicket<<K as SyncKind>::Item, <K as SyncKind>::Lane>;
 
 /// An audio-owned object handed back to the control thread, so the callback
 /// frees nothing.
 pub enum SyncReturn<K: SyncKind> {
     /// A ticket the callback rejected or found withdrawn.
-    Ticket(ReturnedTicket<K::Item, K::Lane>),
+    Ticket(Returned<K>),
     /// A lane-holding track the callback removed.
     Track(K::Track),
     /// The previous reader of a switch, once faded out.
@@ -24,6 +27,9 @@ pub enum SyncReturn<K: SyncKind> {
 pub struct ActivationControl<K: SyncKind> {
     tickets: HeapProd<Ticket<K>>,
     returns: HeapCons<SyncReturn<K>>,
+    /// The ticket handed while the deck still held an earlier one; it
+    /// enters the ring once the deck lets that one go.
+    waiting: Option<Ticket<K>>,
 }
 
 /// The audio half of one deck's activation rings, taken by its callback.
@@ -41,6 +47,7 @@ pub fn activation_channels<K: SyncKind>() -> (ActivationControl<K>, ActivationAu
         ActivationControl {
             tickets,
             returns: returns_rx,
+            waiting: None,
         },
         ActivationAudio {
             pending,
@@ -50,38 +57,45 @@ pub fn activation_channels<K: SyncKind>() -> (ActivationControl<K>, ActivationAu
 }
 
 impl<K: SyncKind> ActivationControl<K> {
-    /// Room for one ticket, while the deck holds none.
-    pub fn room(&mut self) -> Option<TicketRoom<'_, K>> {
-        if self.tickets.vacant_len() > 0 {
-            Some(TicketRoom {
-                tickets: &mut self.tickets,
-            })
-        } else {
-            None
+    /// Hand `ticket` to the deck. While the deck still holds an earlier
+    /// ticket, `ticket` waits and enters once the deck lets that one go. A
+    /// waiting ticket the owner withdrew gives way to `ticket` and comes back
+    /// for release.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Capacity` while a ticket the owner has not withdrawn waits
+    /// already; `ticket` is dropped.
+    pub fn hand(&mut self, ticket: Ticket<K>) -> Result<Option<Returned<K>>, SyncExecutionReject> {
+        self.forward();
+        if self.waiting.as_ref().is_some_and(|waiting| {
+            waiting.gate().permit_state(&waiting.permit()) != PermitState::Withdrawn
+        }) {
+            return Err(SyncExecutionReject::Capacity);
         }
+        let displaced = self.waiting.replace(ticket).map(ReturnedTicket::from);
+        self.forward();
+        Ok(displaced)
     }
 
-    /// The next object the deck handed back.
+    /// The next object the deck handed back, once the waiting ticket has
+    /// entered any room the deck made.
     pub fn next_return(&mut self) -> Option<SyncReturn<K>> {
+        self.forward();
         self.returns.try_pop()
     }
-}
 
-/// Proven room for one ticket in a deck's ring, held exclusively until it
-/// is used.
-#[must_use]
-pub struct TicketRoom<'a, K: SyncKind> {
-    tickets: &'a mut HeapProd<Ticket<K>>,
-}
-
-impl<K: SyncKind> TicketRoom<'_, K> {
-    /// Hand `ticket` to the deck.
-    pub fn send(self, ticket: Ticket<K>) {
-        let sent = self.tickets.try_push(ticket);
-        debug_assert!(
-            sent.is_ok(),
-            "a ticket room is issued only with ring vacancy, and only the deck frees more"
-        );
+    fn forward(&mut self) {
+        if self.tickets.vacant_len() == 0 {
+            return;
+        }
+        if let Some(ticket) = self.waiting.take() {
+            let sent = self.tickets.try_push(ticket);
+            debug_assert!(
+                sent.is_ok(),
+                "the ring had vacancy, and only the deck frees more"
+            );
+        }
     }
 }
 

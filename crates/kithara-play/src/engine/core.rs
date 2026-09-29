@@ -18,7 +18,7 @@ use crate::{
     api::{EngineEvent, SessionDuckingMode, SlotId},
     bridge::{
         PlaybackShared, PlayerNotification, SlotControl,
-        sync::{SyncReturn, SyncTicket},
+        sync::{ReturnedTicket, SyncReturn, SyncTicket},
     },
     error::PlayError,
     resource::{SlotStaging, StagingRecipe},
@@ -204,32 +204,40 @@ impl<S> EngineImpl<S> {
             }
         }
         while let Some(returned) = handle.sync.next_return() {
-            match returned {
-                SyncReturn::Ticket(ticket) => {
-                    if let Some(seek) = ticket.lane().seek_handle() {
-                        handle.unbind_seek(ticket.item(), &seek);
-                    }
-                    if let Some(render) = ticket.lane().render_reader() {
-                        handle.unbind_render(ticket.item(), &render);
-                    }
+            Self::release_return(handle, returned);
+        }
+    }
+
+    /// Forget the resources a returned sync object held in the slot.
+    fn release_return(handle: &mut SlotHandle, returned: SyncReturn) {
+        match returned {
+            SyncReturn::Ticket(ticket) => Self::release_ticket(handle, &ticket),
+            SyncReturn::Track(track) => {
+                if let Some(seek) = track.seek_handle() {
+                    handle.unbind_seek(track.item_id(), &seek);
                 }
-                SyncReturn::Track(track) => {
-                    if let Some(seek) = track.seek_handle() {
-                        handle.unbind_seek(track.item_id(), &seek);
-                    }
-                    if let Some(render) = track.render_reader() {
-                        handle.unbind_render(track.item_id(), &render);
-                    }
-                }
-                SyncReturn::Tail(tail) => {
-                    if let Some(seek) = tail.seek_handle() {
-                        handle.unbind_seek(tail.item_id, &seek);
-                    }
-                    if let Some(render) = tail.render_reader() {
-                        handle.unbind_render(tail.item_id, &render);
-                    }
+                if let Some(render) = track.render_reader() {
+                    handle.unbind_render(track.item_id(), &render);
                 }
             }
+            SyncReturn::Tail(tail) => {
+                if let Some(seek) = tail.seek_handle() {
+                    handle.unbind_seek(tail.item_id, &seek);
+                }
+                if let Some(render) = tail.render_reader() {
+                    handle.unbind_render(tail.item_id, &render);
+                }
+            }
+        }
+    }
+
+    /// Forget the resources an unclaimed ticket's lane held in the slot.
+    fn release_ticket(handle: &mut SlotHandle, ticket: &ReturnedTicket) {
+        if let Some(seek) = ticket.lane().seek_handle() {
+            handle.unbind_seek(ticket.item(), &seek);
+        }
+        if let Some(render) = ticket.lane().render_reader() {
+            handle.unbind_render(ticket.item(), &render);
         }
     }
 
@@ -251,9 +259,6 @@ impl<S> EngineImpl<S> {
             {
                 return Err(SyncExecutionReject::Cancelled);
             }
-            let Some(room) = entry.control.sync.room() else {
-                return Err(SyncExecutionReject::Capacity);
-            };
             let Some(reader) = ticket.lane().render_reader() else {
                 return Err(SyncExecutionReject::Geometry);
             };
@@ -262,10 +267,13 @@ impl<S> EngineImpl<S> {
             let item_id = ticket.item();
             let load = ticket.load();
             let map = ticket.first().head().activation().revision();
-            room.send(ticket);
+            let displaced = entry.control.sync.hand(ticket)?;
             entry
                 .control
                 .bind_sync_resource(item_id, load, map, seek, reader, plan);
+            if let Some(displaced) = displaced {
+                Self::release_ticket(&mut entry.control, &displaced);
+            }
             drop(slots);
             Ok(())
         }))

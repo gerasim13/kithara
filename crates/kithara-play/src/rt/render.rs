@@ -567,7 +567,7 @@ mod sync_tests {
 
     use kithara_platform::sync::Arc;
     use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
-    use kithara_sync::{LoadedMedia, SyncReceipt, activation_channels, sync_receipts};
+    use kithara_sync::{LoadedMedia, SyncReceipt, SyncReturn, activation_channels, sync_receipts};
     use kithara_test_utils::kithara;
     use ringbuf::{HeapRb, traits::Split};
 
@@ -628,10 +628,10 @@ mod sync_tests {
         let mut tracks = TrackSlots::<{ PlayerNodeProcessor::MAX_TRACKS }>::default();
         assert!(tracks.insert(track).is_none());
         let (mut control, audio) = activation_channels::<PlayerSync>();
-        control
-            .room()
-            .expect("an empty deck takes a ticket")
-            .send(ticket);
+        assert!(
+            matches!(control.hand(ticket), Ok(None)),
+            "an empty deck takes a ticket"
+        );
         let (mut notification_tx, _notification_rx) = HeapRb::<PlayerNotification>::new(16).split();
         let (receipt_tx, mut receipt_rx) = sync_receipts();
         let mut sync = PlaySync::new(audio, Some(receipt_tx), None);
@@ -670,7 +670,8 @@ mod sync_tests {
         while let Some(receipt) = receipt_rx.next_receipt() {
             delivered.push(receipt);
         }
-        let pending_remains = control.room().is_none();
+        let pending_remains = !matches!(&attempt, SyncAttempt::Claimed { .. })
+            && !matches!(control.next_return(), Some(SyncReturn::Ticket(_)));
         (attempt, bus_left, delivered, pending_remains)
     }
 

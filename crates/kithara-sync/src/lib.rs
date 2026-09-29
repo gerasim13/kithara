@@ -15,7 +15,7 @@ pub use execution::{
     LoadedMedia, PreparedFirst, ReceiptSink, ReturnRoom, ReturnedTicket, SourceReservation,
     SourceRevision, StagePort, Staged, SyncAttachment, SyncAttempt, SyncCallback, SyncExecution,
     SyncExecutor, SyncGateBinding, SyncKind, SyncReceiptAck, SyncReceiptInbox, SyncReceiptTx,
-    SyncReturn, SyncTicket, TicketRoom, TrackDisposal, activation_channels, sync_receipts,
+    SyncReturn, SyncTicket, TrackDisposal, activation_channels, sync_receipts,
 };
 pub use owner::{GroupState, SyncStaged};
 pub use protocol::{

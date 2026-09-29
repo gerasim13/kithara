@@ -474,7 +474,7 @@ mod tests {
     };
     use kithara_sync::{
         LoadGeneration, LoadedMedia, SyncExecutionReject, SyncExecutionStamp, SyncReceipt,
-        SyncReceiptTx, mock::MemberOwner, sync_receipts,
+        SyncReceiptInbox, SyncReceiptTx, mock::MemberOwner, sync_receipts,
     };
     use kithara_warp::{RenderContext, WarpMapRevision};
     use ringbuf::traits::{Consumer, Producer};
@@ -613,11 +613,10 @@ mod tests {
         let item_id = TrackId::allocate();
         assert!(processor.tracks.insert(lane_track(item_id)).is_none());
         let (pending, pending_stamp, _) = pending_ticket(item_id);
-        control
-            .sync
-            .room()
-            .expect("an empty deck takes a ticket")
-            .send(pending);
+        assert!(
+            matches!(control.sync.hand(pending), Ok(None)),
+            "an empty deck takes a ticket"
+        );
         assert!(control.cmd_tx.try_push(PlayerCmd::Clear).is_ok());
         assert!(
             control
@@ -629,7 +628,7 @@ mod tests {
 
         processor.drain_commands();
         assert_eq!(processor.tracks.len(), 1);
-        assert!(control.sync.room().is_none());
+        assert!(!processor.sync.custody_cleared());
         assert!(matches!(
             processor.cmd_rx.try_peek(),
             Some(PlayerCmd::Clear)
@@ -642,7 +641,7 @@ mod tests {
         processor.sync.maintain();
         processor.drain_commands();
         assert_eq!(processor.tracks.len(), 0);
-        assert!(control.sync.room().is_none());
+        assert!(!processor.sync.custody_cleared());
         assert!(!processor.sync.can_return());
         assert!(matches!(
             processor.cmd_rx.try_peek(),
@@ -653,7 +652,7 @@ mod tests {
         returned.push(control.sync.next_return().expect("second return"));
         processor.sync.maintain();
         processor.drain_commands();
-        assert!(control.sync.room().is_some());
+        assert!(!processor.sync.custody_cleared());
         assert!(!processor.sync.can_return());
         assert!(matches!(
             processor.cmd_rx.try_peek(),
@@ -696,14 +695,13 @@ mod tests {
         owner
             .revoke()
             .expect("the owner revokes a live permit outside an audio claim");
-        control
-            .sync
-            .room()
-            .expect("an empty deck takes a ticket")
-            .send(withdrawn);
+        assert!(
+            matches!(control.sync.hand(withdrawn), Ok(None)),
+            "an empty deck takes a ticket"
+        );
         assert!(control.cmd_tx.try_push(PlayerCmd::Clear).is_ok());
         processor.drain_commands();
-        assert!(control.sync.room().is_some());
+        assert!(processor.sync.custody_cleared());
         assert!(processor.cmd_rx.try_peek().is_none());
         assert!(
             receipt_rx.next_receipt().is_none(),
@@ -749,14 +747,20 @@ mod tests {
         let _ = processor.process(&info, buffers, extra);
     }
 
-    #[kithara::test]
-    fn process_claims_a_ticket_and_returns_its_tail_through_custody() {
+    /// A session deck playing `item_id` at `load`, writing its receipts to
+    /// the returned inbox.
+    fn playing_session_deck(
+        item_id: TrackId,
+        load: LoadGeneration,
+    ) -> (
+        PlayerNodeProcessor,
+        crate::bridge::SlotControl,
+        SyncReceiptInbox,
+    ) {
         let rate = NonZeroU32::new(44_100).expect("fixture rate");
-        let (receipt_tx, mut receipt_rx) = sync_receipts();
-        let (mut processor, mut control) =
+        let (receipt_tx, receipt_rx) = sync_receipts();
+        let (mut processor, control) =
             built_processor(ContextRequirement::Session, Some(receipt_tx));
-        let item_id = TrackId::allocate();
-        let load = LoadGeneration::first();
         let mut track = PlayerTrack::builder()
             .sample_rate(rate)
             .item_id(item_id)
@@ -765,30 +769,138 @@ mod tests {
         track.play();
         assert!(processor.tracks.insert(track).is_none());
         processor.playback.playing.store(true, Ordering::SeqCst);
-        let (ticket, stamp) = entry_ticket(
-            fresh_owner(),
+        (processor, control, receipt_rx)
+    }
+
+    /// The entry ticket `owner` mints for `item_id` at `load`, activating at
+    /// output frame 32; its lane must be read when it `claims`.
+    fn session_entry(
+        owner: MemberOwner,
+        item_id: TrackId,
+        load: LoadGeneration,
+        claims: bool,
+    ) -> (SyncTicket, SyncExecutionStamp) {
+        let rate = NonZeroU32::new(44_100).expect("fixture rate");
+        entry_ticket(
+            owner,
             LoadedMedia::new(item_id, load),
-            resource(ReaderMode::Silence, rate, true, true, None),
+            resource(ReaderMode::Silence, rate, claims, claims, None),
             [0.0; 2],
             0,
             rate,
             None,
-        );
-        let map = ticket.first().head().activation().revision();
-        control
-            .sync
-            .room()
-            .expect("an empty deck takes a ticket")
-            .send(ticket);
+        )
+    }
+
+    fn session_extra() -> ProcExtra {
         let mut store = ProcStore::with_capacity(1);
         super::super::install_render_context(&mut store)
             .expect("invariant: fixture installs one context slot");
-        let mut extra = ProcExtra {
+        ProcExtra {
             logger: realtime_logger(RealtimeLoggerConfig::default()).0,
             store,
             scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(64),
             declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
-        };
+        }
+    }
+
+    /// A tempo step re-plans a deck's entry while the deck still holds the
+    /// ticket it superseded: the replacement waits, enters once the deck
+    /// hands the superseded ticket back, and claims the entry frame.
+    #[kithara::test]
+    fn a_replacement_ticket_enters_once_the_deck_returns_the_one_it_superseded() {
+        let item_id = TrackId::allocate();
+        let load = LoadGeneration::first();
+        let (mut processor, mut control, mut receipt_rx) = playing_session_deck(item_id, load);
+        let superseded_owner = fresh_owner();
+        let (superseded, _) = session_entry(superseded_owner.clone(), item_id, load, false);
+        assert!(
+            matches!(control.sync.hand(superseded), Ok(None)),
+            "an empty deck takes a ticket"
+        );
+        superseded_owner
+            .revoke()
+            .expect("the owner withdraws a live permit outside an audio claim");
+        let (replacement, stamp) = session_entry(fresh_owner(), item_id, load, true);
+        assert!(
+            matches!(control.sync.hand(replacement), Ok(None)),
+            "the deck takes the replacement while it holds the superseded ticket"
+        );
+        let mut extra = session_extra();
+
+        process_session_block(&mut processor, &mut extra, -64);
+        assert_eq!(
+            control.sync.next_return().map(Returned::from),
+            Some(Returned::Ticket(item_id)),
+            "the deck hands the superseded ticket back"
+        );
+        assert!(control.sync.next_return().is_none());
+        assert!(
+            receipt_rx.next_receipt().is_none(),
+            "the withdrawal already belongs to the owner"
+        );
+
+        process_session_block(&mut processor, &mut extra, 0);
+        let receipts: Vec<SyncReceipt> = std::iter::from_fn(|| receipt_rx.next_receipt()).collect();
+        assert!(
+            matches!(
+                receipts.as_slice(),
+                [SyncReceipt::Armed(armed), SyncReceipt::Presented(applied)]
+                    if *armed == stamp && applied.stamp() == stamp
+            ),
+            "the replacement claims its entry frame: {receipts:?}"
+        );
+    }
+
+    /// Quick tempo turns re-plan an entry faster than the deck lets the
+    /// first ticket go: one waiting ticket the owner withdrew gives way to
+    /// the newest and comes back, one it still expects keeps its place.
+    #[kithara::test]
+    fn only_a_withdrawn_waiting_ticket_gives_way_to_a_newer_one() {
+        let (_processor, mut control) = processor();
+        let (held, ..) = pending_ticket(TrackId::allocate());
+        assert!(
+            matches!(control.sync.hand(held), Ok(None)),
+            "an empty deck takes a ticket"
+        );
+        let waiting_id = TrackId::allocate();
+        let (waiting, _, waiting_owner) = pending_ticket(waiting_id);
+        assert!(
+            matches!(control.sync.hand(waiting), Ok(None)),
+            "a ticket waits while the deck holds an earlier one"
+        );
+        let (refused, ..) = pending_ticket(TrackId::allocate());
+        assert!(
+            matches!(
+                control.sync.hand(refused),
+                Err(SyncExecutionReject::Capacity)
+            ),
+            "a waiting ticket the owner still expects keeps its place"
+        );
+
+        waiting_owner
+            .revoke()
+            .expect("the owner withdraws a live permit outside an audio claim");
+        let (newest, ..) = pending_ticket(TrackId::allocate());
+        let displaced = control
+            .sync
+            .hand(newest)
+            .expect("a withdrawn waiting ticket gives way");
+        assert_eq!(displaced.map(|ticket| ticket.item()), Some(waiting_id));
+    }
+
+    #[kithara::test]
+    fn process_claims_a_ticket_and_returns_its_tail_through_custody() {
+        let item_id = TrackId::allocate();
+        let load = LoadGeneration::first();
+        let (mut processor, mut control, mut receipt_rx) = playing_session_deck(item_id, load);
+        let (ticket, stamp) = session_entry(fresh_owner(), item_id, load, true);
+        let map = ticket.first().head().activation().revision();
+        assert!(
+            matches!(control.sync.hand(ticket), Ok(None)),
+            "an empty deck takes a ticket"
+        );
+        let mut extra = session_extra();
 
         process_session_block(&mut processor, &mut extra, 0);
         let receipts: Vec<SyncReceipt> = std::iter::from_fn(|| receipt_rx.next_receipt()).collect();
