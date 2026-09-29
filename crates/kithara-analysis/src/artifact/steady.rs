@@ -11,9 +11,9 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 /// A grid is one straight line of whole beats: the longest run of markers
 /// that stay within [`Self::residual`] of the least-squares line through
 /// them. A run shorter than [`Self::min_run_beats`], holding less than
-/// [`Self::min_coverage`] of the markers, or leaving out a steady run of
-/// another tempo, states no grid: the track keeps no one tempo long enough to
-/// be followed on one.
+/// [`Self::min_coverage`] of the markers, or beside a stretch of markers that
+/// keeps another tempo, states no grid: the track keeps no one tempo long
+/// enough to be followed on one.
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Patch)]
 #[non_exhaustive]
 #[derive(kithara_derive::BuiltDefault)]
@@ -130,8 +130,8 @@ impl GridFit {
     /// The longest steady run through `times`, ascending marker seconds, with
     /// beats first counted at `period` seconds apart and numbered from the
     /// beat nearest the start of the track; `None` when no run is long enough
-    /// to state a grid, holds too few of the markers, or leaves out markers
-    /// that keep another tempo.
+    /// to state a grid, holds too few of the markers, or the track keeps
+    /// another tempo for a stretch of them.
     ///
     /// A run is grown from every marker in turn, since a later one can start
     /// a longer line than an earlier one whose shorter line took part of it,
@@ -152,7 +152,7 @@ impl GridFit {
                 best = Some(run);
             }
         }
-        best.filter(|run| run.members.len() >= least && !self.contradicted(times, period, run))
+        best.filter(|run| run.members.len() >= least && !self.contradicted(times, run.line))
             .map(SteadyRun::numbered_from_start)
     }
 
@@ -169,30 +169,83 @@ impl GridFit {
             .unwrap_or(usize::MAX)
     }
 
-    /// Whether the markers `run` leaves out keep a steady line of their own,
-    /// a tempo the track turns to for [`Self::min_run_beats`] markers that
-    /// one line through the whole track would contradict there. Each such
-    /// marker starts a line at the interval to the next one, when that is
-    /// from half to twice `period`: a phrase tracked on the off-beats keeps
-    /// the run's tempo, and its line holds the run's own markers instead.
-    fn contradicted(&self, times: &[f64], period: f64, run: &SteadyRun) -> bool {
-        let mut held = vec![false; times.len()];
-        for &(_, index) in &run.members {
-            held[index] = true;
-        }
-        let tempo = period / 2.0..=period * 2.0;
+    /// Whether the track keeps, for [`Self::min_run_beats`] markers in a
+    /// row, a steady tempo that no line at a metrical level of `line`'s own
+    /// could hold: half its period, its period, or a whole number of them.
+    /// A phrase tracked on the off-beats, a passage tracked on the eighths
+    /// and beats the tracker missed all keep the line's tempo; a turn to
+    /// another tempo does not, however many of its markers the line shares.
+    ///
+    /// Each stretch starts at the marker the one before it ended on, so the
+    /// markers are walked once.
+    fn contradicted(&self, times: &[f64], line: Line) -> bool {
         let least = self.run_beats();
-        times.windows(2).enumerate().any(|(start, pair)| {
-            let local = pair[1] - pair[0];
-            !held[start]
-                && tempo.contains(&local)
-                && self
-                    .grow(times, start, local)
-                    .members
-                    .iter()
-                    .filter(|&&(_, index)| !held[index])
-                    .count()
-                    >= least
+        let mut start = 0;
+        while start + 1 < times.len() {
+            let stretch = self.stretch(times, start);
+            if stretch.members.len() >= least && !self.at_a_level(times, &stretch, line.period) {
+                return true;
+            }
+            start = stretch
+                .members
+                .last()
+                .map_or(start + 1, |&(_, index)| index.max(start + 1));
+        }
+        false
+    }
+
+    /// The markers from `start` on that one line holds with none between
+    /// them left out: beats first stand the interval between the first two
+    /// markers apart, then the line is the one that fits them best, and the
+    /// stretch ends at the first marker off it.
+    fn stretch(&self, times: &[f64], start: usize) -> SteadyRun {
+        let residual = self.residual.as_secs_f64();
+        let mut sums = Sums::default();
+        sums.add(0, times[start]);
+        let mut members = vec![(0, start)];
+        let mut line = Line {
+            origin: times[start],
+            period: times[start + 1] - times[start],
+        };
+        for (index, &at) in times.iter().enumerate().skip(start + 1) {
+            let Some(ordinal) = line
+                .beat_of(at, residual)
+                .filter(|&ordinal| members.last().is_some_and(|&(last, _)| ordinal > last))
+            else {
+                break;
+            };
+            sums.add(ordinal, at);
+            members.push((ordinal, index));
+            line = sums.line(None);
+        }
+        SteadyRun { line, members }
+    }
+
+    /// Whether the line at a metrical level of `period` near the stretch's
+    /// own that fits the stretch best holds [`Self::min_coverage`] of its
+    /// markers within [`Self::residual`], counting the stretch's beats as its
+    /// own. A marker the tracker set off the beat costs the stretch that
+    /// marker, not its tempo.
+    fn at_a_level(&self, times: &[f64], stretch: &SteadyRun, period: f64) -> bool {
+        let residual = self.residual.as_secs_f64();
+        let least = self.share(stretch.members.len());
+        let mut sums = Sums::default();
+        for &(ordinal, index) in &stretch.members {
+            sums.add(ordinal, times[index]);
+        }
+        let multiple = stretch.line.period / period;
+        let half = (multiple < 1.0).then_some(0.5);
+        let whole = [multiple.floor(), multiple.ceil()]
+            .into_iter()
+            .filter(|&level| level >= 1.0);
+        half.into_iter().chain(whole).any(|level| {
+            let line = sums.line(Some(level * period));
+            let held = stretch
+                .members
+                .iter()
+                .filter(|&&(ordinal, index)| (times[index] - line.at(ordinal)).abs() <= residual)
+                .count();
+            held >= least
         })
     }
 
@@ -299,6 +352,72 @@ mod tests {
         let times: Vec<f64> = steady.chain(turned).collect();
 
         assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
+    /// A tempo the track turns to contradicts the line although the line
+    /// holds some of its markers: every fifth beat of 96 BPM is every
+    /// fourth of 120.
+    #[kithara::test(native)]
+    fn a_turn_whose_markers_the_old_line_shares_states_no_grid() {
+        let steady = (0..16).map(|beat| f64::from(beat) * 0.5);
+        let turned = (0..8).map(|beat| f64::from(beat).mul_add(0.625, 8.0));
+        let times: Vec<f64> = steady.chain(turned).collect();
+
+        assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
+    /// A tempo the tracker follows on every other beat is still another
+    /// tempo, however far apart its markers stand.
+    #[kithara::test(native)]
+    fn a_turn_tracked_on_every_other_beat_states_no_grid() {
+        let steady = (0..32).map(|beat| f64::from(beat) * 0.5);
+        let turned = (0..20).map(|beat| f64::from(beat).mul_add(1.25, 16.0));
+        let times: Vec<f64> = steady.chain(turned).collect();
+
+        assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
+    /// A passage tracked on the eighths keeps the tempo of the beats around
+    /// it; the line holds the beats among them.
+    #[kithara::test(native)]
+    fn a_passage_tracked_at_double_time_keeps_the_grid() {
+        let before = (0..16).map(|beat| f64::from(beat) * 0.5);
+        let eighths = (0..16).map(|eighth| f64::from(eighth).mul_add(0.25, 8.0));
+        let after = (0..16).map(|beat| f64::from(beat).mul_add(0.5, 12.0));
+        let times: Vec<f64> = before.chain(eighths).chain(after).collect();
+
+        let run = fit().steady_run(&times, 0.5).expect("a steady run");
+
+        assert_eq!(run.members.len(), 40);
+    }
+
+    /// Beats the tracker missed leave gaps of whole beats in one tempo.
+    #[kithara::test(native)]
+    fn beats_the_tracker_missed_keep_the_grid() {
+        let times: Vec<f64> = (0..60_u32)
+            .filter(|beat| beat % 7 != 3 && beat % 11 != 5)
+            .map(|beat| f64::from(beat) * 0.5)
+            .collect();
+
+        let run = fit().steady_run(&times, 0.5).expect("a steady run");
+
+        assert_eq!(run.members.len(), times.len());
+    }
+
+    /// A tracker that settles onto the kick over a few beats sets the first
+    /// markers of a stretch late; the stretch keeps the tempo of the line,
+    /// and the line lets go of the marker it does not hold.
+    #[kithara::test(native)]
+    fn a_stretch_the_tracker_settles_into_keeps_the_grid() {
+        let late = [0.055, 0.024, 0.015, 0.014, 0.011, 0.002];
+        let times: Vec<f64> = (0..40_u32)
+            .zip(late.into_iter().chain(std::iter::repeat(0.0)))
+            .map(|(beat, lag)| f64::from(beat).mul_add(0.5, lag))
+            .collect();
+
+        let run = fit().steady_run(&times, 0.5).expect("a steady run");
+
+        assert_eq!(run.members.len(), times.len() - 1);
     }
 
     /// A run that starts at a later marker than the one before it is the

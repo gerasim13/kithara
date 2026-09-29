@@ -353,8 +353,8 @@ mod tests {
         let at = vertex(&[0.0, 1.0, 1.99], 1);
 
         assert!(
-            (at - 1.0).abs() <= 0.5,
-            "the frame stays within half a frame of itself: {at}"
+            (at - 1.0).abs() < f64::EPSILON,
+            "the frame keeps its own place: {at}"
         );
     }
 

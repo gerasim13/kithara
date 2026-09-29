@@ -466,8 +466,8 @@ mod tests {
         let beats = half_beats(
             (0..20)
                 .map(|beat| 2 * beat)
-                .chain((20..25).map(|beat| 2 * beat + 1))
-                .chain((26..46).map(|beat| 2 * beat)),
+                .chain((20..28).map(|beat| 2 * beat + 1))
+                .chain((29..49).map(|beat| 2 * beat)),
         );
         let model = grid(&analysis(
             consts::RATE_48,
@@ -477,8 +477,8 @@ mod tests {
             BeatState::Final,
         ));
 
-        assert_eq!(ordinals(&model), (0..46).collect::<Vec<_>>());
-        assert_eq!(heard(&model), (0..20).chain(26..46).collect::<Vec<_>>());
+        assert_eq!(ordinals(&model), (0..49).collect::<Vec<_>>());
+        assert_eq!(heard(&model), (0..20).chain(29..49).collect::<Vec<_>>());
     }
 
     /// A stray first marker half a beat before the music is not a beat of
