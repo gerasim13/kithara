@@ -1088,7 +1088,7 @@ handler = "command-guard"
 
 fn cargo_build_log(root: &Path, target: &Path) -> String {
     format!(
-        "run --locked --quiet --manifest-path {}/Cargo.toml -p xtask --bin xtask -- self-cache artifact\ntarget={}\n",
+        "run --locked --manifest-path {}/Cargo.toml -p xtask --bin xtask -- self-cache artifact\ntarget={}\n",
         root.display(),
         target.display()
     )
