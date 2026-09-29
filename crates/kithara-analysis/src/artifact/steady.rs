@@ -174,7 +174,8 @@ impl GridFit {
     /// could hold: half its period, its period, or a whole number of them.
     /// A phrase tracked on the off-beats, a passage tracked on the eighths
     /// and beats the tracker missed all keep the line's tempo; a turn to
-    /// another tempo does not, however many of its markers the line shares.
+    /// another tempo does not, however many of its markers the line shares
+    /// and however many of its beats the tracker missed.
     ///
     /// Each stretch starts at the marker the one before it ended on, so the
     /// markers are walked once.
@@ -194,12 +195,16 @@ impl GridFit {
         false
     }
 
-    /// The markers from `start` on that name consecutive beats of one line:
-    /// beats first stand the interval between the first two markers apart,
-    /// then the line is the one that fits them best, and the stretch ends at
-    /// the first marker that is not the next beat of it. A beat the tracker
-    /// left out ends the stretch too, so its beats keep the spacing the
-    /// tracker heard and a later tempo on a multiple of it starts its own.
+    /// The markers from `start` on that name beats of one line: beats first
+    /// stand the interval between the first two markers apart, then the line
+    /// is the one that fits them best. A step to the next marker the line
+    /// holds is interrupted when it passes over a beat no marker holds or
+    /// over a marker the line does not hold; the stretch keeps its tempo
+    /// through one interrupted step and ends at the second in a row, or
+    /// where two beats in a row pass with no marker on them. So a beat the
+    /// tracker missed and a marker it set between two beats leave the
+    /// stretch its tempo, while a later tempo whose markers land on every
+    /// other or every third beat of the stretch starts its own.
     fn stretch(&self, times: &[f64], start: usize) -> SteadyRun {
         let residual = self.residual.as_secs_f64();
         let mut sums = Sums::default();
@@ -209,13 +214,24 @@ impl GridFit {
             origin: times[start],
             period: times[start + 1] - times[start],
         };
+        let mut last = 0;
+        let mut passed_over = false;
+        let mut interrupted = false;
         for (index, &at) in times.iter().enumerate().skip(start + 1) {
-            let Some(ordinal) = line
-                .beat_of(at, residual)
-                .filter(|&ordinal| members.last().is_some_and(|&(last, _)| ordinal == last + 1))
-            else {
+            if at > line.at(last + 2) + residual {
                 break;
+            }
+            let Some(ordinal) = line.beat_of(at, residual).filter(|&ordinal| ordinal > last) else {
+                passed_over = true;
+                continue;
             };
+            let step_interrupted = passed_over || ordinal > last + 1;
+            if interrupted && step_interrupted {
+                break;
+            }
+            interrupted = step_interrupted;
+            passed_over = false;
+            last = ordinal;
             sums.add(ordinal, at);
             members.push((ordinal, index));
             line = sums.line(None);
@@ -406,6 +422,46 @@ mod tests {
         assert!(fit().steady_run(&times, 0.5).is_none());
     }
 
+    /// A tempo the track turns to keeps its tempo through the beats the
+    /// tracker missed in it.
+    #[kithara::test(native)]
+    fn a_turn_with_beats_the_tracker_missed_states_no_grid() {
+        let steady = (0..32).map(|beat| f64::from(beat) * 0.5);
+        let turned = (0..28_u32)
+            .filter(|beat| beat % 7 != 6)
+            .map(|beat| f64::from(beat).mul_add(0.625, 16.0));
+        let times: Vec<f64> = steady.chain(turned).collect();
+
+        assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
+    /// A tempo the track turns to keeps its tempo through a marker the
+    /// tracker set between two of its beats.
+    #[kithara::test(native)]
+    fn a_turn_with_a_marker_between_its_beats_states_no_grid() {
+        let steady = (0..32).map(|beat| f64::from(beat) * 0.5);
+        let turned = (0..12).map(|beat| f64::from(beat).mul_add(0.625, 16.0));
+        let mut times: Vec<f64> = steady
+            .chain(turned)
+            .chain(std::iter::once(18.8125))
+            .collect();
+        times.sort_by(f64::total_cmp);
+
+        assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
+    /// A tempo the track turns to right after two beats the tracker missed
+    /// contradicts the line, although every other one of its beats lands on
+    /// the lattice those missed beats span.
+    #[kithara::test(native)]
+    fn a_turn_after_two_missed_beats_states_no_grid() {
+        let before = (0..16).map(|beat| f64::from(beat) * 0.5);
+        let turned = (0..20).map(|beat| f64::from(beat).mul_add(0.75, 9.0));
+        let times: Vec<f64> = before.chain(turned).collect();
+
+        assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
     /// A marker the tracker set before the first beat takes no beat of the
     /// line and says nothing of its tempo.
     #[kithara::test(native)]
@@ -416,6 +472,9 @@ mod tests {
         let run = fit().steady_run(&times, 0.5).expect("a steady run");
 
         assert_eq!(run.members.len(), 40);
+        assert!(run.members.iter().all(|&(_, index)| index != 0));
+        assert!((run.line.period - 0.5).abs() < 1e-9, "{:?}", run.line);
+        assert!((run.line.origin - 0.125).abs() < 1e-9, "{:?}", run.line);
     }
 
     /// Beats the tracker missed leave gaps of whole beats in one tempo.
