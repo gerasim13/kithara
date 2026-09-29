@@ -2,6 +2,7 @@ mod beat;
 mod grid;
 mod meter;
 mod snapshot;
+mod steady;
 mod track;
 
 pub use beat::BeatArtifact;
@@ -9,8 +10,9 @@ pub use beat::BeatArtifact;
 pub(crate) use beat::FitRegion;
 #[cfg(feature = "analysis-beat")]
 pub(crate) use beat::MarkedBeat;
-pub use grid::{BeatGridUnavailable, ORDINAL_TOLERANCE_BEATS};
+pub use grid::BeatGridUnavailable;
 #[cfg(feature = "analysis-beat")]
 pub(crate) use meter::voted_bar;
 pub use snapshot::{BeatSnapshot, BeatState};
+pub use steady::{GridFit, GridFitPatch};
 pub use track::{AnalysisFingerprint, AnalysisToken, TrackAnalysis};

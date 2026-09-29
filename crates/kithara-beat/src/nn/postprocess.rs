@@ -57,10 +57,12 @@ fn sigmoid(logit: f32) -> f32 {
     1.0 / (1.0 + (-logit).exp())
 }
 
+/// Every frame that wins its max-pool window above the threshold, placed at
+/// the vertex of the curve through it and its two neighbours.
 fn candidates<'a>(
     logits: &'a [f32],
     config: &'a BeatConfig,
-) -> impl Iterator<Item = (usize, f32)> + 'a {
+) -> impl Iterator<Item = (f64, f32)> + 'a {
     (0..logits.len()).filter_map(|index| {
         let start = index.saturating_sub(config.peak_half_width);
         let end = (index + config.peak_half_width + 1).min(logits.len());
@@ -68,12 +70,36 @@ fn candidates<'a>(
             && !logits[start..end]
                 .iter()
                 .any(|&value| value > logits[index]))
-        .then_some((index, logits[index]))
+        .then(|| (vertex(logits, index), logits[index]))
     })
 }
 
+/// Where the parabola through the logits at `index` and its two neighbours
+/// tops out, in fractional frames. A frame that wins its window is no lower
+/// than either neighbour, so the vertex stays within half a frame of it; a
+/// frame at the edge, or one level with both neighbours, stays where it is.
+fn vertex(logits: &[f32], index: usize) -> f64 {
+    let at: f64 = index.as_();
+    let (Some(&before), Some(&after)) = (
+        index.checked_sub(1).and_then(|before| logits.get(before)),
+        logits.get(index + 1),
+    ) else {
+        return at;
+    };
+    let (before, peak, after) = (
+        f64::from(before),
+        f64::from(logits[index]),
+        f64::from(after),
+    );
+    let curvature = before - 2.0 * peak + after;
+    if curvature >= 0.0 {
+        return at;
+    }
+    at + 0.5 * (before - after) / curvature
+}
+
 fn visit_deduplicated_peaks(
-    mut peaks: impl Iterator<Item = (usize, f32)>,
+    mut peaks: impl Iterator<Item = (f64, f32)>,
     width: usize,
     mut visit: impl FnMut(Peak),
 ) {
@@ -81,12 +107,11 @@ fn visit_deduplicated_peaks(
         return;
     };
 
-    let mut p: f64 = first.as_();
+    let mut p = first;
     let mut logit = first_logit;
     let mut c = 1.0_f64;
 
-    for (p2_usize, p2_logit) in peaks {
-        let p2: f64 = p2_usize.as_();
+    for (p2, p2_logit) in peaks {
         if p2 - p <= width.as_() {
             c += 1.0;
             p += (p2 - p) / c;
@@ -121,9 +146,13 @@ fn find_peaks(logits: &[f32], config: &BeatConfig) -> Vec<Peak> {
 #[cfg(test)]
 fn deduplicate_peaks(peaks: &[(usize, f32)], width: usize) -> Vec<Peak> {
     let mut deduplicated: Vec<Peak> = Vec::new();
-    visit_deduplicated_peaks(peaks.iter().copied(), width, |peak| {
-        deduplicated.push(peak);
-    });
+    visit_deduplicated_peaks(
+        peaks.iter().map(|&(frame, logit)| (frame.as_(), logit)),
+        width,
+        |peak| {
+            deduplicated.push(peak);
+        },
+    );
     deduplicated
 }
 
@@ -298,6 +327,48 @@ mod tests {
         logits[6] = 1.0;
         let peaks = find_peaks(&logits, &BeatConfig::default());
         assert_eq!(at(&peaks), vec![2.0, 6.0]);
+    }
+
+    /// The model frames are 20 ms apart, and a beat rarely lands on one: a
+    /// peak whose later neighbour holds more evidence than its earlier one
+    /// sits between them, where the curve through the three frames tops out.
+    #[kithara::test(native)]
+    fn a_peak_leaning_on_a_neighbour_is_placed_between_frames() {
+        let logits = [-5.0, 1.0, 3.0, 2.0, -5.0];
+
+        let peaks = find_peaks(&logits, &BeatConfig::default());
+
+        assert_eq!(peaks.len(), 1);
+        assert!(
+            (peaks[0].at - (2.0 + 1.0 / 6.0)).abs() < 1e-9,
+            "the vertex of the parabola through the three frames: {peaks:?}"
+        );
+    }
+
+    #[kithara::test(native)]
+    fn a_decoded_beat_keeps_its_place_between_frames() {
+        let mut beat_logits = flat(200);
+        beat_logits[99] = 1.0;
+        beat_logits[100] = 3.0;
+        beat_logits[101] = 2.0;
+
+        let (beats, _) = PeakPicker::new(BeatConfig::default())
+            .decode(&beat_logits, &flat(200))
+            .expect("equal-length logits decode");
+
+        assert_eq!(beats.len(), 1);
+        let frame = f64::from(beats[0].at) * f64::from(consts::FPS);
+        assert!(
+            (frame - (100.0 + 1.0 / 6.0)).abs() < 1e-3,
+            "the mark is read at the vertex, not the frame it won: {beats:?}"
+        );
+    }
+
+    #[kithara::test(native)]
+    fn a_three_frame_plateau_collapses_to_its_centre() {
+        let peaks = find_peaks(&[0.0, 1.0, 1.0, 1.0, 0.0], &BeatConfig::default());
+
+        assert_eq!(at(&peaks), vec![2.0]);
     }
 
     #[kithara::test(native, flash(false))]

@@ -35,9 +35,10 @@ kithara = { workspace = true, features = [
 ] }
 kithara-integration-tests = { workspace = true, features = ["all", "analysis"] }
 kithara-test-dylib = { workspace = true }
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures", "rhythm"] }
 kithara-test-utils = { workspace = true, features = ["usdt"] }
 
+num-traits = { workspace = true }
 url = { workspace = true }
 
 [lints]

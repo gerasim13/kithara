@@ -926,12 +926,15 @@ mod tests {
         host.close().await;
     }
 
+    /// A pass over a 44.1 kHz track that ends just after the last of
+    /// `beats`, the markers it heard.
     fn analysed(beats: Vec<(u64, Option<f32>)>) -> TrackAnalysis {
+        let read = beats.last().map_or(0, |&(frame, _)| frame + 1);
         TrackAnalysis::builder()
             .token("track".into())
             .revision(1)
             .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
-            .extent(44_100)
+            .extent(read)
             .beat(BeatSnapshot::new(
                 BeatArtifact::new(120.0, beats, Vec::new()),
                 BeatState::Provisional,
@@ -951,7 +954,11 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_published_tempo_carries_the_confidence_its_grid_reports() {
-        let info = published(&analysed(vec![(0, Some(0.4)), (22_050, Some(0.8))]));
+        let info = published(&analysed(
+            (0..8)
+                .map(|beat| (beat * 22_050, Some(if beat % 2 == 0 { 0.4 } else { 0.8 })))
+                .collect(),
+        ));
 
         assert!((info.bpm - 120.0).abs() < f64::EPSILON);
         let confidence = info.confidence.expect("detected markers name a confidence");
@@ -961,26 +968,20 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
-    fn a_tempo_with_nothing_detected_publishes_no_confidence() {
-        let info = published(&analysed(vec![(0, None), (22_050, None)]));
-
-        assert_eq!(
-            info.confidence, None,
-            "an extrapolated grid names no confidence rather than a zero"
-        );
-    }
-
     /// The deck announces the first beat where the grid puts it on the media
     /// timeline, not where a proportion of whatever length the engine reports
     /// would land.
     #[kithara::test(native, flash(false))]
     fn a_published_tempo_names_the_first_beat_in_media_seconds() {
-        let info = published(&analysed(vec![(22_050, Some(0.9)), (44_100, Some(0.9))]));
+        let info = published(&analysed(
+            (0..8)
+                .map(|beat| (11_025 + beat * 22_050, Some(0.9)))
+                .collect(),
+        ));
 
         assert!(
-            (info.first_beat_offset.as_secs_f64() - 0.5).abs() < 1e-9,
-            "the first beat sits half a second in: {:?}",
+            (info.first_beat_offset.as_secs_f64() - 0.25).abs() < 1e-9,
+            "the first beat sits a quarter of a second in: {:?}",
             info.first_beat_offset
         );
     }
@@ -1049,7 +1050,7 @@ mod tests {
         );
         let mut events = queue.bus().subscribe::<DjEvent>();
 
-        let first = [0, 22_050, 44_100];
+        let first: Vec<u64> = (0..8).map(|beat| beat * 22_050).collect();
         tx.send(Some(publication(1, BeatState::Provisional, &first).into()))
             .expect("the pass publishes");
         wait_for_revision(&state, 1).await;
@@ -1074,11 +1075,11 @@ mod tests {
         );
         assert_eq!(
             ticks(&mut events),
-            stamps(&first),
+            stamps(&first[..3]),
             "every tick stands where the grid puts its beat, in media seconds"
         );
 
-        let then = [0, 22_050, 44_100, 66_150, 88_200];
+        let then: Vec<u64> = (0..10).map(|beat| beat * 22_050).collect();
         tx.send(Some(publication(2, BeatState::Final, &then).into()))
             .expect("the pass publishes again");
         wait_for_revision(&state, 2).await;
@@ -1087,7 +1088,7 @@ mod tests {
 
         assert_eq!(
             ticks(&mut events),
-            stamps(&then[3..]),
+            stamps(&then[3..5]),
             "the deck follows the later revision's grid without repeating itself"
         );
         assert_eq!(

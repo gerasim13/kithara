@@ -28,7 +28,7 @@ pub use archive::{
 };
 pub use artifact::{
     AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatGridUnavailable, BeatSnapshot, BeatState,
-    ORDINAL_TOLERANCE_BEATS, TrackAnalysis,
+    GridFit, GridFitPatch, TrackAnalysis,
 };
 /// The served beat-grid contract, re-exported from its owner so a consumer of
 /// a publication can name what [`TrackAnalysis::grid`] hands it. The types are

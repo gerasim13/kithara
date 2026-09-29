@@ -8,7 +8,7 @@ use kithara_beat::{Tempo, TempoPatch, TempoPatchError};
 use kithara_derive::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
-use crate::consts;
+use crate::{GridFit, GridFitPatch, consts};
 
 /// Beat-analysis tunables used by [`super::AnalyzerBuilder`], beside the
 /// resampler backend the caller hands over.
@@ -38,6 +38,12 @@ pub struct BeatAnalysisConfig<B> {
     pub target_rate: u32,
     #[builder(default = consts::DEFAULT_BEAT_BLOCK_FRAMES)]
     pub block_frames: usize,
+    /// How steady the beats must be for a pass to state a grid. Nested so a
+    /// document can patch `grid:` on its own.
+    #[builder(default)]
+    #[field(get(copy))]
+    #[patch(nested)]
+    pub grid: GridFit,
     /// Reaches the detector's peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.
     #[cfg(feature = "beat-nn")]
@@ -95,7 +101,8 @@ where
                 &self.detector_min_window_seconds,
             )
             .field("detector_window_seconds", &self.detector_window_seconds)
-            .field("detector_overlap_seconds", &self.detector_overlap_seconds);
+            .field("detector_overlap_seconds", &self.detector_overlap_seconds)
+            .field("grid", &self.grid);
         #[cfg(feature = "beat-nn")]
         out.field("beat", &self.beat);
         out
@@ -143,6 +150,8 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::BeatAnalysisConfig;
+    #[cfg(feature = "beat-backend")]
+    use crate::GridFit;
 
     #[kithara::test(native, flash(false))]
     fn default_beat_config_reports_configured_backend() {
@@ -203,12 +212,12 @@ mod tests {
             .expect("beat NN has a cache tag");
 
         assert!(
-            tag.contains(":grid_bpm_from_beats_v5:"),
+            tag.contains(":grid_bpm_from_beats_v6:"),
             "grid semantics must participate in durable-cache identity"
         );
         assert!(
-            !tag.contains(":grid_bpm_from_beats_v4:"),
-            "bar lines counted on the beat grid are not the ones v4 cached"
+            !tag.contains(":grid_bpm_from_beats_v5:"),
+            "beats placed between model frames are not the ones v5 cached"
         );
         assert!(
             tag.contains(":detector_audio_seamless_v2:"),
@@ -217,6 +226,25 @@ mod tests {
         assert!(
             !tag.contains(":detector_audio_seamless_v1:"),
             "a grid built from a track read whole is not the grid v1 cached"
+        );
+    }
+
+    #[cfg(feature = "beat-backend")]
+    #[kithara::test(native)]
+    fn a_moved_grid_fit_changes_the_cache_tag() {
+        let tag = |grid: GridFit| {
+            BeatAnalysisConfig::builder()
+                .resampler_backend(RubatoBackend::default())
+                .grid(grid)
+                .build()
+                .cache_tag()
+                .expect("a build with a detector has a cache tag")
+        };
+
+        assert_ne!(
+            tag(GridFit::default()),
+            tag(GridFit::builder().min_coverage(0.9).build()),
+            "a grid stated under another fit must not be served from the cache"
         );
     }
 
@@ -244,12 +272,14 @@ mod tests {
 mod document_tests {
     #[cfg(feature = "beat-nn")]
     use kithara_beat::BeatConfig;
+    use kithara_platform::time::Duration;
     use kithara_resampler::{ResamplerQuality, rubato::RubatoBackend};
     use kithara_test_utils::kithara;
 
     use super::{BeatAnalysisConfig, BeatAnalysisConfigPatch};
     #[cfg(feature = "beat-dsp")]
     use super::{BeatAnalysisConfigPatchError, Tempo, TempoPatchError};
+    use crate::GridFit;
 
     fn config() -> BeatAnalysisConfig<RubatoBackend> {
         BeatAnalysisConfig::builder()
@@ -310,6 +340,24 @@ mod document_tests {
         assert_eq!(config.beat.peak_half_width, 5);
         assert_eq!(
             config.beat.dedup_width, 4,
+            "a silent inner field must keep the value it already had"
+        );
+    }
+
+    #[kithara::test(native)]
+    fn a_nested_grid_patch_reaches_the_fit() {
+        let patch: BeatAnalysisConfigPatch =
+            serde_yaml_ng::from_str("grid:\n  residual: 12ms\n").expect("the document types");
+        let mut config = config();
+        config.grid = GridFit::builder().min_coverage(0.75).build();
+
+        config
+            .apply(patch)
+            .expect("every key names a value the config accepts");
+
+        assert_eq!(config.grid.residual, Duration::from_millis(12));
+        assert_eq!(
+            config.grid.min_coverage, 0.75,
             "a silent inner field must keep the value it already had"
         );
     }

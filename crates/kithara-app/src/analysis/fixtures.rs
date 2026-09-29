@@ -124,17 +124,20 @@ pub(crate) fn snapshot(
 /// A settled pass that produced beats and no waveform: the cache entry of a
 /// track whose waveform came from somewhere else.
 pub(crate) fn beats_only(fingerprint: AnalysisFingerprint) -> TrackAnalysis {
+    const BEATS: u64 = 8;
+    const SPACING: u64 = 22_050;
+
     let mut coverage = RangeSet::new();
-    coverage.insert(0..1_000);
+    coverage.insert(0..BEATS * SPACING);
     TrackAnalysis::builder()
         .token("test-track".into())
         .revision(4)
         .source_sample_rate(axis())
-        .extent(1_000)
+        .extent(BEATS * SPACING)
         .settled(true)
         .coverage(coverage)
         .fingerprint(fingerprint)
-        .beat(grid())
+        .beat(pulse(BEATS, SPACING))
         .build()
 }
 
@@ -254,27 +257,37 @@ pub(crate) fn rhythm_grid() -> BeatGridModel {
     .expect("the rhythm beats form a valid grid")
 }
 
-/// What an analysis pass finds on the rhythm fixtures: the beats of
-/// [`rhythm_grid`], stated in frames of their 48 kHz source.
+/// What an analysis pass that read the rhythm fixtures to their end finds:
+/// the beats of [`rhythm_grid`], stated in frames of their 48 kHz source.
 pub(crate) fn rhythm_analysis() -> TrackAnalysis {
     const BEATS: u64 = 24;
     const SPACING: u64 = 24_000;
 
+    let mut coverage = RangeSet::new();
+    coverage.insert(0..BEATS * SPACING);
     TrackAnalysis::builder()
         .token("rhythm".into())
         .revision(1)
         .source_sample_rate(other_axis())
+        .extent(BEATS * SPACING)
+        .coverage(coverage)
         .settled(true)
-        .beat(BeatSnapshot::new(
-            BeatArtifact::new(
-                120.0,
-                (0..BEATS).map(|beat| (beat * SPACING, Some(1.0))).collect(),
-                Vec::new(),
-            ),
-            BeatState::Final,
-            Vec::new(),
-        ))
+        .beat(pulse(BEATS, SPACING))
         .build()
+}
+
+/// The markers a pass hears on a steady 120 BPM pulse: `beats` of them,
+/// `spacing` source frames apart.
+fn pulse(beats: u64, spacing: u64) -> BeatSnapshot {
+    BeatSnapshot::new(
+        BeatArtifact::new(
+            120.0,
+            (0..beats).map(|beat| (beat * spacing, Some(1.0))).collect(),
+            Vec::new(),
+        ),
+        BeatState::Final,
+        Vec::new(),
+    )
 }
 
 /// A waveform the caller hands over.

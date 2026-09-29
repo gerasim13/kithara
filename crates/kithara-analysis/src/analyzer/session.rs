@@ -12,7 +12,7 @@ use tracing::warn;
 
 use super::{AnalysisFingerprint, AnalysisToken, Extent, TrackAnalysis};
 use crate::{
-    AnalysisProgress, BeatSnapshot, BeatState, BlobError,
+    AnalysisProgress, BeatSnapshot, BeatState, BlobError, GridFit,
     progress::{AnalysisResume, ResumeState},
     slots::{
         Intake, Opens,
@@ -42,6 +42,7 @@ where
     #[field(get, vis = "pub(crate)")]
     pub(super) coverage: RangeSet<u64>,
     pub(super) beat: Slot<B>,
+    pub(super) grid_fit: GridFit,
     pub(super) waveform: waveform::Slot,
     pub(super) settled: bool,
     pub(super) revision: u64,
@@ -215,6 +216,7 @@ where
             .coverage(self.coverage.clone())
             .fingerprint(self.fingerprint.clone())
             .settled(self.settled)
+            .grid_fit(self.grid_fit)
             .maybe_waveform(waveform)
             .maybe_beat(beat)
             .build()

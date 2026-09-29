@@ -4427,6 +4427,7 @@ dependencies = [
  "derive-where",
  "derive_more",
  "fieldwork",
+ "humantime-serde",
  "kithara-audio",
  "kithara-beat",
  "kithara-blob",
@@ -4465,6 +4466,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "url",
 ]
 

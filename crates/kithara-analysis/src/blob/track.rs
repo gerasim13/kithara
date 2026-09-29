@@ -1,9 +1,10 @@
 use std::{num::NonZeroU32, ops::Range};
 
+use kithara_platform::time::Duration;
 use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
 
 use crate::{
-    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis, Waveform,
+    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, GridFit, TrackAnalysis, Waveform,
     blob::{BlobError, MAX_PREALLOC, Reader, Writer},
     consts,
 };
@@ -13,7 +14,8 @@ impl TrackAnalysis {
     ///
     /// # Errors
     ///
-    /// Returns [`BlobError::TooLarge`] when a length does not fit the format.
+    /// Returns [`BlobError::TooLarge`] when a length or the grid fit's
+    /// residual does not fit the format.
     pub fn write_to(&self, out: &mut Vec<u8>) -> Result<(), BlobError> {
         let mut writer = Writer::new(out);
         writer.write_u32(consts::TRACK_ANALYSIS_BYTES_VERSION);
@@ -40,7 +42,7 @@ impl TrackAnalysis {
         })?;
         writer.write_bool(beat.is_some_and(|beat| beat.state() == BeatState::Final));
         write_ranges(&mut writer, beat.map_or(&[], BeatSnapshot::unanalysed));
-        Ok(())
+        write_grid_fit(&mut writer, self.grid_fit())
     }
 }
 
@@ -70,6 +72,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
         let grid_bytes = reader.read_section()?;
         let final_grid = reader.read_bool()?;
         let unanalysed = read_ranges(&mut reader)?;
+        let grid_fit = read_grid_fit(&mut reader)?;
         reader.finish()?;
 
         let waveform_ok = active.waveform().is_some_and(|tag| waveform_tag == tag);
@@ -107,6 +110,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             .maybe_extent(extent)
             .settled(settled)
             .coverage(coverage)
+            .grid_fit(grid_fit)
             .fingerprint(AnalysisFingerprint::new(
                 beat_ok.then_some(beat_tag.as_str()),
                 waveform_ok.then_some(waveform_tag.as_str()),
@@ -115,6 +119,21 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, unanalysed)))
             .build())
     }
+}
+
+fn write_grid_fit(writer: &mut Writer<'_>, fit: GridFit) -> Result<(), BlobError> {
+    writer.write_u64(u64::try_from(fit.residual.as_nanos()).map_err(|_| BlobError::TooLarge)?);
+    writer.write_u32(fit.min_run_beats.get());
+    writer.write_f64(fit.min_coverage);
+    Ok(())
+}
+
+fn read_grid_fit(reader: &mut Reader<'_>) -> Result<GridFit, BlobError> {
+    Ok(GridFit::builder()
+        .residual(Duration::from_nanos(reader.read_u64()?))
+        .min_run_beats(NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?)
+        .min_coverage(reader.read_f64()?)
+        .build())
 }
 
 fn write_ranges(writer: &mut Writer<'_>, ranges: &[Range<u64>]) {
@@ -215,11 +234,23 @@ mod tests {
     }
 
     #[kithara::test]
-    fn frozen_v7_fixture_decodes_and_reencodes_identically() {
+    fn frozen_v7_fixture_is_a_cache_miss() {
         let active = fingerprint("wave:v1", "beat:v1");
-        let decoded = TrackAnalysis::try_from((consts::V7_FIXTURE, &active)).expect("v7 decodes");
+        assert!(matches!(
+            TrackAnalysis::try_from((consts::V7_FIXTURE, &active)),
+            Err(BlobError::Version {
+                found: 0x4b41_0007,
+                expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
+            })
+        ));
+    }
 
-        assert_eq!(decoded.token().as_str(), "golden-v7");
+    #[kithara::test]
+    fn frozen_v8_fixture_decodes_and_reencodes_identically() {
+        let active = fingerprint("wave:v1", "beat:v1");
+        let decoded = TrackAnalysis::try_from((consts::V8_FIXTURE, &active)).expect("v8 decodes");
+
+        assert_eq!(decoded.token().as_str(), "golden-v8");
         assert_eq!(decoded.source_sample_rate().get(), 44_100);
         assert_eq!(decoded.extent(), Some(1_234));
         assert_eq!(decoded.revision(), 9);
@@ -231,10 +262,36 @@ mod tests {
         assert_eq!(decoded.fingerprint(), &active);
         assert!(decoded.waveform().is_none());
         assert!(decoded.beat().is_none());
+        assert_eq!(decoded.grid_fit(), GridFit::default());
 
         let mut encoded = Vec::new();
-        decoded.write_to(&mut encoded).expect("v7 re-encodes");
-        assert_eq!(encoded.as_slice(), consts::V7_FIXTURE);
+        decoded.write_to(&mut encoded).expect("v8 re-encodes");
+        assert_eq!(encoded.as_slice(), consts::V8_FIXTURE);
+    }
+
+    /// A publication read back states the grid the pass that wrote it would:
+    /// the fit it was published under comes back with it.
+    #[kithara::test]
+    fn the_grid_fit_round_trips() {
+        let fit = GridFit::builder()
+            .residual(Duration::from_millis(12))
+            .min_run_beats(NonZeroU32::new(16).expect("a non-zero run"))
+            .min_coverage(0.75)
+            .build();
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..64);
+        let want = TrackAnalysis::builder()
+            .token(consts::TRACK_TOKEN.into())
+            .revision(3)
+            .source_sample_rate(rate())
+            .coverage(coverage)
+            .fingerprint(active())
+            .grid_fit(fit)
+            .build();
+
+        let got = TrackAnalysis::try_from((&encode(&want)[..], &active())).expect("decodes");
+
+        assert_eq!(got.grid_fit(), fit);
     }
 
     #[kithara::test]

@@ -1,4 +1,4 @@
-use std::num::NonZeroU16;
+use std::{collections::BTreeMap, num::NonZeroU16};
 
 use kithara_beat::{
     BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
@@ -9,15 +9,11 @@ use thiserror::Error;
 
 use super::{
     meter::voted_bar,
-    snapshot::{BeatSnapshot, BeatState},
+    snapshot::BeatState,
+    steady::{Line, SteadyRun},
     track::TrackAnalysis,
 };
 use crate::consts;
-
-/// How far a marker may sit from a whole beat and still name that beat without
-/// a second reading. Past a quarter beat the nearest ordinal is a guess, and a
-/// guess is not an observation, so the pass publishes the tempo alone instead.
-pub const ORDINAL_TOLERANCE_BEATS: f64 = 0.25;
 
 /// Why a pass states no grid a player could follow.
 ///
@@ -32,9 +28,19 @@ pub enum BeatGridUnavailable {
     Rejected(#[from] BeatGridError),
     #[error("the artifact carries {bpm} where a tempo would be")]
     Tempo { bpm: f64 },
+    #[error("no run of the pass's beat markers keeps one tempo long enough to follow")]
+    NoSteadyRun,
 }
 
 /// Restates one published pass as the server-side grid contract.
+///
+/// The grid is the line through the longest steady run of observed markers,
+/// stated as every whole beat of that line from the start of the track to the
+/// end of what is known of it: a marker only ever lands near a beat, and the
+/// line through many of them is where the beats are. A beat a marker named
+/// carries that marker's confidence; one the line alone places carries none.
+/// Beat 0 is the beat of the line nearest the start of the track, so a
+/// revision that moves the line by a hair keeps every beat's number.
 ///
 /// This is the only place source frames become media seconds: the artifact
 /// keeps frames, and the model has no sample rate to read them against.
@@ -43,17 +49,35 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
 
     fn try_from(analysis: &TrackAnalysis) -> Result<Self, Self::Error> {
         let snapshot = analysis.beat().ok_or(BeatGridUnavailable::NoBeats)?;
-        let bpm = snapshot.artifact().bpm();
-        if !bpm.is_finite() || bpm <= 0.0 {
-            return Err(BeatGridUnavailable::Tempo { bpm });
+        let artifact = snapshot.artifact();
+        let stated = artifact.bpm();
+        if !stated.is_finite() || stated <= 0.0 {
+            return Err(BeatGridUnavailable::Tempo { bpm: stated });
         }
         let rate = f64::from(analysis.source_sample_rate().get());
-        let duration = analysis.extent().map(|extent| seconds(extent, rate));
-        let placed = place(snapshot, rate, bpm, duration);
-        let (downbeats, meter) = bars(snapshot, &placed, rate, duration);
+        let horizon = seconds(analysis.source_frames(), rate);
+        let fit = analysis.grid_fit();
+        let (times, confidences) =
+            observed(artifact.beats(), artifact.beat_confidence(), rate, horizon);
+        let run = fit
+            .steady_run(&times, consts::SECONDS_PER_MINUTE / stated)
+            .ok_or(BeatGridUnavailable::NoSteadyRun)?;
+        let beats = beats(&run, &confidences, horizon);
+        let (heard, heard_confidences) = observed(
+            artifact.downbeats(),
+            artifact.downbeat_confidence(),
+            rate,
+            horizon,
+        );
+        let (downbeats, meter) = bars(
+            &beats,
+            run.line,
+            heard.iter().copied().zip(heard_confidences),
+            fit.residual.as_secs_f64(),
+        );
         Ok(Self::try_from(RawBeatGrid {
-            duration,
-            bpm,
+            duration: analysis.extent().map(|extent| seconds(extent, rate)),
+            bpm: consts::SECONDS_PER_MINUTE / run.line.period,
             downbeats,
             meter,
             schema_version: SCHEMA_VERSION,
@@ -63,153 +87,80 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
                 BeatState::Final => BeatGridState::Final,
                 BeatState::Provisional => BeatGridState::Provisional,
             },
-            beats: placed.iter().map(|(_, beat)| *beat).collect(),
+            beats,
         })?)
     }
 }
 
-/// The artifact's beats with the ordinal each one holds, still paired with the
-/// source frame the bar lines name them by.
-///
-/// Each beat kept is the whole beats it sits after or before its kept
-/// neighbour, so a tempo drifting from the stated one never adds up to a lost
-/// beat. Where the tracker slips off the beats - a stray marker, a phrase
-/// tracked on the off-beats - a marker names no whole beat from its kept
-/// neighbour and is left out rather than named wrongly: the grid then states a
-/// gap in its numbers, which is what a consumer following ordinals reads as
-/// "nothing proved here", while the beats around it stand as observed. The
-/// count starts inside the longest run of markers a whole beat apart, so a
-/// slip at the start of the track does not leave the music after it out.
-/// Ordinals count from the first beat kept.
-fn place(
-    snapshot: &BeatSnapshot,
+/// The markers a detector saw, in media seconds up to `horizon`, beside the
+/// confidence it saw each with. A marker analysis placed by extrapolation is
+/// not an observation, and the line is fitted to observations only.
+fn observed(
+    frames: &[u64],
+    confidences: &[Option<f32>],
     rate: f64,
-    bpm: f64,
-    duration: Option<f64>,
-) -> Vec<(u64, GridBeat)> {
-    let artifact = snapshot.artifact();
-    let period = consts::SECONDS_PER_MINUTE / bpm;
-    let whole_beats = |from: &GridBeat, to: &GridBeat| {
-        let exact = (to.at - from.at) / period;
-        let rounded = exact.round();
-        if rounded < 1.0 || (exact - rounded).abs() > ORDINAL_TOLERANCE_BEATS {
-            return None;
-        }
-        rounded.to_i64()
-    };
-    let markers: Vec<(u64, GridBeat)> = artifact
-        .beats()
+    horizon: f64,
+) -> (Vec<f64>, Vec<f32>) {
+    frames
         .iter()
-        .zip(artifact.beat_confidence())
-        .map(|(frame, confidence)| {
-            let beat = GridBeat {
-                at: seconds(*frame, rate),
-                ordinal: 0,
-                confidence: *confidence,
-            };
-            (*frame, beat)
-        })
-        .filter(|(_, beat)| !duration.is_some_and(|duration| beat.at > duration))
-        .collect();
-    let Some(anchor) = longest_run_start(&markers, whole_beats) else {
+        .zip(confidences)
+        .filter_map(|(frame, confidence)| Some((seconds(*frame, rate), (*confidence)?)))
+        .filter(|(at, _)| *at <= horizon)
+        .unzip()
+}
+
+/// Every whole beat of the run's line from the start of the track to
+/// `horizon`.
+fn beats(run: &SteadyRun, confidences: &[f32], horizon: f64) -> Vec<GridBeat> {
+    let line = run.line;
+    let Some(last) = line.nearest(horizon) else {
         return Vec::new();
     };
-    let mut kept: Vec<(u64, GridBeat)> = Vec::with_capacity(markers.len());
-    let mut first = markers[anchor].1;
-    for (frame, beat) in markers[..anchor].iter().rev() {
-        if let Some(step) = whole_beats(beat, &first) {
-            first = GridBeat {
-                ordinal: first.ordinal - step,
-                ..*beat
-            };
-            kept.push((*frame, first));
-        }
-    }
-    kept.reverse();
-    let mut last = markers[anchor].1;
-    kept.push(markers[anchor]);
-    for (frame, beat) in &markers[anchor + 1..] {
-        if let Some(step) = whole_beats(&last, beat) {
-            last = GridBeat {
-                ordinal: last.ordinal + step,
-                ..*beat
-            };
-            kept.push((*frame, last));
-        }
-    }
-    for (_, beat) in &mut kept {
-        beat.ordinal -= first.ordinal;
-    }
-    kept
-}
-
-/// Where the longest run of markers each a whole beat after the one before
-/// it starts; the earliest such run on a tie.
-fn longest_run_start(
-    markers: &[(u64, GridBeat)],
-    whole_beats: impl Fn(&GridBeat, &GridBeat) -> Option<i64>,
-) -> Option<usize> {
-    let mut start = 0;
-    let mut best: Option<(usize, usize)> = None;
-    for index in 0..markers.len() {
-        let continues =
-            index > 0 && whole_beats(&markers[index - 1].1, &markers[index].1).is_some();
-        if !continues {
-            start = index;
-        }
-        let length = index + 1 - start;
-        if best.is_none_or(|(_, longest)| length > longest) {
-            best = Some((start, length));
-        }
-    }
-    best.map(|(start, _)| start)
-}
-
-/// The bar lines the detected ones agree on, each named by the beat it falls
-/// on, and the meter they keep.
-///
-/// Only a detected bar line on a placed beat votes; the bar and phase the
-/// votes agree on then name every placed beat of that phase a bar line, so a
-/// bar the detector skipped is stated without a confidence of its own and a
-/// bar line on the wrong beat is left out. Votes that agree on nothing state
-/// no bars at all.
-fn bars(
-    snapshot: &BeatSnapshot,
-    placed: &[(u64, GridBeat)],
-    rate: f64,
-    duration: Option<f64>,
-) -> (Vec<GridDownbeat>, Option<Meter>) {
-    let artifact = snapshot.artifact();
-    let heard: Vec<(usize, Option<f32>)> = artifact
-        .downbeats()
+    let heard: BTreeMap<i64, f32> = run
+        .members
         .iter()
-        .zip(artifact.downbeat_confidence().iter())
-        .filter(|(frame, _)| duration.is_none_or(|duration| seconds(**frame, rate) <= duration))
-        .filter_map(|(frame, confidence)| {
-            let index = placed
-                .binary_search_by_key(frame, |(placed, _)| *placed)
-                .ok()?;
-            Some((index, *confidence))
-        })
+        .map(|&(ordinal, index)| (ordinal, confidences[index]))
         .collect();
-    let votes = heard
-        .iter()
-        .filter(|(_, confidence)| confidence.is_some())
-        .map(|(index, _)| placed[*index].1.ordinal);
-    let Some((bar, phase)) = voted_bar(votes) else {
+    (0..=last)
+        .map(|ordinal| GridBeat {
+            at: line.at(ordinal),
+            ordinal,
+            confidence: heard.get(&ordinal).copied(),
+        })
+        .filter(|beat| (0.0..=horizon).contains(&beat.at))
+        .collect()
+}
+
+/// The bar lines the detected ones agree on, each on the beat of the grid it
+/// falls on, and the meter they keep.
+///
+/// Only a detected bar line within `residual` of a beat of the line votes;
+/// the bar and phase the votes agree on then name every beat of that phase a
+/// bar line, so a bar the detector skipped is stated without a confidence of
+/// its own and a bar line on the wrong beat is left out. Votes that agree on
+/// nothing state no bars at all.
+fn bars(
+    beats: &[GridBeat],
+    line: Line,
+    heard: impl Iterator<Item = (f64, f32)>,
+    residual: f64,
+) -> (Vec<GridDownbeat>, Option<Meter>) {
+    let mut votes: BTreeMap<i64, f32> = BTreeMap::new();
+    for (at, confidence) in heard {
+        if let Some(ordinal) = line.beat_of(at, residual) {
+            votes.entry(ordinal).or_insert(confidence);
+        }
+    }
+    let Some((bar, phase)) = voted_bar(votes.keys().copied()) else {
         return (Vec::new(), None);
     };
-    let downbeats: Vec<GridDownbeat> = placed
+    let downbeats: Vec<GridDownbeat> = beats
         .iter()
-        .enumerate()
-        .filter(|(_, (_, beat))| beat.ordinal.rem_euclid(bar) == phase)
-        .map(|(index, (_, beat))| GridDownbeat {
+        .filter(|beat| beat.ordinal.rem_euclid(bar) == phase)
+        .map(|beat| GridDownbeat {
             at: beat.at,
             beat_ordinal: beat.ordinal,
-            confidence: heard
-                .binary_search_by_key(&index, |(heard, _)| *heard)
-                .ok()
-                .and_then(|found| heard[found].1),
+            confidence: votes.get(&beat.ordinal).copied(),
         })
         .collect();
     let meter = bar
@@ -235,10 +186,15 @@ mod tests {
 
     use kithara_beat::{BeatGridModel, BeatGridState};
     use kithara_test_utils::kithara;
+    use num_traits::cast::ToPrimitive;
+    use rangemap::RangeSet;
 
-    use super::{BeatGridUnavailable, BeatSnapshot, BeatState, TrackAnalysis};
-    use crate::{BeatArtifact, artifact::track::AnalysisToken, consts};
+    use super::{BeatGridUnavailable, BeatState, TrackAnalysis};
+    use crate::{BeatArtifact, BeatSnapshot, artifact::track::AnalysisToken, consts};
 
+    /// A pass over `beats` and `downbeats`, observed with full confidence,
+    /// that has read the source up to `extent` or, when the length is not
+    /// known yet, to just past its last beat.
     fn analysis(
         rate: u32,
         beats: &[u64],
@@ -264,11 +220,17 @@ mod tests {
         extent: Option<u64>,
         state: BeatState,
     ) -> TrackAnalysis {
+        let read = extent.unwrap_or_else(|| artifact.beats().last().map_or(0, |last| last + 1));
+        let mut coverage = RangeSet::new();
+        if read > 0 {
+            coverage.insert(0..read);
+        }
         TrackAnalysis::builder()
             .token(AnalysisToken::from("track-42"))
             .source_sample_rate(NonZeroU32::new(rate).expect("invariant: a fixture rate is set"))
             .beat(BeatSnapshot::new(artifact, state, Vec::new()))
             .maybe_extent(extent)
+            .coverage(coverage)
             .revision(7)
             .build()
     }
@@ -277,24 +239,63 @@ mod tests {
         BeatGridModel::try_from(analysis).expect("the pass states a grid")
     }
 
-    fn times(model: &BeatGridModel) -> Vec<(i64, f64)> {
+    /// Every beat of the grid as its ordinal and its time in whole
+    /// microseconds, so a line fitted through exact markers compares exactly.
+    fn times(model: &BeatGridModel) -> Vec<(i64, i64)> {
         model
             .as_raw()
             .beats
             .iter()
-            .map(|beat| (beat.ordinal, beat.at))
+            .map(|beat| (beat.ordinal, micros(beat.at)))
             .collect()
     }
 
-    /// Detected frames become media seconds here and nowhere else.
+    fn micros(seconds: f64) -> i64 {
+        (seconds * 1e6)
+            .round()
+            .to_i64()
+            .expect("a fixture time fits in microseconds")
+    }
+
+    /// The ordinals of the beats a detected marker named.
+    fn heard(model: &BeatGridModel) -> Vec<i64> {
+        model
+            .as_raw()
+            .beats
+            .iter()
+            .filter(|beat| beat.confidence.is_some())
+            .map(|beat| beat.ordinal)
+            .collect()
+    }
+
+    fn ordinals(model: &BeatGridModel) -> Vec<i64> {
+        model
+            .as_raw()
+            .beats
+            .iter()
+            .map(|beat| beat.ordinal)
+            .collect()
+    }
+
+    fn on_beats(beats: impl Iterator<Item = u64>) -> Vec<u64> {
+        beats.map(|beat| beat * consts::PERIOD_48).collect()
+    }
+
+    fn half_beats(half_beats: impl Iterator<Item = u64>) -> Vec<u64> {
+        half_beats
+            .map(|half| half * consts::PERIOD_48 / 2)
+            .collect()
+    }
+
+    /// Detected frames become media seconds here and nowhere else, and the
+    /// grid runs to the end of the media even where no marker was heard.
     #[kithara::test(native, flash(false))]
     fn a_pass_publishes_its_beats_as_media_seconds_on_its_own_grid() {
-        let beats: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
             consts::RATE_48,
-            &beats,
+            &on_beats(0..8),
             &[],
-            Some(4 * consts::PERIOD_48),
+            Some(9 * consts::PERIOD_48),
             BeatState::Provisional,
         ));
 
@@ -305,21 +306,68 @@ mod tests {
         );
         assert_eq!(model.as_raw().revision, 7);
         assert_eq!(model.as_raw().state, BeatGridState::Provisional);
-        assert_eq!(model.as_raw().bpm, consts::BPM);
+        assert_eq!(micros(model.as_raw().bpm), micros(consts::BPM));
         assert_eq!(
             model.as_raw().duration,
-            Some(2.0),
+            Some(4.5),
             "the extent states the length"
         );
-        assert_eq!(times(&model), [(0, 0.0), (1, 0.5), (2, 1.0), (3, 1.5)]);
+        assert_eq!(
+            times(&model),
+            (0..=9)
+                .map(|beat| (beat, beat * 500_000))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(heard(&model), (0..8).collect::<Vec<_>>());
+    }
+
+    /// Markers read off a detector's frames land up to half a frame either
+    /// side of the beat; the grid is the beat itself, one line through them.
+    #[kithara::test(native)]
+    fn markers_jittered_around_the_beat_state_the_beat_itself() {
+        let period = 0.483_87;
+        let origin = 0.137;
+        let frame = 0.02;
+        let rate = f64::from(consts::RATE_48);
+        let beats: Vec<(u64, Option<f32>)> = (0..40)
+            .map(|beat| {
+                let exact = f64::from(beat).mul_add(period, origin);
+                let heard = ((exact / frame).round() * frame * rate)
+                    .round()
+                    .to_u64()
+                    .expect("a fixture frame");
+                (heard, Some(1.0))
+            })
+            .collect();
+        let model = grid(&artifact_analysis(
+            consts::RATE_48,
+            BeatArtifact::new(consts::SECONDS_PER_MINUTE / period, beats, Vec::new()),
+            Some(20 * u64::from(consts::RATE_48)),
+            BeatState::Final,
+        ));
+
+        let worst = model
+            .as_raw()
+            .beats
+            .iter()
+            .map(|beat| {
+                let ordinal = beat.ordinal.to_f64().expect("a small ordinal");
+                (beat.at - ordinal.mul_add(period, origin)).abs()
+            })
+            .fold(0.0, f64::max);
+        assert_eq!(heard(&model), (0..40).collect::<Vec<_>>());
+        assert!(
+            worst < 0.002,
+            "every beat sits on the music, not on its marker: {worst} s off"
+        );
     }
 
     /// The model carries no sample rate, so two passes over the same music
     /// must agree once their frames are read against their own rates.
     #[kithara::test(native, flash(false))]
     fn the_same_music_states_the_same_grid_from_either_source_rate() {
-        let at_48: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_48).collect();
-        let at_44_1: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_44_1).collect();
+        let at_48 = on_beats(0..8);
+        let at_44_1: Vec<u64> = (0..8).map(|beat| beat * consts::PERIOD_44_1).collect();
 
         assert_eq!(
             times(&grid(&analysis(
@@ -339,15 +387,11 @@ mod tests {
         );
     }
 
-    /// The gap between two analysed islands costs the grid no beats.
+    /// The gap between two analysed islands costs the grid no beats, and the
+    /// beats in it are the line's, claiming nothing was heard there.
     #[kithara::test(native, flash(false))]
     fn islands_keep_the_ordinals_the_music_gives_them() {
-        let beats = [
-            0,
-            consts::PERIOD_48,
-            60 * consts::PERIOD_48,
-            61 * consts::PERIOD_48,
-        ];
+        let beats = on_beats((0..8).chain(60..68));
         let model = grid(&analysis(
             consts::RATE_48,
             &beats,
@@ -356,25 +400,23 @@ mod tests {
             BeatState::Provisional,
         ));
 
+        assert_eq!(ordinals(&model), (0..68).collect::<Vec<_>>());
         assert_eq!(
-            model
-                .as_raw()
-                .beats
-                .iter()
-                .map(|beat| beat.ordinal)
-                .collect::<Vec<_>>(),
-            [0, 1, 60, 61],
+            heard(&model),
+            (0..8).chain(60..68).collect::<Vec<_>>(),
             "the ordinal counts beats of the music, never entries of the list"
         );
     }
 
-    /// A track a hair slower than its stated tempo drifts a whole beat off
-    /// the stated period within a few minutes; every beat it keeps is still
-    /// one beat after the one before it.
-    #[kithara::test(native, flash(false))]
-    fn a_tempo_drifting_from_the_stated_one_keeps_every_beat() {
-        let slow = consts::PERIOD_48 + consts::PERIOD_48 / 100;
-        let beats: Vec<u64> = (0..100).map(|beat| beat * slow).collect();
+    /// Music that starts after a silence still has beats from the start of
+    /// the track, on the line its music keeps.
+    #[kithara::test(native)]
+    fn the_grid_reaches_back_over_an_intro_no_marker_was_heard_in() {
+        let quarter = consts::PERIOD_48 / 4;
+        let beats: Vec<u64> = on_beats(6..20)
+            .into_iter()
+            .map(|frame| frame + quarter)
+            .collect();
         let model = grid(&analysis(
             consts::RATE_48,
             &beats,
@@ -383,35 +425,34 @@ mod tests {
             BeatState::Final,
         ));
 
-        assert_eq!(
-            model
-                .as_raw()
-                .beats
-                .iter()
-                .map(|beat| beat.ordinal)
-                .collect::<Vec<_>>(),
-            (0..100).collect::<Vec<_>>()
-        );
+        assert_eq!(ordinals(&model), (0..20).collect::<Vec<_>>());
+        assert_eq!(heard(&model), (6..20).collect::<Vec<_>>());
     }
 
-    fn ordinals(model: &BeatGridModel) -> Vec<i64> {
-        model
-            .as_raw()
-            .beats
-            .iter()
-            .map(|beat| beat.ordinal)
-            .collect()
-    }
+    /// A track a hair slower than its stated tempo drifts a whole beat off
+    /// the stated period within a few minutes; the grid follows the music's
+    /// own tempo, and every marker stays one of its beats.
+    #[kithara::test(native, flash(false))]
+    fn a_tempo_drifting_from_the_stated_one_keeps_every_beat() {
+        let slow = consts::PERIOD_48 + consts::PERIOD_48 / 100;
+        let beats: Vec<u64> = (0..100)
+            .map(|beat| beat * slow + consts::PERIOD_48 / 4)
+            .collect();
+        let model = grid(&analysis(
+            consts::RATE_48,
+            &beats,
+            &[],
+            None,
+            BeatState::Final,
+        ));
 
-    fn half_beats(half_beats: impl Iterator<Item = u64>) -> Vec<u64> {
-        half_beats
-            .map(|half| half * consts::PERIOD_48 / 2)
-            .collect()
+        assert_eq!(heard(&model), (0..100).collect::<Vec<_>>());
+        assert_eq!(micros(model.as_raw().bpm), micros(consts::BPM / 1.01));
     }
 
     /// A tracker that slips half a beat onto the off-beats for a phrase and
-    /// back names no whole beat there; the music on either side is still one
-    /// run of whole beats, counted across the slip.
+    /// back names no beat there; the music on either side is one line of
+    /// beats, counted across the slip.
     #[kithara::test(native, flash(false))]
     fn a_phrase_tracked_half_a_beat_off_leaves_the_beats_around_it_counted() {
         let beats = half_beats(
@@ -428,10 +469,11 @@ mod tests {
             BeatState::Final,
         ));
 
-        assert_eq!(ordinals(&model), (0..20).chain(26..46).collect::<Vec<_>>());
+        assert_eq!(ordinals(&model), (0..46).collect::<Vec<_>>());
+        assert_eq!(heard(&model), (0..20).chain(26..46).collect::<Vec<_>>());
     }
 
-    /// A stray first marker half a beat before the music names no beat of
+    /// A stray first marker half a beat before the music is not a beat of
     /// it, and does not cost the music its beats.
     #[kithara::test(native, flash(false))]
     fn a_stray_first_marker_does_not_cost_the_music_its_beats() {
@@ -444,44 +486,91 @@ mod tests {
             BeatState::Final,
         ));
 
-        assert_eq!(ordinals(&model), (0..19).collect::<Vec<_>>());
         assert_eq!(
-            model.as_raw().beats.first().map(|beat| beat.at),
-            Some(0.75),
-            "the grid opens on the music, not on the stray marker"
+            model.as_raw().beats.first().map(|beat| micros(beat.at)),
+            Some(250_000),
+            "the grid keeps the music's phase, not the stray marker's"
+        );
+        assert_eq!(heard(&model).len(), 19);
+    }
+
+    /// A marker off the line names no beat, and the beat the line places
+    /// there claims nothing was heard.
+    #[kithara::test(native)]
+    fn a_marker_off_the_line_is_not_a_beat() {
+        let mut beats = on_beats(0..12);
+        beats[2] = 40_000;
+        let model = grid(&analysis(
+            consts::RATE_48,
+            &beats,
+            &[],
+            None,
+            BeatState::Provisional,
+        ));
+
+        assert_eq!(micros(model.as_raw().bpm), micros(consts::BPM));
+        assert_eq!(ordinals(&model), (0..12).collect::<Vec<_>>());
+        assert_eq!(
+            heard(&model),
+            [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            "a marker the line does not hold is not an observation of a beat"
         );
     }
 
-    /// A pass that does not yet know the length still states what it heard.
+    /// Too few markers keep one tempo to follow, so the pass states no grid
+    /// rather than a line its markers do not hold.
+    #[kithara::test(native)]
+    fn markers_that_keep_no_tempo_state_no_grid() {
+        let wandering: Vec<u64> = (0..24_u64)
+            .scan(0, |at, step| {
+                *at += consts::PERIOD_48 + (step % 5) * consts::PERIOD_48 / 7;
+                Some(*at)
+            })
+            .collect();
+
+        assert_eq!(
+            BeatGridModel::try_from(&analysis(
+                consts::RATE_48,
+                &wandering,
+                &[],
+                None,
+                BeatState::Final,
+            )),
+            Err(BeatGridUnavailable::NoSteadyRun)
+        );
+    }
+
+    /// A pass that does not yet know the length still states what it heard,
+    /// up to where it has read.
     #[kithara::test(native, flash(false))]
     fn an_unknown_length_does_not_withhold_the_grid() {
         let model = grid(&analysis(
             consts::RATE_48,
-            &[0, consts::PERIOD_48],
+            &on_beats(0..8),
             &[],
             None,
             BeatState::Provisional,
         ));
 
         assert_eq!(model.as_raw().duration, None);
-        assert_eq!(model.as_raw().beats.len(), 2);
+        assert_eq!(ordinals(&model), (0..8).collect::<Vec<_>>());
     }
 
     #[kithara::test(native, flash(false))]
     fn a_later_pass_publishes_the_same_grid_as_final() {
-        let beats = [0, consts::PERIOD_48];
+        let beats = on_beats(0..8);
         let provisional = grid(&analysis(
             consts::RATE_48,
             &beats,
             &[],
-            Some(2 * consts::PERIOD_48),
+            Some(8 * consts::PERIOD_48),
             BeatState::Provisional,
         ));
         let final_pass = grid(&analysis(
             consts::RATE_48,
             &beats,
             &[],
-            Some(2 * consts::PERIOD_48),
+            Some(8 * consts::PERIOD_48),
             BeatState::Final,
         ));
 
@@ -511,6 +600,30 @@ mod tests {
         );
     }
 
+    /// Beats analysis placed by extrapolation are not observations, and a
+    /// line is never fitted through them alone.
+    #[kithara::test(native)]
+    fn extrapolated_beats_state_no_grid() {
+        let extrapolated = artifact_analysis(
+            consts::RATE_48,
+            BeatArtifact::new(
+                consts::BPM,
+                on_beats(0..16)
+                    .into_iter()
+                    .map(|frame| (frame, None))
+                    .collect(),
+                Vec::new(),
+            ),
+            None,
+            BeatState::Final,
+        );
+
+        assert_eq!(
+            BeatGridModel::try_from(&extrapolated),
+            Err(BeatGridUnavailable::NoSteadyRun)
+        );
+    }
+
     #[kithara::test(native, flash(false))]
     fn a_pass_without_a_beat_artifact_states_no_grid() {
         let waveform_only = TrackAnalysis::builder()
@@ -527,83 +640,6 @@ mod tests {
         );
     }
 
-    /// A marker too far from a whole beat names none, so the grid leaves it
-    /// out rather than guessing an ordinal for it; the markers that do name a
-    /// beat stand as observed, with a gap where nothing was proved.
-    #[kithara::test(native, flash(false))]
-    fn a_marker_that_names_no_beat_is_left_out_of_the_grid() {
-        let model = grid(&analysis(
-            consts::RATE_48,
-            &[0, consts::PERIOD_48, 40_000, 3 * consts::PERIOD_48],
-            &[],
-            None,
-            BeatState::Provisional,
-        ));
-
-        assert_eq!(model.as_raw().bpm, consts::BPM);
-        assert_eq!(
-            model
-                .as_raw()
-                .beats
-                .iter()
-                .map(|beat| beat.ordinal)
-                .collect::<Vec<_>>(),
-            [0, 1, 3],
-            "a guessed ordinal is not an observation, and its neighbours keep theirs"
-        );
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn the_bar_the_downbeats_keep_becomes_the_meter() {
-        let beats: Vec<u64> = (0..9).map(|beat| beat * consts::PERIOD_48).collect();
-        let model = grid(&analysis(
-            consts::RATE_48,
-            &beats,
-            &[0, 4 * consts::PERIOD_48, 8 * consts::PERIOD_48],
-            None,
-            BeatState::Final,
-        ));
-
-        assert_eq!(
-            model
-                .as_raw()
-                .downbeats
-                .iter()
-                .map(|downbeat| downbeat.beat_ordinal)
-                .collect::<Vec<_>>(),
-            [0, 4, 8]
-        );
-        assert_eq!(
-            model
-                .as_raw()
-                .meter
-                .map(|meter| (meter.beats_per_bar.get(), meter.origin_beat_ordinal)),
-            Some((4, 0))
-        );
-    }
-
-    /// A bar line off every beat casts no vote, and the one left measures no
-    /// bar: the pass states no bars rather than a phase nothing repeats.
-    #[kithara::test(native, flash(false))]
-    fn one_placed_bar_line_measures_no_bar() {
-        let beats: Vec<u64> = (0..5).map(|beat| beat * consts::PERIOD_48).collect();
-        let model = grid(&analysis(
-            consts::RATE_48,
-            &beats,
-            &[0, 30_000],
-            None,
-            BeatState::Provisional,
-        ));
-
-        assert!(model.as_raw().downbeats.is_empty());
-        assert_eq!(model.as_raw().meter, None);
-        assert_eq!(
-            model.as_raw().beats.len(),
-            5,
-            "the beats themselves still stand"
-        );
-    }
-
     fn downbeat_ordinals(model: &BeatGridModel) -> Vec<i64> {
         model
             .as_raw()
@@ -613,38 +649,72 @@ mod tests {
             .collect()
     }
 
+    fn meter(model: &BeatGridModel) -> Option<(u16, i64)> {
+        model
+            .as_raw()
+            .meter
+            .map(|meter| (meter.beats_per_bar.get(), meter.origin_beat_ordinal))
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_bar_the_downbeats_keep_becomes_the_meter() {
+        let model = grid(&analysis(
+            consts::RATE_48,
+            &on_beats(0..9),
+            &on_beats([0, 4, 8].into_iter()),
+            None,
+            BeatState::Final,
+        ));
+
+        assert_eq!(downbeat_ordinals(&model), [0, 4, 8]);
+        assert_eq!(meter(&model), Some((4, 0)));
+    }
+
+    /// A bar line off every beat casts no vote, and the one left measures no
+    /// bar: the pass states no bars rather than a phase nothing repeats.
+    #[kithara::test(native, flash(false))]
+    fn one_placed_bar_line_measures_no_bar() {
+        let model = grid(&analysis(
+            consts::RATE_48,
+            &on_beats(0..9),
+            &[0, 30_000],
+            None,
+            BeatState::Provisional,
+        ));
+
+        assert!(model.as_raw().downbeats.is_empty());
+        assert_eq!(model.as_raw().meter, None);
+        assert_eq!(
+            model.as_raw().beats.len(),
+            9,
+            "the beats themselves still stand"
+        );
+    }
+
     /// A detector hears a bar line on the wrong beat now and then; the bars
     /// around it outvote it instead of withdrawing the whole grid.
     #[kithara::test(native, flash(false))]
     fn a_bar_line_on_the_wrong_beat_is_outvoted() {
-        let beats: Vec<u64> = (0..21).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
             consts::RATE_48,
-            &beats,
-            &[0, 4, 8, 10, 12, 16, 20].map(|beat| beat * consts::PERIOD_48),
+            &on_beats(0..21),
+            &on_beats([0, 4, 8, 10, 12, 16, 20].into_iter()),
             None,
             BeatState::Final,
         ));
 
         assert_eq!(downbeat_ordinals(&model), [0, 4, 8, 12, 16, 20]);
-        assert_eq!(
-            model
-                .as_raw()
-                .meter
-                .map(|meter| (meter.beats_per_bar.get(), meter.origin_beat_ordinal)),
-            Some((4, 0))
-        );
+        assert_eq!(meter(&model), Some((4, 0)));
     }
 
     /// A bar the detector skipped is still a bar: the phase the others agree
     /// on states it, claiming no confidence of its own.
     #[kithara::test(native, flash(false))]
     fn a_bar_the_detector_skipped_is_stated_on_the_agreed_phase() {
-        let beats: Vec<u64> = (0..17).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
             consts::RATE_48,
-            &beats,
-            &[0, 4, 12, 16].map(|beat| beat * consts::PERIOD_48),
+            &on_beats(0..17),
+            &on_beats([0, 4, 12, 16].into_iter()),
             None,
             BeatState::Final,
         ));
@@ -664,11 +734,10 @@ mod tests {
     /// Bar lines split evenly between two phases prove neither.
     #[kithara::test(native, flash(false))]
     fn bar_lines_split_between_two_phases_state_no_bar() {
-        let beats: Vec<u64> = (0..15).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
             consts::RATE_48,
-            &beats,
-            &[0, 4, 10, 14].map(|beat| beat * consts::PERIOD_48),
+            &on_beats(0..15),
+            &on_beats([0, 4, 10, 14].into_iter()),
             None,
             BeatState::Final,
         ));
@@ -677,18 +746,19 @@ mod tests {
         assert_eq!(model.as_raw().meter, None);
     }
 
-    /// Extrapolation stops where the media does.
+    /// The grid stops where the media does, and a marker past it is no
+    /// observation of the music.
     #[kithara::test(native, flash(false))]
     fn a_marker_past_the_stated_length_is_dropped_rather_than_published() {
-        let beats: Vec<u64> = (0..4).map(|beat| beat * consts::PERIOD_48).collect();
         let model = grid(&analysis(
             consts::RATE_48,
-            &beats,
+            &on_beats(0..12),
             &[],
-            Some(2 * consts::PERIOD_48),
+            Some(9 * consts::PERIOD_48),
             BeatState::Final,
         ));
 
-        assert_eq!(times(&model), [(0, 0.0), (1, 0.5), (2, 1.0)]);
+        assert_eq!(ordinals(&model), (0..=9).collect::<Vec<_>>());
+        assert_eq!(heard(&model), (0..=9).collect::<Vec<_>>());
     }
 }

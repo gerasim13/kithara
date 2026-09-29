@@ -7,7 +7,7 @@ use kithara_signal::FrameCoverage;
 use rangemap::RangeSet;
 use tracing::debug;
 
-use super::snapshot::BeatSnapshot;
+use super::{snapshot::BeatSnapshot, steady::GridFit};
 use crate::Waveform;
 
 /// Opaque identity the caller opens a pass with, echoed on every snapshot and
@@ -83,6 +83,11 @@ pub struct TrackAnalysis {
     /// with.
     #[builder(skip)]
     grid: OnceLock<Option<BeatGridModel>>,
+    /// How steady the beats must be for the grid to be stated: the policy of
+    /// the pass that published this, kept with it so the grid reads the same
+    /// wherever the publication is read back.
+    #[builder(default)]
+    grid_fit: GridFit,
     beat: Option<BeatSnapshot>,
     extent: Option<u64>,
     waveform: Option<Waveform>,
@@ -129,6 +134,12 @@ impl TrackAnalysis {
                 }
             })
             .as_ref()
+    }
+
+    /// How steady the beats must be for [`grid`](Self::grid) to state one.
+    #[must_use]
+    pub const fn grid_fit(&self) -> GridFit {
+        self.grid_fit
     }
 
     /// Whether the whole known extent sits in one covered run.

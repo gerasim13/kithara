@@ -68,6 +68,11 @@ where
                 Some(buckets) => waveform::Slot::try_from((buckets, rate, &self.pools))?,
                 None => waveform::Slot::default(),
             },
+            grid_fit: self
+                .beat_config
+                .as_ref()
+                .map(BeatAnalysisConfig::grid)
+                .unwrap_or_default(),
             coverage: RangeSet::new(),
             fingerprint: self.fingerprint_for(demand),
             settled: false,
