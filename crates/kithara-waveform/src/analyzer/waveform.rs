@@ -1,15 +1,17 @@
-use std::{array, collections::BTreeMap};
+use std::{array, collections::BTreeMap, num::NonZeroUsize};
 
 use kithara_blob::{BlobError, Writer};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
-use kithara_platform::sync::Arc;
+use kithara_dsp::{
+    downmix,
+    spectrum::{Fft, Spectrum},
+};
 use kithara_signal::CoverageWrite;
 use num_traits::cast::ToPrimitive;
 use rangemap::RangeSet;
-use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
 use crate::{
-    Band,
+    AnalyzerError, Band,
     bucket::{Bucket, Waveform},
     bucketize::bucketize,
     params::AnalysisParams,
@@ -17,10 +19,8 @@ use crate::{
 };
 
 pub(super) mod consts {
-    pub(super) const HANN_A0: f32 = 0.5;
     pub(super) const HOP_DIVISOR: usize = 4;
     pub(crate) const MAX_PARTIAL: usize = 256;
-    pub(super) const MIN_FFT_SIZE: usize = 2;
 }
 
 pub(super) struct Partial {
@@ -36,14 +36,11 @@ pub(super) struct Partial {
 /// heights.
 pub struct WaveformAnalyzer {
     pub(super) params: AnalysisParams,
-    pub(super) fft: Arc<dyn RealToComplex<f32>>,
+    pub(super) fft: Fft,
+    pub(super) spectrum: Spectrum,
     pub(super) bands: BTreeMap<u64, [f32; Band::COUNT]>,
     pub(super) partial: BTreeMap<u64, Partial>,
     downmix: SampleBuffer,
-    pub(super) fft_input: SampleBuffer,
-    pub(super) hann: SampleBuffer,
-    pub(super) fft_output: Vec<Complex<f32>>,
-    pub(super) fft_scratch: Vec<Complex<f32>>,
     pub(super) band_bin_inv: [f32; Band::COUNT],
     pub(super) opened: u64,
     pub(super) low_mid_bin: usize,
@@ -56,8 +53,9 @@ impl WaveformAnalyzer {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the FFT or window buffers do not fit the
-    /// shared region budget.
+    /// Returns [`AnalyzerError`] when no backend runs the FFT at the
+    /// configured length, or its spectrum does not fit the shared region
+    /// budget.
     ///
     /// Divides each band's summed energy by its bin count so a wide band does not outweigh a narrow
     /// one by sheer bin count, making every band an energy density comparable across bands.
@@ -65,21 +63,16 @@ impl WaveformAnalyzer {
         sample_rate: u32,
         params: AnalysisParams,
         pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, AnalyzerError>
     where
         S: HasPool<f32>,
     {
-        let fft_size = params.fft_size().max(consts::MIN_FFT_SIZE);
-        let mut planner = RealFftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(fft_size);
-        let fft_input = pools.get_with_len::<f32>(fft_size)?;
-        let fft_output = fft.make_output_vec();
-        let fft_scratch = fft.make_scratch_vec();
-
-        let hann = hann_window(fft_size, pools)?;
-        let bins = fft_output.len();
+        let fft_size = params.fft_size();
+        let fft = Fft::new(fft_size)?;
+        let spectrum = fft.spectrum(pools)?;
+        let bins = fft_size.bins();
         let rate = sample_rate.to_f32().unwrap_or(0.0);
-        let size_f = fft_size.to_f32().unwrap_or(1.0);
+        let size_f = fft_size.get().to_f32().unwrap_or(1.0);
         let bin_hz = if size_f > 0.0 { rate / size_f } else { 0.0 };
         let low_mid_bin = crossover_bin(params.low_mid_hz(), bin_hz, bins);
         let mid_high_bin = crossover_bin(params.mid_high_hz(), bin_hz, bins).max(low_mid_bin);
@@ -93,18 +86,15 @@ impl WaveformAnalyzer {
         Ok(Self {
             params,
             fft,
-            hann,
-            low_mid_bin,
-            mid_high_bin,
-            band_bin_inv,
-            fft_input,
-            fft_output,
-            fft_scratch,
-            downmix: pools.get::<f32>(),
-            window_hop: (fft_size / consts::HOP_DIVISOR).max(1),
+            spectrum,
             bands: BTreeMap::new(),
             partial: BTreeMap::new(),
+            downmix: pools.get::<f32>(),
+            band_bin_inv,
             opened: 0,
+            low_mid_bin,
+            mid_high_bin,
+            window_hop: fft_size.get() / consts::HOP_DIVISOR,
         })
     }
 
@@ -126,9 +116,9 @@ impl WaveformAnalyzer {
     where
         S: HasPool<f32>,
     {
-        if channels == 0 {
+        let Some(channels) = NonZeroUsize::new(channels) else {
             return Ok(());
-        }
+        };
         let frames = pcm.len() / channels;
         let Ok(span) = u64::try_from(frames) else {
             return Ok(());
@@ -137,12 +127,9 @@ impl WaveformAnalyzer {
             return Ok(());
         }
 
-        let inv_channels = 1.0 / channels.to_f32().unwrap_or(1.0);
         self.downmix.ensure_len(frames)?;
-        self.downmix.truncate(frames);
-        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
-            *dst = frame.iter().sum::<f32>() * inv_channels;
-        }
+        let written = downmix(pcm, channels, &mut self.downmix);
+        self.downmix.truncate(written);
 
         let mono = std::mem::replace(&mut self.downmix, pools.get::<f32>());
         let result = self.push_mono(pools, &mono, at, span);
@@ -298,24 +285,6 @@ where
     Ok(buffer)
 }
 
-fn hann_window<S>(size: usize, pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
-where
-    S: HasPool<f32>,
-{
-    let mut hann = pools.get_with_len::<f32>(size)?;
-    if size <= 1 {
-        hann.fill(1.0);
-        return Ok(hann);
-    }
-    let denom = (size - 1).to_f32().unwrap_or(1.0);
-    let scale = std::f32::consts::TAU / denom;
-    for (n, sample) in hann.iter_mut().enumerate() {
-        let phase = scale * n.to_f32().unwrap_or(0.0);
-        *sample = consts::HANN_A0.mul_add(-phase.cos(), consts::HANN_A0);
-    }
-    Ok(hann)
-}
-
 fn crossover_bin(hz: f32, bin_hz: f32, bins: usize) -> usize {
     if bin_hz <= 0.0 {
         return bins;
@@ -351,6 +320,7 @@ fn normalize_bands(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_blob::BlobError;
+    use kithara_dsp::spectrum::{FftLen, SpectrumError};
     use kithara_test_fixtures::analysis_fixtures::{
         analysis_silence, waveform_half, waveform_high, waveform_low, waveform_mid, waveform_mix,
         waveform_opposed, waveform_square, waveform_tiny, waveform_tone,
@@ -358,7 +328,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use rangemap::RangeSet;
 
-    use super::{WaveformAnalyzer, hann_window, normalize_bands};
+    use super::{WaveformAnalyzer, normalize_bands};
     use crate::{
         AnalysisParams, Band,
         bucket::Bucket,
@@ -377,7 +347,7 @@ mod tests {
             let pools = pools();
             Self {
                 analyzer: WaveformAnalyzer::new(consts::SR, params, &pools)
-                    .expect("waveform buffers fit the test region"),
+                    .expect("the analyzer builds in the test region"),
                 pools,
             }
         }
@@ -593,34 +563,6 @@ mod tests {
         assert!(
             stopped.len() > empty.len(),
             "a pass with windows behind it writes more than a fresh one"
-        );
-    }
-
-    #[kithara::test]
-    fn the_analysis_window_rises_from_zero_to_one_and_back() {
-        let pools = pools();
-        let hann = hann_window(5, &pools).expect("the window fits the test region");
-        let expected = [0.0, 0.5, 1.0, 0.5, 0.0];
-        for (n, (&actual, &want)) in hann.iter().zip(expected.iter()).enumerate() {
-            assert_approx!(
-                actual,
-                want,
-                "sample {n} of a 5-point window is {actual}, expected {want}"
-            );
-        }
-    }
-
-    #[kithara::test]
-    #[case(0)]
-    #[case(1)]
-    fn a_window_too_short_to_taper_is_flat(#[case] size: usize) {
-        let pools = pools();
-        let hann = hann_window(size, &pools).expect("the window fits the test region");
-        assert_eq!(hann.len(), size);
-        assert!(
-            hann.iter()
-                .all(|&sample| (sample - 1.0).abs() <= consts::EPS),
-            "a window with no slope to describe leaves every sample as it was"
         );
     }
 
@@ -976,6 +918,53 @@ mod tests {
         assert_eq!(
             reached, expected,
             "a push must reach every window its span overlaps, and no other"
+        );
+    }
+
+    #[kithara::test]
+    fn a_crossover_at_either_end_of_the_spectrum_empties_that_band(waveform_mix: Vec<f32>) {
+        let params = AnalysisParams::builder()
+            .band_gain([1.0; 3])
+            .low_mid_hz(0.0)
+            .mid_high_hz(f32::MAX)
+            .build();
+        let wave = Pass::new(params).whole(&waveform_mix, 1, 8);
+        assert_eq!(wave.len(), 8);
+        for b in &wave {
+            assert_eq!(
+                (b.low(), b.high()),
+                (0.0, 0.0),
+                "no bin lies below DC or above Nyquist: {b:?}"
+            );
+        }
+        assert!(
+            wave.iter().any(|b| b.mid() > 0.0),
+            "every bin past DC lands in the mid band"
+        );
+    }
+
+    #[kithara::test]
+    fn the_fft_size_is_a_length_every_backend_runs(waveform_tone: Vec<f32>) {
+        assert_eq!(
+            FftLen::new(1000),
+            Err(SpectrumError::Length),
+            "a length vDSP cannot build is no analysis window"
+        );
+        assert_eq!(AnalysisParams::default().fft_size().get(), 4096);
+        let len = FftLen::new(3072).expect("3·2¹⁰ runs on every backend");
+        let mut pass = Pass::new(
+            AnalysisParams::builder()
+                .band_gain([1.0; 3])
+                .fft_size(len)
+                .build(),
+        );
+        assert_eq!((pass.analyzer.size(), pass.analyzer.hop()), (3072, 768));
+        let wave = pass.whole(&waveform_tone, 1, 8);
+        assert_eq!(wave.len(), 8);
+        assert!(
+            wave.iter()
+                .all(|b| [b.low(), b.mid(), b.high()].iter().all(|v| v.is_finite())),
+            "a 3072-point window draws finite bars: {wave:?}"
         );
     }
 }

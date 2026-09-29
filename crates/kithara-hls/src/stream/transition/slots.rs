@@ -5,7 +5,7 @@ use kithara_abr::{AbrDecision, AbrReason, PendingAbrClaim, PendingAbrDecision, V
 use kithara_bufpool::HasPool;
 use kithara_download::FetchCmd;
 use kithara_platform::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Retired},
     time::{Duration, Instant},
 };
 use kithara_stream::{
@@ -73,7 +73,7 @@ where
             publication: ArcSwap::from_pointee(ResidentSessions::one(active)),
             transition: Mutex::new(TransitionState {
                 incoming: None,
-                retired: Vec::new(),
+                retired: Retired::default(),
             }),
         }
     }
@@ -103,11 +103,8 @@ where
 
     /// Retain replaced snapshots until readers release them; only writers reclaim.
     fn publish(&self, state: &mut TransitionState<S>, residents: ResidentSessions<S>) {
-        state
-            .retired
-            .retain(|snapshot| Arc::strong_count(snapshot) > 1);
-        state.retired.push(self.publication.load_full());
-        self.publication.store(Arc::new(residents));
+        let displaced = self.publication.swap(Arc::new(residents));
+        state.retired.retire(displaced);
     }
 
     fn publish_exact_one(&self, state: &mut TransitionState<S>, session: Arc<HlsSession<S>>) {
@@ -152,7 +149,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(super) incoming: Option<IncomingSlot<S>>,
-    retired: Vec<Arc<ResidentSessions<S>>>,
+    retired: Retired<ResidentSessions<S>>,
 }
 
 pub(super) struct IncomingSlot<S>

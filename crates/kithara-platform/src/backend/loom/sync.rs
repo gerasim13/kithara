@@ -10,6 +10,7 @@ pub use crate::{
     common::{
         error::NotAvailable,
         gate::{CondvarGate, ExclusiveGate, ExclusiveGuard, ThreadGate, WaitGate},
+        retire::Retired,
     },
     loom::sync::{Arc, OnceLock, Weak, atomic},
 };

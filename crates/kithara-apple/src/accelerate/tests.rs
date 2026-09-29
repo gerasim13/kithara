@@ -4,8 +4,9 @@ use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
 use kithara_test_utils::kithara;
 
 use super::{
-    BiquadError, MultichannelBiquad, OutOfWindow, deinterleave_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, max_magnitude_f32, quadratic_interpolate_f32,
+    BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, correlate_f32,
+    deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32, linear_interpolate_f32,
+    max_magnitude_f32, multiply_f32, quadratic_interpolate_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -19,6 +20,10 @@ const SPECIALS: [f32; 8] = [
     f32::NAN,
 ];
 const UNWRITTEN: f32 = -1.0;
+
+/// `N` samples on the boundary `RealDft` takes its planes on.
+#[repr(C, align(64))]
+struct Plane<const N: usize>([f32; N]);
 
 fn bits<const N: usize>(values: [f32; N]) -> [u32; N] {
     values.map(f32::to_bits)
@@ -118,6 +123,13 @@ fn deinterleave_pair_reads_only_whole_pairs() {
 }
 
 #[kithara::test(native)]
+fn downmix_pair_averages_only_whole_pairs() {
+    let mut mono = [9.0_f32; 3];
+    assert_eq!(downmix_pair_f32(&[1.0, 3.0, -2.0, 2.0, 5.0], &mut mono), 2);
+    assert_eq!(bits(mono), bits([2.0, 0.0, 9.0]));
+}
+
+#[kithara::test(native)]
 fn layout_moves_special_values_bit_for_bit() {
     let mut interleaved = [1.0_f32; 16];
     assert_eq!(
@@ -160,4 +172,134 @@ fn max_magnitude_reads_the_largest_absolute_value() {
         2.0_f32.to_bits()
     );
     assert_eq!(max_magnitude_f32(&[]).to_bits(), 0.0_f32.to_bits());
+}
+
+#[kithara::test(native)]
+fn real_dft_of_an_impulse_is_flat_and_doubled() {
+    let dft = RealDft::new(16).unwrap_or_else(|err| panic!("vDSP setup: {err}"));
+    let even = Plane([1.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let odd = Plane([0.0_f32; 8]);
+    let (mut re, mut im) = (Plane([UNWRITTEN; 8]), Plane([UNWRITTEN; 8]));
+    assert_eq!(
+        dft.execute([&even.0, &odd.0], [&mut re.0, &mut im.0]),
+        Ok(())
+    );
+    assert_eq!(re.0, [2.0; 8], "every bin of an impulse is one, doubled");
+    assert_eq!(
+        im.0,
+        [2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "the Nyquist bin rides in im[0]; the rest is real"
+    );
+}
+
+#[kithara::test(native)]
+#[case::empty(0)]
+#[case::single(1)]
+#[case::odd(17)]
+#[case::too_few_twos(24)]
+fn real_dft_refuses_a_length_vdsp_has_no_setup_for(#[case] len: usize) {
+    assert_eq!(RealDft::new(len).err(), Some(DftError::Setup));
+}
+
+#[kithara::test(native)]
+fn real_dft_refuses_planes_of_another_length() {
+    let dft = RealDft::new(32).unwrap_or_else(|err| panic!("vDSP setup: {err}"));
+    let (even, odd, short) = (
+        Plane([0.0_f32; 16]),
+        Plane([0.0_f32; 16]),
+        Plane([0.0_f32; 8]),
+    );
+    let (mut re, mut im) = (Plane([0.0_f32; 16]), Plane([0.0_f32; 16]));
+    let mut short_im = Plane([0.0_f32; 15]);
+    assert_eq!(
+        dft.execute([&even.0, &short.0], [&mut re.0, &mut im.0]),
+        Err(DftError::Shape)
+    );
+    assert_eq!(
+        dft.execute([&even.0, &odd.0], [&mut re.0, &mut short_im.0]),
+        Err(DftError::Shape)
+    );
+    assert_eq!(
+        dft.execute([&even.0, &odd.0], [&mut re.0, &mut im.0]),
+        Ok(())
+    );
+}
+
+/// vDSP picks its algorithm by where the planes sit, so one off the boundary
+/// could round the same frame differently.
+#[kithara::test(native)]
+#[case::even([1, 0, 0, 0])]
+#[case::odd([0, 1, 0, 0])]
+#[case::re([0, 0, 1, 0])]
+#[case::im([0, 0, 0, 1])]
+fn real_dft_refuses_a_plane_off_the_boundary(#[case] shift: [usize; 4]) {
+    let dft = RealDft::new(32).unwrap_or_else(|err| panic!("vDSP setup: {err}"));
+    let (even, odd) = (Plane([0.0_f32; 17]), Plane([0.0_f32; 17]));
+    let (mut re, mut im) = (Plane([0.0_f32; 17]), Plane([0.0_f32; 17]));
+    let [e, o, r, i] = shift;
+    assert_eq!(
+        dft.execute(
+            [&even.0[e..e + 16], &odd.0[o..o + 16]],
+            [&mut re.0[r..r + 16], &mut im.0[i..i + 16]],
+        ),
+        Err(DftError::Shape)
+    );
+    assert_eq!(
+        dft.execute(
+            [&even.0[..16], &odd.0[..16]],
+            [&mut re.0[..16], &mut im.0[..16]]
+        ),
+        Ok(())
+    );
+}
+
+#[kithara::test(native)]
+fn multiply_writes_the_product_of_the_common_prefix() {
+    let mut output = [UNWRITTEN; 4];
+    assert_eq!(
+        multiply_f32(&[1.5, -2.0, 4.0], &[2.0, 0.5, -0.25, 8.0], &mut output),
+        3
+    );
+    assert_eq!(bits(output), bits([3.0, -1.0, -1.0, UNWRITTEN]));
+    assert_eq!(multiply_f32(&[], &[1.0], &mut output), 0);
+}
+
+#[kithara::test(native)]
+fn correlate_slides_the_kernel_along_the_signal() {
+    let signal = [1.0_f32, 2.0, 3.0, 4.0, 5.0];
+    let kernel = [1.0_f32, 0.5, -1.0];
+    let mut output = [UNWRITTEN; 4];
+    assert_eq!(correlate_f32(&signal, &kernel, &mut output), 3);
+    assert_eq!(output, [-1.0, -0.5, 0.0, UNWRITTEN]);
+    let mut short = [UNWRITTEN; 2];
+    assert_eq!(
+        correlate_f32(&signal, &kernel, &mut short),
+        2,
+        "as many lags as the output holds"
+    );
+    assert_eq!(short, [-1.0, -0.5]);
+    assert_eq!(
+        correlate_f32(&kernel, &signal, &mut output),
+        0,
+        "a kernel longer than the signal"
+    );
+    assert_eq!(
+        correlate_f32(&signal, &[], &mut output),
+        0,
+        "an empty kernel"
+    );
+}
+
+#[kithara::test(native)]
+fn sum_squares_adds_the_square_of_every_sample() {
+    assert_eq!(sum_squares_f32(&[1.0, -2.0, 3.0, 0.5]), 14.25);
+    assert_eq!(
+        sum_squares_f32(&[]).to_bits(),
+        0.0_f32.to_bits(),
+        "an empty slice"
+    );
+    assert!(
+        sum_squares_f32(&[1.0, f32::NAN]).is_nan(),
+        "a NaN carries through"
+    );
 }

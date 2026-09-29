@@ -39,6 +39,7 @@ kithara-beat = { workspace = true }
 kithara-blob = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "patch"] }
+kithara-dsp = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }

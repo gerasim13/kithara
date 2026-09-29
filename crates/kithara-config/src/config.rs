@@ -3,7 +3,7 @@
 /// Snapshotting may clone or allocate and does not imply realtime safety.
 /// Validation, preparation and application stay with the domain owner.
 /// ```compile_fail
-/// #[kithara_config::config]
+/// #[derive(kithara_config::Config)]
 /// struct Resource<T> { #[config(value)] resource: T }
 /// ```
 pub trait Config {
@@ -12,7 +12,7 @@ pub trait Config {
 
     /// Reads values without exposing excluded construction inputs.
     /// ```compile_fail
-    /// #[kithara_config::config]
+    /// #[derive(kithara_config::Config)]
     /// struct Secret { #[config(skip = "credential")] token: String }
     /// let config = Secret::builder().token(String::from("private")).build();
     /// let _ = kithara_config::Config::values(&config).token;

@@ -4,8 +4,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DeriveInput, Error, Field, Fields, Ident, Path, PathArguments, Result, Token,
-    Type, Visibility, parenthesized, parse_macro_input, parse_quote, punctuated::Punctuated,
+    Attribute, Data, DeriveInput, Error, Field, Fields, Ident, Meta, Path, PathArguments, Result,
+    Token, Type, Visibility, parenthesized, parse_macro_input, parse_quote, punctuated::Punctuated,
     spanned::Spanned,
 };
 
@@ -30,6 +30,10 @@ enum Merge {
     /// variant carrying one -- and a separate wire type is what a document
     /// says instead. The key carries the wire type and the merge converts.
     Wire { from: Path },
+    /// The field is already an `Option`, so the patch carries it as it
+    /// stands: a document names the value bare, and leaving the key out is
+    /// the only way to keep the value in place.
+    Optional,
     /// Everything else: the patch wraps the field's type in `Option`.
     Value,
 }
@@ -56,10 +60,10 @@ struct Refusal {
 }
 
 /// The check a configuration puts every merged candidate through.
-struct Check {
-    with: Path,
+pub(crate) struct Check {
+    pub(crate) with: Path,
     /// What that gate refuses with.
-    error: Type,
+    pub(crate) error: Type,
 }
 
 /// One source field, sorted by whether a document may name it.
@@ -133,23 +137,19 @@ impl DocumentField<'_> {
         let gates = self.cfgs();
         let default = parse_quote!(::serde::Deserialize::deserialize);
         let deserialize = self.deserialize.as_ref().unwrap_or(&default);
-        let read = if is_option(&self.source) {
-            quote! { #deserialize(deserializer).map(::core::option::Option::Some) }
-        } else {
-            quote! {
-                let value: #ty = #deserialize(deserializer)?;
-                value.map(::core::option::Option::Some).ok_or_else(|| {
-                    ::serde::de::Error::custom("null is not valid for a required configuration field")
-                })
-            }
-        };
         quote! {
             #(#gates)*
             fn #method<'de, D>(deserializer: D) -> ::core::result::Result<#ty, D::Error>
             where
                 D: ::serde::Deserializer<'de>,
             {
-                #read
+                let value: #ty = #deserialize(deserializer)?;
+                if value.is_none() {
+                    return ::core::result::Result::Err(::serde::de::Error::custom(
+                        "null is not a configuration value: leave the key out to keep the current one",
+                    ));
+                }
+                ::core::result::Result::Ok(value)
             }
         }
     }
@@ -175,6 +175,11 @@ impl DocumentField<'_> {
             Merge::Wire { ref from } => quote! {
                 if let Some(value) = patch.#ident {
                     #target.#ident = #from(value);
+                }
+            },
+            Merge::Optional => quote! {
+                if let Some(value) = patch.#ident {
+                    #target.#ident = ::core::option::Option::Some(value);
                 }
             },
             Merge::Value => quote! {
@@ -224,7 +229,7 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
         #[doc = ""]
         #[doc = " `Deserialize` only, never `Serialize`: by the time a patch is typed"]
         #[doc = " its references are resolved, so it holds secrets in the clear."]
-        #[doc = " Missing keys preserve values. Null clears optional values and is rejected for required values."]
+        #[doc = " A missing key preserves its value, and null is rejected for every key."]
         #[derive(
             ::core::clone::Clone,
             ::core::fmt::Debug,
@@ -462,8 +467,58 @@ fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
     refusal_from_attributes(&input.attrs, input.ident.span())
 }
 
-pub(crate) fn is_fallible(attributes: &[Attribute], span: proc_macro2::Span) -> Result<bool> {
-    refusal_from_attributes(attributes, span).map(|refusal| refusal.is_some())
+/// The check `#[patch(validate = ..., error = ...)]` declares, which is every
+/// route into the configuration's commit gate, a document merge or not.
+#[cfg(feature = "config")]
+pub(crate) fn validation(
+    attributes: &[Attribute],
+    span: proc_macro2::Span,
+) -> Result<Option<Check>> {
+    Ok(refusal_from_attributes(attributes, span)?.and_then(|refusal| refusal.validate))
+}
+
+/// The patch options a struct or a field declares, spelled either as
+/// `#[patch(...)]` or as the `patch(...)` group of its `#[config(...)]`, which
+/// is where a configuration type keeps every facet. Only one spelling per item:
+/// two would be two lists of the same options that could disagree.
+fn patch_attributes(attributes: &[Attribute]) -> Result<Vec<Attribute>> {
+    let mut native: Vec<Attribute> = attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("patch"))
+        .cloned()
+        .collect();
+    let mut grouped: Vec<Attribute> = Vec::new();
+    for attribute in attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("config"))
+    {
+        let Meta::List(list) = &attribute.meta else {
+            continue;
+        };
+        for option in list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
+            if !option.path().is_ident("patch") {
+                continue;
+            }
+            let Meta::List(group) = option else {
+                return Err(Error::new_spanned(
+                    option,
+                    "patch options go in a group: `patch(...)`",
+                ));
+            };
+            let options = group.tokens;
+            grouped.push(parse_quote!(#[patch(#options)]));
+        }
+    }
+    if let Some(attribute) = native.first()
+        && !grouped.is_empty()
+    {
+        return Err(Error::new_spanned(
+            attribute,
+            "choose either a native patch attribute or its config group",
+        ));
+    }
+    native.append(&mut grouped);
+    Ok(native)
 }
 
 fn refusal_from_attributes(
@@ -474,7 +529,7 @@ fn refusal_from_attributes(
     let mut with: Option<Path> = None;
     let mut error: Option<Type> = None;
 
-    for attribute in attributes.iter().filter(|a| a.path().is_ident("patch")) {
+    for attribute in &patch_attributes(attributes)? {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("fallible") {
                 fallible = true;
@@ -517,7 +572,7 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
     let mut from: Option<Path> = None;
     let mut added: Vec<TokenStream2> = Vec::new();
 
-    for attribute in field.attrs.iter().filter(|a| a.path().is_ident("patch")) {
+    for attribute in &patch_attributes(&field.attrs)? {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("skip") {
                 skip = true;
@@ -597,6 +652,8 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
                 "`nested` needs a named configuration type",
             )?,
         )
+    } else if is_option(&source) {
+        (Merge::Optional, source.clone())
     } else {
         (Merge::Value, parse_quote!(::core::option::Option<#source>))
     };
@@ -703,7 +760,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn optional_fields_keep_presence_separate_from_their_value() {
+    fn an_optional_field_reaches_the_patch_as_its_own_type() {
         let input: DeriveInput = parse_quote! {
             struct Config {
                 look_ahead_bytes: Option<u64>,
@@ -713,10 +770,9 @@ mod tests {
 
         let expanded = expansion(&input);
 
-        assert!(
-            expanded.contains("look_ahead_bytes : :: core :: option :: Option < Option < u64 > >")
-        );
+        assert!(expanded.contains("look_ahead_bytes : Option < u64 >"));
         assert!(expanded.contains("batch : :: core :: option :: Option < usize >"));
+        assert!(!expanded.contains("Option < Option"));
     }
 
     #[kithara::test(native, flash(false))]
@@ -1000,6 +1056,83 @@ mod tests {
             error.to_string().contains("needs `error = <type>`"),
             "{error}"
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_configuration_keeps_its_patch_options_in_its_config_groups() {
+        let input: DeriveInput = parse_quote! {
+            #[config(default, update, patch(validate = Self::validated, error = TempoError))]
+            pub struct Tempo {
+                #[config(value, patch(skip))]
+                backend: Backend,
+                #[config(value, update, builder(default = 2))]
+                low: f32,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert!(
+            expanded.contains("* self = Self :: validated (staged)"),
+            "the check in the type's config group gates the merge"
+        );
+        assert!(
+            !expanded.contains("backend"),
+            "a field's config group skips it like a native attribute"
+        );
+        assert!(expanded.contains("staged . low = value"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_native_patch_beside_its_config_group_is_refused() {
+        for input in [
+            parse_quote! {
+                #[patch(fallible)]
+                #[config(patch(validate = Self::validated, error = Refusal))]
+                struct Config { batch: usize }
+            },
+            parse_quote! {
+                struct Config {
+                    #[patch(skip)]
+                    #[config(value, patch(skip))]
+                    batch: usize,
+                }
+            },
+        ] {
+            let input: DeriveInput = input;
+            let error = derive(&input).expect_err("two spellings of the same options");
+            assert!(
+                error
+                    .to_string()
+                    .contains("choose either a native patch attribute or its config group"),
+                "{error}"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_option_outside_its_group_is_refused() {
+        for input in [
+            parse_quote! {
+                #[config(patch)]
+                struct Config { batch: usize }
+            },
+            parse_quote! {
+                struct Config {
+                    #[config(value, patch = skip)]
+                    batch: usize,
+                }
+            },
+        ] {
+            let input: DeriveInput = input;
+            let error = derive(&input).expect_err("patch options belong in a group");
+            assert!(
+                error
+                    .to_string()
+                    .contains("patch options go in a group: `patch(...)`"),
+                "{error}"
+            );
+        }
     }
 
     #[kithara::test(native, flash(false))]

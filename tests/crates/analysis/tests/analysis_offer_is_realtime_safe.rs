@@ -19,11 +19,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::play_fixtures::quarter;
 
 const RATE: u32 = 44_100;
-const SAMPLES: usize = 2048;
-
-fn spec(rate: NonZeroU32) -> AudioSpec {
-    AudioSpec::new(2, rate)
-}
+const FRAMES: usize = 1024;
 
 #[kithara::rtsan_forbid_blocking]
 fn offer_under_rt(
@@ -36,8 +32,12 @@ fn offer_under_rt(
 }
 
 #[kithara::test]
-fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
+#[case::mono(1)]
+#[case::stereo(2)]
+#[case::six_channels(6)]
+fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>, #[case] channels: u16) {
     let rate = NonZeroU32::new(RATE).expect("test rate is non-zero");
+    let spec = AudioSpec::new(channels, rate);
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
         AnalysisWorkerConfig::for_builder(
@@ -48,7 +48,7 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
     );
     let (_analysis, mut producer) = worker
         .analyze(
-            stalled_reader(spec(rate)),
+            stalled_reader(spec),
             "rt-track".into(),
             rate,
             0,
@@ -57,14 +57,17 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
         .expect("the analysis pass opens");
 
     // Allocated before the realtime region opens, the way a decoded chunk is.
-    let pcm = &quarter[..SAMPLES];
-    let foreign = spec(NonZeroU32::new(48_000).expect("test rate is non-zero"));
+    let pcm = &quarter[..FRAMES * usize::from(channels)];
+    let foreign = AudioSpec::new(
+        channels,
+        NonZeroU32::new(48_000).expect("test rate is non-zero"),
+    );
 
     assert_eq!(
-        offer_under_rt(&mut producer, pcm, spec(rate), 0),
+        offer_under_rt(&mut producer, pcm, spec, 0),
         Ok(()),
-        "the heaviest path: a range on the pass axis is taken, one downmix and one \
-         copy into the transport the pass allocated when it opened"
+        "the heaviest path: a range on the pass axis is taken at every channel count, \
+         one downmix and one copy into the transport the pass allocated when it opened"
     );
     assert_eq!(
         offer_under_rt(&mut producer, pcm, foreign, 0),

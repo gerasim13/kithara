@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use kithara_config::Config;
 use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, SmootherConfig};
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_platform::{CancelToken, sync::Mutex};
@@ -15,11 +15,9 @@ pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
 };
 
 /// Configuration for the audio engine.
-#[kithara_config::config(builder = false)]
-#[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Config)]
+#[config(debug, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
-#[derive(derive_more::Debug)]
 pub struct EngineConfig<S> {
     /// Stable synchronization identity of the owning player.
     #[config(skip = "player-owned synchronization identity", debug(skip))]

@@ -1,3 +1,7 @@
+use std::num::NonZeroUsize;
+
+use kithara_dsp::spectrum::FftLen;
+
 /// Analysis window, 46.4 ms.
 pub(super) const FRAMES_FRAME: usize = 1024;
 
@@ -7,7 +11,11 @@ pub(super) const FRAMES_HOP: usize = 256;
 /// The rate the crate contract fixes.
 pub(super) const FRAMES_RATE: f32 = 22_050.0;
 
-pub(super) const NOVELTY_HANN_A0: f32 = 0.5;
+/// The novelty transform: one [`FRAMES_FRAME`] window.
+pub(super) const NOVELTY_FFT: FftLen = match FftLen::new(FRAMES_FRAME) {
+    Ok(len) => len,
+    Err(_) => unreachable!(),
+};
 
 /// Analysis stride, 23.2 ms: the rate the difference is actually
 /// measured at.
@@ -27,6 +35,12 @@ pub(super) const TEMPO_TOLERANCE_SECONDS: f32 = 0.025;
 
 /// Periodicity window, 512 detection-function frames (5.94 s).
 pub(super) const PERIOD_ACF_FRAME: usize = 512;
+
+/// The periodicity window as the autocorrelation length.
+pub(super) const PERIOD_ACF_LEN: NonZeroUsize = match NonZeroUsize::new(PERIOD_ACF_FRAME) {
+    Some(len) => len,
+    None => unreachable!(),
+};
 
 /// One beat-period estimate every 128 frames (1.49 s), a 75% overlap.
 pub(super) const PERIOD_ACF_STEP: usize = 128;

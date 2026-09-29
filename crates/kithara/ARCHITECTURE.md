@@ -59,7 +59,7 @@ compatible native software stack.
 
 <tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass in <code>kithara-analysis</code>; the mono resampler backend comes from <code>BeatAnalysisConfig</code>. Apple FFI device sets omit this feature.</td></tr>
 
-<tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-analysis</code>; waveform/blob types remain unconditional</td></tr>
+<tr><td><code>analysis-waveform</code></td><td>yes</td><td>Waveform analyzer in <code>kithara-analysis</code> on the <code>kithara-dsp</code> FFT; waveform/blob types remain unconditional</td></tr>
 
 <tr><td><code>analysis</code></td><td>via analyzer defaults</td><td>Analysis module without selecting an analyzer backend</td></tr>
 

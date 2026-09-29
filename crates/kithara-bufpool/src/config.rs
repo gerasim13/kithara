@@ -1,11 +1,10 @@
-use bon::Builder;
+use kithara_config::Config;
 use kithara_derive::Patch;
 
 use crate::Percent;
 
 /// Policy for one physical buffer pool in a region.
-#[kithara_config::config(builder = false)]
-#[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Patch, Config)]
 pub struct PoolConfig {
     /// Maximum share of the region budget this pool may hold.
     #[config(value, builder(default))]

@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use bon::Builder;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
 #[cfg(all(
@@ -14,20 +14,18 @@ use crate::{StretchControls, WarpPlan, WarpPlanSlot, consts};
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
 /// [`WarpConfigPatch`] is what a configuration document may say about it.
-#[kithara_config::config(builder = false)]
-#[derive(Clone, Debug, Builder, Patch, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(opt_in, get)]
+#[derive(Clone, Debug, Patch, Config)]
+#[config(builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 pub struct WarpConfig {
     /// Explicit projected selection prepared by the musical policy owner.
-    #[config(skip = "shared projected warp plan handle", builder(default = Arc::new(WarpPlanSlot::default())), field(get, deref = false), patch(skip))]
+    #[config(skip = "shared projected warp plan handle", builder(default = Arc::new(WarpPlanSlot::default())), field(get), patch(skip))]
     plan: Arc<WarpPlanSlot>,
     /// Live temporal controls consumed by the resident Warp lane. Not a
     /// document key: this is the handle the UI and the deck already share, so
     /// a document naming a stretch ratio would be overwritten by the first
     /// gesture.
-    #[config(skip = "shared live temporal control handle", builder(default = StretchControls::new(1.0)), field(get, deref = false), patch(skip))]
+    #[config(skip = "shared live temporal control handle", builder(default = StretchControls::new(1.0)), field(get), patch(skip))]
     stretch: Arc<StretchControls>,
     /// Preparation geometry each compiled stretch backend is built with. Not
     /// the backend selection: which engine runs is a live control on
@@ -132,8 +130,8 @@ mod tests {
             )
             .build();
         let mut patch = WarpConfigPatch::default();
-        patch.backends.signalsmith.block_frames = Some(NonZeroUsize::new(512));
-        patch.backends.signalsmith.interval_frames = Some(NonZeroUsize::new(16));
+        patch.backends.signalsmith.block_frames = NonZeroUsize::new(512);
+        patch.backends.signalsmith.interval_frames = NonZeroUsize::new(16);
 
         config.apply(patch);
 

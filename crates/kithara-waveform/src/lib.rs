@@ -2,7 +2,7 @@
 //! analyzer that produces it.
 //!
 //! The model and its codec carry no DSP, so a consumer that receives a served
-//! waveform needs neither an FFT nor an analyzer to read one.
+//! waveform needs no analyzer to read one.
 
 #![forbid(unsafe_code)]
 
@@ -12,6 +12,7 @@ mod band;
 mod bucket;
 #[cfg(feature = "dsp")]
 mod bucketize;
+mod error;
 mod params;
 mod resume;
 
@@ -19,6 +20,7 @@ mod resume;
 pub use analyzer::WaveformAnalyzer;
 pub(crate) use band::Band;
 pub use bucket::{Bucket, MAX_BUCKETS, WAVEFORM_BYTES_VERSION, Waveform, WaveformError};
+pub use error::AnalyzerError;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use params::AnalysisParams;

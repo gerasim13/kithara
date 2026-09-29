@@ -1,5 +1,7 @@
 use std::{num::NonZeroUsize, ops::Range};
 
+use num_traits::cast::ToPrimitive;
+
 use crate::backend::{gather, platform, scatter};
 
 /// Interleaves `input_range` of every channel of channel-major `input`, whose
@@ -118,6 +120,38 @@ pub fn deinterleave_channel_major(
         output_range.start,
         frames,
     );
+}
+
+/// Averages each frame of `interleaved`, which holds `channels` samples per
+/// frame, into one sample of `mono`: the channel sum in channel order times
+/// `1 / channels`.
+///
+/// Writes the whole frames both slices hold and returns their count; a
+/// trailing partial frame is ignored. One channel is a copy, two run the
+/// backend's pair kernel, and every branch gives the bits of that formula.
+#[must_use]
+pub fn downmix(interleaved: &[f32], channels: NonZeroUsize, mono: &mut [f32]) -> usize {
+    let frames = (interleaved.len() / channels).min(mono.len());
+    let (Some(interleaved), Some(mono)) = (
+        interleaved.get(..frames.saturating_mul(channels.get())),
+        mono.get_mut(..frames),
+    ) else {
+        return 0;
+    };
+    match channels.get() {
+        1 => {
+            mono.copy_from_slice(interleaved);
+            frames
+        }
+        2 => platform::downmix_pair(interleaved, mono),
+        width => {
+            let scale = 1.0 / width.to_f32().unwrap_or(1.0);
+            for (slot, frame) in mono.iter_mut().zip(interleaved.chunks_exact(width)) {
+                *slot = frame.iter().sum::<f32>() * scale;
+            }
+            frames
+        }
+    }
 }
 
 /// Frames of `range` that `available` whole interleaved frames can hold.

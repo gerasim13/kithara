@@ -85,30 +85,15 @@ fn missing_values_preserve_state_and_present_values_replace_it() {
 }
 
 #[kithara::test(native, flash(false))]
-fn null_clears_optional_values_including_nested_humantime() {
-    let mut owner = Owner {
-        settings: settings(),
-        other: Some(11),
-    };
-    owner
-        .apply(
-            serde_yaml_ng::from_str("settings:\n  optional: null\n  pause: null\n  delay: null")
-                .unwrap(),
-        )
-        .unwrap();
-    assert_eq!(owner.settings.optional, None);
-    assert_eq!(owner.settings.idle, None);
-    assert_eq!(owner.settings.delay, None);
-    assert_eq!(owner.settings.timeout, Duration::from_secs(3));
-}
-
-#[kithara::test(native, flash(false))]
-fn documents_reject_required_null_and_unknown_fields() {
+fn documents_reject_null_and_unknown_fields() {
     for document in [
         "limit: null",
         "timeout: null",
         "count: null",
         "payload: null",
+        "optional: null",
+        "pause: null",
+        "delay: null",
         "extra: 7",
         "optional: text",
     ] {
@@ -120,14 +105,14 @@ fn documents_reject_required_null_and_unknown_fields() {
 }
 
 #[kithara::test(native, flash(false))]
-fn rejected_nested_patch_does_not_commit_a_clear() {
+fn rejected_nested_patch_commits_nothing() {
     let mut owner = Owner {
         settings: settings(),
         other: Some(11),
     };
     let original = owner.settings.clone();
     let patch = serde_yaml_ng::from_str(
-        "other: null\nsettings:\n  limit: 0\n  optional: null\n  pause: null\n  delay: null",
+        "other: 12\nsettings:\n  limit: 0\n  optional: 7\n  pause: 1s\n  delay: 1s",
     )
     .unwrap();
     assert!(owner.apply(patch).is_err());

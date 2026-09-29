@@ -83,7 +83,7 @@ impl Gallery<'_> {
             "--bin",
             "gallery",
             "--features",
-            "kithara-ui-gallery/masonry",
+            "masonry",
             "--",
         ]);
         command
@@ -180,6 +180,11 @@ mod tests {
 
     /// One binary takes both sets and compares them, so a difference between
     /// them is a difference between the hosts rather than between two builds.
+    ///
+    /// The feature is named bare, for the package `-p` selects. The gallery
+    /// has a dev-dependency on itself, and `kithara-ui-gallery/masonry` turns
+    /// the feature on for that dependency alone, which `cargo run` never
+    /// builds, so the binary would carry the immediate host only.
     #[test]
     fn every_step_runs_the_gallery_built_with_both_hosts() {
         let command = Gallery {
@@ -187,6 +192,10 @@ mod tests {
         }
         .command();
         let args: Vec<_> = command.get_args().map(OsStr::to_string_lossy).collect();
-        assert!(args.iter().any(|arg| arg == "kithara-ui-gallery/masonry"));
+        let features = args
+            .iter()
+            .position(|arg| arg == "--features")
+            .and_then(|at| args.get(at + 1));
+        assert_eq!(features.map(AsRef::as_ref), Some("masonry"));
     }
 }

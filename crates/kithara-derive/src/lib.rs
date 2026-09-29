@@ -13,14 +13,12 @@ mod ranged;
 mod ui;
 mod vocabulary;
 
-/// Declares retained configuration values or a construction builder.
+/// `#[derive(Config)]` — the builder, accessors, retained snapshot and runtime
+/// updates of a configuration struct, all declared through `#[config(...)]`.
 #[cfg(feature = "config")]
-#[proc_macro_attribute]
-pub fn config(
-    attributes: proc_macro::TokenStream,
-    input: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    config::retained::expand(attributes.into(), input.into())
+#[proc_macro_derive(Config, attributes(config))]
+pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    config::retained::expand(input.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -33,9 +31,10 @@ pub fn built_default(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
 }
 /// `#[derive(Patch)]` — generate `<Struct>Patch`, the shape a configuration
 /// document may say about a configuration struct, and the `apply` that merges
-/// one onto the other.
+/// one onto the other. Its options are `#[patch(...)]`, or the `patch(...)`
+/// group of a configuration type's `#[config(...)]`.
 #[cfg(feature = "patch")]
-#[proc_macro_derive(Patch, attributes(patch))]
+#[proc_macro_derive(Patch, attributes(patch, config))]
 pub fn patch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     config::expand(input)
 }

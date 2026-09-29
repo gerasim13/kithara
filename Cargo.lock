@@ -4433,6 +4433,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-events",
  "kithara-platform",
  "kithara-resampler",
@@ -4575,7 +4576,6 @@ dependencies = [
  "bon",
  "bytes",
  "cbc",
- "crossbeam-queue",
  "dashmap",
  "delegate",
  "derive-where",
@@ -4680,17 +4680,17 @@ name = "kithara-beat"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "criterion",
  "hex",
  "kithara-bufpool",
  "kithara-derive",
- "kithara-platform",
+ "kithara-dsp",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
- "realfft",
  "rten",
  "rten-tensor",
  "serde",
@@ -4792,7 +4792,6 @@ name = "kithara-config"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
- "fieldwork",
  "kithara-derive",
  "kithara-test-utils",
  "serde",
@@ -4962,12 +4961,16 @@ dependencies = [
  "criterion",
  "fast-interleave",
  "fearless_simd",
+ "fieldwork",
  "firewheel-core",
  "kithara-apple",
+ "kithara-bufpool",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
+ "realfft",
+ "rustfft",
  "thiserror 2.0.18",
  "wasm-bindgen-test",
 ]
@@ -5646,7 +5649,6 @@ dependencies = [
 name = "kithara-queue"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "delegate",
  "derive-where",
  "derive_more",
@@ -6190,19 +6192,22 @@ name = "kithara-waveform"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "criterion",
  "delegate",
  "fieldwork",
  "kithara-blob",
  "kithara-bufpool",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-platform",
  "kithara-signal",
+ "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "rangemap",
- "realfft",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]

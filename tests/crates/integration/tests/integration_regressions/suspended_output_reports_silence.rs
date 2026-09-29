@@ -2,11 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{
-    events::TrackId,
-    play::{InterruptionKind, Resource},
-    signal::AudioSpec,
-};
+use kithara::{events::TrackId, play::InterruptionKind, signal::AudioSpec};
 use kithara_integration_tests::offline::{
     OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
 };

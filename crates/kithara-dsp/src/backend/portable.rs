@@ -1,9 +1,20 @@
+use std::ops::{Add, Mul};
+
 use fearless_simd::{Level, dispatch, prelude::*};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use super::cascade::Cascade;
 pub(crate) use super::interpolate::interpolate;
 use super::simd::padded;
+#[cfg(feature = "spectrum")]
+use super::simd::zip_map;
+#[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) use super::spectrum::{Dft, Work, correlate};
+
+mod consts {
+    /// Scale that turns the sum of a pair into its mean.
+    pub(super) const PAIR_MEAN: f32 = 0.5;
+}
 
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => deinterleave_pair_kernel(simd, input, left, right))
@@ -87,6 +98,40 @@ pub(super) fn deinterleave_pair_kernel<S: Simd>(
     frames
 }
 
+pub(crate) fn downmix_pair(input: &[f32], mono: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => downmix_pair_kernel(simd, input, mono))
+}
+
+#[inline(always)]
+pub(super) fn downmix_pair_kernel<S: Simd>(simd: S, input: &[f32], mono: &mut [f32]) -> usize {
+    let frames = (input.len() / 2).min(mono.len());
+    let (Some(pairs), Some(mono)) = (
+        input.as_chunks::<2>().0.get(..frames),
+        mono.get_mut(..frames),
+    ) else {
+        return 0;
+    };
+    let lanes = S::f32s::LEN;
+    let half = S::f32s::splat(simd, consts::PAIR_MEAN);
+    let mean = |lo: S::f32s, hi: S::f32s| {
+        let (left, right) = lo.deinterleave(hi);
+        left.add(right).mul(half)
+    };
+    let mut inputs = pairs.chunks_exact(lanes);
+    let mut outputs = mono.chunks_exact_mut(lanes);
+    for (block, out) in (&mut inputs).zip(&mut outputs) {
+        let (lo, hi) = block.as_flattened().split_at(lanes);
+        mean(S::f32s::from_slice(simd, lo), S::f32s::from_slice(simd, hi)).store_slice(out);
+    }
+    let tail = inputs.remainder().as_flattened();
+    let (lo, hi) = tail.split_at(tail.len().min(lanes));
+    let tail = mean(padded(simd, lo), padded(simd, hi));
+    for (slot, value) in outputs.into_remainder().iter_mut().zip(tail.as_slice()) {
+        *slot = *value;
+    }
+    frames
+}
+
 pub(crate) fn peak(samples: &[f32]) -> f32 {
     dispatch!(Level::new(), simd => peak_kernel(simd, samples))
 }
@@ -100,4 +145,43 @@ pub(super) fn peak_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
     }
     peak.max(padded(simd, blocks.remainder()).abs())
         .reduce_max()
+}
+
+#[cfg(feature = "spectrum")]
+pub(crate) fn multiply(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => multiply_kernel(simd, a, b, output))
+}
+
+#[cfg(feature = "spectrum")]
+#[inline(always)]
+pub(super) fn multiply_kernel<S: Simd>(simd: S, a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
+    zip_map(simd, [a, b], output, Mul::mul)
+}
+
+/// `Σ a[i]·b[i]` over the common prefix: one multiply-add per lane, then
+/// the lanes summed.
+#[inline(always)]
+pub(super) fn dot<S: Simd>(simd: S, a: &[f32], b: &[f32]) -> f32 {
+    let len = a.len().min(b.len());
+    let (Some(a), Some(b)) = (a.get(..len), b.get(..len)) else {
+        return 0.0;
+    };
+    let mut lefts = a.chunks_exact(S::f32s::LEN);
+    let mut rights = b.chunks_exact(S::f32s::LEN);
+    let mut sum = S::f32s::splat(simd, 0.0);
+    for (x, y) in (&mut lefts).zip(&mut rights) {
+        sum = S::f32s::from_slice(simd, x).mul_add(S::f32s::from_slice(simd, y), sum);
+    }
+    padded(simd, lefts.remainder())
+        .mul_add(padded(simd, rights.remainder()), sum)
+        .reduce_sum()
+}
+
+pub(crate) fn sum_squares(samples: &[f32]) -> f32 {
+    dispatch!(Level::new(), simd => sum_squares_kernel(simd, samples))
+}
+
+#[inline(always)]
+pub(super) fn sum_squares_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
+    dot(simd, samples, samples)
 }

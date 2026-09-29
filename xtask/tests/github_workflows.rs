@@ -80,7 +80,7 @@ incomplete = {
     name: job["result"]
     for name, job in results.items()
     if job["result"] != "success"
-    and not (name in {"deep", "mutants", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
+    and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
     and not (name == "ui" and job["result"] == "skipped" and not ui_required)
     and not (name == "android" and job["result"] == "skipped" and not android_required)
 }
@@ -1787,6 +1787,25 @@ fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
     assert!(
         callers.is_empty(),
         "`just ci run` needs the GitLab host profile: {callers:?}"
+    );
+}
+
+// Mutation suites cost hours, and a push to the default branch asks for every
+// lane, so neither a push nor a schedule starts them: only a dispatch that asks
+// for all of them, or names the lanes it wants.
+#[test]
+fn mutation_suites_run_only_when_asked_for() {
+    let ci = github_workflow("ci.yml");
+    assert!(!workflow_job_names(workflow_jobs(&ci)).contains("mutants"));
+
+    let dispatch = github_workflow("dispatch.yml");
+    let condition = workflow_job(workflow_jobs(&dispatch), "mutants")
+        .get("if")
+        .and_then(Value::as_str)
+        .expect("the mutation job is guarded");
+    assert!(
+        condition.contains("inputs.mutants || (inputs.only || '') != ''"),
+        "{condition}"
     );
 }
 
