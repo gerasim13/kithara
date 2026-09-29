@@ -194,10 +194,12 @@ impl GridFit {
         false
     }
 
-    /// The markers from `start` on that one line holds with none between
-    /// them left out: beats first stand the interval between the first two
-    /// markers apart, then the line is the one that fits them best, and the
-    /// stretch ends at the first marker off it.
+    /// The markers from `start` on that name consecutive beats of one line:
+    /// beats first stand the interval between the first two markers apart,
+    /// then the line is the one that fits them best, and the stretch ends at
+    /// the first marker that is not the next beat of it. A beat the tracker
+    /// left out ends the stretch too, so its beats keep the spacing the
+    /// tracker heard and a later tempo on a multiple of it starts its own.
     fn stretch(&self, times: &[f64], start: usize) -> SteadyRun {
         let residual = self.residual.as_secs_f64();
         let mut sums = Sums::default();
@@ -210,7 +212,7 @@ impl GridFit {
         for (index, &at) in times.iter().enumerate().skip(start + 1) {
             let Some(ordinal) = line
                 .beat_of(at, residual)
-                .filter(|&ordinal| members.last().is_some_and(|&(last, _)| ordinal > last))
+                .filter(|&ordinal| members.last().is_some_and(|&(last, _)| ordinal == last + 1))
             else {
                 break;
             };
@@ -385,6 +387,31 @@ mod tests {
         let eighths = (0..16).map(|eighth| f64::from(eighth).mul_add(0.25, 8.0));
         let after = (0..16).map(|beat| f64::from(beat).mul_add(0.5, 12.0));
         let times: Vec<f64> = before.chain(eighths).chain(after).collect();
+
+        let run = fit().steady_run(&times, 0.5).expect("a steady run");
+
+        assert_eq!(run.members.len(), 40);
+    }
+
+    /// A tempo the track turns to after a passage tracked on the eighths
+    /// contradicts the line, although every one of its beats lands on the
+    /// eighths' own lattice.
+    #[kithara::test(native)]
+    fn a_turn_after_a_double_time_passage_states_no_grid() {
+        let before = (0..16).map(|beat| f64::from(beat) * 0.5);
+        let eighths = (0..16).map(|eighth| f64::from(eighth).mul_add(0.25, 8.0));
+        let turned = (0..20).map(|beat| f64::from(beat).mul_add(0.75, 12.0));
+        let times: Vec<f64> = before.chain(eighths).chain(turned).collect();
+
+        assert!(fit().steady_run(&times, 0.5).is_none());
+    }
+
+    /// A marker the tracker set before the first beat takes no beat of the
+    /// line and says nothing of its tempo.
+    #[kithara::test(native)]
+    fn a_stray_marker_before_the_first_beat_keeps_the_grid() {
+        let beats = (0..40).map(|beat| f64::from(beat).mul_add(0.5, 0.125));
+        let times: Vec<f64> = std::iter::once(0.0).chain(beats).collect();
 
         let run = fit().steady_run(&times, 0.5).expect("a steady run");
 
