@@ -1,10 +1,11 @@
 use core::num::NonZeroU32;
 
 use firewheel::{
+    StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
+        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
 use kithara_play::rt::read_render_context;
@@ -34,11 +35,12 @@ pub struct Metronome {
     click: Option<Click>,
 }
 
+/// One click, counted in frames of the stream it sounds in.
 #[derive(Clone, Copy, Debug)]
 struct Click {
     elapsed: f64,
-    frames: f64,
-    cycles_per_frame: f64,
+    rate: f64,
+    hz: f64,
     level: f64,
 }
 
@@ -49,11 +51,10 @@ impl Click {
         } else {
             (consts::BEAT_HZ, consts::BEAT_LEVEL)
         };
-        let rate = f64::from(sample_rate.get());
         Self {
             elapsed: 0.0,
-            frames: (consts::CLICK_SECONDS * rate).round(),
-            cycles_per_frame: hz / rate,
+            rate: f64::from(sample_rate.get()),
+            hz,
             level,
         }
     }
@@ -61,10 +62,12 @@ impl Click {
     /// Writes the next samples of this click into `out`, then silence once it
     /// has ended. Returns whether it is still sounding after `out`.
     fn render(&mut self, out: &mut [f32]) -> bool {
+        let frames = (consts::CLICK_SECONDS * self.rate).round();
+        let cycles_per_frame = self.hz / self.rate;
         for sample in out {
-            *sample = if self.elapsed < self.frames {
-                let phase = (self.elapsed * self.cycles_per_frame).fract();
-                let envelope = 1.0 - self.elapsed / self.frames;
+            *sample = if self.elapsed < frames {
+                let phase = (self.elapsed * cycles_per_frame).fract();
+                let envelope = 1.0 - self.elapsed / frames;
                 self.elapsed += 1.0;
                 (self.level * phase.mul_add(2.0, -1.0) * envelope)
                     .to_f32()
@@ -73,7 +76,14 @@ impl Click {
                 0.0
             };
         }
-        self.elapsed < self.frames
+        self.elapsed < frames
+    }
+
+    /// Counts this click in frames of a stream at `rate`: the time it has
+    /// sounded and its pitch stay.
+    fn retune(&mut self, rate: f64) {
+        self.elapsed *= rate / self.rate;
+        self.rate = rate;
     }
 }
 
@@ -132,6 +142,14 @@ impl Metronome {
         sounding || started
     }
 
+    /// Carries a sounding click over to a stream at `sample_rate`, so it
+    /// keeps its pitch and ends when it would have.
+    pub(crate) fn retune(&mut self, sample_rate: NonZeroU32) {
+        if let Some(click) = self.click.as_mut() {
+            click.retune(f64::from(sample_rate.get()));
+        }
+    }
+
     fn continue_click(&mut self, out: &mut [f32]) {
         match self.click.as_mut() {
             Some(click) => {
@@ -175,6 +193,10 @@ struct MetronomeProcessor {
 }
 
 impl AudioNodeProcessor for MetronomeProcessor {
+    fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
+        self.metronome.retune(stream_info.sample_rate);
+    }
+
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
