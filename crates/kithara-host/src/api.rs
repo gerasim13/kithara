@@ -44,6 +44,16 @@ impl HostLevel {
     }
 }
 
+/// A point in the session output graph an output group can listen to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Tap {
+    /// The session output after the limiter: what the output device plays.
+    Master,
+    /// The Host metronome alone: a click on every session beat.
+    Metronome,
+}
+
 /// Which side of the DJ crossfader a mix input is assigned to. `Bypass` is unity
 /// at any position, for an ordinary fader with no crossfade.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

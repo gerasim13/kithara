@@ -25,7 +25,7 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::{DeckSyncState, HostLevel},
+    api::{DeckSyncState, HostLevel, Tap},
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
         protocol::SyncCmd,
@@ -207,23 +207,25 @@ impl<S> Host<S> {
         }
     }
 
-    /// Removes the post-limiter output group.
+    /// Removes the output group listening to `tap`.
     ///
     /// # Errors
     /// Returns an error when graph dispatch fails.
-    pub fn disable_outputs(&self) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::DisableMixTap)
+    pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::DetachOutputs { tap })
     }
 
-    /// Installs one post-limiter group for simultaneous independent outputs.
+    /// Installs one output group listening to `tap`, for simultaneous
+    /// independent outputs.
     ///
     /// # Errors
-    /// Returns an error when an output group is active or graph dispatch fails.
-    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
-        match self
-            .dispatcher
-            .exec_host(HostCmd::EnableOutput { outputs })?
-        {
+    /// Returns an error when `tap` already has a group or graph dispatch fails.
+    pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::AttachOutputs { tap, outputs })
+    }
+
+    fn exec_host_ok(&self, cmd: HostCmd<S>) -> Result<(), PlayError> {
+        match self.dispatcher.exec_host(cmd)? {
             HostReply::Ok => Ok(()),
             HostReply::Err(error) => Err(error),
             _ => Err(PlayError::Internal(

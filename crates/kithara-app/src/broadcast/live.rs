@@ -1,5 +1,6 @@
 use kithara::{
     broadcast::{Broadcast, BroadcastHandle},
+    host::Tap,
     output::OutputGroup,
 };
 
@@ -21,12 +22,12 @@ trait BroadcastHost {
 
 impl BroadcastHost for AppHost {
     fn disable_outputs(&self) -> BroadcastResult<()> {
-        AppHost::disable_outputs(self)?;
+        self.detach_outputs(Tap::Master)?;
         Ok(())
     }
 
     fn enable_outputs(&self, outputs: OutputGroup) -> BroadcastResult<()> {
-        AppHost::enable_outputs(self, outputs)?;
+        self.attach_outputs(Tap::Master, outputs)?;
         Ok(())
     }
 

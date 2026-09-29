@@ -5,6 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     events::TrackId,
+    host::Tap,
     play::{PlayError, Resource, SessionError},
     signal::AudioSpec,
 };
@@ -57,9 +58,9 @@ async fn render_with_tap(constant_half: &'static [u8]) -> (Vec<f32>, Vec<f32>, u
     let harness = playing_harness(constant_half).await;
     let mut tap = harness
         .host()
-        .enable_mix_tap(ROOMY_CAPACITY)
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
-        .expect("enable mix tap");
+        .expect("attach the master tap");
     let rendered = render_blocks(&harness, BLOCKS).await;
     let tapped = tap.drain();
     let drops = tap.drops();
@@ -105,7 +106,7 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     let mut tap = harness
         .host()
-        .enable_mix_tap(ROOMY_CAPACITY)
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
         .expect("arm the mix tap before a session output exists");
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
@@ -133,9 +134,9 @@ async fn the_tap_keeps_feeding_across_a_device_route_restart(constant_half: &'st
     let harness = playing_harness(constant_half).await;
     let mut tap = harness
         .host()
-        .enable_mix_tap(ROOMY_CAPACITY)
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
-        .expect("enable mix tap");
+        .expect("attach the master tap");
     render_blocks(&harness, 2).await;
     assert!(!tap.drain().is_empty(), "the feed runs before the restart");
 
@@ -165,9 +166,9 @@ async fn mix_tap_overflow_drops_exactly_the_capacity_deficit(constant_half: &'st
     let harness = playing_harness(constant_half).await;
     let mut tap = harness
         .host()
-        .enable_mix_tap(TIGHT_CAPACITY)
+        .attach_tap(Tap::Master, TIGHT_CAPACITY)
         .await
-        .expect("enable mix tap");
+        .expect("attach the master tap");
 
     let rendered = render_blocks(&harness, BLOCKS).await;
     let tapped = tap.drain();
@@ -187,41 +188,41 @@ async fn mix_tap_overflow_drops_exactly_the_capacity_deficit(constant_half: &'st
 }
 
 #[kithara::test(tokio)]
-async fn second_enable_is_rejected_and_disable_releases_the_writer(constant_half: &'static [u8]) {
+async fn a_second_attach_is_rejected_and_detach_releases_the_writer(constant_half: &'static [u8]) {
     let harness = playing_harness(constant_half).await;
     let tap = harness
         .host()
-        .enable_mix_tap(ROOMY_CAPACITY)
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
-        .expect("enable mix tap");
+        .expect("attach the master tap");
 
     match harness
         .host()
-        .enable_mix_tap(ROOMY_CAPACITY)
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
         .map(|_| ())
     {
-        Err(PlayError::Session(SessionError::MixTapActive)) => {}
+        Err(PlayError::Session(SessionError::TapActive)) => {}
         other => panic!("a second consumer must be rejected, got {other:?}"),
     }
     assert!(tap.writer_alive());
 
     harness
         .host()
-        .disable_mix_tap()
+        .detach_tap(Tap::Master)
         .await
-        .expect("disable mix tap");
+        .expect("detach the master tap");
     render_blocks(&harness, 2).await;
     assert!(
         !tap.writer_alive(),
-        "disabling the tap must drop the producer so the consumer sees the feed end"
+        "detaching the tap must drop the producer so the consumer sees the feed end"
     );
 
-    let re_enabled = harness
+    let reattached = harness
         .host()
-        .enable_mix_tap(ROOMY_CAPACITY)
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
-        .expect("re-enable mix tap after disable");
-    assert!(re_enabled.writer_alive());
+        .expect("attach the master tap again after detach");
+    assert!(reattached.writer_alive());
     harness.close().await;
 }

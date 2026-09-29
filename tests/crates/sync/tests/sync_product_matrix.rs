@@ -571,9 +571,9 @@ pub(super) struct ProductHarness {
     provider: Provider,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
-    /// Every rendered block with the Host metronome, when artifacts are on.
+    /// Every rendered block with the engine metronome, when artifacts are on.
     #[cfg(not(target_os = "android"))]
-    tap: Option<kithara_integration_tests::audio_artifact::AudioArtifactTap>,
+    listening: Option<artifact::Listening>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -678,89 +678,76 @@ impl Audible {
 }
 
 /// Listening artifacts: an opt-in desktop recording of each harness run with
-/// the Host metronome. They encode through the app's recording stack, which no
-/// device build carries.
+/// the engine metronome. They encode through the app's recording stack, which
+/// no device build carries.
 #[cfg(not(target_os = "android"))]
 mod artifact {
-    use std::ops::Range;
-
-    use kithara_integration_tests::audio_artifact::{AudioArtifactTap, artifact_label};
-
-    use super::{
-        Audible, CHANNELS, Provider, SyncCase,
-        kithara::{
-            signal::SessionFrame,
-            warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
-        },
+    use kithara_integration_tests::{
+        audio_artifact::{AudioArtifactTap, artifact_label},
+        bufpool_ext::TestPools,
+        offline::{OfflineHostHarness, TapProbe},
     };
 
-    /// The artifact of one harness run, named by the running test, the case and
-    /// the decks it hears.
-    pub(super) fn open_tap(
-        case: SyncCase,
-        provider: Provider,
-        audible: Audible,
-    ) -> Option<AudioArtifactTap> {
-        let mut tap = AudioArtifactTap::from_env(
-            &format!("{}-{}-{}", artifact_label(), case.id, audible.label()),
-            case.sample_rate,
-            CHANNELS,
-        )
-        .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id))?;
-        tap.evidence(
-            "provider",
-            serde_json::Value::String(format!("{provider:?}")),
-        );
-        Some(tap)
+    use super::{Audible, CHANNELS, Provider, SyncCase, kithara::host::Tap};
+
+    mod consts {
+        /// Seconds of clicks the metronome ring holds between two drains:
+        /// longer than any single render the harness issues.
+        pub(super) const METRONOME_SECONDS: usize = 1;
     }
 
-    /// Marks every beat the Host session grid places inside `frames` on the
-    /// artifact's metronome. Output frames are session frames: the harness
-    /// renders its session from frame 0.
-    pub(super) fn mark_host_beats(
-        tap: &mut AudioArtifactTap,
-        grid: &BeatGridSnapshot,
-        frames: Range<u64>,
-    ) {
-        let at = |frame: u64| {
-            grid.beat_at(MapPoint::new(
-                grid.stamp(),
-                MapPosition::Session(SessionFrame::new(i64::try_from(frame).unwrap_or(i64::MAX))),
-            ))
-        };
-        let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) =
-            (at(frames.start), at(frames.end))
-        else {
-            return;
-        };
-        let first = f64::from(*first.value().value()).ceil() as i64;
-        let last = f64::from(*last.value().value()).floor() as i64;
-        for ordinal in first..=last {
-            let Ok(beat) = Beat::try_from(BeatOrdinal::new(ordinal)) else {
-                continue;
-            };
-            let BeatGridQuery::Resolved(position) =
-                grid.position_at(MapPoint::new(grid.stamp(), beat))
-            else {
-                continue;
-            };
-            let MapPosition::Session(frame) = *position.value().value() else {
-                continue;
-            };
-            let Ok(frame) = u64::try_from(i64::from(frame)) else {
-                continue;
-            };
-            if !frames.contains(&frame) {
-                continue;
-            }
-            let downbeat = matches!(
-                grid.meter_at(MapPoint::new(grid.stamp(), beat)),
-                BeatGridQuery::Resolved(meter)
-                    if (ordinal - i64::from(meter.value().downbeat()))
-                        .rem_euclid(i64::from(meter.value().beats_per_bar()))
-                        == 0
+    /// The recording of one harness run: every rendered block, and the
+    /// engine metronome's clicks over the same frames.
+    pub(super) struct Listening {
+        tap: AudioArtifactTap,
+        metronome: TapProbe,
+    }
+
+    impl Listening {
+        /// The artifact of one harness run, named by the running test, the
+        /// case and the decks it hears.
+        pub(super) async fn open(
+            case: SyncCase,
+            provider: Provider,
+            audible: Audible,
+            host: &OfflineHostHarness<TestPools>,
+        ) -> Option<Self> {
+            let mut tap = AudioArtifactTap::from_env(
+                &format!("{}-{}-{}", artifact_label(), case.id, audible.label()),
+                case.sample_rate,
+                CHANNELS,
+            )
+            .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id))?;
+            tap.evidence(
+                "provider",
+                serde_json::Value::String(format!("{provider:?}")),
             );
-            tap.host_beat(frame, downbeat);
+            let capacity = consts::METRONOME_SECONDS
+                * usize::try_from(case.sample_rate).expect("sample rate fits usize")
+                * usize::from(CHANNELS);
+            let metronome = host
+                .attach_tap(Tap::Metronome, capacity)
+                .await
+                .unwrap_or_else(|error| panic!("{}: attach the metronome tap: {error}", case.id));
+            Some(Self { tap, metronome })
+        }
+
+        /// Records one render's output with the clicks the engine metronome
+        /// sounded over the same frames.
+        pub(super) fn push(&mut self, case: SyncCase, samples: &[f32]) {
+            let clicks = self.metronome.drain();
+            assert_eq!(
+                (clicks.len(), self.metronome.drops()),
+                (samples.len(), 0),
+                "{}: the metronome tap carries every rendered frame",
+                case.id
+            );
+            self.tap.push(samples);
+            self.tap.push_metronome(&clicks);
+        }
+
+        pub(super) fn mark(&mut self, label: &str) {
+            self.tap.mark(label);
         }
     }
 }
@@ -856,6 +843,8 @@ impl ProductHarness {
             decks.push(Arc::new(deck));
             ids.push(id);
         }
+        #[cfg(not(target_os = "android"))]
+        let listening = artifact::Listening::open(case, provider, audible, &host).await;
         let mut harness = Self {
             decks,
             failures: Vec::new(),
@@ -868,7 +857,7 @@ impl ProductHarness {
                 .map(|deck| provider.start_seconds(deck, start))
                 .collect(),
             #[cfg(not(target_os = "android"))]
-            tap: artifact::open_tap(case, provider, audible),
+            listening,
             _trace: trace,
         };
         harness.wait_loaded(case, &ids).await;
@@ -973,10 +962,8 @@ impl ProductHarness {
         self.tick_all(case).await;
         self.output_frames = end;
         #[cfg(not(target_os = "android"))]
-        if let Some(tap) = self.tap.as_mut() {
-            let grid = self.host.session_grid().await;
-            artifact::mark_host_beats(tap, &grid, start..end);
-            tap.push(&samples);
+        if let Some(listening) = self.listening.as_mut() {
+            listening.push(case, &samples);
         }
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
@@ -991,8 +978,8 @@ impl ProductHarness {
     /// Stamps a control marker on the artifact, when artifacts are on.
     #[cfg(not(target_os = "android"))]
     pub(super) fn mark(&mut self, label: &str) {
-        if let Some(tap) = self.tap.as_mut() {
-            tap.mark(label);
+        if let Some(listening) = self.listening.as_mut() {
+            listening.mark(label);
         }
     }
 

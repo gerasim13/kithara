@@ -3,7 +3,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    host::HostConfig,
+    host::{HostConfig, Tap},
     platform::time::Duration,
     play::{Resource, ResourceConfig, ResourceSrc},
 };
@@ -158,7 +158,7 @@ async fn offline_mix_tap_mirrors_render() {
     let worker = playing_worker().await;
     let _warmup = render_blocks(&worker, WARMUP_BLOCKS).await;
     let mut tap = worker
-        .call(async move |player| player.host().enable_mix_tap(TAP_CAPACITY).await)
+        .call(async move |player| player.host().attach_tap(Tap::Master, TAP_CAPACITY).await)
         .await
         .expect("enable the mix tap");
 

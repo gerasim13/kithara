@@ -6,6 +6,7 @@ use std::{io::Cursor, num::NonZero};
 
 use kithara::{
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+    host::Metronome,
     platform::time::Duration,
     resampler::NoResamplerBackend,
     signal::{AudioSpec, SessionEpoch, SessionFrame},
@@ -302,6 +303,31 @@ fn host_frame(anchors: &[SessionAnchor], beat: f64) -> f64 {
         .expect("frame fits f64")
 }
 
+/// The engine metronome's clicks over the first `frames` session frames,
+/// each span rendered from the anchor the Host plays it under.
+fn metronome(anchors: &[SessionAnchor], frames: usize) -> Vec<f32> {
+    let mut metronome = Metronome::default();
+    let mut mono = vec![0.0; frames];
+    let mut start = 0;
+    for (index, anchor) in anchors.iter().enumerate() {
+        let end = anchors.get(index + 1).map_or(frames, |next| {
+            usize::try_from(i64::from(next.frame()))
+                .expect("anchor after the session start")
+                .min(frames)
+        });
+        let Some(span) = mono.get_mut(start..end) else {
+            continue;
+        };
+        metronome.render(
+            Some(*anchor),
+            SessionFrame::new(i64::try_from(start).expect("frame fits i64")),
+            span,
+        );
+        start = end;
+    }
+    mono.iter().flat_map(|&sample| [sample; CH]).collect()
+}
+
 /// The plan projecting the track onto `anchor`'s Host grid from
 /// `activation`, as the sync owner freezes it when the Host commits
 /// `anchor`: never before the output the member has already presented.
@@ -442,17 +468,7 @@ fn record(
         return;
     };
     tap.push(output);
-    let frames = (output.len() / CH).to_f64().expect("frames fit f64");
-    for beat in 0_u32.. {
-        let frame = host_frame(anchors, f64::from(beat));
-        if frame >= frames {
-            break;
-        }
-        tap.host_beat(
-            frame.to_u64().expect("frame fits u64"),
-            beat.is_multiple_of(4),
-        );
-    }
+    tap.push_metronome(&metronome(anchors, output.len() / CH));
     tap.evidence(
         "projection",
         serde_json::json!({

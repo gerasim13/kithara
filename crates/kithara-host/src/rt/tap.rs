@@ -8,10 +8,8 @@ use firewheel::{
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-pub(crate) use kithara_effects::node::{LimiterNode, MasterEqNode};
 use kithara_output::{LiveOutput, OutputGroup};
 use kithara_platform::sync::Mutex;
-pub(crate) use kithara_play::rt::PlayerNode;
 use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 
@@ -43,7 +41,7 @@ impl AudioNode for TapNode {
 
     fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
         Ok(AudioNodeInfo::new()
-            .debug_name("session_mix_tap")
+            .debug_name("session_tap")
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::STEREO,
                 num_outputs: ChannelCount::ZERO,

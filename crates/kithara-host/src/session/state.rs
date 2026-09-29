@@ -31,9 +31,9 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::{SessionDuckingMode, SlotId},
+    api::{SessionDuckingMode, SlotId, Tap},
     bridge::SharedEq,
-    rt::{LimiterNode, MasterEqNode},
+    rt::{LimiterNode, MasterEqNode, MetronomeNode},
 };
 
 pub(super) struct SlotNodes {
@@ -158,9 +158,26 @@ pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConf
     (eq_layout, gains)
 }
 
-pub(super) enum MixTap {
+pub(super) enum TapSlot {
     Requested(OutputGroup),
     Installed(NodeID),
+}
+
+/// The output group attached to each [`Tap`], waiting for its source node or
+/// installed behind it.
+#[derive(Default)]
+pub(super) struct Taps {
+    master: Option<TapSlot>,
+    metronome: Option<TapSlot>,
+}
+
+impl Taps {
+    pub(super) const fn slot(&mut self, tap: Tap) -> &mut Option<TapSlot> {
+        match tap {
+            Tap::Master => &mut self.master,
+            Tap::Metronome => &mut self.metronome,
+        }
+    }
 }
 
 struct RootSnapshot {
@@ -227,13 +244,14 @@ pub(crate) struct SessionState<T, S> {
     pub(super) sync: SyncRoot<PlayerMember>,
     pub(super) limiter: LimiterConfig,
     pub(super) ctx: Option<FirewheelContext>,
-    pub(super) mix_tap: Option<MixTap>,
+    pub(super) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
     pub(super) requested_declick_frames: Option<NonZeroU32>,
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) session_limiter_node_id: Option<NodeID>,
+    pub(super) session_metronome_node_id: Option<NodeID>,
     pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) stream: Option<T>,
@@ -291,13 +309,14 @@ impl<T, S> SessionState<T, S> {
             ctx: None,
             stream: None,
             transport_control: None,
-            mix_tap: None,
+            taps: Taps::default(),
             next_player_id: 1,
             sample_rate_hint: sample_rate.get(),
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
             session_limiter_node_id: None,
+            session_metronome_node_id: None,
             retains_output: false,
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
@@ -533,6 +552,7 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     let session_memo = Memo::new(session_node);
     let session_id = add_graph_node(fw_ctx, session_node)?;
     let limiter_id = add_graph_node(fw_ctx, limiter)?;
+    let metronome_id = add_graph_node(fw_ctx, MetronomeNode)?;
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
         .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
@@ -550,10 +570,12 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     state.session_output_node_id = Some(session_id);
     state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
-    tap::install_requested(state, limiter_id)?;
+    state.session_metronome_node_id = Some(metronome_id);
+    tap::install_requested(state)?;
     debug!(
         ?session_id,
         ?limiter_id,
+        ?metronome_id,
         "[KITHARA-ROUTE] session output graph ready"
     );
     Ok(())

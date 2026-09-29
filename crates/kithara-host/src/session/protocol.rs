@@ -15,7 +15,7 @@ use kithara_warp::{BeatGridId, BeatsPerMinute, PresentationFrontier};
 
 use crate::{
     PlayerMember,
-    api::{DeckSyncState, HostLevel},
+    api::{DeckSyncState, HostLevel, Tap},
 };
 
 /// Opens the audio stream a session runs on and hands back the object that
@@ -58,8 +58,12 @@ pub(crate) enum HostCmd<S> {
     ApplyMix {
         levels: Box<[HostLevel]>,
     },
-    EnableOutput {
+    AttachOutputs {
+        tap: Tap,
         outputs: OutputGroup,
+    },
+    DetachOutputs {
+        tap: Tap,
     },
     Shutdown,
 }

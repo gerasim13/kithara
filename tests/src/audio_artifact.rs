@@ -31,41 +31,6 @@ const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
 static ATTEMPT: AtomicU64 = AtomicU64::new(0);
 const TRACK_GAIN: f32 = 0.8;
 const METRONOME_GAIN: f32 = 0.2;
-const CLICK_FRAMES: usize = 480;
-const BEAT_HZ: f32 = 1_760.0;
-const DOWNBEAT_HZ: f32 = 2_200.0;
-const BEAT_AMPLITUDE: f32 = 0.45;
-const DOWNBEAT_AMPLITUDE: f32 = 0.72;
-
-/// Decaying saw clicks at each Host beat, louder and higher on downbeats, shaped like `pcm`.
-fn metronome(
-    beats: &BTreeMap<u64, bool>,
-    pcm: &[f32],
-    channels: u16,
-    sample_rate: u32,
-) -> Vec<f32> {
-    let channels = usize::from(channels);
-    let frames = pcm.len() / channels;
-    let mut clicks = vec![0.0; pcm.len()];
-    for (&frame, &downbeat) in beats {
-        let Ok(start) = usize::try_from(frame) else {
-            continue;
-        };
-        let (amplitude, frequency) = if downbeat {
-            (DOWNBEAT_AMPLITUDE, DOWNBEAT_HZ)
-        } else {
-            (BEAT_AMPLITUDE, BEAT_HZ)
-        };
-        for offset in 0..CLICK_FRAMES.min(frames.saturating_sub(start)) {
-            let phase = (offset as f32 * frequency / sample_rate as f32).fract();
-            let envelope = 1.0 - offset as f32 / CLICK_FRAMES as f32;
-            let sample = amplitude * phase.mul_add(2.0, -1.0) * envelope;
-            let index = (start + offset) * channels;
-            clicks[index..index + channels].fill(sample);
-        }
-    }
-    clicks
-}
 
 pub type AudioArtifactRecording = RecordingCore<AssetPartSink<TestPools>>;
 
@@ -93,7 +58,7 @@ pub struct AudioArtifactTap {
     source_grids: BTreeMap<u64, BeatGridSnapshot>,
     evidence: BTreeMap<String, Value>,
     pcm: Vec<f32>,
-    host_beats: BTreeMap<u64, bool>,
+    metronome: Vec<f32>,
 }
 
 #[derive(Serialize)]
@@ -125,7 +90,7 @@ impl AudioArtifactTap {
             source_grids: BTreeMap::new(),
             evidence: BTreeMap::new(),
             pcm: Vec::new(),
-            host_beats: BTreeMap::new(),
+            metronome: Vec::new(),
         })
     }
 
@@ -188,31 +153,10 @@ impl AudioArtifactTap {
         UnderrunLedger::from_probes(&usdt_trace::events())
     }
 
-    /// Mark a Host beat at an output frame for the published metronome.
-    pub fn host_beat(&mut self, frame: u64, downbeat: bool) {
-        self.host_beats.insert(frame, downbeat);
-    }
-
-    /// Output frames of the Host beats marked inside `frames`.
-    pub fn host_beats_in(&self, frames: std::ops::Range<u64>) -> Vec<u64> {
-        self.host_beats
-            .range(frames)
-            .map(|(frame, _)| *frame)
-            .collect()
-    }
-
-    /// The captured output with the Host metronome laid over it, and how many samples clipped.
-    pub fn metronome_mix(&self) -> (Vec<f32>, usize) {
-        self.mix_with(&self.clicks())
-    }
-
-    fn clicks(&self) -> Vec<f32> {
-        metronome(
-            &self.host_beats,
-            &self.pcm,
-            self.channels,
-            self.set.sample_rate,
-        )
+    /// Append the engine metronome's clicks for the frames last pushed to
+    /// the output, interleaved like them.
+    pub fn push_metronome(&mut self, clicks: &[f32]) {
+        self.metronome.extend_from_slice(clicks);
     }
 
     fn mix_with(&self, clicks: &[f32]) -> (Vec<f32>, usize) {
@@ -258,15 +202,13 @@ impl Drop for AudioArtifactTap {
                 None
             }
         };
-        let (metronome_output, metronome_clicks, metronome_clipped) = if self.host_beats.is_empty()
-        {
+        let (metronome_output, metronome_clicks, metronome_clipped) = if self.metronome.is_empty() {
             (None, None, 0)
         } else {
-            let clicks = self.clicks();
-            let (mix, clipped) = self.mix_with(&clicks);
+            let (mix, clipped) = self.mix_with(&self.metronome);
             (
                 self.publish_pcm("output-metronome", &mix),
-                self.publish_pcm("metronome", &clicks),
+                self.publish_pcm("metronome", &self.metronome),
                 clipped,
             )
         };
@@ -303,7 +245,7 @@ impl Drop for AudioArtifactTap {
                 "track_gain": TRACK_GAIN,
                 "metronome_gain": METRONOME_GAIN,
                 "clipped_samples": metronome_clipped,
-                "host_beats": self.host_beats.len(),
+                "frames": self.metronome.len() / usize::from(self.channels),
             },
             "timeline_events": self.timeline.events(),
             "underruns": underruns,

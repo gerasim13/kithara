@@ -9,6 +9,7 @@ use kithara::{
     broadcast::{Broadcast, BroadcastConfig},
     encode::EncodeConfig,
     events::TrackId,
+    host::Tap,
     net::{HttpClient, NetOptions},
     output::OutputGroup,
     platform::{
@@ -176,7 +177,7 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
     outputs.push(broadcast_output);
     harness
         .host()
-        .enable_outputs(outputs)
+        .attach_outputs(Tap::Master, outputs)
         .await
         .expect("enable recorder and broadcast");
 
@@ -193,7 +194,7 @@ async fn route_change_continues_recording_and_broadcast_in_new_segments(broadcas
     assert!(after.iter().any(|sample| sample.abs() > 0.0));
     harness
         .host()
-        .disable_mix_tap()
+        .detach_tap(Tap::Master)
         .await
         .expect("release output group");
     let report = wait_recording(&recording_handle);

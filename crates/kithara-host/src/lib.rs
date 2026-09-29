@@ -15,10 +15,11 @@ pub mod wasm;
 
 pub use api::{
     CrossfaderBus, DeckSyncState, HostLevel, SyncError, SyncExecutionReject, SyncIntent, SyncMode,
-    SyncStatusSnapshot, crossfader_gain,
+    SyncStatusSnapshot, Tap, crossfader_gain,
 };
 pub use error::PlayError;
 pub use host::{Host, HostConfig, HostOwned, PlayerMember};
 pub use kithara_play::SessionSampleRate;
+pub use rt::Metronome;
 pub use session::TransportEvent;
 mod consts;
