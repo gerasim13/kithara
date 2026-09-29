@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
 };
@@ -15,7 +15,7 @@ use super::declared;
 use crate::{
     ci::{
         config::CiPins,
-        environment::{CacheTrust, process_var},
+        environment::{CacheTrust, ci_in, expose_build_target, process_var},
         lane_build::{LaneBuild, SlotPool},
         process::Process,
         run::PipelineKind,
@@ -140,28 +140,43 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
-    let (dir, build) = match target(&args.lane, lane, var)? {
+    let (dir, cargo_dir, build) = match target(&args.lane, lane, var)? {
         Target::Slot(pool) => {
             let build = LaneBuild::claim(&ctx.root, &pool, ext.ci.lane_unit_window())?;
-            announce(build.dir(), var);
-            (Some(build.dir().to_path_buf()), Some(build))
+            let dir = build.dir().to_path_buf();
+            let cargo_dir = hand_over(&ctx.root, &dir, var)?;
+            (Some(dir), Some(cargo_dir), Some(build))
         }
         Target::Job(dir) => {
-            announce(&dir, var);
-            (Some(dir), None)
+            fs::create_dir_all(&dir)
+                .with_context(|| format!("creating the run's build directory {}", dir.display()))?;
+            let cargo_dir = hand_over(&ctx.root, &dir, var)?;
+            (Some(dir), Some(cargo_dir), None)
         }
-        Target::Named(dir) => (dir.map(PathBuf::from), None),
+        Target::Named(dir) => {
+            let dir = dir.map(PathBuf::from);
+            (dir.clone(), dir, None)
+        }
     };
     let _lease = dir.as_deref().and_then(lease::hold);
     let process = Process::new(
         &ctx.root,
-        executor_vars(dir.as_deref(), args.kind, build.is_some()),
+        executor_vars(cargo_dir.as_deref(), args.kind, build.is_some()),
     );
     let outcome = crate::ci::run::journalled(&process, &args.lane, || {
         declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
     });
     let settled = build.map_or(Ok(()), |build| build.settle(outcome.is_ok()));
     outcome.and(settled)
+}
+
+/// Where Cargo is told to build a directory of the fleet: always the
+/// checkout's `target`, linked to `dir`, so the compiler cache sees one path
+/// whichever directory the lane took. The job's later steps are told `dir`
+/// itself.
+fn hand_over(root: &Path, dir: &Path, var: &dyn Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
+    announce(dir, var);
+    expose_build_target(root, dir, cfg!(windows), ci_in(var))
 }
 
 /// Tells the job's later steps where the lane built. GitHub reads `GITHUB_ENV`
@@ -189,8 +204,13 @@ fn announce(dir: &Path, var: &dyn Fn(&str) -> Option<OsString>) {
 mod tests {
     use std::{env, ffi::OsStr, fs, path::Path};
 
+    use kithara_devtools::lock::FileLock;
+
     use super::*;
-    use crate::ci::config::{fixture, workspace_root};
+    use crate::ci::{
+        config::{fixture, workspace_root},
+        lane_build::lock_of,
+    };
 
     /// A lane builds where the executor said. These runners are ephemeral and
     /// the checkout is deleted before the lane starts, so a build directory
@@ -318,12 +338,16 @@ mod tests {
 
     /// A workspace at `root` declaring one lane whose only step succeeds.
     fn trivial_lane(root: &Path) -> (Ctx, LaneArgs) {
-        let (program, step_args) = if cfg!(windows) {
-            ("cmd", r#"["/C", "exit", "0"]"#)
+        if cfg!(windows) {
+            lane_running(root, "cmd", r#"["/C", "exit", "0"]"#)
         } else {
-            ("sh", r#"["-c", "exit 0"]"#)
-        };
+            lane_running(root, "sh", r#"["-c", "exit 0"]"#)
+        }
+    }
 
+    /// A workspace at `root` declaring one lane whose only step runs
+    /// `program` with `step_args`, a TOML array.
+    fn lane_running(root: &Path, program: &str, step_args: &str) -> (Ctx, LaneArgs) {
         let root = root.to_path_buf();
         fixture()
             .pins
@@ -414,6 +438,87 @@ args = {step_args}
         assert_eq!(
             fs::read_to_string(&github_env).expect("read GITHUB_ENV"),
             format!("{}={}\n", consts::LANE_TARGET_ENV, slot.display())
+        );
+    }
+
+    /// The compiler cache keys a compilation on every `CARGO_*` variable, so a
+    /// lane that handed Cargo its slot's own path would share nothing between
+    /// slots: every slot would fill a compiler cache of its own.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_hands_cargo_one_path_whichever_slot_it_builds_in() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let lanes = tempfile::tempdir().expect("create the fleet's build root");
+        let seen = temp.path().join("seen");
+        let record = format!(
+            r#"["-c", "printf '%s\\n%s' \"$CARGO_TARGET_DIR\" \"$(cd \"$CARGO_TARGET_DIR\" && pwd -P)\" > '{}'"]"#,
+            seen.display()
+        );
+        let (ctx, args) = lane_running(temp.path(), "sh", &record);
+        git_init(temp.path());
+        let root = [(
+            consts::TARGET_ROOT_ENV,
+            lanes.path().to_str().expect("a UTF-8 build root"),
+        )];
+        let fleet = environment(&root);
+        let slot = |index: usize| lanes.path().join(format!("review-lane-trivial-{index}"));
+        let seen_by_the_step = || {
+            let text = fs::read_to_string(&seen).expect("the step recorded its build path");
+            let (cargo, resolved) = text
+                .split_once('\n')
+                .expect("the step recorded the path and what it resolves to");
+            (PathBuf::from(cargo), PathBuf::from(resolved))
+        };
+
+        let lock = fs::File::options()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_of(&slot(0)))
+            .expect("open the first slot's lock");
+        let held = FileLock::try_exclusive(lock).expect("another job holds the first slot");
+        run_in(&args, &ctx, &fleet).expect("lane runs beside the held slot");
+        let (beside, beside_slot) = seen_by_the_step();
+        drop(held);
+        run_in(&args, &ctx, &fleet).expect("lane runs in the released slot");
+        let (released, released_slot) = seen_by_the_step();
+
+        assert_eq!(beside, temp.path().join("target"));
+        assert_eq!(
+            released, beside,
+            "Cargo must see one path whichever slot the lane took"
+        );
+        assert_eq!(beside_slot, fs::canonicalize(slot(1)).unwrap());
+        assert_eq!(released_slot, fs::canonicalize(slot(0)).unwrap());
+    }
+
+    /// Outside a CI job the checkout's `target` is a developer's own build, so a
+    /// lane that would link it to a slot refuses instead of deleting it.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_outside_a_ci_job_keeps_the_checkouts_own_target() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let lanes = tempfile::tempdir().expect("create the fleet's build root");
+        let (ctx, args) = trivial_lane(temp.path());
+        git_init(temp.path());
+        let own = temp.path().join("target/debug/own-build");
+        fs::create_dir_all(own.parent().expect("a build file has a directory"))
+            .expect("create the developer's build");
+        fs::write(&own, "built by hand").expect("write the developer's build");
+        let root = lanes.path().to_str().expect("a UTF-8 build root");
+
+        let result = run_in(
+            &args,
+            &ctx,
+            &environment(&[(consts::TARGET_ROOT_ENV, root)]),
+        );
+
+        assert!(own.exists(), "the developer's build must survive the lane");
+        let error = result.expect_err("a lane cannot link a target it must keep");
+        assert!(
+            format!("{error:#}").contains(&temp.path().join("target").display().to_string()),
+            "the refusal must name the directory it kept: {error:#}"
         );
     }
 

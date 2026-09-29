@@ -531,7 +531,12 @@ fn prepare_shared_root(
 }
 
 fn is_ci() -> bool {
-    env::var_os("CI").is_some_and(|value| !value.is_empty())
+    ci_in(&process_var)
+}
+
+/// Whether the environment `var` reads is a CI job's.
+pub(crate) fn ci_in(var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    var("CI").is_some_and(|value| !value.is_empty())
 }
 
 /// The process environment, in the shape the readers of an environment take.
@@ -659,27 +664,46 @@ fn prepare_build_target(
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
     let lease = lease::hold(&backing);
-    let target = expose_build_target(project_root, &backing, is_gitlab(), cfg!(windows))?;
+    let target = expose_build_target(project_root, &backing, cfg!(windows), is_ci())?;
     Ok((target, lease, lane_build))
 }
 
-fn expose_build_target(
+/// The path Cargo builds in: the checkout's `target`, linked to where the build
+/// really goes.
+///
+/// The compiler cache keys a compilation on every `CARGO_*` variable as it
+/// reads it, `CARGO_TARGET_DIR` included. Handed the backing itself, Cargo
+/// would key the cache on which lane slot or job directory the build happened
+/// to take, and two builds of the same sources would share nothing. Windows
+/// builds in the checkout, which needs no link.
+///
+/// A directory already standing there is replaced only inside a CI job, whose
+/// checkout is the job's own. Anywhere else it is someone's build, and it is
+/// kept and refused.
+pub(crate) fn expose_build_target(
     project_root: &FsPath,
     backing: &FsPath,
-    gitlab: bool,
     target_is_windows: bool,
+    in_ci_job: bool,
 ) -> Result<PathBuf> {
-    if !gitlab || target_is_windows {
+    let target = project_root.join("target");
+    if target_is_windows || backing == target {
         return Ok(backing.to_path_buf());
     }
 
-    let target = project_root.join("target");
     match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             fs::remove_file(&target)
                 .with_context(|| format!("replacing stale CI target link {}", target.display()))?;
         }
         Ok(metadata) if metadata.is_dir() => {
+            ensure!(
+                in_ci_job,
+                "outside a CI job {} is someone's build, so it is kept rather than replaced \
+                 with a link to {}; move it away to build here",
+                target.display(),
+                backing.display()
+            );
             fs::remove_dir_all(&target)
                 .with_context(|| format!("removing legacy checkout target {}", target.display()))?;
         }
@@ -1527,7 +1551,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn gitlab_jobs_keep_one_cargo_visible_target_over_private_backings() {
+    fn jobs_keep_one_cargo_visible_target_over_private_backings() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         let first = root.path().join("cache/job-4711/cargo");
@@ -1539,9 +1563,9 @@ mod tests {
         fs::create_dir_all(&first).unwrap();
         fs::create_dir_all(&second).unwrap();
 
-        let visible = expose_build_target(&project, &first, true, false).unwrap();
+        let visible = expose_build_target(&project, &first, false, true).unwrap();
         fs::write(visible.join("first"), "owned by the first job").unwrap();
-        let same_visible = expose_build_target(&project, &second, true, false).unwrap();
+        let same_visible = expose_build_target(&project, &second, false, true).unwrap();
         fs::write(same_visible.join("second"), "owned by the second job").unwrap();
 
         assert_eq!(visible, project.join("target"));
