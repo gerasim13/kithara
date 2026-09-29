@@ -164,7 +164,17 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         executor_vars(cargo_dir.as_deref(), args.kind, build.is_some()),
     );
     let outcome = crate::ci::run::journalled(&process, &args.lane, || {
-        declared::run(&process, lane, &pins, &ctx.config.tools, args.kind)
+        let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind);
+        if var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty()) {
+            let on_github =
+                crate::job::github_in(&|name| var(name).and_then(|value| value.into_string().ok()));
+            crate::ci::run::note_compiler_cache(
+                &process,
+                ctx.config.tools.program("sccache"),
+                on_github,
+            );
+        }
+        result
     });
     let settled = build.map_or(Ok(()), |build| build.settle(outcome.is_ok()));
     outcome.and(settled)
@@ -438,6 +448,45 @@ args = {step_args}
         assert_eq!(
             fs::read_to_string(&github_env).expect("read GITHUB_ENV"),
             format!("{}={}\n", consts::LANE_TARGET_ENV, slot.display())
+        );
+    }
+
+    /// A job compiling through the cache says what the cache carried for it;
+    /// one that compiles without it has no cache to ask.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_that_compiled_through_the_cache_reads_its_counts() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let asked = temp.path().join("asked");
+        let sccache = temp.path().join("sccache");
+        fs::write(
+            &sccache,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> '{}'\nprintf 'Cache hits 3\\nCache misses 1\\nCache write errors 0\\n'\n",
+                asked.display()
+            ),
+        )
+        .expect("write the cache double");
+        fs::set_permissions(&sccache, fs::Permissions::from_mode(0o755))
+            .expect("make the cache double runnable");
+        let (mut ctx, args) = trivial_lane(temp.path());
+        ctx.config.tools =
+            toml::from_str(&format!("[sccache]\nprogram = \"{}\"\n", sccache.display()))
+                .expect("parse the tools table");
+
+        run_in(&args, &ctx, &environment(&[])).expect("lane runs without a wrapper");
+        assert!(
+            !asked.exists(),
+            "a lane with no wrapper has no cache to ask"
+        );
+
+        run_in(&args, &ctx, &environment(&[("RUSTC_WRAPPER", "sccache")]))
+            .expect("lane runs through the wrapper");
+        assert_eq!(
+            fs::read_to_string(&asked).expect("the cache was asked"),
+            "--show-stats\n"
         );
     }
 

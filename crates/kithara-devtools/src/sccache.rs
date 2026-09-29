@@ -1,42 +1,14 @@
-use std::{env, ffi::OsStr, process::Command};
+use std::{env, ffi::OsStr};
 
 use crate::consts;
 
-/// Whether this run is one whose build cost is being accounted for.
+/// Whether this run is a CI job, whose build shares the fleet's compiler cache.
 fn in_ci() -> bool {
     set(env::var_os("CI").as_deref())
 }
 
 fn set(value: Option<&OsStr>) -> bool {
     value.is_some_and(|value| !value.is_empty())
-}
-
-/// Print the compiler cache's hit rate for the build that just ran.
-///
-/// A job that spends nine of its thirteen minutes building says nothing about
-/// why until this number exists: a cache that is installed, enabled and missing
-/// everything looks exactly like a cache that is working. The GitLab lane
-/// executor has printed it for as long as it has existed; a job that reaches
-/// `just` directly - which is every GitHub job - printed nothing.
-///
-/// Best effort by construction. This is a measurement appended to a lane, and a
-/// lane's verdict is about the workspace, never about whether a cache daemon
-/// answered.
-pub(crate) fn report_stats(program: &str) {
-    if !worth_reporting(in_ci(), env::var_os(consts::WRAPPER).as_deref()) {
-        return;
-    }
-    match Command::new(program).arg("--show-stats").status() {
-        Ok(status) if status.success() => {}
-        Ok(status) => eprintln!("sccache statistics were unavailable: {status}"),
-        Err(error) => eprintln!("sccache statistics could not be collected: {error}"),
-    }
-}
-
-/// A workstation runs the same recipes and wants its output to be the test
-/// results, and a run with no wrapper has no cache to report on.
-fn worth_reporting(in_ci: bool, wrapper: Option<&OsStr>) -> bool {
-    in_ci && set(wrapper)
 }
 
 /// What a Clippy run must drop from its environment to get the caching that
@@ -79,26 +51,6 @@ const fn clippy_cleared_for(in_ci: bool) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn value(text: &str) -> Option<&OsStr> {
-        Some(OsStr::new(text))
-    }
-
-    #[test]
-    fn a_workstation_is_left_to_its_test_output() {
-        assert!(!worth_reporting(false, value("sccache")));
-    }
-
-    #[test]
-    fn a_job_without_a_wrapper_has_no_cache_to_report_on() {
-        assert!(!worth_reporting(true, None));
-        assert!(!worth_reporting(true, value("")));
-    }
-
-    #[test]
-    fn a_cached_ci_build_is_accounted_for() {
-        assert!(worth_reporting(true, value("sccache")));
-    }
 
     #[test]
     fn a_ci_clippy_run_keeps_the_shared_cache() {

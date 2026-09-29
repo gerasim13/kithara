@@ -11,6 +11,15 @@ fn gitlab_in(var: &dyn Fn(&str) -> Option<String>) -> bool {
     var("GITLAB_CI").is_some_and(|value| !value.is_empty())
 }
 
+/// Whether this process runs inside a GitHub Actions job.
+pub(crate) fn is_github() -> bool {
+    github_in(&|name| env::var(name).ok())
+}
+
+pub(crate) fn github_in(var: &dyn Fn(&str) -> Option<String>) -> bool {
+    var("GITHUB_ACTIONS").is_some_and(|value| value == "true")
+}
+
 /// Names this process to a job that waits on a lock it holds: the link to
 /// the CI job it runs in, or the local command that took the lock.
 ///
@@ -27,7 +36,7 @@ fn holder_in(var: &dyn Fn(&str) -> Option<String>) -> String {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| format!("<{name} unset>"))
     };
-    if var("GITHUB_ACTIONS").is_some_and(|value| value == "true") {
+    if github_in(var) {
         return format!(
             "{}/{}/actions/runs/{}/attempts/{} on {}",
             named("GITHUB_SERVER_URL"),

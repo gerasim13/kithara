@@ -12,7 +12,7 @@ use crate::{
     common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig},
     consts,
     retried::Evidence,
-    sccache, touched,
+    touched,
     verdict::ChildFailure,
 };
 
@@ -199,7 +199,6 @@ fn run_lane(
     let status = cmd
         .status()
         .with_context(|| format!("failed to run test lane `{lane_name}`: {}", lane.program))?;
-    sccache::report_stats(project.tools.program("sccache"));
     evidence.verdict(lane_name, &project.test.known_flakes, status.code())
 }
 
