@@ -345,7 +345,9 @@ struct BeatClockState {
 impl StateController {
     /// A beat is announced once, known by where it stands: a revision that
     /// moves the grid by a hair can renumber every beat, and a beat within
-    /// half a beat of the last one announced is that one again.
+    /// half its own gap to the beat before it of the last one announced is
+    /// that one again. A supplied grid may space its beats unevenly, so the
+    /// gap is each beat's own, not the stated tempo's.
     fn publish_dj_events(&self, state: &UiState) {
         let Some(current_index) = state.current_track_index else {
             self.beat_clock.lock().last_beat_at = None;
@@ -380,12 +382,16 @@ impl StateController {
         }
 
         let crossed = grid.beats.partition_point(|beat| beat.at <= state.position);
-        let half_beat = consts::SECONDS_PER_MINUTE / grid.bpm / 2.0;
         let last = beat_clock.last_beat_at;
-        for beat in grid.beats[..crossed]
-            .iter()
-            .filter(|beat| last.is_none_or(|prev| beat.at - prev > half_beat))
-        {
+        let mut before = None;
+        for beat in &grid.beats[..crossed] {
+            let gap = before.map_or(consts::SECONDS_PER_MINUTE / grid.bpm, |before| {
+                beat.at - before
+            });
+            before = Some(beat.at);
+            if last.is_some_and(|prev| beat.at - prev <= gap / 2.0) {
+                continue;
+            }
             let Some(beat_number) = beat.ordinal.to_u64() else {
                 continue;
             };
@@ -677,7 +683,10 @@ fn variant_short_label(v: &VariantInfo) -> String {
 mod tests {
     use ::kithara::{
         abr::AbrMode,
-        analysis::{BeatArtifact, BeatGridState, BeatSnapshot, BeatState},
+        analysis::{
+            BeatArtifact, BeatGridModel, BeatGridState, BeatSnapshot, BeatState,
+            GRID_SCHEMA_VERSION, GridBeat, RawBeatGrid,
+        },
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
@@ -696,7 +705,7 @@ mod tests {
     };
     use crate::{
         analysis::{
-            AnalysisHandle, Request, TrackArtifacts,
+            AnalysisHandle, Prepared, Request, Supply, TrackArtifacts,
             fixtures::{
                 answer_subscribe, next_subscribe, queue_off, serve_subscribe, tone_mp3, track,
                 wait_for_revision,
@@ -1146,6 +1155,67 @@ mod tests {
             ticks(&mut events),
             stamps(&then[2..4]),
             "the beat the revision moved by a hair is not announced again"
+        );
+        cancel.cancel();
+        host.close().await;
+    }
+
+    /// A supplied grid may space its beats closer than the tempo it states;
+    /// each of them is a beat of its own and is announced.
+    #[kithara::test(native, tokio)]
+    async fn an_unevenly_spaced_supplied_grid_announces_every_beat() {
+        let (host, queue) = queue_off().await;
+        let cancel = CancelToken::root();
+        let controller = controller_on(
+            queue.clone(),
+            StretchControls::new(1.0),
+            cancel.child(),
+            Arc::new(Mutex::new(UiState::new(&queue))),
+        );
+        let mut events = queue.bus().subscribe::<DjEvent>();
+        let at = [1.0, 1.25, 1.5];
+        let grid = BeatGridModel::try_from(RawBeatGrid {
+            schema_version: GRID_SCHEMA_VERSION,
+            model_id: "supplied".to_owned(),
+            revision: 1,
+            state: BeatGridState::Final,
+            duration: None,
+            bpm: 120.0,
+            beats: at
+                .iter()
+                .zip(0..)
+                .map(|(&at, ordinal)| GridBeat {
+                    at,
+                    ordinal,
+                    confidence: None,
+                })
+                .collect(),
+            downbeats: Vec::new(),
+            meter: None,
+        })
+        .expect("a supplied grid");
+        controller.mutate(|st| {
+            st.current_track_index = Some(0);
+            st.analysis = Some(TrackArtifacts::new(
+                None,
+                Prepared {
+                    beat_grid: Supply::Ready(Arc::new(grid)),
+                    waveform: Supply::Missing,
+                },
+            ));
+            st.position = 1.1;
+        });
+        controller.publish_dj_events(&controller.read(UiState::clone));
+        controller.mutate(|st| st.position = 1.3);
+        controller.publish_dj_events(&controller.read(UiState::clone));
+
+        assert_eq!(
+            ticks(&mut events),
+            at[..2]
+                .iter()
+                .map(|&at| MediaTime::with_seconds(at, MEDIA_TIMESCALE))
+                .collect::<Vec<_>>(),
+            "the beat a quarter of a second after the last is announced"
         );
         cancel.cancel();
         host.close().await;

@@ -19,3 +19,5 @@ pub(crate) use handle::AnalysisHandle;
 #[cfg(test)]
 pub(crate) use handle::Request;
 pub(crate) use service::AnalysisService;
+#[cfg(test)]
+pub(crate) use supply::{Prepared, Supply};
