@@ -28,8 +28,9 @@ pub use archive::{
 };
 pub use artifact::{
     AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatGridUnavailable, BeatSnapshot, BeatState,
-    Coverage, GridFit, GridFitPatch, TrackAnalysis,
+    GridFit, GridFitPatch, MarkerShare, TrackAnalysis,
 };
+use humantime_serde as _;
 /// The served beat-grid contract, re-exported from its owner so a consumer of
 /// a publication can name what [`TrackAnalysis::grid`] hands it. The types are
 /// `kithara-beat`'s own: a server reading a stored grid needs no analyzer.

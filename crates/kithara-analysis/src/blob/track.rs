@@ -4,8 +4,8 @@ use kithara_platform::time::Duration;
 use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
 
 use crate::{
-    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, Coverage, GridFit, TrackAnalysis,
-    Waveform,
+    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, GridFit, MarkerShare,
+    TrackAnalysis, Waveform,
     blob::{BlobError, MAX_PREALLOC, Reader, Writer},
     consts,
 };
@@ -133,7 +133,7 @@ fn read_grid_fit(reader: &mut Reader<'_>) -> Result<GridFit, BlobError> {
     Ok(GridFit::builder()
         .residual(Duration::from_nanos(reader.read_u64()?))
         .min_run_beats(NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?)
-        .min_coverage(Coverage::checked(reader.read_f64()?).ok_or(BlobError::Corrupt)?)
+        .min_coverage(MarkerShare::checked(reader.read_f64()?).ok_or(BlobError::Corrupt)?)
         .build())
 }
 
@@ -277,7 +277,7 @@ mod tests {
         let fit = GridFit::builder()
             .residual(Duration::from_millis(12))
             .min_run_beats(NonZeroU32::new(16).expect("a non-zero run"))
-            .min_coverage(Coverage::checked(0.75).expect("a share"))
+            .min_coverage(MarkerShare::checked(0.75).expect("a share"))
             .build();
         let mut coverage = RangeSet::new();
         coverage.insert(0..64);
@@ -300,7 +300,7 @@ mod tests {
     #[kithara::test]
     fn a_grid_fit_coverage_that_is_no_share_is_corrupt() {
         let fit = GridFit::builder()
-            .min_coverage(Coverage::checked(0.75).expect("a share"))
+            .min_coverage(MarkerShare::checked(0.75).expect("a share"))
             .build();
         let mut coverage = RangeSet::new();
         coverage.insert(0..64);

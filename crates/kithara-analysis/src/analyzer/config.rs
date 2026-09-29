@@ -151,7 +151,7 @@ mod tests {
 
     use super::BeatAnalysisConfig;
     #[cfg(feature = "beat-backend")]
-    use crate::{Coverage, GridFit};
+    use crate::{GridFit, MarkerShare};
 
     #[kithara::test(native, flash(false))]
     fn default_beat_config_reports_configured_backend() {
@@ -244,7 +244,7 @@ mod tests {
         assert_ne!(
             tag(GridFit::default()),
             tag(GridFit::builder()
-                .min_coverage(Coverage::checked(0.9).expect("a share"))
+                .min_coverage(MarkerShare::checked(0.9).expect("a share"))
                 .build()),
             "a grid stated under another fit must not be served from the cache"
         );
@@ -281,7 +281,7 @@ mod document_tests {
     use super::{BeatAnalysisConfig, BeatAnalysisConfigPatch};
     #[cfg(feature = "beat-dsp")]
     use super::{BeatAnalysisConfigPatchError, Tempo, TempoPatchError};
-    use crate::{Coverage, GridFit};
+    use crate::{GridFit, MarkerShare};
 
     fn config() -> BeatAnalysisConfig<RubatoBackend> {
         BeatAnalysisConfig::builder()
@@ -352,7 +352,7 @@ mod document_tests {
             serde_yaml_ng::from_str("grid:\n  residual: 12ms\n").expect("the document types");
         let mut config = config();
         config.grid = GridFit::builder()
-            .min_coverage(Coverage::checked(0.75).expect("a share"))
+            .min_coverage(MarkerShare::checked(0.75).expect("a share"))
             .build();
 
         config
@@ -373,7 +373,7 @@ mod document_tests {
             serde_yaml_ng::from_str::<BeatAnalysisConfigPatch>("grid:\n  min_coverage: 75\n")
                 .expect_err("a run cannot hold more than every marker");
 
-        assert!(format!("{error}").contains("Coverage"), "{error}");
+        assert!(format!("{error}").contains("MarkerShare"), "{error}");
     }
 
     #[kithara::test(native, flash(false))]

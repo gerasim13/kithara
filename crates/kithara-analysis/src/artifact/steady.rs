@@ -26,14 +26,14 @@ pub struct GridFit {
     #[builder(default = NonZeroU32::new(8).unwrap_or(NonZeroU32::MIN))]
     pub min_run_beats: NonZeroU32,
     /// The share of the markers a steady run holds.
-    #[builder(default = Coverage::DEFAULT)]
-    pub min_coverage: Coverage,
+    #[builder(default = MarkerShare::DEFAULT)]
+    pub min_coverage: MarkerShare,
 }
 
 /// A share of a pass's beat markers, from none of them to all.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, kithara_derive::Ranged)]
 #[ranged(min = 0.0, max = 1.0, default = 0.5)]
-pub struct Coverage(f64);
+pub struct MarkerShare(f64);
 
 /// Beat `k` of a steady run, `origin + k * period` seconds into the track.
 #[derive(Clone, Copy, Debug, PartialEq)]
