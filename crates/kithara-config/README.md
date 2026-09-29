@@ -17,25 +17,33 @@
 `Config::values` returns an owned snapshot of a retained configuration. It does
 not mutate an owner, apply prepared state, or promise realtime safety.
 
-`#[config]` composes bon and fieldwork. Fields explicitly select `value`, `nested`,
-or `skip = "reason"`. `value(Type, expression)` projects a borrowed or internal
-field into an owned public value. `#[config(default)]` derives a default through
-the builder. Existing `#[builder]`, `#[fieldwork]`, and `#[field]` options remain
-available. On a function or impl, `#[config]` wraps the corresponding bon builder.
+`#[derive(Config)]` builds the whole configuration type from one `#[config(...)]`
+attribute. Fields explicitly select `value`, `nested`, or `skip = "reason"`;
+`value(Type, expression)` projects a borrowed or internal field into an owned
+public value. The derive generates a bon builder (`X::builder()`), whose
+per-field options live in the field's `builder(...)` group and whose top-level
+options live in the type's; `builder(skip)` or `builder(skip = value)` leaves a
+field out of the builder. `field(get)` and `field(get, copy)` add accessors,
+`#[config(default)]` derives `Default` through the builder, and
+`#[config(debug)]` derives `Debug` without the fields marked `debug(skip)`. For
+a projected field stored in a wrapper, `wrap(default = value, with = Wrapper::new)`
+derives the builder default and setter conversion. `Patch` reads the type's and
+each field's `patch(...)` group.
 
 `#[config(update)]` opts a retained configuration into typed runtime changes;
-each writable field also uses `#[config(value, update)]`. The macro emits a
+each writable field also uses `#[config(value, update)]`. The derive emits a
 concrete update enum per property and a `<Name>Update` record. Optional values
 distinguish `Set`, `Clear`, and `Unchanged`; `Reset` is emitted only when the
-same field declares a bon builder default. `apply_update` lowers through the
-existing generated `Patch::apply`, so its staged validation remains the only
-commit gate. Prepared engines and delegated live owners keep their own explicit
-operations.
+same field declares a builder default. A configuration that declares
+`patch(validate = ..., error = ...)` stages each update and commits it only
+through that check, the same gate a document merge holds; any other takes the
+update in place. Prepared engines and delegated live owners keep their own
+explicit operations.
 
-The attribute emits `<Name>Values` with public snapshot fields, preserving field
-documentation and configuration gates. Resource generics stay on the original
-owner; snapshot types must not depend on them. Domain constructors and methods
-remain responsible for validation and effects.
+The derive emits `<Name>Values` with public snapshot fields, preserving field
+documentation. Resource generics stay on the original owner; snapshot types
+must not depend on them. Domain constructors and methods remain responsible for
+validation and effects.
 
 See the [workspace architecture](https://github.com/zvuk/kithara/wiki/kithara)
 for domain ownership boundaries.

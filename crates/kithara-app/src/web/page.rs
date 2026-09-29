@@ -45,8 +45,8 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     let pools = pools::build(&document.pools())?;
     let host = AppHost::new(
         HostConfig::builder()
-            .maybe_sample_rate_hint(app.sample_rate.flatten())
-            .maybe_output_block_frames(app.output_block_frames.flatten())
+            .maybe_sample_rate_hint(app.sample_rate)
+            .maybe_output_block_frames(app.output_block_frames)
             .build(),
     )?;
     let (sender, receiver) = wasm::worker_host_channel(&host)?;
@@ -55,7 +55,7 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
     let (commands, received) = mpsc::unbounded_channel();
     let boot = Boot::builder()
-        .maybe_package(app.ui_package.as_ref().and_then(Option::as_deref))
+        .maybe_package(app.ui_package.as_deref())
         .settings(&document.ui()?)
         .tracks(document.tracks().to_vec())
         .palette(palette)

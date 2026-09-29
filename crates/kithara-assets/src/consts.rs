@@ -19,11 +19,6 @@ pub(crate) const DEFAULT_GATE_POLL_INTERVAL: Duration = Duration::from_millis(10
 /// The asset root an absolute key is filed under.
 pub(crate) const ABSOLUTE_ROOT: &str = "__absolute__";
 
-/// Capacity of each retire queue. It buys time, not a bound: no capacity can
-/// span an unbounded read:write ratio, so raising this number only moves the
-/// overflow threshold.
-pub(crate) const RETIRE_CAPACITY: usize = 256;
-
 pub(crate) const DEFAULT_EXTENSION: &str = "bin";
 pub(crate) const MAX_EXTENSION_LEN: usize = 16;
 pub(crate) const HASH_BYTES: usize = 16;

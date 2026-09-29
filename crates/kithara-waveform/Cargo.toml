@@ -8,16 +8,19 @@ repository.workspace = true
 description = "Waveform model, byte codec, and progressive band analyzer for Kithara."
 keywords = ["audio", "waveform", "dsp", "analysis"]
 categories = ["multimedia::audio"]
+exclude = ["tests/**"]
 
 [features]
 default = []
-# The FFT band analyzer. The model and its codec are available without it.
-dsp = ["dep:realfft"]
+# The FFT band analyzer. The model, its codec and the analysis parameters
+# are available without it.
+dsp = ["kithara-dsp/spectrum"]
 
 [dependencies]
 kithara-blob = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default"] }
+kithara-dsp = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 
@@ -26,7 +29,6 @@ delegate = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
 rangemap = { workspace = true }
-realfft = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -37,8 +39,20 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 
+serde_json = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
+criterion = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
 [lints]
 workspace = true
+
+[[bench]]
+name = "analyzer"
+harness = false
+required-features = ["dsp"]

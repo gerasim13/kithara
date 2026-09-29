@@ -8,15 +8,13 @@ use std::{
 use arc_swap::ArcSwap;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, CondvarGate},
+    sync::{Arc, CondvarGate, Mutex, MutexGuard, Retired},
 };
 use rangemap::RangeSet;
 
-use super::retire::Retired;
 use crate::{
     StorageError, StorageResult,
     backend::traits::{AvailabilityObserver, Driver, DriverIo},
-    consts,
 };
 
 /// Common state tracked by `Resource<D>`.
@@ -50,13 +48,27 @@ pub(super) struct Inner<D: DriverIo> {
     /// [`CommonState`]; `wait()`/`notify_all()` coordinate `wait_range_inner`.
     pub(super) gate: CondvarGate<CommonState>,
     pub(super) driver: D,
+    /// Snapshots displaced from `available_snapshot`, held until quiesced.
+    /// Only writers lock it, and only after releasing `gate`: the produce
+    /// core takes `gate` on the slow path of an active resource and must
+    /// never wait on these frees.
+    pub(super) retired: Mutex<Retired<RangeSet<u64>>>,
     pub(super) observer: Option<Arc<dyn AvailabilityObserver>>,
-    /// Snapshots parked by produce-core reads, freed by write-side drains —
-    /// see [`Retired`].
-    pub(super) retired: Retired,
 }
 
 impl<D: DriverIo> Inner<D> {
+    /// Publish `state.available` to lock-free readers, release the gate, and
+    /// only then retire the snapshot this displaced: a read racing the write
+    /// never frees that snapshot, and a read queued on the gate never waits
+    /// on the frees.
+    pub(super) fn publish_available(&self, state: MutexGuard<'_, CommonState>) {
+        let displaced = self
+            .available_snapshot
+            .swap(Arc::new(state.available.clone()));
+        drop(state);
+        self.retired.lock().retire(displaced);
+    }
+
     /// Wake every parked `wait_range_inner`. Taking the gate lock first means a
     /// waiter that checked cancellation but has not parked yet cannot miss it.
     pub(super) fn wake_waiters(&self) {
@@ -130,7 +142,7 @@ impl<D: Driver> ResourceCore<D> {
                 committed: AtomicBool::new(is_committed),
                 stamp_on_drop: AtomicBool::new(true),
                 available_snapshot: ArcSwap::from_pointee(available.clone()),
-                retired: Retired::new(consts::RETIRE_CAPACITY),
+                retired: Mutex::new(Retired::default()),
                 gate: CondvarGate::new(CommonState {
                     final_len,
                     available,

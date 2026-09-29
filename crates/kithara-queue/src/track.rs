@@ -1,11 +1,12 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{
     CancelToken,
-    sync::{Mutex, MutexGuard},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use kithara_play::{ResourceConfig, ResourceSrc};
 
@@ -373,11 +374,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
-
     use kithara_assets::AssetStore;
     use kithara_audio::{AudioObserveError, AudioObserver};
-    use kithara_platform::sync::Arc;
+    use kithara_platform::sync::{Arc, atomic::AtomicUsize};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_test_utils::kithara;
 

@@ -7,7 +7,11 @@
 //! Kernels never allocate, never panic and never sanitize implicitly.
 //! `filter` holds biquad cascades with a silence rule that keeps denormals out.
 //! `interp` reads a window at fractional positions with one of four methods
-//! and places the positions of a rate ramp.
+//! and places the positions of a rate ramp. `spectrum` takes the real FFT of
+//! a Hann-windowed frame, reads the magnitude and phase of its bins and
+//! autocorrelates a frame (the `spectrum` feature). `sum_squares` reduces a
+//! slice to the sum of its squares; `downmix` averages the channels of each
+//! interleaved frame.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -29,6 +33,14 @@ mod layout;
 /// one import path the workspace uses; a re-export can later become a local
 /// type of the same name without touching consumers.
 pub mod param;
+/// Real FFT lengths every backend runs; with the `spectrum` feature, the real
+/// FFT over a Hann window, the magnitude and phase of its bins, and the
+/// autocorrelation of a frame.
+pub mod spectrum;
+mod vector;
 
 pub use backend::sanitize;
-pub use layout::{deinterleave_channel_major, deinterleave_variable, interleave_channel_major};
+pub use layout::{
+    deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
+};
+pub use vector::sum_squares;

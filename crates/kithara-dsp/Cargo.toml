@@ -9,9 +9,18 @@ description = "Vector DSP kernels over planar f32 slices: Accelerate on Apple, f
 keywords = ["audio", "dsp", "simd", "accelerate"]
 categories = ["multimedia::audio"]
 
+[features]
+# The real FFT and autocorrelation of `spectrum`, their planes drawn from the
+# caller's `kithara-bufpool` region. `FftLen` and `SpectrumError` are
+# available without it.
+spectrum = ["dep:fieldwork", "dep:kithara-bufpool", "dep:realfft", "dep:rustfft"]
+
 [dependencies]
+kithara-bufpool = { workspace = true, optional = true }
+
 biquad = { workspace = true }
 fearless_simd = { workspace = true }
+fieldwork = { workspace = true, optional = true }
 firewheel-core = { workspace = true }
 num-traits = { workspace = true }
 thiserror = { workspace = true }
@@ -22,6 +31,10 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 kithara-apple = { workspace = true, features = ["accelerate"] }
 
+[target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
+realfft = { workspace = true, optional = true }
+rustfft = { workspace = true, optional = true }
+
 [dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["subscriber"] }
@@ -29,6 +42,8 @@ kithara-test-utils = { workspace = true, features = ["subscriber"] }
 fast-interleave = { workspace = true }
 
 fearless_simd = { workspace = true, features = ["force_support_fallback"] }
+realfft = { workspace = true }
+rustfft = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 assert_no_alloc = { workspace = true }
@@ -43,3 +58,4 @@ workspace = true
 [[bench]]
 name = "kernels"
 harness = false
+required-features = ["spectrum"]

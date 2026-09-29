@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 
 use arc_swap::ArcSwap;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::sync::{Arc, Mutex, Retired};
 use kithara_test_utils::kithara;
 
 use crate::segment::Segment;
@@ -201,7 +201,7 @@ pub(in crate::variant) struct Layout {
     /// path. Payload: frames displaced by a swap, held until quiesced
     /// (`strong_count == 1`) so reclamation stays on the writer and a
     /// reader guard drop is a pure decrement.
-    write_lock: Mutex<Vec<Arc<Frame>>>,
+    write_lock: Mutex<Retired<Frame>>,
 }
 
 impl Layout {
@@ -218,7 +218,7 @@ impl Layout {
         let snapshot = frame.snapshot(segments, init_size);
         Self {
             frame: ArcSwap::from(Arc::new(frame)),
-            write_lock: Mutex::new(Vec::new()),
+            write_lock: Mutex::new(Retired::default()),
             total: AtomicU64::new(snapshot.total),
             sizes_complete: AtomicBool::new(snapshot.sizes_complete),
             publication_seq: AtomicU64::new(0),
@@ -313,10 +313,10 @@ impl Layout {
         let mut frame = (**self.frame.load()).clone();
         f(&mut frame, init_size);
         let snapshot = frame.snapshot(segments, init_size);
-        Self::retire_current(&mut retired, &self.frame);
-        self.frame.store(Arc::new(frame));
+        let displaced = self.frame.swap(Arc::new(frame));
         self.republish(snapshot);
         self.finish_publication();
+        retired.retire(displaced);
     }
 
     pub(in crate::variant) fn natural_offset(&self, idx: usize) -> Option<u64> {
@@ -348,12 +348,6 @@ impl Layout {
             frame.init_seed = 0;
             frame.recompute(init_size, segments);
         });
-    }
-
-    /// Reclaim quiesced retirees, then park the live frame ahead of the swap.
-    fn retire_current(retired: &mut Vec<Arc<Frame>>, frame: &ArcSwap<Frame>) {
-        retired.retain(|frame| Arc::strong_count(frame) > 1);
-        retired.push(frame.load_full());
     }
 
     /// Lock-free `sizes_complete` read for the produce-core EOF gates. `false`

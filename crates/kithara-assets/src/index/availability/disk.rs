@@ -12,7 +12,7 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::StorageError;
 use rkyv::rancor::Error;
 
-use super::core::{Availability, AvailabilityIndex, Entry, InnerIndex};
+use super::core::{AssetTree, Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
     error::{AssetsError, AssetsResult},
     index::persistence::{
@@ -61,7 +61,7 @@ impl AvailabilityIndex {
                 }
             };
 
-        let mut tree = HashMap::clone(&self.inner.assets.load());
+        let mut loaded = AssetTree::new();
         for (root, asset_record) in archived.assets.iter() {
             let mut asset_map = HashMap::new();
 
@@ -86,9 +86,9 @@ impl AvailabilityIndex {
                 );
             }
 
-            tree.insert(root.as_str().to_string(), Arc::new(asset_map));
+            loaded.insert(root.as_str().to_string(), Arc::new(asset_map));
         }
-        self.inner.assets.store(Arc::new(tree));
+        self.edit_tree(|tree| tree.extend(loaded.clone()));
         Ok(())
     }
 

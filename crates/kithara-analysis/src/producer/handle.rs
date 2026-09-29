@@ -1,12 +1,17 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioObserveError, AudioObserver};
+use kithara_dsp::downmix;
 use kithara_signal::{AudioChunk, AudioSpec};
-use num_traits::cast::ToPrimitive;
 use tracing::debug;
 
 use super::ring::Writer;
 use crate::analyzer::AnalysisToken;
+
+mod consts {
+    /// Frames downmixed per stack block, so an offer never allocates.
+    pub(super) const DOWNMIX_BLOCK: usize = 256;
+}
 
 /// The producer side of one analysis pass, named once when the handle is made
 /// so offering costs no lookup. A track with no open pass has no handle.
@@ -48,12 +53,15 @@ impl AnalysisProducer {
             });
         }
 
-        let channels = usize::from(spec.channels.max(1));
+        let channels = NonZeroUsize::new(usize::from(spec.channels)).unwrap_or(NonZeroUsize::MIN);
         let frames = pcm.len() / channels;
-        let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
         let mono = pcm
-            .chunks_exact(channels)
-            .map(move |frame| frame.iter().sum::<f32>() * inv);
+            .chunks(consts::DOWNMIX_BLOCK.saturating_mul(channels.get()))
+            .flat_map(move |block| {
+                let mut mono = [0.0_f32; consts::DOWNMIX_BLOCK];
+                let written = downmix(block, channels, &mut mono);
+                mono.into_iter().take(written)
+            });
 
         self.ring
             .push(at, frames, mono)
@@ -82,7 +90,7 @@ mod tests {
     use kithara_signal::AudioSpec;
     use kithara_test_fixtures::{
         analysis_beat_fixtures::{producer_mono, producer_stereo, producer_unity},
-        analysis_fixtures::analysis_silence,
+        analysis_fixtures::{analysis_silence, waveform_mix},
     };
     use kithara_test_utils::kithara;
 
@@ -209,6 +217,35 @@ mod tests {
             &out[..],
             &pcm[..],
             "the mean of one channel is the channel itself"
+        );
+    }
+
+    #[kithara::test]
+    #[case::mono(1)]
+    #[case::stereo(2)]
+    #[case::six_channels(6)]
+    fn a_range_longer_than_one_block_downmixes_every_frame(
+        #[case] channels: u16,
+        waveform_mix: Vec<f32>,
+    ) {
+        let frames = 700;
+        let width = usize::from(channels);
+        let pcm = &waveform_mix[..frames * width];
+        let (mut producer, mut reader) = producer(1024, 4);
+        let pools = pools();
+        let mut out = pools.get::<f32>();
+
+        assert_eq!(producer.offer(pcm, spec(44_100, channels), 0), Ok(()));
+        assert_eq!(reader.pop(&mut out), Some(0));
+        let scale = 1.0 / f32::from(channels);
+        let want: Vec<u32> = pcm
+            .chunks_exact(width)
+            .map(|frame| (frame.iter().sum::<f32>() * scale).to_bits())
+            .collect();
+        let got: Vec<u32> = out.iter().map(|sample| sample.to_bits()).collect();
+        assert_eq!(
+            got, want,
+            "each of {frames} frames is the mean of its channels, bit for bit"
         );
     }
 }

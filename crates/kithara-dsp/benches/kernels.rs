@@ -1,18 +1,27 @@
 #![forbid(unsafe_code)]
 
-use std::{f64::consts::FRAC_1_SQRT_2, hint::black_box, num::NonZeroUsize};
+use std::{
+    f64::consts::{FRAC_1_SQRT_2, TAU},
+    hint::black_box,
+    num::NonZeroUsize,
+};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{Interpolation, interpolate},
+    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
 };
+use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
+use realfft::{RealToComplex, RealToComplexEven};
 
 mod consts {
     use super::NonZeroUsize;
 
     pub(super) const SIZES: [usize; 6] = [64, 128, 256, 512, 1024, 4096];
+    pub(super) const FFT_LENS: [usize; 3] = [1_024, 3_072, 4_096];
+    pub(super) const TONE_STEP: f32 = 0.05;
     pub(super) const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
     pub(super) const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
 }
@@ -90,6 +99,134 @@ fn kernels(c: &mut Criterion) {
         let mut noisy = vec![f32::from_bits(1); frames];
         group.bench_with_input(BenchmarkId::new("sanitize", frames), &frames, |b, _| {
             b.iter(|| kithara_dsp::sanitize(black_box(&mut noisy)));
+        });
+    }
+    group.finish();
+}
+
+/// `len` samples of a sine advancing [`consts::TONE_STEP`] rad per sample.
+fn tone(len: usize) -> Vec<f32> {
+    std::iter::successors(Some(0.0_f32), |phase| Some(phase + consts::TONE_STEP))
+        .map(f32::sin)
+        .take(len)
+        .collect()
+}
+
+/// The symmetric Hann window the analyzers built for themselves before
+/// `spectrum::Fft`.
+fn hann(len: usize) -> Vec<f32> {
+    let span = len.saturating_sub(1).to_f64().unwrap_or(1.0);
+    (0..len)
+        .filter_map(|n| n.to_f64())
+        .filter_map(|n| (0.5 - 0.5 * (TAU * n / span).cos()).to_f32())
+        .collect()
+}
+
+fn vector(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vector");
+    for size in consts::SIZES {
+        group.throughput(Throughput::Elements(
+            u64::try_from(size).expect("size fits u64"),
+        ));
+        let samples = tone(size);
+        group.bench_with_input(BenchmarkId::new("sum_squares", size), &size, |b, _| {
+            b.iter(|| kithara_dsp::sum_squares(black_box(&samples)));
+        });
+    }
+    group.finish();
+}
+
+fn downmix(c: &mut Criterion) {
+    let mut group = c.benchmark_group("downmix");
+    for frames in consts::SIZES {
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames).expect("frame count fits u64"),
+        ));
+        let mut mono = vec![0.0_f32; frames];
+        for channels in [consts::TWO, consts::SIX] {
+            let interleaved = tone(channels.get() * frames);
+            group.bench_with_input(
+                BenchmarkId::new(format!("{channels}ch"), frames),
+                &frames,
+                |b, _| {
+                    b.iter(|| kithara_dsp::downmix(black_box(&interleaved), channels, &mut mono));
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn spectrum(c: &mut Criterion) {
+    let region = pools();
+    let mut group = c.benchmark_group("spectrum");
+    for len in consts::FFT_LENS {
+        group.throughput(Throughput::Elements(
+            u64::try_from(len).expect("length fits u64"),
+        ));
+        let frame = tone(len);
+        let fft =
+            Fft::new(FftLen::new(len).expect("bench lengths are f·2ⁿ")).expect("the FFT builds");
+        let mut bins = fft.spectrum(&region).expect("the planes fit the region");
+        group.bench_with_input(BenchmarkId::new("fft", len), &len, |b, _| {
+            b.iter(|| fft.forward(black_box(&frame), &mut bins).is_ok());
+        });
+        let window = hann(len);
+        let reference: RealToComplexEven<f32> =
+            RealToComplexEven::new(len, &mut rustfft::FftPlanner::new());
+        let mut input = reference.make_input_vec();
+        let mut output = reference.make_output_vec();
+        let mut scratch = reference.make_scratch_vec();
+        group.bench_with_input(BenchmarkId::new("realfft", len), &len, |b, _| {
+            b.iter(|| {
+                for ((slot, sample), weight) in input.iter_mut().zip(black_box(&frame)).zip(&window)
+                {
+                    *slot = sample * weight;
+                }
+                reference
+                    .process_with_scratch(&mut input, &mut output, &mut scratch)
+                    .is_ok()
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bins(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bins");
+    for size in consts::SIZES {
+        group.throughput(Throughput::Elements(
+            u64::try_from(size).expect("size fits u64"),
+        ));
+        let re = tone(size);
+        let im: Vec<f32> = re.iter().rev().copied().collect();
+        let mut output = vec![0.0_f32; size];
+        group.bench_with_input(BenchmarkId::new("magnitude", size), &size, |b, _| {
+            b.iter(|| magnitude(black_box(&re), black_box(&im), &mut output));
+        });
+        group.bench_with_input(BenchmarkId::new("phase", size), &size, |b, _| {
+            b.iter(|| phase(black_box(&re), black_box(&im), &mut output));
+        });
+    }
+    group.finish();
+}
+
+fn autocorrelation(c: &mut Criterion) {
+    let region = pools();
+    let mut group = c.benchmark_group("autocorrelation");
+    for size in consts::SIZES {
+        group.throughput(Throughput::Elements(
+            u64::try_from(size).expect("size fits u64"),
+        ));
+        let frame = tone(size);
+        let mut acf = Autocorrelation::new(
+            NonZeroUsize::new(size).expect("bench sizes are non-zero"),
+            &region,
+        )
+        .expect("the padding fits the region");
+        let mut output = vec![0.0_f32; size];
+        group.bench_with_input(BenchmarkId::new("process", size), &size, |b, _| {
+            b.iter(|| acf.process(black_box(&frame), &mut output));
         });
     }
     group.finish();
@@ -203,5 +340,16 @@ fn interp(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, kernels, biquad, biquad_decay, interp);
+criterion_group!(
+    benches,
+    kernels,
+    vector,
+    downmix,
+    biquad,
+    biquad_decay,
+    interp,
+    spectrum,
+    bins,
+    autocorrelation
+);
 criterion_main!(benches);

@@ -4,10 +4,14 @@
 use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
+#[cfg(feature = "spectrum")]
+use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
 };
+#[cfg(feature = "spectrum")]
+use kithara_test_utils::bufpool::pools;
 use kithara_test_utils::kithara;
 
 #[global_allocator]
@@ -18,6 +22,8 @@ const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
 const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
 const TWELVE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(11);
 const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
+#[cfg(feature = "spectrum")]
+const LAGS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(511);
 
 #[kithara::test(native)]
 fn layout_and_sanitize_never_allocate() {
@@ -122,5 +128,65 @@ fn interpolation_never_allocates() {
             interpolate(Interpolation::Linear, &window, &[f32::NAN], &mut output),
             Err(InterpError::OutOfWindow)
         );
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
+fn spectrum_never_allocates_after_construction() {
+    let fft =
+        Fft::new(FftLen::new(FRAMES).expect("1024 is an FFT length")).expect("the FFT builds");
+    let mut spectrum = fft.spectrum(&pools()).expect("the planes fit the region");
+    let frame = vec![0.25_f32; FRAMES];
+    let mut bins = vec![0.0_f32; FRAMES / 2 + 1];
+    assert_no_alloc(|| {
+        fft.forward(&frame, &mut spectrum).expect("the frame fits");
+        fft.forward(&frame[..FRAMES / 2], &mut spectrum)
+            .expect("a short frame fits");
+        assert_eq!(
+            magnitude(spectrum.re(), spectrum.im(), &mut bins),
+            FRAMES / 2 + 1
+        );
+        assert_eq!(
+            phase(spectrum.re(), spectrum.im(), &mut bins),
+            FRAMES / 2 + 1
+        );
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
+fn autocorrelation_never_allocates_after_construction() {
+    let mut acf = Autocorrelation::new(LAGS, &pools()).expect("the padding fits the region");
+    let frame = vec![0.25_f32; LAGS.get()];
+    let mut output = vec![0.0_f32; LAGS.get()];
+    assert_no_alloc(|| {
+        assert_eq!(acf.process(&frame, &mut output), LAGS.get());
+        assert_eq!(acf.process(&frame[..100], &mut output), LAGS.get());
+    });
+}
+
+#[kithara::test(native)]
+fn sum_squares_never_allocates() {
+    let samples = vec![0.25_f32; FRAMES];
+    assert_no_alloc(|| {
+        assert_eq!(
+            kithara_dsp::sum_squares(&samples).to_bits(),
+            64.0_f32.to_bits()
+        );
+    });
+}
+
+#[kithara::test(native)]
+fn downmix_never_allocates_at_any_channel_count() {
+    let interleaved = vec![0.25_f32; TWELVE.get() * FRAMES];
+    let mut mono = vec![0.0_f32; FRAMES];
+    assert_no_alloc(|| {
+        for channels in [NonZeroUsize::MIN, TWO, SIX, TWELVE] {
+            assert_eq!(
+                kithara_dsp::downmix(&interleaved, channels, &mut mono),
+                FRAMES
+            );
+        }
     });
 }

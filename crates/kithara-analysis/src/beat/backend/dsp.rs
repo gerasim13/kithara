@@ -10,5 +10,5 @@ pub(super) fn detector<B, S>(
 where
     S: HasPool<f32>,
 {
-    Ok(SpectralBeats::new(pools.clone(), config.tempo())?)
+    SpectralBeats::new(pools.clone(), config.tempo())
 }

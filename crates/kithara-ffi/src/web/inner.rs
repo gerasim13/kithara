@@ -1,8 +1,9 @@
-use std::sync::atomic::{AtomicU32, Ordering};
-
 use js_sys::Function;
 use kithara::{
-    platform::sync::{Arc, Mutex},
+    platform::{
+        atomic::RelaxedAtomicF32,
+        sync::{Arc, Mutex},
+    },
     play::{CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, InterruptionKind},
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId},
 };
@@ -47,8 +48,8 @@ type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;
 /// answer synchronously without a worker round-trip.
 pub(crate) struct WasmInner {
     queue_view: Arc<Mutex<QueueView>>,
-    playing_rate: AtomicU32,
-    volume: AtomicU32,
+    playing_rate: RelaxedAtomicF32,
+    volume: RelaxedAtomicF32,
     action_at_item_end: Mutex<FfiActionAtItemEnd>,
     crossfade_settings: Mutex<FfiCrossfadeSettings>,
     muted: Mutex<bool>,
@@ -56,7 +57,7 @@ pub(crate) struct WasmInner {
     repeat_mode: Mutex<FfiRepeatMode>,
     routes: Routes,
     bridge: WorkerBridge,
-    eq_gains: [AtomicU32; consts::EQ_BANDS],
+    eq_gains: [RelaxedAtomicF32; consts::EQ_BANDS],
 }
 
 impl Default for WasmInner {
@@ -66,29 +67,21 @@ impl Default for WasmInner {
             bridge: WorkerBridge::default(),
             routes: Routes::new(Arc::clone(&queue_view)),
             queue_view,
-            volume: AtomicU32::new(Self::DEFAULT_VOLUME.to_bits()),
+            volume: RelaxedAtomicF32::new(Self::DEFAULT_VOLUME),
             crossfade_settings: Mutex::new(FfiCrossfadeSettings {
                 duration: Self::DEFAULT_CROSSFADE_SECONDS,
                 curve: crate::types::FfiCrossfadeCurve::EqualPower,
                 depth: 1.0,
                 position: 0.5,
             }),
-            playing_rate: AtomicU32::new(Self::DEFAULT_PLAYING_RATE.to_bits()),
+            playing_rate: RelaxedAtomicF32::new(Self::DEFAULT_PLAYING_RATE),
             repeat_mode: Mutex::new(FfiRepeatMode::Off),
             playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
             action_at_item_end: Mutex::new(FfiActionAtItemEnd::Advance),
             muted: Mutex::default(),
-            eq_gains: [const { AtomicU32::new(0) }; consts::EQ_BANDS],
+            eq_gains: [const { RelaxedAtomicF32::new(0.0) }; consts::EQ_BANDS],
         }
     }
-}
-
-fn load_f32(a: &AtomicU32) -> f32 {
-    f32::from_bits(a.load(Ordering::Relaxed))
-}
-
-fn store_f32(a: &AtomicU32, v: f32) {
-    a.store(v.to_bits(), Ordering::Relaxed);
 }
 
 impl WasmInner {
@@ -147,7 +140,9 @@ impl WasmInner {
     }
 
     pub(crate) fn eq_gain(&self, band: u32) -> f32 {
-        self.eq_gains.get(band as usize).map_or(0.0, load_f32)
+        self.eq_gains
+            .get(band as usize)
+            .map_or(0.0, RelaxedAtomicF32::load)
     }
 
     pub(crate) fn insert(
@@ -226,13 +221,9 @@ impl WasmInner {
         *self.playback_order.lock()
     }
 
-    pub(crate) fn playing_rate(&self) -> f32 {
-        load_f32(&self.playing_rate)
-    }
-
     pub(crate) fn rate(&self) -> f32 {
         if self.bridge.is_playing() {
-            load_f32(&self.playing_rate)
+            self.playing_rate.load()
         } else {
             0.0
         }
@@ -300,7 +291,7 @@ impl WasmInner {
 
     pub(crate) fn reset_eq(&self) -> Result<(), FfiError> {
         for g in &self.eq_gains {
-            store_f32(g, 0.0);
+            g.store(0.0);
         }
         self.try_send(WorkerCmd::ResetEq)
     }
@@ -389,14 +380,14 @@ impl WasmInner {
 
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         if let Some(slot) = self.eq_gains.get(band as usize) {
-            store_f32(slot, gain_db);
+            slot.store(gain_db);
         }
         self.try_send(WorkerCmd::SetEqGain { band, gain_db })
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {
         *self.muted.lock() = muted;
-        let volume = if muted { 0.0 } else { load_f32(&self.volume) };
+        let volume = if muted { 0.0 } else { self.volume.load() };
         self.send(WorkerCmd::SetVolume(volume));
     }
 
@@ -405,10 +396,6 @@ impl WasmInner {
         self.try_send(WorkerCmd::SetPlaybackOrder(typed))?;
         *self.playback_order.lock() = order;
         Ok(())
-    }
-
-    pub(crate) fn set_playing_rate(&self, rate: f32) {
-        store_f32(&self.playing_rate, rate);
     }
 
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
@@ -421,7 +408,7 @@ impl WasmInner {
     }
 
     pub(crate) fn set_volume(&self, volume: f32) {
-        store_f32(&self.volume, volume);
+        self.volume.store(volume);
         if !*self.muted.lock() {
             self.send(WorkerCmd::SetVolume(volume));
         }
@@ -462,8 +449,8 @@ impl WasmInner {
             current_time: (position > 0.0).then_some(position),
             duration: (duration > 0.0).then_some(duration),
             rate: self.rate(),
-            playing_rate: load_f32(&self.playing_rate),
-            volume: load_f32(&self.volume),
+            playing_rate: self.playing_rate.load(),
+            volume: self.volume.load(),
             is_muted: *self.muted.lock(),
         }
     }
@@ -479,11 +466,17 @@ impl WasmInner {
         });
     }
 
-    pub(crate) fn volume(&self) -> f32 {
-        load_f32(&self.volume)
-    }
-
     delegate::delegate! {
+        to self.playing_rate {
+            #[call(load)]
+            pub(crate) fn playing_rate(&self) -> f32;
+            #[call(store)]
+            pub(crate) fn set_playing_rate(&self, rate: f32);
+        }
+        to self.volume {
+            #[call(load)]
+            pub(crate) fn volume(&self) -> f32;
+        }
         to self.routes {
             #[call(set_analysis)]
             pub(crate) fn set_analysis_observer(&self, func: Function);

@@ -1,7 +1,8 @@
 use std::{num::NonZeroUsize, ops::RangeInclusive};
 
-use bon::{Builder, bon};
+use bon::bon;
 use kithara_bufpool::PoolRegion;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
@@ -11,14 +12,15 @@ use crate::{StretchKind, consts};
 /// Signalsmith preparation geometry.
 ///
 /// [`SignalsmithConfigPatch`] is what a configuration document may say about it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(get, copy)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch, Config)]
+#[config(builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 pub struct SignalsmithConfig {
     /// Custom analysis block size in source frames; absent selects the native preset.
+    #[config(value, field(get, copy))]
     block_frames: Option<NonZeroUsize>,
     /// Custom analysis interval in source frames; absent selects the native preset.
+    #[config(value, field(get, copy))]
     interval_frames: Option<NonZeroUsize>,
 }
 
@@ -39,14 +41,12 @@ impl SignalsmithConfig {
 /// Bungee native synthesis geometry.
 ///
 /// [`BungeeConfigPatch`] is what a configuration document may say about it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(get, copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Patch, Config)]
+#[config(default, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct BungeeConfig {
     /// Base-two synthesis-hop adjustment passed to the native stretcher.
-    #[builder(default)]
+    #[config(value, builder(default), field(get, copy))]
     log2_synthesis_hop_adjust: i32,
 }
 
@@ -54,16 +54,13 @@ pub struct BungeeConfig {
 ///
 /// [`ElasticBackendConfigPatch`] is what a configuration document may say
 /// about it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, Patch, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(get, copy)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch, Config)]
+#[config(builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 pub struct ElasticBackendConfig {
-    #[builder(default)]
-    #[patch(nested)]
+    #[config(nested, builder(default), field(get), patch(nested))]
     bungee: BungeeConfig,
-    #[builder(default)]
-    #[patch(nested)]
+    #[config(nested, builder(default), field(get), patch(nested))]
     signalsmith: SignalsmithConfig,
 }
 

@@ -1,7 +1,8 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
+use kithara_waveform::AnalyzerError;
 use rangemap::RangeSet;
 
 use super::{
@@ -54,7 +55,7 @@ where
         token: AnalysisToken,
         revision: u64,
         demand: AnalysisDemand,
-    ) -> Result<TrackAnalyzers<B, S>, PoolError> {
+    ) -> Result<TrackAnalyzers<B, S>, AnalyzerError> {
         Ok(TrackAnalyzers {
             revision,
             token,

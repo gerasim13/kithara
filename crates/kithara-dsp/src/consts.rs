@@ -1,3 +1,9 @@
+/// Fewest factors of two in an FFT length vDSP's real DFT builds.
+pub(crate) const FFT_MIN_TWOS: u32 = 4;
+/// Hann window: `w[n] = A0 − A0·cos(2πn / (N − 1))`.
+#[cfg(feature = "spectrum")]
+pub(crate) const HANN_A0: f32 = 0.5;
+
 /// Frames one iteration of the strided copies moves. A loop that moves one
 /// sample per iteration runs at half speed whenever it straddles a 4096-byte
 /// page, and `opt-level = "z"` neither unrolls nor aligns it; four samples

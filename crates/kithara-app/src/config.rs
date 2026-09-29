@@ -276,9 +276,6 @@ mod document_tests {
         let patch: AppConfigPatch =
             serde_yaml_ng::from_str("ui_package: /opt/kithara/ui\n").expect("the document types");
 
-        assert_eq!(
-            patch.ui_package,
-            Some(Some(PathBuf::from("/opt/kithara/ui")))
-        );
+        assert_eq!(patch.ui_package, Some(PathBuf::from("/opt/kithara/ui")));
     }
 }

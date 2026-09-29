@@ -1,6 +1,7 @@
 //! Platform-aware primitives with one compile-time-selected backend.
 //! Backends mirror the public sync, thread, time, and Tokio facade.
 
+pub mod atomic;
 mod common;
 
 #[cfg(not(target_arch = "wasm32"))]

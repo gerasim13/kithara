@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -90,8 +89,8 @@ impl<D: DriverIo> ResourceCore<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
-    /// A write that replaces a generation a produce-core read may still own pays the frees that
-    /// read parked, transferring the ownership cost to the write side.
+    /// Every write publishes its availability and retires the snapshot it displaced,
+    /// so the frees stay on the write side.
     #[kithara::measure]
     pub(super) fn write_at_inner(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
@@ -130,12 +129,9 @@ impl<D: DriverIo> ResourceCore<D> {
                     state.available.remove(window.end..upper);
                 }
             }
-            self.inner
-                .available_snapshot
-                .store(Arc::new(state.available.clone()));
+            self.inner.publish_available(state);
         }
         self.inner.gate.notify_all();
-        self.inner.retired.drain();
 
         if let Some(observer) = self.inner.observer.as_ref() {
             observer.on_write(range);
@@ -161,10 +157,11 @@ mod tests {
 
     use kithara_platform::{
         CancelToken,
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, Weak},
         thread,
         time::Duration,
     };
+    use rangemap::RangeSet;
 
     use crate::{
         ResourceStatus, WaitOutcome,
@@ -384,34 +381,98 @@ mod tests {
         }
     }
 
-    /// A `contains_range_inner` read runs on the audio thread, where freeing
-    /// the range tree is a real-time violation, so it must hand the snapshot it
-    /// loaded to the retire bin instead of dropping it.
+    /// A read never takes ownership of the snapshot, however long the write
+    /// side stays quiet: the produce path reads at audio-tick cadence (~94
+    /// ticks/s at 48 kHz with 512-frame blocks) while writes arrive at
+    /// download cadence. The resource stays active, so every read of the
+    /// ten-second burst answers from the snapshot.
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn a_produce_core_read_parks_its_snapshot() {
+    fn a_read_burst_never_leaks_a_generation() {
+        const TICKS_PER_SECOND: usize = 94;
+        const BURST: usize = TICKS_PER_SECOND * 10;
+
         let core = open_mem();
         core.write_at_inner(0, b"hello world")
             .expect("active write must succeed");
-        assert!(core.inner.retired.is_empty());
+        let snapshot = core.inner.available_snapshot.load_full();
+        let owners = Arc::strong_count(&snapshot);
 
-        let _ = core.contains_range_inner(0..11);
+        let covered = (0..BURST)
+            .filter(|_| core.contains_range_inner(0..11))
+            .count();
 
-        assert!(!core.inner.retired.is_empty());
+        assert_eq!(
+            covered, BURST,
+            "every read in the burst answers from the snapshot"
+        );
+        assert_eq!(
+            Arc::strong_count(&snapshot),
+            owners,
+            "{BURST} reads with no intervening write took ownership of the snapshot"
+        );
     }
 
-    /// The other half of that contract: the write side — which publishes the
-    /// generations in the first place — pays the frees the read parked.
+    /// A reader overlapping writes is never the last owner of a snapshot they
+    /// displaced: its guard drop leaves the snapshot to the writer, and the
+    /// first write after that drop frees it.
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn a_write_drains_the_parked_snapshot() {
+    fn displaced_snapshot_is_freed_by_the_writer() {
         let core = open_mem();
-        core.write_at_inner(0, b"hello world")
+        core.write_at_inner(0, b"hello")
             .expect("active write must succeed");
-        let _ = core.contains_range_inner(0..11);
+        let reader = core.inner.available_snapshot.load();
+        let displaced: Weak<RangeSet<u64>> = Arc::downgrade(&reader);
 
+        core.write_at_inner(5, b" world")
+            .expect("active write must succeed");
         core.write_at_inner(11, b"!")
             .expect("active write must succeed");
+        drop(reader);
+        assert!(
+            displaced.upgrade().is_some(),
+            "a reader guard drop never frees the displaced snapshot"
+        );
 
-        assert!(core.inner.retired.is_empty());
+        core.write_at_inner(12, b"?")
+            .expect("active write must succeed");
+        assert!(
+            displaced.upgrade().is_none(),
+            "the next write frees the quiesced snapshot"
+        );
+    }
+
+    /// A write frees what it retires only after releasing the gate, so a
+    /// produce-core read that takes the gate never waits on those frees. The
+    /// test holds the retire list: the write publishes and then parks on it,
+    /// and a gated read of the still active resource must answer meanwhile.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_gated_read_never_waits_on_retired_frees() {
+        let core = open_mem();
+        let retired = core.inner.retired.lock();
+
+        let writer = core.clone();
+        let (written_tx, written_rx) = mpsc::channel();
+        thread::spawn(move || {
+            written_tx.send(writer.write_at_inner(0, b"hello")).ok();
+        });
+        while !core.contains_range_inner(0..5) {
+            thread::yield_now();
+        }
+
+        let reader = core.clone();
+        let (len_tx, len_rx) = mpsc::channel();
+        thread::spawn(move || {
+            len_tx.send(reader.len_inner()).ok();
+        });
+        len_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("a gated read waited on the frees of a write");
+        drop(retired);
+
+        written_rx
+            .recv()
+            .expect("the writer reports its write")
+            .expect("active write must succeed");
     }
 
     /// Fill `[0, len)` with `value` in multiple `write_at_inner` calls so a

@@ -157,25 +157,9 @@ jobs:
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
-  # Mutation testing is its own group, not a tail of `deep`: the suites run
-  # per group of crates and are judged per group, so a clean group's lane is
-  # not read as part of a deep run that failed elsewhere.
-  mutants:
-    name: Mutants
-    needs: gate
-    if: >-
-      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-      || inputs.required_lanes != ''
-    concurrency:
-      group: heavy-linux-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
-    uses: ./.github/workflows/run.yml
-    with:
-      role: mutants
-      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
-      only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
-      fixture-refresh: ${{ inputs.fixture-refresh }}
+  # Mutation testing is not scheduled from here: a push to the default branch
+  # asks for every lane, and the suites cost hours. `dispatch.yml` runs them
+  # when asked.
 
   platforms:
     name: Platforms
@@ -244,7 +228,6 @@ jobs:
       - gate
       - lanes
       - deep
-      - mutants
       - platforms
       - quality
       - ui
@@ -271,7 +254,7 @@ jobs:
               name: job["result"]
               for name, job in results.items()
               if job["result"] != "success"
-              and not (name in {"deep", "mutants", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
+              and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
               and not (name == "ui" and job["result"] == "skipped" and not ui_required)
               and not (name == "android" and job["result"] == "skipped" and not android_required)
           }

@@ -1,11 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
     ops::Range,
 };
 
 use bon::Builder;
 use kithara_beat::{BeatDetector, BeatMark, RawBeats};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::downmix;
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::ToPrimitive;
 use rangemap::RangeSet;
@@ -290,7 +292,10 @@ where
     where
         S: HasPool<f32>,
     {
-        if channels == 0 || self.failure.is_some() {
+        let Some(channels) = NonZeroUsize::new(channels) else {
+            return false;
+        };
+        if self.failure.is_some() {
             return false;
         }
         let frames = pcm.len() / channels;
@@ -298,15 +303,12 @@ where
             return false;
         }
 
-        let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
         if let Err(error) = self.downmix.ensure_len(frames) {
             self.failure = Some(error.into());
             return false;
         }
-        self.downmix.truncate(frames);
-        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
-            *dst = frame.iter().sum::<f32>() * inv;
-        }
+        let written = downmix(pcm, channels, &mut self.downmix);
+        self.downmix.truncate(written);
         match self.runs.push(pools, &self.downmix, at, opens) {
             Ok(took) => took,
             Err(error) => {

@@ -33,6 +33,13 @@ fn stride(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("strides are non-zero")
 }
 
+/// The channel sum in channel order times `1 / N`: the mean every analysis
+/// path took before `downmix`.
+fn channel_mean(frame: &[f32]) -> f32 {
+    let channels = u16::try_from(frame.len()).expect("fixture channel counts fit u16");
+    frame.iter().sum::<f32>() * (1.0 / f32::from(channels))
+}
+
 #[kithara::test]
 fn deinterleave_variable_matches_fast_interleave() {
     for inputs in 1..=MAX_CHANNELS {
@@ -203,4 +210,55 @@ fn a_short_plane_bounds_the_variable_split_instead_of_panicking() {
     );
     assert_eq!(bits(&three[0]), bits(&[U, 1.0, 2.0]));
     assert_eq!(bits(&three[1]), bits(&[U, -1.0, -2.0]));
+}
+
+#[kithara::test]
+fn downmix_is_the_channel_mean_of_every_whole_frame() {
+    for channels in 1..=MAX_CHANNELS {
+        for frames in FRAMES {
+            let interleaved: Vec<f32> = (0..frames * channels + channels - 1)
+                .map(|slot| sample(0, slot))
+                .collect();
+            let mut mono = vec![UNWRITTEN; frames + TAIL];
+            assert_eq!(
+                kithara_dsp::downmix(&interleaved, count(channels), &mut mono),
+                frames,
+                "{channels} channels, {frames} frames"
+            );
+            for (frame, (got, samples)) in mono
+                .iter()
+                .zip(interleaved.chunks_exact(channels))
+                .enumerate()
+            {
+                let want = channel_mean(samples);
+                assert!(
+                    got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan()),
+                    "{channels} channels, frame {frame} of {frames}: {got} against {want}"
+                );
+            }
+            assert_eq!(
+                bits(&mono[frames..]),
+                bits(&[UNWRITTEN; TAIL]),
+                "{channels} channels wrote past {frames} frames"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn a_short_mono_bounds_the_downmix() {
+    const U: f32 = UNWRITTEN;
+    let mut mono = [U; 2];
+    assert_eq!(
+        kithara_dsp::downmix(&[1.0, 3.0, 5.0, 7.0, 9.0, 11.0], count(2), &mut mono),
+        2
+    );
+    assert_eq!(bits(&mono), bits(&[2.0, 6.0]));
+
+    let mut mono = [U; 3];
+    assert_eq!(
+        kithara_dsp::downmix(&[1.0, 2.0, 3.0, 4.0], count(3), &mut mono),
+        1
+    );
+    assert_eq!(bits(&mono), bits(&[2.0, U, U]));
 }

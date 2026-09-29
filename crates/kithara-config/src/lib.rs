@@ -1,16 +1,16 @@
 //! Owned snapshots of retained settings, with builders and accessors.
 
-pub use kithara_derive::Patch;
-/// Composes builders, accessors, snapshots and explicitly selected runtime updates.
-/// `construction` classifies a consumed builder input without generating a retained snapshot.
-/// On an owner method, `delegate = "property", sdk` registers an SDK operation
-/// while preserving the method as its sole application hook.
+/// `#[derive(Config)]` generates the builder, accessors, `Default`, `Debug`,
+/// the owned snapshot and explicitly selected runtime updates of a struct,
+/// every facet declared through `#[config(...)]`. `construction` classifies a
+/// consumed builder input without generating a retained snapshot.
 ///
 /// ```compile_fail
-/// #[kithara_config::config]
+/// #[derive(kithara_config::Config)]
 /// struct Unclassified { value: u32 }
 /// ```
-pub use kithara_derive::config;
+pub use kithara_derive::Config;
+pub use kithara_derive::Patch;
 
 mod config;
 pub use config::Config;

@@ -16,9 +16,8 @@ on:
   schedule:
     # The night: every lane whose membership names `nightly`.
     - cron: '0 1 * * *'
-    # The week: the lanes that cost hours - Miri, the deep assessment, the
-    # mutation suites - and would owe the machine a night it needs for lanes
-    # that answer faster.
+    # The week: the lanes that cost hours - Miri, the deep assessment - and
+    # would owe the machine a night it needs for lanes that answer faster.
     - cron: '0 8 * * 6'
   workflow_dispatch:
     inputs:
@@ -33,6 +32,12 @@ on:
           selection. This is how one subtask is started on its own.
         type: string
         default: ''
+      mutants:
+        description: >-
+          Run every mutation suite. They cost hours and run only when asked
+          for; name single `deep-mutants-*` lanes in `only` to run some.
+        type: boolean
+        default: false
 
 jobs:
   # The gate lanes a night adds to the ones every push already runs: the
@@ -74,8 +79,12 @@ jobs:
       kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
 
+  # Never on a schedule: `mutants` runs every suite, and `only` runs the lanes
+  # it names.
   mutants:
-    if: vars.KITHARA_RUNNER_LABELS != ''
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      && (inputs.mutants || (inputs.only || '') != '')
     concurrency:
       group: heavy-linux-${{ github.repository }}
       cancel-in-progress: false
@@ -84,7 +93,7 @@ jobs:
     with:
       role: mutants
       kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
-      only: ${{ inputs.only || '' }}
+      only: ${{ inputs.only || 'all' }}
 
   quality:
     if: vars.KITHARA_RUNNER_LABELS != ''
