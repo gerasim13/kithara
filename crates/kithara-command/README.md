@@ -71,7 +71,7 @@ let Ok(seq) = sender.send(When::At(Frame(100)), seek) else {
 inbox.drain();
 while let Some(due) = inbox.next_due(Frame(64), 64) {
     assert_eq!(due.offset(), 36);
-    inbox.apply(due, ());
+    due.apply(());
 }
 assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 ```

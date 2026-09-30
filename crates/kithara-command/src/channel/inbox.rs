@@ -13,8 +13,8 @@ use crate::{
 /// Receiving half of a channel, owned by the executor's thread.
 ///
 /// Each block the executor calls [`Inbox::drain`], then takes batches through
-/// [`Inbox::next_due`] and answers each through [`Inbox::apply`] or
-/// [`Inbox::refuse`] before taking the next one.
+/// [`Inbox::next_due`] and answers each through [`Due::apply`] or
+/// [`Due::refuse`] before taking the next one.
 pub struct Inbox<P: Protocol> {
     pending: HeapCons<Sent<P>>,
     answers: HeapProd<Receipt<P>>,
@@ -22,10 +22,47 @@ pub struct Inbox<P: Protocol> {
 }
 
 /// A batch due inside the current block.
-#[derive(Debug, fieldwork::Fieldwork)]
+///
+/// It holds its inbox until [`Due::apply`] or [`Due::refuse`] answers it, so
+/// the answer reaches the channel the batch came from and the next batch is
+/// judged after it:
+///
+/// ```compile_fail
+/// # use kithara_command::{Clock, Inbox, Protocol, Target};
+/// # #[derive(Debug)]
+/// # enum Deck {}
+/// # #[derive(Clone, Copy, Debug)]
+/// # struct Slot;
+/// # impl Target for Slot {
+/// #     fn index(self) -> usize {
+/// #         0
+/// #     }
+/// # }
+/// # #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// # struct Frame(u64);
+/// # impl Clock for Frame {
+/// #     fn frames_since(self, start: Self) -> Option<u64> {
+/// #         self.0.checked_sub(start.0)
+/// #     }
+/// # }
+/// # impl Protocol for Deck {
+/// #     type Applied = ();
+/// #     type Clock = Frame;
+/// #     type Command = ();
+/// #     type Refusal = ();
+/// #     type Target = Slot;
+/// # }
+/// fn take_two(inbox: &mut Inbox<Deck>) {
+///     let first = inbox.next_due(Frame(0), 64);
+///     let second = inbox.next_due(Frame(0), 64); // ERROR: `first` still holds the inbox
+///     drop((first, second));
+/// }
+/// ```
+#[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get, get_mut)]
-#[must_use = "a due batch is answered through Inbox::apply or Inbox::refuse"]
-pub struct Due<P: Protocol> {
+#[must_use = "a due batch is answered through Due::apply or Due::refuse"]
+pub struct Due<'inbox, P: Protocol> {
+    inbox: &'inbox mut Inbox<P>,
     /// Commands to apply; resources the executor releases go back into it.
     #[field(get, get_mut)]
     batch: Batch<P>,
@@ -74,15 +111,6 @@ impl<P: Protocol> Inbox<P> {
         }
     }
 
-    /// Applies `due`: its receipt reports `data` at the batch's moment.
-    pub fn apply(&mut self, due: Due<P>, data: P::Applied) {
-        self.reply(Receipt {
-            seq: due.seq,
-            outcome: Outcome::Applied { data, at: due.at },
-            batch: due.batch,
-        });
-    }
-
     /// Moves every batch sent since the last call into the schedule.
     pub fn drain(&mut self) {
         while let Some(sent) = self.pending.try_pop() {
@@ -95,13 +123,14 @@ impl<P: Protocol> Inbox<P> {
     /// Batches come in time order and, at one moment, in send order. On the
     /// way it answers [`Rejection::Late`] for a batch whose moment is before
     /// `start`. `None` means nothing more is due inside the block.
-    pub fn next_due(&mut self, start: P::Clock, frames: usize) -> Option<Due<P>> {
+    pub fn next_due(&mut self, start: P::Clock, frames: usize) -> Option<Due<'_, P>> {
         loop {
             let place = Place::of(self.schedule.peek()?, start, frames)?;
             let sent = self.schedule.pop()?;
             let rejection = match place {
                 Place::Within { offset, at } => {
                     return Some(Due {
+                        inbox: self,
                         offset,
                         at,
                         seq: sent.seq,
@@ -118,17 +147,28 @@ impl<P: Protocol> Inbox<P> {
         }
     }
 
-    /// Refuses `due` for a reason of the executor's domain.
-    pub fn refuse(&mut self, due: Due<P>, refusal: P::Refusal) {
-        self.reply(Receipt {
-            seq: due.seq,
-            outcome: Outcome::Rejected(Rejection::Refused(refusal)),
-            batch: due.batch,
-        });
-    }
-
     fn reply(&mut self, receipt: Receipt<P>) {
         let pushed = self.answers.try_push(receipt);
         debug_assert!(pushed.is_ok(), "credits bound the receipts in flight");
+    }
+}
+
+impl<P: Protocol> Due<'_, P> {
+    /// Applies the batch: its receipt reports `data` at the batch's moment.
+    pub fn apply(self, data: P::Applied) {
+        self.inbox.reply(Receipt {
+            seq: self.seq,
+            outcome: Outcome::Applied { data, at: self.at },
+            batch: self.batch,
+        });
+    }
+
+    /// Refuses the batch for a reason of the executor's domain.
+    pub fn refuse(self, refusal: P::Refusal) {
+        self.inbox.reply(Receipt {
+            seq: self.seq,
+            outcome: Outcome::Rejected(Rejection::Refused(refusal)),
+            batch: self.batch,
+        });
     }
 }

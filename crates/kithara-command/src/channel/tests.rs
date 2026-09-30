@@ -75,7 +75,7 @@ fn run_block(inbox: &mut Inbox<Test>, start: u64, frames: usize) -> Vec<(usize, 
                 .iter()
                 .map(|&command| (offset, command)),
         );
-        inbox.apply(due, ());
+        due.apply(());
     }
     applied
 }
@@ -244,7 +244,7 @@ fn a_refusal_leaves_the_ledger_untouched() {
     let refused = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
     inbox.drain();
     let due = inbox.next_due(Frame(0), BLOCK).expect("the batch is due");
-    inbox.refuse(due, "busy");
+    due.refuse("busy");
 
     let retry = send(&mut sender, When::Next, batch(2, &[(Slot(0), None)]));
     assert_eq!(run_block(&mut inbox, 64, BLOCK), [(0, 2)]);
@@ -265,7 +265,7 @@ fn the_executor_returns_resources_inside_the_batch() {
 
     let mut due = inbox.next_due(Frame(0), BLOCK).expect("the batch is due");
     let taken = mem::replace(&mut due.batch_mut().commands[0], 99);
-    inbox.apply(due, ());
+    due.apply(());
 
     assert_eq!(taken, 7);
     let receipt = sender.receipts().next().expect("the receipt arrives");
