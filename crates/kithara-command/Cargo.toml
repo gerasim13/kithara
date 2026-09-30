@@ -10,7 +10,8 @@ keywords = ["audio", "realtime", "command", "scheduling", "lock-free"]
 categories = ["concurrency", "data-structures"]
 
 [dependencies]
-bon = { workspace = true }
+kithara-config = { workspace = true }
+
 delegate = { workspace = true }
 fieldwork = { workspace = true }
 ringbuf = { workspace = true }

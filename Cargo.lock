@@ -4792,9 +4792,9 @@ name = "kithara-command"
 version = "0.0.1-alpha5"
 dependencies = [
  "assert_no_alloc",
- "bon",
  "delegate",
  "fieldwork",
+ "kithara-config",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",

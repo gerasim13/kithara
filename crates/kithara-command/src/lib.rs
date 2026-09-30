@@ -12,7 +12,6 @@
 
 mod channel;
 mod config;
-mod consts;
 mod protocol;
 mod receipt;
 
