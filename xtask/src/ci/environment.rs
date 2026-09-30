@@ -384,6 +384,14 @@ impl CiEnvironment {
             }
         }
         insert(&mut vars, "GRADLE_USER_HOME", gradle_home);
+        // Beside the fixtures, for the reason the Linux fleet keeps them there:
+        // a model fetched into a job's own temp directory is newer than the
+        // build that embedded it, and Cargo rebuilds everything above it.
+        insert(
+            &mut vars,
+            "KITHARA_BEAT_MODEL_CACHE",
+            fixture_cache.join("beat-models"),
+        );
         insert(&mut vars, "KITHARA_FIXTURE_CACHE", fixture_cache);
         insert(
             &mut vars,
@@ -1088,6 +1096,13 @@ mod tests {
                 vars.get(OsStr::new("KITHARA_FIXTURE_CACHE"))
                     .map(OsString::as_os_str),
                 Some(root.join("review/fixtures").as_os_str())
+            );
+            let models = vars
+                .get(OsStr::new("KITHARA_BEAT_MODEL_CACHE"))
+                .expect("a job is told where the beat models live");
+            assert!(
+                PathBuf::from(models).starts_with(root.join("review")),
+                "{models:?} is not in the shared cache of the job's trust"
             );
             let cache_root =
                 root.join("review")
