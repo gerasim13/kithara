@@ -4,13 +4,13 @@
 use std::{fs, io::Write};
 use std::{ops::Range, path::Path};
 
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::RwLock};
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::NamedTempFile;
 
 use crate::{
     ResourceRead, ResourceStatus, ResourceWriter, StorageResult, WaitOutcome,
-    backend::traits::DriverIo,
+    backend::traits::{Driver, DriverIo},
 };
 
 /// Decorator for crash-safe whole-file writes over a single-owner
@@ -24,15 +24,23 @@ use crate::{
 /// For in-memory resources: direct delegation (crash-safety is not applicable).
 pub struct Atomic<D: DriverIo> {
     inner: ResourceWriter<D>,
+    handover: RwLock<()>,
+}
+
+impl<D: Driver> Atomic<D> {
+    /// Open a resource whose readers remain inside this decorator's handover.
+    ///
+    /// # Errors
+    /// Returns an error if the backing resource cannot be opened.
+    pub fn open(cancel: CancelToken, opts: D::Options) -> StorageResult<Self> {
+        Ok(Self {
+            inner: ResourceWriter::open(cancel, opts)?,
+            handover: RwLock::default(),
+        })
+    }
 }
 
 impl<D: DriverIo> Atomic<D> {
-    /// Wrap a writer for crash-safe writes.
-    #[must_use]
-    pub const fn new(inner: ResourceWriter<D>) -> Self {
-        Self { inner }
-    }
-
     /// Returns `true` if the resource has been committed with zero length.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -63,6 +71,7 @@ impl<D: DriverIo> Atomic<D> {
             Write::write_all(&mut tmp, data)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
+            let _handover = self.handover.write();
             self.inner.release_backing_in_place()?;
 
             tmp.persist(&path)
@@ -71,35 +80,56 @@ impl<D: DriverIo> Atomic<D> {
             return self.inner.commit_in_place(Some(data.len() as u64));
         }
 
+        let _handover = self.handover.write();
         self.inner.reactivate_in_place()?;
         self.inner.write_at(0, data)?;
         self.inner.commit_in_place(Some(data.len() as u64))
     }
 
+    pub(super) fn read_settled<R>(&self, read: impl FnOnce(&ResourceWriter<D>) -> R) -> R {
+        let _handover = self.handover.read();
+        read(&self.inner)
+    }
+
+    /// Whether the given range is fully covered by available data.
+    #[must_use]
+    pub fn contains_range(&self, range: Range<u64>) -> bool {
+        self.read_settled(|inner| inner.contains_range(range))
+    }
+
+    /// Committed length, if known.
+    #[must_use]
+    pub fn len(&self) -> Option<u64> {
+        self.read_settled(ResourceRead::len)
+    }
+
+    /// Read data at the given offset into `buf`.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.read_settled(|inner| inner.read_at(offset, buf))
+    }
+
+    /// Read the entire resource into a caller buffer; returns bytes read.
+    ///
+    /// # Errors
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
+        self.read_settled(|inner| inner.read_into(buf))
+    }
+
+    /// Runtime status of the inner resource.
+    #[must_use]
+    pub fn status(&self) -> ResourceStatus {
+        self.read_settled(ResourceRead::status)
+    }
+
     delegate::delegate! {
         to self.inner {
-            /// Whether the given range is fully covered by available data.
-            #[must_use]
-            pub fn contains_range(&self, range: Range<u64>) -> bool;
-            /// Committed length, if known.
-            #[must_use]
-            pub fn len(&self) -> Option<u64>;
             /// Backing file path, if any.
             #[must_use]
             pub fn path(&self) -> Option<&Path>;
-            /// Read data at the given offset into `buf`.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled, failed, or the read fails.
-            pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            /// Read the entire resource into a caller buffer; returns bytes read.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled, failed, or the read fails.
-            pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize>;
-            /// Current runtime status.
-            #[must_use]
-            pub fn status(&self) -> ResourceStatus;
             /// Wait until the given byte range is available.
             ///
             /// # Errors

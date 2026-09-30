@@ -2,27 +2,33 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Barrier, mpsc};
 
 mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::thread;
 use kithara_platform::{CancelToken, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 
 use super::core::Atomic;
 use crate::{
-    MemOptions, MemResource, Resource,
-    test_pools::{byte_buffer, pools},
+    MemDriver, MemOptions,
+    test_pools::{byte_buffer, pools, pools_with_budget},
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::{MmapOptions, MmapResource, OpenMode};
+use crate::{MmapDriver, MmapOptions, OpenMode, ResourceRead};
 
 #[cfg(not(target_arch = "wasm32"))]
-fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
+fn create_mmap_resource(dir: &TempDir, name: &str) -> Atomic<MmapDriver> {
     let path = dir.path().join(name);
-    Resource::open(
+    Atomic::open(
         CancelToken::never(),
         MmapOptions::for_path(path)
             .mode(OpenMode::ReadWrite)
@@ -32,9 +38,9 @@ fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
     .unwrap()
 }
 
-fn create_mem_resource() -> MemResource {
+fn create_mem_resource() -> Atomic<MemDriver> {
     let pools = pools();
-    Resource::open(
+    Atomic::open(
         CancelToken::never(),
         MemOptions::builder().buffer(byte_buffer(&pools)).build(),
     )
@@ -45,8 +51,7 @@ fn create_mem_resource() -> MemResource {
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mmap_write_all_read_into_roundtrip() {
     let dir = TempDir::new().unwrap();
-    let res = create_mmap_resource(&dir, "test.bin");
-    let atomic = Atomic::new(res);
+    let atomic = create_mmap_resource(&dir, "test.bin");
 
     let data = b"hello atomic world";
     atomic.write_all(data).unwrap();
@@ -61,8 +66,7 @@ fn mmap_write_all_read_into_roundtrip() {
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mmap_tmp_file_cleaned_up() {
     let dir = TempDir::new().unwrap();
-    let res = create_mmap_resource(&dir, "index.bin");
-    let atomic = Atomic::new(res);
+    let atomic = create_mmap_resource(&dir, "index.bin");
 
     atomic.write_all(b"data").unwrap();
 
@@ -79,8 +83,7 @@ fn mmap_tmp_file_cleaned_up() {
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mem_write_all_read_into_roundtrip() {
-    let res = create_mem_resource();
-    let atomic = Atomic::new(res);
+    let atomic = create_mem_resource();
 
     let data = b"in-memory data";
     atomic.write_all(data).unwrap();
@@ -93,8 +96,7 @@ fn mem_write_all_read_into_roundtrip() {
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mem_write_all_overwrites_committed_data() {
-    let res = create_mem_resource();
-    let atomic = Atomic::new(res);
+    let atomic = create_mem_resource();
 
     atomic.write_all(b"first").unwrap();
     atomic.write_all(b"second version").unwrap();
@@ -109,8 +111,7 @@ fn mem_write_all_overwrites_committed_data() {
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mmap_read_into_empty_returns_zero() {
     let dir = TempDir::new().unwrap();
-    let res = create_mmap_resource(&dir, "empty.bin");
-    let atomic = Atomic::new(res);
+    let atomic = create_mmap_resource(&dir, "empty.bin");
 
     let mut buf = Vec::new();
     let n = atomic.read_into(&mut buf).unwrap();
@@ -121,8 +122,7 @@ fn mmap_read_into_empty_returns_zero() {
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mmap_overwrite_atomically() {
     let dir = TempDir::new().unwrap();
-    let res = create_mmap_resource(&dir, "overwrite.bin");
-    let atomic = Atomic::new(res);
+    let atomic = create_mmap_resource(&dir, "overwrite.bin");
 
     atomic.write_all(b"first version").unwrap();
     atomic.write_all(b"second version - longer data").unwrap();
@@ -137,17 +137,106 @@ fn mmap_overwrite_atomically() {
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mmap_path_returns_inner_path() {
     let dir = TempDir::new().unwrap();
-    let res = create_mmap_resource(&dir, "path_test.bin");
+    let atomic = create_mmap_resource(&dir, "path_test.bin");
     let expected = dir.path().join("path_test.bin");
-    let atomic = Atomic::new(res);
 
     assert_eq!(atomic.path(), Some(expected.as_path()));
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn mem_path_returns_none() {
-    let res = create_mem_resource();
-    let atomic = Atomic::new(res);
+    let atomic = create_mem_resource();
 
     assert!(atomic.path().is_none());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::test(timeout(Duration::from_secs(3)))]
+fn mmap_writer_waits_for_a_reader_before_releasing_backing() {
+    let dir = TempDir::new().unwrap();
+    let atomic = Arc::new(create_mmap_resource(&dir, "handover.bin"));
+    atomic.write_all(b"old payload").unwrap();
+    let (reading, reading_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let (writing, writing_rx) = mpsc::channel();
+    let (written, written_rx) = mpsc::channel();
+
+    let reader = {
+        let atomic = Arc::clone(&atomic);
+        thread::spawn(move || {
+            atomic.read_settled(|inner| {
+                reading.send(()).unwrap();
+                release_rx.recv().unwrap();
+                let mut bytes = Vec::new();
+                inner.read_into(&mut bytes).unwrap();
+                assert_eq!(bytes, b"old payload");
+            });
+        })
+    };
+    reading_rx.recv().unwrap();
+    let writer = {
+        let atomic = Arc::clone(&atomic);
+        thread::spawn(move || {
+            writing.send(()).unwrap();
+            let result = atomic.write_all(b"new payload");
+            written.send(result).unwrap();
+        })
+    };
+    writing_rx.recv().unwrap();
+    assert!(
+        written_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "writer replaced backing while a read was active"
+    );
+    release.send(()).unwrap();
+    reader.join().unwrap();
+    written_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    writer.join().unwrap();
+
+    let mut bytes = Vec::new();
+    atomic.read_into(&mut bytes).unwrap();
+    assert_eq!(bytes, b"new payload");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::test(timeout(Duration::from_secs(3)))]
+fn concurrent_mmap_writers_publish_one_complete_payload() {
+    let dir = TempDir::new().unwrap();
+    let atomic = Arc::new(create_mmap_resource(&dir, "writers.bin"));
+    let start = Arc::new(Barrier::new(3));
+    let writes: Vec<_> = [b'X', b'Y']
+        .into_iter()
+        .map(|byte| {
+            let atomic = Arc::clone(&atomic);
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                start.wait();
+                atomic.write_all(&[byte; 1024])
+            })
+        })
+        .collect();
+    start.wait();
+    for write in writes {
+        write.join().unwrap().unwrap();
+    }
+    let mut bytes = Vec::new();
+    atomic.read_into(&mut bytes).unwrap();
+    assert!(bytes == [b'X'; 1024] || bytes == [b'Y'; 1024]);
+}
+
+#[kithara::test(timeout(Duration::from_secs(2)))]
+fn failed_memory_write_releases_handover() {
+    let pools = pools_with_budget(64);
+    let atomic = Atomic::<MemDriver>::open(
+        CancelToken::never(),
+        MemOptions::builder().buffer(byte_buffer(&pools)).build(),
+    )
+    .unwrap();
+    assert!(atomic.write_all(&[1; 1024]).is_err());
+    atomic.write_all(b"ok").unwrap();
+    let mut bytes = Vec::new();
+    atomic.read_into(&mut bytes).unwrap();
+    assert_eq!(bytes, b"ok");
 }

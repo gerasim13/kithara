@@ -25,15 +25,22 @@ impl DriverIo for MemDriver {
         if end_usize > state.buf.len() {
             return Ok(());
         }
-        if end_usize == 0 {
-            self.committed.store(None);
+        let displaced = if end_usize == 0 {
+            self.committed.swap(None)
         } else {
             let snapshot = state.buf[..end_usize].to_vec();
-            self.committed.store(Some(Arc::new(snapshot)));
-        }
+            self.committed.swap(Some(Arc::new(snapshot)))
+        };
         state.buf.renew();
         state.len = end;
         drop(state);
+        let mut retired = self.retired.lock();
+        if let Some(displaced) = displaced {
+            retired.retire(displaced);
+        } else {
+            retired.collect();
+        }
+        drop(retired);
         Ok(())
     }
 
@@ -93,7 +100,7 @@ impl DriverIo for MemDriver {
         }
         drop(state);
 
-        if let Some(snapshot) = self.committed.load_full() {
+        if let Some(snapshot) = self.committed.load().as_ref() {
             return Self::read_slice(snapshot.as_slice(), offset, buf);
         }
         Ok(0)

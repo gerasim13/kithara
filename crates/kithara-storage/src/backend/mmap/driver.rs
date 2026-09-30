@@ -5,7 +5,7 @@ use std::{fs, ops::Range, path::PathBuf};
 use arc_swap::ArcSwapOption;
 use bon::Builder;
 use crossbeam_queue::SegQueue;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::sync::{Arc, Mutex, Retired};
 use mmap_io::MemoryMappedFile;
 use rangemap::RangeSet;
 
@@ -82,6 +82,8 @@ pub struct MmapDriver {
     #[debug("{:?}", self.committed.load().is_some())]
     pub(super) committed: ArcSwapOption<MemoryMappedFile>,
     #[debug(skip)]
+    pub(super) retired: Mutex<Retired<MemoryMappedFile>>,
+    #[debug(skip)]
     pub(super) mmap: Mutex<MmapState>,
     pub(super) mode: OpenMode,
     pub(super) path: PathBuf,
@@ -153,6 +155,7 @@ impl Driver for MmapDriver {
         let driver = Self {
             mode,
             committed,
+            retired: Mutex::default(),
             mmap: Mutex::new(mmap_state),
             path: opts.path,
             initial_len: opts.initial_len,
@@ -387,6 +390,120 @@ mod tests {
         let mut buf = [0; 4];
         assert_eq!(driver.read_committed(0, &mut buf).unwrap(), Some(4));
         assert_eq!(&buf, b"data");
+    }
+
+    #[kithara::test]
+    fn displaced_committed_mapping_is_reclaimed_by_next_writer() {
+        let dir = TempDir::new().unwrap();
+        let (driver, _) =
+            MmapDriver::open(MmapOptions::for_path(dir.path().join("snapshot.dat")).build())
+                .unwrap();
+        driver.write_at(0, b"first", false).unwrap();
+        driver.commit(Some(5)).unwrap();
+        let reader = driver.committed.load();
+        let old = Arc::downgrade(reader.as_ref().unwrap());
+
+        driver.reactivate().unwrap();
+        driver.write_at(0, b"second", false).unwrap();
+        driver.commit(Some(6)).unwrap();
+        drop(reader);
+        assert!(
+            old.upgrade().is_some(),
+            "reader drop closed displaced mapping"
+        );
+
+        driver.reactivate().unwrap();
+        driver.write_at(0, b"third!", false).unwrap();
+        driver.commit(Some(6)).unwrap();
+        assert!(old.upgrade().is_none(), "next writer must close mapping");
+    }
+
+    #[kithara::test]
+    fn clearing_committed_mapping_retires_it() {
+        let dir = TempDir::new().unwrap();
+        let (driver, _) =
+            MmapDriver::open(MmapOptions::for_path(dir.path().join("clear.dat")).build()).unwrap();
+        driver.write_at(0, b"first", false).unwrap();
+        driver.commit(Some(5)).unwrap();
+        let reader = driver.committed.load();
+        let old = Arc::downgrade(reader.as_ref().unwrap());
+
+        driver.commit(Some(0)).unwrap();
+        assert_eq!(driver.committed_len(), None);
+        drop(reader);
+        assert!(
+            old.upgrade().is_some(),
+            "clear left reader to close mapping"
+        );
+
+        driver.write_at(0, b"next", false).unwrap();
+        driver.commit(Some(4)).unwrap();
+        assert!(old.upgrade().is_none(), "next writer must close mapping");
+    }
+
+    #[kithara::test]
+    fn release_backing_closes_quiesced_mapping() {
+        let dir = TempDir::new().unwrap();
+        let (driver, _) =
+            MmapDriver::open(MmapOptions::for_path(dir.path().join("release.dat")).build())
+                .unwrap();
+        driver.write_at(0, b"first", false).unwrap();
+        driver.commit(Some(5)).unwrap();
+        let snapshot = driver.committed.load();
+        let old = Arc::downgrade(snapshot.as_ref().unwrap());
+        drop(snapshot);
+
+        driver.release_backing().unwrap();
+        assert!(
+            old.upgrade().is_none(),
+            "release must close a quiesced mapping"
+        );
+    }
+
+    #[kithara::test]
+    fn release_backing_defers_a_live_reader_until_next_writer() {
+        let dir = TempDir::new().unwrap();
+        let (driver, _) =
+            MmapDriver::open(MmapOptions::for_path(dir.path().join("held-release.dat")).build())
+                .unwrap();
+        driver.write_at(0, b"first", false).unwrap();
+        driver.commit(Some(5)).unwrap();
+        let reader = driver.committed.load();
+        let old = Arc::downgrade(reader.as_ref().unwrap());
+
+        driver.release_backing().unwrap();
+        drop(reader);
+        assert!(
+            old.upgrade().is_some(),
+            "reader drop closed released mapping"
+        );
+        driver.write_at(0, b"next", false).unwrap();
+        driver.commit(Some(4)).unwrap();
+        assert!(old.upgrade().is_none(), "next writer must close mapping");
+    }
+
+    #[kithara::test]
+    fn readwrite_transition_retires_committed_mapping() {
+        let dir = TempDir::new().unwrap();
+        let (driver, _) = MmapDriver::open(
+            MmapOptions::for_path(dir.path().join("readwrite.dat"))
+                .mode(OpenMode::ReadWrite)
+                .build(),
+        )
+        .unwrap();
+        driver.write_at(0, b"first", false).unwrap();
+        driver.commit(Some(5)).unwrap();
+        let reader = driver.committed.load();
+        let old = Arc::downgrade(reader.as_ref().unwrap());
+
+        driver.write_at(0, b"next!", true).unwrap();
+        drop(reader);
+        assert!(
+            old.upgrade().is_some(),
+            "transition left reader to close mapping"
+        );
+        driver.commit(Some(5)).unwrap();
+        assert!(old.upgrade().is_none(), "next writer must close mapping");
     }
 
     fn create_resource_growing_by(dir: &TempDir, initial: u64, factor: u64) -> MmapResource {
