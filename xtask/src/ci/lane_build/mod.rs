@@ -10,9 +10,13 @@
 //! first prunes the units the slot's builds stopped using.
 
 mod claim;
+#[cfg(test)]
+mod fixture;
 mod layout;
 mod pool;
 mod prune;
+mod sources;
+mod tracked;
 
 pub(crate) use claim::LaneBuild;
 pub(crate) use pool::{SlotPool, lock_of};
