@@ -49,6 +49,8 @@ mod consts {
     /// A click rises from silence: its beat frame carries the silent foot of
     /// the rise, so it first sounds one frame later.
     pub(super) const SILENT_FOOT: u64 = 1;
+    /// Frames of one click at [`SAMPLE_RATE`]: its 2 ms rise and 8 ms fall.
+    pub(super) const CLICK_FRAMES: u64 = 441;
     /// Blocks rendered after a pause so the deck's fade-out has settled.
     pub(super) const SETTLE_BLOCKS: usize = 4;
     /// Blocks rendered with every deck paused: more than two beats at [`BPM`].
@@ -678,6 +680,10 @@ async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_rid
             .collect::<Vec<_>>(),
         "one click rises from every Host beat of the ride, and nowhere else"
     );
+    let long = heard
+        .iter()
+        .find(|click| click.frames > consts::CLICK_FRAMES);
+    assert!(long.is_none(), "no ride click outlasts one click: {long:?}");
     assert_click_levels(&heard, &full.beats);
 }
 
