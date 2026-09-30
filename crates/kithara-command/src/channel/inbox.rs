@@ -66,10 +66,14 @@ enum Place<T> {
 }
 
 impl<T: Clock> Place<T> {
-    /// `None` when the moment comes after the block of `frames` frames.
+    /// `None` when the block of `frames` frames is empty or the moment comes
+    /// after it.
     fn of(when: When<T>, start: T, frames: usize) -> Option<Self> {
+        if frames == 0 {
+            return None;
+        }
         let When::At(at) = when else {
-            return (frames > 0).then_some(Self::Within {
+            return Some(Self::Within {
                 offset: 0,
                 at: start,
             });

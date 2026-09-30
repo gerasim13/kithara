@@ -279,6 +279,20 @@ fn an_empty_block_applies_nothing() {
     assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1), (0, 2)]);
 }
 
+#[kithara::test]
+fn an_empty_block_answers_nothing() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let seq = send(&mut sender, When::At(Frame(10)), batch(1, &[]));
+
+    assert!(run_block(&mut inbox, 64, 0).is_empty());
+    assert!(outcomes(&mut sender).is_empty());
+    assert!(run_block(&mut inbox, 64, BLOCK).is_empty());
+    assert_eq!(
+        outcomes(&mut sender),
+        [(seq, Outcome::Rejected(Rejection::Late))]
+    );
+}
+
 #[kithara::test(tokio, browser)]
 async fn the_halves_cross_threads() {
     let (mut sender, mut inbox) = pair(8, 0);
