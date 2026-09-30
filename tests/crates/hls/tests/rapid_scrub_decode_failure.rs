@@ -257,7 +257,10 @@ impl Harness {
     /// Issue a seek and observe outcome — returns the outcome so
     /// each scenario can pattern-match its own acceptance criteria.
     async fn scrub(&mut self, target: f64, tag: &str) -> ScrubOutcome {
-        self.queue.seek(target).expect("seek accepted");
+        self.queue
+            .run(move |q| q.seek(target))
+            .await
+            .expect("seek accepted");
         eprintln!("[{tag}] seek issued target={target:.2}s");
         observe_scrub_outcome(
             &self.queue,
@@ -285,7 +288,10 @@ impl Harness {
         for step in 1..=steps_u32 {
             let frac = f64::from(step) / f64::from(steps_u32);
             let target = start_pos + (final_target - start_pos) * frac;
-            self.queue.seek(target).expect("drag seek accepted");
+            self.queue
+                .run(move |q| q.seek(target))
+                .await
+                .expect("drag seek accepted");
             eprintln!("[{tag}] drag step {step}/{steps_u32} → {target:.2}s");
             sleep(step_delay).await;
         }
