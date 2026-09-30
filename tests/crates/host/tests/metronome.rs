@@ -106,16 +106,16 @@ mod consts {
 /// One click the output tap sounded: the first frame it sounds on, how many
 /// frames it sounds for and its peak.
 #[derive(Debug)]
-struct Click {
-    frame: u64,
-    frames: u64,
-    peak: f32,
+pub(super) struct Click {
+    pub(super) frame: u64,
+    pub(super) frames: u64,
+    pub(super) peak: f32,
 }
 
 /// Every click in `pcm`. A click opens on a sounding frame after silence and
 /// ends where two frames in a row are silent: its own waveform may cross
 /// zero on a single sample, silence lasts longer.
-fn clicks(pcm: &[f32]) -> Vec<Click> {
+pub(super) fn clicks(pcm: &[f32]) -> Vec<Click> {
     let channels = usize::from(consts::CHANNELS);
     let mut found: Vec<Click> = Vec::new();
     let mut last_sounding: Option<u64> = None;
@@ -145,7 +145,7 @@ fn clicks(pcm: &[f32]) -> Vec<Click> {
 
 /// Every click in `heard` peaks at the peak of the Host beat it rises from,
 /// a downbeat's or a beat's, at metronome `level`.
-fn assert_click_levels(heard: &[Click], beats: &[(u64, bool)], level: f32) {
+pub(super) fn assert_click_levels(heard: &[Click], beats: &[(u64, bool)], level: f32) {
     for (click, (_, downbeat)) in heard.iter().zip(beats) {
         let expected = level
             * if *downbeat {
@@ -163,7 +163,7 @@ fn assert_click_levels(heard: &[Click], beats: &[(u64, bool)], level: f32) {
 }
 
 /// The session frame of Host beat `ordinal`.
-fn beat_frame(grid: &BeatGridSnapshot, ordinal: i64) -> u64 {
+pub(super) fn beat_frame(grid: &BeatGridSnapshot, ordinal: i64) -> u64 {
     let beat = Beat::try_from(BeatOrdinal::new(ordinal)).expect("whole Host beat");
     let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), beat))
     else {
@@ -220,7 +220,7 @@ fn peak(pcm: &[f32]) -> f32 {
         .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
 }
 
-fn capacity(frames: u64) -> usize {
+pub(super) fn capacity(frames: u64) -> usize {
     usize::try_from(frames).expect("tap capacity") * usize::from(consts::CHANNELS)
 }
 
