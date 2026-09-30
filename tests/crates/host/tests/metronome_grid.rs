@@ -42,8 +42,6 @@ mod consts {
     pub(super) const STEP_BLOCKS: u64 = 77;
     /// Blocks the last ride tempo holds: over eight beats.
     pub(super) const LAST_BLOCKS: u64 = 308;
-    /// Blocks a tempo change may take to reach the published grid.
-    pub(super) const GRID_WAIT_BLOCKS: usize = 4;
     /// The Host places a beat on the frame nearest its exact time: half a
     /// frame, with slack for the float noise of two computations.
     pub(super) const NEAREST_FRAME: f64 = 0.5 + 1e-9;
@@ -270,15 +268,17 @@ async fn host_ride() -> HostRide {
         host.with(move |host| host.set_tempo(tempo))
             .await
             .expect("Host tempo");
-        let mut waited = 0;
-        while host.session_grid().await.revision() == revision {
-            assert!(
-                waited < consts::GRID_WAIT_BLOCKS,
-                "the Host publishes the {bpm} BPM grid"
-            );
-            host.render_forward(block).await;
-            waited += 1;
-        }
+        let commit = if ride.is_empty() {
+            requested
+        } else {
+            requested + consts::CHANGE_LEAD_FRAMES
+        };
+        host.render_forward(commit + block - host.position()).await;
+        assert_ne!(
+            host.session_grid().await.revision(),
+            revision,
+            "the Host publishes the {bpm} BPM grid once the block its commit lands in renders"
+        );
         ride.push(RideStep {
             bpm,
             requested,
@@ -493,6 +493,22 @@ async fn a_known_tempo_deck_and_the_metronome_keep_one_offset_on_every_beat(
             .collect::<Vec<_>>(),
         "the deck plays every fragment click one known period apart"
     );
+    // WHY: The full take's output less the half take's cancels the click
+    // and leaves the deck under the duck: what the listener hears of it.
+    let deck: Vec<f32> = full
+        .output
+        .iter()
+        .zip(&half.output)
+        .map(|(full, half)| full - half)
+        .collect();
+    assert_eq!(
+        clicks(&deck)
+            .iter()
+            .map(|click| click.frame + full.start)
+            .collect::<Vec<_>>(),
+        onsets,
+        "the output sounds every fragment click on the frame the master mixes it"
+    );
 
     // WHY: Each output frame is the frame's mix under the duck plus the
     // click, and both takes duck and click alike. Twice the half take's
@@ -515,6 +531,9 @@ async fn a_known_tempo_deck_and_the_metronome_keep_one_offset_on_every_beat(
         })
         .take_while(|(frame, _)| frame + consts::SILENT_FOOT < end)
         .collect();
+    // WHY: The deck steps by the known period from its first onset and the
+    // metronome from the frame the tempo is set on, so the deck keeps one
+    // offset from the metronome on every beat: no drift.
     assert_eq!(
         heard
             .iter()
@@ -527,15 +546,4 @@ async fn a_known_tempo_deck_and_the_metronome_keep_one_offset_on_every_beat(
         "the metronome clicks every computed beat of the known tempo from the frame it is set on"
     );
     assert_click_levels(&heard, &beats, consts::TAKE_METRONOME);
-
-    let metronome = i64::try_from(heard[0].frame + full.start).expect("click frame");
-    let period = i64::try_from(consts::KNOWN_PERIOD).expect("known period");
-    let offsets: Vec<i64> = onsets
-        .iter()
-        .map(|onset| (i64::try_from(*onset).expect("onset frame") - metronome).rem_euclid(period))
-        .collect();
-    assert!(
-        offsets.iter().all(|offset| *offset == offsets[0]),
-        "the fragment and the metronome keep one offset on every beat, with no drift: {offsets:?}"
-    );
 }
