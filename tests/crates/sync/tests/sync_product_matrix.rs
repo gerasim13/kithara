@@ -17,7 +17,7 @@ use kithara::{
 use kithara::{
     beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
     hls::AbrMode,
-    host::{HostConfig, HostOwned},
+    host::{HostConfig, HostOwned, Tap},
     platform::{
         sync::Arc,
         time::{self, Duration, Instant},
@@ -40,7 +40,7 @@ use kithara_integration_tests::{
     grid::{Start, analysed_grid},
     hls_server::aes128_encryption,
     kithara, memory_asset_store,
-    offline::OfflineHostHarness,
+    offline::{OfflineHostHarness, TapProbe},
     usdt_trace,
 };
 use kithara_test_fixtures::{
@@ -56,6 +56,8 @@ use kithara_test_fixtures::{
 pub(super) const BLOCK_FRAMES: usize = 512;
 pub(super) const CHANNELS: u16 = 2;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+/// Room in the master tap for one `render`, which renders at most a second.
+const MASTER_TAP_SECONDS: usize = 2;
 const START_BPM: f64 = 120.0;
 /// A deadline of ~85 ms at 48 kHz: many times what one player's ring holds
 /// at the bounded render quantum.
@@ -507,6 +509,8 @@ pub(super) struct ProductHarness {
     pub(super) failures: Vec<String>,
     block_frames: usize,
     pub(super) host: OfflineHostHarness<TestPools>,
+    /// The limited mix before the metronome: what the oracles read.
+    master: TapProbe,
     /// Records the render commits `transport_revision` reads for this harness.
     _trace: usdt_trace::Scope,
     output_frames: u64,
@@ -514,7 +518,8 @@ pub(super) struct ProductHarness {
     provider: Provider,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
-    /// Every rendered block with the Host metronome, when artifacts are on.
+    /// Every rendered block as `graph_out` plays it, metronome included,
+    /// when artifacts are on.
     #[cfg(not(target_os = "android"))]
     tap: Option<kithara_integration_tests::audio_artifact::AudioArtifactTap>,
 }
@@ -625,17 +630,9 @@ impl Audible {
 /// device build carries.
 #[cfg(not(target_os = "android"))]
 mod artifact {
-    use std::ops::Range;
-
     use kithara_integration_tests::audio_artifact::{AudioArtifactTap, artifact_label};
 
-    use super::{
-        Audible, CHANNELS, Provider, SyncCase,
-        kithara::{
-            signal::SessionFrame,
-            warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
-        },
-    };
+    use super::{Audible, CHANNELS, Provider, SyncCase};
 
     /// The artifact of one harness run, named by the running test, the case and
     /// the decks it hears.
@@ -655,56 +652,6 @@ mod artifact {
             serde_json::Value::String(format!("{provider:?}")),
         );
         Some(tap)
-    }
-
-    /// Marks every beat the Host session grid places inside `frames` on the
-    /// artifact's metronome. Output frames are session frames: the harness
-    /// renders its session from frame 0.
-    pub(super) fn mark_host_beats(
-        tap: &mut AudioArtifactTap,
-        grid: &BeatGridSnapshot,
-        frames: Range<u64>,
-    ) {
-        let at = |frame: u64| {
-            grid.beat_at(MapPoint::new(
-                grid.stamp(),
-                MapPosition::Session(SessionFrame::new(i64::try_from(frame).unwrap_or(i64::MAX))),
-            ))
-        };
-        let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) =
-            (at(frames.start), at(frames.end))
-        else {
-            return;
-        };
-        let first = f64::from(*first.value().value()).ceil() as i64;
-        let last = f64::from(*last.value().value()).floor() as i64;
-        for ordinal in first..=last {
-            let Ok(beat) = Beat::try_from(BeatOrdinal::new(ordinal)) else {
-                continue;
-            };
-            let BeatGridQuery::Resolved(position) =
-                grid.position_at(MapPoint::new(grid.stamp(), beat))
-            else {
-                continue;
-            };
-            let MapPosition::Session(frame) = *position.value().value() else {
-                continue;
-            };
-            let Ok(frame) = u64::try_from(i64::from(frame)) else {
-                continue;
-            };
-            if !frames.contains(&frame) {
-                continue;
-            }
-            let downbeat = matches!(
-                grid.meter_at(MapPoint::new(grid.stamp(), beat)),
-                BeatGridQuery::Resolved(meter)
-                    if (ordinal - i64::from(meter.value().downbeat()))
-                        .rem_euclid(i64::from(meter.value().beats_per_bar()))
-                        == 0
-            );
-            tap.host_beat(frame, downbeat);
-        }
     }
 }
 
@@ -764,6 +711,16 @@ impl ProductHarness {
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
+        host.set_metronome(true)
+            .await
+            .unwrap_or_else(|error| panic!("{}: metronome: {error}", case.id));
+        let master = host
+            .attach_tap(
+                Tap::Master,
+                case.sample_rate as usize * usize::from(CHANNELS) * MASTER_TAP_SECONDS,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{}: master tap: {error}", case.id));
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
         for (index, source) in sources.into_iter().enumerate() {
@@ -803,6 +760,7 @@ impl ProductHarness {
             failures: Vec::new(),
             block_frames,
             host,
+            master,
             output_frames: 0,
             paced,
             provider,
@@ -908,8 +866,6 @@ impl ProductHarness {
         self.output_frames = end;
         #[cfg(not(target_os = "android"))]
         if let Some(tap) = self.tap.as_mut() {
-            let grid = self.host.session_grid().await;
-            artifact::mark_host_beats(tap, &grid, start..end);
             tap.push(&samples);
         }
         let delay = if self.paced {
@@ -919,7 +875,14 @@ impl ProductHarness {
             Duration::from_millis(1)
         };
         time::sleep(delay).await;
-        samples
+        let master = self.master.drain();
+        assert_eq!(self.master.drops(), 0, "the master tap keeps every frame");
+        assert_eq!(
+            master.len(),
+            frames * usize::from(CHANNELS),
+            "the master tap sees every rendered frame"
+        );
+        master
     }
 
     /// Stamps a control marker on the artifact, when artifacts are on.

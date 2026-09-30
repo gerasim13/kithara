@@ -421,13 +421,7 @@ fn start_label(start: Start) -> String {
     }
 }
 
-fn record(
-    track: &Track,
-    backend: StretchKind,
-    trajectory: &Trajectory,
-    anchors: &[SessionAnchor],
-    output: &[f32],
-) {
+fn record(track: &Track, backend: StretchKind, trajectory: &Trajectory, output: &[f32]) {
     let Some(mut tap) = AudioArtifactTap::from_env(
         &format!(
             "warp-{}-{}-{backend:?}-{}",
@@ -442,17 +436,6 @@ fn record(
         return;
     };
     tap.push(output);
-    let frames = (output.len() / CH).to_f64().expect("frames fit f64");
-    for beat in 0_u32.. {
-        let frame = host_frame(anchors, f64::from(beat));
-        if frame >= frames {
-            break;
-        }
-        tap.host_beat(
-            frame.to_u64().expect("frame fits u64"),
-            beat.is_multiple_of(4),
-        );
-    }
     tap.evidence(
         "projection",
         serde_json::json!({
@@ -518,7 +501,7 @@ fn analysed_beats_land_on_the_host_beats_they_project_to(
     for trajectory in TRAJECTORIES {
         let anchors = anchors(trajectory, track.spec);
         let rendered = render(&track, backend, trajectory, &anchors);
-        record(&track, backend, trajectory, &anchors, &rendered.samples);
+        record(&track, backend, trajectory, &rendered.samples);
         assert!(
             !rendered.positions.is_empty(),
             "{}: the render presented no chunk",

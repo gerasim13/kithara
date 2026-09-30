@@ -151,9 +151,9 @@ wasm BROWSER="chrome" SUITE="all":
     fi
 
 # Render the same active no-SYNC scenarios into listening artifacts, then the
-# SYNC and Warp scenarios on Richie Hawtin - The Tunnel with the Host metronome
-# laid over each capture. The recorders are ignored in ordinary CI so filesystem
-# work cannot consume their behavioral-test deadlines.
+# SYNC and Warp scenarios on Richie Hawtin - The Tunnel; the SYNC captures
+# carry the Host metronome from its output tap. The recorders are ignored in
+# ordinary CI so filesystem work cannot consume their behavioral-test deadlines.
 [positional-arguments]
 audio-artifacts OUTPUT:
     #!/usr/bin/env bash
