@@ -21,9 +21,7 @@ use kithara_test_fixtures::{
     analysis_beat_fixtures::sine_440_long, integration_fixtures::constant_half,
 };
 
-use super::mix_tap::{
-    ROOMY_CAPACITY, play_constant, play_resource, playing_harness, render_blocks,
-};
+use super::mix_tap::{ROOMY_CAPACITY, play_resource, playing_harness, render_blocks};
 
 mod consts {
     pub(super) const SAMPLE_RATE: u32 = 44_100;
@@ -75,6 +73,11 @@ mod consts {
     /// The shallowest duck that keeps [`LOUD_LEVEL`] under the ceiling: the
     /// ducked mix plus the click meets it exactly.
     pub(super) const LOUD_DUCK: f32 = 0.8;
+    /// The least share of [`LOUD_CEILING`] a steady mix at twice the ceiling
+    /// settles at. The limiter's inter-sample detector passes a constant with
+    /// a gain just over one, so it holds that mix 0.084 % under the ceiling;
+    /// bounded at twice that.
+    pub(super) const LOUD_SETTLED: f32 = 0.9983;
     /// The Host tempo a ride starts from.
     pub(super) const RIDE_FROM_BPM: u32 = 120;
     /// The Host tempo a ride ends at.
@@ -710,11 +713,10 @@ async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_rid
 }
 
 #[kithara::test(tokio)]
-async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling(
-    constant_half: &'static [u8],
-) {
+async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling() {
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
     let session = HostConfig::offline(pools())
-        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+        .sample_rate(rate)
         .limiter(
             LimiterConfig::builder()
                 .ceiling(consts::LOUD_CEILING)
@@ -729,42 +731,72 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
                 .expect("loud metronome"),
         )
         .build();
-    let harness = play_constant(OfflinePlayer::new(session).await, constant_half).await;
-    let mut master = harness
-        .host()
-        .attach_tap(Tap::Master, ROOMY_CAPACITY)
+    // WHY: A deck at twice the ceiling from its first frame, with no fade in,
+    // holds the limited mix at the ceiling under the whole click. One block
+    // plays before the taps attach and one more keeps the deck sounding past
+    // the last rendered frame.
+    let frames = u64::from(consts::BLOCK_FRAMES)
+        * u64::try_from(consts::LOUD_BLOCKS + 2).expect("block count");
+    let deck = vec![consts::DECK_LOUD; capacity(frames)];
+    let options = OfflinePlayerOptions::builder()
+        .crossfade_duration(0.0)
+        .block_on_underrun(true)
+        .build();
+    let harness = play_resource(
+        OfflinePlayer::with_options(options, session).await,
+        move || {
+            resource_from_reader(TestPcmReader::with_samples(
+                AudioSpec::new(consts::CHANNELS, rate),
+                deck,
+            ))
+        },
+    )
+    .await;
+    let host = harness.host();
+    let mut master = host
+        .attach_tap(Tap::Master, capacity(frames))
         .await
         .expect("master tap");
-    let mut output = harness
-        .host()
-        .attach_tap(Tap::Output, ROOMY_CAPACITY)
+    let mut output = host
+        .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    harness
-        .host()
-        .set_metronome(true)
-        .await
-        .expect("metronome on");
+    host.set_metronome(true).await.expect("metronome on");
     let tempo = tempo();
-    harness
-        .host()
-        .with(move |host| host.set_tempo(tempo))
+    host.with(move |host| host.set_tempo(tempo))
         .await
         .expect("Host tempo");
     let rendered = render_blocks(&harness, consts::LOUD_BLOCKS).await;
     harness.close().await;
 
-    let output = output.drain();
+    assert_eq!(
+        (output.drops(), master.drops()),
+        (0, 0),
+        "the taps keep every frame"
+    );
+    let (output, master) = (output.drain(), master.drain());
+    assert_eq!(
+        output, rendered,
+        "the output tap carries what graph_out plays"
+    );
+    let under_click: Vec<f32> = master
+        .iter()
+        .zip(&output)
+        .filter(|(master, output)| master != output)
+        .map(|(master, _)| master.abs())
+        .collect();
+    let quietest = under_click.iter().copied().fold(f32::INFINITY, f32::min);
+    assert!(
+        !under_click.is_empty()
+            && quietest >= consts::LOUD_CEILING * consts::LOUD_SETTLED
+            && peak(&master) <= consts::LOUD_CEILING,
+        "the limited mix sits at the ceiling under the whole click: {quietest}"
+    );
     let loudest = peak(&output);
     assert!(
         loudest <= consts::LOUD_CEILING * (1.0 + 4.0 * f32::EPSILON),
         "the ducked mix plus the click stays under the ceiling: {loudest}"
     );
-    assert_eq!(
-        output, rendered,
-        "the output tap carries what graph_out plays"
-    );
-    assert_ne!(output, master.drain(), "a click sounds over the loud mix");
 }
 
 /// The output and master taps of a player at the default Host config whose

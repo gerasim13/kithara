@@ -29,10 +29,7 @@ fn make_resource(constant_half: &'static [u8]) -> Resource {
     ))
 }
 
-pub(super) async fn play_constant(
-    harness: OfflinePlayer,
-    constant_half: &'static [u8],
-) -> OfflinePlayer {
+async fn play_constant(harness: OfflinePlayer, constant_half: &'static [u8]) -> OfflinePlayer {
     play_resource(harness, move || make_resource(constant_half)).await
 }
 
