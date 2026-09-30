@@ -227,7 +227,10 @@ fn slice(meminfo: &str) -> Result<String> {
     ))
 }
 
-fn install_slice() -> Result<()> {
+/// Writes the fleet's memory budget, which every runner container is started
+/// under whichever way the fleet is brought up. systemd reads it on its next
+/// reload.
+pub(super) fn install_slice() -> Result<()> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").context("reading /proc/meminfo")?;
     let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(consts::SERVICE_SLICE);
     std::fs::write(&path, slice(&meminfo)?)
