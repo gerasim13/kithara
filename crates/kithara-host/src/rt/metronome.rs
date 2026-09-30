@@ -145,11 +145,26 @@ impl Click {
 #[derive(Debug, Default)]
 struct Metronome {
     click: Option<Click>,
+    /// The next session beat owed a click while the transport runs. A beat
+    /// is owed by its ordinal, not by the frame it rounds to: a route restart
+    /// rounds the beats on the new rate's frame grid, which can move a beat
+    /// across the restart frame in either direction.
+    owed: Option<i64>,
 }
 
 impl Metronome {
     const fn sounding(&self) -> bool {
         self.click.is_some()
+    }
+
+    /// Whether a block with `trajectory` passes the mix untouched. A block
+    /// without a running transport forgets the owed beat: the next trajectory
+    /// clicks from its first beat on.
+    fn idle(&mut self, trajectory: Option<SessionAnchor>) -> bool {
+        if trajectory.is_none() {
+            self.owed = None;
+        }
+        trajectory.is_none() && !self.sounding()
     }
 
     fn retune(&mut self, sample_rate: NonZeroU32) {
@@ -169,8 +184,10 @@ impl Metronome {
     }
 
     /// Renders one block starting at session frame `start`: the sounding
-    /// click first, then a new click on every whole session beat inside the
-    /// block. Returns whether the block was touched.
+    /// click first, then a new click on every owed session beat whose frame
+    /// is before the block's end. An owed beat a restart rounded behind the
+    /// block clicks on its first frame; with no beat owed yet, the beats
+    /// before the block are not owed. Returns whether the block was touched.
     fn render(
         &mut self,
         trajectory: Option<SessionAnchor>,
@@ -184,12 +201,14 @@ impl Metronome {
         let mut started = false;
         if let Some(anchor) = trajectory {
             let first = i64::from(start);
-            let mut ordinal = anchor
-                .beat_at(start)
-                .ok()
-                .and_then(|beat| f64::from(beat).floor().to_i64());
+            let owed = self.owed;
+            let mut ordinal = owed.or_else(|| {
+                anchor
+                    .beat_at(start)
+                    .ok()
+                    .and_then(|beat| f64::from(beat).floor().to_i64())
+            });
             while let Some(beat) = ordinal {
-                ordinal = beat.checked_add(1);
                 let Some(offset) = beat
                     .to_f64()
                     .and_then(|whole| SessionBeat::new(whole).ok())
@@ -198,12 +217,18 @@ impl Metronome {
                 else {
                     break;
                 };
-                let Ok(offset) = usize::try_from(offset) else {
-                    continue;
+                let offset = match usize::try_from(offset) {
+                    Ok(offset) => offset,
+                    Err(_) if owed.is_some() => 0,
+                    Err(_) => {
+                        ordinal = beat.checked_add(1);
+                        continue;
+                    }
                 };
                 if offset >= left.len() {
                     break;
                 }
+                ordinal = beat.checked_add(1);
                 let (Some(left_run), Some(right_run)) =
                     (left.get_mut(cursor..offset), right.get_mut(cursor..offset))
                 else {
@@ -218,6 +243,7 @@ impl Metronome {
                 cursor = offset;
                 started = true;
             }
+            self.owed = ordinal;
         }
         if let (Some(left_rest), Some(right_rest)) =
             (left.get_mut(cursor..), right.get_mut(cursor..))
@@ -283,7 +309,7 @@ impl AudioNodeProcessor for MetronomeProcessor {
         } else {
             None
         };
-        if trajectory.is_none() && !self.metronome.sounding() {
+        if self.metronome.idle(trajectory) {
             return ProcessStatus::Bypass;
         }
         let frames = info.frames;

@@ -19,8 +19,9 @@ use super::mix_tap::{ROOMY_CAPACITY, play_constant, playing_harness, render_bloc
 
 mod consts {
     pub(super) const SAMPLE_RATE: u32 = 44_100;
-    /// The device rate a route restart moves the session to.
-    pub(super) const RESTART_RATE: u32 = 88_200;
+    /// Twice [`SAMPLE_RATE`]: a route restart between the two rates halves
+    /// or doubles the frame grid the Host beats round to.
+    pub(super) const DOUBLE_RATE: u32 = 88_200;
     pub(super) const BLOCK_FRAMES: u32 = 512;
     pub(super) const CHANNELS: u16 = 2;
     /// A tempo whose beat is not a whole number of frames, so every click
@@ -127,11 +128,14 @@ fn tempo() -> Tempo {
     Tempo::new(consts::BPM).expect("fixture tempo")
 }
 
-/// An offline Host with no deck, its metronome on, its transport running at
-/// [`consts::BPM`], and an output tap holding `frames` frames. One block is
-/// rendered first: the tempo commits on a running session.
-async fn metronome_host(frames: u64) -> (OfflineHostHarness<TestPools>, TapProbe) {
-    let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+/// An offline Host at `sample_rate` with no deck, its metronome on, its
+/// transport running at [`consts::BPM`], and an output tap holding `frames`
+/// frames. One block is rendered first: the tempo commits on a running session.
+async fn metronome_host(
+    sample_rate: u32,
+    frames: u64,
+) -> (OfflineHostHarness<TestPools>, TapProbe) {
+    let sample_rate = NonZeroU32::new(sample_rate).expect("test sample rate");
     let config = HostConfig::offline(pools())
         .sample_rate(sample_rate)
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
@@ -156,7 +160,7 @@ async fn metronome_host(frames: u64) -> (OfflineHostHarness<TestPools>, TapProbe
 async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
     let block = u64::from(consts::BLOCK_FRAMES);
     let frames = consts::BLOCKS * block;
-    let (host, mut tap) = metronome_host(frames).await;
+    let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, frames).await;
 
     let rendered = host.render_forward(frames - block).await;
     let pcm = tap.drain();
@@ -212,7 +216,7 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
 #[kithara::test(tokio)]
 async fn a_click_a_route_restart_interrupts_ends_when_it_would_have_at_the_new_rate() {
     let block = u64::from(consts::BLOCK_FRAMES);
-    let (host, mut tap) = metronome_host(consts::BLOCKS * block).await;
+    let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, consts::BLOCKS * block).await;
     host.render_forward(block).await;
     let beat_one = beat_frame(&host.session_grid().await, 1);
     host.render_forward(beat_one - host.position()).await;
@@ -225,7 +229,7 @@ async fn a_click_a_route_restart_interrupts_ends_when_it_would_have_at_the_new_r
     let head_frames = span / 2;
     host.render_forward(head_frames).await;
     let head = clicks(&tap.drain());
-    host.set_sample_rate(NonZeroU32::new(consts::RESTART_RATE).expect("restart rate"))
+    host.set_sample_rate(NonZeroU32::new(consts::DOUBLE_RATE).expect("restart rate"))
         .await
         .expect("restart the route at the new rate");
     host.render_forward(4 * first.frames).await;
@@ -240,13 +244,108 @@ async fn a_click_a_route_restart_interrupts_ends_when_it_would_have_at_the_new_r
     let [tail] = tail.as_slice() else {
         panic!("only the interrupted click sounds after the restart: {tail:?}");
     };
-    let scale = f64::from(consts::RESTART_RATE) / f64::from(consts::SAMPLE_RATE);
+    let scale = f64::from(consts::DOUBLE_RATE) / f64::from(consts::SAMPLE_RATE);
     let expected = (span - head_frames) as f64 * scale;
     assert_eq!(tail.frame, 0, "the click carries on across the restart");
     assert!(
         (tail.frames as f64 - expected).abs() <= scale,
         "the click ends when it would have: {} frames at the new rate, expected {expected:.0}",
         tail.frames
+    );
+}
+
+/// Renders `host` up to `past` frames after Host beat 1, restarts the route at
+/// `rate`, and returns the clicks the output tap sounds in the blocks after
+/// the restart.
+async fn clicks_after_a_restart_near_beat_one(
+    host: OfflineHostHarness<TestPools>,
+    mut tap: TapProbe,
+    past: u64,
+    rate: u32,
+) -> Vec<Click> {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    host.render_forward(block).await;
+    let beat_one = beat_frame(&host.session_grid().await, 1);
+    host.render_forward(beat_one + past - host.position()).await;
+    tap.drain();
+    host.set_sample_rate(NonZeroU32::new(rate).expect("restart rate"))
+        .await
+        .expect("restart the route at the new rate");
+    host.render_forward(4 * block).await;
+    let tail = clicks(&tap.drain());
+    host.close().await;
+    tail
+}
+
+#[kithara::test(tokio)]
+async fn a_beat_a_restart_to_a_lower_rate_lands_on_clicks_once() {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let (host, tap) = metronome_host(consts::DOUBLE_RATE, consts::BLOCKS * block).await;
+    // WHY: At [`consts::BPM`] beat 1 lies 0.42 frames after the frame it
+    // rounds to at the double rate. A restart one frame later puts it 0.29
+    // frames before the restart frame at the lower rate: onto which it rounds
+    // again.
+    let tail =
+        clicks_after_a_restart_near_beat_one(host, tap, consts::SILENT_FOOT, consts::SAMPLE_RATE)
+            .await;
+
+    let [tail] = tail.as_slice() else {
+        panic!("only beat 1's click sounds after the restart: {tail:?}");
+    };
+    assert_eq!(
+        tail.frame, 0,
+        "beat 1's click carries on across the restart instead of starting again"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_beat_a_restart_to_a_higher_rate_lands_on_still_clicks() {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let (host, tap) = metronome_host(consts::SAMPLE_RATE, consts::BLOCKS * block).await;
+    // WHY: At [`consts::BPM`] beat 1 lies 0.29 frames before the frame it
+    // rounds to, the restart frame; at the double rate that is 0.58 frames,
+    // which rounds onto the frame before the restart.
+    let tail = clicks_after_a_restart_near_beat_one(host, tap, 0, consts::DOUBLE_RATE).await;
+
+    let [tail] = tail.as_slice() else {
+        panic!("beat 1 clicks once after the restart: {tail:?}");
+    };
+    assert_eq!(
+        tail.frame,
+        consts::SILENT_FOOT,
+        "beat 1's click rises from the first frame after the restart"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_metronome_switched_back_on_clicks_from_the_next_beat() {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let frames = consts::BLOCKS * block;
+    let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, frames).await;
+    host.render_forward(block).await;
+    let beat_three = beat_frame(&host.session_grid().await, 3);
+    host.set_metronome(false).await.expect("metronome off");
+    host.render_forward(beat_three + block - host.position())
+        .await;
+    tap.drain();
+    let start = host.position();
+    host.set_metronome(true).await.expect("metronome back on");
+    host.render_forward(frames - start).await;
+    let heard: Vec<u64> = clicks(&tap.drain())
+        .iter()
+        .map(|click| click.frame + start)
+        .collect();
+    let grid = host.session_grid().await;
+    host.close().await;
+
+    let beats: Vec<u64> = host_beats(&grid, start..frames)
+        .into_iter()
+        .map(|(frame, _)| frame + consts::SILENT_FOOT)
+        .collect();
+    assert!(!beats.is_empty(), "the render spans Host beats");
+    assert_eq!(
+        heard, beats,
+        "the beats the metronome was off for stay silent; it clicks from the next beat on"
     );
 }
 
@@ -290,7 +389,7 @@ async fn the_metronome_is_off_by_default_and_passes_the_mix_bit_exactly(
 async fn the_master_tap_carries_no_click() {
     let block = u64::from(consts::BLOCK_FRAMES);
     let frames = 100 * block;
-    let (host, mut output) = metronome_host(frames).await;
+    let (host, mut output) = metronome_host(consts::SAMPLE_RATE, frames).await;
     let mut master = host
         .attach_tap(Tap::Master, capacity(frames))
         .await
