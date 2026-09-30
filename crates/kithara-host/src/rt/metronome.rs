@@ -27,10 +27,11 @@ mod consts {
     /// Tone of a downbeat click.
     pub(super) const DOWNBEAT_HZ: f64 = 2_200.0;
     /// Rise of a click from silence to its peak. A raised-cosine rise and
-    /// fall keep the click and its duck band-limited, so the ducked mix plus
-    /// the click stays under the limiter's true-peak ceiling between samples
-    /// too, as long as the mix carries no loud content in the top kilohertz
-    /// or two under Nyquist: the duck's modulation folds that content back.
+    /// fall keep the click and its duck band-limited. Between samples the
+    /// duck's modulation still folds the mix's highest content back over the
+    /// limiter's true-peak ceiling: by under a hundredth of a decibel at the
+    /// default level, by up to about a third of a decibel at a level equal to
+    /// the ceiling over loud content near Nyquist.
     pub(super) const ATTACK_SECONDS: f64 = 0.002;
     /// Fall of a click from its peak back to silence.
     pub(super) const DECAY_SECONDS: f64 = 0.008;
@@ -388,9 +389,8 @@ mod tests {
         const RISE_FRAMES: f32 = 512.0;
         const ONSET: usize = 1_024;
         const FRAMES: u16 = 2_048;
-        // WHY: A moving mix under a full-depth duck, well inside the band the
-        // oracle resolves exactly. Loud content near Nyquist is out of the
-        // contract: the duck's modulation folds it back over the ceiling.
+        // WHY: A moving mix under a full-depth duck, far enough under Nyquist
+        // that the duck's modulation folds nothing back over the ceiling.
         const TONE_HZ: f64 = 10_000.0;
         const TONE_PHASE: f64 = 2.1;
         const RATE: u16 = 44_100;
