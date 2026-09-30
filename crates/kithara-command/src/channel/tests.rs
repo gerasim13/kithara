@@ -297,3 +297,108 @@ async fn the_halves_cross_threads() {
     assert_eq!(executed.await.expect("the executor finishes"), [(0, 1)]);
     assert_eq!(outcomes(&mut sender), [(seq, applied(0))]);
 }
+
+#[kithara::test]
+fn a_current_basis_applies_the_whole_batch_and_chains() {
+    let (mut sender, mut inbox) = pair(8, 2);
+    let both = Batch {
+        basis: vec![(Slot(0), None), (Slot(1), None)],
+        commands: vec![1, 2],
+    };
+    let first = send(&mut sender, When::Next, both);
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1), (0, 2)]);
+
+    let chained = [(Slot(0), Some(first)), (Slot(1), Some(first))];
+    send(&mut sender, When::Next, batch(3, &chained));
+    assert_eq!(run_block(&mut inbox, 64, BLOCK), [(0, 3)]);
+}
+
+#[kithara::test]
+fn a_moved_target_rejects_the_whole_batch() {
+    let (mut sender, mut inbox) = pair(8, 2);
+    let seek = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    let both = Batch {
+        basis: vec![(Slot(0), None), (Slot(1), None)],
+        commands: vec![2, 3],
+    };
+    let stale = send(&mut sender, When::Next, both);
+
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1)]);
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (seek, applied(0)),
+            (stale, Outcome::Rejected(Rejection::Stale)),
+        ]
+    );
+
+    send(&mut sender, When::Next, batch(4, &[(Slot(1), None)]));
+    assert_eq!(run_block(&mut inbox, 64, BLOCK), [(0, 4)]);
+}
+
+#[kithara::test]
+fn a_disjoint_basis_applies_after_another_target_moves() {
+    let (mut sender, mut inbox) = pair(8, 2);
+    send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    send(&mut sender, When::Next, batch(2, &[(Slot(1), None)]));
+
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1), (0, 2)]);
+}
+
+#[kithara::test]
+fn an_empty_basis_applies_and_records_nothing() {
+    let (mut sender, mut inbox) = pair(8, 1);
+    let seek = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    send(&mut sender, When::Next, batch(2, &[]));
+    send(&mut sender, When::Next, batch(3, &[(Slot(0), Some(seek))]));
+
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1), (0, 2), (0, 3)]);
+}
+
+#[kithara::test]
+fn a_held_batch_is_judged_when_it_fires() {
+    let (mut sender, mut inbox) = pair(8, 1);
+    let start = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1)]);
+
+    let crossfade = send(
+        &mut sender,
+        When::At(Frame(200)),
+        batch(2, &[(Slot(0), Some(start))]),
+    );
+    assert!(run_block(&mut inbox, 64, BLOCK).is_empty());
+    let seek = send(&mut sender, When::Next, batch(3, &[(Slot(0), Some(start))]));
+    assert_eq!(run_block(&mut inbox, 128, BLOCK), [(0, 3)]);
+    assert!(run_block(&mut inbox, 192, BLOCK).is_empty());
+
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (start, applied(0)),
+            (seek, applied(128)),
+            (crossfade, Outcome::Rejected(Rejection::Stale)),
+        ]
+    );
+}
+
+#[kithara::test]
+fn a_repeated_target_applies_only_when_its_entries_agree() {
+    let (mut sender, mut inbox) = pair(8, 1);
+    let first = send(
+        &mut sender,
+        When::Next,
+        batch(1, &[(Slot(0), None), (Slot(0), None)]),
+    );
+    send(
+        &mut sender,
+        When::Next,
+        batch(2, &[(Slot(0), Some(first)), (Slot(0), None)]),
+    );
+    send(
+        &mut sender,
+        When::Next,
+        batch(3, &[(Slot(0), Some(first)), (Slot(0), Some(first))]),
+    );
+
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1), (0, 3)]);
+}

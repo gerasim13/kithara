@@ -3,7 +3,7 @@ use ringbuf::{
     traits::{Consumer, Producer},
 };
 
-use super::{schedule::Schedule, sender::Sent};
+use super::{ledger::Ledger, schedule::Schedule, sender::Sent};
 use crate::{
     config::ChannelConfig,
     protocol::{Batch, Clock, Protocol, Seq, When},
@@ -18,10 +18,11 @@ use crate::{
 pub struct Inbox<P: Protocol> {
     pending: HeapCons<Sent<P>>,
     answers: HeapProd<Receipt<P>>,
+    ledger: Ledger,
     schedule: Schedule<P>,
 }
 
-/// A batch due inside the current block.
+/// A batch due inside the current block whose basis matches.
 ///
 /// It holds its inbox until [`Due::apply`] or [`Due::refuse`] answers it, so
 /// the answer reaches the channel the batch came from and the next batch is
@@ -108,6 +109,7 @@ impl<P: Protocol> Inbox<P> {
             pending,
             answers,
             schedule: Schedule::new(config.capacity.get()),
+            ledger: Ledger::new(config.targets),
         }
     }
 
@@ -122,13 +124,14 @@ impl<P: Protocol> Inbox<P> {
     ///
     /// Batches come in time order and, at one moment, in send order. On the
     /// way it answers [`Rejection::Late`] for a batch whose moment is before
-    /// `start`. `None` means nothing more is due inside the block.
+    /// `start` and [`Rejection::Stale`] for one whose basis no longer matches.
+    /// `None` means nothing more is due inside the block.
     pub fn next_due(&mut self, start: P::Clock, frames: usize) -> Option<Due<'_, P>> {
         loop {
             let place = Place::of(self.schedule.peek()?, start, frames)?;
             let sent = self.schedule.pop()?;
             let rejection = match place {
-                Place::Within { offset, at } => {
+                Place::Within { offset, at } if self.ledger.is_current(&sent.batch.basis) => {
                     return Some(Due {
                         inbox: self,
                         offset,
@@ -137,6 +140,7 @@ impl<P: Protocol> Inbox<P> {
                         batch: sent.batch,
                     });
                 }
+                Place::Within { .. } => Rejection::Stale,
                 Place::Past => Rejection::Late,
             };
             self.reply(Receipt {
@@ -154,8 +158,10 @@ impl<P: Protocol> Inbox<P> {
 }
 
 impl<P: Protocol> Due<'_, P> {
-    /// Applies the batch: its receipt reports `data` at the batch's moment.
+    /// Applies the batch: its targets record it as their last shift, and its
+    /// receipt reports `data` at the batch's moment.
     pub fn apply(self, data: P::Applied) {
+        self.inbox.ledger.record(&self.batch.basis, self.seq);
         self.inbox.reply(Receipt {
             seq: self.seq,
             outcome: Outcome::Applied { data, at: self.at },
@@ -163,7 +169,8 @@ impl<P: Protocol> Due<'_, P> {
         });
     }
 
-    /// Refuses the batch for a reason of the executor's domain.
+    /// Refuses the batch for a reason of the executor's domain; its targets
+    /// keep their last shift.
     pub fn refuse(self, refusal: P::Refusal) {
         self.inbox.reply(Receipt {
             seq: self.seq,
