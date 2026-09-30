@@ -69,12 +69,7 @@ fn run_block(inbox: &mut Inbox<Test>, start: u64, frames: usize) -> Vec<(usize, 
     let mut applied = Vec::new();
     while let Some(due) = inbox.next_due(Frame(start), frames) {
         let offset = due.offset();
-        applied.extend(
-            due.batch()
-                .commands
-                .iter()
-                .map(|&command| (offset, command)),
-        );
+        applied.extend(due.commands().iter().map(|&command| (offset, command)));
         due.apply(());
     }
     applied
@@ -264,7 +259,7 @@ fn the_executor_returns_resources_inside_the_batch() {
     inbox.drain();
 
     let mut due = inbox.next_due(Frame(0), BLOCK).expect("the batch is due");
-    let taken = mem::replace(&mut due.batch_mut().commands[0], 99);
+    let taken = mem::replace(&mut due.commands_mut()[0], 99);
     due.apply(());
 
     assert_eq!(taken, 7);

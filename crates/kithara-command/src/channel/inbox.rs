@@ -41,15 +41,19 @@ pub struct Inbox<P: Protocol> {
 #[must_use = "a due batch is answered through Due::apply or Due::refuse"]
 pub struct Due<'inbox, P: Protocol> {
     inbox: &'inbox mut Inbox<P>,
-    /// Commands to apply; resources the executor releases go back into it.
-    #[field(get, get_mut)]
-    batch: Batch<P>,
     /// The batch's moment; the block start for a batch sent for the next block.
     #[field(get(copy))]
     at: P::Clock,
     /// What the receipt reports when the due batch drops.
     outcome: Outcome<P>,
     seq: Seq,
+    /// Targets the batch shifts, as judged.
+    #[field(get)]
+    basis: Vec<(P::Target, Option<Seq>)>,
+    /// Commands to apply; the executor swaps the resources it releases into
+    /// them.
+    #[field(get, get_mut)]
+    commands: Vec<P::Command>,
     /// Frames from the block start to the batch's moment.
     #[field(get)]
     offset: usize,
@@ -111,12 +115,14 @@ impl<P: Protocol> Inbox<P> {
             let sent = self.schedule.pop()?;
             let rejection = match place {
                 Place::Within { offset, at } if self.ledger.is_current(&sent.batch.basis) => {
+                    let Batch { basis, commands } = sent.batch;
                     return Some(Due {
                         offset,
                         at,
+                        basis,
+                        commands,
                         inbox: self,
                         seq: sent.seq,
-                        batch: sent.batch,
                         outcome: Outcome::Rejected(Rejection::Unanswered),
                     });
                 }
@@ -138,10 +144,17 @@ impl<P: Protocol> Inbox<P> {
 }
 
 impl<P: Protocol> Due<'_, P> {
-    /// Applies the batch: its targets record it as their last shift, and its
-    /// receipt reports `data` at the batch's moment.
+    /// Applies the batch: the targets of its basis, which stays as judged,
+    /// record it as their last shift, and its receipt reports `data` at the
+    /// batch's moment.
+    /// ```compile_fail
+    /// # use kithara_command::{Due, Protocol};
+    /// fn move_basis<P: Protocol>(due: &mut Due<'_, P>) {
+    ///     due.basis_mut()[0].1 = None; // ERROR: the basis is read-only
+    /// }
+    /// ```
     pub fn apply(mut self, data: P::Applied) {
-        self.inbox.ledger.record(&self.batch.basis, self.seq);
+        self.inbox.ledger.record(&self.basis, self.seq);
         self.outcome = Outcome::Applied { data, at: self.at };
     }
 
@@ -154,16 +167,13 @@ impl<P: Protocol> Due<'_, P> {
 
 impl<P: Protocol> Drop for Due<'_, P> {
     /// Answers the batch with its outcome and returns it whole; the empty
-    /// batch left in its place owns no allocation.
+    /// vectors left in its place own no allocation.
     fn drop(&mut self) {
         let outcome = mem::replace(&mut self.outcome, Outcome::Rejected(Rejection::Unanswered));
-        let batch = mem::replace(
-            &mut self.batch,
-            Batch {
-                basis: Vec::new(),
-                commands: Vec::new(),
-            },
-        );
+        let batch = Batch {
+            basis: mem::take(&mut self.basis),
+            commands: mem::take(&mut self.commands),
+        };
         self.inbox.reply(Receipt {
             outcome,
             batch,
