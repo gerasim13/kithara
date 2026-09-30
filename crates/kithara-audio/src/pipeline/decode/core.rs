@@ -314,6 +314,11 @@ impl ActiveDecode {
     #[must_use]
     pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) -> Option<DecoderGeneration> {
         self.active.notify_seek(retire);
+        self.disarm_seek_transition()
+    }
+
+    #[must_use]
+    pub(crate) fn disarm_seek_transition(&mut self) -> Option<DecoderGeneration> {
         if !matches!(self.incoming, Some(IncomingDecode::Priming { .. })) {
             return None;
         }
@@ -480,7 +485,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-    use kithara_decode::{BlenderProfile, DecoderSeekOutcome};
+    use kithara_decode::{BlenderProfile, DecoderSeekOutcome, DropChunks};
     use kithara_platform::time::Duration;
     use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_stream::{
@@ -494,7 +499,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        pipeline::{decode::transition::IncomingPrime, rebuild::retire::Retired},
+        pipeline::decode::transition::IncomingPrime,
         test_pools::{Pools, pools, sample_buffer},
         traits::{AudioObserveError, AudioObserverMock},
     };
@@ -712,9 +717,7 @@ mod tests {
             .push(make_chunk(0))
             .expect("first holdback chunk is valid");
 
-        let retired = Retired::new(1, 1);
-
-        let invalidated = decode.notify_seek(&retired);
+        let invalidated = decode.notify_seek(&DropChunks);
 
         assert!(
             invalidated.is_some(),

@@ -1,5 +1,5 @@
 use arc_swap::ArcSwap;
-use kithara_decode::ChunkRetire;
+use kithara_decode::DropChunks;
 use kithara_events::DeferredBus;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunk;
@@ -21,12 +21,13 @@ use crate::{
     AudioEvent, AudioLaneEvent, DecoderChangeCause, TrackFailureKind,
     pipeline::{
         decode::{
+            DecoderGeneration,
             gate::ReadinessGate,
             resume::ResumeCursor,
             transition::{IncomingPrime, OutgoingFrontier},
         },
         parts::SourceParts,
-        rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort, retire::Retired},
+        rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort},
         seek::SeekEngine,
         track::{
             self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
@@ -93,7 +94,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `execute_recreation`.
     /// Decode generations displaced on the produce core. They are dropped
     /// from `finish_deferred`, outside the forbid-blocking region.
-    pub(crate) retired: Retired,
+    pub(crate) retired: Vec<DecoderGeneration>,
+    pending_seek_cleanup: bool,
     pub(crate) seek_engine: SeekEngine,
     pub(crate) shared_stream: SharedStream<T>,
 }
@@ -118,11 +120,6 @@ fn initial_promotion_frontier(transition: VariantTransition) -> OutgoingFrontier
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
-    const CHUNK_RETIRE_CAPACITY: usize = 64;
-
-    /// Bounded off-RT retire queue for decode state displaced on the produce core.
-    const GENERATION_RETIRE_CAPACITY: usize = 4;
-
     pub(crate) fn new(shared_stream: SharedStream<T>, parts: SourceParts<T>) -> Self {
         let SourceParts {
             activity,
@@ -155,10 +152,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             variant_control,
             state: Track::<Decoding>::new(()).erase(),
             emit: None,
-            retired: Retired::new(
-                Self::GENERATION_RETIRE_CAPACITY,
-                Self::CHUNK_RETIRE_CAPACITY,
-            ),
+            // One checked step can replace active and discard incoming.
+            retired: Vec::with_capacity(2),
+            pending_seek_cleanup: false,
         }
     }
 
@@ -199,10 +195,7 @@ impl<T: StreamType> Drop for StreamAudioSource<T> {
         if let Some(ref emit) = self.emit {
             emit.flush();
         }
-        if let Some(chunk) = self.decode.take_rejected_chunk() {
-            ChunkRetire::retire(&self.retired, chunk);
-        }
-        self.retired.drain();
+        self.retired.clear();
     }
 }
 
@@ -218,7 +211,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn discard_local_incoming(&mut self) {
         if let Some(generation) = self.decode.discard_incoming() {
-            self.retired.retire_generation(generation);
+            self.retired.push(generation);
         }
     }
 
@@ -249,16 +242,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.discard_local_incoming();
     }
 
-    /// Applies a seek to the decode core, retiring what the seek invalidates.
+    /// Records a seek invalidation for the deferred shell.
     ///
-    /// Repositioning the active generation retires the transition join with
-    /// it, so the incoming half that claimed one cannot outlive the call.
-    /// Pairing the two here is what keeps a caller from doing one and not the
-    /// other.
+    /// Disarm the stale join now; every caller returns `StateChanged`, so
+    /// `prepare_deferred` can release the old PCM before another decode step.
     pub(super) fn notify_seek(&mut self) {
-        if let Some(generation) = self.decode.notify_seek(&self.retired) {
-            self.retired.retire_generation(generation);
+        if let Some(generation) = self.decode.disarm_seek_transition() {
+            self.retired.push(generation);
         }
+        self.pending_seek_cleanup = true;
     }
 
     fn prepare_incoming_transition(
@@ -286,7 +278,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 .decode
                 .begin_incoming(transition, initial_promotion_frontier(transition))
         {
-            self.retired.retire_generation(generation);
+            self.retired.push(generation);
         }
         if !self.decode.incoming_is_preparing(transition) || !self.rebuild.can_prepare() {
             return None;
@@ -412,7 +404,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         },
                     );
                 }
-                self.retired.retire_generation(outgoing);
+                self.retired.push(outgoing);
                 self.rebuild.wake();
                 true
             }
@@ -421,7 +413,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 false
             }
             VariantPromotion::Stale => {
-                self.retired.retire_generation(prepared.into());
+                self.retired.push(prepared.into());
                 true
             }
             _ => {
@@ -437,7 +429,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn retire_failed_incoming(&mut self, control: &dyn VariantControl) {
         if let Some((transition, generation)) = self.decode.take_failed_incoming() {
-            self.retired.retire_generation(generation);
+            self.retired.push(generation);
             let _ = control.abort_variant(transition);
         }
     }
@@ -466,10 +458,10 @@ impl<T: StreamType> StreamAudioSource<T> {
                                 .prepare_replacement_profile(generation.blender_profile());
                         }
                         if let Some(displaced) = self.rebuild.cache_replacement(complete) {
-                            retire_completion(&self.retired, displaced);
+                            retire_completion(&mut self.retired, displaced);
                         }
                     } else {
-                        retire_completion(&self.retired, complete);
+                        retire_completion(&mut self.retired, complete);
                     }
                 }
                 DecoderBuildPurpose::Incoming(transition) => match complete.result {
@@ -478,7 +470,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                             self.decode
                                 .install_incoming(transition, complete.build, generation)
                         {
-                            self.retired.retire_generation(generation);
+                            self.retired.push(generation);
                         }
                     }
                     Err(outcome) => {
@@ -489,7 +481,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         );
                         if self.decode.incoming_transition() == Some(transition) {
                             if let Some(generation) = self.decode.discard_incoming() {
-                                self.retired.retire_generation(generation);
+                                self.retired.push(generation);
                             }
                             if let Some(ref control) = self.variant_control {
                                 let _ = control.abort_variant(transition);
@@ -579,9 +571,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-fn retire_completion(retired: &Retired, complete: DecoderBuildComplete) {
+fn retire_completion(retired: &mut Vec<DecoderGeneration>, complete: DecoderBuildComplete) {
     if let Ok(generation) = complete.result {
-        retired.retire_generation(generation);
+        retired.push(generation);
     }
 }
 
@@ -604,7 +596,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
 
     /// Flushes operations deferred from the non-blocking produce core.
     fn finish_deferred(&mut self) {
-        self.retired.drain();
+        self.retired.clear();
         self.rebuild.submit();
         if let Some(ref emit) = self.emit {
             emit.flush();
@@ -614,6 +606,11 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     }
 
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
+        if std::mem::take(&mut self.pending_seek_cleanup)
+            && let Some(generation) = self.decode.notify_seek(&DropChunks)
+        {
+            self.retired.push(generation);
+        }
         let live_epoch = self.seek_obs.epoch();
         let prepare_input = match &self.state {
             CurrentFsm::Decoding(_) | CurrentFsm::AwaitingResume(_) => true,
@@ -624,16 +621,10 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             _ => false,
         };
         self.decode.prepare_deferred(live_epoch, prepare_input);
-        if let Some(chunk) = self.decode.take_rejected_chunk() {
-            ChunkRetire::retire(&self.retired, chunk);
-        }
+        let _ = self.decode.take_rejected_chunk();
         self.route_build_completions();
         self.progress_variant_transition();
         Some(self.decode.active().blender_profile().spec())
-    }
-
-    fn retire_chunk(&self, chunk: AudioChunk) {
-        ChunkRetire::retire(&self.retired, chunk);
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {

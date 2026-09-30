@@ -291,6 +291,7 @@ impl DecoderGeneration {
     }
 
     pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
+        self.gapless.prepare_deferred();
         if self
             .seek_preparation
             .completed

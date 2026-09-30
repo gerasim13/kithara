@@ -6,9 +6,10 @@ use std::{
 };
 
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
+use kithara_bufpool::PoolConfig;
 use kithara_decode::{
-    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
-    GaplessMode, GaplessProfile,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DropChunks,
+    GaplessInfo, GaplessMode, GaplessProfile,
 };
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
@@ -44,7 +45,6 @@ use crate::{
             DecoderBuildComplete, DecoderBuildPurpose, RebuildState, RecreateCause, RecreateNext,
             RecreateState,
             port::{RebuildPort, RebuildRuntime},
-            retire::Retired,
             state::BuildId,
         },
         seek::{ApplySeekState, SeekContext, SeekMode, SeekRequest},
@@ -55,7 +55,7 @@ use crate::{
             WaitingReason,
         },
     },
-    test_pools::{Pools, pools, sample_buffer},
+    test_pools::{Pools, pools, pools_with, sample_buffer},
     traits::{AudioSource, AudioSourceExt},
 };
 
@@ -122,6 +122,77 @@ impl Decoder for TestDecoder {
     }
 
     fn update_byte_len(&self, _len: u64) {}
+}
+
+#[kithara::rtsan_forbid_blocking]
+fn checked_step<T: StreamType>(source: &mut StreamAudioSource<T>) -> TrackStep<AudioChunk> {
+    source.step_track()
+}
+
+#[kithara::test(tokio)]
+async fn retired_generations_are_all_reclaimed_after_a_burst() {
+    let RebuildFixture {
+        drops, mut source, ..
+    } = test_source(0).await;
+    for id in 1..=5 {
+        source.retired.push(DecoderGeneration::new(
+            Box::new(TestDecoder::new(id, Arc::clone(&drops))),
+            None,
+            0,
+            0,
+            None,
+            GaplessMode::Disabled,
+        ));
+    }
+    assert!(
+        drops.lock().is_empty(),
+        "retirement must not destroy on the checked path"
+    );
+    source.flush_deferred();
+    let mut dropped = drops.lock().clone();
+    dropped.sort_unstable();
+    assert_eq!(dropped, (1..=5).collect::<Vec<_>>());
+}
+
+#[kithara::test(tokio)]
+async fn checked_seek_defers_more_than_64_pcm_chunks_without_leaking() {
+    let config = PoolConfig::builder()
+        .max_buffers(128)
+        .max_retained_capacity(1)
+        .build();
+    let pools = pools_with(1024 * 1024, config, config);
+    let baseline = pools.stats().allocated_bytes;
+    let RebuildFixture {
+        drops, mut source, ..
+    } = test_source(0).await;
+    let mut generation = DecoderGeneration::new(
+        Box::new(TestDecoder::new(7, drops)),
+        None,
+        0,
+        0,
+        None,
+        GaplessMode::Disabled,
+    );
+    for _ in 0..65 {
+        generation.stage(AudioChunk::new(
+            AudioChunkInfo::default(),
+            sample_buffer(&pools, &[0.0, 0.0]),
+        ));
+    }
+    assert!(generation.has_output());
+    let old = source.decode.replace_active(generation);
+    source.retired.push(old);
+    source.flush_deferred();
+    assert!(pools.stats().allocated_bytes > baseline);
+
+    source.seek.begin(Duration::from_secs(1));
+    assert!(matches!(checked_step(&mut source), TrackStep::StateChanged));
+    assert!(
+        pools.stats().allocated_bytes > baseline,
+        "checked step must not free PCM"
+    );
+    source.flush_deferred();
+    assert_eq!(pools.stats().allocated_bytes, baseline);
 }
 
 struct FailingDecoder;
@@ -1746,7 +1817,7 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
         GaplessMode::Disabled,
     );
     let old = source.decode.replace_active(replacement);
-    source.retired.retire_generation(old);
+    source.retired.push(old);
 
     assert!(matches!(source.step_track(), TrackStep::Failed));
     assert!(events.try_recv().is_err());
@@ -2309,7 +2380,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
 }
 
 #[kithara::test]
-fn a_seek_hands_its_buffered_chunks_to_the_retire_queue(route_pcm: RoutePcm) {
+fn a_seek_releases_its_buffered_chunks_off_rt(route_pcm: RoutePcm) {
     const STAGED: usize = 3;
     let pools = pools();
 
@@ -2338,9 +2409,7 @@ fn a_seek_hands_its_buffered_chunks_to_the_retire_queue(route_pcm: RoutePcm) {
     }
     assert!(generation.has_output(), "fixture staged nothing to flush");
 
-    let retired = Retired::new(1, 8);
-    generation.notify_seek(&retired);
+    generation.notify_seek(&DropChunks);
 
-    assert_eq!(retired.chunk_len(), STAGED);
     assert!(!generation.has_output());
 }

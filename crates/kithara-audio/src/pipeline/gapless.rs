@@ -20,6 +20,8 @@ pub(crate) struct GaplessStage {
     trimmer: GaplessTrimmer,
     /// Remaining chunks from the current trimmer output batch.
     pending: Option<GaplessOutputIter>,
+    /// An exhausted batch can own heap storage; the deferred shell drops it.
+    retired_pending: Vec<GaplessOutputIter>,
 }
 
 impl GaplessStage {
@@ -47,7 +49,12 @@ impl GaplessStage {
         Self {
             trimmer,
             pending: None,
+            retired_pending: Vec::with_capacity(1),
         }
+    }
+
+    pub(crate) fn prepare_deferred(&mut self) {
+        self.retired_pending.clear();
     }
 
     /// Release any trimmer-held tail at decoder EOF.
@@ -68,13 +75,16 @@ impl GaplessStage {
     pub(crate) fn next(&mut self) -> Option<AudioChunk> {
         let pending = self.pending.as_mut()?;
         let next = pending.next();
-        if pending.len() == 0 {
-            self.pending = None;
+        if pending.len() == 0
+            && let Some(pending) = self.pending.take()
+        {
+            self.retired_pending.push(pending);
         }
         next
     }
 
     pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
+        self.retired_pending.clear();
         if let Some(pending) = self.pending.take() {
             for chunk in pending {
                 retire.retire(chunk);
@@ -116,6 +126,48 @@ fn tail_compensation(
     profile
         .tail_compensation()
         .filter(|_| !codec.is_some_and(AudioCodec::transform_padded))
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_signal::AudioChunkInfo;
+    use kithara_test_utils::{
+        bufpool::{pools, sample_buffer},
+        kithara,
+    };
+
+    use super::*;
+
+    #[kithara::rtsan_forbid_blocking]
+    fn pop_last(stage: &mut GaplessStage) -> Option<AudioChunk> {
+        stage.next()
+    }
+
+    #[kithara::test]
+    fn exhausted_heap_batch_is_reclaimed_by_deferred_prepare() {
+        let pools = pools();
+        let mut output = GaplessOutput::new();
+        for _ in 0..3 {
+            output.push(AudioChunk::new(
+                AudioChunkInfo::default(),
+                sample_buffer(&pools, &[0.0]),
+            ));
+        }
+        assert!(output.spilled(), "fixture batch must own heap storage");
+        let mut stage = GaplessStage {
+            trimmer: GaplessTrimmer::disabled(),
+            pending: Some(output.into_iter()),
+            retired_pending: Vec::with_capacity(1),
+        };
+        drop(stage.next());
+        drop(stage.next());
+        let last = pop_last(&mut stage).expect("last pending chunk");
+        assert!(stage.pending.is_none());
+        assert_eq!(stage.retired_pending.len(), 1);
+        drop(last);
+        stage.prepare_deferred();
+        assert!(stage.retired_pending.is_empty());
+    }
 }
 
 fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {

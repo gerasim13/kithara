@@ -164,7 +164,7 @@ pub(super) fn finish_rebuild<T: StreamType>(
 ) -> TrackStep<AudioChunk> {
     if superseded(&src.shared_stream, src.seek_obs.as_ref(), &rebuild) {
         if let Ok(generation) = complete.result {
-            src.retired.retire_generation(generation);
+            src.retired.push(generation);
         }
         return transition_after_rebuild_superseded(src, &rebuild);
     }
@@ -177,7 +177,7 @@ pub(super) fn finish_rebuild<T: StreamType>(
     let old = src.decode.replace_active(generation);
     src.resume
         .rebase_decode_to_rendered(src.seek_engine.epoch());
-    src.retired.retire_generation(old);
+    src.retired.push(old);
     debug!(
         ?duration,
         offset = recreate.offset,
