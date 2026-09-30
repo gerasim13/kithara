@@ -441,6 +441,10 @@ pub(crate) const UNITS_FILE: &str = ".kithara-lane-units.json";
 /// Stands for content a build the record did not see may have used.
 pub(crate) const UNKNOWN_BLOB: &str = "unknown";
 
+/// The mtime record's first line while a job holds the slot. One a dead job
+/// left behind tells the next claim that its builds were recorded first.
+pub(crate) const HELD_LINE: &str = "held";
+
 /// Asks the pinned nightly's cargo to judge what rustc read by checksum.
 pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNESS";
 

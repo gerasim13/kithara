@@ -412,6 +412,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // for; the cache on disk is untouched. Shared-host Unix sockets need one
     // explicit start before Cargo's parallel compilers can race to start it.
     if args.dry_run {
+        environment.settle_lane_build(false)?;
         return report_lane(
             &lane,
             args.kind,

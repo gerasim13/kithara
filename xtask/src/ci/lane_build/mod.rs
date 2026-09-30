@@ -10,7 +10,8 @@
 //! The slot records which content its artifacts may come from, and a claim
 //! stamps every file whose content is not the only one recorded. A build the
 //! record did not see leaves artifacts of unknown content, so every file is
-//! stamped until a lane succeeds again.
+//! stamped until a lane succeeds again; a job that fails or dies recorded its
+//! content before it built, so it is not such a build.
 //!
 //! A lane that judges by checksum reads a fresh checkout on any runner, so its
 //! sources need no stamp; only build-script runs are still judged by mtime. A

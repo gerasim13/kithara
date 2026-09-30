@@ -2,7 +2,8 @@
 //! and a checkout that claims it stamps every file whose content is not the
 //! only one recorded, so cargo rebuilds exactly those and reuses the rest. A
 //! build the record did not see leaves artifacts of unknown content, so every
-//! file is stamped until a lane succeeds again.
+//! file is stamped until a lane succeeds again. A job that fails or dies is
+//! not such a build: it recorded what it builds from before it built.
 
 use std::{
     fs::{self, File},
@@ -26,12 +27,13 @@ pub(super) struct Claimed {
 }
 
 /// Stamps the checkout's files the slot may hold artifacts of other content
-/// for. The record keeps that content too until the lane succeeds, so a job
-/// that dies mid-build leaves the next one stamping the same files.
+/// for, then records the checkout's content as well and holds the record. A
+/// build the record did not see stamps every file, unless the record is still
+/// held: then the last job died mid-build, after recording its content.
 pub(super) fn claim(project_root: &Path, dir: &Path, tracked: Sources) -> Result<Claimed> {
     let record = dir.join(consts::SOURCES_FILE);
-    let mut recorded = read_sources(&record)?;
-    if unseen_build(dir, &record)? {
+    let (mut recorded, held) = read_sources(&record)?;
+    if !held && unseen_build(dir, &record)? {
         for path in tracked.keys() {
             recorded
                 .entry(path.clone())
@@ -54,7 +56,7 @@ pub(super) fn claim(project_root: &Path, dir: &Path, tracked: Sources) -> Result
             .or_default()
             .extend(blobs.iter().cloned());
     }
-    write_sources(&record, &recorded)?;
+    write_sources(&record, &recorded, true)?;
     Ok(Claimed {
         record,
         claimed: recorded,
@@ -63,20 +65,16 @@ pub(super) fn claim(project_root: &Path, dir: &Path, tracked: Sources) -> Result
 }
 
 impl Claimed {
-    /// Records the job's builds as seen. A failed lane invalidates every
-    /// tracked source because its cached artifacts did not prove trustworthy.
+    /// Records what the slot's artifacts may now come from and releases the
+    /// record. Cargo truncates a unit's fingerprint before it builds the unit,
+    /// so a failed job left no artifact of content it did not claim.
     pub(super) fn settle(&self, succeeded: bool) -> Result<()> {
-        if succeeded {
-            return write_sources(&self.record, &self.tracked);
-        }
-        let mut uncertain = self.claimed.clone();
-        for path in self.tracked.keys() {
-            uncertain
-                .entry(path.clone())
-                .or_default()
-                .insert(consts::UNKNOWN_BLOB.to_owned());
-        }
-        write_sources(&self.record, &uncertain)
+        let sources = if succeeded {
+            &self.tracked
+        } else {
+            &self.claimed
+        };
+        write_sources(&self.record, sources, false)
     }
 }
 
@@ -112,28 +110,38 @@ fn stale_paths<'a>(recorded: &Sources, tracked: &'a Sources) -> Vec<&'a str> {
         .collect()
 }
 
-fn read_sources(record: &Path) -> Result<Sources> {
+/// The content the record names, and whether a job holds it.
+fn read_sources(record: &Path) -> Result<(Sources, bool)> {
     let text = match fs::read_to_string(record) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Sources::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Sources::new(), false));
+        }
         Err(error) => {
             return Err(error).with_context(|| format!("reading {}", record.display()));
         }
     };
     let mut sources = Sources::new();
+    let mut held = false;
     for line in text.lines() {
         if let Some((blob, path)) = line.split_once('\t') {
             sources
                 .entry(path.to_owned())
                 .or_default()
                 .insert(blob.to_owned());
+        } else if line == consts::HELD_LINE {
+            held = true;
         }
     }
-    Ok(sources)
+    Ok((sources, held))
 }
 
-fn write_sources(record: &Path, sources: &Sources) -> Result<()> {
+fn write_sources(record: &Path, sources: &Sources, held: bool) -> Result<()> {
     let mut text = String::new();
+    if held {
+        text.push_str(consts::HELD_LINE);
+        text.push('\n');
+    }
     for (path, blobs) in sources {
         for blob in blobs {
             text.push_str(blob);
@@ -155,7 +163,7 @@ mod tests {
             environment::CacheTrust,
             lane_build::{
                 LaneBuild, SlotPool,
-                fixture::{git_checkout, mtime, set_mtime, sources},
+                fixture::{git_checkout, mtime, pool, set_mtime, slot, sources},
                 tracked,
             },
         },
@@ -168,6 +176,13 @@ mod tests {
         let file = checkout.path().join("lib.rs");
         set_mtime(&file, SystemTime::UNIX_EPOCH);
         (checkout, file)
+    }
+
+    /// A unit fingerprint written now, as a build in `slot` writes one.
+    fn build_in(slot: &Path) {
+        let unit = slot.join("debug/.fingerprint/lib-0123456789abcdef");
+        fs::create_dir_all(&unit).unwrap();
+        fs::write(unit.join("lib-lib"), "hash").unwrap();
     }
 
     #[test]
@@ -201,6 +216,7 @@ mod tests {
         write_sources(
             &slot.join(consts::SOURCES_FILE),
             &sources(&[("lib.rs", "other")]),
+            false,
         )
         .unwrap();
 
@@ -229,11 +245,9 @@ mod tests {
         let slot = lanes.path().join("review-lane-test-0");
         fs::create_dir_all(&slot).unwrap();
         let record = slot.join(consts::SOURCES_FILE);
-        write_sources(&record, &tracked::list(checkout.path()).unwrap()).unwrap();
+        write_sources(&record, &tracked::list(checkout.path()).unwrap(), false).unwrap();
         set_mtime(&record, SystemTime::UNIX_EPOCH);
-        let unit = slot.join("debug/.fingerprint/lib-0123456789abcdef");
-        fs::create_dir_all(&unit).unwrap();
-        fs::write(unit.join("lib-lib"), "hash").unwrap();
+        build_in(&slot);
 
         let claim =
             LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
@@ -251,23 +265,141 @@ mod tests {
         claim.settle(true).unwrap();
     }
 
+    /// Cargo truncates a unit's fingerprint before it builds the unit, so a
+    /// failed lane leaves no artifact of content it did not claim, and the
+    /// next job of that content reuses them.
     #[test]
-    fn a_failed_lane_invalidates_every_tracked_source() {
+    fn a_failed_lane_keeps_what_it_claimed() {
         let (checkout, file) = lib_checkout();
         let lanes = tempfile::tempdir().unwrap();
-        let pool = SlotPool::fleet(lanes.path(), CacheTrust::Review, "test");
-
-        let claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let claim = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
         claim.settle(false).unwrap();
         drop(claim);
         set_mtime(&file, SystemTime::UNIX_EPOCH);
 
-        let _claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let _claim = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
+
+        assert_eq!(
+            mtime(&file),
+            SystemTime::UNIX_EPOCH,
+            "a failed lane certifies the content it claimed"
+        );
+    }
+
+    /// A failed lane still cannot certify content another branch built there.
+    #[test]
+    fn a_failed_lane_keeps_stamping_what_another_branch_built() {
+        let (checkout, file) = lib_checkout();
+        let lanes = tempfile::tempdir().unwrap();
+        fs::create_dir_all(slot(lanes.path())).unwrap();
+        write_sources(
+            &slot(lanes.path()).join(consts::SOURCES_FILE),
+            &sources(&[("lib.rs", "other")]),
+            false,
+        )
+        .unwrap();
+        let claim = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
+        claim.settle(false).unwrap();
+        drop(claim);
+        set_mtime(&file, SystemTime::UNIX_EPOCH);
+
+        let _claim = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
+
+        assert!(mtime(&file) > SystemTime::UNIX_EPOCH, "stamped");
+    }
+
+    /// A job that died holding the slot recorded what it builds from before
+    /// it built, so its fingerprints are not a build the record missed.
+    #[test]
+    fn a_claim_a_dead_job_left_behind_is_not_mistaken_for_an_unseen_build() {
+        let (checkout, file) = lib_checkout();
+        let lanes = tempfile::tempdir().unwrap();
+        let dead = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
+        set_mtime(
+            &slot(lanes.path()).join(consts::SOURCES_FILE),
+            SystemTime::UNIX_EPOCH,
+        );
+        build_in(&slot(lanes.path()));
+        drop(dead);
+        set_mtime(&file, SystemTime::UNIX_EPOCH);
+
+        let _claim = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
+
+        assert_eq!(
+            mtime(&file),
+            SystemTime::UNIX_EPOCH,
+            "a dead job's build was recorded"
+        );
+    }
+
+    /// Once a job settles, a build that never claimed the slot is unseen again.
+    #[test]
+    fn a_build_after_a_settled_job_is_unseen() {
+        let (checkout, file) = lib_checkout();
+        let lanes = tempfile::tempdir().unwrap();
+        let claim = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
+        claim.settle(true).unwrap();
+        drop(claim);
+        set_mtime(
+            &slot(lanes.path()).join(consts::SOURCES_FILE),
+            SystemTime::UNIX_EPOCH,
+        );
+        build_in(&slot(lanes.path()));
+        set_mtime(&file, SystemTime::UNIX_EPOCH);
+
+        let _claim = LaneBuild::claim(
+            checkout.path(),
+            &pool(lanes.path()),
+            consts::DAY,
+            LaneFreshness::Mtime,
+        )
+        .unwrap();
+
         assert!(
             mtime(&file) > SystemTime::UNIX_EPOCH,
-            "a failed lane cannot certify cached artifacts"
+            "an unclaimed build stamps everything"
         );
     }
 }
