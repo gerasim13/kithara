@@ -29,7 +29,8 @@ mod consts {
     /// Rise of a click from silence to its peak. A raised-cosine rise and
     /// fall keep the click and its duck band-limited, so the ducked mix plus
     /// the click stays under the limiter's true-peak ceiling between samples
-    /// too.
+    /// too, as long as the mix carries no loud content in the top kilohertz
+    /// or two under Nyquist: the duck's modulation folds that content back.
     pub(super) const ATTACK_SECONDS: f64 = 0.002;
     /// Fall of a click from its peak back to silence.
     pub(super) const DECAY_SECONDS: f64 = 0.008;
@@ -40,7 +41,8 @@ mod consts {
 }
 
 /// The downbeat click peak and the limiter ceiling the click ducks the mix
-/// under: the ducked mix plus the click never exceeds the ceiling.
+/// under: the ducked mix plus the click never exceeds the ceiling at a
+/// sample.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Duck {
     level: f32,
@@ -383,18 +385,34 @@ mod tests {
         const RISE_FRAMES: f32 = 512.0;
         const ONSET: usize = 1_024;
         const FRAMES: u16 = 2_048;
+        // WHY: A moving mix under a full-depth duck, well inside the band the
+        // oracle resolves exactly. Loud content near Nyquist is out of the
+        // contract: the duck's modulation folds it back over the ceiling.
+        const TONE_HZ: f64 = 10_000.0;
+        const TONE_PHASE: f64 = 2.1;
+        const RATE: u16 = 44_100;
 
-        let rate = NonZeroU32::new(44_100).expect("test rate");
+        let rate = NonZeroU32::new(u32::from(RATE)).expect("test rate");
         let held: Vec<f32> = (0..FRAMES)
             .map(|frame| {
                 let rise = (f32::from(frame) / RISE_FRAMES).min(1.0);
                 CEILING * 0.5 * (1.0 - (PI * rise).cos())
             })
             .collect();
+        let tone: Vec<f32> = held
+            .iter()
+            .zip(0..FRAMES)
+            .map(|(level, frame)| {
+                let cycles = (f64::from(frame) * TONE_HZ / f64::from(RATE)).fract();
+                let tone = f64::from(*level) * TAU.mul_add(cycles, TONE_PHASE).cos();
+                tone.to_f32().expect("a tone sample fits f32")
+            })
+            .collect();
         let silence = vec![0.0; held.len()];
         for (mix, level) in [
             (silence, CEILING),
             (held, crate::consts::DEFAULT_METRONOME_LEVEL),
+            (tone, CEILING),
         ] {
             let duck = Duck::new(level, CEILING).expect("level at most the ceiling");
             for downbeat in [true, false] {
