@@ -166,8 +166,15 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
 
 /// How long each layer in a scope's bucket lives.
 ///
-/// The compiler cache keeps its day: it is large, churns with every commit,
-/// and a miss costs one compilation. The snapshot layers are keyed by content
+/// The compiler cache keeps three days. An entry expires by the age of its
+/// write, and a hit does not renew it, so a single day made the first jobs of
+/// every morning, and all of Monday's, recompile dependencies nobody had
+/// changed. Three days spans a weekend and no more, because the smallest
+/// quota bounds it: with every lane slot sharing one key, a day of fleet
+/// traffic wrote about 25 gibibytes, so three days fit even a 200-gibibyte
+/// scope beside its snapshots, while a key split per slot wrote about 127 a
+/// day, and a week of that fills an 800-gibibyte bucket, which then refuses
+/// every write. The snapshot layers are keyed by content
 /// (a target fingerprint, a `Cargo.lock`), so an object still named by a lock
 /// file is still the right answer weeks later, and expiring it daily would
 /// mean paying the full fetch every morning to rebuild the same bytes.
@@ -179,7 +186,7 @@ fn retention() -> serde_json::Value {
             {
                 "ID": "compiler-cache", "Status": "Enabled",
                 "Filter": {"Prefix": format!("{SCCACHE_PREFIX}/", SCCACHE_PREFIX = consts::SCCACHE_PREFIX)},
-                "Expiration": {"Days": 1}
+                "Expiration": {"Days": 3}
             },
             {
                 "ID": "target-snapshots", "Status": "Enabled",
@@ -369,5 +376,21 @@ mod retention_tests {
             days["source-snapshots/"] > compiler && days["target-snapshots/"] > compiler,
             "a content-keyed snapshot must outlive the compiler cache: {days:?}"
         );
+    }
+
+    /// An entry expires by the age of its write, never by its last hit, so a
+    /// retention shorter than a weekend hands Monday's first jobs a cold cache
+    /// for dependencies nobody changed since Friday.
+    #[test]
+    fn the_compiler_cache_outlives_a_weekend() {
+        let rules = retention();
+        let compiler = rules["Rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .find(|rule| rule["ID"] == "compiler-cache")
+            .expect("a compiler-cache rule");
+
+        assert!(compiler["Expiration"]["Days"].as_u64().expect("days") >= 3);
     }
 }
