@@ -5,7 +5,7 @@
     root: Row(
         children: [
             Brand(id: "brand"),
-            PresetSelector(id: "presets"),
+            PresetSelector(id: "presets", write: Parameter(id: "ui.preset")),
             Spacer(id: "spacer"),
             VuStereo(
                 id: "volume",
@@ -13,7 +13,7 @@
                 read: Telemetry(id: "player.output.levels"),
                 write: Parameter(id: "player.output.volume"),
             ),
-            SettingsButton(id: "settings"),
+            SettingsButton(id: "settings", write: Command(id: "ui.settings.open")),
         ],
     ),
 )

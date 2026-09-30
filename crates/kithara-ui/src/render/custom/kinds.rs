@@ -1,9 +1,9 @@
 use super::{mounted::MappedCustom, widget::CustomWidget};
-use crate::render::{UiEvent, custom::MountedCustom};
+use crate::render::{Published, UiEvent, custom::MountedCustom};
 
 /// What the application registers under one extension kind: how to build a
 /// fresh widget, already speaking the document's own event vocabulary.
-type Factory = Box<dyn Fn() -> Box<dyn MountedCustom<UiEvent>>>;
+type Factory = Box<dyn Fn() -> Box<dyn MountedCustom<Published>>>;
 
 /// The extensions an application offers its hosts, named by kind.
 ///
@@ -16,7 +16,7 @@ pub struct CustomKinds {
 }
 
 impl CustomKinds {
-    pub(crate) fn make(&self, kind: &str) -> Option<Box<dyn MountedCustom<UiEvent>>> {
+    pub(crate) fn make(&self, kind: &str) -> Option<Box<dyn MountedCustom<Published>>> {
         self.kinds.get(kind).map(|make| make())
     }
 
@@ -27,7 +27,7 @@ impl CustomKinds {
     }
 
     /// Registers `make` under `kind`, mapping what its widget recognises into
-    /// the document event vocabulary.
+    /// the event its host is handed.
     #[must_use]
     pub fn with<Kind, Widget, Make, Map>(mut self, kind: Kind, make: Make, map: Map) -> Self
     where
@@ -38,7 +38,12 @@ impl CustomKinds {
     {
         self.kinds.insert(
             kind.into(),
-            Box::new(move || Box::new(MappedCustom::new(make(), map.clone()))),
+            Box::new(move || {
+                let map = map.clone();
+                Box::new(MappedCustom::new(make(), move |action| {
+                    Published::Host(map(action))
+                }))
+            }),
         );
         self
     }

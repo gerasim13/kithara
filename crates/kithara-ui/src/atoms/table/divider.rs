@@ -99,11 +99,14 @@ mod tests {
     fn divider_hit_rect_is_wider_than_the_centered_paint_rect() {
         let skin = crate::builtin::skin();
         let columns = column_layouts(
-            &[
-                column("index", 28.0, false),
-                column("title", 180.0, true),
-                column("artist", 200.0, false),
-            ],
+            (
+                &[
+                    column("index", 28.0, false),
+                    column("title", 180.0, true),
+                    column("artist", 200.0, false),
+                ],
+                true,
+            ),
             &ColumnReads(None),
             None,
             skin,

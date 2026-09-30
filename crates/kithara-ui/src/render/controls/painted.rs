@@ -31,7 +31,7 @@ use crate::{
         recognizers::{Crossing, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
     },
     render::{
-        Skin, UiEvent, activate, command,
+        Published, Skin, activate,
         controls::{
             Drag, Grip, IndexEvent, IndexPress, Indexing, Marked, Marks, Press, Probe, Span,
             snapped,
@@ -408,7 +408,7 @@ where
         );
     }
 
-    pub(crate) fn view(self) -> Element<'skin, UiEvent> {
+    pub(crate) fn view(self) -> Element<'skin, Published> {
         Element::new(self)
     }
 }
@@ -445,7 +445,7 @@ fn iced_length(length: solve::Length) -> Length {
     }
 }
 
-impl<Painter> IcedWidget<UiEvent, Theme, Renderer> for Paint<'_, Painter>
+impl<Painter> IcedWidget<Published, Theme, Renderer> for Paint<'_, Painter>
 where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
@@ -490,7 +490,7 @@ where
     }
 }
 
-impl<'skin, Painter> From<Paint<'skin, Painter>> for Element<'skin, UiEvent>
+impl<'skin, Painter> From<Paint<'skin, Painter>> for Element<'skin, Published>
 where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
@@ -517,7 +517,6 @@ where
 /// along one axis that sets a scalar.
 enum Recognize<Data> {
     Press,
-    Command(fn() -> UiEvent),
     Drag(Box<Dragging>),
     Index {
         count: usize,
@@ -555,18 +554,6 @@ where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
 {
-    pub(crate) fn command(
-        path: &str,
-        paint: Paint<'skin, Painter>,
-        event: fn() -> UiEvent,
-    ) -> Self {
-        Self {
-            paint,
-            path: path.to_owned(),
-            recognize: Recognize::Command(event),
-        }
-    }
-
     pub(crate) fn drag(path: &str, paint: Paint<'skin, Painter>, drag: Drag) -> Self {
         Self {
             paint,
@@ -610,7 +597,7 @@ where
         hit: &Hit,
         count: usize,
         map: Option<IndexEvent<Painter::Data>>,
-    ) -> (bool, Outcome<UiEvent>) {
+    ) -> (bool, Outcome<Published>) {
         let index = self.paint.index_at(hit, count);
         Indexing::new(&self.paint.data, &self.path, map).on_input(&mut state.index, input, index)
     }
@@ -625,7 +612,7 @@ where
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         let input = iced_interact::input(event)?;
         let hit = iced_interact::hit(bounds, cursor);
         let mut repaint = false;
@@ -634,7 +621,6 @@ where
         }
         let action = match &self.recognize {
             Recognize::Press => activate(&self.path, click::on_input(input, &hit)),
-            Recognize::Command(event) => command(*event, click::on_input(input, &hit)),
             Recognize::Drag(drag) => scalar(
                 &self.path,
                 drag.recognizer
@@ -670,7 +656,7 @@ where
         }
     }
 
-    pub(crate) fn view(self) -> Element<'skin, UiEvent> {
+    pub(crate) fn view(self) -> Element<'skin, Published> {
         Element::new(self)
     }
 
@@ -685,7 +671,6 @@ where
         match grip {
             Grip::None => Err(paint),
             Grip::Press => Ok(Self::press(path, paint)),
-            Grip::Command(event) => Ok(Self::command(path, paint, event)),
             Grip::Drag(drag) => Ok(Self::drag(path, paint, drag)),
             Grip::Index { count } => Ok(Self::index(path, paint, count, index_event)),
             Grip::Span(span) => Ok(Self::span(path, paint, span)),
@@ -693,7 +678,7 @@ where
     }
 }
 
-impl<Painter> IcedWidget<UiEvent, Theme, Renderer> for Gesture<'_, Painter>
+impl<Painter> IcedWidget<Published, Theme, Renderer> for Gesture<'_, Painter>
 where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
@@ -735,7 +720,7 @@ where
         let state = tree.state.downcast_ref::<GestureState<Painter>>();
         let hit = iced_interact::hit(layout.bounds(), cursor);
         match &self.recognize {
-            Recognize::Press | Recognize::Command(_) => Hover::new(CursorShape::Pointer)
+            Recognize::Press => Hover::new(CursorShape::Pointer)
                 .cursor(state.press.is_pressed(), &hit)
                 .into(),
             Recognize::Drag(drag) => drag
@@ -748,7 +733,7 @@ where
     }
 
     fn size(&self) -> IcedSize<Length> {
-        IcedWidget::<UiEvent, Theme, Renderer>::size(&self.paint)
+        IcedWidget::<Published, Theme, Renderer>::size(&self.paint)
     }
 
     fn state(&self) -> State {
@@ -767,7 +752,7 @@ where
         cursor: Cursor,
         _renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<GestureState<Painter>>();
@@ -785,7 +770,7 @@ where
     }
 }
 
-impl<'skin, Painter> From<Gesture<'skin, Painter>> for Element<'skin, UiEvent>
+impl<'skin, Painter> From<Gesture<'skin, Painter>> for Element<'skin, Published>
 where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
@@ -1604,7 +1589,7 @@ mod indexed {
         state: &mut GestureState<Painter>,
         event: &Event,
         point: Option<Point>,
-    ) -> (Option<UiEvent>, Status)
+    ) -> (Option<Published>, Status)
     where
         Painter: ControlPainter + 'static,
         Painter::Data: 'static,
@@ -1648,7 +1633,7 @@ mod indexed {
                 Some(Point::new(94.0, 21.0)),
             ),
             (
-                Some(UiEvent::Control {
+                Some(Published::Gesture {
                     path: "gallery/segments".to_owned(),
                     action: ControlAction::SelectIndex(1),
                 }),
@@ -1687,7 +1672,10 @@ mod indexed {
                     Some(point),
                 ),
                 (
-                    Some(UiEvent::SelectPreset(expected.to_owned())),
+                    Some(Published::Gesture {
+                        path: "bar/presets".to_owned(),
+                        action: ControlAction::Text(expected.to_owned()),
+                    }),
                     Status::Captured,
                 )
             );
@@ -1855,14 +1843,14 @@ mod indexed {
         assert_eq!(gesture.indexed_cursor(&hit, 2), CursorShape::Pointer);
     }
 
-    fn no_event(_data: &PresetData, _index: usize) -> Option<UiEvent> {
+    fn no_event(_data: &PresetData, _index: usize) -> Option<ControlAction> {
         None
     }
 
-    fn bounded_segment_event(data: &SegmentedData, index: usize) -> Option<UiEvent> {
+    fn bounded_segment_event(data: &SegmentedData, index: usize) -> Option<ControlAction> {
         data.items
             .get(index)
-            .map(|_| UiEvent::SelectPreset(index.to_string()))
+            .map(|_| ControlAction::Text(index.to_string()))
     }
 
     #[kithara::test]
@@ -1934,7 +1922,6 @@ mod pressed {
     use super::*;
     use crate::{
         atoms::{
-            bar::settings::Settings,
             button::{Button, ButtonConfig, ButtonLabel},
             nav_item::NavItem,
             painter::{ButtonData, NavData},
@@ -1980,48 +1967,10 @@ mod pressed {
         assert_eq!(
             action.into_inner(),
             (
-                Some(UiEvent::Control {
+                Some(Published::Gesture {
                     path: "gallery/buttons/item".to_owned(),
                     action: ControlAction::Activate,
                 }),
-                RedrawRequest::Wait,
-                Status::Captured,
-            )
-        );
-    }
-
-    /// A command publishes the event its control named, not an activation of
-    /// the path it happens to sit at. The path is still where the control
-    /// lives, and a command that leaked it would set an endpoint nobody wrote.
-    #[kithara::test]
-    fn a_press_on_a_command_publishes_the_event_the_control_named() {
-        let skin = builtin::skin();
-        let mark = IconName::Gear
-            .mark()
-            .expect("the gear icon must have a mark");
-        let gesture = Gesture::command(
-            "bar/settings",
-            Paint::pooled(Settings::new(skin), mark, skin, &DrawBuffers::default()),
-            || UiEvent::OpenSettings,
-        );
-        let bounds = Rectangle {
-            height: 32.0,
-            width: 32.0,
-            x: 0.0,
-            y: 0.0,
-        };
-        let cursor = Cursor::Available(Point::new(16.0, 16.0));
-        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
-        let mut state = GestureState::default();
-
-        let action = gesture
-            .on_input(&mut state, &press, bounds, cursor)
-            .expect("a press inside the bounds must publish");
-
-        assert_eq!(
-            action.into_inner(),
-            (
-                Some(UiEvent::OpenSettings),
                 RedrawRequest::Wait,
                 Status::Captured,
             )
@@ -2190,7 +2139,7 @@ mod dragged {
 
         assert_eq!(
             action.into_inner().0,
-            Some(UiEvent::Control {
+            Some(Published::Gesture {
                 path: "mixer/gain".to_owned(),
                 action: ControlAction::SetScalar(f64::from(0.5 + 10.0 / consts::RANGE)),
             })
@@ -2260,7 +2209,7 @@ mod dragged {
         let action = gesture
             .on_input(&mut GestureState::default(), &press, bounds, cursor)
             .unwrap_or_else(|| panic!("a press at {fraction} of the rail must publish"));
-        let Some(UiEvent::Control {
+        let Some(Published::Gesture {
             action: ControlAction::SetScalar(value),
             ..
         }) = action.into_inner().0
@@ -2309,7 +2258,7 @@ mod dragged {
 
         assert_eq!(
             action.into_inner().0,
-            Some(UiEvent::Control {
+            Some(Published::Gesture {
                 path: "mixer/xfade".to_owned(),
                 action: ControlAction::SetScalar(0.25),
             })

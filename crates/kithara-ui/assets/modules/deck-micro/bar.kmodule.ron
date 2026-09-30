@@ -167,7 +167,7 @@
                 size: (w: Shrink, h: Fill),
                 frame: (top: false, right: false, bottom: false, left: true),
                 frame_color: LineInner,
-                children: [SettingsButton(id: "settings")],
+                children: [SettingsButton(id: "settings", write: Command(id: "ui.settings.open"))],
             )),
             Row(
                 id: "window-cell",

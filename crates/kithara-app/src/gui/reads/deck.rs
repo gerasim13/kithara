@@ -75,7 +75,6 @@ impl_child_node!(DeckNode<'a>, |this, segment, _scope| {
         }),
         "eq" => Box::new(EqNode {
             shown: this.shown,
-            cache: this.cache,
             mode: this.eq_mode,
         }),
         "stream" => Box::new(StreamNode {
@@ -192,7 +191,6 @@ impl_child_node!(StreamNode<'a>, |this, segment, scope| {
     let stream = *this;
     let value = match segment {
         "quality" => ReadValue::Text(&stream.cache.quality),
-        "quality_menu" => ReadValue::Bool(stream.cache.view.quality_menu),
         "quality_hidden" => ReadValue::Bool(stream.shown.stream.variants.is_empty()),
         "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
         "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
@@ -205,7 +203,6 @@ impl_child_node!(StreamNode<'a>, |this, segment, scope| {
 
 #[derive(Clone, Copy)]
 struct EqNode<'a> {
-    cache: &'a DeckCache,
     shown: &'a DeckSnapshot,
     mode: EqMode,
 }
@@ -213,7 +210,6 @@ struct EqNode<'a> {
 impl<'a> Node<'a> for EqNode<'a> {
     fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "menu_open" => ReadValue::Bool(self.cache.view.eq_menu_open),
             "bands" => ReadValue::Scalar(self.mode.bands().len().as_()),
             "selected" => ReadValue::Bool(self.drawn(scope.get("bands")?)),
             band => eq_value(self.shown.eq_bands.get(self.mode.band(band)?))?,

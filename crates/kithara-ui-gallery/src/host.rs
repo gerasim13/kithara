@@ -53,13 +53,8 @@ impl App for Gallery {
     }
 
     fn update(&mut self, event: UiEvent) {
-        match event {
-            UiEvent::Control { path, action } => self.reads.apply(&path, &action),
-            UiEvent::LibraryQuery(query) => {
-                self.reads.set_library_query(query);
-            }
-            UiEvent::ToggleModule(module) => self.reads.toggle_module(module),
-            _ => {}
+        if let UiEvent::Write { key, value } = event {
+            self.reads.write(&key, value);
         }
     }
 
@@ -78,12 +73,13 @@ mod tests {
     use kithara_ui::{
         app::{Config, Ui},
         builtin,
+        compile::compile,
         draw::Pt,
         interact::{Input, MOUSE, PointerInput, PointerPhase},
-        render::ControlAction,
+        render::{ControlAction, Published},
     };
 
-    use super::{App, Gallery, UiEvent, ViewState, demo, sections};
+    use super::{App, Gallery, Shot, ViewState, demo, sections};
     use crate::{custom, fixture::resolver};
 
     /// Pressing a row on the skins page dresses the gallery in that skin.
@@ -92,7 +88,7 @@ mod tests {
         let mut gallery = Gallery::default();
         assert_eq!(gallery.skin().id(), "kithara-dark");
 
-        gallery.update(pressing("skins/kithara-neon/item"));
+        pressing(&mut gallery, "skins/kithara-neon/item");
 
         assert_eq!(gallery.skin().id(), "kithara-neon");
     }
@@ -102,7 +98,7 @@ mod tests {
     #[kithara::test]
     fn turning_the_page_keeps_the_skin_it_was_chosen_in() {
         let mut gallery = Gallery::default();
-        gallery.update(pressing("skins/kithara-light/item"));
+        pressing(&mut gallery, "skins/kithara-light/item");
 
         for page in sections::pages().iter().copied() {
             let mut view = ViewState::default();
@@ -116,11 +112,28 @@ mod tests {
         }
     }
 
-    fn pressing(path: &str) -> UiEvent {
-        UiEvent::Control {
+    fn pressing(gallery: &mut Gallery, path: &str) {
+        let shot = Shot {
+            tab: "skins",
+            module: None,
+        };
+        let mut view = shot.standing();
+        let ui = compile(
+            sections::entry(),
+            &resolver(),
+            &demo::registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            custom::config(),
+            &view,
+        )
+        .unwrap_or_else(|error| panic!("the skins page must compile: {error}"));
+        let pressed = Published::Gesture {
             path: path.to_owned(),
             action: ControlAction::Activate,
-        }
+        };
+        let event = gallery.reads(|reads| ui.views().settle(pressed, reads, &mut view));
+        gallery.update(event.unwrap_or_else(|| panic!("{path} must declare a write")));
     }
 
     /// Presses where the nav reads BUTTONS and expects the gallery to turn to

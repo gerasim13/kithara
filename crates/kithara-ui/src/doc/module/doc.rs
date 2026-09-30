@@ -22,6 +22,9 @@ pub struct ModuleDoc {
     pub drop: Option<ModuleDrop>,
     #[serde(default)]
     pub footer: Option<BindingRef>,
+    /// Written when the module's header is pressed to fold or unfold it.
+    #[serde(default)]
+    pub collapse: Option<BindingRef>,
     #[serde(default)]
     pub title: Option<String>,
     pub schema: String,
@@ -32,15 +35,12 @@ pub struct ModuleDoc {
     pub version: u32,
 }
 
-/// The module takes items dropped on it. The pointer crossing its bounds is
-/// reported to the host on `<instance>/drop`; the host holds what is being
-/// dragged and runs `write` when the drag ends over the module.
+/// The module takes rows dropped on it: a row carried out of a table and let
+/// go over the module writes `write` with the row's drag data.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ModuleDrop {
-    /// Reads true while a dragged item is over the module.
-    pub read: BindingRef,
     pub write: BindingRef,
 }
 

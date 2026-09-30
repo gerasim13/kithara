@@ -350,7 +350,7 @@ impl LayoutWalker<'_> {
                 ..
             } => {
                 self.document(&path, layout, depth, false);
-                let shell_attributed = drop.is_none();
+                let shell_attributed = !*drop;
                 let shell = if shell_attributed {
                     layout
                 } else {
@@ -656,7 +656,7 @@ fn write_layout(output: &mut String, ui: &CompiledUi, reads: &dyn Reads, layout:
         reads,
         attribution: Attribution::default(),
     };
-    let content = if ui.resize_edges || ui.dragged.is_some() {
+    let content = if ui.resize_edges {
         walker.wrapper();
         exact_children(layout, 1, &root_path, "window host layer")[0]
     } else {

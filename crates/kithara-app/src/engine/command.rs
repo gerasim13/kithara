@@ -36,8 +36,6 @@ pub(crate) enum DeckCmd {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum MixCmd {
     Crossfader(f32),
-    Master(f32),
-    Muted(DeckId, bool),
     Trim(DeckId, f32),
 }
 
@@ -68,14 +66,14 @@ mod tests {
             .expect("rig fixture is infallible");
         rig.call(|rig| {
             let mid = f32::from(GainDb::at_knob(0.75));
-            rig.send("mixer/a/mid-3", ControlAction::SetScalar(0.75));
+            rig.send("mixer/a/three-band/mid-3", ControlAction::SetScalar(0.75));
             rig.pump();
             rig.frame();
             assert!((rig.scalar("deck.eq.mid@deck=a") - 0.75).abs() < consts::KNOB);
             assert_eq!(rig.queues[0].eq_gain(1), Some(mid));
 
             rig.send("mixer/a/eq-4", ControlAction::Activate);
-            rig.send("mixer/a/high-3", ControlAction::SetScalar(0.0));
+            rig.send("mixer/a/three-band/high-3", ControlAction::SetScalar(0.0));
             let applied = rig.pump();
             assert_eq!(
                 applied.len(),

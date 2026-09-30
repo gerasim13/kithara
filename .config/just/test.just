@@ -404,8 +404,8 @@ miri *ARGS:
 #     through `sanitize(realtime = "nonblocking")` and links the runtime from
 #     `-Zsanitizer=realtime`. Plain `nightly` is whatever the host last
 #     downloaded, so the pin is what the image names.
-#   standalone — stable Rust; the mark is a runtime guard and the runtime comes
-#     from the `rtsan-standalone` crate. Its build script gates on the presence
+#   standalone — any toolchain, the one the caller chose; the mark is a
+#     runtime guard and the runtime comes from the `rtsan-standalone` crate. Its build script gates on the presence
 #     of RTSAN_ENABLE (the value is never read, so `0` also enables it) and
 #     downloads the library with curl unless RTSAN_LIB_PATH names a staged one.
 #     That path must keep the library's canonical file name or the link fails.
@@ -450,7 +450,7 @@ _rtsan TARGETS FEATURES FILTER SUPPRESSIONS="":
         flags="-Zsanitizer=realtime --cfg rtsan"
         ;;
     standalone)
-        toolchain="+${KITHARA_STABLE_TOOLCHAIN:-stable}"
+        toolchain=""
         flags="--cfg rtsan --cfg rtsan_standalone"
         export RTSAN_ENABLE=1
         # The image stages the runtime and names its directory; the file keeps
@@ -491,7 +491,7 @@ _rtsan TARGETS FEATURES FILTER SUPPRESSIONS="":
     RTSAN_OPTIONS="$options" \
     RUSTFLAGS="$flags" \
     RUSTDOCFLAGS="$flags" \
-        cargo "$toolchain" nextest run --profile rtsan \
+        cargo ${toolchain:+"$toolchain"} nextest run --profile rtsan \
         {{ TARGETS }} \
         --features {{ FEATURES }} \
         --target "$target" $repeats {{ FILTER }}

@@ -13,11 +13,11 @@ use crate::{
     ids::InternId,
     layout::{FrameCorners, FrameSides},
     render::{
-        HostedControlPlan, Skin, UiEvent,
+        HostedControlPlan, Published, Skin,
         masonry::{
             custom::HostAction,
             menu::PickerLayer,
-            node::{Detent, Faces, Node},
+            node::{Detent, Face, Faces, Node},
             picker::{EngineTarget, HostedEngine},
             popover::PopoverState,
         },
@@ -93,13 +93,12 @@ pub(crate) struct PopoverRegistration {
 /// The window layer one tree mounted, and what a root needs to keep it in step
 /// with the document it came from.
 pub(crate) struct WindowTracker {
-    /// What the pointer carries, re-read whenever the document is shown again.
-    pub(crate) carried: Option<Binding>,
     pub(crate) layer: Option<WidgetId>,
     pub(crate) pointer: Rc<Cell<Option<Pt>>>,
     /// Whether the last reading found anything, which is when the layer has to
     /// be painted again as the pointer moves.
     pub(crate) carrying: bool,
+    pub(crate) drops: bool,
 }
 /// One mounted leaf and the document source it re-reads without rebuilding.
 pub(crate) enum Watched {
@@ -129,6 +128,10 @@ pub(crate) enum Watched {
     Lit {
         id: WidgetId,
         flag: Binding,
+    },
+    Zone {
+        id: WidgetId,
+        path: String,
     },
 }
 /// Where one node stands, as the root reads it out of the tree.
@@ -370,7 +373,7 @@ impl<Action> MasonryNode<Action> {
 
     pub(crate) fn host_engine(
         &mut self,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
         skin: &Skin,
     ) {
         if self.engine_targets.is_empty() {
@@ -403,6 +406,40 @@ impl<Action> MasonryNode<Action> {
         });
     }
 
+    pub(crate) fn takes_drops(
+        &mut self,
+        path: String,
+        frame: (FrameSides, Rgba, f32),
+        pointer: Rc<Cell<Option<Pt>>>,
+    ) {
+        let node = &mut self.widget.widget;
+        let idle = node.face();
+        node.set_faces(Faces {
+            idle,
+            lit: Face {
+                frame: Some(frame),
+                ..idle
+            },
+        });
+        self.watched.push(Watched::Zone {
+            path,
+            id: self.widget.id(),
+        });
+        self.window = merge_window(
+            self.window.take(),
+            Some(WindowTracker {
+                pointer,
+                layer: None,
+                carrying: false,
+                drops: true,
+            }),
+        );
+    }
+
+    pub(crate) fn drops(&self) -> bool {
+        self.window.as_ref().is_some_and(|window| window.drops)
+    }
+
     /// Rounds the corners of this node's own box that the layout says are the
     /// window's own.
     ///
@@ -418,13 +455,12 @@ impl<Action> MasonryNode<Action> {
         &mut self,
         pointer: Rc<Cell<Option<Pt>>>,
         layer: WidgetId,
-        carried: Option<Binding>,
-        carrying: bool,
+        drops: bool,
     ) {
         self.window = Some(WindowTracker {
             pointer,
-            carried,
-            carrying,
+            carrying: false,
+            drops,
             layer: Some(layer),
         });
     }
@@ -436,8 +472,8 @@ impl<Action> MasonryNode<Action> {
                 self.window = Some(WindowTracker {
                     pointer,
                     layer: None,
-                    carried: None,
                     carrying: false,
+                    drops: false,
                 });
             }
         }
@@ -581,8 +617,8 @@ fn merge_window(
         (Some(window), Some(child)) => Some(WindowTracker {
             pointer: window.pointer,
             layer: window.layer.or(child.layer),
-            carried: window.carried.or(child.carried),
             carrying: window.carrying || child.carrying,
+            drops: window.drops || child.drops,
         }),
         (Some(window), None) | (None, Some(window)) => Some(window),
         (None, None) => None,

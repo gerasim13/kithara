@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use fs4::TryLockError;
-use kithara_devtools::lock::FileLock;
+use kithara_devtools::lock::{FileLock, Wait};
 use tracing::warn;
 
 use super::layout;
@@ -53,8 +53,8 @@ impl GenerationLease {
     }
 
     fn claim(generation: &Path, file: File) -> Result<FileLock> {
-        FileLock::shared(file)
-            .with_context(|| format!("lock self-cache generation {}", generation.display()))
+        let subject = format!("self-cache generation {}", generation.display());
+        FileLock::shared(file, &subject).with_context(|| format!("lock {subject}"))
     }
 }
 
@@ -120,8 +120,16 @@ pub(crate) fn lease_current() -> Result<Option<GenerationLease>> {
 
 pub(super) fn refresh(root: &Path) -> Result<RefreshLock> {
     let (file, path) = open_refresh(root)?;
-    let lock = FileLock::exclusive(file)
-        .with_context(|| format!("lock self-cache refresh {}", path.display()))?;
+    let subject = format!("self-cache refresh {}", path.display());
+    let holder = crate::job::lock_holder();
+    let lock = FileLock::exclusive(
+        file,
+        &Wait {
+            subject: &subject,
+            holder: &holder,
+        },
+    )
+    .with_context(|| format!("lock {subject}"))?;
     Ok(RefreshLock { _lock: lock })
 }
 

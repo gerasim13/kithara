@@ -97,7 +97,7 @@ fn walk(host: Host, page: Shot) -> Walked {
 }
 
 /// The immediate host, which is the one the gallery's own window runs.
-mod immediate {
+pub(super) mod immediate {
     use iced::theme::Base as _;
 
     use super::{
@@ -160,7 +160,7 @@ mod immediate {
     }
 
     /// A renderer with the gallery's own faces registered, drawing into memory.
-    fn renderer() -> iced::Renderer {
+    pub(in crate::checks) fn renderer() -> iced::Renderer {
         let mut fonts = font_system()
             .write()
             .unwrap_or_else(|error| panic!("iced font system lock: {error}"));

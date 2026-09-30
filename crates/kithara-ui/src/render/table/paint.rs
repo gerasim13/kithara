@@ -7,7 +7,7 @@ use iced::{
 };
 use kithara_test_macros as kithara;
 
-use super::super::{Marked, Marks, Probe, Skin, UiEvent, controls::RetainedCanvasState};
+use super::super::{Carried, Marked, Marks, Probe, Published, Skin, controls::RetainedCanvasState};
 use crate::{
     atoms::table::{
         ColumnLayout, TableRowData, column_resizable,
@@ -56,6 +56,7 @@ impl TablePaint {
     pub(super) fn config(&self) -> TableConfig {
         let skin = self.face.skin();
         TableConfig {
+            face: Rc::clone(&self.face),
             body_inset: skin.table.header_height
                 + skin.table.footer_height
                 + skin.table.grid_gap * 2.0,
@@ -122,7 +123,7 @@ impl TablePaint {
     }
 }
 
-impl canvas::Program<UiEvent> for TablePaint {
+impl canvas::Program<Published> for TablePaint {
     type State = TableState;
 
     fn draw(
@@ -153,6 +154,7 @@ pub(super) struct TableState {
     text: RefCell<Option<TextContext>>,
     path: String,
     configured: bool,
+    face: Option<Rc<TableFace>>,
 }
 
 /// The state the table's marks were built from, kept whole so that the next
@@ -202,6 +204,7 @@ impl Probe for TableKey<&Drawn, &Rc<TableFace>> {
 
 #[derive(Clone)]
 pub(super) struct TableConfig {
+    face: Rc<TableFace>,
     divider_columns: Vec<TableColumn>,
     body_inset: f32,
     content_height: f32,
@@ -249,6 +252,7 @@ impl TableState {
 
     pub(super) fn reconcile(&mut self, path: &str, config: &TableConfig) {
         self.rebind(path);
+        self.face = Some(Rc::clone(&config.face));
         let horizontal = ScrollConfig::plain(ScrollAxis::Horizontal, config.content_width);
         let vertical = ScrollConfig::plain(ScrollAxis::Vertical, config.content_height);
         if !self.configured {
@@ -301,6 +305,13 @@ impl TableState {
         self.horizontal.set_viewport(size.width);
         self.vertical
             .set_viewport((size.height - config.body_inset).max(0.0));
+    }
+
+    pub(super) fn carried(&self, path: &str, index: usize) -> Option<Carried> {
+        if self.path != path {
+            return None;
+        }
+        self.face.as_ref()?.carried(index)
     }
 
     pub(super) fn sync(

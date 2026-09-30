@@ -6,7 +6,7 @@ use kithara_ui::{
     ids::EndpointId,
     interact::{Input, MOUSE, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    render::{ControlAction, ReadValue, Reads, Skin, UiEvent},
+    render::{ReadValue, Reads, Skin, UiEvent, WriteValue},
     source::MemResolver,
 };
 
@@ -22,14 +22,14 @@ fn documents() -> MemResolver {
         "pick.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "pick", chrome: Plain,
             root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-                Pressable(id: "one", press: Command(id: "fixture.pick"),
+                Pressable(id: "one", press: Command(id: "fixture.one"),
                     child: Row(id: "one-row", size: (w: Fill, h: Fixed(26.0)), gap: 0.0,
                         active: Model(id: "fixture.first"), active_background: BgSelect,
                         children: [
                             Text(id: "one-label", style: Mono, label: "ONE",
                                 active_color: Text, active: Model(id: "fixture.first")),
                         ])),
-                Pressable(id: "two", press: Command(id: "fixture.pick"),
+                Pressable(id: "two", press: Command(id: "fixture.two"),
                     child: Row(id: "two-row", size: (w: Fill, h: Fixed(26.0)), gap: 0.0,
                         active: Model(id: "fixture.second"), active_background: BgSelect,
                         children: [
@@ -59,7 +59,7 @@ impl EndpointRegistry for Endpoints {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
         match (category, id.0.as_str()) {
             (EndpointCategory::Model, "fixture.first" | "fixture.second") => Some(&self.flag),
-            (EndpointCategory::Command, "fixture.pick") => Some(&self.press),
+            (EndpointCategory::Command, "fixture.one" | "fixture.two") => Some(&self.press),
             _ => None,
         }
     }
@@ -96,10 +96,12 @@ impl App for Picked {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { path, action } = event
-            && matches!(action, ControlAction::Activate)
+        if let UiEvent::Write {
+            key,
+            value: WriteValue::Trigger,
+        } = event
         {
-            self.second = path == "demo/two";
+            self.second = key == "fixture.two";
         }
     }
 }

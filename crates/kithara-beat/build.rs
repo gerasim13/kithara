@@ -101,14 +101,40 @@ fn resolve(cache: &Path, model: &Model) {
     println!("cargo::rustc-env={}={}", model.env, path.display());
 }
 
-/// Fetches into a file only this process writes and moves it into place once
-/// it checks out, so builds sharing one cache never read a partial download.
+/// Fetches under a lock on the model's name and moves the download into place
+/// once it checks out, so builds sharing one cache never read a partial file.
+/// The cache is shared by CI containers, whose process ids collide, so the
+/// lock rather than a per-process name is what keeps two fetches apart: the
+/// second one waits, finds the model placed, and leaves it untouched, because
+/// replacing it would make it newer than what other builds already embedded.
+/// A download cut short by a cancelled job leaves its partial file behind for
+/// the next holder of the lock to overwrite.
 fn fetch(cache: &Path, path: &Path, url: &str, sha256: &str) -> bool {
     if let Err(err) = fs::create_dir_all(cache) {
         println!("cargo::error=cannot create {}: {err}", cache.display());
         return false;
     }
-    let partial = path.with_extension(format!("onnx.{}.part", std::process::id()));
+    let lock_path = path.with_extension("onnx.lock");
+    let lock = match fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(lock) => lock,
+        Err(err) => {
+            println!("cargo::error=cannot open {}: {err}", lock_path.display());
+            return false;
+        }
+    };
+    if let Err(err) = lock.lock() {
+        println!("cargo::error=cannot lock {}: {err}", lock_path.display());
+        return false;
+    }
+    if path.exists() {
+        return true;
+    }
+    let partial = path.with_extension("onnx.part");
     let status = Command::new("curl")
         .args(["-fL", "--retry", "3", "-o"])
         .arg(&partial)

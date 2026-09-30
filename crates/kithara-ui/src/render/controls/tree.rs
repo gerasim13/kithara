@@ -15,11 +15,15 @@ use crate::{
     draw::Rect,
     engine::{ScrollConfig, ScrollState},
     interact::{ScrollAxis, iced as iced_interact},
-    render::{InputOwner, UiEvent, index},
+    render::{InputOwner, Published, index},
     shaping::TextContext,
 };
 
-pub(crate) fn tree_rows<'a>(path: &str, picture: Tree, owner: InputOwner) -> Element<'a, UiEvent> {
+pub(crate) fn tree_rows<'a>(
+    path: &str,
+    picture: Tree,
+    owner: InputOwner,
+) -> Element<'a, Published> {
     let row_count = picture.row_count();
     let row_height = picture.skin().tree.row_height;
     let row_right_inset =
@@ -69,7 +73,7 @@ struct TreeProgram {
     picture: Tree,
 }
 
-impl canvas::Program<UiEvent> for TreeProgram {
+impl canvas::Program<Published> for TreeProgram {
     type State = TreeState;
 
     fn draw(
@@ -110,7 +114,7 @@ impl canvas::Program<UiEvent> for TreeProgram {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         state.reconcile_scroll(
             &self.path,
             self.picture.row_count(),
@@ -134,7 +138,7 @@ struct TreePaint {
     picture: Tree,
 }
 
-impl canvas::Program<UiEvent> for TreePaint {
+impl canvas::Program<Published> for TreePaint {
     type State = TreeState;
 
     fn draw(

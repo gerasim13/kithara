@@ -12,7 +12,7 @@ use kithara_ui::{
     compile::compile,
     draw::{Pt, Rect},
     interact::{Input, MOUSE, PointerInput, PointerPhase},
-    render::{Clock, ControlAction, ReadValue, Reads, Skin, UiEvent, tree},
+    render::{Clock, ReadValue, Reads, Scope, Skin, UiEvent, WriteValue, tree},
     source::{MemResolver, UiConfig},
     view,
 };
@@ -134,7 +134,7 @@ impl Blocks {
 
 impl Reads for Blocks {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        let id = Scope::split(endpoint).0;
         (id == "fixture.hidden").then_some(ReadValue::Bool(!self.shown))
     }
 }
@@ -153,8 +153,11 @@ impl App for Blocks {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { action, .. } = event
-            && action == ControlAction::Activate
+        if let UiEvent::Write {
+            key,
+            value: WriteValue::Trigger,
+        } = event
+            && Scope::split(&key).0 == "fixture.toggle"
         {
             self.shown = !self.shown;
         }

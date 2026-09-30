@@ -122,7 +122,11 @@ impl ViewControl for mount::Custom {
 
 impl ViewControl for mount::Table<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(table(cx, (self.columns, self.columns_state)))
+        Rendered::leading(table(
+            cx,
+            (self.columns, self.columns_state),
+            self.resizable,
+        ))
     }
 }
 

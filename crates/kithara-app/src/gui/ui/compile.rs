@@ -7,7 +7,7 @@ use kithara::{
         compile::{CompiledUi, compile},
         error::UiDocError,
         ids::SourceUri,
-        render::{Clock, Walk, tree},
+        render::{Clock, Published, UiEvent, Walk, tree},
         source::UiConfig,
         view::ViewState,
     },
@@ -60,23 +60,6 @@ impl AppUi {
         screen(&self.single, &self.dual, layout)
     }
 
-    /// Applies whatever the press at `path` writes to the screen's own state.
-    ///
-    /// The application is told about the press all the same; this is only the
-    /// part of it no application declared an endpoint for.
-    pub(super) fn press(&mut self, path: &str) {
-        let Self {
-            dual,
-            single,
-            view,
-            cache,
-            ..
-        } = self;
-        if let Some((state, write)) = screen(single, dual, cache.layout()).views().at(path) {
-            view.apply(state, write);
-        }
-    }
-
     pub(crate) fn window_min(&self) -> Size {
         Size::new(
             self.single.min.w.min().max(self.dual.min.w.min()),
@@ -122,8 +105,22 @@ fn compile_screen(
         doc,
         view,
     )?;
-    ui.require_paths(Package::REQUIRED, &SourceUri(document.to_owned()))?;
+    ui.require_writes(Package::REQUIRED, &SourceUri(document.to_owned()))?;
     Ok(ui)
+}
+
+pub(crate) fn settle(state: &mut Kithara, published: Published) -> Option<UiEvent> {
+    let mut view = std::mem::take(&mut state.ui.view);
+    let event = {
+        let root = ReadRoot::new(state);
+        state.ui.compiled(state.ui.cache.layout()).views().settle(
+            published,
+            &Walk::new(&root),
+            &mut view,
+        )
+    };
+    state.ui.view = view;
+    event
 }
 
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {

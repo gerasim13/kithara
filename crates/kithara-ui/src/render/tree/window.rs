@@ -1,12 +1,12 @@
 use iced::Element;
 
-use super::node::IcedHost;
+use super::{drag::drag_root, node::IcedHost};
 use crate::{
     compile::{CompiledNode, CompiledUi},
     ids::InternId,
     module::WindowControlsStyle,
     render::{
-        Reads, Skin, TitleBar, UiEvent, Widget, WindowControls,
+        Published, Reads, Skin, TitleBar, Widget, WindowControls,
         custom::CustomKinds,
         document,
         document::{Clock, Ctx},
@@ -33,17 +33,17 @@ pub fn render<'a>(
     skin: &'a Skin,
     clock: Clock,
     kinds: Option<&'a CustomKinds>,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let ctx = Ctx::new(ui, reads, view, skin.document(), clock);
     let ctx = kinds.map_or(ctx, |kinds| ctx.with_kinds(kinds));
-    document::render(node, ctx, IcedHost::new(ctx, skin))
+    drag_root(document::render(node, ctx, IcedHost::new(ctx, skin)), skin)
 }
 
 pub(super) fn titlebar<'a>(
     label: InternId,
     ui: &'a CompiledUi,
     skin: &Skin,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     TitleBar::builder()
         .label(ui.resolve(label))
         .skin(skin)
@@ -54,7 +54,7 @@ pub(super) fn titlebar<'a>(
 pub(super) fn window_controls(
     style: WindowControlsStyle,
     skin: &Skin,
-) -> Element<'static, UiEvent> {
+) -> Element<'static, Published> {
     WindowControls::builder()
         .style(style)
         .skin(skin)

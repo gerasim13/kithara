@@ -28,6 +28,7 @@ use crate::{
     draw::Pt,
     interact::{CursorShape, masonry::cursor_icon},
     render::{
+        DragSession, Published,
         document::{Ctx, placements},
         shader::ShaderDeclaration,
         vis::VisDeclaration,
@@ -61,6 +62,7 @@ pub struct MasonryRoot<Action> {
     /// is drawn once and then only when something unrelated wakes the window.
     #[field(with, vis = "pub")]
     animates: bool,
+    drag: DragSession,
     /// Whether the press the window last reported was a second one, so the
     /// release that follows it is a double click rather than a plain one.
     double_click: bool,
@@ -130,6 +132,7 @@ where
             moved: false,
             platform: Vec::new(),
             double_click: false,
+            drag: DragSession::default(),
         };
         this.sync_popovers();
         for layer in layers {
@@ -203,10 +206,19 @@ where
         Ok(handled)
     }
 
+    #[cfg(feature = "capture")]
+    fn read_widget<W: masonry::core::Widget, T>(
+        &self,
+        id: WidgetId,
+        read: impl FnOnce(&W) -> Option<T>,
+    ) -> Option<T> {
+        read(self.root.get_widget(id)?.downcast::<W>()?.inner())
+    }
+
     /// The colour the node `id` writes its text in right now.
     #[cfg(feature = "capture")]
     pub(crate) fn ink_of(&self, id: WidgetId) -> Option<Rgba> {
-        self.root.get_widget(id)?.downcast::<Node>()?.ink()
+        self.read_widget(id, Node::ink)
     }
 
     /// Reports whether Masonry requested another paint or animation frame.
@@ -534,11 +546,76 @@ where
             if let Some(action) = routed.outcome.value() {
                 self.push_action(Box::new(action))?;
             }
+            if let Some(event) = routed.drag {
+                self.follow_drag(&engine, &event)?;
+            }
             if captured || held {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    fn follow_drag(
+        &mut self,
+        engine: &HostedEngine,
+        event: &Published,
+    ) -> Result<(), MasonryRootError> {
+        if !self.window.as_ref().is_some_and(|window| window.drops) {
+            return Ok(());
+        }
+        let hovered = self.drag.hovered().map(str::to_owned);
+        let label = self.drag.label().map(str::to_owned);
+        let engines = &self.engines;
+        let dropped = self.drag.follow(event, |table, index| {
+            engines
+                .iter()
+                .find_map(|engine| engine.carried(table, index))
+        });
+        if self.drag.hovered() != hovered.as_deref() {
+            let hovered = self.drag.hovered().map(str::to_owned);
+            self.light_zones(hovered.as_deref());
+        }
+        if self.drag.label() != label.as_deref() {
+            let label = self.drag.label().map(str::to_owned);
+            self.show_carried(label.as_deref());
+        }
+        if let Some(dropped) = dropped {
+            self.push_action(Box::new(engine.action(dropped)))?;
+        }
+        Ok(())
+    }
+
+    fn light_zones(&mut self, hovered: Option<&str>) {
+        for watched in &self.watched {
+            let Watched::Zone { id, path } = watched else {
+                continue;
+            };
+            let on = hovered == Some(path.as_str());
+            self.root.edit_widget(*id, |mut widget| {
+                let mut node = widget.downcast::<Node>();
+                if node.widget.light(on) {
+                    node.ctx.request_paint_only();
+                    node.ctx.request_post_paint();
+                }
+            });
+        }
+    }
+
+    fn show_carried(&mut self, label: Option<&str>) {
+        let Some(window) = &mut self.window else {
+            return;
+        };
+        let Some(layer) = window.layer else {
+            return;
+        };
+        window.carrying = label.is_some();
+        self.root.edit_widget(layer, |mut widget| {
+            let mut window = widget.downcast::<WindowLayer>();
+            if window.widget.carry(label) {
+                window.ctx.request_paint_only();
+            }
+        });
     }
 
     fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {
@@ -607,14 +684,14 @@ where
     /// The ghost is a value the window layer draws, not shape the layer was
     /// mounted with: the layer stands for the life of the window, and what the
     /// pointer carries changes under it.
-    fn carry_ghost(&mut self, ctx: Ctx<'_, '_>) -> bool {
+    fn carry_ghost(&mut self) -> bool {
         let Some(window) = &mut self.window else {
             return false;
         };
         let Some(layer) = window.layer else {
             return false;
         };
-        let label = ctx.label(window.carried.as_ref());
+        let label = self.drag.label();
         window.carrying = label.is_some();
         self.root.edit_widget(layer, |mut widget| {
             let mut window = widget.downcast::<WindowLayer>();
@@ -703,7 +780,7 @@ where
         let placed = self.place_objects(ctx);
         self.open_surfaces(ctx);
         self.stand_blocks(ctx);
-        let carried = self.carry_ghost(ctx);
+        let carried = self.carry_ghost();
         self.moved = shown || placed || carried;
     }
 
@@ -770,7 +847,7 @@ where
                         lit
                     });
                 }
-                Watched::Placed { .. } => {}
+                Watched::Placed { .. } | Watched::Zone { .. } => {}
             }
         }
         moved

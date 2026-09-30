@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::lock::FileLock;
+use kithara_devtools::lock::{FileLock, Wait};
 use serde::{Deserialize, Serialize};
 
 use super::model::VerificationState;
@@ -233,8 +233,16 @@ impl Ledger {
             .write(true)
             .open(&self.lock_path)
             .with_context(|| format!("opening ledger lock {}", self.lock_path.display()))?;
-        let _lock = FileLock::exclusive(file)
-            .with_context(|| format!("locking ledger {}", self.lock_path.display()))?;
+        let subject = format!("bridge ledger {}", self.lock_path.display());
+        let holder = crate::job::lock_holder();
+        let _lock = FileLock::exclusive(
+            file,
+            &Wait {
+                subject: &subject,
+                holder: &holder,
+            },
+        )
+        .with_context(|| format!("locking {subject}"))?;
         let mut data = self.read()?;
         operation(&mut data)
     }

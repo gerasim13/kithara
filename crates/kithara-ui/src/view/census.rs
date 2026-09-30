@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     error::UiDocError,
-    expand::ControlSite,
+    expand::{ControlSite, scoped_key},
     ids::SourceUri,
+    interact::recognizers::Edge,
     module::{BindingRef, ControlNode, ViewSet},
+    validate::{Gesture, column_writes, write_slots},
     view::ViewState,
 };
 
@@ -18,9 +20,22 @@ pub enum ViewWrite<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum Write {
+pub(super) enum Write {
     Flag(ViewSet),
     Page(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum Target {
+    View(String, Write),
+    Endpoint(Declared),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Declared {
+    pub(super) key: String,
+    pub(super) edge: Option<(Edge, String)>,
+    pub(super) close: Option<String>,
 }
 
 /// Where one page-turning state stood when a screen was compiled.
@@ -45,18 +60,22 @@ pub struct PageStanding {
 /// a document turning its own state needs no application code to do it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ViewWrites {
-    by_path: BTreeMap<String, (String, Write)>,
+    by_path: BTreeMap<String, BTreeMap<Gesture, Target>>,
     pages: BTreeMap<String, PageStanding>,
     named: BTreeSet<String>,
 }
 
 impl ViewWrites {
-    /// What the press at `path` writes, or nothing when it writes no state.
-    #[must_use]
-    pub fn at(&self, path: &str) -> Option<(&str, ViewWrite<'_>)> {
+    /// Whether any control on this screen declares a write to `key`.
+    pub(crate) fn declares(&self, key: &str) -> bool {
         self.by_path
-            .get(path)
-            .map(|(state, write)| (state.as_str(), write.into()))
+            .values()
+            .flat_map(BTreeMap::values)
+            .any(|target| matches!(target, Target::Endpoint(declared) if declared.key == key))
+    }
+
+    pub(super) fn target(&self, path: &str, gesture: Gesture) -> Option<&Target> {
+        self.by_path.get(path)?.get(&gesture)
     }
 
     #[must_use]
@@ -96,14 +115,6 @@ pub(crate) struct Tabs<'a> {
     pub(crate) pages: BTreeSet<String>,
 }
 
-/// Which way one binding runs, which is the slot it fills rather than anything
-/// the binding itself says.
-#[derive(Clone, Copy)]
-pub(crate) enum Side {
-    Read,
-    Write,
-}
-
 /// One naming of a page, kept until the pages a `Tabs` declares are known.
 struct Named {
     origin: SourceUri,
@@ -124,7 +135,7 @@ pub(crate) struct Census {
     declared: BTreeMap<String, BTreeSet<String>>,
     origin: BTreeMap<String, (SourceUri, String)>,
     pages: BTreeMap<String, PageStanding>,
-    writes: BTreeMap<String, (String, Write)>,
+    writes: BTreeMap<String, BTreeMap<Gesture, Target>>,
     read: BTreeSet<String>,
     named: Vec<Named>,
 }
@@ -159,7 +170,12 @@ impl Census {
             .read
             .iter()
             .cloned()
-            .chain(self.writes.values().map(|(state, _)| state.clone()))
+            .chain(self.writes.values().flat_map(BTreeMap::values).filter_map(
+                |target| match target {
+                    Target::View(state, _) => Some(state.clone()),
+                    Target::Endpoint(_) => None,
+                },
+            ))
             .collect();
         Ok(ViewWrites {
             named,
@@ -168,16 +184,22 @@ impl Census {
         })
     }
 
-    /// Notes one binding, on the side the slot it fills puts it.
-    pub(crate) fn note(
+    /// Notes one binding a control reads.
+    pub(crate) fn note_read(&mut self, path: &str, binding: &BindingRef, origin: &SourceUri) {
+        if let Some((state, _)) = self.view_target(path, binding, origin) {
+            self.read.insert(state);
+        }
+    }
+
+    /// The state a view or page binding names and what a write does to it.
+    fn view_target(
         &mut self,
         path: &str,
         binding: &BindingRef,
         origin: &SourceUri,
-        side: Side,
-    ) {
-        let (state, write) = match binding {
-            BindingRef::View { id, set } => (&id.0, Write::Flag(*set)),
+    ) -> Option<(String, Write)> {
+        match binding {
+            BindingRef::View { id, set, .. } => Some((id.0.clone(), Write::Flag(*set))),
             BindingRef::Page { id, name } => {
                 self.named.push(Named {
                     origin: origin.clone(),
@@ -185,24 +207,42 @@ impl Census {
                     path: path.to_owned(),
                     state: id.0.clone(),
                 });
-                (&id.0, Write::Page(name.clone()))
+                Some((id.0.clone(), Write::Page(name.clone())))
             }
             BindingRef::Command { .. }
             | BindingRef::Model { .. }
             | BindingRef::Parameter { .. }
-            | BindingRef::Telemetry { .. } => return,
-        };
-        match side {
-            Side::Read => {
-                self.read.insert(state.clone());
-            }
-            Side::Write => {
-                self.writes.insert(path.to_owned(), (state.clone(), write));
+            | BindingRef::Telemetry { .. } => None,
+        }
+    }
+
+    pub(crate) fn note_write(&mut self, path: String, binding: &BindingRef, at: WriteAt) {
+        let WriteAt {
+            gesture,
+            origin,
+            edge,
+            close,
+        } = at;
+        let target = match binding {
+            BindingRef::Command { id, with }
+            | BindingRef::Model { id, with }
+            | BindingRef::Parameter { id, with } => Target::Endpoint(Declared {
+                edge,
+                close,
+                key: scoped_key(&id.0, with),
+            }),
+            BindingRef::Telemetry { .. } => return,
+            BindingRef::View { .. } | BindingRef::Page { .. } => {
+                let Some((state, write)) = self.view_target(&path, binding, origin) else {
+                    return;
+                };
                 self.origin
                     .entry(state.clone())
-                    .or_insert_with(|| (origin.clone(), path.to_owned()));
+                    .or_insert_with(|| (origin.clone(), path.clone()));
+                Target::View(state, write)
             }
-        }
+        };
+        self.writes.entry(path).or_default().insert(gesture, target);
     }
 
     /// Notes the pages one `Tabs` offers, which of them it showed, and that it
@@ -243,18 +283,70 @@ impl Census {
         .into_iter()
         .flatten()
         {
-            self.note(site.path, binding, origin, Side::Read);
+            self.note_read(site.path, binding, origin);
         }
-        if let Some(binding) = site.write {
-            self.note(site.path, binding, origin, Side::Write);
+        let interval = site.read.and_then(endpoint_key);
+        let close = match site.within {
+            Some(BindingRef::View { id, .. }) => Some(id.0.clone()),
+            _ => None,
+        };
+        for slot in write_slots(site) {
+            let path = slot.child.map_or_else(
+                || site.path.to_owned(),
+                |child| format!("{}/{child}", site.path),
+            );
+            let at = WriteAt {
+                origin,
+                gesture: slot.gesture,
+                edge: slot.edge.zip(interval.clone()),
+                close: close.clone(),
+            };
+            self.note_write(path, slot.binding, at);
+        }
+        for (child, binding) in column_writes(site) {
+            let at = WriteAt {
+                origin,
+                gesture: Gesture::Scalar,
+                edge: None,
+                close: close.clone(),
+            };
+            self.note_write(format!("{}/{child}", site.path), &binding, at);
         }
         if let (ControlNode::Popover { .. }, Some(BindingRef::View { id, .. })) =
             (site.control, site.read)
         {
-            self.writes.insert(
-                site.path.to_owned(),
-                (id.0.clone(), Write::Flag(ViewSet::Off)),
+            self.writes.entry(site.path.to_owned()).or_default().insert(
+                Gesture::Press,
+                Target::View(id.0.clone(), Write::Flag(ViewSet::Off)),
             );
         }
+    }
+}
+
+pub(crate) struct WriteAt<'a> {
+    pub(crate) gesture: Gesture,
+    pub(crate) origin: &'a SourceUri,
+    pub(crate) edge: Option<(Edge, String)>,
+    pub(crate) close: Option<String>,
+}
+
+impl<'a> WriteAt<'a> {
+    pub(crate) const fn plain(gesture: Gesture, origin: &'a SourceUri) -> Self {
+        Self {
+            gesture,
+            origin,
+            edge: None,
+            close: None,
+        }
+    }
+}
+
+fn endpoint_key(binding: &BindingRef) -> Option<String> {
+    match binding {
+        BindingRef::Command { id, with }
+        | BindingRef::Model { id, with }
+        | BindingRef::Parameter { id, with }
+        | BindingRef::Telemetry { id, with } => Some(scoped_key(&id.0, with)),
+        BindingRef::View { .. } | BindingRef::Page { .. } => None,
     }
 }

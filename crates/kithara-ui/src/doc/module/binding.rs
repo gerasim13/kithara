@@ -35,6 +35,10 @@ pub enum BindingRef {
         id: StateId,
         #[serde(default)]
         set: ViewSet,
+        /// Reads the flag as its opposite, so a block that stands hidden
+        /// while a group is closed reads the group's open flag.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        invert: bool,
     },
     /// One page of a [`crate::doc::layout::LayoutNode::Tabs`], named by the
     /// state that says which page stands. A read answers whether the state

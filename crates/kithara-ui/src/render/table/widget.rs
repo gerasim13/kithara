@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use iced::{
     Element, Event, Rectangle, Renderer, Theme,
     advanced::widget::{Id, Operation},
@@ -7,7 +9,7 @@ use iced::{
 use kithara_platform::time::Instant;
 
 use super::{
-    super::{InputOwner, Skin, UiEvent, controls::RetainedCanvas, drag, index, scalar},
+    super::{Carried, InputOwner, Published, Skin, controls::RetainedCanvas, drag, index, scalar},
     paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect},
 };
 use crate::{
@@ -27,7 +29,7 @@ pub(crate) fn table<'skin>(
     columns: Vec<ColumnLayout>,
     skin: &'skin Skin,
     owner: InputOwner,
-) -> Element<'skin, UiEvent> {
+) -> Element<'skin, Published> {
     let paint = TablePaint::new(path, rows, columns, skin);
     let config = paint.config();
     match owner {
@@ -42,6 +44,10 @@ pub(crate) fn table<'skin>(
         .view(),
         InputOwner::Engine => RetainedCanvas::new(paint, path, config).view(),
     }
+}
+
+pub(crate) fn carried(state: &dyn Any, path: &str, index: usize) -> Option<Carried> {
+    state.downcast_ref::<TableState>()?.carried(path, index)
 }
 
 pub(crate) fn sync_table_scroll(
@@ -62,7 +68,7 @@ pub(crate) fn sync_table_scroll(
             operate(self);
         }
 
-        fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn std::any::Any) {
+        fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Any) {
             if let Some(state) = state.downcast_mut::<TableState>() {
                 state.sync(self.path, self.horizontal, self.pressed, self.vertical);
             }
@@ -82,7 +88,7 @@ pub(super) struct TableProgram {
     pub(super) paint: TablePaint,
 }
 
-impl canvas::Program<UiEvent> for TableProgram {
+impl canvas::Program<Published> for TableProgram {
     type State = TableState;
 
     fn draw(
@@ -151,7 +157,7 @@ impl canvas::Program<UiEvent> for TableProgram {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         let input = iced_interact::input(event)?;
         let drag_point = cursor.position().map(Into::into);
         let point = cursor.position_in(bounds).map(Into::into);
@@ -201,7 +207,7 @@ impl TableProgram {
         bounds: Rect,
         point: Option<Pt>,
         origin: Pt,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         let dividers = table_dividers(
             bounds,
             self.paint.face.columns(),
@@ -237,7 +243,7 @@ impl TableProgram {
         input: Input<'_>,
         bounds: Rect,
         point: Option<Pt>,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         if matches!(
             input,
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
@@ -306,7 +312,7 @@ fn scroll_action(
     outcome: Outcome<usize>,
     before: f32,
     after: f32,
-) -> Option<Action<UiEvent>> {
+) -> Option<Action<Published>> {
     if outcome.is_captured() && outcome.value().is_none() && before != after {
         Some(Action::request_redraw().and_capture())
     } else {

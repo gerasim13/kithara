@@ -135,16 +135,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
         self.reads.get(endpoint)
     }
 
-    /// What one text binding answers, or nothing when there is no binding, no
-    /// answer, or an empty answer.
-    #[must_use]
-    pub fn label(self, binding: Option<&Binding>) -> Option<&'r str> {
-        match self.read(binding?)? {
-            ReadValue::Text(label) if !label.is_empty() => Some(label),
-            _ => None,
-        }
-    }
-
     /// The point one binding answers with, or nothing when there is no
     /// binding, no answer, or an answer that is not a point.
     #[must_use]
@@ -161,8 +151,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
     pub fn read(self, binding: &Binding) -> Option<ReadValue<'r>> {
         match binding.kind {
             BindingKind::Command => None,
-            BindingKind::View { .. } => Some(ReadValue::Bool(
-                self.view.flag(self.ui.resolve(binding.key)),
+            BindingKind::View { invert, .. } => Some(ReadValue::Bool(
+                self.view.flag(self.ui.resolve(binding.key)) != invert,
             )),
             BindingKind::Page { name } => Some(ReadValue::Bool(
                 self.ui

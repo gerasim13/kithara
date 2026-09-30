@@ -5,6 +5,7 @@
     title: Some("Micro deck"),
     chip: Some("MIC"),
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-module-deck-micro" })),
     footer: Some(Model(id: "gallery.footer.deck_micro")),
     root: Column(
         children: [

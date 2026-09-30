@@ -30,7 +30,7 @@ use crate::{
     },
     module::TextAlign,
     render::{
-        CustomSkin, HostLayer, ReadValue, UiEvent, WindowCommand, WindowLayerProgram,
+        CustomSkin, HostLayer, Published, ReadValue, WindowCommand, WindowLayerProgram,
         document::Ctx, shader::ShaderDeclaration,
     },
     shaping::{TextContext, TextResources},
@@ -348,7 +348,7 @@ where
 {
     program: Program,
     geometry: Rc<Cell<MasonryRect>>,
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    map_event: Rc<dyn Fn(Published) -> HostAction>,
     pointer: Rc<Cell<Option<Pt>>>,
     /// Encoding buffer the paint pass refills instead of allocating a new one
     /// per frame. `Scene::reset` keeps the capacity the widget has already
@@ -365,7 +365,7 @@ where
         program: Program,
         geometry: Rc<Cell<MasonryRect>>,
         pointer: Rc<Cell<Option<Pt>>>,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
     ) -> Self {
         Self {
             geometry,
@@ -514,7 +514,7 @@ where
             PointerOwnership::Unchanged | PointerOwnership::Claim | PointerOwnership::Release => {}
         }
         if let Some(command) = outcome.value() {
-            ctx.submit_action::<HostAction>((self.map_event)(UiEvent::Window(command)));
+            ctx.submit_action::<HostAction>((self.map_event)(Published::window(command)));
         }
         if outcome.is_captured() || retained {
             ctx.set_handled();

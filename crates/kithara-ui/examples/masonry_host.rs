@@ -8,7 +8,7 @@ use kithara_ui::{
     ids::{EndpointId, SourceUri},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
     render::{
-        CustomSkin, ReadValue, Reads, Skin, UiEvent, document,
+        CustomSkin, Published, ReadValue, Reads, Skin, WindowCommand, document,
         document::{Clock, Ctx},
         masonry::{
             CustomWidget, MasonryHost, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         LetterboxedBadge {
             role: skin.text.section,
         },
-        |()| UiEvent::OpenSettings,
+        |()| Published::window(WindowCommand::Minimize),
     );
     let root = document::render(&ui.root, ctx, host);
     let mut root = MasonryRoot::new(

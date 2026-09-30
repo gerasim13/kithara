@@ -1,9 +1,7 @@
-use std::collections::BTreeSet;
-
 use kithara::{analysis::Waveform, ui::render::WaveBucket};
 use num_traits::cast::ToPrimitive;
 
-use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};
+use super::{modules::Modules, scope::deck_letter, window::WindowState};
 use crate::{
     analysis::{TrackArtifacts, WaveformId},
     catalog::{Catalog, CatalogEntry, is_loaded},
@@ -15,17 +13,13 @@ use crate::{
 #[fieldwork(opt_in, get)]
 pub(crate) struct ViewCache {
     pub(in crate::gui) deck_marks: CatalogRowMarks,
-    pub(in crate::gui) collapsed: CollapsedModules,
     pub(in crate::gui) library: LibraryView,
-    pub(in crate::gui) menu: MenuState,
     pub(in crate::gui) modules: Modules,
-    pub(in crate::gui) drag: Option<usize>,
     pub(in crate::gui) stage: StageView,
     pub(in crate::gui) window: WindowState,
     #[field(get, vis = "pub(in crate::gui)", copy)]
     layout: DeckLayout,
 
-    hover_deck: Option<usize>,
     #[field(get, vis = "pub(in crate::gui)")]
     decks: Vec<DeckCache>,
 
@@ -33,46 +27,9 @@ pub(crate) struct ViewCache {
     focus_deck: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub(in crate::gui) struct StageView {
-    pub(in crate::gui) window: (f32, f32),
     pub(in crate::gui) preset: u32,
-}
-
-impl Default for StageView {
-    fn default() -> Self {
-        Self {
-            preset: 0,
-            window: (0.0, 1.0),
-        }
-    }
-}
-
-impl StageView {
-    pub(in crate::gui) const BPM_CEILING: f32 = 200.0;
-    pub(in crate::gui) const BPM_FLOOR: f32 = 60.0;
-
-    pub(in crate::gui) fn bpm_window(&self) -> (f32, f32) {
-        let span = Self::BPM_CEILING - Self::BPM_FLOOR;
-        (
-            Self::BPM_FLOOR + self.window.0 * span,
-            Self::BPM_FLOOR + self.window.1 * span,
-        )
-    }
-
-    pub(in crate::gui) fn set_edge(&mut self, edge: WindowEdge, at: f32) {
-        let at = at.clamp(0.0, 1.0);
-        match edge {
-            WindowEdge::Min => self.window.0 = at.min(self.window.1),
-            WindowEdge::Max => self.window.1 = at.max(self.window.0),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::gui) enum WindowEdge {
-    Min,
-    Max,
 }
 
 #[derive(Default)]
@@ -184,8 +141,6 @@ pub(in crate::gui) struct DeckCache {
 #[derive(Default)]
 pub(in crate::gui) struct DeckViewState {
     pub(in crate::gui) zoom: Option<f64>,
-    pub(in crate::gui) eq_menu_open: bool,
-    pub(in crate::gui) quality_menu: bool,
 }
 
 #[derive(Default)]
@@ -193,26 +148,9 @@ pub(in crate::gui) struct CatalogRowMarks {
     rows: Vec<String>,
 }
 
-#[derive(Default)]
-pub(in crate::gui) struct CollapsedModules(BTreeSet<String>);
-
 impl ViewCache {
-    pub(in crate::gui) fn close_eq_menus(&mut self) {
-        for deck in &mut self.decks {
-            deck.view.eq_menu_open = false;
-        }
-    }
-
     pub(in crate::gui) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
         self.decks.get_mut(index)
-    }
-
-    pub(in crate::gui) const fn drag_target(&self) -> Option<usize> {
-        if self.drag.is_some() {
-            self.hover_deck
-        } else {
-            None
-        }
     }
 
     pub(crate) const fn laid_out_decks(&self) -> usize {
@@ -229,38 +167,17 @@ impl ViewCache {
         self.window.refresh(self.layout, &self.modules);
     }
 
-    pub(in crate::gui) fn set_eq_menu_open(&mut self, index: usize, open: bool) -> Option<()> {
-        self.deck_mut(index)?.view.eq_menu_open = open;
-        Some(())
-    }
-
-    pub(in crate::gui) fn set_hover_deck(&mut self, deck: usize, over: bool) {
-        if over {
-            self.hover_deck = Some(deck);
-        } else if self.hover_deck == Some(deck) {
-            self.hover_deck = None;
-        }
-    }
-
     pub(in crate::gui) fn set_layout(&mut self, layout: DeckLayout) {
         self.layout = layout;
-        if self.hover_deck.is_some_and(|deck| deck >= layout.decks()) {
-            self.hover_deck = None;
-        }
         if self.focus_deck >= layout.decks() {
             self.focus_deck = 0;
         }
     }
 
-    pub(in crate::gui) fn take_drop(&mut self) -> Option<(usize, usize)> {
-        let row = self.drag.take()?;
-        let deck = self.hover_deck?;
-        self.focus_deck = deck;
-        Some((row, deck))
-    }
-
-    pub(in crate::gui) fn toggle_module(&mut self, module: String) {
-        self.collapsed.toggle(module);
+    pub(in crate::gui) const fn focus(&mut self, deck: usize) {
+        if deck < self.layout.decks() {
+            self.focus_deck = deck;
+        }
     }
 
     #[cfg(test)]
@@ -309,18 +226,6 @@ impl CatalogRowMarks {
                 .iter()
                 .map(|entry| loaded_deck_letters(entry, decks)),
         );
-    }
-}
-
-impl CollapsedModules {
-    pub(in crate::gui) fn contains(&self, module: &str) -> bool {
-        self.0.contains(module)
-    }
-
-    fn toggle(&mut self, module: String) {
-        if !self.0.remove(&module) {
-            self.0.insert(module);
-        }
     }
 }
 
@@ -531,49 +436,6 @@ mod tests {
         let ui = UiState::empty();
 
         assert_eq!(format_quality(&shown(&ui, &DeckSettings::new(0))), "AUTO");
-    }
-
-    #[kithara::test]
-    fn a_drop_ends_the_drag_and_keeps_the_hover() {
-        let mut cache = ViewCache::default();
-        cache.set_hover_deck(1, true);
-        cache.drag = Some(4);
-
-        assert_eq!(cache.drag_target(), Some(1));
-        assert_eq!(cache.take_drop(), Some((4, 1)));
-        assert_eq!(cache.drag_target(), None, "the drag is over");
-
-        cache.drag = Some(7);
-        assert_eq!(cache.take_drop(), Some((7, 1)));
-    }
-
-    #[kithara::test]
-    fn a_drop_outside_every_deck_lands_nowhere() {
-        let mut cache = ViewCache::default();
-        cache.set_hover_deck(0, true);
-        cache.set_hover_deck(1, false);
-        cache.drag = Some(2);
-
-        assert_eq!(cache.hover_deck, Some(0), "another deck's exit is not ours");
-        cache.set_hover_deck(0, false);
-        assert_eq!(cache.take_drop(), None);
-        assert_eq!(cache.drag, None, "a drop always ends the drag");
-    }
-
-    #[kithara::test]
-    fn a_drop_focuses_the_deck_it_landed_on() {
-        let mut cache = ViewCache::default();
-        assert_eq!(cache.focus_deck(), 0);
-
-        cache.set_hover_deck(1, true);
-        cache.drag = Some(2);
-        assert_eq!(cache.take_drop(), Some((2, 1)));
-        assert_eq!(cache.focus_deck(), 1);
-
-        cache.set_hover_deck(1, false);
-        cache.drag = Some(5);
-        assert_eq!(cache.take_drop(), None);
-        assert_eq!(cache.focus_deck(), 1, "a drop on nothing focuses nothing");
     }
 
     #[kithara::test]

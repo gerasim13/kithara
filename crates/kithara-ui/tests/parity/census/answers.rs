@@ -14,6 +14,8 @@ use super::{
 };
 use crate::immediate::Immediate;
 
+const TRAVEL: f32 = 24.0;
+
 /// The retained host with one row mounted, and what of it has already been
 /// seen: how much the document published, and the picture it last drew.
 struct Retained<'a> {
@@ -107,7 +109,7 @@ impl<'a> Retained<'a> {
                 );
                 first.or(self.pointer(
                     Pt {
-                        x: at.x + 24.0,
+                        x: at.x + TRAVEL,
                         y: at.y,
                     },
                     PointerPhase::Move,
@@ -204,17 +206,18 @@ fn played(named: Named, host: &mut Immediate<'_, Census<'_>>, at: Pt) -> Answer 
         Named::Drag => {
             host.press_at(at);
             let started = host.app().published().len();
+            let frames = host.frames();
             let first = host.hover_at(Pt {
                 x: at.x + 2.0,
                 y: at.y,
             });
             let second = host.hover_at(Pt {
-                x: at.x + 24.0,
+                x: at.x + TRAVEL,
                 y: at.y,
             });
             Answer {
                 acted: host.app().published().len() > started,
-                took: first || second,
+                took: first || second || host.frames() > frames,
             }
         }
         Named::Wheel => {
@@ -264,10 +267,16 @@ fn driven_immediate(named: Named, control: &str, skin: &Skin) -> Answer {
 
     let ui = Fixture::new(control).compiled();
     let (width, height): (f32, f32) = (WIDTH.as_(), HEIGHT.as_());
+    // A drag pressed nearer the right edge than its travel ends outside the
+    // window, and the hand leaving the window is answered by any control.
+    let reach = match named {
+        Named::Drag => TRAVEL,
+        Named::Press | Named::Wheel | Named::DoubleClick | Named::Keyboard => 0.0,
+    };
     let mut y = SWEEP / 2.0;
     while y < height {
         let mut x = SWEEP / 2.0;
-        while x < width {
+        while x + reach < width {
             let mut host = Immediate::mount(Census::new(skin), &ui, skin, (WIDTH, HEIGHT));
             let answer = played(named, &mut host, Pt { x, y });
             if !answer.silent() {

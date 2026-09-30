@@ -22,8 +22,8 @@ use kithara_ui::{
     builtin,
     compile::CompiledUi,
     draw::Pt,
-    render::{Clock, UiEvent, fonts::SANS, tree},
-    view::{self},
+    render::{Clock, Published, fonts::SANS, tree},
+    view::{self, ViewState},
 };
 
 use crate::{
@@ -100,7 +100,7 @@ impl Immediate {
                 &mut self.renderer
             )
         );
-        let mut messages: Vec<UiEvent> = Vec::new();
+        let mut messages: Vec<Published> = Vec::new();
         self.scheduled = !self.pending.is_empty();
         let cursor = self.cursor;
         measure_block!("iced.update", {
@@ -127,8 +127,15 @@ impl Immediate {
             );
         });
         self.cache = interface.into_cache();
-        for event in messages {
-            self.app.update(event);
+        let mut standing = ViewState::default();
+        for published in messages {
+            let views = self.ui.views();
+            let settled = self
+                .app
+                .reads(|reads| views.settle(published, reads, &mut standing));
+            if let Some(event) = settled {
+                self.app.update(event);
+            }
         }
         Census {
             scene: None,

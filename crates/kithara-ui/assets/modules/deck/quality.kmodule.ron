@@ -6,18 +6,18 @@
     parameters: ["deck"],
     root: Popover(
         id: "pop",
-        open: Model(id: "deck.stream.quality_menu", with: { "deck": "$deck" }),
+        open: View(id: "quality"),
         align: End,
         anchor: Pressable(
             id: "cell",
-            press: Command(id: "deck.stream.toggle_quality_menu", with: { "deck": "$deck" }),
+            press: View(id: "quality"),
             child: Row(
                 size: (w: Shrink, h: Fill),
                 pad_x: 9.0,
                 gap: 5.0,
                 frame: (top: false, right: false, bottom: false, left: true),
                 frame_color: LineInner,
-                active: Model(id: "deck.stream.quality_menu", with: { "deck": "$deck" }),
+                active: View(id: "quality"),
                 active_background: BgSelect,
                 children: [
                     Row(

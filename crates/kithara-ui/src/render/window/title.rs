@@ -20,7 +20,7 @@ pub(crate) struct TitleBar<'label, 'skin> {
 
 #[cfg(feature = "iced")]
 impl<'a> crate::render::Widget<'a> for TitleBar<'_, '_> {
-    fn view(self) -> Element<'a, crate::render::UiEvent> {
+    fn view(self) -> Element<'a, crate::render::Published> {
         crate::render::window_layer(TitleProgram::new(self.label, self.skin))
     }
 }

@@ -175,12 +175,7 @@ impl Host for WaveHost<'_> {
         Self::flatten(children)
     }
 
-    fn window(
-        &mut self,
-        content: Self::Output,
-        _carried: Option<&Binding>,
-        _resize_edges: bool,
-    ) -> Self::Output {
+    fn window(&mut self, content: Self::Output, _resize_edges: bool) -> Self::Output {
         content
     }
 }
@@ -201,7 +196,7 @@ fn studio_registry() -> kithara_ui::mock::TestRegistry {
         (
             EndpointCategory::Command,
             "deck.queue.load",
-            ValueKind::Trigger,
+            ValueKind::Text,
         ),
         (
             EndpointCategory::Telemetry,
@@ -230,7 +225,11 @@ fn studio_registry() -> kithara_ui::mock::TestRegistry {
             ValueKind::Scalar,
         ),
         (EndpointCategory::Model, "deck.view.zoom", ValueKind::Scalar),
-        (EndpointCategory::Model, "ui.drag.over", ValueKind::Bool),
+        (
+            EndpointCategory::Command,
+            "deck.tempo.reset",
+            ValueKind::Trigger,
+        ),
     ] {
         registry.insert(category, id, EndpointDesc::new(value).with_scope("deck"));
     }

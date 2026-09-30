@@ -12,7 +12,7 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Rect},
     render::{
-        Clock, CustomSkin, ReadValue, Reads, Skin, UiEvent,
+        Clock, CustomSkin, ReadValue, Reads, Skin, UiEvent, WindowCommand,
         custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
         tree,
     },
@@ -93,7 +93,11 @@ impl Extension {
     }
 
     fn kinds() -> CustomKinds {
-        CustomKinds::default().with(Self::KIND, || Caption, |()| UiEvent::OpenSettings)
+        CustomKinds::default().with(
+            Self::KIND,
+            || Caption,
+            |()| UiEvent::Window(WindowCommand::Minimize),
+        )
     }
 
     /// The box the immediate host measured the extension into.

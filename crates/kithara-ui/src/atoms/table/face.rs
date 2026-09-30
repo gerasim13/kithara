@@ -9,7 +9,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
     interact::ScrollAxis,
     module::TableColumnStyle,
-    render::Skin,
+    render::{Carried, Skin},
     shaping::TextContext,
     skin::{FrameSkin, TextRoleSkin},
 };
@@ -32,6 +32,18 @@ pub(crate) struct Drawn {
 }
 
 impl TableFace {
+    pub(crate) fn carried(&self, index: usize) -> Option<Carried> {
+        let row = self.rows().get(index)?;
+        let data = row.drag()?.to_owned();
+        let label = self
+            .columns()
+            .iter()
+            .position(|column| column.column.style() == TableColumnStyle::Primary)
+            .and_then(|primary| row.cell(primary)?.text())
+            .map(str::to_owned);
+        Some(Carried { data, label })
+    }
+
     pub(crate) fn new(rows: Vec<TableRowData>, columns: Vec<ColumnLayout>, skin: &Skin) -> Self {
         let rows = rows
             .into_iter()
@@ -43,6 +55,7 @@ impl TableFace {
                         .collect(),
                     row.selected,
                 )
+                .with_drag(row.drag)
             })
             .collect();
         Self {
@@ -771,6 +784,7 @@ mod tests {
     fn fixture() -> (TableFace, TextContext, Rect, Drawn) {
         let skin = builtin::skin();
         let columns = vec![ColumnLayout {
+            resizable: true,
             column: crate::module::TableColumn::new(
                 "title",
                 "TITLE",

@@ -12,7 +12,9 @@
                 id: "browser",
                 size: (w: Fixed(232.0), h: Fill),
                 read: Model(id: "library.tree"),
+                write: Command(id: "library.select_tree_row"),
                 query: Model(id: "library.query"),
+                write_query: Model(id: "library.query"),
             ),
             Column(
                 size: (w: Fill, h: Fill),
@@ -21,7 +23,7 @@
                         id: "context",
                         size: (w: Fill, h: Fixed(26.0)),
                         read: Model(id: "library.breadcrumb"),
-                        write: Model(id: "library.scope"),
+                        write: Command(id: "library.select_scope"),
                         scope_items: ["ZVUK", "LOCAL"],
                         scope: Model(id: "library.scope"),
                     ),

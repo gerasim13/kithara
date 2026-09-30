@@ -4,6 +4,7 @@
 //! itself out of the target build.
 
 fn main() {
+    println!("cargo::rerun-if-changed=build.rs");
     #[cfg(feature = "native-fixtures")]
     kithara_fixture_gen::generate();
 }

@@ -5,6 +5,7 @@
     title: Some("Deck"),
     chip: Some("DECK"),
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-module-deck" })),
     footer: Some(Model(id: "gallery.footer.deck")),
     root: Column(
         children: [

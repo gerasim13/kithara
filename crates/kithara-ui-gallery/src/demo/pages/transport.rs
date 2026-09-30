@@ -1,4 +1,4 @@
-use kithara_ui::render::{Zoom, zoom_in, zoom_out};
+use kithara_ui::render::{WriteValue, Zoom, zoom_in, zoom_out};
 use num_traits::cast::AsPrimitive;
 
 fn zoom_from_f64(value: f64) -> Zoom {
@@ -52,22 +52,24 @@ impl DeckTransport {
         }
     }
 
-    pub(crate) fn activate(&mut self, path: &str) -> bool {
-        let action = path.rsplit('/').next();
-        if !path.contains("/transport/") {
-            return false;
+    pub(crate) fn write(&mut self, id: &str, value: &WriteValue) {
+        match (id, value) {
+            ("deck.transport.set_cue", WriteValue::Trigger) => self.set_cue(),
+            ("deck.transport.jump_back", WriteValue::Trigger) => self.jump_bars(-1.0),
+            ("deck.transport.jump_forward", WriteValue::Trigger) => self.jump_bars(1.0),
+            ("deck.transport.toggle_loop", WriteValue::Trigger) => self.toggle_loop(),
+            ("deck.transport.toggle_play", WriteValue::Trigger) => self.playing = !self.playing,
+            ("deck.transport.toggle_reverse", WriteValue::Trigger) => self.reverse = !self.reverse,
+            ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {
+                self.seek_normalized(*position);
+            }
+            ("deck.transport.loop_start", WriteValue::Scalar(start)) => self.set_loop_start(*start),
+            ("deck.transport.loop_end", WriteValue::Scalar(end)) => self.set_loop_end(*end),
+            ("deck.view.zoom_in", WriteValue::Trigger) => self.zoom = zoom_in(self.zoom),
+            ("deck.view.zoom_out", WriteValue::Trigger) => self.zoom = zoom_out(self.zoom),
+            ("deck.view.zoom", WriteValue::Scalar(zoom)) => self.zoom = zoom_from_f64(*zoom),
+            _ => {}
         }
-        match action {
-            Some("cue") => self.set_cue(),
-            Some("jump-back") => self.jump_bars(-1.0),
-            Some("jump-forward") => self.jump_bars(1.0),
-            Some("loop") => self.toggle_loop(),
-            Some("reverse") => self.reverse = !self.reverse,
-            Some("zoom-in") => self.zoom = zoom_in(self.zoom),
-            Some("zoom-out") => self.zoom = zoom_out(self.zoom),
-            _ => return false,
-        }
-        true
     }
 
     fn jump_bars(&mut self, bars: f64) {
@@ -79,7 +81,7 @@ impl DeckTransport {
         self.position_secs / self.duration_secs
     }
 
-    pub(crate) fn seek_normalized(&mut self, position: f64) {
+    fn seek_normalized(&mut self, position: f64) {
         self.position_secs = position.clamp(0.0, 1.0) * self.duration_secs;
     }
 
@@ -92,17 +94,13 @@ impl DeckTransport {
         }
     }
 
-    pub(crate) fn set_loop_end(&mut self, end: f64) {
+    fn set_loop_end(&mut self, end: f64) {
         self.loop_region = normalized_loop(self.loop_anchor, end.clamp(0.0, 1.0).as_());
     }
 
-    pub(crate) fn set_loop_start(&mut self, start: f64) {
+    fn set_loop_start(&mut self, start: f64) {
         self.loop_anchor = start.clamp(0.0, 1.0).as_();
         self.loop_region = None;
-    }
-
-    pub(crate) fn set_zoom(&mut self, zoom: f64) {
-        self.zoom = zoom_from_f64(zoom);
     }
 
     fn toggle_loop(&mut self) {
@@ -115,10 +113,6 @@ impl DeckTransport {
         let end = ((self.position_secs + loop_secs) / self.duration_secs).min(1.0);
         self.loop_anchor = start.as_();
         self.loop_region = Some([start.as_(), end.as_()]);
-    }
-
-    pub(crate) const fn toggle_play(&mut self) {
-        self.playing = !self.playing;
     }
 
     pub(crate) fn zoom(&self) -> f64 {
@@ -160,12 +154,12 @@ mod tests {
     fn cue_adds_current_position_without_duplicates_and_stops_at_four() {
         let mut transport = transport();
 
-        transport.activate("modules/deck/transport/cue");
-        transport.activate("modules/deck/transport/cue");
+        transport.write("deck.transport.set_cue", &WriteValue::Trigger);
+        transport.write("deck.transport.set_cue", &WriteValue::Trigger);
         transport.seek_normalized(0.5);
-        transport.activate("modules/deck/transport/cue");
+        transport.write("deck.transport.set_cue", &WriteValue::Trigger);
         transport.seek_normalized(0.75);
-        transport.activate("modules/deck/transport/cue");
+        transport.write("deck.transport.set_cue", &WriteValue::Trigger);
 
         assert_eq!(transport.cues().len(), 4);
         assert!(
@@ -181,11 +175,11 @@ mod tests {
     fn loop_toggle_replaces_initial_region_with_four_bars_from_position() {
         let mut transport = transport();
 
-        transport.activate("modules/deck/transport/loop");
+        transport.write("deck.transport.toggle_loop", &WriteValue::Trigger);
         assert_eq!(transport.loop_region(), None);
 
         transport.seek_normalized(0.25);
-        transport.activate("modules/deck/transport/loop");
+        transport.write("deck.transport.toggle_loop", &WriteValue::Trigger);
         let four_bars = DeckTransport::BARS_PER_LOOP
             * DeckTransport::BEATS_PER_BAR
             * DeckTransport::SECS_PER_MINUTE
@@ -233,16 +227,16 @@ mod tests {
             DeckTransport::BEATS_PER_BAR * DeckTransport::SECS_PER_MINUTE / f64::from(consts::BPM);
 
         transport.seek_normalized(0.5);
-        transport.activate("modules/deck/transport/jump-back");
+        transport.write("deck.transport.jump_back", &WriteValue::Trigger);
         assert_eq!(
             transport.position_secs(),
             consts::DURATION_SECS * 0.5 - one_bar
         );
         transport.seek_normalized(0.999);
-        transport.activate("modules/deck/transport/jump-forward");
+        transport.write("deck.transport.jump_forward", &WriteValue::Trigger);
         assert_eq!(transport.position_normalized(), 1.0);
         transport.seek_normalized(0.001);
-        transport.activate("modules/deck/transport/jump-back");
+        transport.write("deck.transport.jump_back", &WriteValue::Trigger);
         assert_eq!(transport.position_normalized(), 0.0);
     }
 
@@ -250,16 +244,16 @@ mod tests {
     fn zoom_buttons_use_wheel_factor_and_clamp() {
         let mut transport = transport();
 
-        transport.activate("modules/deck/transport/zoom-out");
+        transport.write("deck.view.zoom_out", &WriteValue::Trigger);
         assert_eq!(
             transport.zoom(),
             f64::from(f32::from(zoom_out(zoom_from_f64(consts::ZOOM))))
         );
-        transport.set_zoom(0.49);
-        transport.activate("modules/deck/transport/zoom-out");
+        transport.write("deck.view.zoom", &WriteValue::Scalar(0.49));
+        transport.write("deck.view.zoom_out", &WriteValue::Trigger);
         assert_eq!(transport.zoom(), f64::from(f32::from(Zoom::MAX)));
-        transport.set_zoom(0.016);
-        transport.activate("modules/deck/transport/zoom-in");
+        transport.write("deck.view.zoom", &WriteValue::Scalar(0.016));
+        transport.write("deck.view.zoom_in", &WriteValue::Trigger);
         assert_eq!(transport.zoom(), f64::from(f32::from(Zoom::MIN)));
     }
 }

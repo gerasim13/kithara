@@ -7,6 +7,12 @@ pub const CUES: &[f32] = &[0.27, 0.31];
 pub const DURATION_SECS: f64 = 360.0;
 pub const ENGINE_LOAD: f64 = 0.21;
 pub const KEY: &str = "4m";
+pub const KNOBS: [&str; 4] = [
+    "demo.knob.26",
+    "demo.knob.28",
+    "demo.knob.34",
+    "demo.knob.38",
+];
 pub const LATENCY: &str = "5.3 MS";
 pub const LOOP_REGION: [f32; 2] = [0.30, 0.34];
 /// Where the artwork page's fader starts, and — because a capture never

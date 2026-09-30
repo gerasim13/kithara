@@ -12,18 +12,18 @@ use super::{
 use crate::{
     compile::CompiledUi,
     draw::Transform,
-    expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec},
+    expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec, header_path},
     ids::InternId,
     layout::Axis,
     module::{MeasureAxis, TextAlign},
     render::{
-        Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Skin, UiEvent,
-        Viewport, WheelSurface, Widget,
+        Anchored, ControlAction, InputOwner, ModuleChrome, Placement, Published, Skin, Viewport,
+        WheelSurface, Widget,
         document::{
             Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
             Module as DocumentModule, PlacedMount, Popover as DocumentPopover, SplitMount,
         },
-        placed, window_layers,
+        drop_outline, placed, window_layers,
     },
     size::{Dim, SizeSpec},
 };
@@ -40,7 +40,7 @@ impl<'a, 'r> IcedHost<'a, 'r> {
 }
 
 impl<'a> DocumentHost for IcedHost<'a, '_> {
-    type Output = Element<'a, UiEvent>;
+    type Output = Element<'a, Published>;
 
     fn control(
         &mut self,
@@ -130,12 +130,11 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         content: Option<Self::Output>,
     ) -> Self::Output {
         let instance = self.ctx.ui.resolve(module.instance());
-        let module_name = self.ctx.ui.resolve(module.module());
         let content = content.unwrap_or_else(|| Space::new().into());
         let chrome_hosted = module.chrome_hosted();
         let child = ModuleChrome::builder()
             .content(content)
-            .module(module_name)
+            .header(header_path(instance))
             .maybe_title(module.title().map(|id| self.ctx.ui.resolve(id)))
             .maybe_chip(module.chip().map(|id| self.ctx.ui.resolve(id)))
             .assign(
@@ -155,11 +154,6 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             } else {
                 InputOwner::Leaf
             })
-            .maybe_drop(
-                module
-                    .drop()
-                    .map(|drop| DropZone::new(self.ctx.flag(Some(&drop.read)))),
-            )
             .collapsed(module.collapsed())
             .skin(self.skin)
             .build()
@@ -169,10 +163,9 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
                 child,
                 host::ModuleHost {
                     instance,
-                    module: module_name,
                     chrome: module.chrome(),
                     collapsed: module.collapsed(),
-                    drop: module.drop().is_some(),
+                    drop: module.takes_drops().then(|| drop_outline(self.skin)),
                 },
             )
         } else {
@@ -318,16 +311,11 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         stage(children, size)
     }
 
-    fn window(
-        &mut self,
-        content: Self::Output,
-        carried: Option<&Binding>,
-        resize_edges: bool,
-    ) -> Self::Output {
-        if !resize_edges && carried.is_none() {
-            content
+    fn window(&mut self, content: Self::Output, resize_edges: bool) -> Self::Output {
+        if resize_edges {
+            window_layers(content, resize_edges, self.skin)
         } else {
-            window_layers(content, self.ctx.label(carried), resize_edges, self.skin)
+            content
         }
     }
 }
@@ -349,11 +337,14 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
 /// retained host makes: measured on the sprites page, where a 96-tall sprite
 /// came out 112 tall here and 96 there, which a turn then carried 8 across the
 /// screen.
-fn stage<'a>(children: Vec<Element<'a, UiEvent>>, size: Option<SizeSpec>) -> Element<'a, UiEvent> {
+fn stage<'a>(
+    children: Vec<Element<'a, Published>>,
+    size: Option<SizeSpec>,
+) -> Element<'a, Published> {
     let Some(size) = size else {
         return Stack::with_children(children).into();
     };
-    let mut layers: Vec<Element<'a, UiEvent>> = Vec::with_capacity(children.len() + 1);
+    let mut layers: Vec<Element<'a, Published>> = Vec::with_capacity(children.len() + 1);
     layers.push(Element::from(Space::new()));
     layers.extend(children);
     Stack::with_children(layers)
@@ -381,11 +372,11 @@ fn content_size(size: Option<SizeSpec>) -> (Length, Length) {
 }
 
 fn wheeled<'a>(
-    element: Element<'a, UiEvent>,
+    element: Element<'a, Published>,
     surface: Option<&SurfaceSpec>,
     size: (Length, Length),
     ui: &'a CompiledUi,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let Some(surface) = surface else {
         return element;
     };

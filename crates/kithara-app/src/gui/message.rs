@@ -1,4 +1,4 @@
-use kithara::ui::render::{UiEvent, WindowCommand};
+use kithara::ui::render::{Published, WindowCommand};
 
 use crate::{
     deck::{DeckId, EqMode},
@@ -12,9 +12,9 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     BroadcastToggle,
-    /// Raw event from the compiled UI; translated by
-    /// [`super::ui::translate`].
-    Ui(UiEvent),
+    /// What the compiled UI published; settled against the document's
+    /// writes, then translated by [`super::ui::translate`].
+    Ui(Published),
     /// Event addressed to one deck.
     Deck(DeckId, super::deck::DeckMsg),
     /// Replace the EQ topology of every deck.
@@ -26,8 +26,6 @@ pub(crate) enum Message {
     DeleteFocusedTrack,
     /// Highlight a catalog row.
     SelectCatalogTrack(usize),
-    /// Load catalog row `.0` onto deck `.1`.
-    LoadOntoDeck(usize, DeckId),
     /// Pause every deck the current layout does not lay out.
     PauseHiddenDecks,
     /// Periodic tick from the subscription.

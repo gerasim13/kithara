@@ -9,7 +9,7 @@ use kithara::{
         time::{Duration, Instant, WallInstant},
         tokio::sync::mpsc::{self, UnboundedReceiver},
     },
-    ui::render::{ControlAction, ReadValue, Reads, UiEvent, Walk},
+    ui::render::{ControlAction, Published, ReadValue, Reads, Walk},
 };
 use kithara_test_utils::clock::real_clock_verdict;
 
@@ -208,7 +208,7 @@ impl Rig {
     }
 
     pub(crate) fn send(&mut self, path: &str, action: ControlAction) {
-        self.message(Message::Ui(UiEvent::Control {
+        self.message(Message::Ui(Published::Gesture {
             action,
             path: path.to_owned(),
         }));

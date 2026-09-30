@@ -2,6 +2,9 @@ pub mod address;
 pub(crate) mod controls;
 pub mod custom;
 pub mod document;
+mod drag;
+#[cfg(test)]
+mod drop_fixture;
 pub mod event;
 #[cfg(feature = "iced")]
 pub mod fonts;
@@ -35,8 +38,9 @@ mod window;
 
 pub use address::{Node, Scope, Walk};
 pub use document::{Clock, Ctx, PlacedMount, Snap};
-pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
-pub(crate) use event::{control_event, span_event};
+pub(crate) use drag::{Carried, DragSession};
+pub use event::{Carry, ControlAction, Published, UiEvent, WindowCommand, WindowEdge, WriteValue};
+pub(crate) use event::{CarryStep, carry_event, control_event, span_event};
 pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub(crate) use icons::Mark;
 #[cfg(feature = "iced")]
@@ -56,8 +60,8 @@ pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 pub(crate) use {
     controls::{ChromeLeaf, Marked, Marks, Probe, chrome_leaf, header_chevron, tree_rows},
     immediate::{
-        Anchored, Custom, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport,
-        WheelSurface, corner_radius, frame_overlay,
+        Anchored, Custom, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport, WheelSurface,
+        corner_radius, drop_outline, frame_overlay,
     },
     layer::{draw_host_layer, window_layer, window_layers},
     picker::{hosted_picker_overlay, scope_picker, sync_picker},
@@ -65,10 +69,7 @@ pub(crate) use {
     skin::IcedSkin,
     table::{sync_table_scroll, table},
     text_input::{search_input, sync_text_input},
-    tree::{
-        Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
-        toggle_module, window,
-    },
+    tree::{Widget, activate, drag, engine, index, publish, scalar, scalar_child, step, window},
 };
 
 pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, Zoom, zoom_in, zoom_out};

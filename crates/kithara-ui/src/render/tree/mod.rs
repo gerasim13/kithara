@@ -1,4 +1,5 @@
 mod control;
+mod drag;
 mod event;
 pub(crate) mod geometry;
 mod host;
@@ -10,7 +11,6 @@ mod table;
 mod window;
 
 pub(crate) use event::{
-    Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
-    toggle_module, window,
+    Widget, activate, drag, engine, index, publish, scalar, scalar_child, step, window,
 };
 pub use window::render;

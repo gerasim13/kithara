@@ -16,7 +16,7 @@ use crate::{
     layout::Axis,
     module::MeasureAxis,
     render::{
-        UiEvent,
+        Published,
         document::{Band, Measured as Plan},
     },
     solve::{self, Distribution, Input, Item, Measure},
@@ -32,7 +32,7 @@ pub(super) struct Flex<'a> {
     measure: Option<MeasureAxis>,
     padding: Padding,
     child_layouts: Vec<ChildLayout>,
-    children: Vec<Element<'a, UiEvent>>,
+    children: Vec<Element<'a, Published>>,
     spacing: f32,
 }
 
@@ -62,7 +62,7 @@ impl<'a> Flex<'a> {
     }
 
     pub(super) fn column(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<f32>, Band)>,
+        children: impl IntoIterator<Item = (Element<'a, Published>, Option<f32>, Band)>,
     ) -> Self {
         Self::with_children(
             Axis::Vertical,
@@ -73,7 +73,7 @@ impl<'a> Flex<'a> {
     }
 
     pub(super) fn column_weighted(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
+        children: impl IntoIterator<Item = (Element<'a, Published>, Size<Length>, f32, Band)>,
     ) -> Self {
         Self::weighted(Axis::Vertical, children)
     }
@@ -101,7 +101,7 @@ impl<'a> Flex<'a> {
 
     fn push(
         mut self,
-        child: Element<'a, UiEvent>,
+        child: Element<'a, Published>,
         declared: Option<Size<Length>>,
         main_minimum: Option<f32>,
         main_weight: Option<f32>,
@@ -125,7 +125,7 @@ impl<'a> Flex<'a> {
     }
 
     pub(super) fn row(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<f32>, Band)>,
+        children: impl IntoIterator<Item = (Element<'a, Published>, Option<f32>, Band)>,
     ) -> Self {
         Self::with_children(
             Axis::Horizontal,
@@ -136,7 +136,7 @@ impl<'a> Flex<'a> {
     }
 
     pub(super) fn row_weighted(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
+        children: impl IntoIterator<Item = (Element<'a, Published>, Size<Length>, f32, Band)>,
     ) -> Self {
         Self::weighted(Axis::Horizontal, children)
     }
@@ -148,7 +148,7 @@ impl<'a> Flex<'a> {
 
     fn weighted(
         axis: Axis,
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
+        children: impl IntoIterator<Item = (Element<'a, Published>, Size<Length>, f32, Band)>,
     ) -> Self {
         Self::with_children(
             axis,
@@ -169,7 +169,7 @@ impl<'a> Flex<'a> {
         axis: Axis,
         children: impl IntoIterator<
             Item = (
-                Element<'a, UiEvent>,
+                Element<'a, Published>,
                 Option<Size<Length>>,
                 Option<f32>,
                 Option<f32>,
@@ -223,7 +223,7 @@ impl<'a> Flex<'a> {
         &'t self,
         tree: &'t Tree,
         layout: Layout<'t>,
-    ) -> impl Iterator<Item = (&'t Element<'a, UiEvent>, &'t Tree, Layout<'t>)> {
+    ) -> impl Iterator<Item = (&'t Element<'a, Published>, &'t Tree, Layout<'t>)> {
         let stood = stood(&tree.state, self.children.len());
         self.children
             .iter()
@@ -239,7 +239,7 @@ impl<'a> Flex<'a> {
         &'t mut self,
         tree: &'t mut Tree,
         layout: Layout<'t>,
-    ) -> impl Iterator<Item = (&'t mut Element<'a, UiEvent>, &'t mut Tree, Layout<'t>)> {
+    ) -> impl Iterator<Item = (&'t mut Element<'a, Published>, &'t mut Tree, Layout<'t>)> {
         let Tree {
             state, children, ..
         } = tree;
@@ -298,7 +298,7 @@ fn standing(stood: Option<&[bool]>, index: usize) -> bool {
     stood.is_none_or(|shown| shown[index])
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
+impl IcedWidget<Published, Theme, Renderer> for Flex<'_> {
     fn children(&self) -> Vec<Tree> {
         self.children.iter().map(Tree::new).collect()
     }
@@ -441,7 +441,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<overlay::Element<'a, Published, Theme, Renderer>> {
         let floating: Vec<_> = self
             .shown_mut(tree, layout)
             .filter_map(|(child, tree, layout)| {
@@ -477,7 +477,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         for (child, tree, layout) in self.shown_mut(tree, layout) {
@@ -488,7 +488,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
     }
 }
 
-impl<'a> From<Flex<'a>> for Element<'a, UiEvent> {
+impl<'a> From<Flex<'a>> for Element<'a, Published> {
     fn from(flex: Flex<'a>) -> Self {
         Self::new(flex)
     }
@@ -541,7 +541,7 @@ impl From<solve::Limits> for layout::Limits {
 struct IcedMeasure<'a, 'element> {
     renderer: &'a Renderer,
     child_layouts: &'a [ChildLayout],
-    children: &'a mut [Element<'element, UiEvent>],
+    children: &'a mut [Element<'element, Published>],
     trees: &'a mut [Tree],
     /// Which child each item the solver asks about actually is: the solver sees
     /// only the cells that stand.
@@ -585,7 +585,7 @@ impl Measure for IcedMeasure<'_, '_> {
 pub(super) struct Measured<'a> {
     plan: Plan,
     size: Size<Length>,
-    branches: Vec<Element<'a, UiEvent>>,
+    branches: Vec<Element<'a, Published>>,
 }
 
 #[derive(Default)]
@@ -594,7 +594,11 @@ struct Drawn {
 }
 
 impl<'a> Measured<'a> {
-    pub(super) fn new(branches: Vec<Element<'a, UiEvent>>, plan: Plan, size: Size<Length>) -> Self {
+    pub(super) fn new(
+        branches: Vec<Element<'a, Published>>,
+        plan: Plan,
+        size: Size<Length>,
+    ) -> Self {
         Self {
             plan,
             size,
@@ -620,7 +624,7 @@ impl<'a> Measured<'a> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
+impl IcedWidget<Published, Theme, Renderer> for Measured<'_> {
     fn children(&self) -> Vec<Tree> {
         self.branches.iter().map(Tree::new).collect()
     }
@@ -705,7 +709,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'b, UiEvent, Theme, Renderer>> {
+    ) -> Option<overlay::Element<'b, Published, Theme, Renderer>> {
         let drawn = self.drawn(tree);
         let bounds = layout.children().nth(drawn)?;
         self.branches[drawn].as_widget_mut().overlay(
@@ -737,7 +741,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         let drawn = self.drawn(tree);
@@ -757,7 +761,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
     }
 }
 
-impl<'a> From<Measured<'a>> for Element<'a, UiEvent> {
+impl<'a> From<Measured<'a>> for Element<'a, Published> {
     fn from(measured: Measured<'a>) -> Self {
         Self::new(measured)
     }
@@ -778,7 +782,7 @@ mod tests {
 
     use super::{
         Alignment, Band, Element, Flex, IcedWidget, Layout, Length, MeasureAxis, Measured, Padding,
-        Plan, Renderer, Size, State, Theme, Tree, UiEvent,
+        Plan, Published, Renderer, Size, State, Theme, Tree,
     };
     use crate::{
         render::fonts::{FONT_BYTES, SANS},
@@ -801,11 +805,11 @@ mod tests {
         FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
     }
 
-    fn cell(width: f32) -> Element<'static, UiEvent> {
+    fn cell(width: f32) -> Element<'static, Published> {
         Space::new().width(width).height(20.0).into()
     }
 
-    fn portion(weight: u16) -> Element<'static, UiEvent> {
+    fn portion(weight: u16) -> Element<'static, Published> {
         Space::new()
             .width(Length::FillPortion(weight))
             .height(Length::Fill)
@@ -830,8 +834,8 @@ mod tests {
     fn tree_for(flex: &Flex<'_>) -> Tree {
         Tree {
             tag: Tag::of::<State>(),
-            state: IcedWidget::<UiEvent, Theme, Renderer>::state(flex),
-            children: IcedWidget::<UiEvent, Theme, Renderer>::children(flex),
+            state: IcedWidget::<Published, Theme, Renderer>::state(flex),
+            children: IcedWidget::<Published, Theme, Renderer>::children(flex),
         }
     }
 
@@ -952,7 +956,7 @@ mod tests {
     }
 
     fn measured(axis: MeasureAxis) -> Measured<'static> {
-        let branch = || Element::<UiEvent>::from(Space::new());
+        let branch = || Element::<Published>::from(Space::new());
         Measured::new(
             vec![branch(), branch(), branch()],
             Plan {

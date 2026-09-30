@@ -1,6 +1,6 @@
 use kithara::ui::{
     module::IconName,
-    render::{Node, ReadValue, Scope, TableCell, TableRow, TableValue, TreeRow},
+    render::{Node, ReadValue, Scope, TableCell, TableRow, TreeRow},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -54,6 +54,7 @@ impl<'a> LibraryNode<'a> {
                     ],
                     selected == Some(index),
                 )
+                .with_drag(entry.url.as_str())
             })
             .collect();
 
@@ -65,23 +66,10 @@ impl<'a> LibraryNode<'a> {
             scope,
         }
     }
-
-    pub(super) fn title(&self, row: usize) -> Option<&'a str> {
-        self.rows
-            .get(row)?
-            .cells()
-            .iter()
-            .find(|cell| cell.id() == "title")
-            .and_then(|cell| match cell.value() {
-                TableValue::Text(value) => Some(value),
-                _ => None,
-            })
-    }
 }
 
 /// One row per source group the browser is listing, each carrying how many
-/// entries it holds. `LibraryView::groups` decides which groups those are, and
-/// the host resolves a picked row through the same order.
+/// entries it holds. `LibraryView::groups` decides which groups those are.
 fn tree<'a>(catalog: &Catalog, library: &LibraryView) -> Vec<TreeRow<'a>> {
     library
         .groups()

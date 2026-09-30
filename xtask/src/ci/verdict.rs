@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use kithara_devtools::{
     junit::{CaseTiming, parse_junit},
-    lock::FileLock,
+    lock::{FileLock, Wait},
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -101,19 +101,23 @@ impl JournalFile {
     }
 
     fn load(&self) -> Result<Journal> {
-        let _lock = FileLock::shared(self.open_lock()?).with_context(|| {
-            format!(
-                "locking verdict journal {} for reading",
-                self.path.display()
-            )
-        })?;
+        let subject = format!("verdict journal {}", self.path.display());
+        let _lock = FileLock::shared(self.open_lock()?, &subject)
+            .with_context(|| format!("locking {subject} for reading"))?;
         Journal::load(&self.path)
     }
 
     fn update<T>(&self, operation: impl FnOnce(&mut Journal) -> Result<T>) -> Result<T> {
-        let _lock = FileLock::exclusive(self.open_lock()?).with_context(|| {
-            format!("locking verdict journal {} for update", self.path.display())
-        })?;
+        let subject = format!("verdict journal {}", self.path.display());
+        let holder = crate::job::lock_holder();
+        let _lock = FileLock::exclusive(
+            self.open_lock()?,
+            &Wait {
+                subject: &subject,
+                holder: &holder,
+            },
+        )
+        .with_context(|| format!("locking {subject} for update"))?;
         let mut journal = Journal::load(&self.path)?;
         let output = operation(&mut journal)?;
         journal.store(&self.path)?;

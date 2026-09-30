@@ -1,18 +1,18 @@
 use kithara::{
     effects::GainDb,
     ui::render::{
-        ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, Zoom, zoom_in, zoom_out,
+        DEFAULT_ZOOM, Scope, UiEvent, WindowCommand, WriteValue, Zoom, zoom_in, zoom_out,
     },
 };
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::{DeckLayout, ViewCache, WindowEdge},
-    scope::{consts::MICRO_DECK, deck_index, eq_band},
+    cache::{DeckLayout, ViewCache},
+    scope::deck_index,
 };
 use crate::{
     deck::{DeckId, EqMode, TempoPercent},
-    engine::MixCmd,
+    engine::{Command, MixCmd},
     gui::{
         app::Kithara,
         deck::{DeckMsg, consts::TEMPO_STEP},
@@ -20,293 +20,156 @@ use crate::{
     },
 };
 
-/// Translate a compiled-UI event into an app message, applying host-owned
-/// view state (zoom, module collapse, deck layout) in place. Control paths
-/// come from the app documents and may contain nested include segments.
 pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> {
     match event {
-        UiEvent::Control { path, action } => {
-            if matches!(action, ControlAction::Activate) {
-                state.ui.press(&path);
-            }
-            control(state, &path, &action)
-        }
-        UiEvent::ToggleModule(module) => {
-            state.ui.cache.toggle_module(module);
-            None
-        }
-        UiEvent::LibraryQuery(query) => {
-            state.ui.cache.library.query = query;
-            None
-        }
+        UiEvent::Write { key, value } => write(state, &key, value),
         UiEvent::Window(command) => Some(Message::Window(command)),
         _ => None,
     }
 }
 
-pub(super) enum Route {
-    Bar,
-    Deck(usize),
-    Library,
-    MicroBar,
-    Mixer,
-    Overview,
-}
-
-pub(super) fn route(instance: &str) -> Option<Route> {
-    match instance {
-        "micro-bar" => Some(Route::MicroBar),
-        "bar" => Some(Route::Bar),
-        "mixer" => Some(Route::Mixer),
-        "library" => Some(Route::Library),
-        "overview" => Some(Route::Overview),
-        deck => deck_index(deck.strip_prefix("deck-")?).map(Route::Deck),
+/// Dispatches a declared write by its endpoint domain.
+fn write(state: &mut Kithara, key: &str, value: WriteValue) -> Option<Message> {
+    let (id, scope) = Scope::split(key);
+    match id.split_once('.')?.0 {
+        "deck" => deck_write(state, id, scope, value),
+        "mix" | "mixer" => mixer_write(state, id, scope, &value),
+        "ui" => ui_write(&mut state.ui.cache, id, scope, &value),
+        "broadcast" => broadcast_write(id, &value),
+        "library" => library_write(state, id, &value),
+        _ => None,
     }
 }
 
-/// A match guard would read more clearly here, but `if let` guards are not available at the crate's
-/// MSRV.
-fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
-    let (instance, rest) = path.split_once('/')?;
-    let target = route(instance)?;
-    if let Some(row) = rest.strip_prefix("menu/")
-        && matches!(target, Route::MicroBar | Route::Bar)
-    {
-        return menu_control(&mut state.ui.cache, row, action);
-    }
-    match target {
-        Route::MicroBar => micro_control(state, rest, action),
-        Route::Bar => bar_control(rest, action),
-        Route::Mixer => mixer_control(state, rest, action),
-        Route::Library => library_control(state, rest, action),
-        Route::Overview => {
-            let (letter, control) = rest.split_once('/')?;
-            deck_control(state, deck_index(letter)?, control, action)
-        }
-        Route::Deck(index) => deck_control(state, index, rest, action),
-    }
-}
-
-fn micro_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    let index = deck_index(MICRO_DECK)?;
-    match control {
-        "volume" => volume_control(state, index, action),
-        control => deck_control(state, index, control, action),
-    }
-}
-
-fn volume_control(state: &Kithara, index: usize, action: &ControlAction) -> Option<Message> {
-    let ControlAction::SetScalar(trim) = action else {
-        return None;
-    };
-    Some(Message::Mix(MixCmd::Trim(
-        deck_id(state, index)?,
-        trim.clamp(0.0, 1.0).as_(),
-    )))
-}
-
-fn deck_control(
+fn deck_write(
     state: &mut Kithara,
-    index: usize,
-    control: &str,
-    action: &ControlAction,
+    id: &str,
+    scope: Scope<'_>,
+    value: WriteValue,
 ) -> Option<Message> {
-    if zoom_control(&mut state.ui.cache, index, control, action).is_some() {
-        return None;
-    }
-    if let Some(rest) = control.strip_prefix("stream/") {
-        return stream_control(state, index, rest, action);
-    }
-    let id = deck_id(state, index)?;
-    let msg = match (control, action) {
-        ("drop", ControlAction::Drag(DragPhase::Over(over))) => {
-            state.ui.cache.set_hover_deck(index, *over);
-            return None;
+    let index = deck_index(scope.get("deck")?)?;
+    let msg = match (id, value) {
+        ("deck.view.zoom_in", WriteValue::Trigger) => {
+            return step_zoom(&mut state.ui.cache, index, zoom_in);
         }
-        ("wave", ControlAction::SetScalar(position)) => DeckMsg::SeekTo(position.clamp(0.0, 1.0)),
-        ("wave/zoom", ControlAction::SetScalar(zoom)) => {
+        ("deck.view.zoom_out", WriteValue::Trigger) => {
+            return step_zoom(&mut state.ui.cache, index, zoom_out);
+        }
+        ("deck.view.zoom", WriteValue::Scalar(zoom)) => {
             let zoom: f32 = zoom.as_();
             state.ui.cache.deck_mut(index)?.view.zoom =
                 Some(f64::from(f32::from(Zoom::from(zoom))));
             return None;
         }
-        ("tempo", ControlAction::StepScalar(steps)) => DeckMsg::SetTempo(TempoPercent::from(
-            steps.mul_add(TEMPO_STEP, f32::from(state.snapshot.deck(id)?.tempo)),
-        )),
-        ("tempo", ControlAction::Activate) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
-        ("play", ControlAction::Activate) => DeckMsg::TogglePlayPause,
-        ("prev", ControlAction::Activate) => DeckMsg::Prev,
-        ("next", ControlAction::Activate) => DeckMsg::Next,
+        ("deck.queue.load", WriteValue::Text(source)) => {
+            let deck = deck_id(state, index)?;
+            state.ui.cache.focus(index);
+            state.send(Command::LoadOntoDeck { deck, source });
+            return None;
+        }
+        ("deck.eq.mode", WriteValue::Trigger) => {
+            let mode = match scope.get("bands")? {
+                "3" => EqMode::ThreeBand,
+                "4" => EqMode::FourBand,
+                _ => return None,
+            };
+            return Some(Message::SetEqMode(mode));
+        }
+        ("deck.stream.select_variant", WriteValue::Trigger) => {
+            quality_msg(state, index, scope.get("variant")?)?
+        }
+        ("deck.transport.toggle_play", WriteValue::Trigger) => DeckMsg::TogglePlayPause,
+        ("deck.transport.prev", WriteValue::Trigger) => DeckMsg::Prev,
+        ("deck.transport.next", WriteValue::Trigger) => DeckMsg::Next,
+        ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {
+            DeckMsg::SeekTo(position.clamp(0.0, 1.0))
+        }
+        ("deck.tempo.rate", WriteValue::Step(steps)) => {
+            let tempo = f32::from(state.snapshot.deck(deck_id(state, index)?)?.tempo);
+            DeckMsg::SetTempo(TempoPercent::from(steps.mul_add(TEMPO_STEP, tempo)))
+        }
+        ("deck.tempo.reset", WriteValue::Trigger) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
+        ("deck.eq.low", WriteValue::Scalar(knob)) => eq_band(state, "low", knob)?,
+        ("deck.eq.low_mid", WriteValue::Scalar(knob)) => eq_band(state, "low_mid", knob)?,
+        ("deck.eq.mid", WriteValue::Scalar(knob)) => eq_band(state, "mid", knob)?,
+        ("deck.eq.high_mid", WriteValue::Scalar(knob)) => eq_band(state, "high_mid", knob)?,
+        ("deck.eq.high", WriteValue::Scalar(knob)) => eq_band(state, "high", knob)?,
         _ => return None,
     };
-    Some(Message::Deck(id, msg))
+    Some(Message::Deck(deck_id(state, index)?, msg))
 }
 
-fn stream_control(
-    state: &mut Kithara,
-    index: usize,
-    control: &str,
-    action: &ControlAction,
-) -> Option<Message> {
-    if !matches!(action, ControlAction::Activate) {
-        return None;
-    }
-    let open = match control {
-        "cell" => !state.ui.cache.deck_mut(index)?.view.quality_menu,
-        "pop" => false,
-        row => {
-            let msg = quality_msg(state, index, row)?;
-            state.ui.cache.deck_mut(index)?.view.quality_menu = false;
-            return Some(Message::Deck(deck_id(state, index)?, msg));
-        }
-    };
-    state.ui.cache.deck_mut(index)?.view.quality_menu = open;
-    None
+fn eq_band(state: &Kithara, name: &str, knob: f64) -> Option<DeckMsg> {
+    let band = state.snapshot.eq_mode.band(name)?;
+    Some(DeckMsg::EqBandChanged(band, GainDb::at_knob(knob.as_())))
 }
 
-fn quality_msg(state: &Kithara, index: usize, path: &str) -> Option<DeckMsg> {
-    let (row, _) = path.split_once('/')?;
-    if row == "auto" {
+fn quality_msg(state: &Kithara, index: usize, variant: &str) -> Option<DeckMsg> {
+    if variant == "auto" {
         return Some(DeckMsg::SetQuality(None));
     }
-    let slot: usize = row.strip_prefix("variant-")?.parse().ok()?;
+    let slot: usize = variant.parse().ok()?;
     let id = deck_id(state, index)?;
     let rung = state.snapshot.deck(id)?.stream.variants.get(slot)?.index;
     Some(DeckMsg::SetQuality(Some(rung)))
 }
 
-fn zoom_control(
-    cache: &mut ViewCache,
-    index: usize,
-    control: &str,
-    action: &ControlAction,
-) -> Option<()> {
-    let step: fn(Zoom) -> Zoom = match (control, action) {
-        ("zoom-in", ControlAction::Activate) => zoom_in,
-        ("zoom-out", ControlAction::Activate) => zoom_out,
-        _ => return None,
-    };
+fn step_zoom(cache: &mut ViewCache, index: usize, step: fn(Zoom) -> Zoom) -> Option<Message> {
     let deck = cache.deck_mut(index)?;
     let current: f32 = deck.view.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_);
     deck.view.zoom = Some(f64::from(f32::from(step(current.into()))));
-    Some(())
-}
-
-fn bar_control(control: &str, action: &ControlAction) -> Option<Message> {
-    match (control, action) {
-        ("broadcast", ControlAction::Activate) => Some(Message::BroadcastToggle),
-        _ => None,
-    }
-}
-
-/// The app menu owns its own surface and hands everything else to the host:
-/// window mode, the air, and the layout its rows name by deck count.
-///
-/// A grid cell reaches the host through its own include, so the module name is always the path's
-/// first segment.
-fn menu_control(cache: &mut ViewCache, control: &str, action: &ControlAction) -> Option<Message> {
-    if !matches!(action, ControlAction::Activate) {
-        return None;
-    }
-    match control {
-        "layouts-head" => cache.menu.toggle_layouts(),
-        "modules-head" => cache.menu.toggle_modules(),
-        "full-screen" => return Some(Message::Window(WindowCommand::ToggleFullScreen)),
-        "cast" => return Some(Message::BroadcastToggle),
-        row => {
-            let (row, _) = row.split_once('/').unwrap_or((row, ""));
-            if let Some(module) = row.strip_prefix("module-") {
-                cache.modules.toggle(module);
-                return None;
-            }
-            let decks = row.strip_prefix("layout-")?.parse().ok()?;
-            cache.set_layout(DeckLayout::from_decks(decks)?);
-            return Some(Message::PauseHiddenDecks);
-        }
-    }
     None
 }
 
-fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    match (control, action) {
-        ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixCmd::Crossfader(
-            position.clamp(0.0, 1.0).as_(),
-        ))),
-        ("master", ControlAction::SetScalar(gain)) => {
-            Some(Message::Mix(MixCmd::Master(gain.clamp(0.0, 1.0).as_())))
+fn mixer_write(state: &Kithara, id: &str, scope: Scope<'_>, value: &WriteValue) -> Option<Message> {
+    let cmd = match (id, value) {
+        ("mix.crossfader", WriteValue::Scalar(position)) => {
+            MixCmd::Crossfader(position.clamp(0.0, 1.0).as_())
         }
-        ("window/min" | "window/max", ControlAction::SetScalar(at)) => {
-            let edge = if control.ends_with("min") {
-                WindowEdge::Min
-            } else {
-                WindowEdge::Max
-            };
-            state.ui.cache.stage.set_edge(edge, at.as_());
-            None
-        }
-        _ => strip_control(state, control, action),
-    }
+        ("mixer.trim", WriteValue::Scalar(trim)) => MixCmd::Trim(
+            deck_id(state, deck_index(scope.get("deck")?)?)?,
+            trim.clamp(0.0, 1.0).as_(),
+        ),
+        _ => return None,
+    };
+    Some(Message::Mix(cmd))
 }
 
-/// The channel strip owns both mix-side controls and the deck's tone, so its
-/// instance letter addresses the deck.
-fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    let (letter, control) = control.split_once('/')?;
-    let name = control.rsplit('/').next()?;
-    let index = deck_index(letter)?;
-    match (name, action) {
-        ("eq-menu-anchor", ControlAction::SecondaryActivate) => {
-            state.ui.cache.set_eq_menu_open(index, true)?;
+fn ui_write(
+    cache: &mut ViewCache,
+    id: &str,
+    scope: Scope<'_>,
+    value: &WriteValue,
+) -> Option<Message> {
+    if *value != WriteValue::Trigger {
+        return None;
+    }
+    match id {
+        "ui.window.toggle_full_screen" => Some(Message::Window(WindowCommand::ToggleFullScreen)),
+        "ui.module.toggle" => {
+            cache.modules.toggle(scope.get("module")?);
             None
         }
-        ("eq-menu", ControlAction::Activate) => {
-            state.ui.cache.set_eq_menu_open(index, false)?;
-            None
+        "ui.layout.apply" => {
+            cache.set_layout(DeckLayout::from_decks(scope.get("layout")?.parse().ok()?)?);
+            Some(Message::PauseHiddenDecks)
         }
-        ("eq-3", ControlAction::Activate) => {
-            state.ui.cache.close_eq_menus();
-            Some(Message::SetEqMode(EqMode::ThreeBand))
-        }
-        ("eq-4", ControlAction::Activate) => {
-            state.ui.cache.close_eq_menus();
-            Some(Message::SetEqMode(EqMode::FourBand))
-        }
-        ("mute", ControlAction::Activate) => {
-            let muted = state.snapshot.mix.strips.get(index)?.muted;
-            Some(Message::Mix(MixCmd::Muted(deck_id(state, index)?, !muted)))
-        }
-        ("volume", _) => volume_control(state, index, action),
-        (_, ControlAction::SetScalar(value)) => Some(Message::Deck(
-            deck_id(state, index)?,
-            eq_msg(eq_band(state.snapshot.eq_mode, name)?, *value),
-        )),
         _ => None,
     }
 }
 
-/// The list reports the drag, the deck reports the pointer crossing it, and the
-/// host joins them here. A row is a position in its group, resolved back to a
-/// catalog entry through the scope the rows were drawn from.
-fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
-    match (control, action) {
-        ("browser" | "context", ControlAction::SelectIndex(row)) => {
-            let picked = state.ui.cache.library.groups().nth(*row)?;
-            state.ui.cache.library.scope = picked;
-            None
-        }
-        ("tracks", ControlAction::SelectIndex(row)) => {
-            let index = state.ui.cache.library.catalog_index(&state.catalog, *row)?;
-            Some(Message::SelectCatalogTrack(index))
-        }
-        ("tracks", ControlAction::Drag(DragPhase::Start(row))) => {
-            state.ui.cache.drag = Some(*row);
-            None
-        }
-        ("tracks", ControlAction::Drag(DragPhase::Drop)) => {
-            let (row, deck) = state.ui.cache.take_drop()?;
-            let index = state.ui.cache.library.catalog_index(&state.catalog, row)?;
-            Some(Message::LoadOntoDeck(index, deck_id(state, deck)?))
-        }
+fn broadcast_write(id: &str, value: &WriteValue) -> Option<Message> {
+    match (id, value) {
+        ("broadcast.toggle", WriteValue::Trigger) => Some(Message::BroadcastToggle),
+        _ => None,
+    }
+}
+
+fn library_write(state: &Kithara, id: &str, value: &WriteValue) -> Option<Message> {
+    match (id, value) {
+        ("library.select_track", WriteValue::Index(row)) => Some(Message::SelectCatalogTrack(
+            state.ui.cache.library.catalog_index(&state.catalog, *row)?,
+        )),
         _ => None,
     }
 }
@@ -315,26 +178,23 @@ fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
     state.snapshot.decks.get(index).map(|deck| deck.id)
 }
 
-fn eq_msg(band: usize, knob: f64) -> DeckMsg {
-    DeckMsg::EqBandChanged(band, GainDb::at_knob(knob.as_()))
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
 
+    fn press(cache: &mut ViewCache, key: &str) -> Option<Message> {
+        let (id, scope) = Scope::split(key);
+        ui_write(cache, id, scope, &WriteValue::Trigger)
+    }
+
     fn select_layout(cache: &mut ViewCache, layout: DeckLayout) -> Option<Message> {
-        press_menu(cache, &format!("layout-{}", layout.decks()))
+        press(cache, &format!("ui.layout.apply@layout={}", layout.decks()))
     }
 
-    fn press_menu(cache: &mut ViewCache, row: &str) -> Option<Message> {
-        menu_control(cache, row, &ControlAction::Activate)
-    }
-
-    fn press_zoom(cache: &mut ViewCache, control: &str) -> f64 {
-        zoom_control(cache, 0, control, &ControlAction::Activate);
+    fn press_zoom(cache: &mut ViewCache, step: fn(Zoom) -> Zoom) -> f64 {
+        step_zoom(cache, 0, step);
         cache.deck_mut(0).and_then(|deck| deck.view.zoom).unwrap()
     }
 
@@ -344,118 +204,77 @@ mod tests {
 
         let mut cache = ViewCache::with_decks(1);
 
-        let narrowed = press_zoom(&mut cache, "zoom-in");
-        let widened = press_zoom(&mut cache, "zoom-out");
+        let narrowed = press_zoom(&mut cache, zoom_in);
+        let widened = press_zoom(&mut cache, zoom_out);
         assert!(narrowed < f64::from(DEFAULT_ZOOM), "zoom in must narrow");
         assert!(widened > narrowed, "zoom out must widen");
 
         for _ in 0..PRESSES {
-            press_zoom(&mut cache, "zoom-in");
+            press_zoom(&mut cache, zoom_in);
         }
-        let floor = press_zoom(&mut cache, "zoom-in");
+        let floor = press_zoom(&mut cache, zoom_in);
         assert!(floor > 0.0, "the window never closes");
-        assert_eq!(press_zoom(&mut cache, "zoom-in"), floor);
+        assert_eq!(press_zoom(&mut cache, zoom_in), floor);
 
         for _ in 0..PRESSES {
-            press_zoom(&mut cache, "zoom-out");
+            press_zoom(&mut cache, zoom_out);
         }
-        let ceiling = press_zoom(&mut cache, "zoom-out");
+        let ceiling = press_zoom(&mut cache, zoom_out);
         assert!(ceiling < 1.0, "the window never spans the whole track");
-        assert_eq!(press_zoom(&mut cache, "zoom-out"), ceiling);
+        assert_eq!(press_zoom(&mut cache, zoom_out), ceiling);
     }
 
     #[kithara::test]
-    fn the_layouts_group_applies_the_deck_layout_its_row_names() {
+    fn a_layout_row_applies_the_deck_layout_it_names() {
         let mut cache = ViewCache::default();
-        assert!(!cache.menu.are_layouts_open());
-
-        press_menu(&mut cache, "layouts-head");
-        assert!(cache.menu.are_layouts_open());
-
-        assert!(matches!(
-            press_menu(&mut cache, "layout-1/apply"),
-            Some(Message::PauseHiddenDecks)
-        ));
-        assert_eq!(cache.layout(), DeckLayout::Single);
-        assert!(
-            cache.menu.are_layouts_open(),
-            "applying a layout leaves the menu where it was"
-        );
-
-        press_menu(&mut cache, "layout-2/apply");
-        assert_eq!(cache.layout(), DeckLayout::Dual);
-
-        press_menu(&mut cache, "layouts-head");
-        assert!(!cache.menu.are_layouts_open());
-    }
-
-    #[kithara::test]
-    fn a_module_cell_switches_its_own_pane_and_the_group_opens_on_its_head() {
-        let mut cache = ViewCache::default();
-        assert!(!cache.menu.are_modules_open());
-
-        press_menu(&mut cache, "modules-head");
-        assert!(cache.menu.are_modules_open());
-
-        assert!(cache.modules.is_on("ov"));
-        press_menu(&mut cache, "module-ov/cell");
-        assert!(!cache.modules.is_on("ov"));
-        assert!(cache.modules.is_on("mix"), "one cell switches one pane");
-
-        press_menu(&mut cache, "module-ov/cell");
-        assert!(cache.modules.is_on("ov"));
-    }
-
-    #[kithara::test]
-    fn the_menu_asks_the_host_for_full_screen_and_for_the_air() {
-        let mut cache = ViewCache::default();
-
-        assert!(matches!(
-            press_menu(&mut cache, "full-screen"),
-            Some(Message::Window(WindowCommand::ToggleFullScreen))
-        ));
-        assert!(matches!(
-            press_menu(&mut cache, "cast"),
-            Some(Message::BroadcastToggle)
-        ));
-    }
-
-    #[kithara::test]
-    fn narrowing_the_layout_drops_a_hover_it_stops_laying_out() {
-        let mut cache = ViewCache::default();
-        cache.set_hover_deck(1, true);
 
         assert!(matches!(
             select_layout(&mut cache, DeckLayout::Single),
             Some(Message::PauseHiddenDecks)
         ));
+        assert_eq!(cache.layout(), DeckLayout::Single);
 
-        cache.drag = Some(3);
-        assert_eq!(
-            cache.take_drop(),
-            None,
-            "deck B no longer renders, so it can never report the pointer leaving"
-        );
+        select_layout(&mut cache, DeckLayout::Dual);
+        assert_eq!(cache.layout(), DeckLayout::Dual);
+        assert!(press(&mut cache, "ui.layout.apply@layout=3").is_none());
+        assert_eq!(cache.layout(), DeckLayout::Dual);
     }
 
     #[kithara::test]
-    fn widening_the_layout_keeps_a_hover_it_lays_out() {
+    fn a_module_cell_switches_its_own_pane() {
         let mut cache = ViewCache::default();
-        cache.set_hover_deck(0, true);
 
-        select_layout(&mut cache, DeckLayout::Single);
-        select_layout(&mut cache, DeckLayout::Dual);
+        assert!(cache.modules.is_on("ov"));
+        press(&mut cache, "ui.module.toggle@module=ov");
+        assert!(!cache.modules.is_on("ov"));
+        assert!(cache.modules.is_on("mix"), "one cell switches one pane");
 
-        cache.drag = Some(3);
-        assert_eq!(cache.take_drop(), Some((3, 0)));
+        press(&mut cache, "ui.module.toggle@module=ov");
+        assert!(cache.modules.is_on("ov"));
+    }
+
+    #[kithara::test]
+    fn the_menu_asks_the_host_for_full_screen() {
+        let mut cache = ViewCache::default();
+
+        assert!(matches!(
+            press(&mut cache, "ui.window.toggle_full_screen"),
+            Some(Message::Window(WindowCommand::ToggleFullScreen))
+        ));
+    }
+
+    #[kithara::test]
+    fn the_air_toggle_asks_the_host_for_the_air() {
+        assert!(matches!(
+            broadcast_write("broadcast.toggle", &WriteValue::Trigger),
+            Some(Message::BroadcastToggle)
+        ));
     }
 
     #[kithara::test]
     fn narrowing_the_layout_moves_a_focus_it_stops_laying_out() {
         let mut cache = ViewCache::default();
-        cache.set_hover_deck(1, true);
-        cache.drag = Some(3);
-        cache.take_drop();
+        cache.focus(1);
         assert_eq!(cache.focus_deck(), 1);
 
         select_layout(&mut cache, DeckLayout::Single);
@@ -464,30 +283,43 @@ mod tests {
     }
 
     #[cfg(not(feature = "broadcast"))]
-    mod routing {
-        use ::kithara::ui::render::{ControlAction, DragPhase, UiEvent, WindowCommand};
-        use kithara_test_utils::kithara;
+    mod writes {
+        use std::convert::Infallible;
+
+        use ::kithara::ui::render::{
+            ControlAction, DEFAULT_ZOOM, Published, ReadValue, Reads, UiEvent, Walk, WindowCommand,
+            WriteValue,
+        };
+        use kithara_test_utils::{kithara, off_thread::OffThread};
 
         use super::super::translate;
         use crate::{
+            analysis::fixtures::{short_wav, tone_mp3},
             deck::{DeckId, EqMode, TempoPercent},
             engine::MixCmd,
-            gui::{app::Kithara, deck::DeckMsg, message::Message, rig::Rig},
+            gui::{
+                app::Kithara, deck::DeckMsg, message::Message, reads::ReadRoot, rig::Rig,
+                ui::cache::DeckLayout,
+            },
             state::AbrVariant,
         };
 
-        fn send(state: &mut Kithara, path: &str, action: ControlAction) -> Option<Message> {
+        fn write(state: &mut Kithara, key: &str, value: WriteValue) -> Option<Message> {
             translate(
                 state,
-                UiEvent::Control {
-                    action,
-                    path: path.to_string(),
+                UiEvent::Write {
+                    value,
+                    key: key.to_owned(),
                 },
             )
         }
 
+        fn press(state: &mut Kithara, key: &str) -> Option<Message> {
+            write(state, key, WriteValue::Trigger)
+        }
+
         #[kithara::test(native, flash(false))]
-        fn deck_and_bar_controls_translate_to_their_owned_messages() {
+        fn the_transport_answers_the_writes_it_declares() {
             let mut rig = Rig::offline();
             rig.message(Message::Deck(
                 DeckId(0),
@@ -496,49 +328,90 @@ mod tests {
             let state = &mut rig.ui;
 
             assert!(matches!(
-                send(state, "deck-a/play", ControlAction::Activate),
+                press(state, "deck.transport.toggle_play@deck=a"),
                 Some(Message::Deck(DeckId(0), DeckMsg::TogglePlayPause))
             ));
             assert!(matches!(
-                send(state, "overview/b/next", ControlAction::Activate),
+                press(state, "deck.transport.prev@deck=a"),
+                Some(Message::Deck(DeckId(0), DeckMsg::Prev))
+            ));
+            assert!(matches!(
+                press(state, "deck.transport.next@deck=b"),
                 Some(Message::Deck(DeckId(1), DeckMsg::Next))
             ));
             assert!(matches!(
-                send(
-                    state,
-                    "deck-a/wave",
-                    ControlAction::SetScalar(0.25)
-                ),
+                write(state, "deck.transport.seek_normalized@deck=a", WriteValue::Scalar(0.25)),
                 Some(Message::Deck(DeckId(0), DeckMsg::SeekTo(fraction)))
                     if (fraction - 0.25).abs() < f64::EPSILON
             ));
             assert!(matches!(
-                send(
-                    state,
-                    "deck-a/tempo",
-                    ControlAction::StepScalar(2.0)
-                ),
+                write(state, "deck.tempo.rate@deck=a", WriteValue::Step(2.0)),
                 Some(Message::Deck(DeckId(0), DeckMsg::SetTempo(tempo)))
                     if (f32::from(tempo) - 6.0).abs() < f32::EPSILON
             ));
             assert!(matches!(
-                send(state, "bar/broadcast", ControlAction::Activate),
-                Some(Message::BroadcastToggle)
+                press(state, "deck.tempo.reset@deck=a"),
+                Some(Message::Deck(DeckId(0), DeckMsg::SetTempo(tempo)))
+                    if tempo == TempoPercent::DEFAULT
             ));
             assert!(matches!(
-                send(
-                    state,
-                    "micro-bar/volume",
-                    ControlAction::SetScalar(2.0)
-                ),
+                write(state, "mixer.trim@deck=a", WriteValue::Scalar(2.0)),
                 Some(Message::Mix(MixCmd::Trim(DeckId(0), trim)))
                     if (trim - 1.0).abs() < f32::EPSILON
             ));
-            assert!(send(state, "unknown/play", ControlAction::Activate).is_none());
+            assert!(matches!(
+                press(state, "broadcast.toggle"),
+                Some(Message::BroadcastToggle)
+            ));
         }
 
         #[kithara::test(native, flash(false))]
-        fn stream_controls_own_the_quality_menu_and_selected_rung() {
+        fn the_wave_window_answers_its_zoom_writes() {
+            let mut rig = Rig::offline();
+            let state = &mut rig.ui;
+            let zoom =
+                |state: &mut Kithara| state.ui.cache.deck_mut(0).and_then(|deck| deck.view.zoom);
+
+            assert!(press(state, "deck.view.zoom_in@deck=a").is_none());
+            let narrowed = zoom(state).expect("zooming in sets the window");
+            assert!(narrowed < f64::from(DEFAULT_ZOOM), "zoom in must narrow");
+            assert!(press(state, "deck.view.zoom_out@deck=a").is_none());
+            assert!(zoom(state).is_some_and(|widened| widened > narrowed));
+
+            assert!(write(state, "deck.view.zoom@deck=a", WriteValue::Scalar(0.5)).is_none());
+            assert_eq!(zoom(state), Some(0.5));
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn the_mixer_answers_the_writes_it_declares() {
+            let mut rig = Rig::offline();
+            let state = &mut rig.ui;
+
+            assert!(matches!(
+                write(state, "mix.crossfader", WriteValue::Scalar(1.5)),
+                Some(Message::Mix(MixCmd::Crossfader(position)))
+                    if (position - 1.0).abs() < f32::EPSILON
+            ));
+            assert!(matches!(
+                write(state, "deck.eq.low@deck=a", WriteValue::Scalar(1.0)),
+                Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(0, _)))
+            ));
+            assert!(
+                write(state, "deck.eq.high_mid@deck=a", WriteValue::Scalar(1.0)).is_none(),
+                "only the bank the mode draws answers"
+            );
+            assert!(matches!(
+                press(state, "deck.eq.mode@bands=4,deck=a"),
+                Some(Message::SetEqMode(EqMode::FourBand))
+            ));
+            assert!(matches!(
+                press(state, "deck.eq.mode@bands=3,deck=b"),
+                Some(Message::SetEqMode(EqMode::ThreeBand))
+            ));
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn each_deck_picks_the_quality_its_row_names() {
             let mut rig = Rig::offline();
             rig.shows(DeckId(0), |deck| {
                 deck.abr_variants = vec![AbrVariant {
@@ -549,129 +422,141 @@ mod tests {
             });
             let state = &mut rig.ui;
 
-            assert!(send(state, "deck-a/stream/cell", ControlAction::Activate).is_none());
-            assert!(state.ui.cache.deck_mut(0).unwrap().view.quality_menu);
             assert!(matches!(
-                send(
-                    state,
-                    "deck-a/stream/variant-0/cell",
-                    ControlAction::Activate
-                ),
+                press(state, "deck.stream.select_variant@deck=a,variant=0"),
                 Some(Message::Deck(DeckId(0), DeckMsg::SetQuality(Some(7))))
             ));
-            assert!(!state.ui.cache.deck_mut(0).unwrap().view.quality_menu);
             assert!(matches!(
-                send(state, "deck-a/stream/auto/cell", ControlAction::Activate),
+                press(state, "deck.stream.select_variant@deck=a,variant=auto"),
                 Some(Message::Deck(DeckId(0), DeckMsg::SetQuality(None)))
             ));
-            assert!(
-                send(
-                    state,
-                    "deck-a/stream/cell",
-                    ControlAction::SecondaryActivate
-                )
-                .is_none()
-            );
         }
 
         #[kithara::test(native, flash(false))]
-        fn mixer_controls_translate_levels_eq_and_stage_window() {
+        fn the_app_menu_answers_the_writes_it_declares() {
             let mut rig = Rig::offline();
             let state = &mut rig.ui;
 
             assert!(matches!(
-                send(
-                    state,
-                    "mixer/xfade",
-                    ControlAction::SetScalar(1.5)
-                ),
-                Some(Message::Mix(MixCmd::Crossfader(position)))
-                    if (position - 1.0).abs() < f32::EPSILON
-            ));
-            assert!(matches!(
-                send(
-                    state,
-                    "mixer/master",
-                    ControlAction::SetScalar(-1.0)
-                ),
-                Some(Message::Mix(MixCmd::Master(gain))) if gain.abs() < f32::EPSILON
-            ));
-            assert!(send(state, "mixer/window/min", ControlAction::SetScalar(0.7)).is_none());
-            assert!(send(state, "mixer/window/max", ControlAction::SetScalar(0.2)).is_none());
-            assert_eq!(state.ui.cache.stage.window, (0.7, 0.7));
-
-            assert!(matches!(
-                send(state, "mixer/a/mute", ControlAction::Activate),
-                Some(Message::Mix(MixCmd::Muted(DeckId(0), true)))
-            ));
-            assert!(matches!(
-                send(
-                    state,
-                    "mixer/a/volume",
-                    ControlAction::SetScalar(0.25)
-                ),
-                Some(Message::Mix(MixCmd::Trim(DeckId(0), trim)))
-                    if (trim - 0.25).abs() < f32::EPSILON
-            ));
-            assert!(matches!(
-                send(state, "mixer/a/low-3", ControlAction::SetScalar(1.0)),
-                Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(0, _)))
-            ));
-            assert!(
-                send(
-                    state,
-                    "mixer/a/eq-menu-anchor",
-                    ControlAction::SecondaryActivate
-                )
-                .is_none()
-            );
-            assert!(state.ui.cache.deck_mut(0).unwrap().view.eq_menu_open);
-            assert!(matches!(
-                send(state, "mixer/a/eq-4", ControlAction::Activate),
-                Some(Message::SetEqMode(EqMode::FourBand))
-            ));
-            assert!(!state.ui.cache.deck_mut(0).unwrap().view.eq_menu_open);
-        }
-
-        #[kithara::test(native, flash(false))]
-        fn library_and_host_events_update_view_state_and_keep_row_identity() {
-            let mut rig = Rig::offline();
-            let state = &mut rig.ui;
-
-            assert!(translate(state, UiEvent::LibraryQuery("loc".to_string())).is_none());
-            assert_eq!(state.ui.cache.library.query, "loc");
-            state.ui.cache.library.query.clear();
-            assert!(send(state, "library/browser", ControlAction::SelectIndex(1)).is_none());
-            assert!(matches!(
-                send(state, "library/tracks", ControlAction::SelectIndex(0)),
-                Some(Message::SelectCatalogTrack(0))
-            ));
-            assert!(
-                send(
-                    state,
-                    "library/tracks",
-                    ControlAction::Drag(DragPhase::Start(0))
-                )
-                .is_none()
-            );
-            state.ui.cache.set_hover_deck(1, true);
-            assert!(matches!(
-                send(
-                    state,
-                    "library/tracks",
-                    ControlAction::Drag(DragPhase::Drop)
-                ),
-                Some(Message::LoadOntoDeck(0, DeckId(1)))
-            ));
-
-            let was_collapsed = state.ui.cache.collapsed.contains("ov");
-            assert!(translate(state, UiEvent::ToggleModule("ov".to_string())).is_none());
-            assert_ne!(state.ui.cache.collapsed.contains("ov"), was_collapsed);
-            assert!(matches!(
-                translate(state, UiEvent::Window(WindowCommand::ToggleFullScreen)),
+                press(state, "ui.window.toggle_full_screen"),
                 Some(Message::Window(WindowCommand::ToggleFullScreen))
             ));
-            assert!(translate(state, UiEvent::OpenSettings).is_none());
+            assert!(matches!(
+                press(state, "ui.layout.apply@layout=1"),
+                Some(Message::PauseHiddenDecks)
+            ));
+            assert_eq!(state.ui.cache.layout(), DeckLayout::Single);
+
+            assert!(state.ui.cache.modules.is_on("ov"));
+            assert!(press(state, "ui.module.toggle@module=ov").is_none());
+            assert!(!state.ui.cache.modules.is_on("ov"));
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn the_track_list_selects_the_row_it_writes() {
+            let mut rig = Rig::offline();
+            let state = &mut rig.ui;
+
+            assert!(matches!(
+                write(state, "library.select_track", WriteValue::Index(0)),
+                Some(Message::SelectCatalogTrack(0))
+            ));
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn every_library_row_carries_the_url_of_its_entry() {
+            let rig = Rig::offline();
+            let root = ReadRoot::new(&rig.ui);
+            let reads = Walk::new(&root);
+            let Some(ReadValue::Table(rows)) = reads.get("library.tracks") else {
+                panic!("the library draws a table of tracks");
+            };
+            let urls: Vec<&str> = rig
+                .ui
+                .catalog
+                .entries()
+                .iter()
+                .map(|entry| entry.url.as_str())
+                .collect();
+
+            assert!(!rows.is_empty(), "the rig's catalog lists tracks");
+            assert_eq!(
+                rows.iter().map(|row| row.drag()).collect::<Vec<_>>(),
+                urls.into_iter().map(Some).collect::<Vec<_>>()
+            );
+        }
+
+        fn drop_on(rig: &mut Rig, deck: &str, url: &str) {
+            rig.message(Message::Ui(Published::Gesture {
+                action: ControlAction::Text(url.to_owned()),
+                path: format!("deck-{deck}/drop"),
+            }));
+            rig.pump();
+        }
+
+        fn until_current(rig: &mut Rig, deck: usize, name: &str) {
+            rig.until(
+                "the dropped track becomes current",
+                Rig::DEADLINE,
+                |rig| {
+                    rig.engine.tick();
+                    rig.engine.publish();
+                },
+                |rig| {
+                    rig.queues[deck]
+                        .current()
+                        .is_some_and(|track| track.name == name)
+                },
+            );
+        }
+
+        fn names(rig: &Rig, deck: usize) -> Vec<String> {
+            rig.queues[deck]
+                .tracks()
+                .into_iter()
+                .map(|track| track.name)
+                .collect()
+        }
+
+        async fn with_rig(check: impl FnOnce(&mut Rig) + Send + 'static) {
+            let rig = OffThread::spawn("app-host", || Ok::<_, Infallible>(Rig::offline()))
+                .await
+                .expect("rig fixture is infallible");
+            rig.call(check).await;
+            rig.close().await;
+        }
+
+        #[kithara::test(native, tokio, flash(false))]
+        async fn a_row_dropped_on_deck_b_loads_onto_deck_b(tone_mp3: String) {
+            with_rig(move |rig| {
+                drop_on(rig, "b", &tone_mp3);
+                let [name] = names(rig, 1)
+                    .try_into()
+                    .expect("deck B holds the dropped track");
+
+                until_current(rig, 1, &name);
+                assert!(names(rig, 0).is_empty(), "deck A was not the target");
+            })
+            .await;
+        }
+
+        #[kithara::test(native, tokio, flash(false))]
+        async fn the_same_source_dropped_twice_stays_one_entry_and_current(
+            tone_mp3: String,
+            short_wav: String,
+        ) {
+            with_rig(move |rig| {
+                drop_on(rig, "a", &tone_mp3);
+                drop_on(rig, "a", &short_wav);
+                let [tone, wav] = names(rig, 0).try_into().expect("deck A holds both tracks");
+                until_current(rig, 0, &wav);
+
+                drop_on(rig, "a", &tone_mp3);
+
+                assert_eq!(names(rig, 0), [tone.clone(), wav]);
+                until_current(rig, 0, &tone);
+            })
+            .await;
         }
     }
 }

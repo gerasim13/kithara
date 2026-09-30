@@ -16,6 +16,13 @@ pub trait Node<'a> {
 pub struct Scope<'s>(&'s str);
 
 impl<'s> Scope<'s> {
+    /// Splits a scoped endpoint key into its endpoint id and scope.
+    #[must_use]
+    pub fn split(key: &'s str) -> (&'s str, Self) {
+        key.split_once('@')
+            .map_or_else(|| (key, Self::default()), |(id, scope)| (id, Self(scope)))
+    }
+
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&'s str> {
         self.0.split(',').find_map(|pair| {
@@ -40,10 +47,7 @@ impl<'a> Walk<'a> {
 
 impl Reads for Walk<'_> {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        let (path, scope) = match endpoint.split_once('@') {
-            Some((path, scope)) => (path, Scope(scope)),
-            None => (endpoint, Scope::default()),
-        };
+        let (path, scope) = Scope::split(endpoint);
         let mut segments = path.split('.');
         let mut node = self.root.child(segments.next()?, scope)?;
         for segment in segments {

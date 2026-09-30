@@ -21,45 +21,43 @@ pub(super) enum BindingSide {
     ModelWrite,
 }
 
-pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<ValueKind>) {
+pub(crate) const fn read_kind(control: &ControlNode) -> Option<ValueKind> {
     match control {
-        ControlNode::Bpm { .. } => (Some(ValueKind::Waveform), None),
         ControlNode::DeckSummary { .. }
         | ControlNode::Text { .. }
-        | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
-        ControlNode::ContextBar { .. } => (Some(ValueKind::Text), Some(ValueKind::Scalar)),
-        ControlNode::Optional { .. } => (Some(consts::BLOCK_HIDDEN), None),
-        ControlNode::Popover { .. } => (Some(ValueKind::Bool), None),
-        ControlNode::Pressable { .. } => (None, Some(ValueKind::Trigger)),
-        ControlNode::Button { .. }
+        | ControlNode::Readout { .. }
+        | ControlNode::ContextBar { .. } => Some(ValueKind::Text),
+        ControlNode::Optional { .. } => Some(consts::BLOCK_HIDDEN),
+        ControlNode::Popover { .. }
+        | ControlNode::Button { .. }
         | ControlNode::NavItem { .. }
         | ControlNode::TabLarge { .. }
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
-        | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
+        | ControlNode::Chip { .. } => Some(ValueKind::Bool),
         ControlNode::Adaptive { .. }
         | ControlNode::Time { .. }
         | ControlNode::Scalar { .. }
         | ControlNode::Meter { .. }
         | ControlNode::Sprite { .. }
         | ControlNode::Lottie { .. }
-        | ControlNode::Object { .. } => (Some(ValueKind::Scalar), None),
-        ControlNode::Crossfader { .. }
+        | ControlNode::Object { .. }
+        | ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Knob { .. }
         | ControlNode::Segmented { .. }
-        | ControlNode::Vis { .. } => (Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
-        ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
-        ControlNode::PortalMap { .. } => (Some(ValueKind::PortalMap), None),
-        ControlNode::Range { .. } => (Some(ValueKind::Range), Some(ValueKind::Scalar)),
-        ControlNode::Table { .. } => (Some(ValueKind::Table), None),
-        ControlNode::Tree { .. } => (Some(ValueKind::Tree), None),
-        ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
-            (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
-        }
-        ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
-        ControlNode::Placed { .. } => (Some(ValueKind::Point), Some(ValueKind::Point)),
-        ControlNode::Include { .. }
+        | ControlNode::Vis { .. } => Some(ValueKind::Scalar),
+        ControlNode::Bpm { .. } | ControlNode::Wave { .. } => Some(ValueKind::Waveform),
+        ControlNode::PortalMap { .. } => Some(ValueKind::PortalMap),
+        ControlNode::Range { .. } => Some(ValueKind::Range),
+        ControlNode::Table { .. } => Some(ValueKind::Table),
+        ControlNode::Tree { .. } => Some(ValueKind::Tree),
+        ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => Some(ValueKind::Stereo),
+        ControlNode::Placed { .. } => Some(ValueKind::Point),
+        ControlNode::Pressable { .. }
+        | ControlNode::Row { .. }
+        | ControlNode::Column { .. }
+        | ControlNode::Include { .. }
         | ControlNode::Reveal { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Stage { .. }
@@ -78,7 +76,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Swatch { .. }
         | ControlNode::Cell { .. }
         | ControlNode::Custom { .. }
-        | ControlNode::Shader { .. } => (None, None),
+        | ControlNode::Shader { .. } => None,
     }
 }
 

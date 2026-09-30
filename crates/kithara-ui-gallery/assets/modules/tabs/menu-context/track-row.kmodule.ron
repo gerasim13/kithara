@@ -5,11 +5,12 @@
     parameters: ["row"],
     root: Popover(
         id: "menu",
-        open: Model(id: "gallery.menu.context", with: { "row": "$row" }),
+        open: View(id: "$row"),
         at: Pointer,
         anchor: Pressable(
             id: "row",
             press: Command(id: "gallery.menu.select", with: { "row": "$row" }),
+            secondary: View(id: "$row", set: On),
             child: Row(
                 size: (w: Fill, h: Fixed(30.0)),
                 pad_x: 10.0,

@@ -10,12 +10,12 @@ pub use binding_subst::scoped_key;
 pub(crate) use binding_subst::{intern_binding, scoped_state, substitute_binding, substitute_map};
 pub(crate) use machine::Expander;
 pub use node::{
-    Binding, BindingKind, BlockSpec, ControlSpec, DropSpec, ExpandedNode, MagnetSpec, MeasureSpec,
+    Binding, BindingKind, BlockSpec, ControlSpec, ExpandedNode, MagnetSpec, MeasureSpec,
     SurfaceSpec,
 };
 pub(crate) use node::{
-    Budget, ControlSite, ControlVisitor, ExpandedInclude, ExpandedModule, Unprompted,
-    adaptive_branch, motion_of,
+    Budget, ControlSite, ControlVisitor, ExpandedInclude, ExpandedModule, SlotWrites, Unprompted,
+    adaptive_branch, drop_path, header_path, motion_of,
 };
 
 pub use crate::shader::ShaderSpec;

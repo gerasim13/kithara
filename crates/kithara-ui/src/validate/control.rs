@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::binding::{BindingSide, binding_parts, check_binding, value_kinds};
+use super::{
+    binding::{BindingSide, binding_parts, check_binding, read_kind},
+    slots::{column_writes, primary, write_slots},
+};
 use crate::{
     error::UiDocError,
     expand::ControlSite,
@@ -66,24 +69,47 @@ pub(crate) fn check_controls(
             endpoints,
         )?;
     }
-    let (read_kind, write_kind) = value_kinds(site.control);
     if let Some(binding) = site.read {
         check_binding(
             binding,
             BindingSide::Read,
-            read_kind,
+            read_kind(site.control),
             site.path,
             origin,
             endpoints,
         )?;
     }
-    if let Some(binding) = site.write {
-        let side = if matches!(site.control, ControlNode::ContextBar { .. }) {
-            BindingSide::ModelWrite
-        } else {
-            BindingSide::Write
-        };
-        check_binding(binding, side, write_kind, site.path, origin, endpoints)?;
+    if let Some(binding) = site.write
+        && primary(site.control).is_none()
+    {
+        check_binding(
+            binding,
+            BindingSide::Write,
+            None,
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
+    for slot in write_slots(site) {
+        check_binding(
+            slot.binding,
+            slot.side,
+            Some(slot.kind),
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
+    for (_, binding) in column_writes(site) {
+        check_binding(
+            &binding,
+            BindingSide::Write,
+            Some(ValueKind::Scalar),
+            site.path,
+            origin,
+            endpoints,
+        )?;
     }
     Ok(())
 }

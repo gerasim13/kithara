@@ -19,14 +19,14 @@ use crate::{
     layout::{FrameCorners, FrameSides},
     module::ChromeStyle,
     render::{
-        ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, Widget, chrome_leaf, header_chevron,
+        ChromeLeaf, IcedSkin, InputOwner, Published, Skin, Widget, chrome_leaf, header_chevron,
     },
 };
 
 #[derive(bon::Builder)]
 pub(crate) struct ModuleChrome<'a, Content> {
     skin: &'a Skin,
-    module: &'a str,
+    header: String,
     #[builder(default)]
     style: ChromeStyle,
     content: Content,
@@ -37,7 +37,6 @@ pub(crate) struct ModuleChrome<'a, Content> {
     frame: FrameSides,
     input_owner: InputOwner,
     chip: Option<&'a str>,
-    drop: Option<DropZone>,
     footer: Option<String>,
     title: Option<&'a str>,
     assign: Vec<&'a str>,
@@ -47,43 +46,29 @@ pub(crate) struct ModuleChrome<'a, Content> {
     corners: bool,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct DropZone {
-    pub(crate) active: bool,
-}
-
-impl DropZone {
-    pub(crate) const fn new(active: bool) -> Self {
-        Self { active }
-    }
-}
-
 impl<'a, Content> ModuleChrome<'a, Content>
 where
-    Content: Into<Element<'a, UiEvent>>,
+    Content: Into<Element<'a, Published>>,
 {
-    pub(crate) fn view(self) -> Element<'a, UiEvent> {
+    pub(crate) fn view(self) -> Element<'a, Published> {
         module_view(self)
     }
 }
 
 impl<'a, Content> Widget<'a> for ModuleChrome<'a, Content>
 where
-    Content: Into<Element<'a, UiEvent>>,
+    Content: Into<Element<'a, Published>>,
 {
-    fn view(self) -> Element<'a, UiEvent> {
+    fn view(self) -> Element<'a, Published> {
         module_view(self)
     }
 }
 
-fn module_view<'a, Content>(mut chrome: ModuleChrome<'a, Content>) -> Element<'a, UiEvent>
+fn module_view<'a, Content>(chrome: ModuleChrome<'a, Content>) -> Element<'a, Published>
 where
-    Content: Into<Element<'a, UiEvent>>,
+    Content: Into<Element<'a, Published>>,
 {
-    let drop = chrome.drop.take();
-    let accent = chrome.skin.color(chrome.skin.chrome.drop_zone_color);
-    let border_width = chrome.skin.chrome.frame.border_width;
-    let shell = match chrome.style {
+    match chrome.style {
         ChromeStyle::Full => full(chrome),
         ChromeStyle::Frame => framed(
             chrome.content.into(),
@@ -95,40 +80,20 @@ where
             chrome.round,
         ),
         ChromeStyle::Plain => chrome.content.into(),
-    };
-    match drop {
-        Some(zone) => drop_zone(shell, zone, accent, border_width),
-        None => shell,
     }
 }
 
-/// Outlines the module while the enclosing host observes pointer crossings.
-/// The host publishes without capturing, so controls inside keep every event
-/// they would have had.
-fn drop_zone<'a>(
-    content: Element<'a, UiEvent>,
-    zone: DropZone,
-    accent: Color,
-    border_width: f32,
-) -> Element<'a, UiEvent> {
-    let active = zone.active;
-    let outlined = container(content)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_| {
-            let border = if active {
-                Border::default().color(accent).width(border_width)
-            } else {
-                Border::default()
-            };
-            ContainerStyle::default().border(border)
-        });
-    outlined.into()
+/// How a module that takes drops outlines itself while a carried row is over
+/// it.
+pub(crate) fn drop_outline(skin: &Skin) -> Border {
+    Border::default()
+        .color(skin.color(skin.chrome.drop_zone_color))
+        .width(skin.chrome.frame.border_width)
 }
 
-fn full<'a, Content>(chrome: ModuleChrome<'a, Content>) -> Element<'a, UiEvent>
+fn full<'a, Content>(chrome: ModuleChrome<'a, Content>) -> Element<'a, Published>
 where
-    Content: Into<Element<'a, UiEvent>>,
+    Content: Into<Element<'a, Published>>,
 {
     let skin = chrome.skin;
     let metrics = skin.chrome;
@@ -136,7 +101,7 @@ where
         chrome.title,
         chrome.chip,
         chrome.assign,
-        chrome.module,
+        chrome.header,
         chrome.collapsed,
         skin,
         chrome.input_owner,
@@ -192,13 +157,13 @@ fn header<'a>(
     title: Option<&'a str>,
     chip: Option<&'a str>,
     assign: Vec<&'a str>,
-    module: &str,
+    path: String,
     collapsed: bool,
     skin: &'a Skin,
     input_owner: InputOwner,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let metrics = skin.chrome;
-    let mut children: Vec<Element<'a, UiEvent>> = Vec::with_capacity(5 + assign.len());
+    let mut children: Vec<Element<'a, Published>> = Vec::with_capacity(5 + assign.len());
     if let Some(chip) = chip {
         children.push(chrome_leaf(ChromeLeaf::Chip(chip), skin));
     }
@@ -227,7 +192,7 @@ fn header<'a>(
         .height(Length::Fill);
     let content = Stack::with_children([
         content.into(),
-        header_chevron(module, collapsed, skin, input_owner),
+        header_chevron(path, collapsed, skin, input_owner),
     ])
     .width(Length::Fill)
     .height(Length::Fill);
@@ -287,11 +252,11 @@ where
         .into()
 }
 
-fn horizontal_line(skin: &Skin) -> Element<'_, UiEvent> {
+fn horizontal_line(skin: &Skin) -> Element<'_, Published> {
     chrome_leaf(ChromeLeaf::HorizontalLine, skin)
 }
 
-fn vertical_line(skin: &Skin) -> Element<'_, UiEvent> {
+fn vertical_line(skin: &Skin) -> Element<'_, Published> {
     chrome_leaf(ChromeLeaf::VerticalLine, skin)
 }
 

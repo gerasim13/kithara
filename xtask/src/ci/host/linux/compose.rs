@@ -85,6 +85,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
              restart: \"no\"\n    \
              cpuset: \"{cpuset}\"\n    \
              mem_limit: {memory}\n    \
+             cgroup_parent: {cgroup_parent}\n    \
              pids_limit: {pids}\n    \
              security_opt: [\"no-new-privileges\"]\n    \
              env_file: [\"{env_file}\"]",
@@ -93,6 +94,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             container = unit.name,
             cpuset = unit.cpuset,
             memory = unit.memory,
+            cgroup_parent = unit.cgroup_parent,
             pids = Container::PIDS_LIMIT,
             env_file = unit.env_file,
         )?;
@@ -172,6 +174,20 @@ mod tests {
         );
         assert!(
             yaml.contains("/var/lib/kithara-ci/target/kithara-ci-octocat:/cache/target"),
+            "{yaml}"
+        );
+    }
+
+    /// The fleet's memory budget binds a Compose-started runner exactly as it
+    /// binds one systemd starts.
+    #[test]
+    fn every_service_draws_on_the_fleet_memory_budget() {
+        let host = host_fixture();
+        let yaml = project(&host, &fixture().pins, 32).expect("the project must render");
+        assert_eq!(
+            yaml.matches(&format!("cgroup_parent: {}\n", consts::SERVICE_SLICE))
+                .count(),
+            host.runners.len(),
             "{yaml}"
         );
     }

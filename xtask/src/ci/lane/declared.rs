@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf, time::Instant};
+use std::{collections::BTreeMap, env, ffi::OsString, path::PathBuf, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
@@ -10,7 +10,7 @@ use crate::{
         cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
         run::PipelineKind,
     },
-    config::{CiLaneConfig, CiLanePin},
+    config::{CiLaneConfig, CiLanePin, CiLaneStep, LaneFreshness},
     consts,
 };
 
@@ -57,19 +57,25 @@ pub(crate) fn run(
     }
     for step in &lane.steps {
         let role = step.program.as_deref().unwrap_or(&lane.program);
-        let mut command = if role == consts::SELF_PROGRAM {
-            process.command(&env::current_exe().context("locating the running xtask executable")?)
+        let program = if role == consts::SELF_PROGRAM {
+            env::current_exe()
+                .context("locating the running xtask executable")?
+                .into_os_string()
         } else {
-            process.command(tools.program(role))
+            OsString::from(tools.program(role))
         };
-        let args = step.args_by_kind.get(&kind).unwrap_or(&step.args);
-        for arg in args {
-            command.arg(resolve(arg, process, pins)?);
-        }
-        for (key, value) in &step.env {
-            command.env(key, resolve(value, process, pins)?);
-        }
-        process.run_command(&mut command, &step.label)?;
+        let args = step
+            .args_by_kind
+            .get(&kind)
+            .unwrap_or(&step.args)
+            .iter()
+            .map(|arg| resolve(arg, process, pins))
+            .collect::<Result<Vec<_>>>()?;
+        let vars = step_vars(lane, step, process, pins)?;
+        process.run_command(
+            process.command(&program).args(&args).envs(&vars),
+            &step.label,
+        )?;
     }
     if !process.is_recording() && lane.publishes_sources {
         publish_source_layer(process, tools, &kind)?;
@@ -256,6 +262,30 @@ fn resolve(value: &str, process: &Process, pins: &CiPins) -> Result<String> {
     Ok(filled)
 }
 
+/// The step's own variables, and for a checksum lane the two that make cargo
+/// judge the lane's directory by checksum: the flag and the nightly that
+/// honours it.
+fn step_vars(
+    lane: &CiLaneConfig,
+    step: &CiLaneStep,
+    process: &Process,
+    pins: &CiPins,
+) -> Result<BTreeMap<String, String>> {
+    let mut vars = step
+        .env
+        .iter()
+        .map(|(key, value)| Ok((key.clone(), resolve(value, process, pins)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    if lane.freshness == LaneFreshness::Checksum {
+        vars.insert(consts::CHECKSUM_FRESHNESS_ENV.to_owned(), "true".to_owned());
+        vars.insert(
+            consts::TOOLCHAIN_ENV.to_owned(),
+            pins.nightly_toolchain.clone(),
+        );
+    }
+    Ok(vars)
+}
+
 fn require_pinned_version(
     process: &Process,
     check: &CiLanePin,
@@ -302,7 +332,74 @@ fn pin(pins: &CiPins, key: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+    use crate::ci::{
+        config::fixture,
+        process::{Recording, Step},
+    };
+
+    /// A lane of the given freshness whose one step runs the suite into
+    /// `{target}/suite`.
+    fn checksum_lane(freshness: LaneFreshness) -> CiLaneConfig {
+        CiLaneConfig {
+            label: "fixture".to_owned(),
+            program: "just".to_owned(),
+            freshness,
+            steps: vec![CiLaneStep {
+                args: vec!["test".to_owned(), "run".to_owned()],
+                label: "suite".to_owned(),
+                env: BTreeMap::from([("CARGO_TARGET_DIR".to_owned(), "{target}/suite".to_owned())]),
+                ..CiLaneStep::default()
+            }],
+            ..CiLaneConfig::default()
+        }
+    }
+
+    /// The steps a lane asks for, recorded against a checkout at `/checkout`.
+    fn recorded(lane: &CiLaneConfig) -> Vec<Step> {
+        let process = Process::recording(Path::new("/checkout"), Recording::default());
+        run(
+            &process,
+            lane,
+            &fixture().pins,
+            &ToolsConfig::default(),
+            PipelineKind::Branch,
+        )
+        .unwrap();
+        process.recorded().unwrap().steps().to_vec()
+    }
+
+    /// Checksum freshness is honoured only by nightly cargo, so the lane that
+    /// asks for it gets the flag and the pinned nightly together.
+    #[test]
+    fn a_checksum_lane_builds_with_the_pinned_nightly() {
+        let steps = recorded(&checksum_lane(LaneFreshness::Checksum));
+
+        let env = &steps[0].env;
+        assert_eq!(
+            env.get(consts::CHECKSUM_FRESHNESS_ENV).map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            env.get(consts::TOOLCHAIN_ENV),
+            Some(&fixture().pins.nightly_toolchain)
+        );
+        assert_eq!(
+            env.get("CARGO_TARGET_DIR").map(String::as_str),
+            Some("/checkout/target/suite")
+        );
+    }
+
+    #[test]
+    fn an_mtime_lane_leaves_the_toolchain_to_the_step() {
+        let steps = recorded(&checksum_lane(LaneFreshness::Mtime));
+
+        let env = &steps[0].env;
+        assert!(!env.contains_key(consts::CHECKSUM_FRESHNESS_ENV), "{env:?}");
+        assert!(!env.contains_key(consts::TOOLCHAIN_ENV), "{env:?}");
+    }
 
     #[test]
     fn only_the_trusted_default_branch_publishes_the_source_layer() {

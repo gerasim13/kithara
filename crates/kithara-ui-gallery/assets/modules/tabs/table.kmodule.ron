@@ -20,6 +20,7 @@
                         id: "column-preset",
                         items: ["LIBRARY", "SET QUEUE", "MICRO"],
                         read: Model(id: "gallery.table.preset"),
+                        write: Command(id: "gallery.table.select_preset"),
                         size: (w: Fixed(420.0), h: Fixed(26.0)),
                     ),
                 ],
@@ -44,6 +45,7 @@
                             (id: "transition", label: "@track_list.column.transition", style: Transition, width: 130.0),
                         ],
                         columns_state: Some(Model(id: "gallery.table.columns")),
+                        write_width: Some(Parameter(id: "gallery.table.width")),
                     ),
                     Column(
                         id: "columns-panel",
@@ -61,7 +63,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-index", read: Model(id: "gallery.table.columns.index")),
+                                    Checkbox(id: "column-index", read: Model(id: "gallery.table.columns.index"), write: Command(id: "gallery.table.toggle_column", with: { "column": "index" })),
                                     Text(id: "column-index-label", style: MicroLabel, label: "@track_list.column.index", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -69,7 +71,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-deck", read: Model(id: "gallery.table.columns.deck")),
+                                    Checkbox(id: "column-deck", read: Model(id: "gallery.table.columns.deck"), write: Command(id: "gallery.table.toggle_column", with: { "column": "deck" })),
                                     Text(id: "column-deck-label", style: MicroLabel, label: "@track_list.column.deck", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -77,7 +79,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-title", read: Model(id: "gallery.table.columns.title")),
+                                    Checkbox(id: "column-title", read: Model(id: "gallery.table.columns.title"), write: Command(id: "gallery.table.toggle_column", with: { "column": "title" })),
                                     Text(id: "column-title-label", style: MicroLabel, label: "@track_list.column.title", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -85,7 +87,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-artist", read: Model(id: "gallery.table.columns.artist")),
+                                    Checkbox(id: "column-artist", read: Model(id: "gallery.table.columns.artist"), write: Command(id: "gallery.table.toggle_column", with: { "column": "artist" })),
                                     Text(id: "column-artist-label", style: MicroLabel, label: "@track_list.column.artist", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -93,7 +95,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-bpm", read: Model(id: "gallery.table.columns.bpm")),
+                                    Checkbox(id: "column-bpm", read: Model(id: "gallery.table.columns.bpm"), write: Command(id: "gallery.table.toggle_column", with: { "column": "bpm" })),
                                     Text(id: "column-bpm-label", style: MicroLabel, label: "@track_list.column.bpm", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -101,7 +103,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-key", read: Model(id: "gallery.table.columns.key")),
+                                    Checkbox(id: "column-key", read: Model(id: "gallery.table.columns.key"), write: Command(id: "gallery.table.toggle_column", with: { "column": "key" })),
                                     Text(id: "column-key-label", style: MicroLabel, label: "@track_list.column.key", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -109,7 +111,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-time", read: Model(id: "gallery.table.columns.time")),
+                                    Checkbox(id: "column-time", read: Model(id: "gallery.table.columns.time"), write: Command(id: "gallery.table.toggle_column", with: { "column": "time" })),
                                     Text(id: "column-time-label", style: MicroLabel, label: "@track_list.column.time", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -117,7 +119,7 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-energy", read: Model(id: "gallery.table.columns.energy")),
+                                    Checkbox(id: "column-energy", read: Model(id: "gallery.table.columns.energy"), write: Command(id: "gallery.table.toggle_column", with: { "column": "energy" })),
                                     Text(id: "column-energy-label", style: MicroLabel, label: "@track_list.column.energy", size: (w: Fill, h: Fill)),
                                 ],
                             ),
@@ -125,13 +127,14 @@
                                 size: (w: Fill, h: Fixed(18.0)),
                                 gap: Some(8.0),
                                 children: [
-                                    Checkbox(id: "column-transition", read: Model(id: "gallery.table.columns.transition")),
+                                    Checkbox(id: "column-transition", read: Model(id: "gallery.table.columns.transition"), write: Command(id: "gallery.table.toggle_column", with: { "column": "transition" })),
                                     Text(id: "column-transition-label", style: MicroLabel, label: "@track_list.column.transition", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Button(
                                 id: "reset-columns",
                                 label: "RESET TO DEFAULTS",
+                                write: Command(id: "gallery.table.reset_columns"),
                                 size: (w: Fill, h: Fixed(26.0)),
                             ),
                         ],

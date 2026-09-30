@@ -1,40 +1,25 @@
 use kithara::ui::render::{Node, ReadValue, Scope};
 
 use super::value::{Value, impl_child_node};
-use crate::gui::ui::{
-    cache::{CollapsedModules, DeckLayout},
-    menu::MenuState,
-    modules::Modules,
-    scope::deck_index,
-    window::WindowState,
-};
+use crate::gui::ui::{cache::DeckLayout, modules::Modules, window::WindowState};
 
 #[derive(Clone, Copy)]
 pub(super) struct UiNode<'a> {
-    collapsed: &'a CollapsedModules,
-    menu: &'a MenuState,
     modules: &'a Modules,
     window: &'a WindowState,
     layout: DeckLayout,
-    drag: DragNode<'a>,
 }
 
 impl<'a> UiNode<'a> {
     pub(super) const fn new(
-        drag: DragNode<'a>,
         layout: DeckLayout,
-        collapsed: &'a CollapsedModules,
-        menu: &'a MenuState,
         modules: &'a Modules,
         window: &'a WindowState,
     ) -> Self {
         Self {
-            collapsed,
-            menu,
             modules,
             window,
             layout,
-            drag,
         }
     }
 }
@@ -42,19 +27,16 @@ impl<'a> UiNode<'a> {
 impl_child_node!(UiNode<'a>, |this, segment, _scope| {
     let node: Box<dyn Node<'a> + 'a> = match segment {
         "app" => Box::new(AppNode),
-        "drag" => Box::new(this.drag),
         "layout" => Box::new(LayoutNode {
             layout: this.layout,
         }),
         "layouts" => Box::new(LayoutsNode {
             layout: this.layout,
         }),
-        "menu" => Box::new(MenuNode { menu: this.menu }),
         "window" => Box::new(WindowNode {
             window: this.window,
         }),
         "module" => Box::new(ModulesNode {
-            collapsed: this.collapsed,
             modules: this.modules,
         }),
         "modules" => Box::new(ModuleCountNode {
@@ -96,61 +78,6 @@ impl_child_node!(WindowNode<'a>, |this, segment, scope| {
     };
     Some(Box::new(Value(value)))
 });
-
-#[derive(Clone, Copy)]
-struct MenuNode<'a> {
-    menu: &'a MenuState,
-}
-
-impl<'a> Node<'a> for MenuNode<'a> {
-    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let value = match segment {
-            "group_open" => ReadValue::Bool(self.group_open(scope)),
-            "group_hidden" => ReadValue::Bool(!self.group_open(scope)),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
-
-impl MenuNode<'_> {
-    /// The menu expands one group at a time; a group it does not draw is
-    /// closed.
-    fn group_open(self, scope: Scope<'_>) -> bool {
-        match scope.get("group") {
-            Some("lay") => self.menu.are_layouts_open(),
-            Some("mod") => self.menu.are_modules_open(),
-            _ => false,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct DragNode<'a> {
-    over: Option<usize>,
-    track: Option<&'a str>,
-    decks: usize,
-}
-
-impl<'a> DragNode<'a> {
-    pub(super) const fn new(track: Option<&'a str>, over: Option<usize>, decks: usize) -> Self {
-        Self { over, track, decks }
-    }
-}
-
-impl<'a> Node<'a> for DragNode<'a> {
-    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let value = match segment {
-            "track" => ReadValue::Text(self.track?),
-            "over" => {
-                let deck = deck_index(scope.get("deck")?).filter(|deck| *deck < self.decks)?;
-                ReadValue::Bool(self.over == Some(deck))
-            }
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
 
 #[derive(Clone, Copy)]
 struct LayoutNode {
@@ -196,7 +123,6 @@ impl<'a> Node<'a> for LayoutsNode {
 
 #[derive(Clone, Copy)]
 struct ModulesNode<'a> {
-    collapsed: &'a CollapsedModules,
     modules: &'a Modules,
 }
 
@@ -204,17 +130,13 @@ impl_child_node!(ModulesNode<'a>, |this, segment, scope| {
     let value = match segment {
         "on" => ReadValue::Bool(this.is_on(scope)),
         "hidden" => ReadValue::Bool(!this.is_on(scope)),
-        document => {
-            return Some(Box::new(ModuleNode {
-                collapsed: this.collapsed.contains(document),
-            }));
-        }
+        _ => return None,
     };
     Some(Box::new(Value(value)))
 });
 
 impl ModulesNode<'_> {
-    fn is_on(&self, scope: Scope<'_>) -> bool {
+    fn is_on(self, scope: Scope<'_>) -> bool {
         scope
             .get("module")
             .is_some_and(|module| self.modules.is_on(module))
@@ -230,21 +152,6 @@ impl<'a> Node<'a> for ModuleCountNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
             "count" => ReadValue::Text(self.modules.count()),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ModuleNode {
-    collapsed: bool,
-}
-
-impl<'a> Node<'a> for ModuleNode {
-    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let value = match segment {
-            "collapsed" => ReadValue::Bool(self.collapsed),
             _ => return None,
         };
         Some(Box::new(Value(value)))

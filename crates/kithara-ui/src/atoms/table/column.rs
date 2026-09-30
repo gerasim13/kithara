@@ -8,13 +8,14 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ColumnLayout {
     pub(crate) column: TableColumn,
+    pub(crate) resizable: bool,
     pub(crate) width: f32,
 }
 
 pub(crate) fn column_resizable(columns: &[ColumnLayout], index: usize) -> bool {
-    columns
-        .get(index)
-        .is_some_and(|column| !column.column.flexible() && index + 1 < columns.len())
+    columns.get(index).is_some_and(|column| {
+        column.resizable && !column.column.flexible() && index + 1 < columns.len()
+    })
 }
 
 fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: &TableColumn) -> bool {
@@ -26,7 +27,7 @@ fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: &Table
 }
 
 pub(crate) fn column_layouts(
-    columns: &[TableColumn],
+    (columns, resizable): (&[TableColumn], bool),
     reads: &dyn Reads,
     state: Option<(&str, &str)>,
     skin: &Skin,
@@ -35,6 +36,7 @@ pub(crate) fn column_layouts(
         .iter()
         .filter(|column| column_visible(reads, state, column))
         .map(|column| ColumnLayout {
+            resizable,
             column: column.clone(),
             width: effective_column_width(reads, state, column, skin),
         })
@@ -133,29 +135,32 @@ mod tests {
     fn total_width_uses_host_override_and_flexible_minimum() {
         let skin = crate::builtin::skin();
         let columns = column_layouts(
-            &[
-                TableColumn::new(
-                    "index",
-                    "#",
-                    crate::module::TableColumnStyle::Index,
-                    28.0,
-                    false,
-                ),
-                TableColumn::new(
-                    "title",
-                    "TITLE",
-                    crate::module::TableColumnStyle::Primary,
-                    180.0,
-                    true,
-                ),
-                TableColumn::new(
-                    "artist",
-                    "ARTIST",
-                    crate::module::TableColumnStyle::Secondary,
-                    200.0,
-                    false,
-                ),
-            ],
+            (
+                &[
+                    TableColumn::new(
+                        "index",
+                        "#",
+                        crate::module::TableColumnStyle::Index,
+                        28.0,
+                        false,
+                    ),
+                    TableColumn::new(
+                        "title",
+                        "TITLE",
+                        crate::module::TableColumnStyle::Primary,
+                        180.0,
+                        true,
+                    ),
+                    TableColumn::new(
+                        "artist",
+                        "ARTIST",
+                        crate::module::TableColumnStyle::Secondary,
+                        200.0,
+                        false,
+                    ),
+                ],
+                true,
+            ),
             &WidthReads,
             Some(("columns", "")),
             skin,

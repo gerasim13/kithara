@@ -437,6 +437,7 @@ fn table_spec(
             extra.columns_state.as_ref(),
             &context.origin,
         )?,
+        resizable: extra.writes.width.is_some(),
     })
 }
 

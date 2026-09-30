@@ -16,7 +16,7 @@ use kithara_ui::{
     ids::EndpointId,
     interact::{Input, MOUSE, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    render::{ControlAction, ReadValue, Reads, Skin, UiEvent},
+    render::{ReadValue, Reads, Skin, UiEvent, WriteValue},
     source::{MemResolver, UiConfig},
     view,
 };
@@ -124,6 +124,13 @@ fn documents() -> MemResolver {
     resolver
 }
 
+fn trigger(key: &str) -> UiEvent {
+    UiEvent::Write {
+        key: key.to_owned(),
+        value: WriteValue::Trigger,
+    }
+}
+
 /// Plays the gesture through the retained host, answering with the point each
 /// press landed on as well as what it published.
 ///
@@ -203,6 +210,7 @@ fn both_hosts_answer_a_press_in_an_open_menu_with_the_row_it_landed_on() {
     let retained = retained(&["demo/anchor", "demo/item-face"]);
     let immediate = immediate(&retained.points);
 
+    assert_eq!(retained.published, [trigger("fixture.pick")]);
     assert_eq!(
         immediate.published, retained.published,
         "the two hosts disagree on what a press inside an open menu reaches, at {:?}",
@@ -216,10 +224,7 @@ fn a_press_in_an_open_menu_activates_the_row_it_landed_on() {
     let retained = retained(&["demo/anchor", "demo/item-face"]);
 
     assert!(
-        retained.published.contains(&UiEvent::Control {
-            path: "demo/item".to_owned(),
-            action: ControlAction::Activate,
-        }),
+        retained.published.contains(&trigger("fixture.pick")),
         "the retained host published {:?} for a press at {:?}",
         retained.published,
         retained.points
@@ -258,6 +263,7 @@ fn both_hosts_answer_a_press_on_the_bare_page_with_the_page_control() {
     let retained = retained(&["demo/page-face"]);
     let immediate = immediate(&retained.points);
 
+    assert_eq!(retained.published, [trigger("fixture.page")]);
     assert_eq!(
         immediate.published, retained.published,
         "the two hosts disagree on what a press on the bare page reaches, at {:?}",

@@ -61,6 +61,8 @@ fn insert_deck_endpoints(registry: &mut DemoRegistry) {
         ("deck.transport.toggle_reverse", ValueKind::Trigger),
         ("deck.transport.toggle_sync", ValueKind::Trigger),
         ("deck.transport.seek_normalized", ValueKind::Scalar),
+        ("deck.transport.loop_start", ValueKind::Scalar),
+        ("deck.transport.loop_end", ValueKind::Scalar),
         ("deck.key.transpose_down", ValueKind::Trigger),
         ("deck.key.toggle_lock", ValueKind::Trigger),
         ("deck.key.transpose_up", ValueKind::Trigger),
@@ -201,7 +203,7 @@ fn insert_pivot_endpoints(registry: &mut DemoRegistry) {
     registry.insert(
         EndpointCategory::Parameter,
         "pivot.range",
-        EndpointDesc::new(ValueKind::Scalar),
+        EndpointDesc::new(ValueKind::Range),
     );
     for (id, kind) in [
         ("pivot.portal.active", ValueKind::Bool),
@@ -252,16 +254,11 @@ fn insert_pivot_endpoints(registry: &mut DemoRegistry) {
 }
 
 fn insert_quality_endpoints(registry: &mut DemoRegistry) {
-    for (id, kind) in [
-        ("deck.stream.quality_menu", ValueKind::Bool),
-        ("deck.stream.quality", ValueKind::Text),
-    ] {
-        registry.insert(
-            EndpointCategory::Model,
-            id,
-            EndpointDesc::new(kind).with_scope("deck"),
-        );
-    }
+    registry.insert(
+        EndpointCategory::Model,
+        "deck.stream.quality",
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+    );
     registry.insert(
         EndpointCategory::Telemetry,
         "deck.stream.quality_hidden",
@@ -289,11 +286,6 @@ fn insert_quality_endpoints(registry: &mut DemoRegistry) {
     }
     registry.insert(
         EndpointCategory::Command,
-        "deck.stream.toggle_quality_menu",
-        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
-    );
-    registry.insert(
-        EndpointCategory::Command,
         "deck.stream.select_variant",
         EndpointDesc::new(ValueKind::Trigger)
             .with_scope("deck")
@@ -313,12 +305,22 @@ pub fn registry() -> impl EndpointRegistry {
     stress::insert_endpoints(&mut registry);
     insert_output_levels(&mut registry);
     insert_engine_endpoints(&mut registry);
+    registry.insert(
+        EndpointCategory::Command,
+        "demo.cells.select",
+        EndpointDesc::new(ValueKind::Index),
+    );
     for id in [
         "player.output.volume",
-        "demo.cells.segmented",
         "vis.preset",
         "gallery.sprite.scrub",
         "gallery.lottie.scrub",
+        "demo.knob.26",
+        "demo.knob.28",
+        "demo.knob.34",
+        "demo.knob.38",
+        "demo.levels.volume",
+        "demo.volume",
     ] {
         registry.insert(
             EndpointCategory::Parameter,
@@ -472,6 +474,34 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
+    for id in [
+        "demo.toggle.toggle_on",
+        "demo.toggle.toggle_off",
+        "demo.checkbox.toggle_on",
+        "demo.checkbox.toggle_off",
+        "demo.chip.toggle_active",
+        "demo.chip.toggle_inactive",
+        "demo.button.toggle_play",
+        "demo.button.toggle_cue",
+        "demo.button.toggle_sync",
+    ] {
+        registry.insert(
+            EndpointCategory::Command,
+            id,
+            EndpointDesc::new(ValueKind::Trigger),
+        );
+    }
+    for (id, scope) in [
+        ("gallery.skin.select", "choice"),
+        ("gallery.font.select", "choice"),
+        ("gallery.module.collapse", "module"),
+    ] {
+        registry.insert(
+            EndpointCategory::Command,
+            id,
+            EndpointDesc::new(ValueKind::Trigger).with_scope(scope),
+        );
+    }
     for skin in builtin::skins() {
         registry.insert(
             EndpointCategory::Model,
@@ -498,6 +528,26 @@ fn insert_table_endpoints(registry: &mut DemoRegistry) {
         EndpointCategory::Model,
         "gallery.table.preset",
         EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "gallery.table.select_preset",
+        EndpointDesc::new(ValueKind::Index),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "gallery.table.toggle_column",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("column"),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "gallery.table.reset_columns",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "gallery.table.width",
+        EndpointDesc::new(ValueKind::Scalar).with_scope("column"),
     );
     for column in consts::table_columns() {
         registry.insert(
@@ -533,8 +583,6 @@ fn insert_menu_endpoints(registry: &mut DemoRegistry) {
         registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
     }
     for (id, kind, scope) in [
-        ("ui.menu.group_open", ValueKind::Bool, "group"),
-        ("ui.menu.group_hidden", ValueKind::Bool, "group"),
         ("ui.window.active", ValueKind::Bool, "window"),
         ("ui.window.hidden", ValueKind::Bool, "window"),
         ("ui.window.close_hidden", ValueKind::Bool, "window"),
@@ -542,7 +590,6 @@ fn insert_menu_endpoints(registry: &mut DemoRegistry) {
         ("ui.window.caption", ValueKind::Text, "window"),
         ("ui.module.on", ValueKind::Bool, "module"),
         ("ui.layout.selected", ValueKind::Bool, "layout"),
-        ("gallery.menu.context", ValueKind::Bool, "row"),
         ("gallery.menu.selected", ValueKind::Bool, "row"),
         ("gallery.menu.track", ValueKind::Text, "row"),
         ("gallery.menu.bpm", ValueKind::Text, "row"),
@@ -572,7 +619,6 @@ fn insert_menu_endpoints(registry: &mut DemoRegistry) {
         );
     }
     for (id, scope) in [
-        ("ui.menu.toggle_group", "group"),
         ("ui.window.focus", "window"),
         ("ui.window.cycle_display", "window"),
         ("ui.window.close", "window"),
@@ -607,5 +653,21 @@ fn insert_library_endpoints(registry: &mut DemoRegistry) {
         ("ui.preset", ValueKind::Text),
     ] {
         registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
+    }
+    registry.insert(
+        EndpointCategory::Parameter,
+        "ui.preset",
+        EndpointDesc::new(ValueKind::Text),
+    );
+    for id in [
+        "library.select_scope",
+        "library.select_track",
+        "library.select_tree_row",
+    ] {
+        registry.insert(
+            EndpointCategory::Command,
+            id,
+            EndpointDesc::new(ValueKind::Index),
+        );
     }
 }

@@ -11,7 +11,7 @@ use crate::{
     ids::InternId,
     module::TableColumn,
     render::{
-        InputOwner, ReadValue, Skin, Tree, UiEvent, Widget, controls::Paint, document::Ctx,
+        InputOwner, Published, ReadValue, Skin, Tree, Widget, controls::Paint, document::Ctx,
         scope_picker, vis,
     },
     shaping::TextContext,
@@ -27,7 +27,7 @@ pub(super) fn context_bar<'a>(
     scope: (&[InternId], Option<&Binding>),
     painter: Context,
     data: Viewed,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let (scope_items, scope) = scope;
     let skin = cx.skin;
     if scope_items.is_empty() {
@@ -58,14 +58,15 @@ pub(super) fn context_bar<'a>(
     )
 }
 
-pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Element<'a, UiEvent> {
+pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Element<'a, Published> {
     vis::view(value, ctx)
 }
 
 pub(super) fn table<'a>(
     cx: &Cx<'a, '_, '_>,
     columns: (&[TableColumn], Option<&Binding>),
-) -> Element<'a, UiEvent> {
+    resizable: bool,
+) -> Element<'a, Published> {
     let Some(ReadValue::Table(rows)) = cx.value else {
         return Space::new().into();
     };
@@ -73,7 +74,7 @@ pub(super) fn table<'a>(
     let columns_scope = cx.ctx.scope(columns_state);
     let columns_state = columns_state.map(|binding| cx.ctx.ui.resolve(binding.id));
     let state = columns_state.map(|prefix| (prefix, columns_scope));
-    let columns = column_layouts(columns, &cx.ctx, state, cx.skin);
+    let columns = column_layouts((columns, resizable), &cx.ctx, state, cx.skin);
     let rows = rows.iter().map(TableRowData::from).collect();
     crate::render::table(cx.path, rows, columns, cx.skin, cx.owner)
 }
@@ -85,7 +86,7 @@ pub(super) fn tree<'a>(
     ctx: Ctx<'_, '_>,
     skin: &'a Skin,
     owner: InputOwner,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let query = query
         .and_then(|binding| ctx.read(binding))
         .and_then(|value| match value {

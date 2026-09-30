@@ -22,7 +22,7 @@ use super::{
 use crate::{
     engine::{Descriptor, Engine, Target, TextInputSnapshot},
     interact::{Hit, InputMethodRequest, TextInputLayout, iced as iced_interact},
-    render::{InputOwner, Skin, UiEvent},
+    render::{InputOwner, Published, Skin},
 };
 
 pub(crate) fn search_input<'a>(
@@ -30,7 +30,7 @@ pub(crate) fn search_input<'a>(
     query: &str,
     skin: &'a Skin,
     owner: InputOwner,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let paint = TextInputPaint::new(query, skin);
     let input_layout = paint.layout();
     match owner {
@@ -80,9 +80,9 @@ pub(crate) fn sync_text_input(path: &str, snapshot: TextInputSnapshot) -> impl O
 
 struct TextInputWidget<P>
 where
-    P: Program<UiEvent, Theme, Renderer, State = TextInputState>,
+    P: Program<Published, Theme, Renderer, State = TextInputState>,
 {
-    canvas: Canvas<P, UiEvent>,
+    canvas: Canvas<P, Published>,
     owner: InputOwner,
     path: String,
     query: String,
@@ -91,10 +91,10 @@ where
 
 impl<P> TextInputWidget<P>
 where
-    P: Program<UiEvent, Theme, Renderer, State = TextInputState>,
+    P: Program<Published, Theme, Renderer, State = TextInputState>,
 {
     fn new(
-        canvas: Canvas<P, UiEvent>,
+        canvas: Canvas<P, Published>,
         path: &str,
         query: &str,
         input_layout: TextInputLayout,
@@ -109,7 +109,7 @@ where
         }
     }
 
-    fn view<'a>(self) -> Element<'a, UiEvent>
+    fn view<'a>(self) -> Element<'a, Published>
     where
         P: 'a,
     {
@@ -117,9 +117,9 @@ where
     }
 }
 
-impl<P> IcedWidget<UiEvent, Theme, Renderer> for TextInputWidget<P>
+impl<P> IcedWidget<Published, Theme, Renderer> for TextInputWidget<P>
 where
-    P: Program<UiEvent, Theme, Renderer, State = TextInputState>,
+    P: Program<Published, Theme, Renderer, State = TextInputState>,
 {
     fn diff(&self, tree: &mut Tree) {
         tree.state.downcast_mut::<TextInputState>().reconcile(
@@ -165,7 +165,7 @@ where
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         self.canvas.update(
@@ -317,7 +317,7 @@ mod tests {
     use crate::{
         builtin,
         render::{
-            UiEvent,
+            ControlAction, control_event,
             fonts::{FONT_BYTES, SANS},
         },
     };
@@ -401,7 +401,13 @@ mod tests {
         );
         assert!(shell.is_event_captured());
         drop(shell);
-        assert_eq!(messages, [UiEvent::LibraryQuery("abx".to_owned())]);
+        assert_eq!(
+            messages,
+            [control_event(
+                "tree/browser/search",
+                ControlAction::Text("abx".to_owned())
+            )]
+        );
 
         let mut shell = Shell::new(&mut messages);
         element.as_widget_mut().update(
@@ -454,8 +460,11 @@ mod tests {
         assert_eq!(
             messages,
             [
-                UiEvent::LibraryQuery("abx".to_owned()),
-                UiEvent::LibraryQuery("abx日".to_owned()),
+                control_event("tree/browser/search", ControlAction::Text("abx".to_owned())),
+                control_event(
+                    "tree/browser/search",
+                    ControlAction::Text("abx\u{65e5}".to_owned())
+                ),
             ]
         );
     }

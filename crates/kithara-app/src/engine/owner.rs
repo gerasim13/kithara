@@ -118,8 +118,6 @@ impl Engine {
     fn apply_mix(&mut self, cmd: MixCmd) {
         let result = match cmd {
             MixCmd::Crossfader(position) => self.session.set_crossfader(position),
-            MixCmd::Master(gain) => self.session.set_group_master(gain),
-            MixCmd::Muted(id, muted) => self.session.set_muted(id, muted),
             MixCmd::Trim(id, trim) => self.session.set_trim(id, trim),
         };
         if let Err(error) = result {

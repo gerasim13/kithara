@@ -12,12 +12,12 @@ use iced::{
     },
 };
 
-use crate::render::UiEvent;
+use crate::render::Published;
 
 pub(crate) fn hosted_picker_overlay<'a>(
-    child: Element<'a, UiEvent, Theme, Renderer>,
-    route: impl for<'b> FnMut(&Event, mouse::Cursor, &mut Shell<'b, UiEvent>) -> bool + 'a,
-) -> Element<'a, UiEvent, Theme, Renderer> {
+    child: Element<'a, Published, Theme, Renderer>,
+    route: impl for<'b> FnMut(&Event, mouse::Cursor, &mut Shell<'b, Published>) -> bool + 'a,
+) -> Element<'a, Published, Theme, Renderer> {
     Element::new(Box::new(HostedPickerPortal {
         route,
         child: RefCell::new(Nested::new(child)),
@@ -26,12 +26,12 @@ pub(crate) fn hosted_picker_overlay<'a>(
 
 struct HostedPickerPortal<'a, F> {
     route: F,
-    child: RefCell<Nested<'a, UiEvent, Theme, Renderer>>,
+    child: RefCell<Nested<'a, Published, Theme, Renderer>>,
 }
 
-impl<F> overlay::Overlay<UiEvent, Theme, Renderer> for HostedPickerPortal<'_, F>
+impl<F> overlay::Overlay<Published, Theme, Renderer> for HostedPickerPortal<'_, F>
 where
-    F: for<'a> FnMut(&Event, mouse::Cursor, &mut Shell<'a, UiEvent>) -> bool,
+    F: for<'a> FnMut(&Event, mouse::Cursor, &mut Shell<'a, Published>) -> bool,
 {
     fn draw(
         &self,
@@ -51,7 +51,7 @@ where
         &'a mut self,
         _layout: Layout<'a>,
         _renderer: &Renderer,
-    ) -> Option<Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<Element<'a, Published, Theme, Renderer>> {
         Some(Element::new(Box::new(HostedPickerLayer {
             child: &self.child,
             route: &mut self.route,
@@ -61,12 +61,12 @@ where
 
 struct HostedPickerLayer<'a, 'child, F> {
     route: &'a mut F,
-    child: &'a RefCell<Nested<'child, UiEvent, Theme, Renderer>>,
+    child: &'a RefCell<Nested<'child, Published, Theme, Renderer>>,
 }
 
-impl<F> overlay::Overlay<UiEvent, Theme, Renderer> for HostedPickerLayer<'_, '_, F>
+impl<F> overlay::Overlay<Published, Theme, Renderer> for HostedPickerLayer<'_, '_, F>
 where
-    F: for<'a> FnMut(&Event, mouse::Cursor, &mut Shell<'a, UiEvent>) -> bool,
+    F: for<'a> FnMut(&Event, mouse::Cursor, &mut Shell<'a, Published>) -> bool,
 {
     fn update(
         &mut self,
@@ -75,7 +75,7 @@ where
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
     ) {
         if (self.route)(event, cursor, shell) {
             return;

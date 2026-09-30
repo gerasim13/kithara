@@ -18,7 +18,7 @@ use crate::{
     draw::{Pt, Rect, replay},
     interact::{CursorShape, masonry::cursor_icon},
     render::{
-        DragGhost, HostLayer, Skin, UiEvent, WindowCommand, WindowEdge, WindowSurface,
+        DragGhost, HostLayer, Published, Skin, WindowCommand, WindowEdge, WindowSurface,
         masonry::custom::HostAction,
     },
     shaping::TextContext,
@@ -27,7 +27,7 @@ use crate::{
 pub(crate) struct WindowLayer {
     active: Option<WindowCommand>,
     ghost: Option<DragGhost>,
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    map_event: Rc<dyn Fn(Published) -> HostAction>,
     pointer: Rc<Cell<Option<Pt>>>,
     text: TextContext,
     resize_edges: bool,
@@ -39,7 +39,7 @@ impl WindowLayer {
         ghost: Option<DragGhost>,
         resize_edges: bool,
         pointer: Rc<Cell<Option<Pt>>>,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
         skin: &Skin,
     ) -> Self {
         Self {
@@ -155,7 +155,7 @@ impl Widget for WindowLayer {
             });
             if let Some(command) = self.command_at(ctx.size(), pointer) {
                 self.active = Some(command);
-                ctx.submit_action::<HostAction>((self.map_event)(UiEvent::Window(command)));
+                ctx.submit_action::<HostAction>((self.map_event)(Published::window(command)));
                 ctx.capture_pointer();
                 ctx.set_handled();
                 return;

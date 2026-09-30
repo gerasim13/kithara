@@ -24,7 +24,7 @@ use crate::{
     draw::Rect,
     engine::{Descriptor, Engine, PickerSnapshot},
     interact::iced as iced_interact,
-    render::{InputOwner, ReadValue, Skin, UiEvent, engine as engine_event},
+    render::{InputOwner, Published, ReadValue, Skin, engine as engine_event},
     shaping::TextContext,
 };
 
@@ -40,9 +40,9 @@ pub(crate) fn scope_picker<'a>(
     value: Option<&ReadValue<'_>>,
     skin: &'a Skin,
     owner: InputOwner,
-    anchor: Element<'a, UiEvent>,
+    anchor: Element<'a, Published>,
     face: impl Fn(Rect) -> Rect + 'a,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let selected = picker_selected_index(value, items.len());
     Element::new(PickerWidget {
         anchor,
@@ -76,7 +76,7 @@ pub(crate) fn sync_picker(path: &str, snapshot: PickerSnapshot) -> impl Operatio
 
 struct PickerWidget<'a> {
     face: Box<dyn Fn(Rect) -> Rect + 'a>,
-    anchor: Element<'a, UiEvent>,
+    anchor: Element<'a, Published>,
     owner: InputOwner,
     paint: Rc<PickerPaint<'a>>,
     path: String,
@@ -103,7 +103,7 @@ impl PickerWidget<'_> {
         event: &Event,
         face: Rectangle,
         cursor: mouse::Cursor,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
     ) {
         let Some(input) = iced_interact::input(event) else {
             return;
@@ -137,7 +137,7 @@ impl PickerWidget<'_> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
+impl IcedWidget<Published, Theme, Renderer> for PickerWidget<'_> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.anchor)]
     }
@@ -222,7 +222,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
         _renderer: &Renderer,
         _viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<overlay::Element<'a, Published, Theme, Renderer>> {
         let anchor = self.face_bounds(layout.bounds()) + translation;
         let state = tree.state.downcast_mut::<PickerState>();
         state.snapshot().open.then(|| {
@@ -257,7 +257,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         let before = tree.state.downcast_ref::<PickerState>().snapshot();
@@ -432,7 +432,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let mut element: Element<'_, UiEvent> = scope_picker(
+        let mut element: Element<'_, Published> = scope_picker(
             "library/context",
             vec!["ZVUK", "LOCAL"],
             None,
@@ -456,7 +456,7 @@ mod tests {
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let deliver = |element: &mut Element<'_, UiEvent>,
+        let deliver = |element: &mut Element<'_, Published>,
                        tree: &mut Tree,
                        event: Event,
                        cursor: mouse::Cursor| {
@@ -513,7 +513,7 @@ mod tests {
                 key_event(Named::Enter, Code::Enter),
                 mouse::Cursor::Unavailable,
             ),
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "library/context".to_owned(),
                 action: ControlAction::SelectIndex(1),
             }]
@@ -536,13 +536,13 @@ mod tests {
     }
 
     fn dispatch(
-        element: &mut Element<'_, UiEvent>,
+        element: &mut Element<'_, Published>,
         tree: &mut Tree,
         node: &layout::Node,
         renderer: &Renderer,
         viewport: Size,
         pointer: Point,
-    ) -> (Vec<UiEvent>, bool) {
+    ) -> (Vec<Published>, bool) {
         let event = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
         let cursor = mouse::Cursor::Available(pointer);
         let bounds = Rectangle::with_size(viewport);
@@ -619,7 +619,7 @@ mod tests {
             },
         );
         let chrome = WindowSurface::drag().view();
-        let mut element: Element<'_, UiEvent> = Column::with_children(vec![picker, chrome])
+        let mut element: Element<'_, Published> = Column::with_children(vec![picker, chrome])
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
@@ -653,12 +653,12 @@ mod tests {
         );
         assert_eq!(
             selected,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "library/context".to_owned(),
                 action: ControlAction::SelectIndex(0),
             }]
         );
         assert!(captured);
-        assert!(!selected.contains(&UiEvent::Window(WindowCommand::Drag)));
+        assert!(!selected.contains(&Published::window(WindowCommand::Drag)));
     }
 }

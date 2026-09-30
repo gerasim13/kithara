@@ -201,7 +201,6 @@ fn text(endpoint: &str) -> &'static str {
         "deck.playback.tempo" => "+0.0%",
         "deck.stream.quality" => "320 kbps",
         "broadcast.url" => "OFF AIR",
-        "ui.drag.track" => "",
         _ => "Fixture",
     }
 }

@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use kithara_platform::time::Instant;
 use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, ValueKind},
-    render::{ReadValue, StereoLevels, WaveBucket, WaveformView},
+    render::{ReadValue, StereoLevels, WaveBucket, WaveformView, WriteValue},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -131,12 +131,10 @@ impl StressState {
         self.last_tick = None;
     }
 
-    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
-        if path != "stress/master" {
-            return false;
+    pub(crate) fn write(&mut self, id: &str, value: &WriteValue) {
+        if let ("bench.fader", WriteValue::Scalar(value)) = (id, value) {
+            self.fader = value.clamp(0.0, 1.0);
         }
-        self.fader = value.clamp(0.0, 1.0);
-        true
     }
 
     pub(crate) fn tick(&mut self) {
@@ -156,11 +154,13 @@ pub(crate) fn insert_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Text),
         );
     }
-    registry.insert(
-        EndpointCategory::Model,
-        "bench.fader",
-        EndpointDesc::new(ValueKind::Scalar),
-    );
+    for category in [EndpointCategory::Model, EndpointCategory::Parameter] {
+        registry.insert(
+            category,
+            "bench.fader",
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
     for index in 0..4 {
         registry.insert(
             EndpointCategory::Model,

@@ -29,12 +29,12 @@ use crate::{
     draw::{Rgba, Transform},
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
-    layout::Axis,
+    layout::{Axis, FrameSides},
     module::{ChromeStyle, MeasureAxis, TextStyle},
     mount,
     render::{
-        ControlAction, CustomSkin, DragGhost, HostedControlPlan, InputOwner, ReadValue, Skin,
-        UiEvent,
+        ControlAction, CustomSkin, DragGhost, HostedControlPlan, InputOwner, Published, ReadValue,
+        Skin,
         document::{
             Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
         },
@@ -53,10 +53,10 @@ type Windows = BTreeMap<String, Rc<RefCell<Window>>>;
 /// Mounts the toolkit-neutral document fold into a retained Masonry widget tree.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
-pub struct MasonryHost<'a, Action = UiEvent> {
+pub struct MasonryHost<'a, Action = Published> {
     pub(in crate::render) skin: &'a Skin,
     pub(in crate::render) ctx: Ctx<'a, 'a>,
-    pub(in crate::render) map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    pub(in crate::render) map_event: Rc<dyn Fn(Published) -> HostAction>,
     custom: BTreeMap<String, Box<dyn MountedCustom<HostAction>>>,
     #[field(with)]
     state: MasonryState,
@@ -117,7 +117,7 @@ impl MasonryState {
     }
 }
 
-impl<'a> MasonryHost<'a, UiEvent> {
+impl<'a> MasonryHost<'a, Published> {
     #[must_use]
     pub fn new(ctx: Ctx<'a, 'a>, skin: &'a Skin) -> Self {
         Self::map_actions(ctx, skin, |event| event)
@@ -132,7 +132,7 @@ where
     #[must_use]
     pub fn map_actions<Map>(ctx: Ctx<'a, 'a>, skin: &'a Skin, map: Map) -> Self
     where
-        Map: Fn(UiEvent) -> Action + 'static,
+        Map: Fn(Published) -> Action + 'static,
     {
         Self {
             ctx,
@@ -473,7 +473,7 @@ where
 
     pub(in crate::render) fn event(
         &self,
-        event: impl Fn() -> UiEvent + 'static,
+        event: impl Fn() -> Published + 'static,
     ) -> Box<dyn Fn() -> HostAction> {
         let map = Rc::clone(&self.map_event);
         Box::new(move || map(event()))
@@ -486,7 +486,7 @@ where
         control: Control,
         owner: InputOwner,
         path: &str,
-        interactive: impl FnOnce(Control, String, Rc<dyn Fn(UiEvent) -> HostAction>) -> Control,
+        interactive: impl FnOnce(Control, String, Rc<dyn Fn(Published) -> HostAction>) -> Control,
     ) -> Control {
         match owner {
             InputOwner::Leaf => interactive(control, path.to_owned(), Rc::clone(&self.map_event)),
@@ -671,9 +671,20 @@ where
         let mut output = self
             .mount_module(&mut module, content)
             .rounded(module.round(), self.skin.chrome.frame.radius);
-        if module.drop().is_some() {
+        if module.takes_drops() {
             let instance = self.ctx.ui.resolve(module.instance());
-            output.add_engine_control(HostedControlPlan::crossing(instance), true);
+            let crossing = HostedControlPlan::crossing(instance);
+            let zone = crossing.path().to_owned();
+            output.takes_drops(
+                zone,
+                (
+                    FrameSides::default(),
+                    self.skin.rgba(self.skin.chrome.drop_zone_color),
+                    self.skin.chrome.frame.border_width,
+                ),
+                Rc::clone(&self.state.pointer),
+            );
+            output.add_engine_control(crossing, true);
             output.host_engine(Rc::clone(&self.map_event), self.skin);
         }
         output
@@ -856,17 +867,12 @@ where
         MasonryNode::document(NodeLayout::Stage, declared, children, true, None, None)
     }
 
-    fn window(
-        &mut self,
-        mut content: Self::Output,
-        carried: Option<&Binding>,
-        resize_edges: bool,
-    ) -> Self::Output {
-        if carried.is_none() && !resize_edges {
+    fn window(&mut self, mut content: Self::Output, resize_edges: bool) -> Self::Output {
+        let drops = content.drops();
+        if !resize_edges && !drops {
             return content;
         }
-        let label = self.ctx.label(carried);
-        let ghost = carried.is_some().then(|| DragGhost::new(label, self.skin));
+        let ghost = drops.then(|| DragGhost::new(None, self.skin));
         let pointer = Rc::clone(&self.state.pointer);
         let layer = WindowLayer::new(
             ghost,
@@ -878,7 +884,7 @@ where
         let layer = NewWidget::new(layer);
         let layer_id = layer.id();
         content.add_layer(layer.erased());
-        content.set_window_layer(pointer, layer_id, carried.cloned(), label.is_some());
+        content.set_window_layer(pointer, layer_id, drops);
         content
     }
 }

@@ -53,7 +53,8 @@ enum LinuxCommand {
     },
     /// Write and enable one service per runner in the profile.
     InstallServices,
-    /// Generate the whole fleet as one Compose project, from the same profile.
+    /// Generate the whole fleet as one Compose project, from the same profile,
+    /// and install the memory budget its services are started under.
     Compose {
         /// Where the project is written.
         #[arg(long, default_value = consts::FILE)]
@@ -163,6 +164,8 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
                     registration::configure(&host, runner, Path::new(&services::env_file(runner)))?;
                 }
             }
+            services::install_slice()?;
+            process.run("systemctl", &["daemon-reload"], "reload systemd")?;
             compose::write(&host, &pins, out)
         }
         LinuxCommand::InstallWindows => {

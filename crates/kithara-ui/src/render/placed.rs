@@ -18,7 +18,7 @@ use iced::{
 use crate::{
     draw::Pt,
     interact::{Propagation, iced as iced_interact, recognizers::Carry},
-    render::{ControlAction, Snap, UiEvent, control_event},
+    render::{ControlAction, Published, Snap, control_event},
 };
 
 /// Puts one child of a stage at a point in it, and lets the pointer carry it
@@ -28,8 +28,8 @@ pub(crate) fn placed<'a>(
     at: Pt,
     carried: bool,
     snap: Option<Snap>,
-    child: Element<'a, UiEvent>,
-) -> Element<'a, UiEvent> {
+    child: Element<'a, Published>,
+) -> Element<'a, Published> {
     Element::new(Placed {
         child,
         snap,
@@ -40,7 +40,7 @@ pub(crate) fn placed<'a>(
 }
 
 struct Placed<'a> {
-    child: Element<'a, UiEvent>,
+    child: Element<'a, Published>,
     snap: Option<Snap>,
     at: Pt,
     path: String,
@@ -67,7 +67,7 @@ impl Placed<'_> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
+impl IcedWidget<Published, Theme, Renderer> for Placed<'_> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.child)]
     }
@@ -161,7 +161,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         if let Some(child) = layout.children().next() {

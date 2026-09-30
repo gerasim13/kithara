@@ -13,9 +13,9 @@ use iced::{
 use kithara_test_macros as kithara;
 
 use super::{SHADER, Uniforms, VisFrame};
-use crate::render::{ReadValue, UiEvent, document::Ctx};
+use crate::render::{Published, ReadValue, document::Ctx};
 
-pub(crate) fn view<'a>(preset: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Element<'a, UiEvent> {
+pub(crate) fn view<'a>(preset: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Element<'a, Published> {
     let Some(frame) = VisFrame::read(preset.copied(), &ctx) else {
         return Space::new().into();
     };
@@ -28,7 +28,7 @@ pub(crate) fn view<'a>(preset: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Elem
 #[derive(Clone, Copy, Debug)]
 struct Program(VisFrame);
 
-impl shader::Program<UiEvent> for Program {
+impl shader::Program<Published> for Program {
     type Primitive = Primitive;
     type State = ();
 

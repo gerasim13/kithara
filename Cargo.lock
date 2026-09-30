@@ -4904,6 +4904,8 @@ dependencies = [
  "syn 3.0.3",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 

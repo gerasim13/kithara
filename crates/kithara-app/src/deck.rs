@@ -283,28 +283,6 @@ impl DeckSet {
         self.commit(next)
     }
 
-    /// The master gain every deck's level is folded through.
-    ///
-    /// # Errors
-    /// See [`DeckSet::commit`].
-    pub fn set_group_master(&mut self, gain: f32) -> Result<(), PlayError> {
-        let mut next = self.mix.clone();
-        next.group_master = gain;
-        self.commit(next)
-    }
-
-    /// Mute or unmute one deck.
-    ///
-    /// # Errors
-    /// See [`DeckSet::commit`].
-    pub fn set_muted(&mut self, id: DeckId, muted: bool) -> Result<(), PlayError> {
-        let mut next = self.mix.clone();
-        if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
-            strip.muted = muted;
-        }
-        self.commit(next)
-    }
-
     /// The deck's output fader: session-input gain, never content volume.
     ///
     /// # Errors
@@ -455,16 +433,15 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn per_deck_trim_and_mute_are_independent() {
+    fn per_deck_trim_is_independent() {
         let mut set = deck_set(4);
         let before = set.mix().levels().unwrap();
 
         set.set_trim(DeckId(2), 0.25).expect("trim deck 2");
-        set.set_muted(DeckId(3), true).expect("mute deck 3");
 
         let levels = set.mix().levels().unwrap();
         assert_eq!(levels[2], 0.25);
-        assert_eq!(levels[3], 0.0);
+        assert_eq!(levels[3], before[3]);
         assert_eq!(levels[0], before[0]);
         assert_eq!(levels[1], before[1]);
     }

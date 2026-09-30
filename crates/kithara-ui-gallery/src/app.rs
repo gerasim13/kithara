@@ -6,7 +6,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     registry::EndpointRegistry,
-    render::{Clock, ControlAction, Skin, UiEvent, WindowCommand, custom::CustomKinds, tree},
+    render::{Clock, Published, Skin, UiEvent, WindowCommand, custom::CustomKinds, tree},
     skin::SkinDoc,
     view::{Screens, ViewState},
 };
@@ -21,7 +21,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub enum Message {
     Tick,
-    Ui(UiEvent),
+    Ui(Published),
     /// Move to the next page to photograph, or finish and exit.
     CaptureNext,
     /// The page is on screen; ask the window for its pixels.
@@ -129,14 +129,39 @@ impl Gallery {
         self.compiled().animates || self.reads.feeds()
     }
 
-    /// Applies whatever the press at `path` writes to the screen's own state,
-    /// then shows the page that state now stands at.
-    pub fn press(&mut self, path: &str) {
-        let Self { screens, view, .. } = self;
-        if let Some((state, write)) = screens.shown().views().at(path) {
-            view.apply(state, write);
-        }
+    /// Settles what the page published: the screen's own state turns, and the
+    /// write the page declares reaches the demo model.
+    fn settle(&mut self, published: Published) -> Task<Message> {
+        let Self {
+            screens,
+            reads,
+            view,
+            ..
+        } = self;
+        let event = screens.shown().views().settle(published, &*reads, view);
         self.turn();
+        match event {
+            Some(UiEvent::Write { key, value }) => {
+                let was = self.reads.active_skin();
+                self.reads.write(&key, value);
+                if self.reads.active_skin() != was {
+                    self.dress();
+                }
+                Task::none()
+            }
+            Some(UiEvent::Window(command)) => self.window(command),
+            _ => Task::none(),
+        }
+    }
+
+    fn window(&self, command: WindowCommand) -> Task<Message> {
+        match command {
+            WindowCommand::Drag => window::drag(self.window_id),
+            WindowCommand::Minimize => window::minimize(self.window_id, true),
+            WindowCommand::ToggleMaximize => window::toggle_maximize(self.window_id),
+            WindowCommand::Close => iced::exit(),
+            _ => Task::none(),
+        }
     }
 
     /// Turns to the page a shot names, as freshly as the retained host mounts
@@ -175,12 +200,11 @@ impl Gallery {
             view,
             ..
         } = self;
-        let resolver = resolver();
-        let endpoints = crate::demo::registry();
         let skin = reads.skin().document();
         screens
             .show(view, || {
-                Ok::<_, Infallible>(compiled(&resolver, &endpoints, skin, view))
+                let endpoints = crate::demo::registry();
+                Ok::<_, Infallible>(compiled(&resolver(), &endpoints, skin, view))
             })
             .unwrap_or_else(|never| match never {});
         let page = screens.shown().views().standing(view, sections::PAGE);
@@ -196,33 +220,7 @@ pub fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             state.tick();
             Task::none()
         }
-        Message::Ui(UiEvent::Control { path, action }) => {
-            if matches!(action, ControlAction::Activate) {
-                state.press(&path);
-            }
-            let was = state.reads.active_skin();
-            state.reads.apply(&path, &action);
-            if state.reads.active_skin() != was {
-                state.dress();
-            }
-            Task::none()
-        }
-        Message::Ui(UiEvent::LibraryQuery(query)) => {
-            state.reads.set_library_query(query);
-            Task::none()
-        }
-        Message::Ui(UiEvent::ToggleModule(module)) => {
-            state.reads.toggle_module(module);
-            Task::none()
-        }
-        Message::Ui(UiEvent::Window(command)) => match command {
-            WindowCommand::Drag => window::drag(state.window_id),
-            WindowCommand::Minimize => window::minimize(state.window_id, true),
-            WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
-            WindowCommand::Close => iced::exit(),
-            _ => Task::none(),
-        },
-        Message::Ui(_) => Task::none(),
+        Message::Ui(published) => state.settle(published),
         Message::CaptureNext => state.capture_next(),
         Message::CaptureShoot(shot) => {
             window::screenshot(state.window_id).map(move |image| Message::CaptureSave(shot, image))

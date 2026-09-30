@@ -1,4 +1,7 @@
-use kithara_ui::{draw::Pt, render::ReadValue};
+use kithara_ui::{
+    draw::Pt,
+    render::{ReadValue, WriteValue},
+};
 
 /// Where each carried placement of the scene page stands, and which artwork the
 /// one that answers a press is showing.
@@ -23,13 +26,15 @@ impl Default for SceneState {
 }
 
 impl SceneState {
-    /// Answers the press on the artwork by turning the flag it switches on.
-    pub(crate) fn activate(&mut self, path: &str) -> bool {
-        if path != "scene/switch" {
-            return false;
+    /// Answers the press on the artwork, which turns the flag it switches
+    /// on, and the point a drag published for one of the placements.
+    pub(crate) fn write(&mut self, id: &str, value: &WriteValue) {
+        match (id, value) {
+            ("gallery.scene.switch", WriteValue::Trigger) => self.sparked = !self.sparked,
+            ("gallery.scene.one", WriteValue::Point(at)) => self.one = *at,
+            ("gallery.scene.two", WriteValue::Point(at)) => self.two = *at,
+            _ => {}
         }
-        self.sparked = !self.sparked;
-        true
     }
 
     pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'static>> {
@@ -41,23 +46,15 @@ impl SceneState {
         };
         Some(value)
     }
-
-    /// Takes the point a drag published, if the path is one of the scene's own
-    /// placements.
-    pub(crate) fn place(&mut self, path: &str, at: Pt) -> bool {
-        match path {
-            "scene/carry-one" => self.one = at,
-            "scene/carry-two" => self.two = at,
-            _ => return false,
-        }
-        true
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_ui::{draw::Pt, render::ReadValue};
+    use kithara_ui::{
+        draw::Pt,
+        render::{ReadValue, WriteValue},
+    };
 
     use super::SceneState;
 
@@ -71,7 +68,7 @@ mod tests {
     fn a_placement_stands_where_its_drag_published() {
         let mut scene = SceneState::default();
 
-        assert!(scene.place("scene/carry-one", consts::AT));
+        scene.write("gallery.scene.one", &WriteValue::Point(consts::AT));
         assert_eq!(
             scene.get("gallery.scene.one"),
             Some(ReadValue::Point(consts::AT))
@@ -85,18 +82,9 @@ mod tests {
         let mut scene = SceneState::default();
         let before = scene.get("gallery.scene.two");
 
-        scene.place("scene/carry-one", consts::AT);
+        scene.write("gallery.scene.one", &WriteValue::Point(consts::AT));
 
         assert_eq!(scene.get("gallery.scene.two"), before);
-    }
-
-    #[kithara::test]
-    fn a_path_the_scene_does_not_hold_moves_nothing() {
-        let mut scene = SceneState::default();
-        let before = scene.get("gallery.scene.one");
-
-        assert!(!scene.place("scene/carry-nine", consts::AT));
-        assert_eq!(scene.get("gallery.scene.one"), before);
     }
 
     #[kithara::test]
@@ -107,21 +95,10 @@ mod tests {
             scene.get("gallery.scene.sparked"),
             Some(ReadValue::Bool(false))
         );
-        assert!(scene.activate("scene/switch"));
+        scene.write("gallery.scene.switch", &WriteValue::Trigger);
         assert_eq!(
             scene.get("gallery.scene.sparked"),
             Some(ReadValue::Bool(true))
-        );
-    }
-
-    #[kithara::test]
-    fn a_press_elsewhere_leaves_the_artwork_alone() {
-        let mut scene = SceneState::default();
-
-        assert!(!scene.activate("scene/carry-one"));
-        assert_eq!(
-            scene.get("gallery.scene.sparked"),
-            Some(ReadValue::Bool(false))
         );
     }
 }

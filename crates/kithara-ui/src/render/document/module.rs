@@ -1,5 +1,4 @@
 use crate::{
-    expand::DropSpec,
     ids::InternId,
     layout::{FrameCorners, FrameSides},
     module::ChromeStyle,
@@ -16,10 +15,10 @@ pub struct Module<'a> {
     pub(super) instance: InternId,
     pub(super) module: InternId,
     pub(super) chip: Option<InternId>,
-    pub(super) drop: Option<&'a DropSpec>,
     pub(super) footer: Option<String>,
     pub(super) title: Option<InternId>,
     pub(super) chrome_hosted: bool,
+    pub(super) drop: bool,
     pub(super) collapsed: bool,
     pub(super) corners: bool,
 }
@@ -61,9 +60,9 @@ impl Module<'_> {
         self.corners
     }
 
-    /// Optional compiled drop target.
+    /// Whether the module takes dropped rows.
     #[must_use]
-    pub const fn drop(&self) -> Option<&DropSpec> {
+    pub const fn takes_drops(&self) -> bool {
         self.drop
     }
 

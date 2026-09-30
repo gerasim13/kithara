@@ -295,10 +295,7 @@ impl Stroke {
     }
 }
 
-/// What a host did with the events carrying the promise: whether the document
-/// published anything, and whether the host showed it took them - the
-/// immediate tree capturing the event, the retained one drawing something
-/// new.
+/// What a host did with the events carrying the promise.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Answer {
     pub(crate) acted: bool,

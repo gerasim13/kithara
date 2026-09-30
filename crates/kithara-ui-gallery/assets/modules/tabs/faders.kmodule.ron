@@ -19,12 +19,14 @@
                 size: (w: Fixed(220.0), h: Fixed(34.0)),
                 label: Some("VOL"),
                 read: Model(id: "demo.volume"),
+                write: Parameter(id: "demo.volume"),
             ),
             Fader(
                 id: "volume",
                 size: (w: Fixed(120.0), h: Fixed(34.0)),
                 style: Volume,
                 read: Model(id: "demo.volume"),
+                write: Parameter(id: "demo.volume"),
             ),
             Text(id: "vertical-title", style: Section, label: Some("VERTICAL FADER + VU")),
             Row(
@@ -34,6 +36,7 @@
                         id: "vertical",
                         size: (w: Fixed(18.0), h: Fixed(120.0)),
                         read: Model(id: "demo.levels"),
+                        write: Parameter(id: "demo.volume"),
                     ),
                 ],
             ),

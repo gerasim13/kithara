@@ -20,7 +20,7 @@ use crate::{
         masonry::{pointer_button, portable_scroll},
     },
     render::{
-        HostedControlPlan, UiEvent,
+        Carried, HostedControlPlan, Published,
         document::Ctx,
         event::engine_value,
         hosted::{TablePlan, TableProjection, TreePlan, TreeProjection},
@@ -61,6 +61,7 @@ pub(in crate::render) struct OpenPicker {
 /// What routing one event through the engine produced.
 pub(in crate::render) struct Routed {
     pub(in crate::render) outcome: Outcome<HostAction>,
+    pub(in crate::render) drag: Option<Published>,
     /// The widgets whose face the event changed, which are the widgets that
     /// have to be painted again for it to be seen.
     pub(in crate::render) repaint: Vec<WidgetId>,
@@ -91,7 +92,7 @@ pub(crate) struct HostedEngine {
     menu: Cell<Option<WidgetId>>,
     menu_changed: Cell<bool>,
     engine: Rc<RefCell<Engine>>,
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    map_event: Rc<dyn Fn(Published) -> HostAction>,
     pointer: Rc<Cell<Option<Pt>>>,
     _projections: Vec<Rc<dyn TableProjection>>,
     _tree_projections: Vec<Rc<dyn TreeProjection>>,
@@ -110,7 +111,7 @@ impl HostedEngine {
     pub(in crate::render) fn new(
         owner: WidgetId,
         targets: Vec<EngineTarget>,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
     ) -> Rc<Self> {
         let text_input = targets
             .iter()
@@ -283,6 +284,7 @@ impl HostedEngine {
             return Routed {
                 focused,
                 repaint,
+                drag: None,
                 outcome: Outcome::IGNORED,
             };
         };
@@ -290,12 +292,30 @@ impl HostedEngine {
         let child = emission.child;
         let outcome = emission
             .outcome
-            .map(|event| (self.map_event)(engine_value(&path, child, event)));
+            .map(|event| engine_value(&path, child, event));
+        let mut drag = None;
+        let outcome = outcome.map(|event| {
+            if matches!(event, Published::Carry { .. }) {
+                drag = Some(event.clone());
+            }
+            (self.map_event)(event)
+        });
         Routed {
-            outcome,
             repaint,
             focused,
+            drag,
+            outcome,
         }
+    }
+
+    pub(in crate::render) fn carried(&self, table: &str, index: usize) -> Option<Carried> {
+        self.targets
+            .iter()
+            .find_map(|target| target.plan.carried(table, index))
+    }
+
+    pub(in crate::render) fn action(&self, event: Published) -> HostAction {
+        (self.map_event)(event)
     }
 
     pub(in crate::render) fn set_menu_layer(&self, layer: WidgetId) {

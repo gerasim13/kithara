@@ -1,8 +1,13 @@
-use kithara::ui::render::{Node, PortalMapView, PortalTarget, ReadValue, ScalarRange, Scope};
+use kithara::ui::render::{Node, PortalMapView, PortalTarget, ReadValue, Scope};
 use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
 use crate::gui::ui::cache::StageView;
+
+mod consts {
+    pub(super) const BPM_CEILING: f32 = 200.0;
+    pub(super) const BPM_FLOOR: f32 = 60.0;
+}
 
 /// One deck as the tempo map sees it.
 #[derive(Clone, Copy)]
@@ -12,17 +17,14 @@ pub(super) struct DeckTempo {
     pub(super) position: f64,
 }
 
-/// The tempo axis: the decks' analysed BPMs against the window the host owns.
-/// Moving a window edge really changes the axis the map is drawn on, so the
-/// range beside it is not a decoration.
-pub(super) struct TempoNode<'a> {
-    view: &'a StageView,
+/// The tempo axis: the decks' analysed BPMs across the BPM span the map draws.
+pub(super) struct TempoNode {
     targets: Vec<PortalTarget>,
     master: f32,
 }
 
-impl<'a> TempoNode<'a> {
-    pub(super) fn new(view: &'a StageView, decks: &[DeckTempo]) -> Self {
+impl TempoNode {
+    pub(super) fn new(decks: &[DeckTempo]) -> Self {
         let master = focused(decks).and_then(|deck| deck.bpm).unwrap_or_default();
         let targets = decks
             .iter()
@@ -33,27 +35,18 @@ impl<'a> TempoNode<'a> {
                 })
             })
             .collect();
-        Self {
-            view,
-            targets,
-            master,
-        }
+        Self { targets, master }
     }
 }
 
-impl<'a, 'b: 'a> Node<'a> for &'a TempoNode<'b> {
+impl<'a> Node<'a> for &'a TempoNode {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let (min, max) = self.view.bpm_window();
         let value = match segment {
             "map" => ReadValue::PortalMap(PortalMapView {
-                min,
-                max,
+                min: consts::BPM_FLOOR,
+                max: consts::BPM_CEILING,
                 master: self.master,
                 targets: &self.targets,
-            }),
-            "window" => ReadValue::Range(ScalarRange {
-                min: self.view.window.0,
-                max: self.view.window.1,
             }),
             _ => return None,
         };

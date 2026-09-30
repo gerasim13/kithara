@@ -17,10 +17,6 @@ use crate::{
 pub struct LayoutDoc {
     pub id: DocId,
     pub root: LayoutNode,
-    /// Names the item the pointer is carrying. While it reads as text, the
-    /// layout draws that text at the pointer, over everything it lays out.
-    #[serde(default)]
-    pub dragged: Option<BindingRef>,
     pub schema: String,
     /// A window without system decorations has to be resized by its own edges;
     /// the renderer frames the root with them when this is set.

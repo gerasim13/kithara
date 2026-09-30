@@ -12,7 +12,7 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     draw::{Pt, Rect},
     interact::{Input, MOUSE, PointerInput, PointerPhase},
-    render::{Clock, ControlAction, ReadValue, Reads, Skin, UiEvent, tree},
+    render::{Clock, ReadValue, Reads, Scope, Skin, UiEvent, WriteValue, tree},
     source::{MemResolver, UiConfig},
     view,
 };
@@ -81,7 +81,7 @@ struct Bars {
 
 impl Reads for Bars {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        let id = Scope::split(endpoint).0;
         (id == "fixture.menu").then_some(ReadValue::Bool(self.open))
     }
 }
@@ -100,8 +100,11 @@ impl App for Bars {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { action, .. } = event
-            && action == ControlAction::Activate
+        if let UiEvent::Write {
+            key,
+            value: WriteValue::Trigger,
+        } = event
+            && Scope::split(&key).0 == "fixture.toggle"
         {
             self.open = !self.open;
         }

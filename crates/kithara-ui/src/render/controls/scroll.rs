@@ -9,7 +9,7 @@ use iced::{
     widget::canvas::{Canvas, Program},
 };
 
-use crate::render::UiEvent;
+use crate::render::Published;
 
 pub(in crate::render) trait RetainedCanvasState: Default {
     type Config;
@@ -20,17 +20,17 @@ pub(in crate::render) trait RetainedCanvasState: Default {
 
 pub(in crate::render) struct RetainedCanvas<P>
 where
-    P: Program<UiEvent, Theme, Renderer>,
+    P: Program<Published, Theme, Renderer>,
     P::State: RetainedCanvasState,
 {
-    canvas: Canvas<P, UiEvent>,
+    canvas: Canvas<P, Published>,
     config: <P::State as RetainedCanvasState>::Config,
     path: String,
 }
 
 impl<P> RetainedCanvas<P>
 where
-    P: Program<UiEvent, Theme, Renderer>,
+    P: Program<Published, Theme, Renderer>,
     P::State: RetainedCanvasState,
 {
     pub(in crate::render) fn new(
@@ -47,7 +47,7 @@ where
         }
     }
 
-    pub(in crate::render) fn view<'a>(self) -> Element<'a, UiEvent>
+    pub(in crate::render) fn view<'a>(self) -> Element<'a, Published>
     where
         P: 'a,
     {
@@ -55,9 +55,9 @@ where
     }
 }
 
-impl<P> IcedWidget<UiEvent, Theme, Renderer> for RetainedCanvas<P>
+impl<P> IcedWidget<Published, Theme, Renderer> for RetainedCanvas<P>
 where
-    P: Program<UiEvent, Theme, Renderer>,
+    P: Program<Published, Theme, Renderer>,
     P::State: RetainedCanvasState,
 {
     fn diff(&self, tree: &mut Tree) {
@@ -109,7 +109,7 @@ where
                 cursor: mouse::Cursor,
                 renderer: &Renderer,
                 clipboard: &mut dyn Clipboard,
-                shell: &mut Shell<'_, UiEvent>,
+                shell: &mut Shell<'_, Published>,
                 viewport: &Rectangle,
             );
             fn mouse_interaction(

@@ -12,7 +12,7 @@ use kithara_ui::{
     param::Param,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        Clock, ControlAction, ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent,
+        Clock, ControlAction, Published, ReadValue, Reads, StereoLevels, TableCell, TableRow,
         WaveBucket, WaveformView, tree,
     },
     source::{Limits, MemResolver, UiConfig},
@@ -87,8 +87,8 @@ impl BenchReads {
         }
     }
 
-    fn apply(&mut self, event: &UiEvent) {
-        let UiEvent::Control { path, action } = event else {
+    fn apply(&mut self, event: &Published) {
+        let Published::Gesture { path, action } = event else {
             return;
         };
         let ControlAction::SetScalar(value) = action else {
@@ -203,7 +203,7 @@ fn bench_event_apply(c: &mut Criterion) {
     for depth in [1, 4, 8] {
         let ui = nested_fixture(depth, 10, true).compile();
         let mut reads = BenchReads::new();
-        let event = UiEvent::Control {
+        let event = Published::Gesture {
             path: "nested/level-0/fader-0-0".to_owned(),
             action: ControlAction::SetScalar(0.63),
         };
@@ -403,6 +403,7 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         frame_color: None,
         active_frame_color: None,
         write: None,
+        reset: None,
     }
 }
 
@@ -422,6 +423,7 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         background: None,
         background_alpha: None,
         write: None,
+        reset: None,
     }
 }
 
@@ -489,6 +491,9 @@ fn wave(id: &str, endpoint: &str) -> ControlNode {
         style: WaveStyle::default(),
         badge: None,
         zoom: None,
+        write_zoom: None,
+        write_loop_start: None,
+        write_loop_end: None,
     }
 }
 
@@ -515,6 +520,7 @@ fn table(id: &str, endpoint: &str) -> ControlNode {
             true,
         )])),
         columns_state: None,
+        write_width: None,
     }
 }
 

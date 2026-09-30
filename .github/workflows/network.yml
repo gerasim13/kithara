@@ -53,3 +53,10 @@ jobs:
         # child of the volume root is the shape the build-cache budget reads:
         # its own eviction unit, with its own lease while it runs.
         run: CARGO_TARGET_DIR=/cache/target/lane-network just test run --lane=network
+
+      # Declared lanes report what the compiler cache carried through `ci lane`;
+      # this one never enters it, so it prints the counts itself. A write-error
+      # count equal to the misses means nothing it compiled was stored.
+      - name: Compiler cache
+        if: always()
+        run: sccache --show-stats

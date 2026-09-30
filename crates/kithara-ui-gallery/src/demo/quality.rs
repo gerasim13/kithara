@@ -1,4 +1,4 @@
-use kithara_ui::render::ReadValue;
+use kithara_ui::render::{ReadValue, Scope, WriteValue};
 
 struct QualityVariant {
     label: &'static str,
@@ -28,14 +28,12 @@ mod consts {
 pub struct QualityState {
     value: String,
     auto: bool,
-    open: bool,
     current: usize,
 }
 
 impl Default for QualityState {
     fn default() -> Self {
         let mut state = Self {
-            open: false,
             auto: true,
             current: 1,
             value: String::new(),
@@ -46,18 +44,23 @@ impl Default for QualityState {
 }
 
 impl QualityState {
-    pub fn activate(&mut self, path: &str) -> bool {
-        let Some((_, id)) = path.split_once("/stream/") else {
-            return false;
-        };
-        let (node, _) = id.split_once('/').unwrap_or((id, ""));
-        match node {
-            "pop" => self.open = false,
-            "cell" => self.open = !self.open,
-            "auto" => self.select(None),
-            _ => return self.select_variant(node),
+    /// Answers the pick of one variant, or of the automatic choice.
+    pub fn write(&mut self, id: &str, scope: Scope<'_>, value: &WriteValue) {
+        if !matches!(
+            (id, value),
+            ("deck.stream.select_variant", WriteValue::Trigger)
+        ) {
+            return;
         }
-        true
+        match scope.get("variant") {
+            Some("auto") => self.select(None),
+            Some(variant) => {
+                if let Some(slot) = index(variant).filter(|slot| *slot < consts::VARIANTS.len()) {
+                    self.select(Some(slot));
+                }
+            }
+            None => {}
+        }
     }
 
     fn active(&self, variant: &str) -> Option<bool> {
@@ -69,17 +72,18 @@ impl QualityState {
 
     #[must_use]
     pub fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
+        let (id, scope) = Scope::split(endpoint);
         let value = match id {
-            "deck.stream.quality_menu" => ReadValue::Bool(self.open),
             "deck.stream.quality" => ReadValue::Text(&self.value),
             "deck.stream.quality_hidden" => ReadValue::Bool(false),
-            "deck.stream.variant_active" => ReadValue::Bool(self.active(variant(scope)?)?),
+            "deck.stream.variant_active" => ReadValue::Bool(self.active(scope.get("variant")?)?),
             "deck.stream.variant_hidden" => {
-                ReadValue::Bool(index(variant(scope)?)? >= consts::VARIANTS.len())
+                ReadValue::Bool(index(scope.get("variant")?)? >= consts::VARIANTS.len())
             }
-            "deck.stream.variant_label" => ReadValue::Text(Self::text(variant(scope)?)?.label),
-            "deck.stream.variant_sub" => ReadValue::Text(Self::text(variant(scope)?)?.sub),
+            "deck.stream.variant_label" => {
+                ReadValue::Text(Self::text(scope.get("variant")?)?.label)
+            }
+            "deck.stream.variant_sub" => ReadValue::Text(Self::text(scope.get("variant")?)?.sub),
             _ => return None,
         };
         Some(value)
@@ -102,31 +106,12 @@ impl QualityState {
             }
             None => self.auto = true,
         }
-        self.open = false;
         self.rebuild();
-    }
-
-    fn select_variant(&mut self, node: &str) -> bool {
-        let Some(index) = node
-            .strip_prefix("variant-")
-            .and_then(index)
-            .filter(|slot| *slot < consts::VARIANTS.len())
-        else {
-            return false;
-        };
-        self.select(Some(index));
-        true
     }
 
     fn text(variant: &str) -> Option<&'static QualityVariant> {
         consts::VARIANTS.get(index(variant)?)
     }
-}
-
-fn variant(scope: &str) -> Option<&str> {
-    scope
-        .split(',')
-        .find_map(|pair| pair.strip_prefix("variant="))
 }
 
 fn index(variant: &str) -> Option<usize> {

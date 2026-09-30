@@ -6,6 +6,7 @@
     chip: Some("MOD"),
     assign: ["A"],
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-tokens-anatomy" })),
     footer: Some(Model(id: "gallery.footer.tokens_anatomy")),
     root: Column(
         gap: Some(8.0),

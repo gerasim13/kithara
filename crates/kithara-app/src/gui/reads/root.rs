@@ -6,7 +6,7 @@ use super::{
     library::LibraryNode,
     mix::{MixNode, PlayerNode, StripsNode},
     stage::{DeckTempo, TempoNode, VisNode},
-    ui::{DragNode, UiNode},
+    ui::UiNode,
 };
 use crate::{broadcast::Broadcaster, gui::app::Kithara};
 
@@ -17,7 +17,7 @@ pub(in crate::gui) struct ReadRoot<'a> {
     mix: MixNode<'a>,
     player: PlayerNode<'a>,
     mixer: StripsNode<'a>,
-    tempo: TempoNode<'a>,
+    tempo: TempoNode,
     ui: UiNode<'a>,
     decks: Vec<DeckNode<'a>>,
     vis: VisNode<'a>,
@@ -54,11 +54,6 @@ impl<'a> ReadRoot<'a> {
                 position: deck.position.max(0.0),
             })
             .collect();
-        let drag = DragNode::new(
-            cache.drag.and_then(|row| library.title(row)),
-            cache.drag_target(),
-            decks.len(),
-        );
 
         Self {
             library,
@@ -72,16 +67,9 @@ impl<'a> ReadRoot<'a> {
             mix: MixNode::new(&snapshot.mix),
             mixer: StripsNode::new(&snapshot.mix),
             player: PlayerNode::new(&snapshot.mix),
-            tempo: TempoNode::new(&cache.stage, &tempos),
+            tempo: TempoNode::new(&tempos),
             vis: VisNode::new(&cache.stage, &tempos),
-            ui: UiNode::new(
-                drag,
-                cache.layout(),
-                &cache.collapsed,
-                &cache.menu,
-                &cache.modules,
-                &cache.window,
-            ),
+            ui: UiNode::new(cache.layout(), &cache.modules, &cache.window),
         }
     }
 }
@@ -121,11 +109,8 @@ mod tests {
         deck::{DeckId, EqMode},
         engine::{DeckSettings, DeckSnapshot},
         gui::ui::{
-            cache::{
-                CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView, StageView,
-            },
+            cache::{CatalogRowMarks, DeckCache, DeckLayout, LibraryView, StageView},
             endpoints::readable_endpoints,
-            menu::MenuState,
             modules::Modules,
             window::WindowState,
         },
@@ -136,10 +121,8 @@ mod tests {
     struct Fixture {
         catalog: Catalog,
         marks: CatalogRowMarks,
-        collapsed: CollapsedModules,
         eq_mode: EqMode,
         library: LibraryView,
-        menu: MenuState,
         mix: MixState,
         modules: Modules,
         stage: StageView,
@@ -153,9 +136,7 @@ mod tests {
             Self {
                 catalog: Catalog::new(vec!["dropped.mp3".to_string()]),
                 marks: CatalogRowMarks::default(),
-                collapsed: CollapsedModules::default(),
                 library: LibraryView::default(),
-                menu: MenuState::default(),
                 modules: Modules::default(),
                 window: WindowState::default(),
                 broadcast_available: false,
@@ -186,7 +167,6 @@ mod tests {
                     position: deck.position.max(0.0),
                 })
                 .collect();
-            let drag = DragNode::new(library.title(0), Some(1), decks.len());
 
             ReadRoot {
                 library,
@@ -196,16 +176,9 @@ mod tests {
                 mix: MixNode::new(&self.mix),
                 mixer: StripsNode::new(&self.mix),
                 player: PlayerNode::new(&self.mix),
-                tempo: TempoNode::new(&self.stage, &tempos),
+                tempo: TempoNode::new(&tempos),
                 vis: VisNode::new(&self.stage, &tempos),
-                ui: UiNode::new(
-                    drag,
-                    DeckLayout::Dual,
-                    &self.collapsed,
-                    &self.menu,
-                    &self.modules,
-                    &self.window,
-                ),
+                ui: UiNode::new(DeckLayout::Dual, &self.modules, &self.window),
             }
         }
 
@@ -358,7 +331,7 @@ mod tests {
             Some(ReadValue::Text("-1.0%")),
         );
         assert_eq!(
-            walk.get("ui.drag.over@deck=c"),
+            walk.get("deck.playback.tempo@deck=c"),
             None,
             "the session has two decks",
         );
@@ -474,26 +447,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_menu_reads_its_own_state_and_the_layout_in_force() {
-        let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
-        fixture.menu.toggle_layouts();
+    fn the_menu_reads_the_layout_in_force() {
+        let fixture = Fixture::new(["+0.0%", "+0.0%"]);
         let shown = fixture.shown();
         let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
-        assert_eq!(
-            walk.get("ui.menu.group_open@group=lay"),
-            Some(ReadValue::Bool(true))
-        );
-        assert_eq!(
-            walk.get("ui.menu.group_hidden@group=lay"),
-            Some(ReadValue::Bool(false))
-        );
-        assert_eq!(
-            walk.get("ui.menu.group_open@group=mod"),
-            Some(ReadValue::Bool(false)),
-            "the menu offers no module group yet",
-        );
         assert_eq!(
             walk.get("ui.layout.selected@layout=2"),
             Some(ReadValue::Bool(true)),

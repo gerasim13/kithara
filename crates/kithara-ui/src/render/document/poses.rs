@@ -96,5 +96,5 @@ impl Host for &mut Poses {
 
     fn stage(&mut self, _children: Vec<Self::Output>, _size: Option<SizeSpec>) {}
 
-    fn window(&mut self, _content: Self::Output, _carried: Option<&Binding>, _resize_edges: bool) {}
+    fn window(&mut self, _content: Self::Output, _resize_edges: bool) {}
 }

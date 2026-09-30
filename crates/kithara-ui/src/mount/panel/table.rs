@@ -8,4 +8,5 @@ use crate::{expand::Binding, module::TableColumn};
 pub(crate) struct Table<'a> {
     pub(crate) columns: &'a [TableColumn],
     pub(crate) columns_state: Option<&'a Binding>,
+    pub(crate) resizable: bool,
 }

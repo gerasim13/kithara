@@ -151,11 +151,12 @@ pub(crate) fn substitute_binding(
     path: &str,
     instance: &str,
 ) -> Result<BindingRef, UiDocError> {
-    if let BindingRef::View { id, set } = binding {
+    if let BindingRef::View { id, set, invert } = binding {
         let id = substitute(args, origin, &id.0, path)?;
         return Ok(BindingRef::View {
             id: StateId(scoped_state(instance, &id)),
             set: *set,
+            invert: *invert,
         });
     }
     if let BindingRef::Page { id, name } = binding {
@@ -259,11 +260,14 @@ pub(crate) fn intern_binding(
     binding: &BindingRef,
     origin: &SourceUri,
 ) -> Result<Binding, UiDocError> {
-    if let BindingRef::View { id, set } = binding {
+    if let BindingRef::View { id, set, invert } = binding {
         let id = interner.intern(&id.0, origin)?;
         return Ok(Binding {
             with: BTreeMap::new(),
-            kind: BindingKind::View { set: *set },
+            kind: BindingKind::View {
+                set: *set,
+                invert: *invert,
+            },
             id,
             key: id,
         });

@@ -26,8 +26,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             state.send(Command::App(AppCmd::BroadcastToggle));
             Task::none()
         }
-        Message::Ui(event) => {
-            if let Some(translated) = ui::translate(state, event) {
+        Message::Ui(published) => {
+            if let Some(translated) =
+                ui::settle(state, published).and_then(|event| ui::translate(state, event))
+            {
                 return update(state, translated);
             }
             Task::none()
@@ -50,10 +52,6 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::SelectCatalogTrack(index) => {
             handle_select_catalog(state, index);
-            Task::none()
-        }
-        Message::LoadOntoDeck(index, id) => {
-            handle_load(state, index, id);
             Task::none()
         }
         Message::PauseHiddenDecks => {
@@ -169,14 +167,6 @@ const fn handle_select_catalog(state: &mut Kithara, index: usize) {
     state.selected_track = Some(index);
 }
 
-fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
-    let Some(entry) = state.catalog.get(index) else {
-        return;
-    };
-    let source = entry.url.clone();
-    state.send(Command::LoadOntoDeck { source, deck: id });
-}
-
 fn handle_tick(state: &mut Kithara) {
     let playing = state.snapshot.decks.iter().any(|deck| deck.playing);
     state.ui.advance(Duration::from_millis(
@@ -190,7 +180,7 @@ mod tests {
 
     use ::kithara::{
         effects::GainDb,
-        ui::render::{ControlAction, UiEvent, WindowCommand, WindowEdge},
+        ui::render::{ControlAction, Published, WindowCommand, WindowEdge},
     };
     use iced::{Size, window::Direction};
     use kithara_test_utils::{kithara, off_thread::OffThread};
@@ -252,16 +242,13 @@ mod tests {
         rig.call(|rig| {
             apply(
                 rig,
-                Message::Ui(UiEvent::Control {
+                Message::Ui(Published::Gesture {
                     action: ControlAction::SetScalar(1.0),
                     path: "mixer/xfade".to_string(),
                 }),
             );
             assert_eq!(rig.snapshots.load().mix.position, 1.0);
             assert_eq!(rig.ui.snapshot.mix.position, 1.0);
-
-            apply(rig, Message::Ui(UiEvent::LibraryQuery("local".to_string())));
-            assert_eq!(rig.ui.ui.cache.library.query, "local");
 
             apply(rig, Message::SelectCatalogTrack(1));
             assert_eq!(rig.ui.selected_track, Some(1));
@@ -273,7 +260,6 @@ mod tests {
             let deck = rig.ui.snapshot.deck(DeckId(0)).expect("deck A");
             assert_eq!(f32::from(deck.tempo), 50.0);
 
-            apply(rig, Message::LoadOntoDeck(usize::MAX, DeckId(0)));
             let queue = rig.queues[0].clone();
             queue.append("https://example.test/pending.mp3").unwrap();
             rig.shows(DeckId(0), |deck| {
@@ -307,7 +293,7 @@ mod tests {
             assert_eq!(
                 update(
                     &mut rig.ui,
-                    Message::Ui(UiEvent::Window(WindowCommand::Minimize))
+                    Message::Ui(Published::window(WindowCommand::Minimize))
                 )
                 .units(),
                 1

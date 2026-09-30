@@ -1,5 +1,5 @@
 use kithara_ui::render::{
-    PortalMapView, PortalTarget, ReadValue, ScalarRange, TableRow, TableValue,
+    PortalMapView, PortalTarget, ReadValue, ScalarRange, Scope, TableRow, TableValue, WriteValue,
 };
 use num_traits::cast::AsPrimitive;
 
@@ -103,34 +103,25 @@ impl Default for PivotState {
 }
 
 impl PivotState {
-    pub(crate) fn activate(&mut self, path: &str) -> bool {
-        if !path.contains("pivot") {
-            return false;
-        }
-        if let Some(index) = path
-            .split('/')
-            .find_map(|part| part.strip_prefix("row-"))
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|index| *index < self.portals.len())
-        {
-            self.select(index);
-            return true;
-        }
-        match path.rsplit('/').next() {
-            Some("step") => {
-                self.family = Family::Step;
-                self.rebuild(Selection::Index(0));
+    pub(crate) fn write(&mut self, id: &str, scope: Scope<'_>, value: &WriteValue) {
+        match (id, value) {
+            ("pivot.portal.select", WriteValue::Trigger) => {
+                if let Some(index) = scope
+                    .get("portal")
+                    .and_then(|portal| portal.parse::<usize>().ok())
+                    .filter(|index| *index < self.portals.len())
+                {
+                    self.select(index);
+                }
             }
-            Some("leap") => {
-                self.family = Family::Leap;
-                self.rebuild(Selection::Index(0));
-            }
-            Some("mul-1") => self.set_multiplier(0),
-            Some("mul-2") => self.set_multiplier(1),
-            Some("mul-4") => self.set_multiplier(2),
-            _ => return false,
+            ("pivot.family.step", WriteValue::Trigger) => self.set_family(Family::Step),
+            ("pivot.family.leap", WriteValue::Trigger) => self.set_family(Family::Leap),
+            ("pivot.multiplier.1", WriteValue::Trigger) => self.set_multiplier(0),
+            ("pivot.multiplier.2", WriteValue::Trigger) => self.set_multiplier(1),
+            ("pivot.multiplier.4", WriteValue::Trigger) => self.set_multiplier(2),
+            ("pivot.range", WriteValue::Range(min, max)) => self.set_range(*min, *max),
+            _ => {}
         }
-        true
     }
 
     pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
@@ -314,20 +305,22 @@ impl PivotState {
         self.rebuild_selected();
     }
 
-    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
-        if !path.contains("pivot") || !value.is_finite() {
-            return false;
+    fn set_family(&mut self, family: Family) {
+        self.family = family;
+        self.rebuild(Selection::Index(0));
+    }
+
+    fn set_range(&mut self, min: f64, max: f64) {
+        let (Some(min), Some(max)) = (range_bpm(min), range_bpm(max)) else {
+            return;
+        };
+        if distance(min, self.min) > f32::EPSILON {
+            self.min = min.min(self.max - consts::RANGE_GAP);
         }
-        let norm: f32 = value.clamp(0.0, 1.0).as_();
-        let bpm = consts::RANGE_LOW + norm * (consts::RANGE_HIGH - consts::RANGE_LOW);
-        let bpm = (bpm / 2.0).round() * 2.0;
-        match path.rsplit('/').next() {
-            Some("min") => self.min = bpm.min(self.max - consts::RANGE_GAP),
-            Some("max") => self.max = bpm.max(self.min + consts::RANGE_GAP),
-            _ => return false,
+        if distance(max, self.max) > f32::EPSILON {
+            self.max = max.max(self.min + consts::RANGE_GAP);
         }
         self.rebuild(Selection::Current);
-        true
     }
 
     fn track(&self, index: usize) -> Option<&'static TableRow<'static>> {
@@ -371,6 +364,15 @@ enum Selection {
     Index(usize),
 }
 
+fn range_bpm(value: f64) -> Option<f32> {
+    if !value.is_finite() {
+        return None;
+    }
+    let norm: f32 = value.clamp(0.0, 1.0).as_();
+    let bpm = consts::RANGE_LOW + norm * (consts::RANGE_HIGH - consts::RANGE_LOW);
+    Some((bpm / 2.0).round() * 2.0)
+}
+
 fn distance(left: f32, right: f32) -> f32 {
     (left - right).abs()
 }
@@ -409,13 +411,19 @@ mod tests {
         assert_eq!(selected.pulse, 62.0);
     }
 
+    fn norm(bpm: f32) -> f64 {
+        f64::from((bpm - consts::RANGE_LOW) / (consts::RANGE_HIGH - consts::RANGE_LOW))
+    }
+
     #[kithara::test]
     fn range_keeps_an_eight_bpm_gap_and_two_bpm_steps() {
         let mut state = PivotState::default();
 
-        assert!(state.set_scalar("pivot/range/min", 1.0));
+        let range = WriteValue::Range(1.0, norm(state.max));
+        state.write("pivot.range", Scope::default(), &range);
         assert_eq!(state.min, 168.0);
-        assert!(state.set_scalar("pivot/range/max", 0.0));
+        let range = WriteValue::Range(norm(state.min), 0.0);
+        state.write("pivot.range", Scope::default(), &range);
         assert_eq!(state.max, 176.0);
     }
 }

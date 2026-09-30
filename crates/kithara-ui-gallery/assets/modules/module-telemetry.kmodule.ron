@@ -5,6 +5,7 @@
     title: Some("Telemetry"),
     chip: Some("TLM"),
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-module-telemetry" })),
     footer: Some(Model(id: "gallery.footer.telemetry")),
     root: Column(
         children: [

@@ -24,7 +24,7 @@ use crate::{
     backends::replay_ordered,
     draw::{DrawListBuilder, Rect},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
-    render::{InputOwner, Skin, UiEvent, controls::snapped, toggle_module},
+    render::{InputOwner, Published, Skin, activate, controls::snapped},
     shaping::TextContext,
 };
 
@@ -39,7 +39,7 @@ pub(crate) enum ChromeLeaf<'a> {
     VerticalLine,
 }
 
-pub(crate) fn chrome_leaf<'a>(leaf: ChromeLeaf<'a>, skin: &'a Skin) -> Element<'a, UiEvent> {
+pub(crate) fn chrome_leaf<'a>(leaf: ChromeLeaf<'a>, skin: &'a Skin) -> Element<'a, Published> {
     Element::new(LeafPaint { skin, leaf })
 }
 
@@ -97,7 +97,7 @@ impl LeafPaint<'_, '_> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
+impl IcedWidget<Published, Theme, Renderer> for LeafPaint<'_, '_> {
     fn draw(
         &self,
         tree: &Tree,
@@ -162,24 +162,21 @@ impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
 }
 
 pub(crate) fn header_chevron<'a>(
-    module: &str,
+    path: String,
     collapsed: bool,
     skin: &'a Skin,
     owner: InputOwner,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let paint = ChevronPaint {
         chevron: ChromeChevron::new(skin),
         collapsed,
         skin,
     };
     match owner {
-        InputOwner::Leaf => Canvas::new(ChevronProgram {
-            paint,
-            module: module.to_owned(),
-        })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into(),
+        InputOwner::Leaf => Canvas::new(ChevronProgram { paint, path })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
         InputOwner::Engine => Canvas::new(paint)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -189,10 +186,10 @@ pub(crate) fn header_chevron<'a>(
 
 struct ChevronProgram<'skin> {
     paint: ChevronPaint<'skin>,
-    module: String,
+    path: String,
 }
 
-impl canvas::Program<UiEvent> for ChevronProgram<'_> {
+impl canvas::Program<Published> for ChevronProgram<'_> {
     type State = ();
 
     fn draw(
@@ -218,10 +215,10 @@ impl canvas::Program<UiEvent> for ChevronProgram<'_> {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         let input = iced_interact::input(event)?;
         let hit = iced_interact::hit(bounds, cursor);
-        toggle_module(&self.module, click::on_input(input, &hit))
+        activate(&self.path, click::on_input(input, &hit))
     }
 }
 
@@ -252,7 +249,7 @@ impl ChevronPaint<'_> {
     }
 }
 
-impl canvas::Program<UiEvent> for ChevronPaint<'_> {
+impl canvas::Program<Published> for ChevronPaint<'_> {
     type State = ();
 
     fn draw(
@@ -287,7 +284,7 @@ mod tests {
     use crate::{
         builtin,
         draw::DrawCmd,
-        render::{IcedSkin, fonts},
+        render::{ControlAction, IcedSkin, fonts},
         skin::FontWeight,
     };
 
@@ -309,7 +306,7 @@ mod tests {
         FallbackRenderer::Secondary(TinySkiaRenderer::new(fonts::SANS, Pixels(14.0)))
     }
 
-    fn measured_size(mut element: Element<'_, UiEvent>, renderer: &Renderer) -> Size {
+    fn measured_size(mut element: Element<'_, Published>, renderer: &Renderer) -> Size {
         let mut tree = Tree::new(element.as_widget());
         element
             .as_widget_mut()
@@ -413,7 +410,7 @@ mod tests {
         let skin = builtin::skin();
         let metrics = skin.chrome;
         let renderer = headless_renderer();
-        let chip: Element<'_, UiEvent> = container(
+        let chip: Element<'_, Published> = container(
             shaped("FX")
                 .font(fonts::mono(FontWeight::Normal))
                 .size(metrics.chip_text.size)
@@ -423,7 +420,7 @@ mod tests {
         .height(Length::Fill)
         .align_y(Vertical::Center)
         .into();
-        let title: Element<'_, UiEvent> = container(
+        let title: Element<'_, Published> = container(
             shaped("DECK")
                 .font(fonts::display(FontWeight::Medium))
                 .size(metrics.title_text.size)
@@ -446,9 +443,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_leaf_header_canvas_publishes_the_module_toggle() {
+    fn the_leaf_header_canvas_publishes_a_press_on_the_header() {
         let program = ChevronProgram {
-            module: "app-deck".to_owned(),
+            path: "app-deck/header".to_owned(),
             paint: ChevronPaint {
                 chevron: ChromeChevron::new(builtin::skin()),
                 collapsed: false,
@@ -470,7 +467,10 @@ mod tests {
         assert_eq!(
             action.into_inner(),
             (
-                Some(UiEvent::ToggleModule("app-deck".to_owned())),
+                Some(Published::Gesture {
+                    path: "app-deck/header".to_owned(),
+                    action: ControlAction::Activate,
+                }),
                 RedrawRequest::Wait,
                 event::Status::Captured,
             )
