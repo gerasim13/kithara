@@ -19,6 +19,7 @@ name = "infra"
 crates = [
   "kithara-blob",
   "kithara-bufpool",
+  "kithara-command",
   "kithara-drm",
   "kithara-dsp",
   "kithara-events",

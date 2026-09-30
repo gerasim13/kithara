@@ -4788,6 +4788,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-command"
+version = "0.0.1-alpha5"
+dependencies = [
+ "bon",
+ "delegate",
+ "fieldwork",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "ringbuf",
+ "thiserror 2.0.18",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "kithara-config"
 version = "0.0.1-alpha5"
 dependencies = [

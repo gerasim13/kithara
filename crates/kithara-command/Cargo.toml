@@ -1,0 +1,30 @@
+[package]
+name = "kithara-command"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Timestamped command batches for real-time executors: ordered schedule, basis verdict, receipts."
+keywords = ["audio", "realtime", "command", "scheduling", "lock-free"]
+categories = ["concurrency", "data-structures"]
+
+[dependencies]
+bon = { workspace = true }
+delegate = { workspace = true }
+fieldwork = { workspace = true }
+ringbuf = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-platform = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["subscriber"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+
+[lints]
+workspace = true
