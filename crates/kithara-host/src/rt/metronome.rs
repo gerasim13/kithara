@@ -147,26 +147,21 @@ impl Click {
 #[derive(Debug, Default)]
 struct Metronome {
     click: Option<Click>,
-    /// The next session beat owed a click while the transport runs. A beat
-    /// is owed by its ordinal, not by the frame it rounds to: a route restart
-    /// rounds the beats on the new rate's frame grid, which can move a beat
-    /// across the restart frame in either direction.
+    /// The next session beat owed a click while the transport runs on from
+    /// [`Self::reached`]. A beat is owed by its ordinal, not by the frame it
+    /// rounds to: a route restart rounds the beats on the new rate's frame
+    /// grid, which can move a beat across the restart frame in either
+    /// direction.
     owed: Option<i64>,
+    /// The session beat the last rendered block ended on. A block starting
+    /// anywhere else follows a seek or a stretch the metronome did not
+    /// render, so no beat before it is owed.
+    reached: Option<SessionBeat>,
 }
 
 impl Metronome {
     const fn sounding(&self) -> bool {
         self.click.is_some()
-    }
-
-    /// Whether a block with `trajectory` passes the mix untouched. A block
-    /// without a running transport forgets the owed beat: the next trajectory
-    /// clicks from its first beat on.
-    fn idle(&mut self, trajectory: Option<SessionAnchor>) -> bool {
-        if trajectory.is_none() {
-            self.owed = None;
-        }
-        trajectory.is_none() && !self.sounding()
     }
 
     fn retune(&mut self, sample_rate: NonZeroU32) {
@@ -187,9 +182,10 @@ impl Metronome {
 
     /// Renders one block starting at session frame `start`: the sounding
     /// click first, then a new click on every owed session beat whose frame
-    /// is before the block's end. An owed beat a restart rounded behind the
-    /// block clicks on its first frame; with no beat owed yet, the beats
-    /// before the block are not owed. Returns whether the block was touched.
+    /// is before the block's end. A block continuing the last one owes the
+    /// beats from its owed beat on, clicking one a restart rounded behind the
+    /// block on its first frame; any other block owes the beats from its
+    /// start on. Returns whether the block was touched.
     fn render(
         &mut self,
         trajectory: Option<SessionAnchor>,
@@ -203,7 +199,10 @@ impl Metronome {
         let mut started = false;
         if let Some(anchor) = trajectory {
             let first = i64::from(start);
-            let owed = self.owed;
+            let continues = self
+                .reached
+                .is_some_and(|reached| anchor.frame_at(reached).is_ok_and(|frame| frame == start));
+            let owed = self.owed.filter(|_| continues);
             let mut ordinal = owed.or_else(|| {
                 anchor
                     .beat_at(start)
@@ -246,6 +245,10 @@ impl Metronome {
                 started = true;
             }
             self.owed = ordinal;
+            let end = i64::try_from(left.len())
+                .ok()
+                .and_then(|frames| first.checked_add(frames));
+            self.reached = end.and_then(|end| anchor.beat_at(SessionFrame::new(end)).ok());
         }
         if let (Some(left_rest), Some(right_rest)) =
             (left.get_mut(cursor..), right.get_mut(cursor..))
@@ -311,7 +314,7 @@ impl AudioNodeProcessor for MetronomeProcessor {
         } else {
             None
         };
-        if self.metronome.idle(trajectory) {
+        if trajectory.is_none() && !self.metronome.sounding() {
             return ProcessStatus::Bypass;
         }
         let frames = info.frames;
@@ -430,6 +433,94 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A 120 BPM transport at 44.1 kHz playing session beat `beat` on
+    /// session frame `frame`: a beat every 22 050 frames.
+    fn transport(frame: i64, beat: f64) -> SessionAnchor {
+        const BEATS_PER_SECOND: f64 = 2.0;
+        SessionAnchor::new(
+            SessionFrame::new(frame),
+            SessionBeat::new(beat).expect("finite beat"),
+            BEATS_PER_SECOND,
+            NonZeroU32::new(44_100).expect("test rate"),
+        )
+        .expect("a positive tempo")
+    }
+
+    /// A metronome that clicked session beat 1 and rendered its click out:
+    /// one block of silence around the beat. Returns the frame after it.
+    fn past_beat_one(metronome: &mut Metronome, duck: Duck) -> i64 {
+        const LEAD: i64 = 256;
+        const FRAMES: usize = 1_024;
+        let beat_one = 22_050;
+        let start = beat_one - LEAD;
+        let mut left = [0.0; FRAMES];
+        let mut right = [0.0; FRAMES];
+        metronome.render(
+            Some(transport(0, 0.0)),
+            SessionFrame::new(start),
+            duck,
+            &mut left,
+            &mut right,
+        );
+        assert!(
+            left.iter().any(|sample| *sample != 0.0) && !metronome.sounding(),
+            "beat 1 clicks and its click ends inside the block"
+        );
+        start + i64::try_from(FRAMES).expect("block length")
+    }
+
+    #[kithara::test]
+    fn a_seek_forward_clicks_none_of_the_beats_it_jumps_over() {
+        const TARGET: f64 = 40.25;
+        let duck = Duck::new(crate::consts::DEFAULT_METRONOME_LEVEL, 0.98).expect("default level");
+        let mut metronome = Metronome::default();
+        let seek = past_beat_one(&mut metronome, duck);
+
+        let mut left = [0.0; 1_024];
+        let mut right = [0.0; 1_024];
+        let touched = metronome.render(
+            Some(transport(seek, TARGET)),
+            SessionFrame::new(seek),
+            duck,
+            &mut left,
+            &mut right,
+        );
+
+        assert!(
+            !touched && left.iter().chain(&right).all(|sample| *sample == 0.0),
+            "no beat lies between the seek target and the block's end"
+        );
+    }
+
+    #[kithara::test]
+    fn a_seek_backward_clicks_the_beats_it_plays_again() {
+        const TARGET: f64 = 0.99;
+        let duck = Duck::new(crate::consts::DEFAULT_METRONOME_LEVEL, 0.98).expect("default level");
+        let mut metronome = Metronome::default();
+        let seek = past_beat_one(&mut metronome, duck);
+        let anchor = transport(seek, TARGET);
+        let beat_one = anchor
+            .frame_at(SessionBeat::new(1.0).expect("whole beat"))
+            .expect("beat 1 after the seek");
+        let offset = usize::try_from(i64::from(beat_one) - seek).expect("beat 1 inside the block");
+
+        let mut left = [0.0; 1_024];
+        let mut right = [0.0; 1_024];
+        metronome.render(
+            Some(anchor),
+            SessionFrame::new(seek),
+            duck,
+            &mut left,
+            &mut right,
+        );
+
+        assert_eq!(
+            left.iter().position(|sample| *sample != 0.0),
+            Some(offset + 1),
+            "beat 1 clicks again, rising from its frame after the seek"
+        );
     }
 
     #[kithara::test]
