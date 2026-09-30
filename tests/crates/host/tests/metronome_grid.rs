@@ -11,10 +11,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
-    bufpool_ext::pools,
-    offline::{OfflineHostHarness, OfflinePlayer, resource_from_reader},
+    bufpool_ext::{TestPools, pools},
+    offline::{OfflineHostHarness, OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
 };
-use kithara_test_fixtures::unit_fixtures::warp_nominal_clicks_long;
 
 use super::{
     metronome::{assert_click_levels, beat_frame, capacity, clicks},
@@ -56,21 +55,21 @@ mod consts {
     pub(super) const SILENT_FOOT: u64 = 1;
     /// The default metronome level: a downbeat click at the limiter ceiling.
     pub(super) const FULL_LEVEL: f32 = 1.0;
-    /// The tempo of the known-tempo fragment: 22 050 frames a beat.
-    pub(super) const KNOWN_BPM: u32 = 120;
-    /// Frames a beat lasts at [`KNOWN_BPM`] and [`SAMPLE_RATE`].
-    pub(super) const KNOWN_PERIOD: u64 = 22_050;
-    /// Beats the known-tempo fragment clicks: eight bars.
-    pub(super) const KNOWN_BEATS: u64 = 32;
-    /// The fragment's clicks at this share sit under the limiter ceiling, so
-    /// the master is the deck and a louder take is exactly twice a softer.
-    pub(super) const FRAGMENT_LEVEL: f32 = 0.5;
-    /// Metronome level and duck of a take over the fragment: the fragment's
-    /// clicks stay audible under the metronome's.
-    pub(super) const TAKE_METRONOME: f32 = 0.5;
-    /// Blocks rendered past the fragment so its last click and the
-    /// metronome's end in the take.
-    pub(super) const TAIL_BLOCKS: usize = 16;
+    /// The tempo of the recorded metronome: 22 050 frames a beat.
+    pub(super) const OVERLAY_BPM: u32 = 120;
+    /// Frames a beat lasts at [`OVERLAY_BPM`] and [`SAMPLE_RATE`].
+    pub(super) const OVERLAY_PERIOD: u64 = 22_050;
+    /// Beats the recorded metronome clicks: four bars.
+    pub(super) const OVERLAY_BEATS: u64 = 16;
+    /// Metronome level of every overlay take: the recorded click passes the
+    /// limiter untouched, and with the live one on top it meets the ceiling.
+    pub(super) const OVERLAY_LEVEL: f32 = 0.5;
+    /// No duck: the live click adds to the mix and leaves it whole.
+    pub(super) const NO_DUCK: f32 = 0.0;
+    /// Silence the deck plays before the recording, so the live metronome
+    /// starts on another frame, and on another phase of a render block,
+    /// than the recorded one did.
+    pub(super) const OVERLAY_PAD: u64 = 7_777;
 }
 
 /// One stretch of the Host tempo as the math has it. From `frame` on, the
@@ -382,63 +381,171 @@ async fn the_metronome_clicks_on_the_frame_nearest_every_computed_beat() {
     assert_click_levels(&heard, &accents, consts::FULL_LEVEL);
 }
 
-/// A take of a deck playing the known-tempo fragment at `level` under the
-/// Host metronome at [`consts::KNOWN_BPM`]: both taps from frame `start` and
-/// the frame the tempo was set on.
-struct KnownTake {
-    output: Vec<f32>,
-    master: Vec<f32>,
-    start: u64,
-    requested: u64,
-}
-
-async fn known_take(fragment: &[f32], level: f32) -> KnownTake {
-    // WHY: The PCM reader plays one sample a frame on every channel; the
-    // fixture interleaves two equal channels.
-    let samples: Vec<f32> = fragment
-        .iter()
-        .step_by(usize::from(consts::CHANNELS))
-        .map(|sample| sample * level)
-        .collect();
-    let frames = consts::KNOWN_BEATS * consts::KNOWN_PERIOD;
-    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
-    let session = HostConfig::offline(pools())
-        .sample_rate(rate)
+/// The Host of every overlay take: the metronome at
+/// [`consts::OVERLAY_LEVEL`] with no duck.
+fn overlay_session() -> HostConfig<TestPools> {
+    HostConfig::offline(pools())
+        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
         .metronome(
             MetronomeConfig::builder()
-                .level(consts::TAKE_METRONOME)
-                .duck(consts::TAKE_METRONOME)
+                .level(consts::OVERLAY_LEVEL)
+                .duck(consts::NO_DUCK)
                 .build()
-                .expect("take metronome"),
+                .expect("a metronome without a duck"),
         )
-        .build();
-    let harness = play_resource(OfflinePlayer::new(session).await, move || {
-        resource_from_reader(TestPcmReader::with_samples(
-            AudioSpec::new(consts::CHANNELS, rate),
-            samples,
-        ))
-    })
-    .await;
-    let host = harness.host();
-    let tail =
-        u64::try_from(consts::TAIL_BLOCKS).expect("tail blocks") * u64::from(consts::BLOCK_FRAMES);
-    let mut master = host
-        .attach_tap(Tap::Master, capacity(frames + 2 * tail))
+        .build()
+}
+
+fn overlay_tempo() -> Tempo {
+    Tempo::new(f64::from(consts::OVERLAY_BPM)).expect("overlay tempo")
+}
+
+/// The Host metronome with no deck under it, recorded from the frame its
+/// first tempo is set on: [`consts::OVERLAY_BEATS`] beats, beat 0 on
+/// frame 0.
+async fn recorded_metronome() -> Vec<f32> {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let frames = consts::OVERLAY_BEATS * consts::OVERLAY_PERIOD;
+    let host = OfflineHostHarness::new(overlay_session())
         .await
-        .expect("master tap");
-    let mut output = host
-        .attach_tap(Tap::Output, capacity(frames + 2 * tail))
+        .expect("offline Host without a deck");
+    let mut tap = host
+        .attach_tap(Tap::Output, capacity(block + frames))
         .await
         .expect("output tap");
     host.set_metronome(true).await.expect("metronome on");
     let start = host.position();
+    host.render_forward(block).await;
     let requested = host.position();
-    let tempo = Tempo::new(f64::from(consts::KNOWN_BPM)).expect("fragment tempo");
-    host.with(move |host| host.set_tempo(tempo))
+    host.with(|host| host.set_tempo(overlay_tempo()))
         .await
         .expect("Host tempo");
-    while host.position() < start + frames + tail {
+    host.render_forward(frames).await;
+    host.close().await;
+
+    assert_eq!(tap.drops(), 0, "the tap keeps every frame");
+    let mut recording = tap.drain().split_off(capacity(requested - start));
+    recording.truncate(capacity(frames));
+    recording
+}
+
+/// A deck playing `recording` after [`consts::OVERLAY_PAD`] frames of
+/// silence, settled from its first frame and never short of decoded audio.
+async fn overlay_deck(recording: &[f32]) -> OfflinePlayer {
+    // WHY: The PCM reader plays one sample a frame on every channel; the
+    // metronome clicks both channels alike.
+    let pad = usize::try_from(consts::OVERLAY_PAD).expect("pad frames");
+    let samples: Vec<f32> = std::iter::repeat_n(0.0, pad)
+        .chain(
+            recording
+                .iter()
+                .step_by(usize::from(consts::CHANNELS))
+                .copied(),
+        )
+        .collect();
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+    let options = OfflinePlayerOptions::builder()
+        .crossfade_duration(0.0)
+        .block_on_underrun(true)
+        .build();
+    play_resource(
+        OfflinePlayer::with_options(options, overlay_session()).await,
+        move || {
+            resource_from_reader(TestPcmReader::with_samples(
+                AudioSpec::new(consts::CHANNELS, rate),
+                samples,
+            ))
+        },
+    )
+    .await
+}
+
+/// The session frame an [`overlay_deck`] plays frame 0 of `recording` on,
+/// found with the metronome off: the deck's first sound less the frames the
+/// recording is silent before its first click.
+async fn recording_start(recording: &[f32]) -> u64 {
+    let lead = clicks(recording)
+        .first()
+        .expect("the recording clicks")
+        .frame;
+    let harness = overlay_deck(recording).await;
+    let host = harness.host();
+    let horizon = consts::OVERLAY_PAD + consts::OVERLAY_PERIOD;
+    let mut master = host
+        .attach_tap(
+            Tap::Master,
+            capacity(horizon + u64::from(consts::BLOCK_FRAMES)),
+        )
+        .await
+        .expect("master tap");
+    let start = host.position();
+    while host.position() < start + horizon {
+        render_blocks(&harness, 1).await;
+    }
+    harness.close().await;
+
+    assert_eq!(master.drops(), 0, "the tap keeps every frame");
+    let first = clicks(&master.drain())
+        .first()
+        .expect("the deck sounds the recording")
+        .frame;
+    start + first - lead
+}
+
+/// The first frame `heard` differs from `expected` on, counted from the
+/// first frame of `heard`, with both samples there.
+fn first_difference(heard: &[f32], expected: &[f32]) -> Option<(usize, f32, f32)> {
+    heard
+        .iter()
+        .zip(expected)
+        .position(|(heard, expected)| heard != expected)
+        .map(|sample| {
+            (
+                sample / usize::from(consts::CHANNELS),
+                heard[sample],
+                expected[sample],
+            )
+        })
+}
+
+#[kithara::test(tokio)]
+async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
+    let recording = recorded_metronome().await;
+    assert_eq!(
+        clicks(&recording).len(),
+        usize::try_from(consts::OVERLAY_BEATS).expect("beats"),
+        "the recording clicks every beat"
+    );
+    let at = recording_start(&recording).await;
+
+    let harness = overlay_deck(&recording).await;
+    let host = harness.host();
+    let frames = consts::OVERLAY_BEATS * consts::OVERLAY_PERIOD;
+    let start = host.position();
+    let held = capacity(at + frames + u64::from(consts::BLOCK_FRAMES) - start);
+    let mut master = host
+        .attach_tap(Tap::Master, held)
+        .await
+        .expect("master tap");
+    let mut output = host
+        .attach_tap(Tap::Output, held)
+        .await
+        .expect("output tap");
+    host.set_metronome(true).await.expect("metronome on");
+    // WHY: The first tempo pins beat 0 on the frame it is set on: the frame
+    // the deck plays the recording's beat 0 on.
+    while host.position() < at {
+        let step = (at - host.position()).min(u64::from(consts::BLOCK_FRAMES));
+        harness
+            .render(usize::try_from(step).expect("block frames"))
+            .await;
+        let _ = harness.tick_and_drain().await;
+    }
+    host.with(|host| host.set_tempo(overlay_tempo()))
+        .await
+        .expect("Host tempo");
+    while host.position() < at + frames {
         render_blocks(&harness, 1).await;
     }
     harness.close().await;
@@ -448,102 +555,34 @@ async fn known_take(fragment: &[f32], level: f32) -> KnownTake {
         (0, 0),
         "the taps keep every frame"
     );
-    KnownTake {
-        output: output.drain(),
-        master: master.drain(),
-        start,
-        requested,
-    }
-}
-
-#[kithara::test(tokio)]
-async fn a_known_tempo_deck_and_the_metronome_keep_one_offset_on_every_beat(
-    warp_nominal_clicks_long: Vec<f32>,
-) {
-    let full = known_take(&warp_nominal_clicks_long, consts::FRAGMENT_LEVEL).await;
-    let half = known_take(&warp_nominal_clicks_long, consts::FRAGMENT_LEVEL / 2.0).await;
-
+    let mut placed = vec![0.0; capacity(at - start)];
+    placed.extend_from_slice(&recording);
+    let master = master.drain();
+    let output = output.drain();
+    assert!(
+        master.len() >= placed.len() && output.len() >= placed.len(),
+        "the taps hold the whole recording"
+    );
     if let Some(mut artifact) =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
             .expect("listening artifact")
     {
-        artifact.push(&full.output);
+        artifact.push(&output[capacity(at - start)..placed.len()]);
     }
     assert_eq!(
-        (half.start, half.requested),
-        (full.start, full.requested),
-        "both takes run on one timeline"
+        first_difference(&master, &placed),
+        None,
+        "the deck plays the recorded metronome from frame {at} on \
+         (frame from {start}, master, recording)"
     );
-    assert!(
-        half.master
-            .iter()
-            .copied()
-            .eq(full.master.iter().map(|sample| sample / 2.0)),
-        "the deck at half its level mixes to exactly half the master"
-    );
-    let onsets: Vec<u64> = clicks(&full.master)
-        .iter()
-        .map(|click| click.frame + full.start)
-        .collect();
-    let first_onset = *onsets.first().expect("the deck sounds the fragment");
+    // WHY: With no duck the output is the mix plus the live click. The live
+    // click lands on the recorded one sample for sample exactly when the
+    // output is twice the mix: any offset sounds as a flam.
+    let doubled: Vec<f32> = placed.iter().map(|sample| sample * 2.0).collect();
     assert_eq!(
-        onsets,
-        (0..consts::KNOWN_BEATS)
-            .map(|beat| first_onset + beat * consts::KNOWN_PERIOD)
-            .collect::<Vec<_>>(),
-        "the deck plays every fragment click one known period apart"
+        first_difference(&output, &doubled),
+        None,
+        "the live metronome clicks on every recorded click, sample for sample \
+         (frame from {start}, output, twice the recording)"
     );
-    // WHY: The full take's output less the half take's cancels the click
-    // and leaves the deck under the duck: what the listener hears of it.
-    let deck: Vec<f32> = full
-        .output
-        .iter()
-        .zip(&half.output)
-        .map(|(full, half)| full - half)
-        .collect();
-    assert_eq!(
-        clicks(&deck)
-            .iter()
-            .map(|click| click.frame + full.start)
-            .collect::<Vec<_>>(),
-        onsets,
-        "the output sounds every fragment click on the frame the master mixes it"
-    );
-
-    // WHY: Each output frame is the frame's mix under the duck plus the
-    // click, and both takes duck and click alike. Twice the half take's
-    // output less the full take's cancels the mix and leaves the click.
-    let clicked: Vec<f32> = half
-        .output
-        .iter()
-        .zip(&full.output)
-        .map(|(half, full)| half.mul_add(2.0, -full))
-        .collect();
-    let heard = clicks(&clicked);
-    let end = full.start
-        + u64::try_from(full.output.len()).expect("take length") / u64::from(consts::CHANNELS);
-    let beats: Vec<(u64, bool)> = (0..)
-        .map(|beat: u64| {
-            (
-                full.requested + beat * consts::KNOWN_PERIOD,
-                beat % u64::from(consts::BEATS_PER_BAR) == 0,
-            )
-        })
-        .take_while(|(frame, _)| frame + consts::SILENT_FOOT < end)
-        .collect();
-    // WHY: The deck steps by the known period from its first onset and the
-    // metronome from the frame the tempo is set on, so the deck keeps one
-    // offset from the metronome on every beat: no drift.
-    assert_eq!(
-        heard
-            .iter()
-            .map(|click| click.frame + full.start)
-            .collect::<Vec<_>>(),
-        beats
-            .iter()
-            .map(|(frame, _)| frame + consts::SILENT_FOOT)
-            .collect::<Vec<_>>(),
-        "the metronome clicks every computed beat of the known tempo from the frame it is set on"
-    );
-    assert_click_levels(&heard, &beats, consts::TAKE_METRONOME);
 }

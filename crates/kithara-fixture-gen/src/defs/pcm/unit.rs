@@ -13,9 +13,7 @@ mod consts {
     pub(super) const TEST_DECAY: f32 = 400.0;
     pub(super) const WARP_BEATS: usize = 8;
     pub(super) const WARP_CLICK_OFFSET: usize = 8_192;
-    /// Eight bars of nominal clicks: long enough to hear a drift against a
-    /// grid of the same tempo.
-    pub(super) const WARP_LONG_BEATS: usize = 32;
+    pub(super) const WARP_NOMINAL_FRAMES: usize = 176_400;
     pub(super) const WARP_NOMINAL_PERIOD: usize = 22_050;
     pub(super) const WAV_BITS_PER_SAMPLE: u16 = 16;
     pub(super) const WAV_BYTES_PER_SAMPLE: u16 = WAV_BITS_PER_SAMPLE / 8;
@@ -137,8 +135,7 @@ mod consts {
 #[case::warp_sine(warp_tone(352_800))]
 #[case::warp_pair(vec![0.25, -0.5])]
 #[case::warp_constant(vec![0.25; 10240])]
-#[case::warp_nominal_clicks(warp_nominal_clicks(consts::WARP_BEATS))]
-#[case::warp_nominal_clicks_long(warp_nominal_clicks(consts::WARP_LONG_BEATS))]
+#[case::warp_nominal_clicks(warp_nominal_clicks())]
 #[case::warp_clicks(warp_clicks())]
 fn unit_pcm(samples: Vec<f32>) -> Vec<u8> {
     samples.into_iter().flat_map(f32::to_le_bytes).collect()
@@ -314,10 +311,10 @@ fn warp_clicks() -> Vec<f32> {
     out
 }
 
-/// `beats` clicks one nominal period apart: the grid the warp core declares.
-fn warp_nominal_clicks(beats: usize) -> Vec<f32> {
-    let mut out = warp_silence(beats * consts::WARP_NOMINAL_PERIOD);
-    for beat in 0..beats {
+/// Eight clicks one nominal period apart: the grid the warp core declares.
+fn warp_nominal_clicks() -> Vec<f32> {
+    let mut out = warp_silence(consts::WARP_NOMINAL_FRAMES);
+    for beat in 0..consts::WARP_BEATS {
         warp_click(
             &mut out,
             beat * consts::WARP_NOMINAL_PERIOD + consts::WARP_CLICK_OFFSET,

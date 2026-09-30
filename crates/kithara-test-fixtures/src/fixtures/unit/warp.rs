@@ -30,13 +30,6 @@ pub fn warp_nominal_clicks() -> Vec<f32> {
     samples(&assets::unit_pcm_warp_nominal_clicks())
 }
 
-/// Thirty-two [`warp_nominal_clicks`]: 120 BPM at 44.1 kHz for eight bars.
-#[kithara::fixture]
-#[must_use]
-pub fn warp_nominal_clicks_long() -> Vec<f32> {
-    samples(&assets::unit_pcm_warp_nominal_clicks_long())
-}
-
 /// Prepared build-time PCM input for warp clicks.
 #[kithara::fixture]
 #[must_use]
