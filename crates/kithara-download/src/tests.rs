@@ -26,6 +26,10 @@ use kithara_platform::{
     time::{self, Duration, Instant},
     tokio::task::spawn as tokio_spawn,
 };
+#[cfg(feature = "flash")]
+use kithara_platform::{flash::virtual_now, time::WallInstant};
+#[cfg(feature = "flash")]
+use kithara_test_utils::virtual_pace;
 use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara};
 use url::Url;
 
@@ -497,6 +501,115 @@ async fn run_real_time_ahead(by: Duration) {
     // The first real read anchors the engine's real clock.
     let _anchor = Instant::now();
     time::sleep(by).await;
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn virtual_server_delay_is_part_of_streamed_request_duration() {
+    const DELAY: Duration = Duration::from_millis(250);
+
+    let app = Router::new().route(
+        "/data",
+        get(|| async {
+            time::sleep(DELAY).await;
+            Bytes::from(vec![0_u8; 20_000])
+        }),
+    );
+    let server = TestHttpServer::new(app).await;
+    let gate = CompletionGate::new(1);
+    let gate_cb = Arc::clone(&gate);
+    let cmd = FetchCmd::get(server.url("/data"))
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(move |_bytes, _headers, _error| {
+            gate_cb.complete();
+        }))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(peer).with_bus(bus);
+
+    gate.wait().await;
+    let (bytes, duration) = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|envelope| match envelope.event {
+            TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                bytes_transferred,
+                duration,
+                ..
+            }) => Some((bytes_transferred, duration)),
+            _ => None,
+        })
+        .expect("streaming fetch completion event");
+    assert_eq!(bytes, 20_000);
+    assert!(
+        duration >= DELAY,
+        "virtual server delay missing: {duration:?}"
+    );
+    drop(handle);
+}
+
+#[cfg(feature = "flash")]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn streamed_request_duration_excludes_unrelated_virtual_delay() {
+    const UNRELATED_DELAY: Duration = Duration::from_secs(2);
+
+    let app = Router::new().route("/data", get(|| async { Bytes::from(vec![0_u8; 20_000]) }));
+    let server = TestHttpServer::new(app).await;
+    let measured = Arc::new(Mutex::new(None::<(Duration, Duration)>));
+    let measured_cb = Arc::clone(&measured);
+    let gate = CompletionGate::new(1);
+    let gate_cb = Arc::clone(&gate);
+    let cmd = FetchCmd::get(server.url("/data"))
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_response(Box::new(move |_headers| {
+            let wall = WallInstant::now();
+            let virtual_start = virtual_now();
+            virtual_pace(UNRELATED_DELAY);
+            *measured_cb.lock() = Some((
+                wall.elapsed(),
+                virtual_now().saturating_duration_since(virtual_start),
+            ));
+        }))
+        .on_complete(Box::new(move |_bytes, _headers, _error| {
+            gate_cb.complete();
+        }))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(peer).with_bus(bus);
+
+    gate.wait().await;
+    let (bytes, duration) = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|envelope| match envelope.event {
+            TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                bytes_transferred,
+                duration,
+                ..
+            }) => Some((bytes_transferred, duration)),
+            _ => None,
+        })
+        .expect("streaming fetch completion event");
+    let (wall, virtual_elapsed) = (*measured.lock()).expect("clock sample");
+    assert!(bytes >= 16_000, "ABR needs a full-size network sample");
+    assert!(
+        virtual_elapsed > wall,
+        "virtual delay must outrun wall time"
+    );
+    assert!(
+        duration < virtual_elapsed,
+        "unrelated virtual delay leaked into {duration:?} fetch duration"
+    );
+    drop(handle);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
