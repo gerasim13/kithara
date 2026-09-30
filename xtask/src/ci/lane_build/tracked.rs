@@ -1,7 +1,8 @@
-//! What the checkout's git index says it holds.
+//! What the checkout holds, named by git blob ids.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     ops::Bound,
     path::Path,
     process::Command,
@@ -13,25 +14,62 @@ use sha2::{Digest, Sha256};
 /// Git blob ids per tracked path.
 pub(super) type Sources = BTreeMap<String, BTreeSet<String>>;
 
-/// The checkout's tracked files. A hook or a caller may point git at another
-/// repository's index through its environment, so the listing drops those
-/// variables and names this checkout alone.
+/// The checkout's files as the worktree holds them, which is what cargo
+/// reads: the index, with every unstaged edit, deletion and untracked file
+/// that git does not ignore applied.
 pub(super) fn list(project_root: &Path) -> Result<Sources> {
+    let mut sources = parse_stage(&git(project_root, &["ls-files", "--stage", "-z"])?);
+    let changed = git(
+        project_root,
+        &[
+            "ls-files",
+            "--modified",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+    )?;
+    let mut present = BTreeSet::new();
+    for path in changed.split('\0').filter(|path| !path.is_empty()) {
+        sources.remove(path);
+        let is_file =
+            fs::symlink_metadata(project_root.join(path)).is_ok_and(|metadata| metadata.is_file());
+        if is_file && !path.contains('\n') {
+            present.insert(path);
+        }
+    }
+    if present.is_empty() {
+        return Ok(sources);
+    }
+    let mut args = vec!["hash-object", "--"];
+    args.extend(present.iter());
+    let blobs = git(project_root, &args)?;
+    for (path, blob) in present.into_iter().zip(blobs.lines()) {
+        sources.insert(path.to_owned(), BTreeSet::from([blob.to_owned()]));
+    }
+    Ok(sources)
+}
+
+/// Runs git in the checkout and returns what it printed. A hook or a caller
+/// may point git at another repository through its environment, so those
+/// variables are dropped and git names this checkout alone.
+fn git(project_root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .current_dir(project_root)
         .env_remove("GIT_DIR")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_WORK_TREE")
-        .args(["ls-files", "--stage", "-z"])
+        .args(args)
         .output()
-        .context("listing the checkout's tracked files")?;
+        .with_context(|| format!("running git {}", args.join(" ")))?;
     if !output.status.success() {
         bail!(
-            "git ls-files failed: {}",
+            "git {} failed: {}",
+            args.join(" "),
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(parse_stage(&String::from_utf8_lossy(&output.stdout)))
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// The content a watched path names: a tracked file's blobs, or for a
@@ -95,12 +133,40 @@ fn parse_stage(listed: &str) -> Sources {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
-    use crate::ci::lane_build::fixture::sources;
+    use crate::ci::lane_build::fixture::{git, git_checkout, sources};
+
+    /// Cargo reads the worktree, not the index: an unstaged edit, a deleted
+    /// file and an untracked one are named as the worktree holds them, as if
+    /// every change were staged, and an ignored file is not named at all.
+    #[test]
+    fn the_listing_names_what_the_worktree_holds() {
+        let checkout = git_checkout(&[
+            ("edited.rs", "before"),
+            ("deleted.rs", "gone"),
+            ("kept.rs", "same"),
+        ]);
+        let root = checkout.path();
+        fs::write(root.join("edited.rs"), "after").unwrap();
+        fs::remove_file(root.join("deleted.rs")).unwrap();
+        fs::write(root.join("untracked.rs"), "new").unwrap();
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        fs::write(root.join("ignored.log"), "noise").unwrap();
+
+        let listed = list(root).unwrap();
+        git(root, &["add", "-A"]);
+
+        assert_eq!(listed, list(root).unwrap());
+        assert!(listed.contains_key("untracked.rs"));
+        assert!(!listed.contains_key("deleted.rs"));
+        assert!(!listed.contains_key("ignored.log"));
+    }
 
     #[test]
     fn stage_listing_skips_links_and_submodules() {
-        let listed = "100644 aaa 0\tsrc/lib.rs\0120000 bbb 0\tlink\0160000 ccc 0\tvendor\0";
+        let listed = "100644 aaa 0\tsrc/lib.rs\x00120000 bbb 0\tlink\x00160000 ccc 0\tvendor\0";
 
         assert_eq!(parse_stage(listed), sources(&[("src/lib.rs", "aaa")]));
     }

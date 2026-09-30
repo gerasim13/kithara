@@ -48,7 +48,9 @@ impl Unit {
 /// The paths and variables a run named with `rerun-if` directives.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Watches {
-    /// Every `rerun-if-changed` path, joined to the package root when relative.
+    /// Every `rerun-if-changed` path, joined to the package root when
+    /// relative. A dependency's relative path names its own sources, which its
+    /// version fixes, so it is left out.
     pub(super) paths: Vec<PathBuf>,
     /// Whether the run printed any rerun-if directive at all.
     pub(super) declares: bool,
@@ -142,10 +144,11 @@ fn parse_output(text: &str, root: Option<&Path>) -> Watches {
         if let Some(path) = directive.strip_prefix("rerun-if-changed=") {
             watches.declares = true;
             let path = Path::new(path);
-            watches.paths.push(match root {
-                Some(root) if path.is_relative() => root.join(path),
-                _ => path.to_path_buf(),
-            });
+            match root {
+                Some(root) if path.is_relative() => watches.paths.push(root.join(path)),
+                None if path.is_relative() => {}
+                _ => watches.paths.push(path.to_path_buf()),
+            }
         } else if directive.starts_with("rerun-if-env-changed=") {
             watches.declares = true;
         }
@@ -255,13 +258,10 @@ fn newer(path: &Path, reference: SystemTime) -> Result<bool> {
     Ok(false)
 }
 
-/// Whether a workspace run watches a path whose content nothing names, in the
-/// lane directory or outside both, that changed since the run; its mtime
-/// decides, as it would for cargo.
+/// Whether a run watches a path whose content nothing names, in the lane
+/// directory or outside both, that changed since the run; its mtime decides,
+/// as it would for cargo.
 fn outside_changed(unit: &Unit, checkout: &Checkout, reference: SystemTime) -> Result<bool> {
-    if !unit.is_workspace() {
-        return Ok(false);
-    }
     for path in &unit.watches.paths {
         let changed = match checkout.classify(path)? {
             Place::Checkout(_) => false,
@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(
             parse_output(&text, Some(Path::new("/c/crates/probe"))),
             Watches {
-                paths: vec![PathBuf::from("/c/crates/probe/build.rs"), model],
+                paths: vec![PathBuf::from("/c/crates/probe/build.rs"), model.clone()],
                 declares: true,
             }
         );
@@ -475,6 +475,14 @@ mod tests {
                 paths: Vec::new(),
                 declares: true,
             }
+        );
+        assert_eq!(
+            parse_output(&text, None),
+            Watches {
+                paths: vec![model],
+                declares: true,
+            },
+            "a dependency's relative path names its own fixed sources"
         );
         assert_eq!(
             parse_output("cargo::rustc-cfg=probe\n", None),
@@ -591,6 +599,58 @@ mod tests {
         set_mtime(&model, SystemTime::now() + Duration::from_secs(3600));
         let _claim = claim_slot(checkout.path(), lanes.path());
         assert!(!output.exists(), "a newer outside path reruns the script");
+    }
+
+    /// Cargo reads the worktree, so an edit nobody staged reruns a script
+    /// that watches the file, and the next claim keeps the run it made.
+    #[test]
+    fn an_unstaged_edit_to_a_watched_file_reruns_the_script() {
+        let checkout = cargo_checkout(&[]);
+        let lanes = tempfile::tempdir().unwrap();
+        let lane = slot(lanes.path());
+        let output = lane.join(PROBE_BUILD_RUN).join("output");
+        run_lane(checkout.path(), lanes.path(), || {
+            write_unit(&lane, PROBE_BUILD_RUN, PROBE_DIRECTIVE);
+        });
+
+        fs::write(checkout.path().join("src/lib.rs"), "pub fn edited() {}").unwrap();
+        run_lane(checkout.path(), lanes.path(), || {
+            assert!(!output.exists(), "an unstaged edit reruns the script");
+            write_unit(&lane, PROBE_BUILD_RUN, PROBE_DIRECTIVE);
+        });
+        let _claim = claim_slot(checkout.path(), lanes.path());
+
+        assert!(output.exists(), "the run made from the edit is kept");
+    }
+
+    /// A dependency's own sources are fixed by its version, but a path it
+    /// names outside them, such as a system library a `-sys` script links,
+    /// is judged by its mtime as it would be for cargo.
+    #[test]
+    fn a_dependency_run_is_judged_by_what_it_names_outside_its_sources() {
+        let checkout = cargo_checkout(&[]);
+        let lanes = tempfile::tempdir().unwrap();
+        let lane = slot(lanes.path());
+        let elsewhere = tempfile::tempdir().unwrap();
+        let library = elsewhere.path().join("libsystem.so");
+        fs::write(&library, "v1").unwrap();
+        set_mtime(&library, SystemTime::UNIX_EPOCH);
+        let key = "debug/build/system-sys-0123456789abcdef";
+        let directive = format!(
+            "cargo::rerun-if-changed=build.rs\ncargo::rerun-if-changed={}\n",
+            library.display()
+        );
+        let output = lane.join(key).join("output");
+
+        run_lane(checkout.path(), lanes.path(), || {
+            write_unit(&lane, key, &directive);
+        });
+        run_lane(checkout.path(), lanes.path(), || {});
+        assert!(output.exists(), "an unchanged system path keeps the run");
+
+        set_mtime(&library, SystemTime::now() + Duration::from_secs(3600));
+        let _claim = claim_slot(checkout.path(), lanes.path());
+        assert!(!output.exists(), "a newer system path reruns the script");
     }
 
     /// A job that died after its script ran again leaves an `output` no
