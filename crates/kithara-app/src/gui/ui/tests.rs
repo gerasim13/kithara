@@ -7,19 +7,17 @@ use ::kithara::ui::{
     expand::{ControlSpec, ExpandedNode},
     ids::SourceUri,
     module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, ViewSet, WaveStyle},
-    render::{Clock, ReadValue, Reads, tree},
+    render::{Clock, ControlAction, Ctx, Published, ReadValue, Reads, UiEvent, WriteValue, tree},
     size::{Dim, SizeSpec, control_size},
-    source::UiConfig,
-    view,
+    source::{SourceResolver, UiConfig},
+    view::{self, ViewState},
 };
 use kithara_test_utils::kithara;
 
 use super::{
     cache::DeckLayout,
     compile::{AppUi, compile_ui},
-    events::route,
     package::Package,
-    scope::consts::MICRO_DECK,
 };
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
@@ -134,8 +132,8 @@ fn surfaces(ui: &CompiledUi) -> Vec<(&str, &str)> {
     out
 }
 
-/// Every module that takes drops, as `(instance, scoped binding keys)`.
-fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
+/// Every module that takes drops, as `(instance, scoped keys its drop zone writes)`.
+fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<String>)> {
     let mut out = Vec::new();
     let mut stack = vec![&ui.root];
     while let Some(node) = stack.pop() {
@@ -150,12 +148,22 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
             }
             CompiledNode::Module {
                 instance,
-                drop: Some(drop),
+                drop: true,
                 ..
-            } => out.push((
-                ui.resolve(*instance),
-                vec![ui.resolve(drop.write.key), ui.resolve(drop.read.key)],
-            )),
+            } => {
+                let instance = ui.resolve(*instance);
+                let dropped = settle(
+                    ui,
+                    &mut ViewState::new(),
+                    &format!("{instance}/drop"),
+                    ControlAction::Text(String::new()),
+                );
+                let keys = match dropped {
+                    Some(UiEvent::Write { key, .. }) => vec![key],
+                    _ => Vec::new(),
+                };
+                out.push((instance, keys));
+            }
             _ => {}
         }
     }
@@ -379,32 +387,6 @@ fn list_min(pane: &ExpandedNode) -> f32 {
 }
 
 #[kithara::test]
-fn every_address_names_an_instance_the_host_routes() {
-    for layout in LAYOUTS {
-        let ui = compile_ui(layout).unwrap();
-        let mut named: Vec<&str> = control_paths(&ui)
-            .into_iter()
-            .filter_map(|path| path.split_once('/').map(|(instance, _)| instance))
-            .collect();
-        named.sort_unstable();
-        named.dedup();
-        for instance in &named {
-            assert!(
-                route(instance).is_some(),
-                "{layout:?}: `{instance}` addresses controls that `events::route` does not name",
-            );
-        }
-
-        let mut want = vec!["bar", "deck-a", "library", "micro-bar", "mixer", "overview"];
-        if layout == DeckLayout::Dual {
-            want.push("deck-b");
-        }
-        want.sort_unstable();
-        assert_eq!(named, want, "{layout:?}");
-    }
-}
-
-#[kithara::test]
 fn every_block_stands_once_the_window_holds_the_ones_above_it() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
@@ -600,34 +582,6 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
                 found >= floor,
                 "{layout:?}: `{walker}` reached {found} nodes, under the {floor} the documents declare",
             );
-        }
-    }
-}
-
-#[kithara::test]
-fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
-    for layout in LAYOUTS {
-        let ui = compile_ui(layout).unwrap();
-        for (path, keys) in controls(&ui) {
-            for key in keys {
-                let Some(letter) = key.split_once('@').and_then(|(_, scope)| {
-                    scope.split(',').find_map(|pair| pair.strip_prefix("deck="))
-                }) else {
-                    continue;
-                };
-                let mut routed = vec![
-                    format!("deck-{letter}/"),
-                    format!("mixer/{letter}/"),
-                    format!("overview/{letter}/"),
-                ];
-                if letter == MICRO_DECK {
-                    routed.push("micro-bar/".to_owned());
-                }
-                assert!(
-                    routed.iter().any(|prefix| path.starts_with(prefix)),
-                    "{layout:?}: control `{path}` is bound to `{key}` but is not addressed by deck `{letter}`",
-                );
-            }
         }
     }
 }
@@ -946,6 +900,55 @@ fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
     }
 }
 
+fn settle(
+    ui: &CompiledUi,
+    view: &mut ViewState,
+    path: &str,
+    action: ControlAction,
+) -> Option<UiEvent> {
+    let reads = BandReads {
+        bands: None,
+        seen: RefCell::default(),
+    };
+    let published = Published::Gesture {
+        action,
+        path: path.to_owned(),
+    };
+    ui.views().settle(published, &reads, view)
+}
+
+#[kithara::test]
+fn a_secondary_press_opens_the_eq_menu_of_its_own_strip_and_a_mode_row_shuts_it() {
+    let mode = |bands: u8, deck: &str| UiEvent::Write {
+        key: format!("deck.eq.mode@bands={bands},deck={deck}"),
+        value: WriteValue::Trigger,
+    };
+    let ui = compile_ui(DeckLayout::Dual).unwrap();
+    let mut view = ViewState::default();
+
+    let opened = settle(
+        &ui,
+        &mut view,
+        "mixer/a/eq-menu-anchor",
+        ControlAction::SecondaryActivate,
+    );
+    assert_eq!(opened, None);
+    let picked = settle(&ui, &mut view, "mixer/b/eq-3", ControlAction::Activate);
+    assert_eq!(picked, Some(mode(3, "b")));
+    assert!(
+        view.flag("mixer/a"),
+        "deck B's row leaves deck A's menu open"
+    );
+    assert!(!view.flag("mixer/b"));
+
+    let picked = settle(&ui, &mut view, "mixer/a/eq-4", ControlAction::Activate);
+    assert_eq!(picked, Some(mode(4, "a")));
+    assert!(
+        !view.flag("mixer/a"),
+        "a mode row shuts the menu it sits in"
+    );
+}
+
 #[kithara::test]
 fn eq_banks_stack_their_knobs_from_high_to_low() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
@@ -1110,14 +1113,12 @@ fn every_laid_out_deck_takes_dropped_tracks() {
         for letter in ["a", "b"].into_iter().take(layout.decks()) {
             let want = (
                 format!("deck-{letter}"),
-                vec![
-                    format!("deck.queue.load@deck={letter}"),
-                    format!("ui.drag.over@deck={letter}"),
-                ],
+                vec![format!("deck.queue.load@deck={letter}")],
             );
             assert!(
-                targets.iter().any(|(instance, keys)| *instance == want.0
-                    && keys.iter().copied().eq(want.1.iter().map(String::as_str))),
+                targets
+                    .iter()
+                    .any(|(instance, keys)| *instance == want.0 && *keys == want.1),
                 "{layout:?}: deck {letter} must take drops, got {targets:?}",
             );
         }
@@ -1284,7 +1285,7 @@ fn every_module_cell_switches_the_pane_it_names() {
         let pressed = pressables(&ui);
 
         assert!(
-            pressed.contains(&("bar/menu/modules-head", "ui.menu.toggle_group@group=mod")),
+            pressed.contains(&("bar/menu/modules-head", "bar/group-mod")),
             "{layout:?}: the modules group must expand from its own head",
         );
         let controls = controls(&ui);
@@ -1382,20 +1383,24 @@ fn the_bar_carries_the_app_menu() {
         let ui = compile_ui(layout).unwrap();
         let pressed = pressables(&ui);
 
-        for (path, set) in [
-            ("bar/menu/burger", ViewSet::Toggle),
-            ("bar/menu/header-close", ViewSet::Off),
-            ("bar/menu/pop", ViewSet::Off),
+        for (path, open, opened) in [
+            ("bar/menu/burger", ViewSet::Off, true),
+            ("bar/menu/burger", ViewSet::On, false),
+            ("bar/menu/header-close", ViewSet::On, false),
+            ("bar/menu/pop", ViewSet::On, false),
         ] {
+            let mut view = ViewState::new();
+            view.set("bar/menu", open);
+            let host = settle(&ui, &mut view, path, ControlAction::Activate);
             assert_eq!(
-                ui.views().at(path),
-                Some(("bar/menu", view::ViewWrite::Flag(set))),
+                (host, view.flag("bar/menu")),
+                (None, opened),
                 "{layout:?}: `{path}` must turn the menu's own state",
             );
         }
 
         for (path, key) in [
-            ("bar/menu/layouts-head", "ui.menu.toggle_group@group=lay"),
+            ("bar/menu/layouts-head", "bar/group-lay"),
             ("bar/menu/layout-1/apply", "ui.layout.apply@layout=1"),
             ("bar/menu/layout-2/apply", "ui.layout.apply@layout=2"),
             ("bar/menu/full-screen", "ui.window.toggle_full_screen"),
@@ -1407,6 +1412,80 @@ fn the_bar_carries_the_app_menu() {
             );
         }
     }
+}
+
+/// The app menu is a panel of switches: several of them are turned in one
+/// opening, so a write it delivers leaves it standing.
+#[kithara::test]
+fn a_write_from_inside_the_app_menu_leaves_it_open() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+
+        for (path, key) in [
+            ("bar/menu/module-ov/cell", "ui.module.toggle@module=ov"),
+            ("bar/menu/module-cpu/cell", "ui.module.toggle@module=cpu"),
+            ("bar/menu/layout-2/apply", "ui.layout.apply@layout=2"),
+            ("bar/menu/full-screen", "ui.window.toggle_full_screen"),
+            ("bar/menu/cast", "broadcast.toggle"),
+        ] {
+            let mut view = ViewState::new();
+            view.set("bar/menu", ViewSet::On);
+            let host = settle(&ui, &mut view, path, ControlAction::Activate);
+            assert_eq!(
+                host,
+                Some(UiEvent::Write {
+                    key: key.to_owned(),
+                    value: WriteValue::Trigger,
+                }),
+                "{layout:?}: `{path}` must deliver `{key}`",
+            );
+            assert!(
+                view.flag("bar/menu"),
+                "{layout:?}: `{path}` must leave the menu open",
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn the_layouts_head_opens_and_folds_the_layouts_block() {
+    let ui = compile_ui(DeckLayout::Dual).unwrap();
+    let reads = BandReads {
+        bands: None,
+        seen: RefCell::default(),
+    };
+    let hidden = |view: &ViewState| {
+        let mut hidden = None;
+        each_node(&ui, &mut |node| {
+            if let ExpandedNode::Optional { block, .. } = node
+                && ui.resolve(block.path) == "bar/menu/layouts-block"
+            {
+                let ctx = Ctx::new(&ui, &reads, view, builtin::skin_doc(), Clock::default());
+                hidden = Some(ctx.flag(Some(&block.hidden)));
+            }
+        });
+        hidden.unwrap_or_else(|| panic!("the app menu lays out its layouts block"))
+    };
+    let mut view = ViewState::new();
+    assert!(hidden(&view), "the layouts group starts folded");
+
+    let opened = settle(
+        &ui,
+        &mut view,
+        "bar/menu/layouts-head",
+        ControlAction::Activate,
+    );
+    assert_eq!(opened, None);
+    assert!(!hidden(&view), "a press on its head opens the group");
+
+    let folded = settle(
+        &ui,
+        &mut view,
+        "bar/menu/layouts-head",
+        ControlAction::Activate,
+    );
+    assert_eq!(folded, None);
+    assert!(hidden(&view), "a second press folds it again");
 }
 
 #[kithara::test]
@@ -1421,10 +1500,7 @@ fn each_deck_picks_its_own_stream_quality() {
             let pressed = pressables(&ui);
 
             assert!(
-                pressed.contains(&(
-                    cell.as_str(),
-                    format!("deck.stream.toggle_quality_menu@deck={letter}").as_str()
-                )),
+                pressed.contains(&(cell.as_str(), format!("deck-{letter}/quality").as_str())),
                 "{layout:?}: the cell of deck {letter} must toggle its own menu",
             );
             for (path, variant) in [(&auto, "auto"), (&rung, "0")] {
@@ -1441,6 +1517,32 @@ fn each_deck_picks_its_own_stream_quality() {
     }
 }
 
+#[kithara::test]
+fn a_quality_choice_shuts_the_menu_it_was_picked_from() {
+    let ui = compile_ui(DeckLayout::Dual).unwrap();
+
+    for (row, variant) in [("auto", "auto"), ("variant-0", "0")] {
+        let mut view = ViewState::new();
+        view.set("deck-a/quality", ViewSet::On);
+        view.set("deck-b/quality", ViewSet::On);
+        let host = settle(
+            &ui,
+            &mut view,
+            &format!("deck-a/stream/{row}/pick"),
+            ControlAction::Activate,
+        );
+        assert_eq!(
+            host,
+            Some(UiEvent::Write {
+                key: format!("deck.stream.select_variant@deck=a,variant={variant}"),
+                value: WriteValue::Trigger,
+            }),
+        );
+        assert!(!view.flag("deck-a/quality"), "`{row}` shuts its own menu");
+        assert!(view.flag("deck-b/quality"), "`{row}` leaves deck B's open");
+    }
+}
+
 /// The package this application ships is read from disk the way a release
 /// reads it, so drift between the documents on disk and what the build
 /// embeds cannot hide behind the embedded copy.
@@ -1454,24 +1556,28 @@ fn the_shipped_package_compiles_from_disk() {
     );
 }
 
-/// A path the screen does not answer on is named, rather than left to be
-/// found by pressing where nothing is.
-///
-/// This is the check that stands between a package and a window that draws a
-/// player which cannot play: the screen compiles either way, and only the
-/// paths it answers on say whether the application can reach it.
+/// A refused screen names each required write no control on it declares.
 #[kithara::test]
-fn a_path_the_screen_does_not_answer_on_is_named() {
+fn a_write_the_screen_does_not_declare_is_named() {
     let ui = compile_ui(DeckLayout::Dual).expect("the shipped screen must compile");
     let origin = SourceUri("app.klayout.ron".to_owned());
 
     let error = ui
-        .require_paths(&["deck-a/play", "deck-a/eject"], &origin)
-        .expect_err("a screen answering on no eject path must be refused");
+        .require_writes(
+            &[
+                "deck.transport.toggle_play@deck=a",
+                "deck.transport.eject@deck=a",
+            ],
+            &origin,
+        )
+        .expect_err("a screen declaring no eject write must be refused");
 
     assert!(
-        matches!(&error, UiDocError::MissingPaths { paths, .. } if paths == &["deck-a/eject"]),
-        "the refusal must name the path the screen does not answer on, not {error}"
+        matches!(
+            &error,
+            UiDocError::MissingWrites { writes, .. } if writes == &["deck.transport.eject@deck=a"]
+        ),
+        "the refusal must name the write the screen does not declare, not {error}"
     );
 }
 
@@ -1569,4 +1675,367 @@ fn a_manifest_on_disk_answers_before_the_one_this_build_embeds() {
         matches!(&error, UiDocError::MissingRole { role, .. } if role == "deck-single"),
         "the disk manifest must be the one asked for the missing role, got {error}"
     );
+}
+
+fn edited_package(edits: &[(&str, fn(&str) -> String)]) -> tempfile::TempDir {
+    let root = tempfile::tempdir().expect("a temporary package root");
+    for (path, edit) in edits {
+        let shipped = super::package::embedded()
+            .load(None, path)
+            .unwrap_or_else(|error| panic!("`{path}` must ship: {error}"))
+            .text;
+        let edited = edit(&shipped);
+        assert_ne!(edited, shipped, "the edit must change `{path}`");
+        let file = root.path().join(path);
+        std::fs::create_dir_all(file.parent().expect("a document sits in a folder"))
+            .expect("the folder must be made");
+        std::fs::write(file, edited).expect("the document must be written");
+    }
+    root
+}
+
+fn without_write(text: &str, id: &str) -> String {
+    let declared = format!("write: Command(id: \"{id}\"");
+    text.lines()
+        .filter(|line| !line.contains(&declared))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+fn compiled_from(root: &Path) -> Result<AppUi, UiDocError> {
+    let package = Package::load(Some(root)).expect("the edited package must load");
+    AppUi::new(package, &UiConfig::default())
+}
+
+#[kithara::test]
+fn a_package_renaming_the_play_control_still_compiles() {
+    let root = edited_package(&[("modules/app-deck.kmodule.ron", |text| {
+        text.replace("id: \"play\"", "id: \"start\"")
+    })]);
+
+    if let Err(error) = compiled_from(root.path()) {
+        panic!("a renamed play control keeps the write the app requires: {error}");
+    }
+}
+
+#[kithara::test]
+fn a_package_that_cannot_play_deck_a_is_refused_by_the_write_it_lacks() {
+    let root = edited_package(&[
+        ("modules/app-deck.kmodule.ron", |text| {
+            without_write(text, "deck.transport.toggle_play")
+        }),
+        ("modules/app-bar-micro.kmodule.ron", |text| {
+            without_write(text, "deck.transport.toggle_play")
+        }),
+    ]);
+
+    let Err(error) = compiled_from(root.path()) else {
+        panic!("a screen that cannot start deck A must be refused");
+    };
+    assert!(
+        matches!(
+            &error,
+            UiDocError::MissingWrites { writes, .. } if writes == &["deck.transport.toggle_play@deck=a"]
+        ),
+        "the refusal must name the write the screen lacks, not {error}"
+    );
+}
+
+#[kithara::test]
+fn a_package_that_cannot_seek_deck_a_is_refused_by_the_write_it_lacks() {
+    let root = edited_package(&[
+        ("modules/app-deck.kmodule.ron", |text| {
+            without_write(text, "deck.transport.seek_normalized")
+        }),
+        ("modules/app-bar-micro.kmodule.ron", |text| {
+            without_write(text, "deck.transport.seek_normalized")
+        }),
+        ("modules/deck/overview-row.kmodule.ron", |text| {
+            without_write(text, "deck.transport.seek_normalized")
+        }),
+    ]);
+
+    let Err(error) = compiled_from(root.path()) else {
+        panic!("a screen that cannot move deck A's position must be refused");
+    };
+    assert!(
+        matches!(
+            &error,
+            UiDocError::MissingWrites { writes, .. } if writes == &["deck.transport.seek_normalized@deck=a"]
+        ),
+        "the refusal must name the write the screen lacks, not {error}"
+    );
+}
+
+const fn publishes(spec: &ControlSpec) -> bool {
+    matches!(
+        spec,
+        ControlSpec::Button { .. }
+            | ControlSpec::NavItem { .. }
+            | ControlSpec::TabLarge { .. }
+            | ControlSpec::Toggle
+            | ControlSpec::Checkbox
+            | ControlSpec::Chip { .. }
+            | ControlSpec::SettingsButton
+            | ControlSpec::Crossfader { .. }
+            | ControlSpec::Fader { .. }
+            | ControlSpec::Knob { .. }
+            | ControlSpec::Vis
+            | ControlSpec::VuStereo
+            | ControlSpec::VuVertical { .. }
+            | ControlSpec::Wave { .. }
+            | ControlSpec::Range
+            | ControlSpec::Segmented { .. }
+            | ControlSpec::ContextBar { .. }
+            | ControlSpec::Table { .. }
+            | ControlSpec::Tree { .. }
+            | ControlSpec::Select { .. }
+            | ControlSpec::PresetSelector
+    )
+}
+
+#[kithara::test]
+fn every_control_the_studio_draws_declares_the_write_it_makes() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let mut unbound = Vec::new();
+        each_node(&ui, &mut |node| {
+            if let ExpandedNode::Control {
+                path,
+                spec,
+                write: None,
+                ..
+            } = node
+                && publishes(spec)
+            {
+                unbound.push(ui.resolve(*path));
+            }
+        });
+        assert!(
+            unbound.is_empty(),
+            "{layout:?}: these controls publish a gesture no write answers: {unbound:?}"
+        );
+    }
+}
+
+#[cfg(not(feature = "broadcast"))]
+mod answered {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use ::kithara::ui::{
+        expand::{Binding, BindingKind},
+        geom::Pt,
+        render::{Scope, WindowCommand},
+    };
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        deck::{DeckId, EqMode},
+        engine::MixCmd,
+        gui::{
+            app::Kithara,
+            deck::DeckMsg,
+            message::Message,
+            rig::Rig,
+            ui::{events::translate, scope::deck_index},
+        },
+        state::AbrVariant,
+    };
+
+    fn host_writes(ui: &CompiledUi) -> BTreeMap<String, WriteValue> {
+        let reads = BandReads {
+            bands: None,
+            seen: RefCell::default(),
+        };
+        let mut paths: Vec<String> = control_paths(ui).into_iter().map(str::to_owned).collect();
+        paths.extend(
+            drop_targets(ui)
+                .into_iter()
+                .map(|(instance, _)| format!("{instance}/drop")),
+        );
+        each_node(ui, &mut |node| {
+            if let ExpandedNode::Control {
+                path,
+                spec: ControlSpec::Wave { .. },
+                ..
+            } = node
+            {
+                paths.push(format!("{}/zoom", ui.resolve(*path)));
+            }
+        });
+        let actions = [
+            ControlAction::Activate,
+            ControlAction::SecondaryActivate,
+            ControlAction::SetScalar(0.5),
+            ControlAction::StepScalar(1.0),
+            ControlAction::SelectIndex(0),
+            ControlAction::Text(String::new()),
+            ControlAction::Place(Pt { x: 0.0, y: 0.0 }),
+        ];
+        let mut out = BTreeMap::new();
+        for path in paths {
+            for action in &actions {
+                let published = Published::Gesture {
+                    action: action.clone(),
+                    path: path.clone(),
+                };
+                if let Some(UiEvent::Write { key, value }) =
+                    ui.views().settle(published, &reads, &mut ViewState::new())
+                {
+                    out.insert(key, value);
+                }
+            }
+        }
+        out
+    }
+
+    fn tree_writes(ui: &CompiledUi) -> BTreeSet<&str> {
+        let mut out = BTreeSet::new();
+        let mut note = |binding: &Binding| {
+            if !matches!(
+                binding.kind,
+                BindingKind::View { .. } | BindingKind::Page { .. }
+            ) {
+                out.insert(ui.resolve(binding.key));
+            }
+        };
+        each_node(ui, &mut |node| match node {
+            ExpandedNode::Control {
+                write: Some(write), ..
+            } => note(write),
+            ExpandedNode::Pressable { press, .. } => note(press),
+            ExpandedNode::Row {
+                surface: Some(surface),
+                ..
+            }
+            | ExpandedNode::Column {
+                surface: Some(surface),
+                ..
+            } => note(&surface.write),
+            _ => {}
+        });
+        out
+    }
+
+    fn zoom(state: &mut Kithara, deck: Option<usize>) -> Option<f64> {
+        state.ui.cache.deck_mut(deck?)?.view.zoom
+    }
+
+    fn answers(key: &str, value: WriteValue) -> bool {
+        let (id, scope) = Scope::split(key);
+        let deck = scope.get("deck").and_then(deck_index);
+        let mut rig = Rig::offline();
+        if matches!(id, "deck.eq.low_mid" | "deck.eq.high_mid") {
+            rig.message(Message::SetEqMode(EqMode::FourBand));
+            rig.pump();
+            rig.ui.refresh();
+        }
+        if let (Some(index), Some(slot)) = (
+            deck,
+            scope.get("variant").and_then(|slot| slot.parse().ok()),
+        ) {
+            rig.shows(DeckId(index), |shown| {
+                shown.abr_variants = (0..=slot)
+                    .map(|index| AbrVariant {
+                        index,
+                        label: String::new(),
+                        detail: String::new(),
+                    })
+                    .collect();
+            });
+        }
+        let state = &mut rig.ui;
+        if let (Some(index), "deck.queue.load") = (deck, id) {
+            state.ui.cache.focus(1 - index);
+        }
+        let zoomed = zoom(state, deck);
+        let module = scope.get("module");
+        let shown = module.map(|module| state.ui.cache.modules.is_on(module));
+
+        let answer = translate(
+            state,
+            UiEvent::Write {
+                value,
+                key: key.to_owned(),
+            },
+        );
+
+        match id {
+            "deck.view.zoom" | "deck.view.zoom_in" | "deck.view.zoom_out" => {
+                answer.is_none() && zoom(state, deck) != zoomed
+            }
+            "deck.queue.load" => answer.is_none() && Some(state.ui.cache.focus_deck()) == deck,
+            "ui.module.toggle" => {
+                answer.is_none()
+                    && module.map(|module| state.ui.cache.modules.is_on(module)) != shown
+            }
+            "ui.layout.apply" => matches!(answer, Some(Message::PauseHiddenDecks)),
+            "ui.window.toggle_full_screen" => matches!(
+                answer,
+                Some(Message::Window(WindowCommand::ToggleFullScreen))
+            ),
+            "broadcast.toggle" => matches!(answer, Some(Message::BroadcastToggle)),
+            "mix.crossfader" => matches!(answer, Some(Message::Mix(MixCmd::Crossfader(_)))),
+            "mixer.trim" => {
+                matches!(answer, Some(Message::Mix(MixCmd::Trim(DeckId(index), _))) if Some(index) == deck)
+            }
+            "library.select_track" => matches!(answer, Some(Message::SelectCatalogTrack(_))),
+            "deck.eq.mode" => matches!(answer, Some(Message::SetEqMode(_))),
+            _ => {
+                let Some(Message::Deck(DeckId(index), msg)) = answer else {
+                    return false;
+                };
+                Some(index) == deck
+                    && match id {
+                        "deck.transport.toggle_play" => matches!(msg, DeckMsg::TogglePlayPause),
+                        "deck.transport.prev" => matches!(msg, DeckMsg::Prev),
+                        "deck.transport.next" => matches!(msg, DeckMsg::Next),
+                        "deck.transport.seek_normalized" => matches!(msg, DeckMsg::SeekTo(_)),
+                        "deck.tempo.rate" | "deck.tempo.reset" => {
+                            matches!(msg, DeckMsg::SetTempo(_))
+                        }
+                        "deck.eq.low" | "deck.eq.low_mid" | "deck.eq.mid" | "deck.eq.high_mid"
+                        | "deck.eq.high" => matches!(msg, DeckMsg::EqBandChanged(..)),
+                        "deck.stream.select_variant" => matches!(msg, DeckMsg::SetQuality(_)),
+                        _ => panic!("`{key}` is declared and names no answer this test knows"),
+                    }
+            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn every_write_the_studio_declares_is_answered() {
+        let mut declared = BTreeMap::new();
+        for layout in LAYOUTS {
+            let ui = compile_ui(layout).unwrap();
+            let writes = host_writes(&ui);
+            let unreached: Vec<&str> = tree_writes(&ui)
+                .into_iter()
+                .filter(|key| !writes.contains_key(*key))
+                .collect();
+            assert!(
+                unreached.is_empty(),
+                "{layout:?}: no gesture reaches {unreached:?}"
+            );
+            declared.extend(writes);
+        }
+        for key in [
+            "deck.tempo.reset@deck=a",
+            "deck.view.zoom@deck=a",
+            "deck.queue.load@deck=b",
+        ] {
+            assert!(declared.contains_key(key), "the studio declares `{key}`");
+        }
+
+        let unanswered: Vec<String> = declared
+            .into_iter()
+            .filter(|(key, value)| !answers(key, value.clone()))
+            .map(|(key, _)| key)
+            .collect();
+        assert!(
+            unanswered.is_empty(),
+            "the app leaves these declared writes unanswered: {unanswered:?}"
+        );
+    }
 }

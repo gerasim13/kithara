@@ -10,7 +10,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
         CustomSkin, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels,
-        TableCell, TableRow, TreeRow, UiEvent, WaveBucket, WaveformView,
+        TableCell, TableRow, TreeRow, UiEvent, WaveBucket, WaveformView, WindowCommand,
         custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
     },
     source::{MemResolver, UiConfig},
@@ -235,8 +235,6 @@ fn models(registry: &mut CensusRegistry) {
     ] {
         registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
     }
-    // A range reads the whole interval and writes one end of it, so the two
-    // halves of its contract are two kinds under one name.
     registry.insert(
         EndpointCategory::Model,
         "pivot.range",
@@ -245,7 +243,17 @@ fn models(registry: &mut CensusRegistry) {
     registry.insert(
         EndpointCategory::Parameter,
         "pivot.range",
-        EndpointDesc::new(ValueKind::Scalar),
+        EndpointDesc::new(ValueKind::Range),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "library.select_scope",
+        EndpointDesc::new(ValueKind::Index),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "ui.menu.toggle",
+        EndpointDesc::new(ValueKind::Trigger),
     );
 }
 
@@ -291,7 +299,11 @@ pub(crate) fn census_kinds() -> CustomKinds {
     /// the registry does not hold the name.
     const KIND: &str = "census-extension";
 
-    CustomKinds::default().with(KIND, || CensusExtension, |()| UiEvent::OpenSettings)
+    CustomKinds::default().with(
+        KIND,
+        || CensusExtension,
+        |()| UiEvent::Window(WindowCommand::Minimize),
+    )
 }
 
 impl Fixture {

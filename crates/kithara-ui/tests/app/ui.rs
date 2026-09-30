@@ -21,7 +21,8 @@ use kithara_ui::{
     interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent,
+        ControlAction, Published, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow,
+        UiEvent, WriteValue,
         custom::CustomKinds,
         document::{Clock, Ctx},
     },
@@ -56,6 +57,26 @@ impl EndpointRegistry for Registry {
     }
 }
 
+fn swap_endpoints() -> Registry {
+    Registry::model("fixture.lit", ValueKind::Bool).with(
+        EndpointCategory::Command,
+        "fixture.swap",
+        ValueKind::Trigger,
+    )
+}
+
+fn dial_endpoints(kind: ValueKind) -> Registry {
+    Registry::model("fixture.dial", kind).with(
+        EndpointCategory::Parameter,
+        "fixture.dial",
+        ValueKind::Scalar,
+    )
+}
+
+fn triggers(event: &UiEvent, key: &str) -> bool {
+    matches!(event, UiEvent::Write { key: written, value: WriteValue::Trigger } if written == key)
+}
+
 /// An application that shows one of two documents and swaps between them
 /// whenever the one it is showing publishes an activation.
 #[derive(Default)]
@@ -88,9 +109,7 @@ impl App for Swapper {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { action, .. } = event
-            && action == ControlAction::Activate
-        {
+        if triggers(&event, "fixture.swap") {
             self.lit = !self.lit;
         }
     }
@@ -138,9 +157,7 @@ impl App for Dresser<'_> {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { action, .. } = event
-            && action == ControlAction::Activate
-        {
+        if triggers(&event, "fixture.swap") {
             self.lit = !self.lit;
         }
     }
@@ -191,8 +208,10 @@ impl App for Dial {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { action, .. } = event
-            && let ControlAction::SetScalar(value) = action
+        if let UiEvent::Write {
+            value: WriteValue::Scalar(value),
+            ..
+        } = event
         {
             self.value = value;
         }
@@ -256,7 +275,12 @@ impl App for Typed {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::LibraryQuery(query) = event {
+        if let UiEvent::Write {
+            key,
+            value: WriteValue::Text(query),
+        } = event
+            && key == "fixture.query"
+        {
             self.query = query;
         }
     }
@@ -288,11 +312,13 @@ impl App for Board {
 }
 
 fn interaction_endpoints() -> Registry {
-    Registry::model("fixture.dial", ValueKind::Scalar).with(
-        EndpointCategory::Model,
-        "fixture.flag",
-        ValueKind::Bool,
-    )
+    dial_endpoints(ValueKind::Scalar)
+        .with(EndpointCategory::Model, "fixture.flag", ValueKind::Bool)
+        .with(
+            EndpointCategory::Command,
+            "fixture.fire",
+            ValueKind::Trigger,
+        )
 }
 
 struct InteractionBoard {
@@ -325,12 +351,12 @@ impl App for InteractionBoard {
     }
 
     fn update(&mut self, event: UiEvent) {
-        let UiEvent::Control { path, action } = event else {
+        let UiEvent::Write { key, value } = event else {
             return;
         };
-        match action {
-            ControlAction::Activate if path == "demo/fire" => self.active = true,
-            ControlAction::SetScalar(value) if path == "demo/dial" => self.value = value,
+        match (key.as_str(), value) {
+            ("fixture.fire", WriteValue::Trigger) => self.active = true,
+            ("fixture.dial", WriteValue::Scalar(value)) => self.value = value,
             _ => {}
         }
     }
@@ -383,9 +409,14 @@ fn focused_search<'a>(endpoints: &'a Registry, resolver: &'a MemResolver) -> Ui<
 
 fn tree_fixture() -> (Registry, MemResolver) {
     (
-        Registry::model("fixture.tree", ValueKind::Tree),
+        Registry::model("fixture.tree", ValueKind::Tree).with(
+            EndpointCategory::Command,
+            "fixture.query",
+            ValueKind::Text,
+        ),
         one_control(
-            r#"Tree(id: "control", size: (w: Fill, h: Fill), read: Model(id: "fixture.tree"))"#,
+            r#"Tree(id: "control", size: (w: Fill, h: Fill), read: Model(id: "fixture.tree"),
+                write_query: Command(id: "fixture.query"))"#,
         ),
     )
 }
@@ -401,9 +432,12 @@ fn board() -> MemResolver {
         "board.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
             root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-                Chip(id: "one", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "ONE", read: Model(id: "fixture.flag")),
-                Chip(id: "two", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "TWO", read: Model(id: "fixture.flag")),
-                Chip(id: "three", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "THREE", read: Model(id: "fixture.flag")),
+                Chip(id: "one", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "ONE", read: Model(id: "fixture.flag"),
+                    write: Command(id: "fixture.one")),
+                Chip(id: "two", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "TWO", read: Model(id: "fixture.flag"),
+                    write: Command(id: "fixture.two")),
+                Chip(id: "three", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "THREE", read: Model(id: "fixture.flag"),
+                    write: Command(id: "fixture.three")),
             ]))"#,
     );
     resolver
@@ -420,8 +454,9 @@ fn interaction_board() -> MemResolver {
         "interactions.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
             root: Row(size: (w: Fill, h: Fill), gap: 12.0, pad: 12.0, children: [
-                Chip(id: "fire", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "FIRE", read: Model(id: "fixture.flag")),
-                Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial")),
+                Chip(id: "fire", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "FIRE", read: Model(id: "fixture.flag"),
+                    write: Command(id: "fixture.fire")),
+                Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial")),
             ]))"#,
     );
     resolver
@@ -445,7 +480,7 @@ fn drag(control: &Draggable) -> Dragged {
     } else {
         ValueKind::Scalar
     };
-    let endpoints = Registry::model("fixture.dial", kind);
+    let endpoints = dial_endpoints(kind);
     let resolver = one_control(control);
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -503,9 +538,9 @@ impl SourceResolver for Counted<'_> {
 /// the notch and this layer carries it through.
 #[kithara::test]
 fn a_wheel_notch_over_a_knob_steps_it() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(
-        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
     );
     let mut scenario = Scenario::mount(
         Dial::new(false),
@@ -573,7 +608,12 @@ fn a_key_release_does_not_repeat_text_input() {
 
 #[kithara::test]
 fn controls_on_one_page_publish_only_their_own_activation() {
-    let endpoints = Registry::model("fixture.flag", ValueKind::Bool);
+    let endpoints = ["fixture.one", "fixture.two", "fixture.three"]
+        .into_iter()
+        .fold(
+            Registry::model("fixture.flag", ValueKind::Bool),
+            |registry, id| registry.with(EndpointCategory::Command, id, ValueKind::Trigger),
+        );
     let resolver = board();
     let mut scenario = Scenario::mount(
         Board,
@@ -586,15 +626,19 @@ fn controls_on_one_page_publish_only_their_own_activation() {
         1.0,
     );
 
-    for path in ["demo/one", "demo/two", "demo/three"] {
+    for (path, key) in [
+        ("demo/one", "fixture.one"),
+        ("demo/two", "fixture.two"),
+        ("demo/three", "fixture.three"),
+    ] {
         let mark = scenario.published().len();
         scenario.click(path);
 
         assert_eq!(
             &scenario.published()[mark..],
-            [UiEvent::Control {
-                path: path.to_owned(),
-                action: ControlAction::Activate,
+            [UiEvent::Write {
+                key: key.to_owned(),
+                value: WriteValue::Trigger,
             }]
         );
     }
@@ -625,9 +669,9 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
     scenario.press("demo/fire");
     assert_eq!(
         &scenario.published()[mark..],
-        [UiEvent::Control {
-            path: "demo/fire".to_owned(),
-            action: ControlAction::Activate,
+        [UiEvent::Write {
+            key: "fixture.fire".to_owned(),
+            value: WriteValue::Trigger,
         }]
     );
     photograph_scenario(&mut scenario, capture.as_deref(), "01-press", SIZE);
@@ -646,10 +690,10 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
     let values = drag
         .iter()
         .filter_map(|event| match event {
-            UiEvent::Control {
-                path,
-                action: ControlAction::SetScalar(value),
-            } if path == "demo/dial" => Some(*value),
+            UiEvent::Write {
+                key,
+                value: WriteValue::Scalar(value),
+            } if key == "fixture.dial" => Some(*value),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -664,15 +708,15 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
     let mark = scenario.published().len();
     scenario.wheel("demo/dial", -1.0);
     let [
-        UiEvent::Control {
-            path,
-            action: ControlAction::SetScalar(value),
+        UiEvent::Write {
+            key,
+            value: WriteValue::Scalar(value),
         },
     ] = &scenario.published()[mark..]
     else {
         panic!("the named wheel must publish one scalar event")
     };
-    assert_eq!(path, "demo/dial");
+    assert_eq!(key, "fixture.dial");
     assert_ne!(*value, before, "the named wheel must move the dial");
     assert_eq!(scenario.app().value, *value);
     photograph_scenario(&mut scenario, capture.as_deref(), "03-wheel", SIZE);
@@ -684,7 +728,7 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
 /// difference between the hosts.
 #[kithara::test]
 fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
-    let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
+    let endpoints = swap_endpoints();
     let resolver = resolver();
     let blue = page_skin("fixture-blue", "#123456");
     let ui = Ui::new(
@@ -710,7 +754,7 @@ fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
 /// default: the default arena never fails on this fixture.
 #[kithara::test]
 fn a_passed_configuration_reaches_the_compiled_document() {
-    let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
+    let endpoints = swap_endpoints();
     let resolver = resolver();
     let settings = UiConfig::builder().max_arena_bytes(1).build();
     // `Ui` carries no `Debug` impl, so `expect_err` cannot be used here: fall
@@ -823,7 +867,7 @@ fn a_passed_configurations_custom_kinds_field_is_ignored() {
 /// painted.
 #[kithara::test]
 fn a_running_ui_follows_its_application_to_another_skin() {
-    let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
+    let endpoints = swap_endpoints();
     let resolver = resolver();
     let blue = page_skin("fixture-blue", "#123456");
     let mut scenario = Scenario::mount(
@@ -851,7 +895,7 @@ fn a_running_ui_follows_its_application_to_another_skin() {
 /// control needs, so a tree built against the old one is the wrong shape.
 #[kithara::test]
 fn turning_to_another_skin_compiles_the_document_again() {
-    let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
+    let endpoints = swap_endpoints();
     let inner = resolver();
     let resolver = Counted {
         inner: &inner,
@@ -883,9 +927,9 @@ fn turning_to_another_skin_compiles_the_document_again() {
 /// cannot have changed, because the application is still showing the same one.
 #[kithara::test]
 fn moving_a_control_does_not_compile_the_document_again() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let inner = one_control(
-        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
     );
     let resolver = Counted {
         inner: &inner,
@@ -995,6 +1039,7 @@ fn resolver() -> MemResolver {
                             size: Some((w: Fixed(120.0), h: Fixed(40.0))),
                             label: "SWAP",
                             read: Model(id: "fixture.lit"),
+                            write: Command(id: "fixture.swap"),
                         ),
                     ]))"#
             ),
@@ -1006,7 +1051,7 @@ fn resolver() -> MemResolver {
 /// The skin every fixture wears unless it is the skin itself under test.
 /// Shared rather than resolved per test: resolving one embeds the fonts, and
 /// the suite mounts hundreds of documents.
-fn skin() -> &'static Skin {
+pub(crate) fn skin() -> &'static Skin {
     static SKIN: LazyLock<Skin> = LazyLock::new(|| {
         Skin::resolve_with_font_policy(
             builtin::skin_doc().clone(),
@@ -1056,9 +1101,9 @@ fn press(at: Pt, phase: PointerPhase) -> Input<'static> {
 /// for the life of the window however carefully the tree resolves the shape.
 #[kithara::test]
 fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(
-        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
     );
     let mut ui = Ui::new(
         Dial::new(false),
@@ -1117,18 +1162,12 @@ impl App for Menu {
     }
 
     fn update(&mut self, event: UiEvent) {
-        let UiEvent::Control { path, action } = event else {
-            return;
-        };
-        if action != ControlAction::Activate {
-            return;
-        }
-        if path.ends_with("inside") {
+        if triggers(&event, "fixture.pick") {
             self.picked = true;
-        } else if path.ends_with("head") {
+        } else if triggers(&event, "fixture.group") {
             self.picked = true;
             self.group = !self.group;
-        } else {
+        } else if triggers(&event, "fixture.toggle") {
             self.open = !self.open;
         }
     }
@@ -1152,18 +1191,28 @@ fn menu_endpoints() -> Registry {
             ValueKind::Trigger,
         )
         .with(
+            EndpointCategory::Command,
+            "fixture.group",
+            ValueKind::Trigger,
+        )
+        .with(
             EndpointCategory::Parameter,
             "fixture.rate",
             ValueKind::Scalar,
         )
 }
 
-/// A burger with a menu hanging on it, the menu holding a control of its own.
+/// A burger with a menu hanging on it, the menu holding a control of its own
+/// and a row that shuts it.
 const MENU: &str = r#"Popover(id: "menu", open: Model(id: "fixture.menu"), align: Start,
     anchor: Pressable(id: "burger", press: Command(id: "fixture.toggle"),
         child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
-    content: Pressable(id: "inside", press: Command(id: "fixture.pick"),
-        child: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0))))))"#;
+    content: Column(id: "surface", size: (w: Fixed(100.0), h: Shrink), gap: 0.0, children: [
+        Pressable(id: "inside", press: Command(id: "fixture.pick"),
+            child: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0))))),
+        Pressable(id: "close", press: Command(id: "fixture.toggle"),
+            child: Spacer(id: "shut", size: Some((w: Fixed(100.0), h: Fixed(20.0))))),
+    ]))"#;
 
 /// Mounts one of the menu documents and hands it to the check.
 fn with_document(control: &str, check: impl FnOnce(Ui<'_, Menu>)) {
@@ -1204,6 +1253,19 @@ fn press_the_anchor(ui: &mut Ui<'_, Menu>) {
     );
 }
 
+fn press_the_close_row(ui: &mut Ui<'_, Menu>) {
+    let row = ui
+        .rect_of("demo/shut")
+        .unwrap_or_else(|| panic!("the open menu must lay its close row out"));
+    press_at(
+        ui,
+        Pt {
+            x: row.x + row.w / 2.0,
+            y: row.y + row.h / 2.0,
+        },
+    );
+}
+
 /// How much of a picture the host draws, read the way the control census in the
 /// retained host reads a picture.
 fn drawn_shapes<A: App>(ui: &mut Ui<'_, A>) -> u32 {
@@ -1213,9 +1275,6 @@ fn drawn_shapes<A: App>(ui: &mut Ui<'_, A>) -> u32 {
         .n_paths
 }
 
-/// What the host draws for the menu fixture at each of the three moments the
-/// document passes through: shut, opened by a press on its anchor, and shut
-/// again by a press away from it.
 /// A bar carrying the menu, mounted under one instance name.
 fn menu_bar(instance: &str, band: &str) -> String {
     format!(
@@ -1362,10 +1421,10 @@ fn menu_pictures() -> [u32; 3] {
         );
         drawn[1] = drawn_shapes(&mut ui);
 
-        press_at(&mut ui, Pt { x: 200.0, y: 100.0 });
+        press_the_close_row(&mut ui);
         assert!(
             !ui.app().open,
-            "a press away from an open menu must reach the application as a dismissal"
+            "the press on the close row must reach the application and shut the menu"
         );
         drawn[2] = drawn_shapes(&mut ui);
     });
@@ -1432,10 +1491,10 @@ fn a_shut_menu_takes_no_press_over_the_room_its_surface_filled() {
             "the fixture must offer a point the menu covers and the burger does not: \
              surface {surface:?}, anchor {anchor:?}"
         );
-        press_at(&mut ui, Pt { x: 200.0, y: 100.0 });
+        press_the_close_row(&mut ui);
         assert!(
             !ui.app().open,
-            "a press away from an open menu must shut it again"
+            "the press on the close row must shut the menu again"
         );
 
         press_at(&mut ui, at);
@@ -1486,7 +1545,7 @@ fn with_grouped_menu(check: impl FnOnce(Ui<'_, Menu>)) {
     anchor: Pressable(id: "burger", press: Command(id: "fixture.toggle"),
         child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
     content: Column(id: "surface", size: (w: Fixed(140.0), h: Shrink), gap: 0.0, children: [
-        Pressable(id: "head", press: Command(id: "fixture.pick"),
+        Pressable(id: "head", press: Command(id: "fixture.group"),
             child: Row(size: (w: Fill, h: Fixed(26.0)), pad_x: 10.0, gap: 8.0, children: [
                 Text(id: "head-caret", style: MicroLabel, label: ">"),
                 Text(id: "head-label", size: (w: Fill, h: Fill), style: MicroLabel,
@@ -1680,10 +1739,11 @@ impl App for Stepped {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control {
-            action: ControlAction::StepScalar(step),
-            ..
+        if let UiEvent::Write {
+            key,
+            value: WriteValue::Step(step),
         } = event
+            && key == "fixture.rate"
         {
             self.steps.push(step);
         }
@@ -1737,17 +1797,25 @@ fn a_wheel_over_a_writing_row_steps_the_value_it_names() {
     );
 }
 
-/// An application that picks a track up when its one control is pressed and
-/// carries it until it is pressed again, the way a playlist row starts a drag.
-#[derive(Default)]
-struct Carry {
-    carrying: bool,
-}
+/// The rows of the track list the carrying fixture shows, each naming the track
+/// a hand carries out of it.
+static TRACKS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
+    ["One", "Two", "Three"]
+        .into_iter()
+        .map(|title| {
+            TableRow::new(vec![TableCell::text("title", title)], false)
+                .with_drag(format!("file:///{title}.mp3"))
+        })
+        .collect()
+});
+
+/// An application showing a track list beside a deck that takes drops.
+struct Carry;
 
 impl Reads for Carry {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
-        (id == "fixture.carried" && self.carrying).then_some(ReadValue::Text("Signal Path"))
+        (id == "fixture.tracks").then(|| ReadValue::Table(&TRACKS))
     }
 }
 
@@ -1764,60 +1832,85 @@ impl App for Carry {
         skin()
     }
 
-    fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { action, .. } = event
-            && action == ControlAction::Activate
-        {
-            self.carrying = !self.carrying;
-        }
-    }
+    fn update(&mut self, _event: UiEvent) {}
 }
 
 fn carry_endpoints() -> Registry {
-    Registry::model("fixture.carried", ValueKind::Text).with(
+    Registry::model("fixture.tracks", ValueKind::Table).with(
         EndpointCategory::Command,
-        "fixture.grab",
-        ValueKind::Trigger,
+        "fixture.load",
+        ValueKind::Text,
     )
 }
 
-/// A window that names what the pointer carries, over one control to pick a
-/// track up from.
+/// A window holding a track list, a deck that takes the tracks dropped on it,
+/// and bare room beside them.
 fn carry_document() -> MemResolver {
     let mut resolver = MemResolver::default();
     resolver.insert(
         "carry.klayout.ron",
         r#"(schema: "kithara.layout", version: 1, id: "carry", resize_edges: true,
-            dragged: Some(Model(id: "fixture.carried")),
-            root: Module(instance: "demo", source: "carry.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+            root: Split(axis: Horizontal, children: [
+                (node: Module(instance: "library", source: "library.kmodule.ron",
+                    size: (w: Fixed(200.0), h: Fill))),
+                (node: Module(instance: "deck", source: "deck.kmodule.ron",
+                    size: (w: Fixed(100.0), h: Fill))),
+                (weight: 1.0, node: Module(instance: "body", source: "body.kmodule.ron",
+                    size: (w: Fill, h: Fill))),
+            ]))"#,
     );
     resolver.insert(
-        "carry.kmodule.ron",
-        r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
-            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-                Pressable(id: "grab", press: Command(id: "fixture.grab"),
-                    child: Spacer(id: "row", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+        "library.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "library", chrome: Plain,
+            root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+                Table(id: "tracks", size: (w: Fill, h: Fill), read: Model(id: "fixture.tracks"),
+                    columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)]),
             ]))"#,
+    );
+    resolver.insert(
+        "deck.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck", chrome: Plain,
+            drop: Some((write: Command(id: "fixture.load"))),
+            root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+                Spacer(id: "face", size: Some((w: Fill, h: Fill))),
+            ]))"#,
+    );
+    resolver.insert(
+        "body.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "body", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: []))"#,
     );
     resolver
 }
+
+const CARRY_WINDOW: (u32, u32) = (400, 200);
+const PICK_UP: Pt = Pt { x: 60.0, y: 60.0 };
+const BARE: Pt = Pt { x: 350.0, y: 150.0 };
 
 /// Mounts the carrying fixture and hands it to the check.
 fn with_carry(check: impl FnOnce(Ui<'_, Carry>)) {
     let endpoints = carry_endpoints();
     let resolver = carry_document();
     let ui = Ui::new(
-        Carry::default(),
+        Carry,
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
             .text(builtin::text_doc())
             .build(),
-        (240, 120),
+        CARRY_WINDOW,
         1.0,
     )
     .unwrap_or_else(|error| panic!("the carrying fixture must mount: {error}"));
     check(ui);
+}
+
+fn pick_up(ui: &mut Ui<'_, Carry>) {
+    ui.input(press(PICK_UP, PointerPhase::Move));
+    ui.input(press(PICK_UP, PointerPhase::Down));
+    for at in [Pt { x: 64.0, y: 62.0 }, Pt { x: 150.0, y: 80.0 }] {
+        ui.input(press(at, PointerPhase::Move));
+    }
 }
 
 /// What the host draws at each of the three moments the pointer passes through:
@@ -1826,88 +1919,74 @@ fn with_carry(check: impl FnOnce(Ui<'_, Carry>)) {
 fn carrying_pictures() -> [u32; 3] {
     let mut drawn = [0; 3];
     with_carry(|mut ui| {
-        let over = Pt { x: 160.0, y: 90.0 };
-        ui.input(press(over, PointerPhase::Move));
+        ui.input(press(BARE, PointerPhase::Move));
         drawn[0] = drawn_shapes(&mut ui);
 
-        let grab = ui
-            .rect_of("demo/row")
-            .unwrap_or_else(|| panic!("the control a track is picked up from must be laid out"));
-        let grab = Pt {
-            x: grab.x + grab.w / 2.0,
-            y: grab.y + grab.h / 2.0,
-        };
-        press_at(&mut ui, grab);
-        assert!(
-            ui.app().carrying,
-            "the press must reach the application and pick the track up"
-        );
-        ui.input(press(over, PointerPhase::Move));
+        pick_up(&mut ui);
+        ui.input(press(BARE, PointerPhase::Move));
         drawn[1] = drawn_shapes(&mut ui);
 
-        press_at(&mut ui, grab);
-        assert!(
-            !ui.app().carrying,
-            "the second press must reach the application and put the track down"
-        );
-        ui.input(press(over, PointerPhase::Move));
+        ui.input(press(BARE, PointerPhase::Up));
+        ui.input(press(BARE, PointerPhase::Move));
         drawn[2] = drawn_shapes(&mut ui);
     });
     drawn
 }
 
 /// Presents and completes one frame, so what is read after it is about the one
-/// thing the test does next.
-fn settle_frame(ui: &mut Ui<'_, Carry>) {
+/// thing the test does next, and answers what that frame drew.
+fn settle_frame(ui: &mut Ui<'_, Carry>) -> u64 {
     ui.frame(Duration::from_millis(16));
-    ui.render()
-        .unwrap_or_else(|error| panic!("the carrying fixture must draw: {error}"));
+    let drawn = geometry(
+        ui.render()
+            .unwrap_or_else(|error| panic!("the carrying fixture must draw: {error}"))
+            .scene(),
+    );
     let _ = ui.complete_frame();
+    drawn
 }
 
-/// Whether moving the pointer asks the host for another frame, with a track
-/// picked up first or with nothing carried at all.
-fn frame_asked_while_moving(carrying: bool) -> bool {
-    let mut asked = false;
+struct Moved {
+    asked: bool,
+    redrawn: bool,
+}
+
+fn moving_the_pointer(carrying: bool) -> Moved {
+    let mut moved = Moved {
+        asked: false,
+        redrawn: false,
+    };
     with_carry(|mut ui| {
         if carrying {
-            let grab = ui.rect_of("demo/row").unwrap_or_else(|| {
-                panic!("the control a track is picked up from must be laid out")
-            });
-            press_at(
-                &mut ui,
-                Pt {
-                    x: grab.x + grab.w / 2.0,
-                    y: grab.y + grab.h / 2.0,
-                },
-            );
-            assert!(
-                ui.app().carrying,
-                "the press must reach the application and pick the track up"
-            );
+            pick_up(&mut ui);
         }
-        settle_frame(&mut ui);
+        let before = settle_frame(&mut ui);
 
-        ui.input(press(Pt { x: 160.0, y: 90.0 }, PointerPhase::Move));
+        ui.input(press(BARE, PointerPhase::Move));
 
-        asked = ui.needs_frame();
+        moved.asked = ui.needs_frame();
+        moved.redrawn = settle_frame(&mut ui) != before;
     });
-    asked
+    moved
 }
 
 #[kithara::test]
 fn a_carried_track_asks_for_a_frame_as_the_pointer_moves() {
+    let moved = moving_the_pointer(true);
+
     assert!(
-        frame_asked_while_moving(true),
+        moved.asked && moved.redrawn,
         "a track is drawn under the pointer, so it has to follow it: a window carrying one must \
-         paint again as the pointer moves"
+         paint it again where the pointer moved (asked {}, redrawn {})",
+        moved.asked,
+        moved.redrawn
     );
 }
 
 #[kithara::test]
 fn an_empty_pointer_asks_for_no_frame_as_it_moves() {
     assert!(
-        !frame_asked_while_moving(false),
+        !moving_the_pointer(false).asked,
         "a pointer carrying nothing draws nothing that follows it, so moving it must leave the \
          host with nothing to paint"
     );
@@ -1919,8 +1998,8 @@ fn a_track_the_pointer_picks_up_is_drawn_under_it() {
 
     assert!(
         carrying > empty,
-        "the application says the pointer is carrying a track, so the host it is embedded in must \
-         draw it: an empty pointer drew {empty} shapes, a carrying one drew {carrying}"
+        "the pointer is carrying a track, so the host must draw it: an empty pointer drew \
+         {empty} shapes, a carrying one drew {carrying}"
     );
 }
 
@@ -1936,7 +2015,7 @@ fn a_track_the_pointer_puts_down_is_taken_out_of_the_picture_again() {
 
 #[kithara::test]
 fn scene_keeps_the_public_single_redraw_signature() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(r#"Spacer(id: "scene", size: Some((w: Fill, h: Fill)))"#);
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -1953,7 +2032,7 @@ fn scene_keeps_the_public_single_redraw_signature() {
 
 #[kithara::test]
 fn an_idle_ui_skips_its_following_frame() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(r#"Spacer(id: "idle", size: Some((w: Fill, h: Fill)))"#);
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -1985,9 +2064,9 @@ fn an_idle_ui_skips_its_following_frame() {
 
 #[kithara::test]
 fn a_tick_refreshes_non_vis_reads_without_remounting() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(
-        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
     );
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -2023,7 +2102,7 @@ fn a_tick_refreshes_non_vis_reads_without_remounting() {
 
 #[kithara::test]
 fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(r#"Spacer(id: "scaled", size: Some((w: Fill, h: Fill)))"#);
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -2055,7 +2134,7 @@ fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
 
 #[kithara::test]
 fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
-    let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
+    let endpoints = swap_endpoints();
     let resolver = resolver();
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -2069,9 +2148,9 @@ fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
 
     assert_eq!(
         scenario.published(),
-        [UiEvent::Control {
-            path: "demo/swap".to_owned(),
-            action: ControlAction::Activate,
+        [UiEvent::Write {
+            key: "fixture.swap".to_owned(),
+            value: WriteValue::Trigger,
         }],
         "a press inside the chip must reach the application exactly once"
     );
@@ -2089,7 +2168,7 @@ fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
 /// empty one.
 #[kithara::test]
 fn a_host_that_swaps_documents_draws_the_new_one_from_the_filled_pools() {
-    let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
+    let endpoints = swap_endpoints();
     let resolver = resolver();
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -2121,28 +2200,28 @@ struct Draggable {
 /// value and does not answer a drag belongs here the moment it can.
 const DRAGGED: [Draggable; 5] = [
     Draggable {
-        control: r#"VuVertical(id: "dial", ticks: true, size: (w: Fixed(38.0), h: Fixed(120.0)), read: Model(id: "fixture.dial"))"#,
+        control: r#"VuVertical(id: "dial", ticks: true, size: (w: Fixed(38.0), h: Fixed(120.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
         from: Pt { x: 30.0, y: 100.0 },
         to: Pt { x: 30.0, y: 40.0 },
     },
     // The stereo meter reads across, not down: its level is the width it fills.
     Draggable {
-        control: r#"VuStereo(id: "dial", size: (w: Fixed(220.0), h: Fixed(40.0)), read: Model(id: "fixture.dial"))"#,
+        control: r#"VuStereo(id: "dial", size: (w: Fixed(220.0), h: Fixed(40.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
         from: Pt { x: 20.0, y: 60.0 },
         to: Pt { x: 200.0, y: 60.0 },
     },
     Draggable {
-        control: r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        control: r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
         from: Pt { x: 19.0, y: 60.0 },
         to: Pt { x: 19.0, y: 40.0 },
     },
     Draggable {
-        control: r#"Fader(id: "dial", size: (w: Fixed(220.0), h: Fixed(34.0)), read: Model(id: "fixture.dial"))"#,
+        control: r#"Fader(id: "dial", size: (w: Fixed(220.0), h: Fixed(34.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
         from: Pt { x: 20.0, y: 60.0 },
         to: Pt { x: 200.0, y: 60.0 },
     },
     Draggable {
-        control: r#"Crossfader(id: "dial", ticks: true, size: (w: Fixed(220.0), h: Fixed(64.0)), read: Model(id: "fixture.dial"))"#,
+        control: r#"Crossfader(id: "dial", ticks: true, size: (w: Fixed(220.0), h: Fixed(64.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
         from: Pt { x: 20.0, y: 60.0 },
         to: Pt { x: 200.0, y: 60.0 },
     },
@@ -2167,9 +2246,9 @@ fn dragging_a_control_moves_it_for_the_whole_gesture() {
 
 #[kithara::test]
 fn dragging_a_knob_by_path_publishes_a_run_of_rising_values() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(
-        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
     );
     let mut scenario = Scenario::mount(
         Dial::new(false),
@@ -2187,10 +2266,10 @@ fn dragging_a_knob_by_path_publishes_a_run_of_rising_values() {
     let values = scenario.published()[mark..]
         .iter()
         .filter_map(|event| match event {
-            UiEvent::Control {
-                action: ControlAction::SetScalar(value),
-                ..
-            } => Some(*value),
+            UiEvent::Write {
+                key,
+                value: WriteValue::Scalar(value),
+            } if key == "fixture.dial" => Some(*value),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -2222,10 +2301,10 @@ fn a_dragged_control_redraws_on_every_step_not_only_on_release() {
 /// move both, on the step it moves — not once the hand lets go.
 #[kithara::test]
 fn controls_sharing_an_endpoint_move_together_during_the_gesture() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(
-        r#"Knob(id: "a", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial")),
-           Knob(id: "b", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        r#"Knob(id: "a", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial")),
+           Knob(id: "b", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
     );
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -2274,9 +2353,9 @@ fn controls_sharing_an_endpoint_move_together_during_the_gesture() {
 /// against.
 #[kithara::test]
 fn a_double_click_resets_the_knob_it_lands_on() {
-    let endpoints = Registry::model("fixture.dial", ValueKind::Scalar);
+    let endpoints = dial_endpoints(ValueKind::Scalar);
     let resolver = one_control(
-        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"), write: Parameter(id: "fixture.dial"))"#,
     );
     let config = Config::builder()
         .endpoints(&endpoints)
@@ -2340,7 +2419,7 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
         },
     };
 
-    let endpoints = Registry::model("fixture.lit", ValueKind::Bool);
+    let endpoints = swap_endpoints();
     let resolver = resolver();
     let reads = Swapper::default();
     let ui = compile(
@@ -2398,7 +2477,7 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
 
     assert_eq!(
         root.take_actions(),
-        vec![UiEvent::Control {
+        vec![Published::Gesture {
             path: "demo/swap".to_owned(),
             action: ControlAction::Activate,
         }],
@@ -2443,19 +2522,28 @@ fn the_host_clock_accumulates_the_steps_it_was_driven_with() {
     assert_eq!(ui.clock().elapsed, Duration::from_millis(100));
 }
 
-/// A registry that answers for whatever tab a page row binds to, so a fixture
-/// can name its rows without listing them twice.
-struct Tabs(EndpointDesc);
+/// A registry that answers for whatever tab a page row binds to.
+struct Tabs {
+    flag: EndpointDesc,
+    open: EndpointDesc,
+}
 
 impl Default for Tabs {
     fn default() -> Self {
-        Self(EndpointDesc::new(ValueKind::Bool))
+        Self {
+            flag: EndpointDesc::new(ValueKind::Bool),
+            open: EndpointDesc::new(ValueKind::Trigger),
+        }
     }
 }
 
 impl EndpointRegistry for Tabs {
     fn endpoint(&self, category: EndpointCategory, _id: &EndpointId) -> Option<&EndpointDesc> {
-        (category == EndpointCategory::Model).then_some(&self.0)
+        match category {
+            EndpointCategory::Model => Some(&self.flag),
+            EndpointCategory::Command => Some(&self.open),
+            _ => None,
+        }
     }
 }
 
@@ -2485,10 +2573,12 @@ impl App for Pages {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { path, action } = event
-            && action == ControlAction::Activate
+        if let UiEvent::Write {
+            key,
+            value: WriteValue::Trigger,
+        } = event
         {
-            self.opened.push(path);
+            self.opened.push(key);
         }
     }
 }
@@ -2527,7 +2617,8 @@ fn page_list(rows: usize) -> MemResolver {
         "row.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "gallery-nav-row",
             parameters: ["label", "tab"],
-            root: NavItem(id: "item", label: "$label", icon: "Disc", read: Model(id: "$tab")))"#,
+            root: NavItem(id: "item", label: "$label", icon: "Disc", read: Model(id: "$tab"),
+                write: Command(id: "$tab")))"#,
     );
     resolver
 }
@@ -2560,7 +2651,7 @@ fn a_row_a_window_scrolled_into_view_answers_its_own_press() {
         scenario.scene();
     }
     scenario.click(&last);
-    assert_eq!(scenario.app().opened, vec![last]);
+    assert_eq!(scenario.app().opened, [format!("page.row{}", rows - 1)]);
 }
 
 /// An application showing one reading, which either keeps moving - the way a
@@ -2699,8 +2790,10 @@ impl App for Pager {
     }
 
     fn update(&mut self, event: UiEvent) {
-        if let UiEvent::Control { action, .. } = event
-            && action == ControlAction::Activate
+        if let UiEvent::Write {
+            value: WriteValue::Trigger,
+            ..
+        } = event
         {
             self.second = true;
         }
@@ -2834,10 +2927,8 @@ fn a_menu_opens_on_state_no_endpoint_declares() {
     );
 }
 
-/// The state a press turns is told to the application all the same: what the
-/// document does for itself is not hidden from the host that owns it.
 #[kithara::test]
-fn a_view_press_is_still_published() {
+fn a_view_press_hands_the_application_nothing() {
     let (endpoints, resolver) = view_menu(VIEW_MENU);
     let mut scenario = Scenario::mount(
         Bare,
@@ -2853,13 +2944,11 @@ fn a_view_press_is_still_published() {
 
     scenario.click("demo/anchor");
 
-    assert_eq!(
-        &scenario.published()[mark..],
-        [UiEvent::Control {
-            path: "demo/burger".to_owned(),
-            action: ControlAction::Activate,
-        }],
+    assert!(
+        scenario.view().flag("demo/menu"),
+        "the press must turn the state the document named for itself"
     );
+    assert_eq!(&scenario.published()[mark..], []);
 }
 
 /// A state written under one name and read under another leaves the one meant

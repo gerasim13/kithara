@@ -25,7 +25,7 @@ use super::super::{
     protocol::{Cmd, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
-use crate::{PlayerMember, host::HeldPlayer};
+use crate::{MetronomeConfig, PlayerMember, host::HeldPlayer, rt::SessionOutput};
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
@@ -123,7 +123,8 @@ where
         sample_rate,
         None,
         None,
-        LimiterConfig::default(),
+        SessionOutput::new(LimiterConfig::default(), MetronomeConfig::default())
+            .expect("the default output chain"),
         start_stream_fn,
     )
 }

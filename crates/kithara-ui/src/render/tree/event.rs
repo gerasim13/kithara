@@ -6,17 +6,19 @@ use crate::{
         Outcome,
         recognizers::{DragEvent, StepEvent},
     },
-    render::{ControlAction, DragPhase, UiEvent, WindowCommand, control_event},
+    render::{
+        Carry, CarryStep, ControlAction, Published, WindowCommand, carry_event, control_event,
+    },
 };
 
 /// Shared view contract: a built control renders itself into the event tree.
 pub(crate) trait Widget<'a> {
-    fn view(self) -> Element<'a, UiEvent>;
+    fn view(self) -> Element<'a, Published>;
 }
 
 /// Carry a recognizer's verdict out to the toolkit. The recognizer decides
 /// whether the gesture took the pointer; this only names the event it produced.
-fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Action<UiEvent>> {
+fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> Published) -> Option<Action<Published>> {
     let captured = outcome.is_captured();
     let Some(value) = outcome.value() else {
         return captured.then(Action::capture);
@@ -29,19 +31,19 @@ fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Ac
     })
 }
 
-pub(crate) fn publish(outcome: Outcome<UiEvent>) -> Option<Action<UiEvent>> {
+pub(crate) fn publish(outcome: Outcome<Published>) -> Option<Action<Published>> {
     action(outcome, |event| event)
 }
 
-fn set_scalar(path: &str, value: f64) -> UiEvent {
+fn set_scalar(path: &str, value: f64) -> Published {
     control_event(path, ControlAction::SetScalar(value))
 }
 
-pub(crate) fn scalar(path: &str, outcome: Outcome<f64>) -> Option<Action<UiEvent>> {
+pub(crate) fn scalar(path: &str, outcome: Outcome<f64>) -> Option<Action<Published>> {
     action(outcome, |value| set_scalar(path, value))
 }
 
-pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<UiEvent>> {
+pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<Published>> {
     action(outcome, |event| {
         control_event(
             path,
@@ -53,26 +55,15 @@ pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<UiE
     })
 }
 
-pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
+pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<Published>> {
     action(outcome, |()| control_event(path, ControlAction::Activate))
 }
 
-pub(crate) fn toggle_module(module: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
-    action(outcome, |()| UiEvent::ToggleModule(module.to_owned()))
+pub(crate) fn window(command: WindowCommand, outcome: Outcome<()>) -> Option<Action<Published>> {
+    action(outcome, |()| Published::window(command))
 }
 
-pub(crate) fn window(command: WindowCommand, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
-    action(outcome, |()| UiEvent::Window(command))
-}
-
-/// What a control says to the document rather than to its own endpoint. The
-/// event is built only once the gesture produced one, so a command that carries
-/// a word costs nothing on the inputs that are not it.
-pub(crate) fn command(event: fn() -> UiEvent, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
-    action(outcome, |()| event())
-}
-
-pub(crate) fn index(path: &str, outcome: Outcome<usize>) -> Option<Action<UiEvent>> {
+pub(crate) fn index(path: &str, outcome: Outcome<usize>) -> Option<Action<Published>> {
     action(outcome, |index| {
         control_event(path, ControlAction::SelectIndex(index))
     })
@@ -82,7 +73,7 @@ pub(crate) fn engine(
     path: &str,
     child: Option<&str>,
     outcome: Outcome<EngineEvent>,
-) -> Option<Action<UiEvent>> {
+) -> Option<Action<Published>> {
     let captured = outcome.is_captured();
     match outcome.value() {
         Some(EngineEvent::Scalar(value)) => child.map_or_else(
@@ -91,15 +82,15 @@ pub(crate) fn engine(
         ),
         Some(EngineEvent::Activate) => activate(path, typed_outcome((), captured)),
         Some(EngineEvent::Crossing(over)) => {
-            drag_phase(path, typed_outcome(DragPhase::Over(over), captured))
+            carry(path, typed_outcome(Carry(CarryStep::Over(over)), captured))
         }
         Some(EngineEvent::Index(selected)) => index(path, typed_outcome(selected, captured)),
         Some(EngineEvent::Drag { event, index }) => {
             drag(path, index, typed_outcome(event, captured))
         }
-        Some(EngineEvent::Text(query)) => {
-            action(typed_outcome(query, captured), UiEvent::LibraryQuery)
-        }
+        Some(EngineEvent::Text(query)) => action(typed_outcome(query, captured), |query| {
+            control_event(path, ControlAction::Text(query))
+        }),
         None => captured.then(Action::capture),
     }
 }
@@ -114,7 +105,7 @@ fn typed_outcome<T>(value: T, captured: bool) -> Outcome<T> {
 
 /// A value a control decides for itself, addressed under one of its own
 /// endpoints rather than the one its gesture writes.
-pub(crate) fn scalar_child(path: &str, child: &str, value: f64) -> Action<UiEvent> {
+pub(crate) fn scalar_child(path: &str, child: &str, value: f64) -> Action<Published> {
     Action::publish(set_scalar(&format!("{path}/{child}"), value)).and_capture()
 }
 
@@ -122,20 +113,20 @@ pub(crate) fn drag(
     path: &str,
     index: usize,
     outcome: Outcome<DragEvent>,
-) -> Option<Action<UiEvent>> {
-    drag_phase(
+) -> Option<Action<Published>> {
+    carry(
         path,
-        outcome.map(|event| match event {
-            DragEvent::Started => DragPhase::Start(index),
-            DragEvent::Dropped => DragPhase::Drop,
+        outcome.map(|event| {
+            Carry(match event {
+                DragEvent::Started => CarryStep::Start(index),
+                DragEvent::Dropped => CarryStep::Drop,
+            })
         }),
     )
 }
 
-fn drag_phase(path: &str, outcome: Outcome<DragPhase>) -> Option<Action<UiEvent>> {
-    action(outcome, |phase| {
-        control_event(path, ControlAction::Drag(phase))
-    })
+fn carry(path: &str, outcome: Outcome<Carry>) -> Option<Action<Published>> {
+    action(outcome, |step| carry_event(path, step))
 }
 
 #[cfg(test)]
@@ -156,7 +147,7 @@ mod tests {
 
         assert_eq!(
             action.into_inner().0,
-            Some(UiEvent::Control {
+            Some(Published::Gesture {
                 path: "deck-a/wave/loop_start".to_owned(),
                 action: ControlAction::SetScalar(0.14),
             })
@@ -170,7 +161,7 @@ mod tests {
 
         assert_eq!(
             action.into_inner().0,
-            Some(UiEvent::Control {
+            Some(Published::Gesture {
                 path: "cells/beat".to_owned(),
                 action: ControlAction::SelectIndex(3),
             })
@@ -191,9 +182,9 @@ mod tests {
 
         assert_eq!(
             action.into_inner().0,
-            Some(UiEvent::Control {
+            Some(Published::Carry {
                 path: "library/tracks".to_owned(),
-                action: ControlAction::Drag(DragPhase::Start(3)),
+                step: Carry(CarryStep::Start(3)),
             })
         );
     }
@@ -211,25 +202,14 @@ mod tests {
             assert_eq!(
                 action.into_inner(),
                 (
-                    Some(UiEvent::Control {
+                    Some(Published::Carry {
                         path: "deck-a/drop".to_owned(),
-                        action: ControlAction::Drag(DragPhase::Over(over)),
+                        step: Carry(CarryStep::Over(over)),
                     }),
                     RedrawRequest::Wait,
                     event::Status::Ignored,
                 )
             );
         }
-    }
-
-    #[kithara::test]
-    fn module_header_activation_binds_directly_to_toggle_module() {
-        let action = toggle_module("app-deck", Outcome::set(()))
-            .expect("a module-header activation must publish");
-
-        assert_eq!(
-            action.into_inner().0,
-            Some(UiEvent::ToggleModule("app-deck".to_owned()))
-        );
     }
 }

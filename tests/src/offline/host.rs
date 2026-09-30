@@ -6,7 +6,7 @@ use std::{num::NonZeroU32, ops::Deref};
 use kithara::play::{SessionError, TransportRevision};
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{Host, HostConfig, HostLevel, HostOwned},
+    host::{Host, HostConfig, HostLevel, HostOwned, Tap},
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -306,27 +306,36 @@ where
         self.max_block_frames
     }
 
-    pub async fn enable_mix_tap(&self, capacity: usize) -> Result<MixTapProbe, PlayError> {
+    pub async fn attach_tap(&self, tap: Tap, capacity: usize) -> Result<TapProbe, PlayError> {
         let (pcm_tx, pcm_rx) = HeapRb::<f32>::new(capacity).split();
         let drops = Arc::new(AtomicU64::new(0));
-        self.install_mix_tap(MixTapWriter::new(pcm_tx, Arc::clone(&drops)))
-            .await?;
-        Ok(MixTapProbe { drops, pcm: pcm_rx })
-    }
-
-    pub async fn install_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
         let mut outputs = OutputGroup::new();
-        outputs.push(writer);
-        self.enable_outputs(outputs).await
+        outputs.push(MixTapWriter::new(pcm_tx, Arc::clone(&drops)));
+        self.attach_outputs(tap, outputs).await?;
+        Ok(TapProbe { drops, pcm: pcm_rx })
     }
 
-    pub async fn disable_mix_tap(&self) -> Result<(), PlayError> {
-        self.off.call(|state| state.host.disable_outputs()).await
-    }
-
-    pub async fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
+    pub async fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
         self.off
-            .call(move |state| state.host.enable_outputs(outputs))
+            .call(move |state| state.host.attach_outputs(tap, outputs))
+            .await
+    }
+
+    pub async fn detach_tap(&self, tap: Tap) -> Result<(), PlayError> {
+        self.off
+            .call(move |state| state.host.detach_outputs(tap))
+            .await
+    }
+
+    pub async fn set_metronome(&self, on: bool) -> Result<(), PlayError> {
+        self.off
+            .call(move |state| state.host.set_metronome(on))
+            .await
+    }
+
+    pub async fn set_metronome_level(&self, level: f32) -> Result<(), PlayError> {
+        self.off
+            .call(move |state| state.host.set_metronome_level(level))
             .await
     }
 
@@ -425,12 +434,12 @@ impl RenderSink for VecSink {
     }
 }
 
-pub struct MixTapProbe {
+pub struct TapProbe {
     drops: Arc<AtomicU64>,
     pcm: HeapCons<f32>,
 }
 
-impl MixTapProbe {
+impl TapProbe {
     pub fn drain(&mut self) -> Vec<f32> {
         self.pcm.pop_iter().collect()
     }

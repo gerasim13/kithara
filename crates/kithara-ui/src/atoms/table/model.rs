@@ -19,11 +19,17 @@ pub(crate) struct TableRow {
     cells: Vec<TableCell>,
     #[field(get, vis = "pub(crate)")]
     selected: bool,
+    #[field(get, with, vis = "pub(crate)")]
+    drag: Option<String>,
 }
 
 impl TableRow {
     pub(crate) fn new(cells: Vec<TableCell>, selected: bool) -> Self {
-        Self { cells, selected }
+        Self {
+            cells,
+            selected,
+            drag: None,
+        }
     }
 
     pub(crate) fn cell(&self, index: usize) -> Option<&TableCell> {

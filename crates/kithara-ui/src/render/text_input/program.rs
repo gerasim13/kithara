@@ -9,7 +9,7 @@ use super::{paint::TextInputPaint, widget::TextInputState};
 use crate::{
     engine::Target,
     interact::iced as iced_interact,
-    render::{UiEvent, engine as engine_event},
+    render::{Published, engine as engine_event},
 };
 
 pub(super) struct InputProgram<'a> {
@@ -26,7 +26,7 @@ impl<'a> InputProgram<'a> {
     }
 }
 
-impl canvas::Program<UiEvent> for InputProgram<'_> {
+impl canvas::Program<Published> for InputProgram<'_> {
     type State = TextInputState;
 
     fn draw(
@@ -58,7 +58,7 @@ impl canvas::Program<UiEvent> for InputProgram<'_> {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         let input = iced_interact::input(event)?;
         let before = state.snapshot().clone();
         let target = Target::new(&self.path, iced_interact::hit(bounds, cursor));
@@ -89,7 +89,7 @@ impl<'a> PaintProgram<'a> {
     }
 }
 
-impl canvas::Program<UiEvent> for PaintProgram<'_> {
+impl canvas::Program<Published> for PaintProgram<'_> {
     type State = TextInputState;
 
     fn draw(

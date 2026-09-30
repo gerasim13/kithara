@@ -301,7 +301,7 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
         .unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(cargo);
     command
-        .args(["run", "--locked", "--quiet", "--manifest-path"])
+        .args(["run", "--locked", "--manifest-path"])
         .arg(root.join("Cargo.toml"))
         .args(["-p", "xtask", "--bin", "xtask"]);
     if release {
@@ -558,11 +558,23 @@ mod tests {
 
     use anyhow::{Result, anyhow};
 
-    use super::{publish_unchanged, refresh_with};
+    use super::{cargo_build_command, publish_unchanged, refresh_with};
     use crate::{
         config::XtaskCacheConfig,
         self_cache::{manifest::CacheManifest, publish},
     };
+
+    /// A job that rebuilds this binary before its lane spends a minute or two
+    /// on it, and a quiet build left that minute as a gap in the job's log.
+    #[test]
+    fn a_rebuild_shows_its_progress_in_the_job_log() {
+        let command = cargo_build_command(std::path::Path::new("/repo"), false);
+
+        assert!(
+            !command.get_args().any(|arg| arg == "--quiet"),
+            "the build's progress must reach the log: {command:?}"
+        );
+    }
 
     fn fixture() -> Result<(tempfile::TempDir, PathBuf, PathBuf, XtaskCacheConfig)> {
         let temp = tempfile::tempdir()?;

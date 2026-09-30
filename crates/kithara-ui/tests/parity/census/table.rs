@@ -1,7 +1,7 @@
 use kithara_ui::{
     draw::{DrawListBuilder, Rect, Rgba},
     render::{
-        CustomSkin, UiEvent,
+        CustomSkin, UiEvent, WindowCommand,
         custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
     },
 };
@@ -82,7 +82,7 @@ pub(crate) const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     (
         "Wave",
         Paints::Yes,
-        r#"Wave(id: "control", read: Model(id: "demo.wave"))"#,
+        r#"Wave(id: "control", read: Model(id: "demo.wave"), write: Parameter(id: "demo.seek"))"#,
     ),
     (
         "Vis",
@@ -130,7 +130,7 @@ pub(crate) const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         // for a reason that had nothing to do with this host.
         "ContextBar",
         Paints::Yes,
-        r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Model(id: "library.scope"))"#,
+        r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Command(id: "library.select_scope"))"#,
     ),
     (
         "Text",
@@ -145,12 +145,12 @@ pub(crate) const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     (
         "Chip",
         Paints::Yes,
-        r#"Chip(id: "control", label: "A", read: Model(id: "ui.menu.open"))"#,
+        r#"Chip(id: "control", label: "A", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
     ),
     (
         "NavItem",
         Paints::Yes,
-        r#"NavItem(id: "control", label: "LIBRARY", icon: Playlist, read: Model(id: "ui.menu.open"))"#,
+        r#"NavItem(id: "control", label: "LIBRARY", icon: Playlist, read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
     ),
     (
         "Button",
@@ -165,22 +165,22 @@ pub(crate) const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     (
         "TabLarge",
         Paints::Yes,
-        r#"TabLarge(id: "control", label: "MIXER", read: Model(id: "ui.menu.open"))"#,
+        r#"TabLarge(id: "control", label: "MIXER", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
     ),
     (
         "Toggle",
         Paints::Yes,
-        r#"Toggle(id: "control", read: Model(id: "ui.menu.open"))"#,
+        r#"Toggle(id: "control", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
     ),
     (
         "Checkbox",
         Paints::Yes,
-        r#"Checkbox(id: "control", read: Model(id: "ui.menu.open"))"#,
+        r#"Checkbox(id: "control", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
     ),
     (
         "Segmented",
         Paints::Yes,
-        r#"Segmented(id: "control", items: ["A", "B"], read: Model(id: "library.scope"))"#,
+        r#"Segmented(id: "control", items: ["A", "B"], read: Model(id: "library.scope"), write: Command(id: "library.select_scope"))"#,
     ),
     (
         "Select",
@@ -215,12 +215,12 @@ pub(crate) const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     (
         "VuVertical",
         Paints::Yes,
-        r#"VuVertical(id: "control", read: Telemetry(id: "player.output.levels"))"#,
+        r#"VuVertical(id: "control", read: Telemetry(id: "player.output.levels"), write: Parameter(id: "player.output.volume"))"#,
     ),
     (
         "VuStereo",
         Paints::Yes,
-        r#"VuStereo(id: "control", read: Telemetry(id: "player.output.levels"))"#,
+        r#"VuStereo(id: "control", read: Telemetry(id: "player.output.levels"), write: Parameter(id: "player.output.volume"))"#,
     ),
     (
         "Fader",
@@ -280,7 +280,11 @@ impl CustomWidget for CensusExtension {
 }
 
 pub(crate) fn census_kinds() -> CustomKinds {
-    CustomKinds::default().with(CENSUS_KIND, || CensusExtension, |()| UiEvent::OpenSettings)
+    CustomKinds::default().with(
+        CENSUS_KIND,
+        || CensusExtension,
+        |()| UiEvent::Window(WindowCommand::Minimize),
+    )
 }
 
 /// The sources the census table names beside the controls themselves. Only the

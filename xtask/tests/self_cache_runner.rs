@@ -2,11 +2,11 @@
 
 use std::{
     env, fs,
-    io::{self, ErrorKind, Write},
+    io::{self, BufRead, BufReader, ErrorKind, Read, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::{Arc, Barrier},
+    sync::{Arc, Barrier, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -181,6 +181,12 @@ exit 98
     }
 
     fn cached_in(&self, root: &Path, args: &[&str], target: Option<&Path>) -> Result<Output> {
+        self.cached_command(root, args, target)?
+            .output()
+            .context("run cached xtask")
+    }
+
+    fn cached_command(&self, root: &Path, args: &[&str], target: Option<&Path>) -> Result<Command> {
         let fake_cargo = self.fake_bin.join("cargo");
         let mut command = Command::new(self.active_binary()?);
         command
@@ -196,7 +202,7 @@ exit 98
             Some(target) => command.env("CARGO_TARGET_DIR", target),
             None => command.env_remove("CARGO_TARGET_DIR"),
         };
-        command.output().context("run cached xtask")
+        Ok(command)
     }
 
     fn transport(&self, root: &Path) -> Result<Output> {
@@ -344,6 +350,50 @@ exec "$SELF_CACHE_TEST_XTASK" "$@"
     }
 }
 
+/// A command whose stdout is its answer keeps it clean while it waits: the
+/// wait is announced on stderr.
+#[test]
+fn a_waiting_command_announces_on_stderr_and_keeps_stdout_for_its_answer() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    let lease = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.active_generation()?.join("lease.lock"))?;
+    let cleanup = FileLock::try_exclusive(lease)
+        .ok()
+        .context("the generation lease is free before the command starts")?;
+    let mut child = fixture
+        .cached_command(
+            &fixture.root,
+            &["self-cache", "status"],
+            Some(&fixture.target),
+        )?
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let lines = stream_lines(&mut child)?;
+
+    let (stream, waiting) = lines_until(&lines, "waiting for self-cache generation")?;
+    assert_eq!(stream, Stream::Stderr, "{waiting}");
+    drop(cleanup);
+    let rest = lines.iter().collect::<Vec<_>>();
+    assert!(child.wait()?.success());
+
+    let answer = rest
+        .iter()
+        .filter(|(stream, _)| *stream == Stream::Stdout)
+        .map(|(_, line)| line.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(answer, ["current"]);
+    assert!(
+        rest.iter().any(|(stream, line)| *stream == Stream::Stderr
+            && line.contains("took self-cache generation")),
+        "{rest:?}"
+    );
+    Ok(())
+}
+
 #[test]
 fn warm_probe_and_status_are_cargo_and_git_free() -> Result<()> {
     let fixture = Fixture::new()?;
@@ -427,6 +477,58 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     fs::write(release, [])?;
     assert_success(&child.wait_with_output()?);
     assert!(!heartbeat.exists());
+    Ok(())
+}
+
+/// The host's cache cleanup holds a job's build target lease exclusively
+/// while it decides whether to evict. A job arriving then says so instead of
+/// sitting silent, and starts its command only once it holds the lease.
+#[test]
+fn ci_public_just_runner_announces_a_wait_for_the_build_target_lease() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.install_fake_transport()?;
+    let cache = fixture._temp.path().join("cache");
+    let ready = fixture._temp.path().join("ready");
+    let release = fixture._temp.path().join("release");
+    let target = fixture._temp.path().join("private-target");
+    fs::create_dir_all(&target)?;
+    let lease = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(target.join(".kithara-job-lease"))?;
+    let cleanup = FileLock::try_exclusive(lease)
+        .ok()
+        .context("the build target lease is free before the job starts")?;
+    let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
+    command
+        .env("CI", "true")
+        .env("CI_CONCURRENT_ID", "0")
+        .env("CI_JOB_ID", "lease-test")
+        .env("KITHARA_CACHE_TRUST", "review")
+        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env("CARGO_TARGET_DIR", &target)
+        .env("SELF_CACHE_READY", &ready)
+        .env("SELF_CACHE_RELEASE", &release)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let lines = stream_lines(&mut child)?;
+
+    let (stream, waiting) = lines_until(&lines, "waiting for the CI build target lease")?;
+    assert_eq!(stream, Stream::Stderr, "{waiting}");
+    assert!(
+        !ready.exists(),
+        "the command ran before the lease was taken"
+    );
+    drop(cleanup);
+    let (stream, took) = lines_until(&lines, "took the CI build target lease")?;
+    assert_eq!(stream, Stream::Stderr, "{took}");
+    wait_for_file(&ready, &mut child)?;
+    fs::write(&release, [])?;
+    assert!(child.wait()?.success());
     Ok(())
 }
 
@@ -986,7 +1088,7 @@ handler = "command-guard"
 
 fn cargo_build_log(root: &Path, target: &Path) -> String {
     format!(
-        "run --locked --quiet --manifest-path {}/Cargo.toml -p xtask --bin xtask -- self-cache artifact\ntarget={}\n",
+        "run --locked --manifest-path {}/Cargo.toml -p xtask --bin xtask -- self-cache artifact\ntarget={}\n",
         root.display(),
         target.display()
     )
@@ -1020,6 +1122,55 @@ fn assert_success(output: &Output) {
         "command failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+/// Every line the child prints, tagged with the stream it came on, until
+/// both streams close.
+fn stream_lines(child: &mut Child) -> Result<mpsc::Receiver<(Stream, String)>> {
+    let (sender, receiver) = mpsc::channel();
+    forward(
+        child.stdout.take().context("child stdout is not piped")?,
+        Stream::Stdout,
+        sender.clone(),
+    );
+    forward(
+        child.stderr.take().context("child stderr is not piped")?,
+        Stream::Stderr,
+        sender,
+    );
+    Ok(receiver)
+}
+
+fn forward<R: Read + Send + 'static>(
+    reader: R,
+    stream: Stream,
+    sender: mpsc::Sender<(Stream, String)>,
+) {
+    thread::spawn(move || {
+        for line in BufReader::new(reader)
+            .lines()
+            .map_while(std::result::Result::ok)
+        {
+            if sender.send((stream, line)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// The first line containing `needle`. The condition is the child's output,
+/// not the clock: an error means the child closed both streams first.
+fn lines_until(lines: &mpsc::Receiver<(Stream, String)>, needle: &str) -> Result<(Stream, String)> {
+    lines
+        .iter()
+        .find(|(_, line)| line.contains(needle))
+        .with_context(|| format!("the child closed its output without printing `{needle}`"))
 }
 
 /// Waits for `path` while `process` is still alive.

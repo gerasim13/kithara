@@ -12,12 +12,12 @@ use tracing::{info, warn};
 
 use super::{
     config::CiConfig,
-    environment::CiEnvironment,
+    environment::{CiEnvironment, LaneTarget},
     process::{Process, Recording},
     verdict,
 };
 use crate::{
-    config::{CiLaneConfig, KitharaExt},
+    config::{CiLaneConfig, KitharaExt, LaneFreshness},
     consts,
 };
 
@@ -231,11 +231,7 @@ fn execute_lane(
         }
         let result = dispatch();
         if uses_sccache {
-            process.best_effort(
-                tools.program("sccache"),
-                &["--show-stats"],
-                "sccache statistics",
-            );
+            note_compiler_cache(process, tools.program("sccache"), crate::job::is_github());
         }
         result
     })
@@ -259,6 +255,101 @@ pub(crate) fn journalled(
     let result = dispatch();
     process.report_journal(lane);
     result
+}
+
+/// Say what the compiler cache carried for the lane, from the counts its
+/// server kept while the lane ran. `sccache` is the program the lane's
+/// compilations went through.
+///
+/// A cache that stores nothing looks like a working one in every number but
+/// one: its build takes as long as a cold one, and only the write errors say
+/// that nothing it compiled will be there for the next job. That number is
+/// raised to the job's summary rather than left in a table of thirty.
+pub(crate) fn note_compiler_cache(process: &Process, sccache: &str, on_github: bool) {
+    if process.is_recording() {
+        return;
+    }
+    let (event, detail) = match process.capture(sccache, &["--show-stats"], "sccache statistics") {
+        Ok(stats) => {
+            println!("{stats}");
+            compiler_cache_note(&stats)
+        }
+        Err(error) => (CompilerCache::Unreadable, format!("{error:#}")),
+    };
+    if event == CompilerCache::WriteFailed {
+        warn!(%detail, "the compiler cache could not store what this lane compiled");
+        if on_github {
+            println!(
+                "::warning title=Compiler cache::{detail}: what this lane compiled was not \
+                 stored, so the next job compiles it again"
+            );
+        }
+    }
+    process.note_cache("compiler cache", event.name(), detail);
+}
+
+/// What the compiler cache did for a lane, as its counts tell it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompilerCache {
+    /// Some of what the lane compiled was already there.
+    Reused,
+    /// Nothing the lane compiled was there.
+    Miss,
+    /// The lane asked for nothing, so the counts say nothing about the cache.
+    Idle,
+    /// What the lane compiled was not stored for the next job.
+    WriteFailed,
+    /// The counts could not be read.
+    Unreadable,
+}
+
+impl CompilerCache {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Reused => "reused",
+            Self::Miss => "miss",
+            Self::Idle => "idle",
+            Self::WriteFailed => "write failed",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
+/// The journal entry for what `sccache --show-stats` counted.
+fn compiler_cache_note(stats: &str) -> (CompilerCache, String) {
+    let count = |label: &str| {
+        stats.lines().find_map(|line| {
+            let (name, value) = line.trim_end().rsplit_once(char::is_whitespace)?;
+            if name.trim() == label {
+                value.parse::<u64>().ok()
+            } else {
+                None
+            }
+        })
+    };
+    let (Some(hits), Some(misses), Some(failed)) = (
+        count("Cache hits"),
+        count("Cache misses"),
+        count("Cache write errors"),
+    ) else {
+        return (
+            CompilerCache::Unreadable,
+            "sccache counted no hits, misses or write errors".to_owned(),
+        );
+    };
+    let event = if failed > 0 {
+        CompilerCache::WriteFailed
+    } else if hits > 0 {
+        CompilerCache::Reused
+    } else if misses > 0 {
+        CompilerCache::Miss
+    } else {
+        CompilerCache::Idle
+    };
+    (
+        event,
+        format!("{hits} hits, {misses} misses, {failed} write errors"),
+    )
 }
 
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
@@ -289,15 +380,17 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         )?;
     let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
     ci_config.pins.validate_tool_pins(&ctx.config.tools)?;
+    let declared = ext.ci.lanes.get(&args.lane);
     let environment = CiEnvironment::prepare(
         ctx,
         &ci_config,
         lane.cache_group(),
-        ext.ci
-            .lanes
-            .get(&args.lane)
-            .is_some_and(|lane| lane.target_snapshot.is_some()),
-        Some(args.lane.as_str()),
+        declared.is_some_and(|declared| declared.target_snapshot.is_some()),
+        Some(LaneTarget {
+            name: &args.lane,
+            window: ext.ci.lane_unit_window(),
+            freshness: declared.map_or_else(LaneFreshness::default, |declared| declared.freshness),
+        }),
     )?;
     info!(
         lane = %args.lane,
@@ -445,7 +538,8 @@ mod tests {
 
     use super::{
         super::{config::fixture, process::Recording},
-        CacheGroup, Lane, PipelineKind, command_lane, execute_lane, sccache_server_is_stopped,
+        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
+        execute_lane, sccache_server_is_stopped,
     };
     use crate::{
         Cli,
@@ -453,6 +547,61 @@ mod tests {
         config::{CiLaneConfig, KitharaExt},
         consts,
     };
+
+    /// `sccache --show-stats` as a lane's server prints it, with the counts
+    /// it kept.
+    fn stats(hits: u32, misses: u32, write_errors: u32) -> String {
+        format!(
+            "Compile requests                    1898\n\
+             Cache hits                          {hits}\n\
+             Cache hits (Rust)                    885\n\
+             Cache misses                          {misses}\n\
+             Cache misses (Rust)                    3\n\
+             Cache hits rate                    99.15 %\n\
+             Cache write errors                    {write_errors}\n\
+             Cache errors                           0\n"
+        )
+    }
+
+    #[test]
+    fn a_lane_says_what_the_compiler_cache_carried() {
+        assert_eq!(
+            compiler_cache_note(&stats(1746, 15, 0)),
+            (
+                CompilerCache::Reused,
+                "1746 hits, 15 misses, 0 write errors".to_owned()
+            )
+        );
+    }
+
+    /// A cache that cannot store what it compiled looks like a working one in
+    /// every other number, and two days of full builds went unnoticed that way.
+    #[test]
+    fn a_cache_that_could_not_store_its_misses_is_named_a_failure() {
+        assert_eq!(
+            compiler_cache_note(&stats(1746, 15, 15)).0,
+            CompilerCache::WriteFailed
+        );
+    }
+
+    #[test]
+    fn a_lane_that_found_nothing_it_compiled_is_named_a_miss() {
+        assert_eq!(compiler_cache_note(&stats(0, 15, 0)).0, CompilerCache::Miss);
+    }
+
+    /// Zero hits of zero lookups is no evidence the cache carried anything.
+    #[test]
+    fn a_lane_that_compiled_nothing_is_not_named_reused() {
+        assert_eq!(compiler_cache_note(&stats(0, 0, 0)).0, CompilerCache::Idle);
+    }
+
+    #[test]
+    fn statistics_without_counts_are_named_unreadable() {
+        assert_eq!(
+            compiler_cache_note("sccache: error: connection refused").0,
+            CompilerCache::Unreadable
+        );
+    }
 
     /// The repository the lane declarations are read from, whatever checkout a
     /// resolution then runs against.
@@ -592,27 +741,17 @@ mod tests {
         assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
     }
 
-    /// A called workflow inherits no environment from its caller, so the three
-    /// that run a lane outside `lane.yml` must each name the build directory
-    /// themselves. Left unset, a lane builds in the checkout - which
-    /// `actions/checkout` wipes every run - and recompiles the workspace from
-    /// source, which is most of what these lanes cost.
+    /// Windows runs no `ci lane`: its guest keeps one build directory, and a
+    /// called workflow inherits no environment from its caller, so the workflow
+    /// names it. Left unset, the job builds in the checkout, which
+    /// `actions/checkout` wipes every run, and recompiles the workspace.
     #[test]
-    fn a_workflow_that_runs_a_lane_names_the_build_directory_it_keeps() {
-        for (workflow, target) in [
-            (
-                "android.yml",
-                "CARGO_TARGET_DIR: /cache/lanes/lane-android-test",
-            ),
-            ("ui.yml", "CARGO_TARGET_DIR: /cache/lanes/lane-deep-ui"),
-            ("windows.yml", r"CARGO_TARGET_DIR: C:\kithara-ci\target"),
-        ] {
-            let text = fs::read_to_string(repo().join(".github/workflows").join(workflow)).unwrap();
-            assert!(
-                text.contains(target),
-                "{workflow} builds in the checkout, which every run wipes"
-            );
-        }
+    fn the_windows_workflow_names_the_build_directory_it_keeps() {
+        let text = fs::read_to_string(repo().join(".github/workflows/windows.yml")).unwrap();
+        assert!(
+            text.contains(r"CARGO_TARGET_DIR: C:\kithara-ci\target"),
+            "windows.yml builds in the checkout, which every run wipes"
+        );
     }
 
     #[test]

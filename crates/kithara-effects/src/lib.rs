@@ -10,6 +10,8 @@ mod dsp;
 pub mod eq;
 mod gain_db;
 mod limiter;
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
 pub mod node;
 
 pub use chain::{apply_effects, held_source_frames, reset_effects};

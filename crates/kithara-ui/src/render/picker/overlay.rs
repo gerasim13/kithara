@@ -17,7 +17,7 @@ use num_traits::cast::AsPrimitive;
 use super::{paint::PickerPaint, program::targets, widget::PickerState};
 use crate::{
     interact::iced as iced_interact,
-    render::{InputOwner, UiEvent, draw_host_layer, engine as engine_event},
+    render::{InputOwner, Published, draw_host_layer, engine as engine_event},
 };
 
 pub(super) struct PickerPortal<'a, 'b> {
@@ -28,7 +28,7 @@ pub(super) struct PickerPortal<'a, 'b> {
     pub(super) anchor: Rectangle,
 }
 
-impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerPortal<'_, '_> {
+impl overlay::Overlay<Published, Theme, Renderer> for PickerPortal<'_, '_> {
     fn draw(
         &self,
         _renderer: &mut Renderer,
@@ -47,7 +47,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerPortal<'_, '_> {
         &'a mut self,
         _layout: Layout<'a>,
         _renderer: &Renderer,
-    ) -> Option<Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<Element<'a, Published, Theme, Renderer>> {
         Some(Element::new(Box::new(PickerOverlay {
             anchor: self.anchor,
             owner: self.owner,
@@ -66,7 +66,7 @@ struct PickerOverlay<'a, 'b> {
     anchor: Rectangle,
 }
 
-impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
+impl overlay::Overlay<Published, Theme, Renderer> for PickerOverlay<'_, '_> {
     fn draw(
         &self,
         renderer: &mut Renderer,
@@ -114,7 +114,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
         cursor: mouse::Cursor,
         _renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
     ) {
         if matches!(self.owner, InputOwner::Engine) {
             return;

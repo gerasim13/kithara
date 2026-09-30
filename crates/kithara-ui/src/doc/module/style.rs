@@ -79,6 +79,17 @@ pub enum PopoverAt {
     Pointer,
 }
 
+/// What shuts a popover that stands open on a view flag.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum PopoverDismiss {
+    /// A tap outside it or Escape.
+    #[default]
+    OnTapOutside,
+    /// The same, and any press inside it that reaches the application.
+    OnAnyAction,
+}
+
 /// Which edge of the popover surface lines up with that geometry.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]

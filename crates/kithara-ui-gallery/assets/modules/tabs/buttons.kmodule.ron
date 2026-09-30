@@ -18,6 +18,7 @@
                         active_label: Some("PAUSE"),
                         style: TransportPrimary,
                         read: Model(id: "demo.button.play"),
+                        write: Command(id: "demo.button.toggle_play"),
                     ),
                     Button(
                         id: "cue",
@@ -25,6 +26,7 @@
                         label: "CUE",
                         style: Transport,
                         read: Model(id: "demo.button.cue"),
+                        write: Command(id: "demo.button.toggle_cue"),
                     ),
                     Button(
                         id: "sync",
@@ -32,6 +34,7 @@
                         label: "SYNC",
                         style: Transport,
                         read: Model(id: "demo.button.sync"),
+                        write: Command(id: "demo.button.toggle_sync"),
                     ),
                 ],
             ),

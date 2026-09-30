@@ -68,6 +68,7 @@
                 size: (w: Fill, h: Fixed(34.0)),
                 style: Volume,
                 read: Model(id: "bench.fader"),
+                write: Parameter(id: "bench.fader"),
             ),
         ],
     ),

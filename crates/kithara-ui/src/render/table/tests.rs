@@ -18,7 +18,7 @@ use iced_tiny_skia::Renderer as TinySkiaRenderer;
 use kithara_test_utils::kithara;
 
 use super::{
-    super::{Marked, Skin, UiEvent, controls::RetainedCanvas},
+    super::{Marked, Published, Skin, controls::RetainedCanvas},
     paint::{TablePaint, TableState, local_rect},
     widget::*,
 };
@@ -31,7 +31,7 @@ use crate::{
     ids::SourceUri,
     module::{TableColumn, TableColumnStyle},
     render::{
-        ControlAction, DragPhase,
+        Carry, CarryStep, ControlAction,
         fonts::{FONT_BYTES, SANS},
     },
     shaping::TextContext,
@@ -68,6 +68,7 @@ fn columns() -> Vec<ColumnLayout> {
     ]
     .into_iter()
     .map(|column| ColumnLayout {
+        resizable: true,
         width: column.width(),
         column,
     })
@@ -382,7 +383,7 @@ fn divider_drag_at_nonzero_origin_uses_the_full_hit_width_and_exact_travel() {
     .expect("dragging the divider must publish its new width");
     assert!(matches!(
         action.into_inner().0,
-        Some(UiEvent::Control {
+        Some(Published::Gesture {
             action: ControlAction::SetScalar(value),
             ..
         }) if value == f64::from(divider.value + 20.0)
@@ -414,6 +415,7 @@ fn leaf_divider_state_follows_its_column_across_reorder_and_removal() {
 
     let mut reordered = columns();
     reordered.push(ColumnLayout {
+        resizable: true,
         column: TableColumn::new(
             "transition",
             "ACTION",
@@ -438,7 +440,7 @@ fn leaf_divider_state_follows_its_column_across_reorder_and_removal() {
     .expect("the armed divider must survive a column reorder");
     assert!(matches!(
         action.into_inner().0,
-        Some(UiEvent::Control { path, .. }) if path == "library/tracks/width/index"
+        Some(Published::Gesture { path, .. }) if path == "library/tracks/width/index"
     ));
 
     let paint = TablePaint::new(
@@ -493,9 +495,9 @@ fn leaf_row_drag_keeps_the_start_index_binder() {
     assert_eq!(
         started.into_inner(),
         (
-            Some(UiEvent::Control {
+            Some(Published::Carry {
                 path: "library/tracks".to_owned(),
-                action: ControlAction::Drag(DragPhase::Start(3)),
+                step: Carry(CarryStep::Start(3)),
             }),
             RedrawRequest::Wait,
             event::Status::Ignored,
@@ -544,7 +546,7 @@ fn leaf_plain_release_selects_the_armed_row_index() {
     assert_eq!(
         released.into_inner(),
         (
-            Some(UiEvent::Control {
+            Some(Published::Gesture {
                 path: "library/tracks".to_owned(),
                 action: ControlAction::SelectIndex(2),
             }),
@@ -649,7 +651,7 @@ fn hosted_canvas_forwards_projection_and_rebinds_before_paint() {
     let paint = paint();
     let config = paint.config();
     let mut widget = RetainedCanvas::new(paint, "library/tracks", config);
-    let mut tree = Tree::new(&widget as &dyn IcedWidget<UiEvent, Theme, Renderer>);
+    let mut tree = Tree::new(&widget as &dyn IcedWidget<Published, Theme, Renderer>);
     let node = Node::new(Size::new(180.0, 120.0));
     let renderer = headless_renderer();
     let mut other = sync_table_scroll("library/history", 40.0, None, 60.0);
@@ -704,7 +706,7 @@ fn leaf_layout_clamps_offsets_after_rows_shrink_and_viewport_widens() {
         "library/tracks",
         config,
     );
-    let mut tree = Tree::new(&widget as &dyn IcedWidget<UiEvent, Theme, Renderer>);
+    let mut tree = Tree::new(&widget as &dyn IcedWidget<Published, Theme, Renderer>);
     let renderer = headless_renderer();
     let narrow = Size::new(180.0, 120.0);
     IcedWidget::layout(

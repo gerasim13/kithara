@@ -4920,6 +4920,8 @@ dependencies = [
  "syn 3.0.3",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
@@ -5377,6 +5379,7 @@ dependencies = [
  "firewheel-web-audio",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-dsp",
  "kithara-effects",
  "kithara-events",
@@ -5390,6 +5393,7 @@ dependencies = [
  "kithara-warp",
  "kithara-worker",
  "kithara-workspace-hack",
+ "num-traits",
  "portable-atomic",
  "ringbuf",
  "thiserror 2.0.18",

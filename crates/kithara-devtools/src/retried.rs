@@ -1,20 +1,22 @@
-//! Whether a lane that exited zero hid a failure inside a retry.
+//! What a lane's run left behind, and the verdict it supports.
 
 use std::{
     collections::BTreeSet,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use toml::Value;
+use tracing::warn;
 
 use crate::{
     common::project::{KnownFlake, TestCommandConfig},
     consts,
     junit::{CaseTiming, parse_junit},
     stress_report::read_bounded_utf8,
+    verdict::ChildFailure,
 };
 
 /// What one nextest profile declares about hiding a failure.
@@ -26,58 +28,171 @@ struct Declared {
     retries: u64,
 }
 
-/// Fails a lane whose runner retried a test into a pass.
+/// What a lane leaves behind to be judged by.
 ///
-/// nextest keeps the failing attempt — its streams, its panic and its dump —
-/// and exits zero, so a lane judged by its exit code alone reads a defect that
-/// reproduced as a clean run. The retry makes that attempt legible; it is not
-/// permission to pass. A profile granting no retry can hide nothing.
-///
-/// # Errors
-///
-/// Returns an error when the profile grants retries and keeps no report, when
-/// the report it declares is absent, or when the report names a retried pass
-/// that no `test.known_flakes` entry owns.
-pub(crate) fn verdict(
-    lane_name: &str,
-    root: &Path,
-    config: &TestCommandConfig,
-    command: &Command,
-) -> Result<()> {
-    let Some(profile) = nextest_profile(command) else {
-        return Ok(());
-    };
-    let declared = declared_profile(root, config, &profile)?;
-    if declared.retries == 0 {
-        return Ok(());
+/// nextest keeps a failing attempt — its streams, its panic and its dump —
+/// and exits zero when a retry passes, so a lane judged by its exit code
+/// alone reads a defect that reproduced as a clean run. The retry makes that
+/// attempt legible; it is not permission to pass. A red lane is read from the
+/// same report, so its error names the tests instead of pointing thousands of
+/// lines up.
+#[derive(Debug)]
+pub(crate) enum Evidence {
+    /// The lane runs no nextest profile that keeps a report: its exit status
+    /// is the whole verdict.
+    Status,
+    /// The report the lane's nextest profile writes to `path`, from a
+    /// profile that grants `retries` attempts after the first.
+    Report { path: PathBuf, retries: u64 },
+}
+
+impl Evidence {
+    /// Reads what the lane's command will leave behind.
+    ///
+    /// # Errors
+    ///
+    /// When the nextest config cannot be read, or when the profile grants
+    /// retries and keeps no report: a retried pass would leave nothing to
+    /// judge the lane by.
+    pub(crate) fn of(root: &Path, config: &TestCommandConfig, command: &Command) -> Result<Self> {
+        let Some(profile) = nextest_profile(command) else {
+            return Ok(Self::Status);
+        };
+        let declared = declared_profile(root, config, &profile)?;
+        match declared.junit {
+            Some(relative) => Ok(Self::Report {
+                path: report_path(root, &profile, &relative),
+                retries: declared.retries,
+            }),
+            None if declared.retries > 0 => bail!(
+                "nextest profile `{profile}` grants {} retries and declares no JUnit report: a retried pass would leave nothing to judge the lane by",
+                declared.retries
+            ),
+            None => Ok(Self::Status),
+        }
     }
-    let Some(relative) = declared.junit else {
-        bail!(
-            "nextest profile `{profile}` grants {} retries and declares no JUnit report: a retried pass would leave nothing to judge the lane by",
-            declared.retries
+
+    /// Removes the report an earlier run left, so the report read after this
+    /// run is this run's own. A shared build directory keeps another job's.
+    ///
+    /// A report that cannot be removed is logged, not returned: nextest
+    /// overwrites it once it records a test, so only a lane that stopped
+    /// before that can read it, and such a lane is red whatever it names.
+    pub(crate) fn clear(&self) {
+        let Self::Report { path, .. } = self else {
+            return;
+        };
+        if let Err(error) = fs::remove_file(path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            warn!(
+                "the previous report at {} stays: {error}; a lane that stops before nextest \
+                 records a test may name its tests",
+                path.display()
+            );
+        }
+    }
+
+    /// Judges the lane that exited with `code`.
+    ///
+    /// # Errors
+    ///
+    /// A [`ChildFailure`] with the lane's exit code when the lane is red or
+    /// passed a test only on a retry that no `known` entry owns, naming the
+    /// tests its report blames; an error when a green lane's profile declares
+    /// a report the lane did not leave or that cannot be read. A red lane
+    /// keeps its code whatever its report holds.
+    pub(crate) fn verdict(
+        &self,
+        lane_name: &str,
+        known: &[KnownFlake],
+        code: Option<i32>,
+    ) -> Result<()> {
+        let label = format!("test lane `{lane_name}`");
+        let failed = code != Some(0);
+        let Self::Report { path, retries } = self else {
+            return if failed {
+                Err(ChildFailure::inherited(label, code))
+            } else {
+                Ok(())
+            };
+        };
+        if failed {
+            let detail = if path.is_file() {
+                read_cases(path).map_or_else(
+                    |error| {
+                        format!(
+                            "its report at {} could not be read ({error:#}); the cause is above",
+                            path.display()
+                        )
+                    },
+                    |cases| {
+                        named(&cases, known, path).unwrap_or_else(|| {
+                            format!(
+                                "nextest exited non-zero and its report at {} names no failed test; the cause is above",
+                                path.display()
+                            )
+                        })
+                    },
+                )
+            } else {
+                "the lane left no test report: it stopped before nextest recorded a test (a build error or an interruption); the cause is above".to_owned()
+            };
+            return Err(ChildFailure::explained(label, code, detail));
+        }
+        if *retries == 0 {
+            return Ok(());
+        }
+        ensure!(
+            path.is_file(),
+            "{label} ran a nextest profile that declares a JUnit report at {}: without it a retried pass is unjudgeable",
+            path.display()
         );
-    };
-    let report = report_path(root, &profile, &relative);
-    ensure!(
-        report.is_file(),
-        "test lane `{lane_name}` ran nextest profile `{profile}`, which declares a JUnit report at {}: without it a retried pass is unjudgeable",
-        report.display()
-    );
-    let xml = read_bounded_utf8(&report, consts::MAX_JUNIT_BYTES, "test lane JUnit")?;
-    let cases = parse_junit(&xml)
-        .with_context(|| format!("parse test lane JUnit at {}", report.display()))?;
-    let retried = unowned(&cases, &config.known_flakes);
-    if retried.is_empty() {
-        return Ok(());
+        named(&read_cases(path)?, known, path).map_or(Ok(()), |detail| {
+            Err(ChildFailure::explained(label, code, detail))
+        })
     }
-    bail!(
-        "test lane `{lane_name}` reports {} test(s) that passed only on a retry, which is a defect that reproduced:\n{}\
-         Every failing attempt is printed above and kept in {}.\n\
-         Fix the defect, or name the test in `test.known_flakes` with the issue that owns it.",
-        retried.len(),
-        listing(&retried),
+}
+
+fn read_cases(report: &Path) -> Result<Vec<CaseTiming>> {
+    let xml = read_bounded_utf8(report, consts::MAX_JUNIT_BYTES, "test lane JUnit")?;
+    parse_junit(&xml).with_context(|| format!("parse test lane JUnit at {}", report.display()))
+}
+
+/// What the report blames: the cases that failed every attempt, and the
+/// retried passes no registry entry owns. `None` when it blames nothing.
+fn named(cases: &[CaseTiming], known: &[KnownFlake], report: &Path) -> Option<String> {
+    let failed = cases.iter().filter(|case| case.failed).collect::<Vec<_>>();
+    let retried = unowned(cases, known);
+    if failed.is_empty() && retried.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !failed.is_empty() {
+        parts.push(format!(
+            "{} test(s) failed on every attempt:\n{}",
+            failed.len(),
+            listing(&failed)
+        ));
+    }
+    if !retried.is_empty() {
+        parts.push(format!(
+            "{} test(s) passed only on a retry, which is a defect that reproduced:\n{}",
+            retried.len(),
+            listing(&retried)
+        ));
+    }
+    parts.push(format!(
+        "Every failing attempt is printed above and kept in {}.",
         report.display()
-    );
+    ));
+    if !retried.is_empty() {
+        parts.push(
+            "Fix the defect, or name the test in `test.known_flakes` with the issue that owns it."
+                .to_owned(),
+        );
+    }
+    Some(parts.join("\n"))
 }
 
 /// nextest resolves `junit.path` against its own store directory, and that
@@ -187,8 +302,9 @@ fn case_id(case: &CaseTiming) -> String {
 fn listing(cases: &[&CaseTiming]) -> String {
     cases
         .iter()
-        .map(|case| format!("  - {}\n", case_id(case)))
-        .collect()
+        .map(|case| format!("  - {}", case_id(case)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -196,6 +312,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::verdict::ChildFailure;
 
     fn config(nextest_config: &str, known: &[(&str, &str)]) -> TestCommandConfig {
         TestCommandConfig {
@@ -228,22 +345,35 @@ mod tests {
         command
     }
 
+    fn judge(root: &Path, known: &[(&str, &str)], args: &[&str], code: Option<i32>) -> Result<()> {
+        let config = config("nextest.toml", known);
+        Evidence::of(root, &config, &command(args))?.verdict(
+            "workspace",
+            &config.known_flakes,
+            code,
+        )
+    }
+
+    fn exit_code(error: &anyhow::Error) -> Option<i32> {
+        error
+            .downcast_ref::<ChildFailure>()
+            .map(ChildFailure::exit_code)
+    }
+
+    const CI: &[&str] = &["nextest", "run", "--profile", "ci"];
+
     #[test]
     fn a_retried_pass_fails_the_lane_that_reported_it() {
         let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
-        let error = verdict(
-            "workspace",
-            temp.path(),
-            &config("nextest.toml", &[]),
-            &command(&["nextest", "run", "--profile", "ci"]),
-        )
-        .expect_err("a retried pass is not a clean lane");
+        let error = judge(temp.path(), &[], CI, Some(0))
+            .expect_err("a retried pass is not a clean lane")
+            .to_string();
 
-        let error = error.to_string();
+        assert!(error.contains("passed only on a retry"), "{error}");
         assert!(
-            error.contains("kithara_queue::delayed_target"),
-            "the verdict names the retried test: {error}"
+            error.contains("  - kithara_queue::delayed_target"),
+            "{error}"
         );
     }
 
@@ -251,14 +381,11 @@ mod tests {
     fn a_registry_entry_owns_the_retried_pass_it_names() {
         let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
-        verdict(
-            "workspace",
+        judge(
             temp.path(),
-            &config(
-                "nextest.toml",
-                &[("kithara_queue::delayed_target", "https://example.test/1")],
-            ),
-            &command(&["nextest", "run", "--profile", "ci"]),
+            &[("kithara_queue::delayed_target", "https://example.test/1")],
+            CI,
+            Some(0),
         )
         .expect("an owned retried pass keeps the lane green");
     }
@@ -267,14 +394,9 @@ mod tests {
     fn a_profile_that_retries_without_a_report_cannot_be_judged() {
         let temp = lane("[profile.ci]\nretries = 1\n", None);
 
-        let error = verdict(
-            "workspace",
-            temp.path(),
-            &config("nextest.toml", &[]),
-            &command(&["nextest", "run", "--profile", "ci"]),
-        )
-        .expect_err("a retry that leaves no trace is unjudgeable")
-        .to_string();
+        let error = judge(temp.path(), &[], CI, Some(0))
+            .expect_err("a retry that leaves no trace is unjudgeable")
+            .to_string();
 
         assert!(error.contains("declares no JUnit report"), "{error}");
     }
@@ -283,14 +405,9 @@ mod tests {
     fn a_declared_report_the_lane_did_not_leave_fails_it() {
         let temp = lane(consts::RETRYING_PROFILE, None);
 
-        let error = verdict(
-            "workspace",
-            temp.path(),
-            &config("nextest.toml", &[]),
-            &command(&["nextest", "run", "--profile", "ci"]),
-        )
-        .expect_err("a missing report is a lane that presented no evidence")
-        .to_string();
+        let error = judge(temp.path(), &[], CI, Some(0))
+            .expect_err("a missing report is a lane that presented no evidence")
+            .to_string();
 
         assert!(error.contains("junit.xml"), "{error}");
     }
@@ -299,26 +416,99 @@ mod tests {
     fn a_profile_that_grants_no_retry_is_not_judged() {
         let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
-        verdict(
-            "workspace",
-            temp.path(),
-            &config("nextest.toml", &[]),
-            &command(&["nextest", "run"]),
-        )
-        .expect("the default profile retries nothing, so it hides nothing");
+        judge(temp.path(), &[], &["nextest", "run"], Some(0))
+            .expect("the default profile retries nothing, so it hides nothing");
     }
 
     #[test]
     fn a_lane_that_runs_no_nextest_is_not_judged() {
         let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
-        verdict(
-            "browser",
+        judge(temp.path(), &[], &["test", "--profile", "ci"], Some(0))
+            .expect("`--profile` on `cargo test` names a Cargo profile");
+    }
+
+    #[test]
+    fn a_red_lane_that_runs_no_nextest_keeps_its_code() {
+        let temp = lane(consts::RETRYING_PROFILE, None);
+
+        let error = judge(temp.path(), &[], &["test"], Some(3)).expect_err("the lane is red");
+
+        assert_eq!(exit_code(&error), Some(3));
+        assert_eq!(
+            error.to_string(),
+            "test lane `workspace` failed (exit code 3)"
+        );
+    }
+
+    #[test]
+    fn a_red_lane_names_the_tests_that_failed_and_those_that_passed_only_on_a_retry() {
+        let temp = lane(consts::RETRYING_PROFILE, Some(consts::FAILED_AND_RETRIED));
+
+        let error = judge(temp.path(), &[], CI, Some(100)).expect_err("the lane is red");
+
+        assert_eq!(exit_code(&error), Some(100));
+        let error = error.to_string();
+        assert!(
+            error.contains("1 test(s) failed on every attempt:\n  - kithara_queue::stalled_target"),
+            "{error}"
+        );
+        assert!(
+            error.contains("1 test(s) passed only on a retry, which is a defect that reproduced:\n  - kithara_queue::delayed_target"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_red_lane_without_a_report_did_not_reach_its_tests() {
+        let temp = lane(consts::RETRYING_PROFILE, None);
+
+        let error = judge(temp.path(), &[], CI, Some(101)).expect_err("the lane is red");
+
+        assert_eq!(exit_code(&error), Some(101));
+        let error = error.to_string();
+        assert!(error.contains("left no test report"), "{error}");
+    }
+
+    #[test]
+    fn a_red_lane_whose_report_blames_no_test_says_so() {
+        let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
+
+        let error = judge(
             temp.path(),
-            &config("nextest.toml", &[]),
-            &command(&["test", "--profile", "ci"]),
+            &[("kithara_queue::delayed_target", "https://example.test/1")],
+            CI,
+            Some(100),
         )
-        .expect("`--profile` on `cargo test` names a Cargo profile");
+        .expect_err("the lane is red")
+        .to_string();
+
+        assert!(error.contains("names no failed test"), "{error}");
+    }
+
+    #[test]
+    fn a_red_lane_whose_report_cannot_be_read_keeps_its_code() {
+        let temp = lane(consts::RETRYING_PROFILE, Some("<testsuites><testsuite"));
+
+        let error = judge(temp.path(), &[], CI, Some(100)).expect_err("the lane is red");
+
+        assert_eq!(exit_code(&error), Some(100));
+        let error = error.to_string();
+        assert!(error.contains("could not be read"), "{error}");
+        assert!(error.contains("junit.xml"), "{error}");
+    }
+
+    #[test]
+    fn clearing_removes_the_report_a_previous_run_left() {
+        let temp = lane(consts::RETRYING_PROFILE, Some(consts::FAILED_AND_RETRIED));
+        let evidence = Evidence::of(temp.path(), &config("nextest.toml", &[]), &command(CI))
+            .expect("read the profile");
+        let report = temp.path().join("target/nextest/ci/junit.xml");
+
+        evidence.clear();
+        assert!(!report.exists());
+        evidence.clear();
+        assert!(!report.exists());
     }
 
     #[test]

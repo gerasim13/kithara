@@ -1240,6 +1240,100 @@ impl WasmPlayerSelenium {
         self.wait_between_switches("HLS").await
     }
 
+    async fn run_playback_rate_scenario(&self) -> Result<(), String> {
+        self.open_player_page().await?;
+        self.clear_playlist().await?;
+        self.add_track(&self.endpoints.mp3_url()).await?;
+        let mp3 = self.find_track_index(consts::MP3.name()).await?;
+        self.select_track_and_wait(mp3, "rate fixture").await?;
+
+        let normal = self.measure_source_rate().await?;
+        self.driver
+            .execute("window.__player.setPlayingRate(2);", Vec::<Value>::new())
+            .await
+            .map_err(|err| format!("set 2x playback rate failed: {err}"))?;
+        let fast = self.measure_source_rate().await?;
+        if fast <= normal * 1.5 {
+            return Err(format!(
+                "2x target did not change rendered source progression: normal={normal:.2}, fast={fast:.2}"
+            ));
+        }
+
+        self.click_button("pause-btn").await?;
+        time::sleep(Duration::from_millis(500)).await;
+        let paused = self.snapshot().await;
+        self.driver
+            .execute(
+                "window.__player.setPlayingRate(0); \
+                 if (window.__player.playingRate() !== Math.fround(0.05)) return 'unclamped'; \
+                 window.__player.setPlayingRate(0.5); \
+                 try { window.__player.setPlayingRate(NaN); return 'accepted'; } \
+                 catch (_) { return window.__player.playingRate(); }",
+                Vec::<Value>::new(),
+            )
+            .await
+            .map_err(|err| format!("paused target or rejection failed: {err}"))?
+            .convert::<f64>()
+            .map_err(|err| format!("rejected rate readback failed: {err}"))
+            .and_then(|target| {
+                if (target - 0.5).abs() < f64::EPSILON {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "invalid rate changed the submitted target: {target}"
+                    ))
+                }
+            })?;
+        time::sleep(Duration::from_millis(500)).await;
+        let paused_after = self.snapshot().await;
+        if paused_after.pos.unwrap_or(0.0) - paused.pos.unwrap_or(0.0) > 100.0 {
+            return Err(format!(
+                "changing the paused target resumed playback: before={paused:?}, after={paused_after:?}"
+            ));
+        }
+        self.click_button("play-btn").await?;
+        let slow = self.measure_source_rate().await?;
+        if slow >= normal * 0.75 {
+            return Err(format!(
+                "paused 0.5x target was not applied on resume: normal={normal:.2}, slow={slow:.2}"
+            ));
+        }
+        self.driver
+            .execute("window.__player.setPlayingRate(1);", Vec::<Value>::new())
+            .await
+            .map_err(|err| format!("restore 1x playback rate failed: {err}"))?;
+        let restored = self.measure_source_rate().await?;
+        if restored <= slow * 1.5 {
+            return Err(format!(
+                "1x target did not restore source progression: slow={slow:.2}, restored={restored:.2}"
+            ));
+        }
+        Ok(())
+    }
+
+    async fn measure_source_rate(&self) -> Result<f64, String> {
+        let before = self.snapshot().await;
+        let started = Instant::now();
+        time::sleep(Duration::from_secs(3)).await;
+        let after = self.snapshot().await;
+        let callbacks = after
+            .rt_process_calls
+            .unwrap_or(0)
+            .saturating_sub(before.rt_process_calls.unwrap_or(0));
+        if callbacks == 0 {
+            return Err(format!(
+                "audio callback did not run: before={before:?}, after={after:?}"
+            ));
+        }
+        let progress = after.pos.unwrap_or(0.0) - before.pos.unwrap_or(0.0);
+        if progress <= 0.0 {
+            return Err(format!(
+                "source did not advance: before={before:?}, after={after:?}"
+            ));
+        }
+        Ok(progress / started.elapsed().as_secs_f64())
+    }
+
     async fn get_position_ms(&self) -> Result<f64, String> {
         self.driver
             .execute(
@@ -1757,6 +1851,15 @@ async fn selenium_player_scenarios(
     let (_harness, session) = selenium_setup;
     let result = session.run_player_scenarios().await;
     selenium_teardown(session, "player_scenarios", result).await;
+}
+
+#[kithara::test(selenium)]
+async fn selenium_playback_rate(
+    #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
+) {
+    let (_harness, session) = selenium_setup;
+    let result = session.run_playback_rate_scenario().await;
+    selenium_teardown(session, "playback_rate", result).await;
 }
 
 #[kithara::test(selenium)]

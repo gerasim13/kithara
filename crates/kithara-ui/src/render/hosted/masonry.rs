@@ -65,6 +65,7 @@ pub(super) struct TableSource {
     columns_state: Option<(String, String)>,
     rows: Option<String>,
     columns: Vec<TableColumn>,
+    resizable: bool,
 }
 
 #[derive(Clone, Default)]
@@ -460,7 +461,7 @@ impl TablePlan {
 
 impl TableSource {
     pub(super) fn new(
-        columns: Vec<TableColumn>,
+        (columns, resizable): (Vec<TableColumn>, bool),
         columns_state: Option<(String, String)>,
         rows: Option<String>,
     ) -> Self {
@@ -468,6 +469,7 @@ impl TableSource {
             columns_state,
             rows,
             columns,
+            resizable,
         }
     }
 
@@ -487,7 +489,7 @@ impl TableSource {
             .columns_state
             .as_ref()
             .map(|(prefix, scope)| (prefix.as_str(), scope.as_str()));
-        let columns = column_layouts(&self.columns, &ctx, state, skin);
+        let columns = column_layouts((&self.columns, self.resizable), &ctx, state, skin);
         TableFace::new(rows, columns, skin)
     }
 }
@@ -632,6 +634,7 @@ mod tests {
         let skin = builtin::skin();
         let columns = vec![
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new(
                     "index",
                     "#",
@@ -642,6 +645,7 @@ mod tests {
                 width: 98.0,
             },
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new(
                     "name",
                     "NAME",
@@ -686,6 +690,7 @@ mod tests {
         let skin = builtin::skin();
         let columns = vec![
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new(
                     "index",
                     "#",
@@ -696,6 +701,7 @@ mod tests {
                 width: 98.0,
             },
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new(
                     "name",
                     "NAME",
@@ -766,7 +772,7 @@ mod tests {
     ) -> TablePlan {
         let declared = columns.iter().map(|column| column.column.clone()).collect();
         let plan = TablePlan::new(path, rows, columns, skin);
-        plan.bind_source(TableSource::new(declared, None, None));
+        plan.bind_source(TableSource::new((declared, true), None, None));
         plan
     }
 

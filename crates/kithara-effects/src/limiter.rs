@@ -293,6 +293,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::mock::reconstructed_peak;
 
     fn limiter(sample_rate: u32, release_ms: f32) -> PeakLimiter {
         PeakLimiter::new(
@@ -310,44 +311,6 @@ mod tests {
     fn run(limiter: &mut PeakLimiter, left: &mut [f32], right: &mut [f32]) {
         let mut chans: [&mut [f32]; 2] = [left, right];
         limiter.process_planar(&mut chans);
-    }
-
-    /// Reconstruct the continuous waveform by windowed-sinc interpolation and
-    /// return its largest magnitude. Independent of the limiter's own detector.
-    fn reconstructed_peak(samples: &[f32]) -> f32 {
-        const PHASES: usize = 16;
-        const HALF_WIDTH: isize = 32;
-        let mut peak = 0.0_f32;
-        // WHY: The trailing window is cut because the signal continues past the buffer in
-        // the stream the limiter serves, so a decay to silence there is the test's artefact
-        // and not the limiter's output. The leading edge is real and stays measured.
-        let tail = HALF_WIDTH as usize;
-        for index in 0..samples.len().saturating_sub(tail) {
-            for phase in 0..PHASES {
-                let offset = phase as f32 / PHASES as f32;
-                let mut value = 0.0_f32;
-                for tap in -HALF_WIDTH..=HALF_WIDTH {
-                    let position = index as isize + tap;
-                    let Ok(position) = usize::try_from(position) else {
-                        continue;
-                    };
-                    let Some(&sample) = samples.get(position) else {
-                        continue;
-                    };
-                    let distance = offset - tap as f32;
-                    let sinc = if distance.abs() < 1e-6 {
-                        1.0
-                    } else {
-                        let argument = PI * distance;
-                        argument.sin() / argument
-                    };
-                    let window = 0.5 * (1.0 + (PI * distance / HALF_WIDTH as f32).cos()).max(0.0);
-                    value += sample * sinc * window;
-                }
-                peak = peak.max(value.abs());
-            }
-        }
-        peak
     }
 
     #[kithara::test(native, flash(false))]

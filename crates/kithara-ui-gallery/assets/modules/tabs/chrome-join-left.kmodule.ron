@@ -5,6 +5,7 @@
     title: Some("LEFT MODULE"),
     chip: Some("FULL"),
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-chrome-join-left" })),
     root: Column(
         pad: Some(14.0),
         children: [

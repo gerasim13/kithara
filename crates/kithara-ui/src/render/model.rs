@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{draw::Pt, module::IconName};
 
 /// Stereo levels and volume exposed to renderers.
@@ -128,13 +130,31 @@ impl<'a> TableCell<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableRow<'a> {
     cells: Vec<TableCell<'a>>,
+    drag: Option<Cow<'a, str>>,
     selected: bool,
 }
 
 impl<'a> TableRow<'a> {
     #[must_use]
     pub fn new(cells: Vec<TableCell<'a>>, selected: bool) -> Self {
-        Self { cells, selected }
+        Self {
+            cells,
+            drag: None,
+            selected,
+        }
+    }
+
+    /// The row carries `data` when it is dragged out of its table, and a drop
+    /// zone that takes it writes `data`.
+    #[must_use]
+    pub fn with_drag<D: Into<Cow<'a, str>>>(mut self, data: D) -> Self {
+        self.drag = Some(data.into());
+        self
+    }
+
+    #[must_use]
+    pub fn drag(&self) -> Option<&str> {
+        self.drag.as_deref()
     }
 
     #[must_use]

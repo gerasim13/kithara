@@ -10,7 +10,7 @@ use crate::{
         recognizers::{Edge, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
     },
     render::{
-        ControlAction, ReadValue, ScalarRange, Skin, UiEvent, control_event,
+        ControlAction, Published, ReadValue, ScalarRange, Skin, control_event,
         controls::{DataRefresh, Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span},
         document::Ctx,
         masonry::{
@@ -41,14 +41,13 @@ where
 
 /// What a control does with the pointer, and where it publishes the answer.
 struct Interaction<Data> {
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    map_event: Rc<dyn Fn(Published) -> HostAction>,
     recognize: Recognize<Data>,
     path: String,
 }
 
 enum Recognize<Data> {
     Press,
-    Command(fn() -> UiEvent),
     Drag(Box<Dragged>),
     Index {
         count: usize,
@@ -164,13 +163,12 @@ where
         mut self,
         grip: Grip,
         path: String,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
         index_event: Option<IndexEvent<Painter::Data>>,
     ) -> Self {
         let recognize = match grip {
             Grip::None => return self,
             Grip::Press => Recognize::Press,
-            Grip::Command(event) => Recognize::Command(event),
             Grip::Drag(drag) => Recognize::Drag(Box::new(Dragged::new(drag))),
             Grip::Index { count } => Recognize::Index {
                 count,
@@ -238,7 +236,7 @@ where
             .as_ref()
             .map_or(CursorShape::None, |interaction| {
                 match &interaction.recognize {
-                    Recognize::Press | Recognize::Command(_) => {
+                    Recognize::Press => {
                         Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
                     }
                     Recognize::Drag(drag) => {
@@ -330,10 +328,6 @@ where
                         ControlAction::Activate,
                     ))
                 });
-            }
-            Recognize::Command(event) => {
-                let event = *event;
-                return click::on_input(input, hit).map(|()| (interaction.map_event)(event()));
             }
             Recognize::Index { map, .. } => {
                 let index = indexed.and_then(|(_, index)| index);
@@ -506,7 +500,7 @@ mod indexed {
         control: &mut Painted<Painter>,
         phase: PointerPhase,
         point: Option<Pt>,
-    ) -> (Option<UiEvent>, Propagation, PointerOwnership)
+    ) -> (Option<Published>, Propagation, PointerOwnership)
     where
         Painter: Retained,
     {
@@ -518,7 +512,7 @@ mod indexed {
         let ownership = outcome.ownership();
         let event = outcome
             .value()
-            .and_then(|action| action.downcast::<UiEvent>().ok());
+            .and_then(|action| action.downcast::<Published>().ok());
         (event, propagation, ownership)
     }
 
@@ -548,7 +542,7 @@ mod indexed {
                 Some(Pt { x: 94.0, y: 21.0 }),
             ),
             (
-                Some(UiEvent::Control {
+                Some(Published::Gesture {
                     path: "gallery/segments".to_owned(),
                     action: ControlAction::SelectIndex(1),
                 }),
@@ -576,7 +570,10 @@ mod indexed {
             assert_eq!(
                 answer(&mut control, PointerPhase::Up, Some(point)),
                 (
-                    Some(UiEvent::SelectPreset(expected.to_owned())),
+                    Some(Published::Gesture {
+                        path: "bar/presets".to_owned(),
+                        action: ControlAction::Text(expected.to_owned()),
+                    }),
                     Propagation::Captured,
                     PointerOwnership::Release,
                 )
@@ -674,14 +671,14 @@ mod indexed {
         assert_eq!(control.cursor(&hit), CursorShape::Pointer);
     }
 
-    fn no_event(_data: &PresetData, _index: usize) -> Option<UiEvent> {
+    fn no_event(_data: &PresetData, _index: usize) -> Option<ControlAction> {
         None
     }
 
-    fn bounded_segment_event(data: &SegmentedData, index: usize) -> Option<UiEvent> {
+    fn bounded_segment_event(data: &SegmentedData, index: usize) -> Option<ControlAction> {
         data.items
             .get(index)
-            .map(|_| UiEvent::SelectPreset(index.to_string()))
+            .map(|_| ControlAction::Text(index.to_string()))
     }
 
     #[kithara::test]

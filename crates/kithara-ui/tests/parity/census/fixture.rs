@@ -59,7 +59,8 @@ static TABLE_ROWS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
                 TableCell::text("time", "03:24"),
             ],
             false,
-        );
+        )
+        .with_drag("file:///late.mp3");
         8
     ]
 });
@@ -142,14 +143,20 @@ impl Default for CensusRegistry {
                 ValueKind::Table,
             ),
             (EndpointCategory::Model, "pivot.map", ValueKind::PortalMap),
-            // A range reads the whole interval and writes one end of it, so the
-            // two halves of its contract are two kinds under one name.
             (EndpointCategory::Model, "pivot.range", ValueKind::Range),
+            (EndpointCategory::Parameter, "pivot.range", ValueKind::Range),
             (
-                EndpointCategory::Parameter,
-                "pivot.range",
-                ValueKind::Scalar,
+                EndpointCategory::Command,
+                "library.select_scope",
+                ValueKind::Index,
             ),
+            (EndpointCategory::Command, "library.load", ValueKind::Text),
+            (
+                EndpointCategory::Command,
+                "ui.menu.toggle",
+                ValueKind::Trigger,
+            ),
+            (EndpointCategory::Parameter, "demo.seek", ValueKind::Scalar),
             (EndpointCategory::Model, "ui.menu.open", ValueKind::Bool),
             (EndpointCategory::Model, "vis.preset", ValueKind::Scalar),
             (
@@ -214,6 +221,7 @@ impl Fixture {
             "fixture.kmodule.ron",
             &format!(
                 r#"(schema: "kithara.module", version: 1, id: "census", chrome: Plain,
+                    drop: Some((write: Command(id: "library.load"))),
                     root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0,
                         children: [{control}]))"#
             ),

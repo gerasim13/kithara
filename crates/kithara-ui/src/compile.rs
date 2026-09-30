@@ -5,14 +5,14 @@ use crate::draw::{DrawBuffers, PoolStats};
 use crate::{
     error::UiDocError,
     expand::{
-        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
-        Unprompted, intern_binding, motion_of, scoped_state, substitute_binding, substitute_map,
+        Binding, BlockSpec, Budget, ControlSite, ExpandedInclude, ExpandedNode, Expander,
+        Unprompted, drop_path, header_path, intern_binding, motion_of, scoped_state,
+        substitute_binding, substitute_map,
     },
     ids::{InstanceId, InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameCorners, FrameSides, LayoutNode, SplitChild, parse_layout},
     module::{ChromeStyle, MeasureAxis},
     registry::{BuiltinEndpoints, EndpointRegistry},
-    require,
     resolve::load_module_graph,
     room,
     shader::ShaderCache,
@@ -23,16 +23,14 @@ use crate::{
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},
     text::TextDoc,
-    validate::{self, NodePath},
-    view::{Census, Side, Tabs as ViewTabs, ViewState, ViewWrites},
+    validate::{self, Gesture, NodePath},
+    view::{Census, Tabs as ViewTabs, ViewState, ViewWrites, WriteAt},
 };
 
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CompiledUi {
     pub root: CompiledNode,
-    /// Names the item the pointer is carrying; drawn at the pointer.
-    pub dragged: Option<Binding>,
     pub size: SizeSpec,
     /// The room the whole tree needs, which is the smallest window it draws in.
     pub min: SizeSpec,
@@ -88,31 +86,23 @@ impl CompiledUi {
             .any(|include| self.resolve(include.module) == module)
     }
 
-    /// Refuses a screen that answers on none of the paths an application binds
-    /// behaviour to.
-    ///
-    /// An application reaches its own interface by path: a press arrives
-    /// named, and the application decides what it means. A package free to lay
-    /// its screens out as it likes is therefore also free to lay out one that
-    /// answers nowhere, and nothing about drawing it would say so - the window
-    /// would open with no way to start playing. Naming the few paths without
-    /// which the application is not itself turns that into a refusal.
-    ///
-    /// Popover, pressable and control paths all count: they are what a host
-    /// addresses, and an application binds to whichever of them its documents
-    /// use.
+    /// Refuses a screen missing any of `required`, the writes every screen must declare.
     ///
     /// # Errors
-    /// Returns [`UiDocError::MissingPaths`] listing every required path the
-    /// screen does not answer on.
-    pub fn require_paths(&self, required: &[&str], origin: &SourceUri) -> Result<(), UiDocError> {
-        let missing = require::missing(self, required);
+    /// Returns [`UiDocError::MissingWrites`] listing every required write no
+    /// control on the screen declares, in the order asked.
+    pub fn require_writes(&self, required: &[&str], origin: &SourceUri) -> Result<(), UiDocError> {
+        let missing: Vec<String> = required
+            .iter()
+            .filter(|key| !self.views.declares(key))
+            .map(|key| (*key).to_owned())
+            .collect();
         if missing.is_empty() {
             return Ok(());
         }
-        Err(UiDocError::MissingPaths {
+        Err(UiDocError::MissingWrites {
             origin: origin.clone(),
-            paths: missing,
+            writes: missing,
         })
     }
 
@@ -216,7 +206,7 @@ pub enum CompiledNode {
         /// layout is built.
         round: FrameCorners,
         footer: Option<Binding>,
-        drop: Option<DropSpec>,
+        drop: bool,
         collapsed: InternId,
         root: Box<ExpandedNode>,
         size: SizeSpec,
@@ -282,7 +272,6 @@ pub fn compile(
     }
     let document = parse_layout(&loaded.text, &loaded.uri)?;
     validate::check_layout_instances(&document, &loaded.uri)?;
-    validate::check_layout_dragged(&document, &loaded.uri, endpoints)?;
     let mut budget = Budget::new(config.limits.max_nodes);
     let mut interner = Interner::new(config.max_arena_bytes);
     let mut includes = Vec::new();
@@ -305,11 +294,6 @@ pub fn compile(
     round_corners(&mut root, FrameCorners::ALL);
     let size = compiled_node_size(&root);
     let min = compiled_min(&root, skin);
-    let dragged = document
-        .dragged
-        .as_ref()
-        .map(|binding| intern_binding(&mut interner, binding, &loaded.uri))
-        .transpose()?;
     let unprompted = motion_of_layout(&root);
     let driven = unprompted.driven;
     let animates = driven || unprompted.continuous || interner.reads_clock();
@@ -319,7 +303,6 @@ pub fn compile(
         root,
         size,
         min,
-        dragged,
         animates,
         driven,
         includes,
@@ -428,7 +411,7 @@ impl Compiler<'_> {
             LayoutNode::Optional { id, hidden, node } => {
                 let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0, "")?;
                 validate::check_layout_block(&hidden, &id.0, layout_uri, self.endpoints)?;
-                self.states.note(&id.0, &hidden, layout_uri, Side::Read);
+                self.states.note_read(&id.0, &hidden, layout_uri);
                 let child = self.build(node, layout_uri)?;
                 Ok(CompiledNode::Optional {
                     block: BlockSpec {
@@ -536,8 +519,7 @@ impl Compiler<'_> {
                 origin: module_uri.clone(),
                 rel: module_uri.0.clone(),
             })?;
-        validate::check_module_footer(document, &module_uri, self.endpoints)?;
-        validate::check_module_drop(document, &module_uri, self.endpoints)?;
+        validate::check_module_bindings(document, &module_uri, self.endpoints)?;
         let mut expanded = Expander::new(
             self.config.limits.max_depth,
             self.budget,
@@ -548,6 +530,22 @@ impl Compiler<'_> {
             &mut visitor,
         )
         .expand_module(&set, &module_uri, &args, &at.instance.0)?;
+        if let Some(collapse) = &document.collapse {
+            let header = header_path(&at.instance.0);
+            let collapse =
+                substitute_binding(&args, &module_uri, collapse, &header, &at.instance.0)?;
+            self.states.note_write(
+                header,
+                &collapse,
+                WriteAt::plain(Gesture::Press, &module_uri),
+            );
+        }
+        if let Some(drop) = &document.drop {
+            let zone = drop_path(&at.instance.0);
+            let write = substitute_binding(&args, &module_uri, &drop.write, &zone, &at.instance.0)?;
+            self.states
+                .note_write(zone, &write, WriteAt::plain(Gesture::Text, &module_uri));
+        }
         room::check_module(&expanded.root, self.skin, &module_uri)?;
         let declared = at.size;
         room::check_box(

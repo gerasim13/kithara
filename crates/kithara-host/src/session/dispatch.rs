@@ -2,7 +2,6 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_bufpool::HasPool;
-use kithara_output::OutputGroup;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
 use kithara_play::{PlayError, StreamShape};
@@ -36,8 +35,21 @@ where
         HostCmd::ApplyMix { levels } => {
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
-        HostCmd::EnableOutput { outputs } => tap::enable(state, outputs)
+        HostCmd::AttachOutputs {
+            tap: target,
+            outputs,
+        } => tap::attach(state, target, outputs)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        HostCmd::DetachOutputs { tap: target } => {
+            tap::detach(state, target);
+            HostReply::Ok
+        }
+        HostCmd::SetMetronome { on } => {
+            controls::set_metronome(state, on);
+            HostReply::Ok
+        }
+        HostCmd::SetMetronomeLevel { level } => controls::set_metronome_level(state, level)
+            .map_or_else(HostReply::Err, |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
@@ -204,18 +216,6 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::EnableMixTap { writer } => {
-            let mut outputs = OutputGroup::new();
-            outputs.push(writer);
-            match tap::enable(state, outputs) {
-                Ok(()) => Reply::Ok,
-                Err(err) => Reply::Err(err),
-            }
-        }
-        Cmd::DisableMixTap => {
-            tap::disable(state);
-            Reply::Ok
-        }
         Cmd::SetSessionDucking { mode } => {
             controls::set_session_ducking(state, mode);
             Reply::Ok
@@ -304,7 +304,10 @@ pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Reply {
     if stream_died(state) {
         return restart_dead_stream(state);
     }
-    Reply::Ok
+    match transport::observe_commits(state) {
+        Ok(()) => Reply::Ok,
+        Err(error) => Reply::Err(error.into()),
+    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -524,11 +527,12 @@ mod tests {
 
     use super::*;
     use crate::{
+        api::Tap,
         bridge::MixTapWriter,
         session::{
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
-            state::{Deck, MixTap, SessionState},
+            state::{Deck, SessionState, TapSlot},
             tests::graph::{attach_player, state as test_state},
         },
     };
@@ -1419,7 +1423,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn output_group_is_one_tap_and_is_cleared_by_idle_teardown() {
+    fn each_tap_takes_one_group_and_idle_teardown_clears_both() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
@@ -1431,25 +1435,50 @@ mod tests {
         outputs.push(mix_tap_writer(&drops));
         outputs.push(mix_tap_writer(&drops));
         assert!(matches!(
-            run_host_cmd(&mut state, HostCmd::EnableOutput { outputs },),
+            run_host_cmd(
+                &mut state,
+                HostCmd::AttachOutputs {
+                    tap: Tap::Master,
+                    outputs,
+                },
+            ),
             HostReply::Ok
         ));
         assert!(
-            matches!(state.mix_tap, Some(MixTap::Installed(_))),
+            matches!(state.taps.slot(Tap::Master), Some(TapSlot::Installed(_))),
             "a tap armed on a running session reaches the graph at once"
         );
 
+        let mut second = OutputGroup::new();
+        second.push(mix_tap_writer(&drops));
         assert!(
             matches!(
-                run_cmd(
+                run_host_cmd(
                     &mut state,
-                    Cmd::EnableMixTap {
-                        writer: mix_tap_writer(&drops),
+                    HostCmd::AttachOutputs {
+                        tap: Tap::Master,
+                        outputs: second,
                     },
                 ),
-                Reply::Err(SessionError::MixTapActive)
+                HostReply::Err(PlayError::Session(SessionError::TapActive))
             ),
             "a second consumer must be rejected instead of silently replacing the first"
+        );
+
+        let mut beside = OutputGroup::new();
+        beside.push(mix_tap_writer(&drops));
+        assert!(
+            matches!(
+                run_host_cmd(
+                    &mut state,
+                    HostCmd::AttachOutputs {
+                        tap: Tap::Output,
+                        outputs: beside,
+                    },
+                ),
+                HostReply::Ok
+            ),
+            "the output tap takes its own group beside the master tap"
         );
 
         assert!(matches!(
@@ -1458,8 +1487,37 @@ mod tests {
         ));
         assert!(state.session_limiter_node_id.is_none());
         assert!(
-            state.mix_tap.is_none(),
-            "idle teardown must clear the mix tap with the context it lived in"
+            state.taps.slot(Tap::Master).is_none() && state.taps.slot(Tap::Output).is_none(),
+            "idle teardown must clear both taps with the context they lived in"
+        );
+    }
+
+    #[kithara::test]
+    fn the_metronome_flag_survives_an_idle_teardown() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::SetMetronome { on: true }),
+            HostReply::Ok
+        ));
+
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
+            Reply::Ok
+        ));
+        assert!(state.session_metronome_node_id.is_none());
+        start_player_cmd(&mut state, id);
+
+        assert!(state.metronome, "the flag outlives the context");
+        assert!(
+            state
+                .session_metronome_memo
+                .as_ref()
+                .is_some_and(|memo| memo.enabled),
+            "the rebuilt metronome node starts switched on"
         );
     }
 

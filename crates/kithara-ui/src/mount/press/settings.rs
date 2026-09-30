@@ -11,7 +11,7 @@ mod host {
         atoms::bar::settings::Settings as Face,
         module::IconName,
         render::{
-            Mark, Skin, UiEvent,
+            Mark, Skin,
             controls::{Draws, Grip, Reading},
         },
     };
@@ -25,11 +25,8 @@ mod host {
             IconName::Gear.mark()
         }
 
-        /// Pressing it opens a surface the application owns. There is no
-        /// endpoint under this button to activate, so it names the event
-        /// instead.
         fn grip(&self, _skin: &Skin, _data: &Mark) -> Grip {
-            Grip::Command(|| UiEvent::OpenSettings)
+            Grip::Press
         }
 
         fn painter(&self, skin: &Skin) -> Face {

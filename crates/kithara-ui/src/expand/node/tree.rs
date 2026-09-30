@@ -238,6 +238,7 @@ pub enum ControlSpec {
     Table {
         columns: Vec<TableColumn>,
         columns_state: Option<Binding>,
+        resizable: bool,
     },
     Tree {
         query: Option<Binding>,
@@ -300,6 +301,8 @@ pub enum BindingKind {
     /// is absent on the side that only reads.
     View {
         set: ViewSet,
+        /// The read answers the flag's opposite.
+        invert: bool,
     },
     /// One page of a `Tabs` body, by the state that says which page stands. A
     /// read answers whether the state stands at this page, a write stands it
@@ -328,11 +331,21 @@ pub(crate) struct ExpandedModule {
     pub(crate) collapsed: InternId,
     pub(crate) module: InternId,
     pub(crate) chip: Option<InternId>,
-    pub(crate) drop: Option<DropSpec>,
+    pub(crate) drop: bool,
     pub(crate) footer: Option<Binding>,
     pub(crate) title: Option<InternId>,
     pub(crate) assign: Vec<InternId>,
     pub(crate) includes: Vec<ExpandedInclude>,
+}
+
+/// The path a module's header press publishes on.
+pub(crate) fn header_path(instance: &str) -> String {
+    format!("{instance}/header")
+}
+
+/// The path a module's drop zone publishes on.
+pub(crate) fn drop_path(instance: &str) -> String {
+    format!("{instance}/drop")
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -563,15 +576,6 @@ pub struct SurfaceSpec {
     pub path: InternId,
 }
 
-/// Compiled drop target of a module: the command the host runs when a drag is
-/// released over it, and the flag that reads true while one hovers it.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct DropSpec {
-    pub read: Binding,
-    pub write: Binding,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
     pub(crate) control: &'a ControlNode,
@@ -585,6 +589,40 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) scope: Option<&'a BindingRef>,
     pub(crate) write: Option<&'a BindingRef>,
     pub(crate) zoom: Option<&'a BindingRef>,
+    pub(crate) writes: SlotWrites<'a>,
+    /// What opens the popover a write from this site shuts.
+    pub(crate) shuts: Option<&'a BindingRef>,
+}
+
+impl<'a> ControlSite<'a> {
+    /// A site at `path` that binds nothing.
+    pub(crate) fn new(control: &'a ControlNode, path: &'a str) -> Self {
+        Self {
+            control,
+            path,
+            columns: &[],
+            active: None,
+            columns_state: None,
+            query: None,
+            read: None,
+            scope: None,
+            write: None,
+            zoom: None,
+            writes: SlotWrites::default(),
+            shuts: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SlotWrites<'a> {
+    pub(crate) secondary: Option<&'a BindingRef>,
+    pub(crate) reset: Option<&'a BindingRef>,
+    pub(crate) zoom: Option<&'a BindingRef>,
+    pub(crate) loop_start: Option<&'a BindingRef>,
+    pub(crate) loop_end: Option<&'a BindingRef>,
+    pub(crate) query: Option<&'a BindingRef>,
+    pub(crate) width: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =

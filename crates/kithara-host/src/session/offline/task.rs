@@ -1,13 +1,12 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_effects::LimiterConfig;
 use kithara_platform::{
     sync::{Arc, mpsc, mpsc::TryRecvError},
     time::Duration,
 };
 use kithara_play::PlayError;
-use kithara_sync::GroupState;
+use kithara_sync::{GroupState, SyncError};
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
 use thiserror::Error;
 use tracing::warn;
@@ -17,11 +16,12 @@ use super::{
         dispatch::run_host_cmd,
         protocol::{HostCmd, HostCmdMsg, HostReply},
         state::{RootView, SessionState, ensure_ctx},
+        transport,
     },
     OfflineSessionClient,
     backend::{BackendConfig, OfflineStream},
 };
-use crate::PlayerMember;
+use crate::{PlayerMember, rt::SessionOutput};
 
 pub(crate) mod consts {
     pub(crate) const CHANNELS: usize = 2;
@@ -49,7 +49,7 @@ struct OfflineSessionTask<S> {
 
 pub(crate) struct OfflineTaskConfig<S> {
     pub(crate) declared_latency: Duration,
-    pub(crate) limiter: LimiterConfig,
+    pub(crate) output: SessionOutput,
     pub(crate) declick_frames: NonZeroU32,
     pub(crate) max_block_frames: NonZeroU32,
     pub(crate) sample_rate: NonZeroU32,
@@ -180,7 +180,7 @@ where
         max_block_frames,
         declick_frames,
         declared_latency,
-        limiter,
+        output,
     } = config;
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let pending = dispatcher.reserve(task_config).map_err(|error| {
@@ -215,7 +215,7 @@ where
                     sample_rate,
                     Some(max_block_frames),
                     Some(declick_frames),
-                    limiter,
+                    output,
                     start_stream,
                 )),
             }
@@ -259,6 +259,7 @@ where
             usize::try_from(frames).map_err(|_| OfflineSessionError::TimelineOverflow)?,
             &mut output,
         )?;
+    transport::observe_commits(state)?;
     Ok(output)
 }
 
@@ -282,6 +283,8 @@ pub(crate) enum OfflineSessionError {
     SampleCountOverflow,
     #[error("offline session is gone")]
     SessionGone,
+    #[error("offline session grid was refused: {0}")]
+    SessionGrid(#[from] SyncError),
     #[error("offline timeline overflow")]
     TimelineOverflow,
 }

@@ -25,6 +25,10 @@ pub(super) struct Container<'a> {
     /// [`super::services::cpuset`].
     pub(super) cpuset: String,
     pub(super) memory: &'a str,
+    /// The slice that caps the fleet as a whole. A runner's own `memory` never
+    /// fired: the host livelocked on the sum of ceilings several times its
+    /// memory, so every container draws on one budget instead.
+    pub(super) cgroup_parent: &'static str,
     pub(super) devices: &'a [PathBuf],
     pub(super) groups: &'a [u32],
     /// Where the just-in-time registration is left for it. Minted per start and
@@ -159,6 +163,7 @@ pub(super) fn container<'a>(
         network: &host.network,
         cpuset,
         memory: &runner.memory,
+        cgroup_parent: consts::SERVICE_SLICE,
         devices: &runner.devices,
         groups: &runner.groups,
         env_file: super::services::env_file(runner),
@@ -186,6 +191,35 @@ mod tests {
                 "{name} is missing from {environment:?}"
             );
         }
+    }
+
+    /// A lane's build directory moves between runners, and it records the
+    /// downloaded beat models by path and modification time. Models kept where
+    /// only one runner sees them are fetched again by the next, newer than the
+    /// build, and everything that embeds them is rebuilt.
+    #[test]
+    fn a_job_keeps_the_beat_models_on_a_mount_every_runner_shares() {
+        let host = super::super::profile::tests::host_fixture();
+        let [first, second, ..] = host.runners.as_slice() else {
+            panic!("the host fixture serves more than one runner");
+        };
+        let environment = Container::environment(first);
+        let models = environment
+            .iter()
+            .find_map(|entry| entry.strip_prefix("KITHARA_BEAT_MODEL_CACHE="))
+            .expect("a job is told where the beat models live");
+
+        let shared = Container::mounts(&host, first)
+            .into_iter()
+            .zip(Container::mounts(&host, second))
+            .filter(|(mine, theirs)| mine == theirs)
+            .map(|((_, destination), _)| destination);
+        assert!(
+            shared
+                .into_iter()
+                .any(|destination| Path::new(models).starts_with(destination)),
+            "{models} is not on a mount every runner shares"
+        );
     }
 
     #[test]

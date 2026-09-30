@@ -5,6 +5,7 @@
     title: Some("Global bar"),
     chip: Some("BAR"),
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-module-global-bar" })),
     footer: Some(Model(id: "gallery.footer.global_bar")),
     root: Column(
         children: [

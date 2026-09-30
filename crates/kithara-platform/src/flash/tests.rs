@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     consts,
-    sync::{Arc, Notify},
+    sync::{Arc, Notify, ThreadGate, WaitGate},
 };
 
 /// Serialize the cases that drive the process-global `FLASH` engine (the
@@ -631,6 +631,81 @@ fn equal_deadlines_wake_in_one_step() {
         "three waiters, two advance steps: the two equal deadlines wake in one batch"
     );
     assert_eq!(flash.clock.now_nanos(), base + 8 * consts::NANOS_PER_SEC);
+}
+
+#[kithara::test(native, flash(false))]
+fn deferred_worker_poll_precedes_distant_timer() {
+    let _g = guard();
+    let _a = ambient_scope(true);
+
+    assert_eq!(
+        run_deferred_worker_poll(false),
+        3_000,
+        "an ordinary gate backstop must not drive the clock ahead of the distant timer"
+    );
+    assert_eq!(
+        run_deferred_worker_poll(true),
+        10,
+        "deferred work must be polled at the worker's 10ms interval, before the 3s timer"
+    );
+}
+
+fn run_deferred_worker_poll(poll_deadline: bool) -> usize {
+    reset();
+    let flash = Arc::clone(&super::system::FLASH);
+    let base = flash.clock.now_nanos();
+    let gate = Arc::new(ThreadGate::default());
+    let deferred = Arc::new(AtomicUsize::new(0));
+    let observed_ms = Arc::new(AtomicUsize::new(0));
+    let coordinator = flash.test_hold();
+
+    let worker = {
+        let flash = Arc::clone(&flash);
+        let gate = Arc::clone(&gate);
+        let deferred = Arc::clone(&deferred);
+        let observed_ms = Arc::clone(&observed_ms);
+        thread::spawn(move || {
+            bracketed_on(&flash, || {
+                let since = gate.current();
+                let signalled = if poll_deadline {
+                    gate.wait_poll_timeout(since, Duration::from_millis(10))
+                } else {
+                    gate.wait_timeout(since, Duration::from_millis(10))
+                };
+                assert!(!signalled);
+                assert_eq!(deferred.load(Ordering::Acquire), 1);
+                observed_ms.store(
+                    ((flash.clock.now_nanos() - base) / 1_000_000) as usize,
+                    Ordering::Release,
+                );
+            });
+        })
+    };
+    let producer = {
+        let flash = Arc::clone(&flash);
+        thread::spawn(move || {
+            bracketed_on(&flash, || flash.park_for(Duration::from_secs(3)));
+        })
+    };
+    let notifier = {
+        let flash = Arc::clone(&flash);
+        thread::spawn(move || {
+            bracketed_on(&flash, || {
+                flash.park_for(Duration::from_millis(5));
+                deferred.store(1, Ordering::Release);
+            });
+        })
+    };
+    while flash.timed_count() != 3 {
+        thread::yield_now();
+    }
+    drop(coordinator);
+
+    notifier.join().expect("deferred notifier panicked");
+    worker.join().expect("worker panicked");
+    producer.join().expect("distant timer panicked");
+    assert_eq!(flash.active_count(), 0, "all wake credits must settle");
+    observed_ms.load(Ordering::Acquire)
 }
 
 #[kithara::test(native, flash(false))]

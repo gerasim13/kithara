@@ -16,11 +16,11 @@ use super::contract::WindowLayerProgram;
 use crate::{
     draw::Rect,
     interact::{Input, Outcome, PointerId, PointerOwnership, PointerPhase, iced as iced_interact},
-    render::{UiEvent, draw_host_layer, window as window_event},
+    render::{Published, draw_host_layer, window as window_event},
     solve::Length as SolveLength,
 };
 
-pub(crate) fn window_layer<'a>(program: impl WindowLayerProgram + 'a) -> Element<'a, UiEvent> {
+pub(crate) fn window_layer<'a>(program: impl WindowLayerProgram + 'a) -> Element<'a, Published> {
     Element::new(WindowLayerLeaf { program })
 }
 
@@ -28,7 +28,7 @@ struct WindowLayerLeaf<P> {
     program: P,
 }
 
-impl<P> IcedWidget<UiEvent, Theme, Renderer> for WindowLayerLeaf<P>
+impl<P> IcedWidget<Published, Theme, Renderer> for WindowLayerLeaf<P>
 where
     P: WindowLayerProgram,
 {
@@ -56,7 +56,7 @@ where
         _renderer: &Renderer,
         _viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<overlay::Element<'a, Published, Theme, Renderer>> {
         let state = tree.state.downcast_mut::<(P::State, Option<PointerId>)>();
         let (state, pointer_owner) = state;
         Some(overlay::Element::new(Box::new(WindowLayerOverlay {
@@ -100,7 +100,7 @@ where
     bounds: Rect,
 }
 
-impl<P> overlay::Overlay<UiEvent, Theme, Renderer> for WindowLayerOverlay<'_, P>
+impl<P> overlay::Overlay<Published, Theme, Renderer> for WindowLayerOverlay<'_, P>
 where
     P: WindowLayerProgram,
 {
@@ -145,7 +145,7 @@ where
         pointer: mouse::Cursor,
         _renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
     ) {
         let Some(input) = iced_interact::input(event) else {
             return;
@@ -381,7 +381,7 @@ mod tests {
             mouse::Interaction::Grab
         );
         drop(shell);
-        assert_eq!(messages, [UiEvent::Window(WindowCommand::Drag)]);
+        assert_eq!(messages, [Published::window(WindowCommand::Drag)]);
     }
 
     #[kithara::test]

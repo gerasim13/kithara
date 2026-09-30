@@ -12,7 +12,7 @@ pub use self::{
     node::{AdaptiveStep, ControlNode, Magnet, Measure, MeasureAxis},
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
-        PopoverAt, ScalarFormat, TableColumn, TableColumnStyle, TextAlign, TextStyle, Tone,
-        WaveStyle, WindowControlsStyle,
+        PopoverAt, PopoverDismiss, ScalarFormat, TableColumn, TableColumnStyle, TextAlign,
+        TextStyle, Tone, WaveStyle, WindowControlsStyle,
     },
 };

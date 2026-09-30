@@ -9,7 +9,9 @@ use anyhow::Error;
 #[error(ignore)]
 pub struct ChildFailure {
     exit_code: Option<i32>,
-    stderr: Option<String>,
+    /// What the current process knows about the failure: the child's captured
+    /// stderr, or its own reading of what the child left behind.
+    detail: Option<String>,
     label: String,
 }
 
@@ -20,8 +22,8 @@ impl fmt::Display for ChildFailure {
             Some(code) => write!(f, " (exit code {code})")?,
             None => write!(f, " (terminated without an exit code)")?,
         }
-        if let Some(stderr) = &self.stderr {
-            write!(f, ": {stderr}")?;
+        if let Some(detail) = &self.detail {
+            write!(f, ": {detail}")?;
         }
         Ok(())
     }
@@ -34,7 +36,18 @@ impl ChildFailure {
         let stderr = (!stderr.is_empty()).then_some(stderr);
         Error::new(Self {
             exit_code,
-            stderr,
+            detail: stderr,
+            label,
+        })
+    }
+
+    /// Report a child whose failure the current process explained from what
+    /// the child left behind, such as the tests a runner's report names.
+    #[must_use]
+    pub(crate) fn explained(label: String, exit_code: Option<i32>, detail: String) -> Error {
+        Error::new(Self {
+            exit_code,
+            detail: Some(detail),
             label,
         })
     }
@@ -51,7 +64,7 @@ impl ChildFailure {
         Error::new(Self {
             label,
             exit_code,
-            stderr: None,
+            detail: None,
         })
     }
 }
@@ -142,6 +155,22 @@ impl NotClean {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_explained_child_failure_keeps_its_code_and_says_why() {
+        let error = ChildFailure::explained(
+            "test lane `sync`".to_owned(),
+            Some(100),
+            "1 test(s) failed on every attempt:\n  - s::t".to_owned(),
+        );
+        let (message, code) = NotClean::render(&error);
+
+        assert_eq!(code, 100);
+        assert_eq!(
+            message,
+            "test lane `sync` failed (exit code 100): 1 test(s) failed on every attempt:\n  - s::t"
+        );
+    }
 
     #[test]
     fn a_verdict_says_what_ran_and_what_it_found() {

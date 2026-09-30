@@ -9,10 +9,7 @@ use iced::{
         mouse, overlay,
         overlay::Nested,
         renderer,
-        widget::{
-            Operation, Tree,
-            tree::{State, Tag},
-        },
+        widget::{Operation, Tree},
     },
     event::Status,
     widget::canvas::Frame,
@@ -21,11 +18,9 @@ use iced::{
 use super::{cursor, handle};
 use crate::{
     backends::replay_ordered,
-    interact::{Input, Outcome, PointerPhase, iced as iced_interact},
-    render::{
-        DragGhost, HostLayer, Skin, UiEvent, WindowCommand, WindowSurface, window as window_event,
-    },
-    shaping::{TextContext, TextResources},
+    interact::{Outcome, iced as iced_interact},
+    render::{HostLayer, Published, Skin, WindowCommand, WindowSurface, window as window_event},
+    shaping::TextResources,
 };
 
 pub(crate) fn draw_host_layer<A>(
@@ -45,28 +40,21 @@ pub(crate) fn draw_host_layer<A>(
 }
 
 pub(crate) fn window_layers<'a>(
-    child: Element<'a, UiEvent>,
-    carried: Option<&str>,
+    child: Element<'a, Published>,
     resize_edges: bool,
     skin: &'a Skin,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     Element::new(WindowLayers {
-        child,
-        ghost: carried.map(|label| DragGhost::new(Some(label), skin)),
-        resize_edges,
         skin,
+        child,
+        resize_edges,
     })
 }
 
 struct WindowLayers<'a> {
     skin: &'a Skin,
-    child: Element<'a, UiEvent>,
-    ghost: Option<DragGhost>,
+    child: Element<'a, Published>,
     resize_edges: bool,
-}
-
-struct LayerState {
-    text: RefCell<Option<TextContext>>,
 }
 
 impl WindowLayers<'_> {
@@ -76,23 +64,15 @@ impl WindowLayers<'_> {
 }
 
 struct WindowOverlay<'a> {
-    text: &'a RefCell<Option<TextContext>>,
     skin: &'a Skin,
-    ghost: Option<&'a DragGhost>,
     bounds: Rectangle,
-    child: RefCell<Option<Nested<'a, UiEvent, Theme, Renderer>>>,
+    child: RefCell<Option<Nested<'a, Published, Theme, Renderer>>>,
     resize_edges: bool,
 }
 
 impl WindowOverlay<'_> {
-    fn draw_layers(&self, renderer: &mut Renderer, pointer: mouse::Cursor) {
+    fn draw_layers(&self, renderer: &mut Renderer) {
         if let Some(layer) = self.resize_layer() {
-            draw_host_layer(renderer, &layer, self.skin.text_resources());
-        }
-        if let Some(ghost) = self.ghost {
-            let mut text = self.text.borrow_mut();
-            let text = text.get_or_insert_with(|| self.skin.text_resources().into());
-            let layer = ghost.layer(pointer.position().map(Into::into), self.bounds.into(), text);
             draw_host_layer(renderer, &layer, self.skin.text_resources());
         }
     }
@@ -117,17 +97,9 @@ impl WindowOverlay<'_> {
         &self,
         event: &Event,
         pointer: mouse::Cursor,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
     ) -> bool {
         let input = iced_interact::input(event);
-        if self.ghost.is_some()
-            && matches!(
-                input,
-                Some(Input::Pointer(pointer)) if pointer.phase == PointerPhase::Move
-            )
-        {
-            shell.request_redraw();
-        }
         input.is_some_and(|input| {
             let Some(layer) = self.resize_layer() else {
                 return false;
@@ -155,7 +127,7 @@ impl WindowOverlay<'_> {
     }
 }
 
-impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
+impl overlay::Overlay<Published, Theme, Renderer> for WindowOverlay<'_> {
     fn draw(
         &self,
         renderer: &mut Renderer,
@@ -169,7 +141,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
         {
             child.draw(renderer, theme, style, child_layout, pointer);
         }
-        self.draw_layers(renderer, pointer);
+        self.draw_layers(renderer);
     }
 
     fn layout(&mut self, renderer: &Renderer, bounds: Size) -> Node {
@@ -220,7 +192,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
         pointer: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
     ) {
         if self.update_layers(event, pointer, shell) {
             return;
@@ -235,7 +207,7 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
+impl IcedWidget<Published, Theme, Renderer> for WindowLayers<'_> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.child)]
     }
@@ -323,7 +295,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<overlay::Element<'a, Published, Theme, Renderer>> {
         let child_layout = Self::child_layout(layout)?;
         let child = self.child.as_widget_mut().overlay(
             &mut tree.children[0],
@@ -332,17 +304,14 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
             viewport,
             translation,
         );
-        if !self.resize_edges && self.ghost.is_none() {
+        if !self.resize_edges {
             return child;
         }
-        let state = tree.state.downcast_ref::<LayerState>();
         Some(overlay::Element::new(Box::new(WindowOverlay {
             bounds: layout.bounds(),
             child: RefCell::new(child.map(Nested::new)),
-            ghost: self.ghost.as_ref(),
             resize_edges: self.resize_edges,
             skin: self.skin,
-            text: &state.text,
         })))
     }
 
@@ -354,16 +323,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
         self.size()
     }
 
-    fn state(&self) -> State {
-        State::new(LayerState {
-            text: RefCell::new(None),
-        })
-    }
-
-    fn tag(&self) -> Tag {
-        Tag::of::<LayerState>()
-    }
-
     fn update(
         &mut self,
         tree: &mut Tree,
@@ -372,7 +331,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
         pointer: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         let Some(child_layout) = Self::child_layout(layout) else {
@@ -403,7 +362,6 @@ mod tests {
         },
         mouse::{self, Button, Cursor},
         widget::{Space, mouse_area},
-        window,
     };
     use iced_renderer::fallback::Renderer as FallbackRenderer;
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
@@ -412,14 +370,14 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        render::{UiEvent, WindowCommand, WindowEdge, fonts::SANS},
+        render::{Published, WindowCommand, WindowEdge, fonts::SANS},
     };
 
-    fn press_at(x: f32) -> (Vec<UiEvent>, bool) {
+    fn press_at(x: f32) -> (Vec<Published>, bool) {
         let child = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-            .on_press(UiEvent::OpenSettings)
+            .on_press(Published::window(WindowCommand::Minimize))
             .into();
-        let mut element = window_layers(child, None, true, builtin::skin());
+        let mut element = window_layers(child, true, builtin::skin());
         let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
         let viewport = Size::new(100.0, 60.0);
         let mut tree = Tree::new(element.as_widget());
@@ -469,7 +427,7 @@ mod tests {
 
     struct PressOverlayWidget;
 
-    impl IcedWidget<UiEvent, Theme, Renderer> for PressOverlayWidget {
+    impl IcedWidget<Published, Theme, Renderer> for PressOverlayWidget {
         fn draw(
             &self,
             _tree: &Tree,
@@ -493,7 +451,7 @@ mod tests {
             _renderer: &Renderer,
             _viewport: &Rectangle,
             _translation: Vector,
-        ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+        ) -> Option<overlay::Element<'a, Published, Theme, Renderer>> {
             Some(overlay::Element::new(Box::new(PressOverlay)))
         }
 
@@ -504,7 +462,7 @@ mod tests {
 
     struct PressOverlay;
 
-    impl overlay::Overlay<UiEvent, Theme, Renderer> for PressOverlay {
+    impl overlay::Overlay<Published, Theme, Renderer> for PressOverlay {
         fn draw(
             &self,
             _renderer: &mut Renderer,
@@ -539,22 +497,22 @@ mod tests {
             pointer: Cursor,
             _renderer: &Renderer,
             _clipboard: &mut dyn Clipboard,
-            shell: &mut Shell<'_, UiEvent>,
+            shell: &mut Shell<'_, Published>,
         ) {
             if matches!(
                 event,
                 Event::Mouse(mouse::Event::ButtonPressed(Button::Left))
             ) && pointer.is_over(layout.bounds())
             {
-                shell.publish(UiEvent::OpenSettings);
+                shell.publish(Published::window(WindowCommand::Minimize));
                 shell.capture_event();
             }
         }
     }
 
-    fn overlay_press_at(x: f32) -> Vec<UiEvent> {
+    fn overlay_press_at(x: f32) -> Vec<Published> {
         let child = Element::new(PressOverlayWidget);
-        let mut element = window_layers(child, None, true, builtin::skin());
+        let mut element = window_layers(child, true, builtin::skin());
         let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
         let viewport = Size::new(100.0, 60.0);
         let bounds = Rectangle::with_size(viewport);
@@ -595,12 +553,12 @@ mod tests {
         let (messages, captured) = press_at(3.0);
         assert_eq!(
             messages,
-            [UiEvent::Window(WindowCommand::Resize(WindowEdge::West))]
+            [Published::window(WindowCommand::Resize(WindowEdge::West))]
         );
         assert!(captured);
 
         let (messages, captured) = press_at(5.0);
-        assert_eq!(messages, [UiEvent::OpenSettings]);
+        assert_eq!(messages, [Published::window(WindowCommand::Minimize)]);
         assert!(captured, "the control underneath owns the inside press");
     }
 
@@ -608,9 +566,12 @@ mod tests {
     fn resize_edge_is_above_a_document_popup_but_the_inside_press_reaches_it() {
         assert_eq!(
             overlay_press_at(3.0),
-            [UiEvent::Window(WindowCommand::Resize(WindowEdge::West))]
+            [Published::window(WindowCommand::Resize(WindowEdge::West))]
         );
-        assert_eq!(overlay_press_at(5.0), [UiEvent::OpenSettings]);
+        assert_eq!(
+            overlay_press_at(5.0),
+            [Published::window(WindowCommand::Minimize)]
+        );
     }
 
     #[kithara::test]
@@ -619,7 +580,7 @@ mod tests {
             .width(Length::Fixed(20.0))
             .height(Length::Fixed(10.0))
             .into();
-        let mut element = window_layers(child, None, true, builtin::skin());
+        let mut element = window_layers(child, true, builtin::skin());
         let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
         let viewport = Size::new(100.0, 60.0);
         let mut tree = Tree::new(element.as_widget());
@@ -631,51 +592,5 @@ mod tests {
 
         assert_eq!(node.size(), viewport);
         assert_eq!(node.children()[0].size(), Size::new(20.0, 10.0));
-    }
-
-    #[kithara::test]
-    fn moving_the_drag_ghost_redraws_without_publishing_or_capturing() {
-        let child = Space::new().width(Length::Fill).height(Length::Fill).into();
-        let mut element = window_layers(child, Some("Signal Path"), false, builtin::skin());
-        let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
-        let viewport = Size::new(240.0, 80.0);
-        let mut tree = Tree::new(element.as_widget());
-        let node = element.as_widget_mut().layout(
-            &mut tree,
-            &renderer,
-            &Limits::new(Size::ZERO, viewport),
-        );
-        let mut clipboard = clipboard::Null;
-        let mut messages = Vec::new();
-        let mut shell = Shell::new(&mut messages);
-        let pointer = Point::new(30.0, 30.0);
-        let bounds = Rectangle::with_size(viewport);
-        let mut overlay = element
-            .as_widget_mut()
-            .overlay(
-                &mut tree,
-                Layout::new(&node),
-                &renderer,
-                &bounds,
-                Vector::ZERO,
-            )
-            .expect("the drag ghost must produce a root overlay");
-        let overlay_node = overlay.as_overlay_mut().layout(&renderer, viewport);
-        overlay.as_overlay_mut().update(
-            &Event::Mouse(mouse::Event::CursorMoved { position: pointer }),
-            Layout::new(&overlay_node),
-            Cursor::Available(pointer),
-            &renderer,
-            &mut clipboard,
-            &mut shell,
-        );
-
-        let captured = shell.is_event_captured();
-        let redraw = shell.redraw_request();
-        drop(shell);
-
-        assert!(messages.is_empty());
-        assert!(!captured);
-        assert_ne!(redraw, window::RedrawRequest::Wait);
     }
 }

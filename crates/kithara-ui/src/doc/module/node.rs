@@ -7,8 +7,8 @@ use super::{
     motion::{Motion, Pose},
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
-        PopoverAt, ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle,
-        WindowControlsStyle,
+        PopoverAt, PopoverDismiss, ScalarFormat, TableColumn, TextAlign, TextStyle, Tone,
+        WaveStyle, WindowControlsStyle,
     },
 };
 use crate::{
@@ -74,6 +74,9 @@ pub enum ControlNode {
         active_frame_color: Option<ColorRole>,
         #[serde(default)]
         write: Option<BindingRef>,
+        /// Written by an activation of the surface its `write` steps.
+        #[serde(default)]
+        reset: Option<BindingRef>,
         children: Vec<Self>,
     },
     Column {
@@ -108,6 +111,9 @@ pub enum ControlNode {
         background_alpha: Option<f32>,
         #[serde(default)]
         write: Option<BindingRef>,
+        /// Written by an activation of the surface its `write` steps.
+        #[serde(default)]
+        reset: Option<BindingRef>,
         children: Vec<Self>,
     },
     Scroll {
@@ -159,6 +165,9 @@ pub enum ControlNode {
         at: PopoverAt,
         #[serde(default)]
         align: PopoverAlign,
+        /// `Write` needs `open` to be a view flag.
+        #[serde(default)]
+        dismiss: PopoverDismiss,
         anchor: Box<Self>,
         content: Box<Self>,
     },
@@ -166,6 +175,9 @@ pub enum ControlNode {
     Pressable {
         id: NodeId,
         press: BindingRef,
+        /// Written by a secondary press.
+        #[serde(default)]
+        secondary: Option<BindingRef>,
         child: Box<Self>,
     },
     /// Offsets its child from wherever its container placed it.
@@ -486,6 +498,14 @@ pub enum ControlNode {
         badge: Option<String>,
         #[serde(default)]
         zoom: Option<BindingRef>,
+        /// Written by the wheel's zoom.
+        #[serde(default)]
+        write_zoom: Option<BindingRef>,
+        /// Where a drag across the wave starts and ends the loop it marks.
+        #[serde(default)]
+        write_loop_start: Option<BindingRef>,
+        #[serde(default)]
+        write_loop_end: Option<BindingRef>,
     },
     Vis {
         id: NodeId,
@@ -589,6 +609,10 @@ pub enum ControlNode {
         columns: Option<Param<Vec<TableColumn>>>,
         #[serde(default)]
         columns_state: Option<BindingRef>,
+        /// Written with a column's width when its divider is dragged, scoped
+        /// by that column's id under `column`.
+        #[serde(default)]
+        write_width: Option<BindingRef>,
     },
     Tree {
         id: NodeId,
@@ -600,6 +624,9 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         #[serde(default)]
         query: Option<BindingRef>,
+        /// Written with the text typed into the search field.
+        #[serde(default)]
+        write_query: Option<BindingRef>,
     },
     ContextBar {
         id: NodeId,

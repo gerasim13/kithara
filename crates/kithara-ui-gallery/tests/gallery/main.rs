@@ -8,7 +8,7 @@ mod checks;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    render::{Clock, Skin, UiEvent},
+    render::{Clock, Published, Skin},
 };
 #[cfg(feature = "masonry")]
 use kithara_ui_gallery::host;
@@ -35,7 +35,7 @@ mod tests {
         registry::SECONDS,
         render::{ControlAction, ReadValue, Reads},
         source::SourceResolver,
-        view::ViewWrite,
+        view::ViewState,
     };
     use num_traits::cast::AsPrimitive;
 
@@ -78,7 +78,7 @@ mod tests {
 
         drop(update(
             &mut gallery,
-            Message::Ui(UiEvent::Control {
+            Message::Ui(Published::Gesture {
                 path: "skins/kithara-neon/item".to_owned(),
                 action: ControlAction::Activate,
             }),
@@ -98,7 +98,7 @@ mod tests {
 
         drop(update(
             &mut gallery,
-            Message::Ui(UiEvent::Control {
+            Message::Ui(Published::Gesture {
                 path: "assets/mono/item".to_owned(),
                 action: ControlAction::Activate,
             }),
@@ -221,7 +221,7 @@ mod tests {
 
         let mut drawn = BTreeSet::new();
         for ui in pages {
-            each_control(&ui, &mut |_, spec| {
+            each_control(&ui, &mut |_, spec, _| {
                 drawn.insert(spec.kind());
             });
         }
@@ -444,7 +444,7 @@ mod tests {
     ) {
         let ui = page(tab);
         let mut claims = Vec::new();
-        each_control(&ui, &mut |path, spec| {
+        each_control(&ui, &mut |path, spec, _| {
             if belongs(path) {
                 for kind in engine_descriptor_kinds(spec) {
                     let path = if matches!(spec, ControlSpec::Tree { .. }) && *kind == "text-input"
@@ -522,8 +522,12 @@ mod tests {
         }
     }
 
-    fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
-        fn walk(node: &ExpandedNode, ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
+    fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec, Option<&Binding>)) {
+        fn walk(
+            node: &ExpandedNode,
+            ui: &CompiledUi,
+            visit: &mut impl FnMut(&str, &ControlSpec, Option<&Binding>),
+        ) {
             match node {
                 ExpandedNode::Row { children, .. }
                 | ExpandedNode::Column { children, .. }
@@ -553,8 +557,10 @@ mod tests {
                         walk(branch, ui, visit);
                     }
                 }
-                ExpandedNode::Control { path, spec, .. } => {
-                    visit(ui.resolve(*path), spec);
+                ExpandedNode::Control {
+                    path, spec, write, ..
+                } => {
+                    visit(ui.resolve(*path), spec, write.as_ref());
                 }
                 other => panic!("the control census does not walk {other:?}"),
             }
@@ -598,14 +604,23 @@ mod tests {
         );
     }
 
-    /// What each of `paths` writes into `state`, which the document says and
-    /// the compiled screen carries.
-    fn turned_to<'a>(ui: &'a CompiledUi, state: &str, paths: &[String]) -> Vec<&'a str> {
+    /// The page a press on each of `paths` turns `state` to, which the
+    /// document says and the compiled screen carries.
+    fn turned_to(ui: &CompiledUi, state: &str, paths: &[String]) -> Vec<String> {
+        let reads = DemoReads::default();
         paths
             .iter()
-            .map(|path| match ui.views().at(path) {
-                Some((wrote, ViewWrite::Page(page))) if wrote == state => page,
-                other => panic!("{path} must turn {state}, and writes {other:?}"),
+            .map(|path| {
+                let mut view = ViewState::new();
+                let published = Published::Gesture {
+                    action: ControlAction::Activate,
+                    path: path.clone(),
+                };
+                let host = ui.views().settle(published, &reads, &mut view);
+                match (host, view.page(state)) {
+                    (None, Some(page)) => page.to_owned(),
+                    other => panic!("{path} must turn {state}, and turns {other:?}"),
+                }
             })
             .collect()
     }
@@ -656,7 +671,7 @@ mod tests {
     fn the_assets_page_shows_every_icon_the_toolkit_draws() {
         let ui = page("assets");
         let mut shown = Vec::new();
-        each_control(&ui, &mut |path, spec| {
+        each_control(&ui, &mut |path, spec, _| {
             if let ControlSpec::Glyph { icon, .. } = spec
                 && path.starts_with("assets/icon-")
             {
@@ -728,10 +743,10 @@ mod tests {
             found.popovers,
             [
                 ("app-menu/menu/pop", "app-menu/menu"),
-                ("ctx/track-1/menu", "gallery.menu.context@row=1"),
-                ("ctx/track-2/menu", "gallery.menu.context@row=2"),
-                ("ctx/track-3/menu", "gallery.menu.context@row=3"),
-                ("ctx/track-4/menu", "gallery.menu.context@row=4"),
+                ("ctx/track-1/menu", "ctx/1"),
+                ("ctx/track-2/menu", "ctx/2"),
+                ("ctx/track-3/menu", "ctx/3"),
+                ("ctx/track-4/menu", "ctx/4"),
             ]
         );
 
@@ -1335,16 +1350,16 @@ mod tests {
     /// what turns it.
     #[kithara::test]
     fn the_press_on_the_scene_artwork_turns_the_flag_it_switches_on() {
-        let mut reads = DemoReads::default();
+        let mut hand = checks::Hand::at("scene");
 
         assert_eq!(
-            reads.get("gallery.scene.sparked"),
+            hand.reads.get("gallery.scene.sparked"),
             Some(ReadValue::Bool(false))
         );
-        reads.apply("scene/switch", &ControlAction::Activate);
+        hand.press("scene/switch");
 
         assert_eq!(
-            reads.get("gallery.scene.sparked"),
+            hand.reads.get("gallery.scene.sparked"),
             Some(ReadValue::Bool(true))
         );
     }
@@ -1353,18 +1368,21 @@ mod tests {
     /// back from the same endpoint.
     #[kithara::test]
     fn a_published_point_is_where_the_scene_placement_then_stands() {
-        let mut reads = DemoReads::default();
+        let mut hand = checks::Hand::at("scene");
         let at = Pt { x: 260.0, y: 150.0 };
 
-        reads.apply("scene/carry-one", &ControlAction::Place(at));
+        hand.gesture("scene/carry-one", ControlAction::Place(at));
 
-        assert_eq!(reads.get("gallery.scene.one"), Some(ReadValue::Point(at)));
+        assert_eq!(
+            hand.reads.get("gallery.scene.one"),
+            Some(ReadValue::Point(at))
+        );
     }
 
     /// The one fader a page carries, under the path the document gives it.
     fn only_fader_path(ui: &CompiledUi) -> String {
         let mut found = Vec::new();
-        each_control(ui, &mut |path, spec| {
+        each_control(ui, &mut |path, spec, _| {
             if matches!(spec, ControlSpec::Fader { .. }) {
                 found.push(path.to_owned());
             }
@@ -1389,12 +1407,12 @@ mod tests {
     #[case::sprite("sprites", "gallery.sprite.scrub")]
     fn the_scrub_fader_moves_its_neighbour(#[case] tab: Page, #[case] endpoint: &str) {
         let path = only_fader_path(&page(tab));
-        let mut reads = DemoReads::default();
-        let before = scalar(&reads, endpoint);
+        let mut hand = checks::Hand::at(tab);
+        let before = scalar(&hand.reads, endpoint);
 
-        reads.apply(&path, &ControlAction::SetScalar(0.9));
+        hand.gesture(&path, ControlAction::SetScalar(0.9));
 
-        assert_ne!(scalar(&reads, endpoint), before);
+        assert_ne!(scalar(&hand.reads, endpoint), before);
     }
 
     #[kithara::test]
@@ -1474,12 +1492,12 @@ mod tests {
         collect_menu_reads(&ui.root, &ui, &mut keys);
         assert!(!keys.is_empty());
 
-        let mut reads = DemoReads::default();
-        reads.apply("app-menu/menu/new-window", &ControlAction::Activate);
+        let mut hand = checks::Hand::at("menu");
+        hand.press("app-menu/menu/new-window");
         let unanswered: Vec<_> = keys
             .iter()
             .copied()
-            .filter(|key| reads.get(key).is_none())
+            .filter(|key| hand.reads.get(key).is_none())
             .collect();
 
         assert_eq!(unanswered, [""; 0]);
@@ -1502,7 +1520,12 @@ mod tests {
 
         assert_eq!(
             contexts,
-            [("library2/context", "library.scope", "library.scope", 2)]
+            [(
+                "library2/context",
+                "library.scope",
+                "library.select_scope",
+                2
+            )]
         );
     }
 
@@ -1775,7 +1798,7 @@ mod tests {
                     },
                 write:
                     Some(Binding {
-                        kind: BindingKind::Model,
+                        kind: BindingKind::Command,
                         id: write,
                         ..
                     }),

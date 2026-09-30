@@ -7,6 +7,7 @@
             Table(
                 id: "tracks",
                 read: Model(id: "library.tracks"),
+                write: Command(id: "library.select_track"),
                 columns: [
                     (id: "deck", label: "@track_list.column.deck", style: Badge, width: 64.0),
                     (id: "title", label: "@track_list.column.title", style: Primary, width: 180.0, flexible: true),

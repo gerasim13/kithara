@@ -8,7 +8,7 @@ use kithara_ui::{
     module::{ChromeStyle, IconName, PopoverAt},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
-        ReadValue, Reads,
+        ControlAction, Published, ReadValue, Reads,
         document::{Clock, Ctx},
     },
     size::{Dim, SizeSpec},
@@ -2729,9 +2729,18 @@ fn a_tabs_compiles_the_page_it_stands_at() {
         "one",
         "a state standing nowhere must show the page the document calls initial"
     );
+    let mut view = ViewState::new();
+    let host = ui.views().settle(
+        Published::Gesture {
+            action: ControlAction::Activate,
+            path: "nav/two".to_owned(),
+        },
+        &Silent,
+        &mut view,
+    );
     assert_eq!(
-        ui.views().at("nav/two").map(|(state, _)| state),
-        Some("shown"),
+        (host, view.page("shown")),
+        (None, Some("two")),
         "a press naming the screen's state must write the screen's state, not the module's"
     );
 }

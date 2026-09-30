@@ -167,14 +167,17 @@ mod tests {
     fn divider_columns(index_width: f32) -> Vec<ColumnLayout> {
         vec![
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new("index", "#", TableColumnStyle::Index, 28.0, false),
                 width: index_width,
             },
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new("name", "NAME", TableColumnStyle::Primary, 180.0, true),
                 width: 180.0,
             },
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new(
                     "detail",
                     "DETAIL",
@@ -185,6 +188,7 @@ mod tests {
                 width: 200.0,
             },
             ColumnLayout {
+                resizable: true,
                 column: TableColumn::new(
                     "action",
                     "ACTION",

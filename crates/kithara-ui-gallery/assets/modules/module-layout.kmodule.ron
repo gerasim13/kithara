@@ -5,6 +5,7 @@
     title: Some("Layout"),
     chip: Some("LAY"),
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-module-layout" })),
     footer: Some(Model(id: "gallery.footer.layout")),
     root: Column(
         children: [
@@ -14,6 +15,7 @@
                 default: [
                     Include(id: "layout", source: "library.kmodule.ron", with: {
                         "read": "library.visible_tracks",
+                        "select": "library.select_track",
                         "columns": "[(id: \"title\", label: \"@track_list.column.title\", style: Primary, width: 180.0, flexible: true), (id: \"artist\", label: \"@track_list.column.artist\", style: Secondary, width: 200.0), (id: \"time\", label: \"@track_list.column.time\", style: Time, width: 70.0)]",
                     }),
                 ],

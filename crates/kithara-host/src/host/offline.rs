@@ -13,7 +13,8 @@ use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
 use super::{Host, HostConfig};
 use crate::{
-    PlayerMember,
+    MetronomeConfig, PlayerMember,
+    rt::SessionOutput,
     session::{
         HostDispatcher, RootView,
         offline::{OfflineSessionClient, OfflineTaskConfig},
@@ -63,6 +64,7 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
         #[builder(default)] limiter: LimiterConfig,
+        #[builder(default)] metronome: MetronomeConfig,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
         #[builder(default = default_dispatcher_config())] dispatcher: DispatcherConfig,
         #[builder(default = TaskConfig::new())] task: TaskConfig,
@@ -74,6 +76,7 @@ impl<S> HostConfig<S> {
             declick_frames,
             declared_latency,
             limiter,
+            metronome,
             worker,
             task,
             dispatcher: Box::new(dispatcher),
@@ -107,6 +110,7 @@ where
             declick_frames,
             declared_latency,
             limiter,
+            metronome,
             worker,
             dispatcher,
             task,
@@ -114,6 +118,7 @@ where
         else {
             unreachable!("offline runtime requires offline Host config");
         };
+        let output = SessionOutput::new(limiter, metronome)?;
         let worker = Worker::new(worker);
         let dispatcher = worker.dispatcher(*dispatcher);
         let (client, task_handle) = crate::session::offline::spawn(
@@ -123,7 +128,7 @@ where
             root_view,
             OfflineTaskConfig {
                 declared_latency,
-                limiter,
+                output,
                 declick_frames,
                 max_block_frames,
                 sample_rate,

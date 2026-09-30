@@ -143,12 +143,7 @@ impl Host for Spy<'_> {
         Self::flatten(children)
     }
 
-    fn window(
-        &mut self,
-        content: Self::Output,
-        _carried: Option<&Binding>,
-        _resize_edges: bool,
-    ) -> Self::Output {
+    fn window(&mut self, content: Self::Output, _resize_edges: bool) -> Self::Output {
         content
     }
 }

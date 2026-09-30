@@ -11,12 +11,12 @@ use super::{
 };
 use crate::{
     engine::{Descriptor, Engine, PickerSnapshot, Target},
-    expand::ExpandedNode,
+    expand::{ExpandedNode, header_path},
     interact::iced as iced_interact,
     layout::{FrameCorners, FrameSides},
     module::ChromeStyle,
     render::{
-        HostedControlPlan, IcedSkin, Resolving, Skin, UiEvent, corner_radius, document::Ctx,
+        HostedControlPlan, IcedSkin, Published, Resolving, Skin, corner_radius, document::Ctx,
         frame_overlay, picker_hits,
     },
     size::{Dim, SizeSpec, Snapshot, branch, is_hidden},
@@ -24,16 +24,16 @@ use crate::{
 };
 
 pub(crate) struct Rendered<'a> {
-    element: Element<'a, UiEvent>,
+    element: Element<'a, Published>,
     align: Horizontal,
 }
 
 impl<'a> Rendered<'a> {
-    pub(super) const fn new(element: Element<'a, UiEvent>, align: Horizontal) -> Self {
+    pub(super) const fn new(element: Element<'a, Published>, align: Horizontal) -> Self {
         Self { element, align }
     }
 
-    pub(super) const fn leading(element: Element<'a, UiEvent>) -> Self {
+    pub(super) const fn leading(element: Element<'a, Published>) -> Self {
         Self::new(element, Horizontal::Left)
     }
 }
@@ -47,12 +47,12 @@ pub(super) fn padding(horizontal: f32, vertical: f32) -> Padding {
 }
 
 pub(super) fn filled<'a>(
-    element: Container<'a, UiEvent>,
+    element: Container<'a, Published>,
     background: Option<ColorRole>,
     alpha: Option<f32>,
     round: FrameCorners,
     skin: &Skin,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let Some(role) = background else {
         return element.into();
     };
@@ -71,12 +71,12 @@ pub(super) fn filled<'a>(
 }
 
 pub(super) fn bordered<'a>(
-    element: Element<'a, UiEvent>,
+    element: Element<'a, Published>,
     frame: Option<FrameSides>,
     tone: (ColorRole, f32),
     size: (Length, Length),
     skin: &Skin,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let (role, width) = tone;
     match frame {
         Some(sides) => frame_overlay(element, sides, size, skin.color(role), width),
@@ -95,7 +95,7 @@ pub(super) fn effective_size(
 pub(super) fn apply_size<'a>(
     rendered: Rendered<'a>,
     size: Option<SizeSpec>,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let Rendered { element, align } = rendered;
     let Some(size) = size else {
         return element;
@@ -125,7 +125,7 @@ pub(super) enum HostedLayout {
     Chrome {
         /// What the module's `drop:` mounts, when it declares one.
         drop: Option<HostedControlPlan>,
-        header: Option<(String, String)>,
+        header: Option<String>,
         collapsed: bool,
     },
     Group {
@@ -260,7 +260,7 @@ impl HostedLayout {
                 if let Some(plan) = drop {
                     descriptors.append(&mut plan.descriptors());
                 }
-                if let Some((path, _)) = header {
+                if let Some(path) = header {
                     descriptors.push(Descriptor::activation(path.clone()));
                 }
             }
@@ -323,6 +323,15 @@ impl HostedLayout {
         }
     }
 
+    pub(super) fn drop_zone(&self) -> Option<&str> {
+        match self {
+            Self::Chrome {
+                drop: Some(plan), ..
+            } => Some(plan.path()),
+            _ => None,
+        }
+    }
+
     fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
         match self {
             Self::Group { children, .. }
@@ -370,7 +379,7 @@ impl HostedLayout {
                 } else {
                     layout
                 };
-                let Some((path, _)) = header else {
+                let Some(path) = header else {
                     return;
                 };
                 let Some(body) = first_child(shell) else {
@@ -459,37 +468,17 @@ impl HostedLayout {
         descriptors
     }
 
-    pub(super) fn header_module<'a>(&'a self, path: &str) -> Option<&'a str> {
-        match self {
-            Self::Chrome {
-                header: Some((header, module)),
-                ..
-            } if header == path => Some(module),
-            Self::Chrome { .. }
-            | Self::Group { .. }
-            | Self::Measured { .. }
-            | Self::Scroll { .. }
-            | Self::Slot { .. }
-            | Self::Stage { .. }
-            | Self::Wrapper { .. }
-            | Self::Control(_)
-            | Self::SelfMeasuredControl(_) => None,
-        }
-    }
-
     pub(super) fn module(spec: ModuleHost<'_>) -> Self {
         let ModuleHost {
             instance,
-            module,
             chrome,
             collapsed,
             drop,
         } = spec;
         Self::Chrome {
             collapsed,
-            drop: drop.then(|| HostedControlPlan::crossing(instance)),
-            header: (chrome == ChromeStyle::Full)
-                .then(|| (format!("{instance}/header"), module.to_owned())),
+            drop: drop.map(|_| HostedControlPlan::crossing(instance)),
+            header: (chrome == ChromeStyle::Full).then(|| header_path(instance)),
         }
     }
 
@@ -595,7 +584,7 @@ mod tests {
 
     #[kithara::test]
     fn fixed_size_spec_sets_both_element_axes() {
-        let element: Element<'static, UiEvent> = Space::new().into();
+        let element: Element<'static, Published> = Space::new().into();
         let element = apply_size(
             Rendered::leading(element),
             Some(SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(6.0))),
@@ -609,7 +598,7 @@ mod tests {
 
     #[kithara::test]
     fn shrink_size_spec_reaches_the_toolkit() {
-        let element: Element<'static, UiEvent> =
+        let element: Element<'static, Published> =
             Space::new().width(Length::Fill).height(Length::Fill).into();
         let element = apply_size(
             Rendered::leading(element),
@@ -808,7 +797,7 @@ mod tests {
 
     #[kithara::test]
     fn range_preserves_widget_fill_portion() {
-        let element: Element<'static, UiEvent> = Space::new()
+        let element: Element<'static, Published> = Space::new()
             .width(Length::FillPortion(2))
             .height(Length::Fill)
             .into();

@@ -1,7 +1,6 @@
 use std::{collections::HashMap, mem, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
-use kithara_effects::LimiterConfig;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{
@@ -12,6 +11,7 @@ use kithara_warp::BeatGridId;
 use super::super::{HeldPlayer, Host, HostOwned, owner::SessionRuntime};
 use crate::{
     PlayerMember,
+    rt::SessionOutput,
     session::{HostDispatcher, RootView, web::WebSessionState},
     wasm::HostRoute,
 };
@@ -89,13 +89,13 @@ impl<S> Platform<S> {
         view: RootView,
         sample_rate: NonZeroU32,
         _output_block_frames: Option<NonZeroU32>,
-        limiter: LimiterConfig,
+        output: SessionOutput,
     ) -> Result<StartedPlatform<S>, PlayError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(group, view, sample_rate, limiter)?;
+            crate::session::web::spawn::<S>(group, view, sample_rate, output)?;
         Ok((dispatcher, Self::owner(web_state)))
     }
 

@@ -31,7 +31,7 @@ use crate::{
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     module::ViewSet,
     render::{
-        ControlAction, Reads, Skin, UiEvent, WindowCommand,
+        Published, Reads, Skin, UiEvent, WindowCommand,
         custom::CustomKinds,
         document,
         document::{Clock, Ctx},
@@ -53,7 +53,7 @@ pub struct Ui<'config, Application> {
     #[field(get(copy), vis = "pub")]
     clock: Clock,
     config: Config<'config>,
-    root: MasonryRoot<UiEvent>,
+    root: MasonryRoot<Published>,
     state: MasonryState,
     pointer: PhysicalPosition<f64>,
     size: PhysicalSize<u32>,
@@ -490,13 +490,15 @@ where
         }
         let was_document = self.app.document().to_owned();
         let was_skin = self.app.skin().id().to_owned();
-        for event in actions {
-            if let UiEvent::Control { path, action } = &event
-                && matches!(action, ControlAction::Activate)
-                && let Some((state, write)) = self.screens.shown().views().at(path)
-            {
-                self.view.apply(state, write);
-            }
+        for published in actions {
+            let Self {
+                app, screens, view, ..
+            } = self;
+            let Some(event) =
+                app.reads(|reads| screens.shown().views().settle(published, reads, view))
+            else {
+                continue;
+            };
             if let UiEvent::Window(command) = event {
                 self.commands.push(command);
             }
@@ -602,7 +604,7 @@ fn mount<Application>(
     options: RenderRootOptions,
     clock: Clock,
     view: &ViewState,
-) -> Result<MasonryRoot<UiEvent>, RunError>
+) -> Result<MasonryRoot<Published>, RunError>
 where
     Application: App,
 {

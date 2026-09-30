@@ -20,7 +20,7 @@ use crate::{
     draw::{DrawListBuilder, Rect},
     interact::iced as iced_interact,
     render::{
-        Skin, UiEvent,
+        Published, Skin,
         scroll::{Bar, Window},
     },
 };
@@ -34,14 +34,14 @@ use crate::{
 /// on either and the bar comes out of the same three numbers.
 pub(crate) struct Viewport<'a> {
     skin: &'a Skin,
-    child: Element<'a, UiEvent>,
+    child: Element<'a, Published>,
     height: Length,
     width: Length,
 }
 
 impl<'a> Viewport<'a> {
     pub(crate) const fn new(
-        child: Element<'a, UiEvent>,
+        child: Element<'a, Published>,
         width: Length,
         height: Length,
         skin: &'a Skin,
@@ -55,7 +55,7 @@ impl<'a> Viewport<'a> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
+impl IcedWidget<Published, Theme, Renderer> for Viewport<'_> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.child)]
     }
@@ -188,7 +188,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<overlay::Element<'a, Published, Theme, Renderer>> {
         overlay::from_children(
             std::slice::from_mut(&mut self.child),
             tree,
@@ -221,7 +221,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
@@ -250,7 +250,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Viewport<'_> {
     }
 }
 
-impl<'a> From<Viewport<'a>> for Element<'a, UiEvent> {
+impl<'a> From<Viewport<'a>> for Element<'a, Published> {
     fn from(viewport: Viewport<'a>) -> Self {
         Self::new(viewport)
     }

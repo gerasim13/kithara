@@ -17,12 +17,13 @@ use tracing::{debug, warn};
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
     state::{
-        Deck, GraphRegistry, MixTap, SessionState, SlotNodes, add_graph_node, ensure_ctx,
+        Deck, GraphRegistry, SessionState, SlotNodes, TapSlot, Taps, add_graph_node, ensure_ctx,
         prepare_eq_layout,
     },
     transport::SessionTransportState,
 };
 use crate::{
+    PlayError,
     api::{SessionDuckingMode, SlotId},
     bridge::slot_channels,
     rt::{MasterEqNode, PlayerNode, TapNode},
@@ -74,64 +75,83 @@ fn connect_stereo(
 
 pub(super) mod tap {
     use super::*;
+    use crate::api::Tap;
 
-    pub(in crate::session) fn enable<T, S>(
+    pub(in crate::session) fn attach<T, S>(
         state: &mut SessionState<T, S>,
+        tap: Tap,
         outputs: OutputGroup,
     ) -> Result<(), SessionError> {
-        if state.mix_tap.is_some() {
-            return Err(SessionError::MixTapActive);
+        if state.taps.slot(tap).is_some() {
+            return Err(SessionError::TapActive);
         }
-        let Some(limiter_id) = state.session_limiter_node_id else {
-            state.mix_tap = Some(MixTap::Requested(outputs));
+        let Some(from) = source(state, tap) else {
+            *state.taps.slot(tap) = Some(TapSlot::Requested(outputs));
             return Ok(());
         };
-        install(state, limiter_id, outputs)
+        install(state, tap, from, outputs)
     }
 
-    pub(in crate::session) fn disable<T, S>(state: &mut SessionState<T, S>) {
-        let Some(MixTap::Installed(tap_id)) = state.mix_tap.take() else {
+    pub(in crate::session) fn detach<T, S>(state: &mut SessionState<T, S>, tap: Tap) {
+        let Some(TapSlot::Installed(tap_id)) = state.taps.slot(tap).take() else {
             return;
         };
         let Some(ref mut fw_ctx) = state.ctx else {
             return;
         };
         if let Err(err) = fw_ctx.remove_node(tap_id) {
-            warn!(?err, "failed to remove session mix tap node");
+            warn!(?tap, ?err, "failed to remove session tap node");
         }
         if let Err(err) = fw_ctx.update() {
-            warn!("graph update after mix tap disable failed: {err:?}");
+            warn!(?tap, "graph update after tap detach failed: {err:?}");
         }
     }
 
     pub(in crate::session) fn install_requested<T, S>(
         state: &mut SessionState<T, S>,
-        limiter_id: NodeID,
     ) -> Result<(), SessionError> {
-        let Some(MixTap::Requested(outputs)) = state.mix_tap.take() else {
-            return Ok(());
-        };
-        install(state, limiter_id, outputs)
+        for tap in [Tap::Master, Tap::Output] {
+            let Some(from) = source(state, tap) else {
+                continue;
+            };
+            let slot = state.taps.slot(tap);
+            if !matches!(slot, Some(TapSlot::Requested(_))) {
+                continue;
+            }
+            let Some(TapSlot::Requested(outputs)) = slot.take() else {
+                continue;
+            };
+            install(state, tap, from, outputs)?;
+        }
+        Ok(())
+    }
+
+    fn source<T, S>(state: &SessionState<T, S>, tap: Tap) -> Option<NodeID> {
+        match tap {
+            Tap::Master => state.session_limiter_node_id,
+            Tap::Output => state.session_metronome_node_id,
+        }
     }
 
     fn install<T, S>(
         state: &mut SessionState<T, S>,
-        limiter_id: NodeID,
+        tap: Tap,
+        from: NodeID,
         outputs: OutputGroup,
     ) -> Result<(), SessionError> {
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
         let tap_id = add_graph_node(fw_ctx, TapNode::new(outputs))?;
-        if let Err(err) = connect_stereo(fw_ctx, limiter_id, tap_id, "connect limiter->mix_tap") {
+        if let Err(err) = connect_stereo(fw_ctx, from, tap_id, "connect session output->tap") {
             if let Err(remove_err) = fw_ctx.remove_node(tap_id) {
-                warn!(?remove_err, "failed to remove the unconnected mix tap node");
+                warn!(?remove_err, "failed to remove the unconnected tap node");
             }
             return Err(err);
         }
         if let Err(err) = fw_ctx.update() {
-            warn!("graph update after mix tap install failed: {err:?}");
+            warn!("graph update after tap install failed: {err:?}");
         }
-        state.mix_tap = Some(MixTap::Installed(tap_id));
-        debug!(?tap_id, "[KITHARA-ROUTE] session mix tap installed");
+        *state.taps.slot(tap) = Some(TapSlot::Installed(tap_id));
+        debug!(?tap, ?tap_id, "[KITHARA-ROUTE] session tap installed");
         Ok(())
     }
 }
@@ -321,11 +341,13 @@ pub(super) mod lifecycle {
             state.ctx = None;
             state.publish_root();
             state.transport_control = None;
-            state.mix_tap = None;
+            state.taps = Taps::default();
             state.transport = SessionTransportState::default();
             state.session_output_node_id = None;
             state.session_output_memo = None;
             state.session_limiter_node_id = None;
+            state.session_metronome_node_id = None;
+            state.session_metronome_memo = None;
         }
         Ok(())
     }
@@ -483,6 +505,37 @@ pub(super) mod controls {
             let mut queue = fw_ctx.event_queue(session_id);
             memo.update_memo(&mut queue);
         }
+    }
+
+    pub(in crate::session) fn set_metronome<T, S>(state: &mut SessionState<T, S>, on: bool) {
+        state.metronome = on;
+        if let (Some(fw_ctx), Some(id), Some(memo)) = (
+            &mut state.ctx,
+            state.session_metronome_node_id,
+            &mut state.session_metronome_memo,
+        ) {
+            memo.enabled = on;
+            let mut queue = fw_ctx.event_queue(id);
+            memo.update_memo(&mut queue);
+        }
+    }
+
+    /// The next click sounds at `level`; a sounding click keeps its own.
+    pub(in crate::session) fn set_metronome_level<T, S>(
+        state: &mut SessionState<T, S>,
+        level: f32,
+    ) -> Result<(), PlayError> {
+        state.output.set_metronome_level(level)?;
+        if let (Some(fw_ctx), Some(id), Some(memo)) = (
+            &mut state.ctx,
+            state.session_metronome_node_id,
+            &mut state.session_metronome_memo,
+        ) {
+            memo.level = level;
+            let mut queue = fw_ctx.event_queue(id);
+            memo.update_memo(&mut queue);
+        }
+        Ok(())
     }
 
     /// Validates the whole request before mutating anything, so an invalid
@@ -860,6 +913,40 @@ mod tests {
             Reply::Err(error) => panic!("transport snapshot failed: {error}"),
             _ => panic!("transport query returned an unexpected reply"),
         }
+    }
+
+    #[kithara::test]
+    fn a_session_tick_publishes_the_session_grid_the_graph_committed() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player = register(&mut state);
+        start(&mut state, player);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(124.0).expect("invariant: fixture tempo is valid"),
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(deliver_one_block(), "transport commit must be rendered");
+
+        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+
+        let committed = state
+            .transport_control
+            .as_mut()
+            .expect("a running stream keeps transport control")
+            .observation()
+            .snapshot()
+            .expect("the rendered block committed the tempo")
+            .session_grid();
+        assert_eq!(
+            state.root_view.grid(),
+            committed,
+            "with no synchronization command, the session tick publishes the committed grid"
+        );
     }
 
     /// Stopping is the verb a host reaches for when playback ends, and it must

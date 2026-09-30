@@ -18,7 +18,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Rect, Rgba},
     module::TextStyle,
     render::{
-        ReadValue, Skin, UiEvent, Widget,
+        Published, ReadValue, Skin, Widget,
         controls::{PaintState, Probe},
     },
     skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
@@ -41,7 +41,7 @@ impl<'a, 'value, 'data, 'skin> Widget<'a> for Text<'value, 'data, 'skin>
 where
     'skin: 'a,
 {
-    fn view(self) -> Element<'a, UiEvent> {
+    fn view(self) -> Element<'a, Published> {
         let value = match self.value {
             Some(ReadValue::Text(value)) => Some(*value),
             _ => self.label,
@@ -159,7 +159,7 @@ impl Painted<'_> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
+impl IcedWidget<Published, Theme, Renderer> for Painted<'_> {
     /// Words are drawn as outlines through the canvas, so tessellating them is
     /// the most expensive thing on a page of prose. The list a paragraph draws
     /// is kept and the geometry behind it reused, exactly as a painted control
@@ -218,7 +218,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
     }
 }
 
-impl<'a> From<Painted<'a>> for Element<'a, UiEvent> {
+impl<'a> From<Painted<'a>> for Element<'a, Published> {
     fn from(painted: Painted<'a>) -> Self {
         Self::new(painted)
     }

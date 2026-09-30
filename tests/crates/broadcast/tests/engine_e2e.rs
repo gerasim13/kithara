@@ -5,6 +5,7 @@ use kithara::{
     audio::mock::TestPcmReader,
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, BroadcastOutput},
     events::TrackId,
+    host::Tap,
     net::{HttpClient, NetOptions},
     output::{LiveOutput, OutputGroup},
     platform::{CancelScope, time::Duration, tokio::task::spawn_blocking},
@@ -162,7 +163,7 @@ impl OnAir {
         });
         harness
             .host()
-            .enable_outputs(outputs)
+            .attach_outputs(Tap::Master, outputs)
             .await
             .expect("enable the master output group");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");

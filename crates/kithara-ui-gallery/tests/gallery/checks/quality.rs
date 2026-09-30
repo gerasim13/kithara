@@ -1,19 +1,21 @@
 //! What the quality cell reports and what picking a variant does to it.
 
 use kithara_test_utils::kithara;
-use kithara_ui::render::ReadValue;
+use kithara_ui::render::{ReadValue, Reads as _};
 
-use crate::demo::quality::QualityState;
+use super::Hand;
+use crate::DemoReads;
 
 const CELL: &str = "modules/deck/transport/stream/cell";
-fn text(state: &QualityState, endpoint: &str) -> String {
+const MENU: &str = "modules/quality";
+fn text(state: &DemoReads, endpoint: &str) -> String {
     match state.get(endpoint) {
         Some(ReadValue::Text(value)) => value.to_owned(),
         other => panic!("{endpoint} must read as text, got {other:?}"),
     }
 }
 
-fn flag(state: &QualityState, endpoint: &str) -> bool {
+fn flag(state: &DemoReads, endpoint: &str) -> bool {
     match state.get(endpoint) {
         Some(ReadValue::Bool(value)) => value,
         other => panic!("{endpoint} must read as a flag, got {other:?}"),
@@ -22,7 +24,7 @@ fn flag(state: &QualityState, endpoint: &str) -> bool {
 
 #[kithara::test]
 fn the_cell_names_the_variant_the_ladder_plays_while_it_picks_them() {
-    let state = QualityState::default();
+    let state = DemoReads::default();
 
     assert_eq!(text(&state, "deck.stream.quality@deck=a"), "AUTO·320");
     assert!(flag(
@@ -34,39 +36,40 @@ fn the_cell_names_the_variant_the_ladder_plays_while_it_picks_them() {
 
 #[kithara::test]
 fn picking_a_variant_leaves_auto_and_closes_the_menu() {
-    let mut state = QualityState::default();
-    state.activate(CELL);
-    assert!(flag(&state, "deck.stream.quality_menu@deck=a"));
+    let mut hand = Hand::at("modules");
+    hand.press(CELL);
+    assert!(hand.view.flag(MENU));
 
-    state.activate("modules/deck/transport/stream/variant-2/pick");
+    hand.press("modules/deck/transport/stream/variant-2/pick");
 
-    assert_eq!(text(&state, "deck.stream.quality@deck=a"), "128");
+    let state = &hand.reads;
+    assert_eq!(text(state, "deck.stream.quality@deck=a"), "128");
     assert!(!flag(
-        &state,
+        state,
         "deck.stream.variant_active@deck=a,variant=auto"
     ));
-    assert!(flag(&state, "deck.stream.variant_active@deck=a,variant=2"));
-    assert!(!flag(&state, "deck.stream.quality_menu@deck=a"));
+    assert!(flag(state, "deck.stream.variant_active@deck=a,variant=2"));
+    assert!(!hand.view.flag(MENU));
 }
 
 #[kithara::test]
-fn the_popover_path_closes_the_menu_and_the_cell_toggles_it() {
+fn the_popover_closes_the_menu_and_the_cell_toggles_it() {
     const POP: &str = "modules/deck/transport/stream/pop";
 
-    let mut state = QualityState::default();
+    let mut hand = Hand::at("modules");
 
-    state.activate(CELL);
-    state.activate(POP);
-    assert!(!flag(&state, "deck.stream.quality_menu@deck=a"));
+    hand.press(CELL);
+    hand.press(POP);
+    assert!(!hand.view.flag(MENU));
 
-    state.activate(CELL);
-    state.activate(CELL);
-    assert!(!flag(&state, "deck.stream.quality_menu@deck=a"));
+    hand.press(CELL);
+    hand.press(CELL);
+    assert!(!hand.view.flag(MENU));
 }
 
 #[kithara::test]
 fn a_slot_beyond_the_ladder_reads_hidden() {
-    let state = QualityState::default();
+    let state = DemoReads::default();
 
     assert!(!flag(&state, "deck.stream.variant_hidden@deck=a,variant=2"));
     assert!(flag(&state, "deck.stream.variant_hidden@deck=a,variant=3"));

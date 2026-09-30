@@ -1,13 +1,20 @@
-use crate::{draw::Pt, interact::recognizers::Edge};
+use crate::{draw::Pt, interact::recognizers::Edge, validate::Gesture};
 #[cfg(feature = "masonry")]
 use crate::{engine::EngineEvent, interact::recognizers::DragEvent};
 
 /// The one place a control event is built. Every publisher and every widget
 /// goes through here, so a binding rule has a single site to attach to instead
 /// of fifteen literals to keep in step.
-pub(crate) fn control_event(path: &str, action: ControlAction) -> UiEvent {
-    UiEvent::Control {
+pub(crate) fn control_event(path: &str, action: ControlAction) -> Published {
+    Published::Gesture {
         action,
+        path: path.to_owned(),
+    }
+}
+
+pub(crate) fn carry_event(path: &str, step: Carry) -> Published {
+    Published::Carry {
+        step,
         path: path.to_owned(),
     }
 }
@@ -17,7 +24,7 @@ pub(crate) fn control_event(path: &str, action: ControlAction) -> UiEvent {
 /// Both ends are host-owned scalars under the control's own path, so the
 /// control needs no second document node and the host needs no rule for
 /// turning an index back into a name.
-pub(crate) fn span_event(path: &str, edge: Edge, value: f32) -> UiEvent {
+pub(crate) fn span_event(path: &str, edge: Edge, value: f32) -> Published {
     let child = match edge {
         Edge::Min => "min",
         Edge::Max => "max",
@@ -29,25 +36,23 @@ pub(crate) fn span_event(path: &str, edge: Edge, value: f32) -> UiEvent {
 }
 
 #[cfg(feature = "masonry")]
-pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) -> UiEvent {
+pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) -> Published {
     match event {
         EngineEvent::Scalar(value) => {
             let path = child.map_or_else(|| path.to_owned(), |child| format!("{path}/{child}"));
             control_event(&path, ControlAction::SetScalar(value))
         }
         EngineEvent::Activate => control_event(path, ControlAction::Activate),
-        EngineEvent::Crossing(over) => {
-            control_event(path, ControlAction::Drag(DragPhase::Over(over)))
-        }
+        EngineEvent::Crossing(over) => carry_event(path, Carry(CarryStep::Over(over))),
         EngineEvent::Index(selected) => control_event(path, ControlAction::SelectIndex(selected)),
-        EngineEvent::Drag { event, index } => control_event(
+        EngineEvent::Drag { event, index } => carry_event(
             path,
-            ControlAction::Drag(match event {
-                DragEvent::Started => DragPhase::Start(index),
-                DragEvent::Dropped => DragPhase::Drop,
+            Carry(match event {
+                DragEvent::Started => CarryStep::Start(index),
+                DragEvent::Dropped => CarryStep::Drop,
             }),
         ),
-        EngineEvent::Text(query) => UiEvent::LibraryQuery(query),
+        EngineEvent::Text(query) => control_event(path, ControlAction::Text(query)),
     }
 }
 
@@ -63,19 +68,48 @@ pub enum ControlAction {
     Place(Pt),
     StepScalar(f32),
     SelectIndex(usize),
-    Drag(DragPhase),
+    Text(String),
 }
 
-/// Phase of a pointer drag that carries an item from the control it started on
-/// to the one it is released over.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+impl ControlAction {
+    pub(crate) const fn gesture(&self) -> Gesture {
+        match self {
+            Self::Activate => Gesture::Press,
+            Self::SecondaryActivate => Gesture::Secondary,
+            Self::SetScalar(_) => Gesture::Scalar,
+            Self::StepScalar(_) => Gesture::Step,
+            Self::SelectIndex(_) => Gesture::Index,
+            Self::Text(_) => Gesture::Text,
+            Self::Place(_) => Gesture::Place,
+        }
+    }
+}
+
+/// The value one declared write carries, typed by the endpoint it addresses.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum DragPhase {
-    /// The item at this index is now being dragged out of the control.
+pub enum WriteValue {
+    Trigger,
+    Scalar(f64),
+    Step(f32),
+    Index(usize),
+    Text(String),
+    Point(Pt),
+    Range(f64, f64),
+}
+
+/// One step of a row carried from the table it was picked up in to the drop
+/// zone it is let go over, which the toolkit follows for itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Carry(pub(crate) CarryStep);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CarryStep {
+    /// The row at this index is now being carried out of the table.
     Start(usize),
-    /// The pointer crossed into (`true`) or out of (`false`) the control.
+    /// The pointer crossed into (`true`) or out of (`false`) a drop zone.
     Over(bool),
-    /// The pointer was released and the drag ended.
+    /// The pointer was released and the carry ended.
     Drop,
 }
 
@@ -105,14 +139,36 @@ pub enum WindowEdge {
     SouthWest,
 }
 
-/// Event emitted by the shared UI contract.
+/// What a document publishes, for its host to settle through the compiled
+/// screen it was drawn from.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Published {
+    /// A hand operated the control at `path`.
+    Gesture { path: String, action: ControlAction },
+    /// A row is being carried, which the toolkit follows on its own.
+    Carry { path: String, step: Carry },
+    /// An event that needs no settling: window chrome, or what a widget the
+    /// host registered maps its own action to.
+    Host(UiEvent),
+}
+
+impl Published {
+    /// What a piece of window chrome asks of the window.
+    #[must_use]
+    pub const fn window(command: WindowCommand) -> Self {
+        Self::Host(UiEvent::Window(command))
+    }
+}
+
+/// What a host is handed once a document's publication settled.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum UiEvent {
-    Control { path: String, action: ControlAction },
-    SelectPreset(String),
-    ToggleModule(String),
-    OpenSettings,
-    LibraryQuery(String),
+    /// A write the document declares: the scoped endpoint key and its value.
+    Write {
+        key: String,
+        value: WriteValue,
+    },
     Window(WindowCommand),
 }

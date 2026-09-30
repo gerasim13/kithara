@@ -57,11 +57,17 @@ pub fn player_registry() -> TestRegistry {
             EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
         );
     }
-    registry.insert(
-        EndpointCategory::Command,
+    for id in [
+        "deck.transport.loop_end",
+        "deck.transport.loop_start",
         "deck.transport.seek_normalized",
-        EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
-    );
+    ] {
+        registry.insert(
+            EndpointCategory::Command,
+            id,
+            EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
+        );
+    }
     registry.insert(
         EndpointCategory::Telemetry,
         "deck.playback.playing",
@@ -123,6 +129,16 @@ pub fn player_registry() -> TestRegistry {
         "library.visible_tracks",
         EndpointDesc::new(ValueKind::Table),
     );
+    registry.insert(
+        EndpointCategory::Command,
+        "library.select_track",
+        EndpointDesc::new(ValueKind::Index),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "ui.preset",
+        EndpointDesc::new(ValueKind::Text),
+    );
     insert_stream_endpoints(&mut registry);
     insert_bar_endpoints(&mut registry);
     insert_menu_endpoints(&mut registry);
@@ -176,8 +192,6 @@ fn insert_menu_endpoints(registry: &mut TestRegistry) {
         registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
     }
     for (id, kind, scope) in [
-        ("ui.menu.group_open", ValueKind::Bool, "group"),
-        ("ui.menu.group_hidden", ValueKind::Bool, "group"),
         ("ui.window.active", ValueKind::Bool, "window"),
         ("ui.window.hidden", ValueKind::Bool, "window"),
         ("ui.window.close_hidden", ValueKind::Bool, "window"),
@@ -209,7 +223,6 @@ fn insert_menu_endpoints(registry: &mut TestRegistry) {
         );
     }
     for (id, scope) in [
-        ("ui.menu.toggle_group", "group"),
         ("ui.window.focus", "window"),
         ("ui.window.cycle_display", "window"),
         ("ui.window.close", "window"),
@@ -303,16 +316,6 @@ fn insert_stream_endpoints(registry: &mut TestRegistry) {
         EndpointCategory::Model,
         "deck.stream.quality",
         EndpointDesc::new(ValueKind::Text).with_scope("deck"),
-    );
-    registry.insert(
-        EndpointCategory::Model,
-        "deck.stream.quality_menu",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
-    registry.insert(
-        EndpointCategory::Command,
-        "deck.stream.toggle_quality_menu",
-        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
     );
     registry.insert(
         EndpointCategory::Model,

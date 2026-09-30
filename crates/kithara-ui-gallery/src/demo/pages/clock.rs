@@ -1,4 +1,4 @@
-use kithara_ui::render::ReadValue;
+use kithara_ui::render::{ReadValue, Scope, WriteValue};
 
 mod consts {
     use super::Source;
@@ -77,42 +77,33 @@ impl Default for ClockState {
 }
 
 impl ClockState {
-    pub(crate) fn activate(&mut self, path: &str) -> bool {
-        if path.contains("key-lock/") {
-            match path.rsplit('/').next() {
-                Some("toggle") => self.key_locked = !self.key_locked,
-                Some("down" | "up") => {}
-                _ => return false,
+    pub(crate) fn write(&mut self, id: &str, scope: Scope<'_>, value: &WriteValue) {
+        match (id, value) {
+            ("clock.source.select", WriteValue::Trigger) => {
+                if let Some(source) = scope
+                    .get("source")
+                    .and_then(|id| consts::SOURCES.iter().position(|source| source.id == id))
+                {
+                    self.source = source;
+                }
             }
-            return true;
+            ("clock.tempo", WriteValue::Step(steps)) => self.step(f64::from(*steps) * 0.01),
+            ("clock.nudge_up", WriteValue::Trigger) => self.step(0.01),
+            ("clock.nudge_down", WriteValue::Trigger) => self.step(-0.01),
+            ("clock.family.step", WriteValue::Trigger) => self.family_step = true,
+            ("clock.family.leap", WriteValue::Trigger) => self.family_step = false,
+            ("clock.grid.toggle_quantize", WriteValue::Trigger) => self.quantize = !self.quantize,
+            ("clock.grid.toggle_snap", WriteValue::Trigger) => self.snap = !self.snap,
+            ("clock.grid.toggle_click", WriteValue::Trigger) => self.click = !self.click,
+            ("clock.link.toggle", WriteValue::Trigger) => self.link = !self.link,
+            ("clock.midi.toggle_send", WriteValue::Trigger) => self.midi_send = !self.midi_send,
+            ("clock.tap", WriteValue::Trigger) => self.set_bpm(125.0),
+            ("clock.half", WriteValue::Trigger) => self.set_bpm(self.bpm / 2.0),
+            ("clock.double", WriteValue::Trigger) => self.set_bpm(self.bpm * 2.0),
+            ("clock.reset", WriteValue::Trigger) => self.set_bpm(124.0),
+            ("deck.key.toggle_lock", WriteValue::Trigger) => self.key_locked = !self.key_locked,
+            _ => {}
         }
-        if !path.contains("clock") {
-            return false;
-        }
-        if let Some(source) = consts::SOURCES
-            .iter()
-            .position(|source| path.contains(&format!("source-{}/select", source.id)))
-        {
-            self.source = source;
-            return true;
-        }
-        match path.rsplit('/').next() {
-            Some("up" | "nudge_up") => self.step(0.01),
-            Some("down" | "nudge_down") => self.step(-0.01),
-            Some("step") => self.family_step = true,
-            Some("leap") => self.family_step = false,
-            Some("quantize") => self.quantize = !self.quantize,
-            Some("snap") => self.snap = !self.snap,
-            Some("click") => self.click = !self.click,
-            Some("link-toggle") => self.link = !self.link,
-            Some("midi-send") => self.midi_send = !self.midi_send,
-            Some("tap") => self.set_bpm(125.0),
-            Some("half") => self.set_bpm(self.bpm / 2.0),
-            Some("double") => self.set_bpm(self.bpm * 2.0),
-            Some("reset") => self.set_bpm(124.0),
-            _ => return false,
-        }
-        true
     }
 
     pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
@@ -158,7 +149,7 @@ impl ClockState {
         self.rebuild();
     }
 
-    pub(crate) fn step(&mut self, steps: f64) {
+    fn step(&mut self, steps: f64) {
         self.set_bpm(self.bpm + steps);
     }
 }

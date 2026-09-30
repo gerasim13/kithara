@@ -8,7 +8,7 @@ use {
     kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig},
 };
 
-use crate::consts;
+use crate::{MetronomeConfig, consts};
 
 /// Configuration for the shared output session owned by `Host`.
 #[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
@@ -23,6 +23,8 @@ pub enum HostConfig<S> {
         output_block_frames: Option<NonZeroU32>,
         /// Session output limiter policy.
         limiter: LimiterConfig,
+        /// Host metronome: its click's level, its duck's depth and their shape.
+        metronome: MetronomeConfig,
         marker: PhantomData<fn() -> S>,
     },
     /// Device-free finite renderer.
@@ -41,6 +43,8 @@ pub enum HostConfig<S> {
         declared_latency: Duration,
         /// Session output limiter policy.
         limiter: LimiterConfig,
+        /// Host metronome: its click's level, its duck's depth and their shape.
+        metronome: MetronomeConfig,
         /// Shared worker configuration for the session scheduler.
         worker: WorkerConfig,
         /// Dispatcher budgets for the single offline session task.
@@ -62,11 +66,13 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
         #[builder(default)] limiter: LimiterConfig,
+        #[builder(default)] metronome: MetronomeConfig,
     ) -> Self {
         Self::Realtime {
             sample_rate_hint,
             output_block_frames,
             limiter,
+            metronome,
             marker: PhantomData,
         }
     }

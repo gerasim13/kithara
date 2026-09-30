@@ -11,7 +11,7 @@ use crate::{
     ids::{NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
     module::{BindingRef, MeasureAxis},
-    registry::{EndpointRegistry, ValueKind},
+    registry::EndpointRegistry,
     size::SizeSpec,
 };
 
@@ -171,24 +171,6 @@ pub(crate) fn check_layout_block(
         BindingSide::Read,
         Some(BLOCK_HIDDEN),
         path,
-        origin,
-        endpoints,
-    )
-}
-
-pub(crate) fn check_layout_dragged(
-    doc: &LayoutDoc,
-    origin: &SourceUri,
-    endpoints: &dyn EndpointRegistry,
-) -> Result<(), UiDocError> {
-    let Some(binding) = doc.dragged.as_ref() else {
-        return Ok(());
-    };
-    check_binding(
-        binding,
-        BindingSide::Read,
-        Some(ValueKind::Text),
-        "root/dragged",
         origin,
         endpoints,
     )

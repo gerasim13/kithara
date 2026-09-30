@@ -7,7 +7,7 @@ use crate::{
         CursorShape, Hover, Input, Outcome, PointerOwnership, PointerPhase, recognizers,
         recognizers::{Scalar, Track, WheelStep},
     },
-    render::{ControlAction, ScalarRange, UiEvent, control_event},
+    render::{ControlAction, Published, ScalarRange, control_event},
 };
 
 /// What the pointer means to a control.
@@ -18,13 +18,6 @@ pub(crate) enum Grip {
     None,
     /// A press that activates it.
     Press,
-    /// A press that says something to the document rather than setting the
-    /// control's own endpoint. The settings button opens a surface the
-    /// application owns; there is no endpoint under it to activate.
-    ///
-    /// The event is named by a function rather than carried, so a grip stays
-    /// `Copy` and a control that builds one every frame allocates nothing.
-    Command(fn() -> UiEvent),
     /// A drag along one axis that sets a scalar.
     Drag(Drag),
     /// A press that picks one indexed cell. Painters use equal horizontal cells
@@ -124,7 +117,7 @@ impl Drag {
     }
 }
 
-pub(crate) type IndexEvent<Data> = fn(&Data, usize) -> Option<UiEvent>;
+pub(crate) type IndexEvent<Data> = fn(&Data, usize) -> Option<ControlAction>;
 
 pub(crate) struct Indexing<'a, Data> {
     data: &'a Data,
@@ -142,15 +135,16 @@ impl<'a, Data> Indexing<'a, Data> {
         state: &mut IndexPress,
         input: Input<'_>,
         index: Option<usize>,
-    ) -> (bool, Outcome<UiEvent>) {
+    ) -> (bool, Outcome<Published>) {
         let (changed, selected) = state.follow(input, index, self.map.is_some());
         let captured = selected.is_captured();
         let ownership = selected.ownership();
         let event = selected.value().and_then(|index| {
-            self.map.map_or_else(
-                || Some(control_event(self.path, ControlAction::SelectIndex(index))),
-                |map| map(self.data, index),
-            )
+            self.map
+                .map_or(Some(ControlAction::SelectIndex(index)), |map| {
+                    map(self.data, index)
+                })
+                .map(|action| control_event(self.path, action))
         });
         match (event, captured) {
             (Some(event), true) => (changed, Outcome::set(event).with_ownership(ownership)),

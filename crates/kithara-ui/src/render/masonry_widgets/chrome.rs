@@ -2,10 +2,11 @@ use super::mount::NodeLayout;
 use crate::{
     atoms::chrome::{ChromeChevron, ChromeLabel, footer_role},
     draw::Rgba,
+    expand::header_path,
     layout::{Axis, FrameSides},
     module::TextAlign,
     render::{
-        UiEvent,
+        ControlAction, control_event,
         document::Module,
         masonry::{
             MasonryHost, MasonryNode, Painted,
@@ -137,9 +138,9 @@ where
             Some(self.skin.rgba(metrics.header_background)),
             self.chrome_frame(metrics.header_frame),
         );
-        let name = self.ctx.ui.resolve(module.module()).to_owned();
+        let path = header_path(self.ctx.ui.resolve(module.instance()));
         header.set_actions(
-            Some(self.event(move || UiEvent::ToggleModule(name.clone()))),
+            Some(self.event(move || control_event(&path, ControlAction::Activate))),
             None,
         );
         header

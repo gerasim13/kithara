@@ -354,14 +354,17 @@ mod tests {
                     "deck.transport.toggle_sync",
                     "deck.view.zoom_in",
                     "deck.view.zoom_out",
-                    "deck.stream.toggle_quality_menu",
                 ],
                 ValueKind::Trigger,
                 &["deck"],
             );
             self.add(
                 Command,
-                &["deck.transport.seek_normalized"],
+                &[
+                    "deck.transport.loop_end",
+                    "deck.transport.loop_start",
+                    "deck.transport.seek_normalized",
+                ],
                 ValueKind::Scalar,
                 &["deck"],
             );
@@ -383,12 +386,6 @@ mod tests {
                     "deck.playback.synced",
                     "deck.stream.quality_hidden",
                 ],
-                ValueKind::Bool,
-                &["deck"],
-            );
-            self.add(
-                Model,
-                &["deck.stream.quality_menu"],
                 ValueKind::Bool,
                 &["deck"],
             );
@@ -460,12 +457,6 @@ mod tests {
             );
             self.add(
                 Model,
-                &["ui.menu.group_open", "ui.menu.group_hidden"],
-                ValueKind::Bool,
-                &["group"],
-            );
-            self.add(
-                Model,
                 &[
                     "ui.window.active",
                     "ui.window.hidden",
@@ -499,12 +490,6 @@ mod tests {
             );
             self.add(
                 Command,
-                &["ui.menu.toggle_group"],
-                ValueKind::Trigger,
-                &["group"],
-            );
-            self.add(
-                Command,
                 &[
                     "ui.window.focus",
                     "ui.window.cycle_display",
@@ -528,10 +513,12 @@ mod tests {
         }
 
         fn player(&mut self) {
-            use EndpointCategory::{Model, Parameter, Telemetry};
+            use EndpointCategory::{Command, Model, Parameter, Telemetry};
             self.add(Telemetry, &["player.output.levels"], ValueKind::Stereo, &[]);
             self.add(Parameter, &["player.output.volume"], ValueKind::Scalar, &[]);
+            self.add(Parameter, &["ui.preset"], ValueKind::Text, &[]);
             self.add(Model, &["library.visible_tracks"], ValueKind::Table, &[]);
+            self.add(Command, &["library.select_track"], ValueKind::Index, &[]);
         }
 
         fn preset_surface() -> Self {

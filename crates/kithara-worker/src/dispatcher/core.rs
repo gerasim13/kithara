@@ -349,7 +349,7 @@ fn wait_for_backpressure(wake: &Wake, budgets: SchedulerBudgets) {
         let wait = poll_interval.min(remaining);
         let mut woken = false;
         hang_park!(|watchdog_remaining| {
-            woken = wake.wait_timeout(wait.min(watchdog_remaining));
+            woken = wake.wait_poll_timeout(wait.min(watchdog_remaining));
         });
         if woken {
             return;

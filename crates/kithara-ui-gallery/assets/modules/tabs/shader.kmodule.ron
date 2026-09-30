@@ -3,6 +3,7 @@
     version: 1,
     id: "gallery-shader",
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-shader" })),
     title: "DOCUMENT SHADER",
     root: Column(id: "shader-page", gap: 12.0, pad: 16.0, children: [
         Text(id: "caption", style: Section, label: "A DOCUMENT-OWNED FRAGMENT, DRAWN BY BOTH HOSTS", size: (w: Fill, h: Shrink)),

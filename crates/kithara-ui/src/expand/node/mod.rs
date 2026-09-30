@@ -3,10 +3,10 @@ mod tests;
 mod tree;
 
 pub use self::tree::{
-    Binding, BindingKind, BlockSpec, ControlSpec, DropSpec, ExpandedNode, MagnetSpec, MeasureSpec,
+    Binding, BindingKind, BlockSpec, ControlSpec, ExpandedNode, MagnetSpec, MeasureSpec,
     SurfaceSpec,
 };
 pub(crate) use self::tree::{
-    Budget, ControlSite, ControlVisitor, ExpandedInclude, ExpandedModule, Unprompted,
-    adaptive_branch, motion_of,
+    Budget, ControlSite, ControlVisitor, ExpandedInclude, ExpandedModule, SlotWrites, Unprompted,
+    adaptive_branch, drop_path, header_path, motion_of,
 };

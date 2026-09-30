@@ -13,30 +13,41 @@ pub struct Wake {
 }
 
 impl Wake {
-    /// Coalesce a future dispatcher pass without unparking the thread.
-    pub fn defer(&self) {
-        self.inner.deferred.store(true, Ordering::Release);
-    }
-
-    fn take_deferred(&self) -> bool {
-        self.inner.deferred.swap(false, Ordering::Acquire)
-    }
-
-    pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
+    fn wait(&self, timeout: Duration, poll_deadline: bool) -> bool {
         if self.take_deferred() {
             return true;
         }
         let since = self.inner.seen.load(Ordering::Relaxed);
-        let woken = self.inner.gate.wait_timeout(since, timeout);
+        let woken = if poll_deadline {
+            self.inner.gate.wait_poll_timeout(since, timeout)
+        } else {
+            self.inner.gate.wait_timeout(since, timeout)
+        };
         self.inner
             .seen
             .store(self.inner.gate.current(), Ordering::Relaxed);
         woken || self.take_deferred()
     }
 
-    /// Wake the dispatcher immediately from an off-real-time thread.
-    pub fn wake(&self) {
-        self.inner.gate.signal();
+    delegate::delegate! {
+        to self.inner.deferred {
+            /// Coalesce a future dispatcher pass without unparking the thread.
+            #[call(store)]
+            pub fn defer(&self, [true], [Ordering::Release]);
+            #[call(swap)]
+            fn take_deferred(&self, [false], [Ordering::Acquire]) -> bool;
+        }
+        to self {
+            #[call(wait)]
+            pub(crate) fn wait_timeout(&self, timeout: Duration, [false]) -> bool;
+            #[call(wait)]
+            pub(crate) fn wait_poll_timeout(&self, timeout: Duration, [true]) -> bool;
+        }
+        to self.inner.gate {
+            /// Wake the dispatcher immediately from an off-real-time thread.
+            #[call(signal)]
+            pub fn wake(&self);
+        }
     }
 }
 

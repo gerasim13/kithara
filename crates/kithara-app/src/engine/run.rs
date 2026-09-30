@@ -70,13 +70,11 @@ mod tests {
 
             rig.send("mixer/xfade", ControlAction::SetScalar(1.0));
             rig.send("deck-a/play", ControlAction::Activate);
-            rig.send("mixer/a/mute", ControlAction::Activate);
             for _ in 0..3 {
                 rig.frame();
             }
 
             assert!((rig.scalar("mix.crossfader") - 1.0).abs() < f64::EPSILON);
-            assert!(rig.flag("mixer.muted@deck=a"));
             assert!(
                 !rig.flag("deck.playback.playing@deck=a"),
                 "whether the deck plays is the engine's to report"
@@ -101,10 +99,6 @@ mod tests {
                                 deck: DeckId(0),
                                 cmd: DeckCmd::Play,
                             },
-                            ..
-                        },
-                        Envelope {
-                            command: Command::Mix(MixCmd::Muted(DeckId(0), true)),
                             ..
                         },
                     ] if (*position - 1.0).abs() < f32::EPSILON

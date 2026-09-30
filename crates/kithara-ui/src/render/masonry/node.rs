@@ -37,7 +37,8 @@ use crate::{
     },
     layout::{FrameCorners, FrameSides},
     render::{
-        ControlAction, ReadValue, UiEvent, document::Ctx, shader::ShaderDeclaration, vis::VisFrame,
+        ControlAction, Published, ReadValue, document::Ctx, shader::ShaderDeclaration,
+        vis::VisFrame,
     },
     solve,
     solve::{Limits, Size},
@@ -49,7 +50,7 @@ use crate::{
 /// The gesture is the one the immediate host puts over the same flow, so the
 /// two hosts step alike; only the way it is mounted differs.
 pub(crate) struct Detent {
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    map_event: Rc<dyn Fn(Published) -> HostAction>,
     stepper: Stepper,
     path: String,
 }
@@ -57,7 +58,7 @@ pub(crate) struct Detent {
 impl Detent {
     pub(in crate::render) fn new(
         path: String,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
     ) -> Self {
         Self {
             path,
@@ -483,6 +484,13 @@ impl Node {
         if node.limits != Some(limits) {
             node.limits = Some(limits);
             raw.request_layout();
+        }
+    }
+
+    pub(crate) const fn face(&self) -> Face {
+        Face {
+            background: self.background,
+            frame: self.frame,
         }
     }
 

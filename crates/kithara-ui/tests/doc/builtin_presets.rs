@@ -347,3 +347,115 @@ fn the_app_menu_is_part_of_the_builtin_preset_surface() {
         .load(None, "modules/app-menu.kmodule.ron")
         .expect("the micro bar includes the app menu");
 }
+
+fn each_control<'a>(node: &'a ExpandedNode, visit: &mut impl FnMut(&'a ExpandedNode)) {
+    match node {
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Stage { children, .. }
+        | ExpandedNode::Slot { children, .. } => {
+            for child in children {
+                each_control(child, visit);
+            }
+        }
+        ExpandedNode::Scroll { child, .. }
+        | ExpandedNode::Object { child, .. }
+        | ExpandedNode::Reveal { child, .. }
+        | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Placed { child, .. } => each_control(child, visit),
+        ExpandedNode::Adaptive { base, steps, .. } => {
+            each_control(base, visit);
+            for (_, step) in steps {
+                each_control(step, visit);
+            }
+        }
+        ExpandedNode::Popover {
+            anchor, content, ..
+        } => {
+            each_control(anchor, visit);
+            each_control(content, visit);
+        }
+        ExpandedNode::Control { .. } => visit(node),
+        _ => {}
+    }
+}
+
+fn each_module<'a>(node: &'a CompiledNode, visit: &mut impl FnMut(&'a ExpandedNode)) {
+    match node {
+        CompiledNode::Split { children, .. } => {
+            for cell in children {
+                each_module(&cell.node, visit);
+            }
+        }
+        CompiledNode::Optional { child, .. } => each_module(child, visit),
+        CompiledNode::Adaptive { base, steps, .. } => {
+            each_module(base, visit);
+            for (_, step) in steps {
+                each_module(step, visit);
+            }
+        }
+        CompiledNode::Module { root, .. } => each_control(root, visit),
+        _ => {}
+    }
+}
+
+const fn publishes(spec: &ControlSpec) -> bool {
+    matches!(
+        spec,
+        ControlSpec::Button { .. }
+            | ControlSpec::NavItem { .. }
+            | ControlSpec::TabLarge { .. }
+            | ControlSpec::Toggle
+            | ControlSpec::Checkbox
+            | ControlSpec::Chip { .. }
+            | ControlSpec::SettingsButton
+            | ControlSpec::Crossfader { .. }
+            | ControlSpec::Fader { .. }
+            | ControlSpec::Knob { .. }
+            | ControlSpec::Vis
+            | ControlSpec::VuStereo
+            | ControlSpec::VuVertical { .. }
+            | ControlSpec::Wave { .. }
+            | ControlSpec::Range
+            | ControlSpec::Segmented { .. }
+            | ControlSpec::ContextBar { .. }
+            | ControlSpec::Table { .. }
+            | ControlSpec::Tree { .. }
+            | ControlSpec::Select { .. }
+            | ControlSpec::PresetSelector
+    )
+}
+
+#[kithara::test]
+fn every_control_a_shipped_preset_draws_declares_the_write_it_makes() {
+    let mut unbound = Vec::new();
+    for preset in [builtin::MICRO_PRESET, builtin::PLAYER_PRESET] {
+        let ui = compile(
+            preset,
+            &builtin::resolver(),
+            &kithara_ui::mock::player_registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &UiConfig::default(),
+            &view::EMPTY,
+        )
+        .unwrap_or_else(|error| panic!("{preset} must compile: {error}"));
+        each_module(&ui.root, &mut |node| {
+            if let ExpandedNode::Control {
+                path,
+                spec,
+                write: None,
+                ..
+            } = node
+                && publishes(spec)
+            {
+                unbound.push(format!("{preset}: {}", ui.resolve(*path)));
+            }
+        });
+    }
+    assert!(
+        unbound.is_empty(),
+        "these controls publish a gesture no write answers: {unbound:?}"
+    );
+}

@@ -17,6 +17,8 @@ use iced::{
         key::{Code, Physical},
     },
     mouse::{self, Button, Interaction, ScrollDelta},
+    time::Instant,
+    window::{self, RedrawRequest},
 };
 use iced_runtime::{
     UserInterface,
@@ -26,7 +28,7 @@ use kithara_ui::{
     app::App,
     compile::CompiledUi,
     draw::Pt,
-    render::{Clock, ControlAction, Skin, UiEvent, fonts::FONT_BYTES, tree},
+    render::{Clock, Published, Skin, fonts::FONT_BYTES, tree},
     view::ViewState,
 };
 use num_traits::cast::AsPrimitive;
@@ -52,6 +54,8 @@ pub(crate) struct Immediate<'a, A> {
     hand: Interaction,
     renderer: iced::Renderer,
     size: Size,
+    #[field(get(copy), vis = "pub(crate)")]
+    frames: usize,
     /// What the tree said of itself when it last answered an event.
     state: State,
     /// The state the screen keeps for itself, which this host owns exactly as
@@ -77,7 +81,7 @@ impl<'a, A: App> Immediate<'a, A> {
     /// Builds the tree, hands it the events, and keeps what it remembered,
     /// answering with what the document published and whether any widget took
     /// an event for itself.
-    fn deliver(&mut self, cursor: Point, events: &[Event]) -> (Vec<UiEvent>, bool) {
+    fn deliver(&mut self, cursor: Point, events: &[Event]) -> (Vec<Published>, bool) {
         let Self {
             app,
             cache,
@@ -88,11 +92,12 @@ impl<'a, A: App> Immediate<'a, A> {
             state,
             ui,
             view,
+            ..
         } = self;
         let element = app
             .reads(|reads| tree::render(&ui.root, ui, reads, view, skin, Clock::default(), None));
         let mut interface = UserInterface::build(element, *size, std::mem::take(cache), renderer);
-        let mut published: Vec<UiEvent> = Vec::new();
+        let mut published: Vec<Published> = Vec::new();
         let (settled, statuses) = interface.update(
             events,
             Cursor::Available(cursor),
@@ -121,12 +126,24 @@ impl<'a, A: App> Immediate<'a, A> {
     /// longer answers for the pointer. The runtime rebuilds and asks again, and
     /// so does this, with no event the second time so nothing is delivered
     /// twice.
-    fn dispatch(&mut self, cursor: Point, event: &Event) -> (Vec<UiEvent>, bool) {
+    fn dispatch(&mut self, cursor: Point, event: &Event) -> (Vec<Published>, bool) {
         let (mut published, mut captured) = self.deliver(cursor, std::slice::from_ref(event));
         if matches!(self.state, State::Outdated) {
             let (again, took) = self.deliver(cursor, &[]);
             published.extend(again);
             captured |= took;
+        }
+        if matches!(
+            self.state,
+            State::Updated {
+                redraw_request: RedrawRequest::NextFrame,
+                ..
+            }
+        ) {
+            self.frames += 1;
+            let redraw = Event::Window(window::Event::RedrawRequested(Instant::now()));
+            let (drawn, _) = self.deliver(cursor, std::slice::from_ref(&redraw));
+            published.extend(drawn);
         }
         (published, captured)
     }
@@ -184,6 +201,7 @@ impl<'a, A: App> Immediate<'a, A> {
             ui,
             cache: Cache::default(),
             hand: Interaction::None,
+            frames: 0,
             renderer: renderer(),
             size: Size::new(size.0.as_(), size.1.as_()),
             state: State::Outdated,
@@ -214,18 +232,13 @@ impl<'a, A: App> Immediate<'a, A> {
         .fold(false, |took, event| self.play(cursor, &event) || took)
     }
 
-    /// Applies what the press writes to the screen's own state, then tells the
-    /// application. The state a document turns for itself belongs to whichever
-    /// host is showing it, so this host turns it exactly as the retained one
-    /// does before the application hears anything.
-    fn settle(&mut self, event: UiEvent) {
-        if let UiEvent::Control { path, action } = &event
-            && matches!(action, ControlAction::Activate)
-            && let Some((state, write)) = self.ui.views().at(path)
-        {
-            self.view.apply(state, write);
+    /// Settles what the tree published the way the retained host does.
+    fn settle(&mut self, published: Published) {
+        let Self { app, ui, view, .. } = self;
+        let delivered = app.reads(|reads| ui.views().settle(published, reads, view));
+        if let Some(event) = delivered {
+            self.app.update(event);
         }
-        self.app.update(event);
     }
 
     /// One notch of the wheel over a point of the window, the pointer having

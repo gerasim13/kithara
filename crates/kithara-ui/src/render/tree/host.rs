@@ -1,7 +1,7 @@
 use iced::{
-    Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector,
+    Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector,
     advanced::{
-        Clipboard, Shell, Widget as IcedWidget,
+        Clipboard, Renderer as _, Shell, Widget as IcedWidget,
         layout::{self, Layout},
         mouse,
         mouse::Cursor,
@@ -20,51 +20,54 @@ use crate::{
     interact::{Input, PointerPhase, ScrollAxis, iced as iced_interact},
     module::ChromeStyle,
     render::{
-        Skin, UiEvent, controls::sync_tree_scroll, document::Ctx, engine as engine_event,
-        hosted_picker_overlay, sync_picker, sync_table_scroll, sync_text_input, toggle_module,
+        Published, Skin, controls::sync_tree_scroll, document::Ctx, engine as engine_event,
+        hosted_picker_overlay, sync_picker, sync_table_scroll, sync_text_input,
     },
 };
 
 #[derive(Clone, Copy)]
 pub(super) struct ModuleHost<'a> {
     pub(super) instance: &'a str,
-    pub(super) module: &'a str,
     pub(super) chrome: ChromeStyle,
     pub(super) collapsed: bool,
-    pub(super) drop: bool,
+    pub(super) drop: Option<Border>,
 }
 
 pub(super) fn module_host<'a>(
-    child: Element<'a, UiEvent>,
+    child: Element<'a, Published>,
     spec: ModuleHost<'a>,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     Element::new(Host {
         child,
         layout: HostedLayout::module(spec),
+        outline: spec.drop.unwrap_or_default(),
     })
 }
 
 pub(super) fn host<'a>(
-    child: Element<'a, UiEvent>,
+    child: Element<'a, Published>,
     root: &ExpandedNode,
     ctx: Ctx<'_, '_>,
     skin: &Skin,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     Element::new(Host {
         child,
         layout: HostedLayout::new(root, ctx, skin),
+        outline: Border::default(),
     })
 }
 
 struct Host<'a> {
-    child: Element<'a, UiEvent>,
+    child: Element<'a, Published>,
     layout: HostedLayout,
+    outline: Border,
 }
 
 struct State {
     engine: Engine,
     last_hovered_control: Option<String>,
     last_mouse_interaction: Option<mouse::Interaction>,
+    zone: Zone,
 }
 
 impl State {
@@ -75,20 +78,41 @@ impl State {
             engine,
             last_hovered_control: None,
             last_mouse_interaction: None,
+            zone: Zone {
+                path: layout.drop_zone().map(str::to_owned),
+                hovered: false,
+            },
         }
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
+pub(super) struct Zone {
+    path: Option<String>,
+    hovered: bool,
+}
+
+impl Zone {
+    fn follow(&mut self, path: Option<&str>) {
+        if self.path.as_deref() != path {
+            self.path = path.map(str::to_owned);
+            self.hovered = false;
+        }
+    }
+
+    pub(super) fn hover(&mut self, zone: Option<&str>) {
+        self.hovered = self.path.is_some() && self.path.as_deref() == zone;
+    }
+}
+
+impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.child)]
     }
 
     fn diff(&self, tree: &mut Tree) {
-        tree.state
-            .downcast_mut::<State>()
-            .engine
-            .reconcile(self.layout.descriptors());
+        let state = tree.state.downcast_mut::<State>();
+        state.engine.reconcile(self.layout.descriptors());
+        state.zone.follow(self.layout.drop_zone());
         tree.diff_children(std::slice::from_ref(&self.child));
     }
 
@@ -111,6 +135,16 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             cursor,
             viewport,
         );
+        if tree.state.downcast_ref::<State>().zone.hovered {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: layout.bounds(),
+                    border: self.outline,
+                    ..renderer::Quad::default()
+                },
+                Color::TRANSPARENT,
+            );
+        }
     }
 
     fn layout(
@@ -196,6 +230,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
+        operation.custom(
+            None,
+            layout.bounds(),
+            &mut tree.state.downcast_mut::<State>().zone,
+        );
         self.child
             .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);
@@ -208,7 +247,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+    ) -> Option<overlay::Element<'a, Published, Theme, Renderer>> {
         let layout_tree = &self.layout;
         let state = tree.state.downcast_mut::<State>();
         let open = layout_tree
@@ -246,7 +285,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         cursor: Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<State>();
@@ -266,11 +305,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
                     && state.engine.scroll_offset(&emission.path).is_some();
                 let control_pointer_captured =
                     control_pointer_answered(&state.engine, input, &emission.path, captured);
-                let action = if let Some(module) = self.layout.header_module(&emission.path) {
-                    toggle_module(module, emission.outcome.map(|_| ()))
-                } else {
-                    engine_event(&emission.path, emission.child, emission.outcome)
-                };
+                let action = engine_event(&emission.path, emission.child, emission.outcome);
                 if let Some(action) = action {
                     let (message, redraw_request, _) = action.into_inner();
                     shell.request_redraw_at(redraw_request);
@@ -413,7 +448,7 @@ fn route_open_picker(
     layout: Layout<'_>,
     event: &Event,
     cursor: Cursor,
-    shell: &mut Shell<'_, UiEvent>,
+    shell: &mut Shell<'_, Published>,
 ) -> bool {
     let Some(input @ Input::Pointer(pointer)) = iced_interact::input(event) else {
         return false;
@@ -448,7 +483,7 @@ fn route_open_picker(
 }
 
 fn sync_scrolls(
-    child: &mut Element<'_, UiEvent>,
+    child: &mut Element<'_, Published>,
     tree: &mut Tree,
     layout: Layout<'_>,
     renderer: &Renderer,
@@ -474,7 +509,7 @@ fn sync_scrolls(
 }
 
 fn sync_pickers(
-    child: &mut Element<'_, UiEvent>,
+    child: &mut Element<'_, Published>,
     tree: &mut Tree,
     layout: Layout<'_>,
     renderer: &Renderer,
@@ -493,7 +528,7 @@ fn sync_pickers(
 }
 
 fn sync_text_inputs(
-    child: &mut Element<'_, UiEvent>,
+    child: &mut Element<'_, Published>,
     tree: &mut Tree,
     layout: Layout<'_>,
     renderer: &Renderer,
@@ -600,16 +635,17 @@ mod tests {
         compile::{Address, CompiledNode, CompiledUi, compile},
         draw::{DrawList, Pt, Rect},
         engine::{PickerSnapshot, ScrollConfig},
-        expand::ControlSpec,
+        expand::{ControlSpec, header_path},
         ids::EndpointId,
         interact::{CursorShape, Key, Modifiers, mouse as mouse_input},
         module::{IconName, WaveStyle},
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, DragPhase, DropZone, HostLayer, InputOwner, LayerHit, ModuleChrome,
+            Carry, CarryStep, ControlAction, HostLayer, InputOwner, LayerHit, ModuleChrome,
             ReadValue, Reads, StereoLevels, TableCell, TableRow, TreeRow, WaveBucket, WaveformView,
-            WheelSurface, Widget, WindowCommand, WindowLayerProgram,
+            WheelSurface, Widget, WindowCommand, WindowLayerProgram, control_event,
             document::{Clock, Ctx},
+            drop_fixture,
             fonts::{FONT_BYTES, SANS},
             tree::control::HostedControl,
             window_layer,
@@ -635,7 +671,7 @@ mod tests {
             layout::Axis,
             module::MeasureAxis,
             render::{
-                InputOwner, Skin, UiEvent,
+                InputOwner, Published, Skin,
                 document::{
                     Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover,
                     SplitMount, render,
@@ -645,7 +681,7 @@ mod tests {
             size::SizeSpec,
         };
 
-        type Output<'a> = iced::Element<'a, UiEvent>;
+        type Output<'a> = iced::Element<'a, Published>;
 
         /// Renders a whole document the way the application does.
         pub(super) fn render_compiled<'a>(
@@ -752,12 +788,7 @@ mod tests {
                         children: Vec<SplitMount<Self::Output>>,
                     ) -> Self::Output;
                     fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
-                    fn window(
-                        &mut self,
-                        content: Self::Output,
-                        carried: Option<&Binding>,
-                        resize_edges: bool,
-                    ) -> Self::Output;
+                    fn window(&mut self, content: Self::Output, resize_edges: bool) -> Self::Output;
                 }
             }
         }
@@ -805,14 +836,28 @@ mod tests {
     }
 
     fn dispatch_press(
-        element: &mut Element<'_, UiEvent>,
+        element: &mut Element<'_, Published>,
         tree: &mut Tree,
         node: &layout::Node,
         renderer: &Renderer,
         viewport: Size,
         point: Point,
-    ) -> (Vec<UiEvent>, bool) {
+    ) -> (Vec<Published>, bool) {
         let event = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        dispatch(element, tree, node, renderer, viewport, &event, point)
+    }
+
+    /// Routes one event to the overlay first and to the base unless the
+    /// overlay captured it or stands under the cursor.
+    fn dispatch(
+        element: &mut Element<'_, Published>,
+        tree: &mut Tree,
+        node: &layout::Node,
+        renderer: &Renderer,
+        viewport: Size,
+        event: &Event,
+        point: Point,
+    ) -> (Vec<Published>, bool) {
         let cursor = Cursor::Available(point);
         let bounds = Rectangle::with_size(viewport);
         let mut clipboard = clipboard::Null;
@@ -829,7 +874,7 @@ mod tests {
                 let mut nested = overlay::Nested::new(overlay);
                 let overlay_node = nested.layout(renderer, viewport);
                 nested.update(
-                    &event,
+                    event,
                     Layout::new(&overlay_node),
                     cursor,
                     renderer,
@@ -847,7 +892,7 @@ mod tests {
         if !shell.is_event_captured() {
             element.as_widget_mut().update(
                 tree,
-                &event,
+                event,
                 Layout::new(node),
                 base_cursor,
                 renderer,
@@ -909,6 +954,10 @@ mod tests {
 
     struct Registry {
         boolean: EndpointDesc,
+        column_scalar: EndpointDesc,
+        column_trigger: EndpointDesc,
+        deck_trigger: EndpointDesc,
+        index: EndpointDesc,
         scalar: EndpointDesc,
         scoped_scalar: EndpointDesc,
         stereo: EndpointDesc,
@@ -923,6 +972,10 @@ mod tests {
         fn default() -> Self {
             Self {
                 boolean: EndpointDesc::new(ValueKind::Bool),
+                column_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("column"),
+                column_trigger: EndpointDesc::new(ValueKind::Trigger).with_scope("column"),
+                deck_trigger: EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+                index: EndpointDesc::new(ValueKind::Index),
                 scalar: EndpointDesc::new(ValueKind::Scalar),
                 scoped_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
                 stereo: EndpointDesc::new(ValueKind::Stereo),
@@ -938,9 +991,34 @@ mod tests {
     impl EndpointRegistry for Registry {
         fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
             match (category, id.0.as_str()) {
-                (EndpointCategory::Parameter, "gain")
-                | (EndpointCategory::Model | EndpointCategory::Parameter, "demo.cells.segmented")
-                | (EndpointCategory::Model, "demo.volume") => Some(&self.scalar),
+                (EndpointCategory::Parameter, "gain" | "demo.volume" | "demo.levels.volume")
+                | (EndpointCategory::Model, "demo.cells.segmented" | "demo.volume") => {
+                    Some(&self.scalar)
+                }
+                (
+                    EndpointCategory::Command,
+                    "demo.cells.select" | "library.select_tree_row" | "gallery.table.select_preset",
+                ) => Some(&self.index),
+                (
+                    EndpointCategory::Command,
+                    "demo.button.toggle_play"
+                    | "demo.button.toggle_cue"
+                    | "demo.button.toggle_sync"
+                    | "demo.toggle.toggle_on"
+                    | "demo.toggle.toggle_off"
+                    | "demo.checkbox.toggle_on"
+                    | "demo.checkbox.toggle_off"
+                    | "demo.chip.toggle_active"
+                    | "demo.chip.toggle_inactive"
+                    | "gallery.table.reset_columns",
+                ) => Some(&self.trigger),
+                (EndpointCategory::Command, "gallery.table.toggle_column") => {
+                    Some(&self.column_trigger)
+                }
+                (EndpointCategory::Parameter, "gallery.table.width") => Some(&self.column_scalar),
+                (EndpointCategory::Command, "deck.transport.toggle_play") => {
+                    Some(&self.deck_trigger)
+                }
                 (EndpointCategory::Telemetry, "levels")
                 | (EndpointCategory::Model, "demo.levels") => Some(&self.stereo),
                 (
@@ -973,6 +1051,7 @@ mod tests {
                     EndpointCategory::Model,
                     "gallery.table.preset" | "library.scope" | "deck.view.zoom",
                 ) => Some(&self.scalar),
+                (EndpointCategory::Command, "library.select_scope") => Some(&self.index),
                 (EndpointCategory::Model, "library.breadcrumb" | "library.query") => {
                     Some(&self.text)
                 }
@@ -981,11 +1060,7 @@ mod tests {
                 (EndpointCategory::Model, endpoint)
                     if endpoint.starts_with("gallery.table.columns.") =>
                 {
-                    if endpoint.starts_with("gallery.table.columns.width.") {
-                        Some(&self.scalar)
-                    } else {
-                        Some(&self.boolean)
-                    }
+                    Some(&self.boolean)
                 }
                 (EndpointCategory::Command, "demo.seek")
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
@@ -1766,19 +1841,17 @@ mod tests {
     }
 
     fn chrome_child<'a>(
-        content: Element<'a, UiEvent>,
-        module: &'a str,
+        content: Element<'a, Published>,
+        instance: &str,
         style: ChromeStyle,
-        drop: bool,
         collapsed: bool,
-    ) -> Element<'a, UiEvent> {
+    ) -> Element<'a, Published> {
         ModuleChrome::builder()
             .content(content)
-            .module(module)
+            .header(header_path(instance))
             .assign(Vec::new())
             .style(style)
             .input_owner(InputOwner::Engine)
-            .maybe_drop(drop.then(|| DropZone::new(false)))
             .collapsed(collapsed)
             .skin(builtin::skin())
             .build()
@@ -1788,19 +1861,17 @@ mod tests {
     #[kithara::test]
     fn module_drop_crossing_observes_boundaries_and_forwards_to_the_child() {
         let instance = "deck-a";
-        let module = "app-deck";
         let spec = ModuleHost {
             instance,
-            module,
             chrome: ChromeStyle::Plain,
             collapsed: false,
-            drop: true,
+            drop: Some(Border::default()),
         };
         let content = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-            .on_move(|_| UiEvent::OpenSettings)
-            .on_exit(UiEvent::OpenSettings)
+            .on_move(|_| Published::window(WindowCommand::Minimize))
+            .on_exit(Published::window(WindowCommand::Minimize))
             .into();
-        let child = chrome_child(content, module, ChromeStyle::Plain, true, false);
+        let child = chrome_child(content, instance, ChromeStyle::Plain, false);
         let mut element = module_host(child, spec);
         let renderer = headless_renderer();
         let viewport = Size::new(100.0, 40.0);
@@ -1838,11 +1909,11 @@ mod tests {
         assert_eq!(
             messages,
             [
-                UiEvent::Control {
+                Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    action: ControlAction::Drag(DragPhase::Over(true)),
+                    step: Carry(CarryStep::Over(true)),
                 },
-                UiEvent::OpenSettings,
+                Published::window(WindowCommand::Minimize),
             ],
             "entry publishes once and the observed move still reaches the child"
         );
@@ -1866,12 +1937,12 @@ mod tests {
         assert_eq!(
             messages,
             [
-                UiEvent::Control {
+                Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    action: ControlAction::Drag(DragPhase::Over(true)),
+                    step: Carry(CarryStep::Over(true)),
                 },
-                UiEvent::OpenSettings,
-                UiEvent::OpenSettings,
+                Published::window(WindowCommand::Minimize),
+                Published::window(WindowCommand::Minimize),
             ],
             "an inside move produces no second crossing and still reaches the child"
         );
@@ -1892,34 +1963,33 @@ mod tests {
         assert_eq!(
             messages,
             [
-                UiEvent::Control {
+                Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    action: ControlAction::Drag(DragPhase::Over(true)),
+                    step: Carry(CarryStep::Over(true)),
                 },
-                UiEvent::OpenSettings,
-                UiEvent::OpenSettings,
-                UiEvent::Control {
+                Published::window(WindowCommand::Minimize),
+                Published::window(WindowCommand::Minimize),
+                Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    action: ControlAction::Drag(DragPhase::Over(false)),
+                    step: Carry(CarryStep::Over(false)),
                 },
-                UiEvent::OpenSettings,
+                Published::window(WindowCommand::Minimize),
             ],
             "exit publishes once and the observed leave still reaches the child"
         );
     }
 
     #[kithara::test]
-    fn full_module_header_activation_toggles_the_module_directly() {
-        let module = "app-deck";
+    fn full_module_header_activation_publishes_a_press_on_the_header() {
+        let instance = "deck-a";
         let spec = ModuleHost {
-            module,
-            instance: "deck-a",
+            instance,
             chrome: ChromeStyle::Full,
             collapsed: false,
-            drop: true,
+            drop: Some(Border::default()),
         };
         let content = Space::new().width(Length::Fill).height(Length::Fill).into();
-        let child = chrome_child(content, module, ChromeStyle::Full, true, false);
+        let child = chrome_child(content, instance, ChromeStyle::Full, false);
         let mut element = module_host(child, spec);
         let renderer = headless_renderer();
         let viewport = Size::new(200.0, 120.0);
@@ -1968,17 +2038,21 @@ mod tests {
         );
         drop(shell);
 
-        assert_eq!(messages, [UiEvent::ToggleModule(module.to_owned())]);
+        assert_eq!(
+            messages,
+            [control_event("deck-a/header", ControlAction::Activate)]
+        );
     }
 
     #[kithara::test]
     fn decoded_input_unanswered_by_the_engine_reaches_the_child() {
         let child = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-            .on_press(UiEvent::OpenSettings)
+            .on_press(Published::window(WindowCommand::Minimize))
             .into();
         let mut element = Element::new(Host {
             child,
             layout: HostedLayout::Control(None),
+            outline: Border::default(),
         });
         let renderer = headless_renderer();
         let viewport = Size::new(100.0, 40.0);
@@ -2004,7 +2078,7 @@ mod tests {
         );
         drop(shell);
 
-        assert_eq!(messages, [UiEvent::OpenSettings]);
+        assert_eq!(messages, [Published::window(WindowCommand::Minimize)]);
     }
 
     #[kithara::test]
@@ -2060,6 +2134,7 @@ mod tests {
         let mut element = Element::new(Host {
             child,
             layout: HostedLayout::Control(None),
+            outline: Border::default(),
         });
         let renderer = headless_renderer();
         let viewport = Size::new(100.0, 40.0);
@@ -2093,7 +2168,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "deck-a/tempo".to_owned(),
                 action: ControlAction::StepScalar(1.0),
             }],
@@ -2184,7 +2259,7 @@ mod tests {
         assert!(bottom > 0.0);
         assert!(
             messages.is_empty(),
-            "engine-owned scrolling emits no UiEvent"
+            "engine-owned scrolling emits no Published"
         );
 
         let mut shell = Shell::new(&mut messages);
@@ -2204,7 +2279,7 @@ mod tests {
         drop(shell);
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "tree/surface".to_owned(),
                 action: ControlAction::StepScalar(1.0),
             }],
@@ -2263,7 +2338,7 @@ mod tests {
         drop(shell);
         assert_eq!(
             messages.last(),
-            Some(&UiEvent::Control {
+            Some(&Published::Gesture {
                 path: "tree/browser".to_owned(),
                 action: ControlAction::SelectIndex(expected),
             }),
@@ -2327,7 +2402,11 @@ mod tests {
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
-            let mut element = Element::new(Host { child, layout });
+            let mut element = Element::new(Host {
+                child,
+                layout,
+                outline: Border::default(),
+            });
             let mut tree = Tree::new(element.as_widget());
             let node = element.as_widget_mut().layout(
                 &mut tree,
@@ -2367,7 +2446,7 @@ mod tests {
 
         assert_eq!(
             action.into_inner().0,
-            Some(UiEvent::Control {
+            Some(Published::Gesture {
                 path: path.to_owned(),
                 action: ControlAction::SetScalar(0.5),
             })
@@ -2541,7 +2620,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "faders/default".to_owned(),
                 action: ControlAction::SetScalar(0.5),
             }]
@@ -2618,7 +2697,7 @@ mod tests {
         drop(shell);
 
         assert_eq!(messages.len(), 1);
-        let UiEvent::Control { path, action } = &messages[0] else {
+        let Published::Gesture { path, action } = &messages[0] else {
             panic!("the hosted stereo meter must publish a control event");
         };
         assert_eq!(path, &expected_path);
@@ -2693,11 +2772,11 @@ mod tests {
         assert_eq!(
             messages,
             [
-                UiEvent::Control {
+                Published::Gesture {
                     path: "atoms/toggles/toggle-on".to_owned(),
                     action: ControlAction::Activate,
                 },
-                UiEvent::Control {
+                Published::Gesture {
                     path: "atoms/toggles/checkbox-on".to_owned(),
                     action: ControlAction::Activate,
                 },
@@ -2787,11 +2866,11 @@ mod tests {
         assert_eq!(
             messages,
             [
-                UiEvent::Control {
+                Published::Gesture {
                     path: "atoms/chips/active".to_owned(),
                     action: ControlAction::Activate,
                 },
-                UiEvent::Control {
+                Published::Gesture {
                     path: "atoms/chips/inactive".to_owned(),
                     action: ControlAction::Activate,
                 },
@@ -2911,11 +2990,11 @@ mod tests {
         assert_eq!(
             messages,
             [
-                UiEvent::Control {
+                Published::Gesture {
                     path: "buttons/play".to_owned(),
                     action: ControlAction::Activate,
                 },
-                UiEvent::Control {
+                Published::Gesture {
                     path: "buttons/default".to_owned(),
                     action: ControlAction::Activate,
                 },
@@ -3027,7 +3106,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "cells/beat".to_owned(),
                 action: ControlAction::SelectIndex(2),
             }]
@@ -3258,10 +3337,6 @@ mod tests {
                 "library2/table/scroll-x",
                 "library2/table",
                 "library2/table/rows",
-                "library2/table/width/index",
-                "library2/table/width/artist",
-                "library2/table/width/bpm",
-                "library2/table/width/key",
             ]
         );
         assert!(matches!(
@@ -3282,10 +3357,6 @@ mod tests {
                 "library2/context",
                 "library2/table",
                 "library2/table/rows",
-                "library2/table/width/index",
-                "library2/table/width/artist",
-                "library2/table/width/bpm",
-                "library2/table/width/key",
             ]
         );
         let picker = targets
@@ -3295,7 +3366,7 @@ mod tests {
         assert_eq!(picker.hit.area().h, builtin::skin().tree.scope_item_height);
         assert_eq!(
             active_descriptors(&hosted, &targets).len(),
-            9,
+            5,
             "the non-overflowing table omits only its horizontal scroll descriptor"
         );
 
@@ -3347,7 +3418,13 @@ mod tests {
             &viewport_bounds,
         );
         drop(shell);
-        assert_eq!(messages, [UiEvent::LibraryQuery("x".to_owned())]);
+        assert_eq!(
+            messages,
+            [control_event(
+                "library2/browser/search",
+                ControlAction::Text("x".to_owned())
+            )]
+        );
         messages.clear();
 
         let mut shell = Shell::new(&mut messages);
@@ -3443,7 +3520,7 @@ mod tests {
         drop(shell);
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "library2/context".to_owned(),
                 action: ControlAction::SelectIndex(1),
             }]
@@ -3626,7 +3703,7 @@ mod tests {
         let chrome = window_layer(OverlapWindowProgram {
             area: Rc::clone(&area),
         });
-        let mut element: Element<'_, UiEvent> = Stack::with_children(vec![hosted, chrome])
+        let mut element: Element<'_, Published> = Stack::with_children(vec![hosted, chrome])
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
@@ -3697,13 +3774,13 @@ mod tests {
         );
         assert_eq!(
             selected,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "library2/context".to_owned(),
                 action: ControlAction::SelectIndex(0),
             }]
         );
         assert!(captured);
-        assert!(!selected.contains(&UiEvent::Window(WindowCommand::Drag)));
+        assert!(!selected.contains(&Published::window(WindowCommand::Drag)));
         assert!(
             tree.children[0]
                 .state
@@ -3922,7 +3999,13 @@ mod tests {
         );
         assert!(shell.is_event_captured());
         drop(shell);
-        assert_eq!(messages, [UiEvent::LibraryQuery("a日".to_owned())]);
+        assert_eq!(
+            messages,
+            [control_event(
+                "library2/browser/search",
+                ControlAction::Text("a\u{65e5}".to_owned())
+            )]
+        );
         assert!(
             tree.state
                 .downcast_ref::<State>()
@@ -4095,7 +4178,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "modules-tabs/deck-micro".to_owned(),
                 action: ControlAction::Activate,
             }]
@@ -4201,7 +4284,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "gallery/buttons/item".to_owned(),
                 action: ControlAction::Activate,
             }]
@@ -4243,7 +4326,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "nav/item".to_owned(),
                 action: ControlAction::Activate,
             }]
@@ -4258,7 +4341,7 @@ mod tests {
         ui: &CompiledUi,
         viewport: Size,
         act: impl FnOnce(
-            &mut Element<'_, UiEvent>,
+            &mut Element<'_, Published>,
             &mut Tree,
             &layout::Node,
             &Renderer,
@@ -4358,7 +4441,7 @@ mod tests {
         );
         assert_eq!(
             published,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "nav/first".to_owned(),
                 action: ControlAction::Activate,
             }]
@@ -4375,7 +4458,7 @@ mod tests {
         /// pointer ended up over.
         other: Rect,
         /// What that move published.
-        published: Vec<UiEvent>,
+        published: Vec<Published>,
         /// Whether the press inside the box armed the meter there. Without this
         /// the move that follows measures nothing.
         armed: bool,
@@ -4457,7 +4540,7 @@ mod tests {
             dragged.at,
             dragged.held
         );
-        let [UiEvent::Control { path, action }] = dragged.published.as_slice() else {
+        let [Published::Gesture { path, action }] = dragged.published.as_slice() else {
             panic!(
                 "the drag must publish one control event, and it published {:?}",
                 dragged.published
@@ -4486,7 +4569,7 @@ mod tests {
         assert!(
             !dragged.published.iter().any(|event| matches!(
                 event,
-                UiEvent::Control { path, .. } if path == "nav/other"
+                Published::Gesture { path, .. } if path == "nav/other"
             )),
             "the knob under the pointer answered a drag it never started: {:?}",
             dragged.published
@@ -4586,7 +4669,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "overview/a/wave".to_owned(),
                 action: ControlAction::SetScalar(0.25),
             }]
@@ -4608,6 +4691,7 @@ mod tests {
         let mut element = Element::new(Host {
             child,
             layout: HostedLayout::new(root, ctx(&ui, &reads), builtin::skin()),
+            outline: Border::default(),
         });
         let renderer = headless_renderer();
         let viewport = Size::new(100.0, 40.0);
@@ -4651,7 +4735,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: path.to_owned(),
                 action: ControlAction::SetScalar(0.5),
             }]
@@ -4840,7 +4924,7 @@ mod tests {
             1,
             "a wheel on the real hosted knob must publish exactly once"
         );
-        let UiEvent::Control { path, action } = &messages[0] else {
+        let Published::Gesture { path, action } = &messages[0] else {
             panic!("the hosted knob wheel must publish a control event");
         };
         assert_eq!(path, "mixer/a/high");
@@ -4881,7 +4965,7 @@ mod tests {
             "the hosted knob's paint-only child must not answer the move a second time, and strip \
              B must stay silent while strip A owns the mixer's capture slot"
         );
-        let UiEvent::Control { path, action } = &messages[0] else {
+        let Published::Gesture { path, action } = &messages[0] else {
             panic!("the captured strip A knob must publish a control event");
         };
         assert_eq!(path, "mixer/a/high");
@@ -4963,10 +5047,437 @@ mod tests {
         drop(shell);
 
         assert_eq!(messages.len(), 1);
-        let UiEvent::Control { path, action } = &messages[0] else {
+        let Published::Gesture { path, action } = &messages[0] else {
             panic!("the retained knob must publish a control event");
         };
         assert_eq!(path, "mixer/a/high");
         assert_eq!(action, &ControlAction::SetScalar(0.75));
+    }
+
+    mod dropping {
+        use std::any::Any;
+
+        use iced::{
+            Color, Element, Event, Point, Rectangle, Size, Theme,
+            advanced::{
+                Renderer as _,
+                layout::{self, Limits},
+                renderer,
+                renderer::Headless as _,
+                widget::{Id, Operation, Tree},
+            },
+            mouse::{self, Button, Cursor},
+        };
+        use num_traits::cast::AsPrimitive;
+
+        use super::{
+            super::{super::drag::Root, Renderer, Zone},
+            headless_renderer,
+        };
+        use crate::{
+            builtin,
+            compile::CompiledUi,
+            draw::{Pt, Rect},
+            render::{
+                DragGhost, DragSession, Published, UiEvent,
+                document::Clock,
+                draw_host_layer,
+                drop_fixture::{self, DropHost, DropReads},
+                tree::render,
+            },
+            shaping::TextContext,
+            view,
+        };
+
+        fn viewport() -> Size {
+            Size::new(drop_fixture::WIDTH, drop_fixture::HEIGHT)
+        }
+
+        pub(super) struct Window {
+            renderer: Renderer,
+            tree: Option<Tree>,
+            published: Vec<Published>,
+        }
+
+        impl Window {
+            fn event(&mut self, ui: &CompiledUi, reads: &DropReads, event: &Event, at: Point) {
+                let mut element: Element<'_, Published> = render(
+                    &ui.root,
+                    ui,
+                    reads,
+                    &view::EMPTY,
+                    builtin::skin(),
+                    Clock::default(),
+                    None,
+                );
+                let tree = self
+                    .tree
+                    .get_or_insert_with(|| Tree::new(element.as_widget()));
+                tree.diff(element.as_widget());
+                let node: layout::Node = element.as_widget_mut().layout(
+                    tree,
+                    &self.renderer,
+                    &Limits::new(Size::ZERO, viewport()),
+                );
+                let (published, _) = super::dispatch(
+                    &mut element,
+                    tree,
+                    &node,
+                    &self.renderer,
+                    viewport(),
+                    event,
+                    at,
+                );
+                self.published.extend(published);
+            }
+
+            pub(super) fn let_go(&mut self, ui: &CompiledUi, reads: &DropReads) -> Vec<UiEvent> {
+                let published = DropHost::let_go(self, ui, reads, drop_fixture::OVER_THE_DECK);
+                drop_fixture::writes(ui, &published, reads)
+            }
+
+            pub(super) fn photo(
+                &mut self,
+                ui: &CompiledUi,
+                reads: &DropReads,
+                (x, y): (f32, f32),
+            ) -> Vec<u8> {
+                let mut element: Element<'_, Published> = render(
+                    &ui.root,
+                    ui,
+                    reads,
+                    &view::EMPTY,
+                    builtin::skin(),
+                    Clock::default(),
+                    None,
+                );
+                let tree = self
+                    .tree
+                    .as_mut()
+                    .unwrap_or_else(|| panic!("the window must have drawn a frame"));
+                tree.diff(element.as_widget());
+                let node = element.as_widget_mut().layout(
+                    tree,
+                    &self.renderer,
+                    &Limits::new(Size::ZERO, viewport()),
+                );
+                element.as_widget().draw(
+                    tree,
+                    &mut self.renderer,
+                    &Theme::Dark,
+                    &renderer::Style::default(),
+                    layout::Layout::new(&node),
+                    Cursor::Available(Point::new(x, y)),
+                    &Rectangle::with_size(viewport()),
+                );
+                screenshot(&mut self.renderer, Color::BLACK)
+            }
+
+            pub(super) fn open() -> Self {
+                Self {
+                    renderer: headless_renderer(),
+                    tree: None,
+                    published: Vec::new(),
+                }
+            }
+
+            pub(super) fn host_saw_a_carry(&self) -> bool {
+                self.published
+                    .iter()
+                    .any(|event| matches!(event, Published::Carry { .. }))
+            }
+
+            pub(super) fn pick_up_and_carry(&mut self, ui: &CompiledUi, reads: &DropReads) {
+                self.pick_up(ui, reads, drop_fixture::FROM);
+                for at in drop_fixture::CARRY {
+                    self.to(ui, reads, at);
+                }
+                self.to(ui, reads, drop_fixture::OVER_THE_DECK);
+            }
+
+            pub(super) fn press_drag_release(
+                &mut self,
+                ui: &CompiledUi,
+                reads: &DropReads,
+                from: (f32, f32),
+                to: (f32, f32),
+            ) -> Vec<Published> {
+                self.to(ui, reads, from);
+                self.event(
+                    ui,
+                    reads,
+                    &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                    Point::new(from.0, from.1),
+                );
+                self.to(ui, reads, to);
+                self.event(
+                    ui,
+                    reads,
+                    &Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+                    Point::new(to.0, to.1),
+                );
+                std::mem::take(&mut self.published)
+            }
+
+            pub(super) fn session(&self) -> &DragSession {
+                self.tree
+                    .as_ref()
+                    .map(|tree| &tree.state.downcast_ref::<Root>().session)
+                    .unwrap_or_else(|| panic!("the document root must follow the drag"))
+            }
+
+            pub(super) fn lit(&mut self, ui: &CompiledUi, reads: &DropReads) -> Vec<String> {
+                let mut element: Element<'_, Published> = render(
+                    &ui.root,
+                    ui,
+                    reads,
+                    &view::EMPTY,
+                    builtin::skin(),
+                    Clock::default(),
+                    None,
+                );
+                let tree = self
+                    .tree
+                    .as_mut()
+                    .unwrap_or_else(|| panic!("the window must have drawn a frame"));
+                let node = element.as_widget_mut().layout(
+                    tree,
+                    &self.renderer,
+                    &Limits::new(Size::ZERO, viewport()),
+                );
+                let mut lit = Lit(Vec::new());
+                element.as_widget_mut().operate(
+                    tree,
+                    layout::Layout::new(&node),
+                    &self.renderer,
+                    &mut lit,
+                );
+                lit.0
+            }
+
+            pub(super) fn to(&mut self, ui: &CompiledUi, reads: &DropReads, (x, y): (f32, f32)) {
+                let at = Point::new(x, y);
+                self.event(
+                    ui,
+                    reads,
+                    &Event::Mouse(mouse::Event::CursorMoved { position: at }),
+                    at,
+                );
+            }
+        }
+
+        impl DropHost for Window {
+            fn carry_to(&mut self, ui: &CompiledUi, reads: &DropReads, at: (f32, f32)) {
+                self.to(ui, reads, at);
+            }
+
+            fn let_go(
+                &mut self,
+                ui: &CompiledUi,
+                reads: &DropReads,
+                at: (f32, f32),
+            ) -> Vec<Published> {
+                self.event(
+                    ui,
+                    reads,
+                    &Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+                    Point::new(at.0, at.1),
+                );
+                std::mem::take(&mut self.published)
+            }
+
+            fn open(_ui: &CompiledUi, _reads: &DropReads) -> Self {
+                Self::open()
+            }
+
+            fn pick_up(&mut self, ui: &CompiledUi, reads: &DropReads, at: (f32, f32)) {
+                self.to(ui, reads, at);
+                self.event(
+                    ui,
+                    reads,
+                    &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                    Point::new(at.0, at.1),
+                );
+            }
+
+            // The window renders the document afresh on every event.
+            fn refresh(&mut self, _ui: &CompiledUi, _reads: &DropReads) {}
+        }
+
+        fn screenshot(renderer: &mut Renderer, background: Color) -> Vec<u8> {
+            let size = viewport();
+            renderer.screenshot(
+                Size::new(size.width.as_(), size.height.as_()),
+                1.0,
+                background,
+            )
+        }
+
+        pub(super) struct Ghost {
+            pixels: Vec<(usize, [u8; 4])>,
+        }
+
+        impl Ghost {
+            pub(super) fn shown_in(&self, photo: &[u8]) -> bool {
+                self.pixels
+                    .iter()
+                    .all(|(at, pixel)| photo.get(at * 4..at * 4 + 4) == Some(&pixel[..]))
+            }
+        }
+
+        pub(super) fn ghost_alone(title: &str) -> Ghost {
+            let skin = builtin::skin();
+            let (x, y) = drop_fixture::OVER_THE_DECK;
+            let bounds = Rect {
+                x: 0.0,
+                y: 0.0,
+                w: drop_fixture::WIDTH,
+                h: drop_fixture::HEIGHT,
+            };
+            let mut text = TextContext::from(skin.text_resources());
+            let layer =
+                DragGhost::new(Some(title), skin).layer(Some(Pt { x, y }), bounds, &mut text);
+            let over = |background: Color| {
+                let mut renderer = headless_renderer();
+                renderer.with_layer(Rectangle::with_size(viewport()), |renderer| {
+                    draw_host_layer(renderer, &layer, skin.text_resources());
+                });
+                screenshot(&mut renderer, background)
+            };
+            let (black, white) = (over(Color::BLACK), over(Color::WHITE));
+            let pixels: Vec<(usize, [u8; 4])> = black
+                .chunks_exact(4)
+                .zip(white.chunks_exact(4))
+                .enumerate()
+                .filter(|(_, (black, white))| black == white)
+                .map(|(at, (black, _))| (at, [black[0], black[1], black[2], black[3]]))
+                .collect();
+            assert!(
+                !pixels.is_empty(),
+                "the ghost must paint something of its own"
+            );
+            Ghost { pixels }
+        }
+
+        struct Lit(Vec<String>);
+
+        impl Operation for Lit {
+            fn custom(&mut self, _id: Option<&Id>, _bounds: Rectangle, state: &mut dyn Any) {
+                if let Some(Zone {
+                    path: Some(path),
+                    hovered: true,
+                }) = state.downcast_ref::<Zone>()
+                {
+                    self.0.push(path.clone());
+                }
+            }
+
+            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+                operate(self);
+            }
+        }
+    }
+
+    drop_fixture::drop_suite!(dropping::Window);
+
+    #[kithara::test]
+    fn a_table_without_write_width_offers_no_column_resize() {
+        let ui = drop_fixture::compiled_with_columns();
+        let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+        let mut window = dropping::Window::open();
+
+        let published =
+            window.press_drag_release(&ui, &reads, drop_fixture::BORDER, drop_fixture::WIDER);
+
+        assert_eq!(published, []);
+    }
+
+    #[kithara::test]
+    fn a_table_with_write_width_resizes_the_column_dragged_by_its_border() {
+        let ui = drop_fixture::compiled_with_column_widths();
+        let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+        let mut window = dropping::Window::open();
+
+        let published =
+            window.press_drag_release(&ui, &reads, drop_fixture::BORDER, drop_fixture::WIDER);
+
+        assert!(
+            published.iter().any(
+                |event| matches!(event, Published::Gesture { path, .. } if path == drop_fixture::RESIZED)
+            ),
+            "the border drag must publish the column's width: {published:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn the_root_keeps_every_carry_step_from_the_host() {
+        let ui = drop_fixture::compiled();
+        let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+        let mut window = dropping::Window::open();
+
+        window.pick_up_and_carry(&ui, &reads);
+
+        assert!(!window.host_saw_a_carry());
+    }
+
+    #[kithara::test]
+    fn a_zone_is_hovered_only_while_a_carried_row_is_over_it() {
+        let ui = drop_fixture::compiled();
+        let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+        let mut window = dropping::Window::open();
+        let hovered = |window: &mut dropping::Window| {
+            let lit = window.lit(&ui, &reads) == [drop_fixture::ZONE];
+            (window.session().hovered() == Some(drop_fixture::ZONE), lit)
+        };
+
+        window.to(&ui, &reads, drop_fixture::OVER_THE_DECK);
+        let hovered_empty = hovered(&mut window);
+        window.pick_up_and_carry(&ui, &reads);
+        let carried_over = hovered(&mut window);
+        window.to(&ui, &reads, drop_fixture::AWAY);
+        let carried_away = hovered(&mut window);
+        window.to(&ui, &reads, drop_fixture::OVER_THE_DECK);
+        window.let_go(&ui, &reads);
+        let released = hovered(&mut window);
+
+        assert_eq!(
+            [hovered_empty, carried_over, carried_away, released],
+            [(false, false), (true, true), (false, false), (false, false)],
+            "the zone is hovered, and outlines itself, while a carried row is over it and at no \
+             other time"
+        );
+    }
+
+    #[kithara::test]
+    fn a_row_dropped_from_a_list_an_engine_drives_delivers_the_decks_write() {
+        let ui = drop_fixture::compiled_engine_hosted();
+        let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+        let mut window = dropping::Window::open();
+
+        window.pick_up_and_carry(&ui, &reads);
+        let writes = window.let_go(&ui, &reads);
+
+        assert_eq!(writes, [drop_fixture::load(drop_fixture::DRAGGED)]);
+    }
+
+    #[kithara::test]
+    fn the_ghost_carries_the_dragged_rows_title_until_it_is_let_go() {
+        let ui = drop_fixture::compiled();
+        let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+        let mut window = dropping::Window::open();
+
+        let ghost = dropping::ghost_alone(drop_fixture::DRAGGED_TITLE);
+        let at = drop_fixture::OVER_THE_DECK;
+
+        window.pick_up_and_carry(&ui, &reads);
+        let carried = ghost.shown_in(&window.photo(&ui, &reads, at));
+        window.let_go(&ui, &reads);
+        let released = ghost.shown_in(&window.photo(&ui, &reads, at));
+
+        assert_eq!(
+            [carried, released],
+            [true, false],
+            "the window draws the ghost with the dragged row's title while the row is carried"
+        );
     }
 }

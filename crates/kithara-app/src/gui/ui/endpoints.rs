@@ -14,7 +14,6 @@ impl Endpoint {
     const DECK: &[&str] = &["deck"];
     const EQ_MODE: &[&str] = &["deck", "bands"];
     const GLOBAL: &[&str] = &[];
-    const GROUP: &[&str] = &["group"];
     const LAYOUT: &[&str] = &["layout"];
     const MODULE: &[&str] = &["module"];
     const VARIANT: &[&str] = &["deck", "variant"];
@@ -130,6 +129,12 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::DECK,
     },
     Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.tempo.reset",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
         category: EndpointCategory::Parameter,
         id: "deck.eq.low",
         value: ValueKind::Scalar,
@@ -161,12 +166,6 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "deck.eq.menu_open",
-        value: ValueKind::Bool,
-        scopes: Endpoint::DECK,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
         id: "deck.eq.bands",
         value: ValueKind::Scalar,
         scopes: Endpoint::DECK,
@@ -179,9 +178,9 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Command,
-        id: "deck.eq.menu",
+        id: "deck.eq.mode",
         value: ValueKind::Trigger,
-        scopes: Endpoint::DECK,
+        scopes: Endpoint::EQ_MODE,
     },
     Endpoint {
         category: EndpointCategory::Model,
@@ -204,20 +203,8 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.queue.load",
-        value: ValueKind::Trigger,
-        scopes: Endpoint::DECK,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
-        id: "ui.drag.over",
-        value: ValueKind::Bool,
-        scopes: Endpoint::DECK,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
-        id: "ui.drag.track",
         value: ValueKind::Text,
-        scopes: Endpoint::GLOBAL,
+        scopes: Endpoint::DECK,
     },
     Endpoint {
         category: EndpointCategory::Parameter,
@@ -235,12 +222,6 @@ static ENDPOINTS: &[Endpoint] = &[
         category: EndpointCategory::Parameter,
         id: "mixer.muted",
         value: ValueKind::Bool,
-        scopes: Endpoint::DECK,
-    },
-    Endpoint {
-        category: EndpointCategory::Command,
-        id: "mixer.toggle_mute",
-        value: ValueKind::Trigger,
         scopes: Endpoint::DECK,
     },
     Endpoint {
@@ -265,6 +246,12 @@ static ENDPOINTS: &[Endpoint] = &[
         category: EndpointCategory::Model,
         id: "library.tracks",
         value: ValueKind::Table,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "library.select_track",
+        value: ValueKind::Index,
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
@@ -295,18 +282,6 @@ static ENDPOINTS: &[Endpoint] = &[
         category: EndpointCategory::Model,
         id: "tempo.map",
         value: ValueKind::PortalMap,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
-        id: "tempo.window",
-        value: ValueKind::Range,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Command,
-        id: "tempo.window_edge",
-        value: ValueKind::Scalar,
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
@@ -362,24 +337,6 @@ static ENDPOINTS: &[Endpoint] = &[
         id: "ui.app.version",
         value: ValueKind::Text,
         scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
-        id: "ui.menu.group_open",
-        value: ValueKind::Bool,
-        scopes: Endpoint::GROUP,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
-        id: "ui.menu.group_hidden",
-        value: ValueKind::Bool,
-        scopes: Endpoint::GROUP,
-    },
-    Endpoint {
-        category: EndpointCategory::Command,
-        id: "ui.menu.toggle_group",
-        value: ValueKind::Trigger,
-        scopes: Endpoint::GROUP,
     },
     Endpoint {
         category: EndpointCategory::Command,
@@ -472,21 +429,9 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::DECK,
     },
     Endpoint {
-        category: EndpointCategory::Model,
-        id: "deck.stream.quality_menu",
-        value: ValueKind::Bool,
-        scopes: Endpoint::DECK,
-    },
-    Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.stream.quality_hidden",
         value: ValueKind::Bool,
-        scopes: Endpoint::DECK,
-    },
-    Endpoint {
-        category: EndpointCategory::Command,
-        id: "deck.stream.toggle_quality_menu",
-        value: ValueKind::Trigger,
         scopes: Endpoint::DECK,
     },
     Endpoint {

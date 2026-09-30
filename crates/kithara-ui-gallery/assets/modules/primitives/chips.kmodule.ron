@@ -16,6 +16,7 @@
                         size: (w: Fixed(20.0), h: Fixed(16.0)),
                         label: "A",
                         read: Model(id: "demo.chip.active"),
+                        write: Command(id: "demo.chip.toggle_active"),
                     ),
                     Chip(
                         id: "inactive",
@@ -23,6 +24,7 @@
                         label: "FX1",
                         style: Routing,
                         read: Model(id: "demo.chip.inactive"),
+                        write: Command(id: "demo.chip.toggle_inactive"),
                     ),
                 ],
             ),

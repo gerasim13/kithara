@@ -88,12 +88,6 @@ fn strip_mut(drawn: &mut EngineSnapshot, id: DeckId) -> Option<&mut MixStrip> {
 fn lay_mix(cmd: MixCmd, drawn: &mut EngineSnapshot) {
     match cmd {
         MixCmd::Crossfader(position) => drawn.mix.position = position,
-        MixCmd::Master(gain) => drawn.mix.group_master = gain,
-        MixCmd::Muted(id, muted) => {
-            if let Some(strip) = strip_mut(drawn, id) {
-                strip.muted = muted;
-            }
-        }
         MixCmd::Trim(id, trim) => {
             if let Some(strip) = strip_mut(drawn, id) {
                 strip.trim = trim;

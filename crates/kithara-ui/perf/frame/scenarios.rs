@@ -98,7 +98,7 @@ pub(crate) mod consts {
         },
         Scenario {
             name: "ContextBar",
-            control: r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Model(id: "library.scope"))"#,
+            control: r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Command(id: "library.select_scope"))"#,
             interaction: Interaction::PressLeading,
         },
         Scenario {
@@ -113,12 +113,12 @@ pub(crate) mod consts {
         },
         Scenario {
             name: "Chip",
-            control: r#"Chip(id: "control", label: "A", read: Model(id: "ui.menu.open"))"#,
+            control: r#"Chip(id: "control", label: "A", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
             interaction: Interaction::Press,
         },
         Scenario {
             name: "NavItem",
-            control: r#"NavItem(id: "control", label: "LIBRARY", icon: Playlist, read: Model(id: "ui.menu.open"))"#,
+            control: r#"NavItem(id: "control", label: "LIBRARY", icon: Playlist, read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
             interaction: Interaction::Press,
         },
         Scenario {
@@ -133,22 +133,22 @@ pub(crate) mod consts {
         },
         Scenario {
             name: "TabLarge",
-            control: r#"TabLarge(id: "control", label: "MIXER", read: Model(id: "ui.menu.open"))"#,
+            control: r#"TabLarge(id: "control", label: "MIXER", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
             interaction: Interaction::Press,
         },
         Scenario {
             name: "Toggle",
-            control: r#"Toggle(id: "control", read: Model(id: "ui.menu.open"))"#,
+            control: r#"Toggle(id: "control", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
             interaction: Interaction::Press,
         },
         Scenario {
             name: "Checkbox",
-            control: r#"Checkbox(id: "control", read: Model(id: "ui.menu.open"))"#,
+            control: r#"Checkbox(id: "control", read: Model(id: "ui.menu.open"), write: Command(id: "ui.menu.toggle"))"#,
             interaction: Interaction::Press,
         },
         Scenario {
             name: "Segmented",
-            control: r#"Segmented(id: "control", items: ["A", "B"], read: Model(id: "library.scope"))"#,
+            control: r#"Segmented(id: "control", items: ["A", "B"], read: Model(id: "library.scope"), write: Command(id: "library.select_scope"))"#,
             interaction: Interaction::Press,
         },
         Scenario {
@@ -183,12 +183,12 @@ pub(crate) mod consts {
         },
         Scenario {
             name: "VuVertical",
-            control: r#"VuVertical(id: "control", read: Telemetry(id: "player.output.levels"))"#,
+            control: r#"VuVertical(id: "control", read: Telemetry(id: "player.output.levels"), write: Parameter(id: "player.output.volume"))"#,
             interaction: Interaction::Drag,
         },
         Scenario {
             name: "VuStereo",
-            control: r#"VuStereo(id: "control", read: Telemetry(id: "player.output.levels"))"#,
+            control: r#"VuStereo(id: "control", read: Telemetry(id: "player.output.levels"), write: Parameter(id: "player.output.volume"))"#,
             interaction: Interaction::Drag,
         },
         Scenario {

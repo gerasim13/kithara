@@ -7,7 +7,9 @@ use std::{
     thread,
 };
 
-use self::consts::DISABLE_REMOTE_FIXTURES_ENV;
+use kithara_platform::time::Instant;
+
+use self::consts::{DISABLE_REMOTE_FIXTURES_ENV, WAIT_REPORTED};
 use crate::{
     context::BuildContext,
     graph,
@@ -16,7 +18,14 @@ use crate::{
 };
 
 mod consts {
+    use kithara_platform::time::Duration;
+
     pub(super) const DISABLE_REMOTE_FIXTURES_ENV: &str = "KITHARA_DISABLE_REMOTE_FIXTURES";
+    /// A wait on another build's fixture shorter than this is two builds
+    /// starting together, not one waiting on the other. Cargo holds a build
+    /// script's output until it ends, so the warning a longer wait prints is
+    /// the one trace of it the job log gets.
+    pub(super) const WAIT_REPORTED: Duration = Duration::from_secs(1);
 }
 
 /// Rejects two cases that would produce one accessor, before either is written.
@@ -157,8 +166,16 @@ fn materialize_one(
             format!("remote hydration disabled by {DISABLE_REMOTE_FIXTURES_ENV}"),
         ));
     }
+    let waiting = Instant::now();
     let _lock = store::lock_entry(namespace, id)
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
+    let waited = waiting.elapsed();
+    if waited >= WAIT_REPORTED {
+        println!(
+            "cargo:warning=waited {} s for fixture `{name}`, which another build was producing",
+            waited.as_secs()
+        );
+    }
     if reuse && store::has_entry(namespace, id, def.ext) {
         return None;
     }

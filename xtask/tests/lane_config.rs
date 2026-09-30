@@ -388,16 +388,14 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
     }
 }
 
-/// Every Linux lane builds in a directory named after it on a root the host's
-/// runners share, so the artefacts a lane finds were built by whichever branch
-/// ran it last, on whichever runner. Cargo's default freshness compares mtimes,
-/// and a checkout leaves a file it did not change with the mtime of an earlier
-/// checkout: a test binary another branch built later then reads as fresh, and
-/// the lane runs that branch's tests. Freshness by content is the only kind a
-/// shared directory can trust, and Cargo honours it only on nightly - a stable
-/// toolchain ignores the flag without a word.
+/// Every lane that runs the suite, whole or under the real-time sanitizer,
+/// builds in a directory named after it on a root runners share, so the
+/// artefacts a lane finds were built by whichever branch ran it last. Only a
+/// checksum lane has cargo judge what rustc read by content and has its claim
+/// decide every build-script run, so a lane that runs the suite and is judged
+/// by mtime could run another branch's tests.
 #[test]
-fn every_linux_test_lane_judges_freshness_by_content() {
+fn every_test_lane_judges_freshness_by_checksum() {
     let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
@@ -406,44 +404,37 @@ fn every_linux_test_lane_judges_freshness_by_content() {
     let lanes = config["ext"]["ci"]["lanes"]
         .as_table()
         .expect("the catalog declares lanes");
+    let runs_the_suite = |args: &toml::Value| {
+        let args: Vec<&str> = args
+            .as_array()
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        matches!(args.as_slice(), ["test", recipe, ..] if *recipe == "run" || recipe.starts_with("rtsan"))
+    };
     let mut checked = 0;
     for (name, lane) in lanes {
-        if lane.get("os").and_then(toml::Value::as_str) != Some("linux") {
-            continue;
-        }
         let steps = lane
             .get("steps")
             .and_then(toml::Value::as_array)
             .map_or(&[][..], Vec::as_slice);
-        for step in steps {
-            let args: Vec<&str> = step
-                .get("args")
-                .and_then(toml::Value::as_array)
-                .map_or(&[][..], Vec::as_slice)
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .collect();
-            if !args.starts_with(&["test", "run"]) {
-                continue;
-            }
-            let env = |key: &str| {
-                step.get("env")
-                    .and_then(|env| env.get(key))
-                    .and_then(toml::Value::as_str)
-            };
-            assert_eq!(env("CARGO_BUILD_FINGERPRINT"), Some("content"), "{name}");
-            assert_eq!(
-                env("CARGO_UNSTABLE_CHECKSUM_FRESHNESS"),
-                Some("true"),
-                "{name}"
-            );
-            assert_eq!(
-                env("RUSTUP_TOOLCHAIN"),
-                Some("{pin.nightly_toolchain}"),
-                "{name}"
-            );
-            checked += 1;
+        let suite = steps.iter().any(|step| {
+            step.get("args").is_some_and(runs_the_suite)
+                || step
+                    .get("args_by_kind")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|kinds| kinds.values().any(runs_the_suite))
+        });
+        if !suite {
+            continue;
         }
+        assert_eq!(
+            lane.get("freshness").and_then(toml::Value::as_str),
+            Some("checksum"),
+            "{name}"
+        );
+        checked += 1;
     }
-    assert!(checked > 0, "the catalog runs the suite on Linux");
+    assert!(checked > 0, "the catalog runs the suite");
 }

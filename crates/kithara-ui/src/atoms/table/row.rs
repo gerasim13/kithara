@@ -13,6 +13,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TableRowData {
     pub(crate) selected: bool,
+    pub(crate) drag: Option<String>,
     cells: Vec<(String, TableCell)>,
 }
 
@@ -32,6 +33,7 @@ impl From<&ReadRow<'_>> for TableRowData {
                 })
                 .collect(),
             selected: row.selected(),
+            drag: row.drag().map(str::to_owned),
         }
     }
 }
@@ -159,7 +161,7 @@ mod tests {
     fn row_geometry_keeps_grid_gaps_outside_row_hits() {
         let skin = crate::builtin::skin();
         let columns = column_layouts(
-            &[column("title", 180.0, true)],
+            (&[column("title", 180.0, true)], true),
             &ColumnReads(None),
             None,
             skin,
@@ -181,7 +183,7 @@ mod tests {
     fn visible_row_hits_are_clipped_to_the_body() {
         let skin = crate::builtin::skin();
         let columns = column_layouts(
-            &[column("title", 180.0, true)],
+            (&[column("title", 180.0, true)], true),
             &ColumnReads(None),
             None,
             skin,
@@ -211,11 +213,14 @@ mod tests {
     fn row_hits_yield_to_the_visible_scrollbar_lane_at_each_horizontal_edge() {
         let skin = crate::builtin::skin();
         let columns = column_layouts(
-            &[
-                column("title", 180.0, true),
-                column("artist", 200.0, false),
-                column("transition", 130.0, false),
-            ],
+            (
+                &[
+                    column("title", 180.0, true),
+                    column("artist", 200.0, false),
+                    column("transition", 130.0, false),
+                ],
+                true,
+            ),
             &ColumnReads(None),
             None,
             skin,

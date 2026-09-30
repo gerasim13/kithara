@@ -133,6 +133,7 @@ mod table_projection {
                 TableColumn::new("name", "NAME", TableColumnStyle::Primary, 192.0, true),
             ],
             columns_state: None,
+            resizable: true,
         };
         let cx = Resolving {
             skin,
@@ -359,7 +360,7 @@ mod dragged {
         draw::{DrawBuffers, Pt, Rect},
         interact::{Hit, Input, PointerPhase, mouse},
         mount,
-        render::{ControlAction, ReadValue, UiEvent, controls::Draws},
+        render::{ControlAction, Published, ReadValue, controls::Draws},
     };
 
     mod consts {
@@ -432,9 +433,9 @@ mod dragged {
         let to = from - builtin::skin().knob.drag_range * consts::STEP;
         knob.input(moved(to), &at(to))
             .value()
-            .and_then(|action| action.downcast::<UiEvent>().ok())
+            .and_then(|action| action.downcast::<Published>().ok())
             .and_then(|event| match event {
-                UiEvent::Control {
+                Published::Gesture {
                     action: ControlAction::SetScalar(value),
                     ..
                 } => Some(value),

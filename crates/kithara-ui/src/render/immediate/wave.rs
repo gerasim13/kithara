@@ -20,7 +20,7 @@ use crate::{
         recognizers::{Scalar, ScalarState, Track},
     },
     module::WaveStyle,
-    render::{Skin, UiEvent, Widget, controls::snapped, immediate::cache, scalar, scalar_child},
+    render::{Published, Skin, Widget, controls::snapped, immediate::cache, scalar, scalar_child},
     shaping::TextContext,
 };
 
@@ -36,7 +36,7 @@ pub(crate) struct MiniWave<'path, 'skin> {
 }
 
 impl<'a, 'skin: 'a> Widget<'a> for MiniWave<'_, 'skin> {
-    fn view(self) -> Element<'a, UiEvent> {
+    fn view(self) -> Element<'a, Published> {
         let painter = Face::new(self.style, self.skin);
         let hero = painter.hero();
         let drag = Scalar::builder()
@@ -110,7 +110,7 @@ struct Painted {
     overlay: bool,
 }
 
-impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
+impl canvas::Program<Published> for MiniWaveCanvas<'_> {
     type State = MiniWaveState;
 
     fn draw(
@@ -179,7 +179,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
+    ) -> Option<Action<Published>> {
         if let Event::Keyboard(KeyboardEvent::ModifiersChanged(modifiers)) = event {
             state.modifiers = *modifiers;
             return None;

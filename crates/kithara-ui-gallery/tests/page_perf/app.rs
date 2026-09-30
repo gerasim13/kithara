@@ -86,9 +86,9 @@ impl App for PageApp {
     fn update(&mut self, event: UiEvent) {
         self.published += 1;
         if self.closes_loop
-            && let UiEvent::Control { path, action } = event
+            && let UiEvent::Write { key, value } = event
         {
-            self.reads.apply(&path, &action);
+            self.reads.write(&key, value);
         }
     }
 }

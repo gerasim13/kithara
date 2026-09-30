@@ -156,10 +156,12 @@ wasm BROWSER="chrome" SUITE="all":
         --test webcodecs_browser
     fi
 
-# Render the same active no-SYNC scenarios into listening artifacts, then the
-# SYNC and Warp scenarios on Richie Hawtin - The Tunnel with the Host metronome
-# laid over each capture. The recorders are ignored in ordinary CI so filesystem
-# work cannot consume their behavioral-test deadlines.
+# Render the same active no-SYNC scenarios into listening artifacts, the Host
+# metronome over a sine deck through a tempo ride, then the SYNC and Warp
+# scenarios on Richie Hawtin - The Tunnel; the metronome and SYNC captures come
+# from the Host output tap, clicks included. Recorders that only write artifacts
+# are ignored in ordinary CI so filesystem work cannot consume their
+# behavioral-test deadlines.
 [positional-arguments]
 audio-artifacts OUTPUT:
     #!/usr/bin/env bash
@@ -175,8 +177,8 @@ audio-artifacts OUTPUT:
         -E 'test(/no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-host-tests --test host \
-        --run-ignored=only \
-        -E 'test(=no_sync_real_media::matrix::record_no_sync_real_media_artifacts)'
+        --run-ignored=all \
+        -E 'test(=no_sync_real_media::matrix::record_no_sync_real_media_artifacts) | test(=metronome::the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-sync-tests --test sync \
         --run-ignored=all \
@@ -409,8 +411,8 @@ miri *ARGS:
 #     through `sanitize(realtime = "nonblocking")` and links the runtime from
 #     `-Zsanitizer=realtime`. Plain `nightly` is whatever the host last
 #     downloaded, so the pin is what the image names.
-#   standalone — stable Rust; the mark is a runtime guard and the runtime comes
-#     from the `rtsan-standalone` crate. Its build script gates on the presence
+#   standalone — any toolchain, the one the caller chose; the mark is a
+#     runtime guard and the runtime comes from the `rtsan-standalone` crate. Its build script gates on the presence
 #     of RTSAN_ENABLE (the value is never read, so `0` also enables it) and
 #     downloads the library with curl unless RTSAN_LIB_PATH names a staged one.
 #     That path must keep the library's canonical file name or the link fails.
@@ -455,7 +457,7 @@ _rtsan TARGETS FEATURES FILTER SUPPRESSIONS="":
         flags="-Zsanitizer=realtime --cfg rtsan"
         ;;
     standalone)
-        toolchain="+${KITHARA_STABLE_TOOLCHAIN:-stable}"
+        toolchain=""
         flags="--cfg rtsan --cfg rtsan_standalone"
         export RTSAN_ENABLE=1
         # The image stages the runtime and names its directory; the file keeps
@@ -496,7 +498,7 @@ _rtsan TARGETS FEATURES FILTER SUPPRESSIONS="":
     RTSAN_OPTIONS="$options" \
     RUSTFLAGS="$flags" \
     RUSTDOCFLAGS="$flags" \
-        cargo "$toolchain" nextest run --profile rtsan \
+        cargo ${toolchain:+"$toolchain"} nextest run --profile rtsan \
         {{ TARGETS }} \
         --features {{ FEATURES }} \
         --target "$target" $repeats {{ FILTER }}
@@ -505,9 +507,10 @@ rtsan-async FILTER="no_block": (_rtsan "-p kithara-harness-tests --test suite_li
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
+# `metronome` drives the Host click inserted after the limiter.
 # `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
 # makes it.
-rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe": (_rtsan "-p kithara-play -p kithara-harness-tests -p kithara-host-tests -p kithara-analysis-tests --test play --test suite_light --test host --test analysis" "kithara-play/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
+rtsan FILTER="offline_harness rt_metrics mix_tap metronome analysis_offer_is_realtime_safe": (_rtsan "-p kithara-play -p kithara-harness-tests -p kithara-host-tests -p kithara-analysis-tests --test play --test suite_light --test host --test analysis" "kithara-play/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
 
 rtsan-file FILTER="phase_continuity": (_rtsan "-p kithara-decode-tests --test decode_heavy" "apple-fused-src" FILTER)
 

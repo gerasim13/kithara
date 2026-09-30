@@ -19,7 +19,7 @@ pub(crate) struct WindowControls<'skin> {
 
 #[cfg(feature = "iced")]
 impl<'a> crate::render::Widget<'a> for WindowControls<'_> {
-    fn view(self) -> Element<'a, crate::render::UiEvent> {
+    fn view(self) -> Element<'a, crate::render::Published> {
         crate::render::window_layer(ControlsProgram::new(self.style, self.skin))
     }
 }

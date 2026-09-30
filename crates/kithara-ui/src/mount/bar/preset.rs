@@ -31,7 +31,7 @@ mod host {
     use crate::{
         atoms::bar::preset::{Preset as Face, PresetData, PresetItem},
         render::{
-            ReadValue, Skin, UiEvent,
+            ControlAction, ReadValue, Skin,
             controls::{Draws, Grip, IndexEvent, Reading},
             document::Ctx,
         },
@@ -83,10 +83,10 @@ mod host {
         items.iter().position(|item| item.name == name)
     }
 
-    fn select(data: &PresetData, index: usize) -> Option<UiEvent> {
+    fn select(data: &PresetData, index: usize) -> Option<ControlAction> {
         data.items
             .get(index)
-            .map(|item| UiEvent::SelectPreset(item.name.to_owned()))
+            .map(|item| ControlAction::Text(item.name.to_owned()))
     }
 
     #[cfg(feature = "masonry")]
@@ -148,11 +148,11 @@ mod host {
 
             assert_eq!(
                 select(&data, 0),
-                Some(UiEvent::SelectPreset(builtin::MICRO_PRESET.to_owned()))
+                Some(ControlAction::Text(builtin::MICRO_PRESET.to_owned()))
             );
             assert_eq!(
                 select(&data, 1),
-                Some(UiEvent::SelectPreset(builtin::PLAYER_PRESET.to_owned()))
+                Some(ControlAction::Text(builtin::PLAYER_PRESET.to_owned()))
             );
             assert_eq!(select(&data, 2), None);
         }

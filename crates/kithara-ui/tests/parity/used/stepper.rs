@@ -15,9 +15,9 @@ use kithara_ui::{
     compile::compile,
     draw::Pt,
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
-    render::{Clock, ReadValue, Reads, Skin, UiEvent, tree},
+    render::{Clock, ReadValue, Reads, Skin, UiEvent, WriteValue, tree},
     source::{MemResolver, UiConfig},
-    view,
+    view::{self, ViewState},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -170,7 +170,12 @@ fn neutral() -> Vec<UiEvent> {
         &Rectangle::with_size(viewport),
     );
     drop(shell);
+    let mut screen = ViewState::default();
+    let app = Tempo::default();
     published
+        .into_iter()
+        .filter_map(|published| ui.views().settle(published, &app, &mut screen))
+        .collect()
 }
 
 /// A detent over a row that names what it writes publishes the same step on
@@ -181,8 +186,17 @@ fn neutral() -> Vec<UiEvent> {
 /// readings and not the surface draws a tempo nobody can change.
 #[kithara::test]
 fn both_hosts_publish_the_same_step_for_one_detent() {
+    let retained = retained();
     assert_eq!(
-        retained(),
+        retained,
+        [UiEvent::Write {
+            key: "fixture.rate".to_owned(),
+            value: WriteValue::Step(1.0),
+        }],
+        "a detent over the row must deliver one step of the tempo it writes"
+    );
+    assert_eq!(
+        retained,
         neutral(),
         "the two hosts disagree on what a detent over the row that writes the tempo publishes"
     );

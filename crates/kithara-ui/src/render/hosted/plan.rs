@@ -20,7 +20,7 @@ use crate::{
     },
     draw::Rect,
     engine::{Descriptor, ScrollConfig},
-    expand::{Binding, ControlSpec},
+    expand::{Binding, ControlSpec, drop_path},
     ids::InternId,
     interact::{CursorShape, Hover, ScrollAxis, recognizers::WheelStep},
     module::{FaderStyle, TableColumn, WaveStyle},
@@ -261,13 +261,25 @@ impl HostedControlPlan {
         }
     }
 
+    #[cfg(feature = "masonry")]
+    pub(in crate::render) fn carried(
+        &self,
+        path: &str,
+        index: usize,
+    ) -> Option<crate::render::Carried> {
+        match self {
+            Self::Table(plan) if plan.path == path => plan.carried(index),
+            _ => None,
+        }
+    }
+
     /// What a module's `drop:` amounts to, wherever it is mounted.
     ///
     /// Both hosts ask here instead of each spelling out the path and the
     /// gesture again, so a document that takes drops means one thing.
     pub(in crate::render) fn crossing(instance: &str) -> Self {
         Self::Crossing {
-            path: format!("{instance}/drop"),
+            path: drop_path(instance),
         }
     }
 
@@ -375,11 +387,12 @@ impl HostedControlPlan {
                 ControlSpec::Table {
                     columns,
                     columns_state,
+                    resizable,
                 },
                 Some(ReadValue::Table(rows)),
             ) => Some(Self::Table(Box::new(TablePlan::resolved(
                 path,
-                columns,
+                (columns, *resizable),
                 columns_state.as_ref(),
                 read,
                 rows,
@@ -389,11 +402,12 @@ impl HostedControlPlan {
                 ControlSpec::Table {
                     columns,
                     columns_state,
+                    resizable,
                 },
                 _,
             ) => Some(Self::Table(Box::new(TablePlan::resolved(
                 path,
-                columns,
+                (columns, *resizable),
                 columns_state.as_ref(),
                 read,
                 &[],
@@ -622,7 +636,7 @@ impl TablePlan {
 
     fn resolved(
         path: &str,
-        declared_columns: &[TableColumn],
+        (declared_columns, resizable): (&[TableColumn], bool),
         columns_state: Option<&Binding>,
         _read: Option<&Binding>,
         rows: &[TableRow<'_>],
@@ -631,12 +645,12 @@ impl TablePlan {
         let Resolving { ctx, skin } = cx;
         let state =
             columns_state.map(|binding| (ctx.ui.resolve(binding.id), ctx.scope(Some(binding))));
-        let columns = column_layouts(declared_columns, &ctx, state, skin);
+        let columns = column_layouts((declared_columns, resizable), &ctx, state, skin);
         let rows = rows.iter().map(TableRowData::from).collect();
         let plan = Self::new(path, rows, columns, skin);
         #[cfg(feature = "masonry")]
         plan.bind_source(TableSource::new(
-            declared_columns.to_vec(),
+            (declared_columns.to_vec(), resizable),
             columns_state.map(|binding| {
                 (
                     ctx.ui.resolve(binding.id).to_owned(),
@@ -650,5 +664,10 @@ impl TablePlan {
 
     pub(crate) fn row_count(&self) -> usize {
         self.picture.borrow().rows().len()
+    }
+
+    #[cfg(feature = "masonry")]
+    fn carried(&self, index: usize) -> Option<crate::render::Carried> {
+        self.picture.borrow().carried(index)
     }
 }

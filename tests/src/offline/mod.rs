@@ -20,7 +20,7 @@ pub use app::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use disk_queue::{DiskQueue, RenderPacing};
 pub use host::{
-    MixTapProbe, OfflineHostHarness, OfflineQueue, OfflineResident, RENDER_PACE,
+    OfflineHostHarness, OfflineQueue, OfflineResident, RENDER_PACE, TapProbe,
     assert_playhead_tracks_renderer, audio_clock_pace,
 };
 #[cfg(not(target_arch = "wasm32"))]

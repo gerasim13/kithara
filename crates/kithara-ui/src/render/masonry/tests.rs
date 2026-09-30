@@ -35,6 +35,7 @@ use super::{
 };
 use crate::{
     atoms::bar::context::Context,
+    backends::paint_color,
     builtin,
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Pt, Rect, Rgba},
@@ -43,13 +44,13 @@ use crate::{
     module::IconName,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, CustomSkin, DragPhase, PortalMapView, PortalTarget, ReadValue, Reads,
-        ScalarRange, Skin, StereoLevels, TableCell, TableRow, TreeRow, UiEvent, WaveBucket,
-        WaveformView, WindowCommand, WindowEdge, WindowLayerProgram,
+        Carry, CarryStep, ControlAction, CustomSkin, PortalMapView, PortalTarget, Published,
+        ReadValue, Reads, ScalarRange, Skin, StereoLevels, TableCell, TableRow, TreeRow, UiEvent,
+        WaveBucket, WaveformView, WindowCommand, WindowEdge, WindowLayerProgram, control_event,
         custom::CustomKinds,
         document,
         document::{Clock, Ctx},
-        picker_hits,
+        drop_fixture, picker_hits,
         vis::{VisDeclaration, VisFrame},
     },
     shaping::{FontPolicy, TextContext},
@@ -342,7 +343,7 @@ enum WheelAction {
 
 #[derive(Debug, PartialEq)]
 enum TestAction {
-    Document(UiEvent),
+    Document(Published),
     Wheel(WheelAction),
 }
 
@@ -1014,7 +1015,9 @@ fn a_press_reaches_the_extension_the_document_named_by_kind() {
 
     assert_eq!(
         root.take_actions(),
-        [TestAction::Document(UiEvent::OpenSettings)],
+        [TestAction::Document(Published::window(
+            WindowCommand::Minimize
+        ))],
     );
 }
 
@@ -1052,7 +1055,7 @@ fn a_cell_placed_where_it_was_measured_is_laid_out_once() {
             MeasureProbe {
                 measures: Rc::clone(&measures),
             },
-            |()| TestAction::Document(UiEvent::OpenSettings),
+            |()| TestAction::Document(Published::window(WindowCommand::Minimize)),
         );
     let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let _root = masonry_root(output, 200, 120);
@@ -1083,7 +1086,7 @@ fn a_frame_that_transitions_to_no_repaint_still_paints_its_result() {
                 paints: Rc::clone(&paints),
                 pending: true,
             },
-            |()| TestAction::Document(UiEvent::OpenSettings),
+            |()| TestAction::Document(Published::window(WindowCommand::Minimize)),
         );
     let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
@@ -1155,7 +1158,7 @@ fn custom_pointer_capture_keeps_moves_after_the_pointer_leaves() {
             CaptureProbe {
                 observations: Rc::clone(&observations),
             },
-            |()| TestAction::Document(UiEvent::OpenSettings),
+            |()| TestAction::Document(Published::window(WindowCommand::Minimize)),
         );
     let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
@@ -1224,7 +1227,7 @@ fn a_modifier_capturing_custom_still_receives_the_actual_key_packet() {
             KeyProbe {
                 observed: Rc::clone(&observed),
             },
-            |()| TestAction::Document(UiEvent::OpenSettings),
+            |()| TestAction::Document(Published::window(WindowCommand::Minimize)),
         );
     let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
@@ -1257,7 +1260,7 @@ fn custom_component_receives_neutral_line_and_pixel_wheel_input() {
             ScrollProbe {
                 observations: Rc::clone(&observations),
             },
-            |()| TestAction::Document(UiEvent::OpenSettings),
+            |()| TestAction::Document(Published::window(WindowCommand::Minimize)),
         );
     let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
@@ -1352,7 +1355,7 @@ fn popover_layer_places_exactly_and_owns_inside_and_outside_presses() {
     );
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::Window(
+        vec![TestAction::Document(Published::window(
             WindowCommand::Resize(WindowEdge::East),
         ))],
         "the topmost window edge must win without also dismissing the open popover"
@@ -1367,7 +1370,7 @@ fn popover_layer_places_exactly_and_owns_inside_and_outside_presses() {
     );
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::Control {
+        vec![TestAction::Document(Published::Gesture {
             path: "demo/menu".to_owned(),
             action: ControlAction::Activate,
         })],
@@ -1430,7 +1433,7 @@ fn a_press_inside_an_open_popover_reaches_the_control_it_lands_on() {
 
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::Control {
+        vec![TestAction::Document(Published::Gesture {
             path: "demo/item".to_owned(),
             action: ControlAction::Activate,
         })],
@@ -1504,7 +1507,7 @@ fn an_open_popover_keeps_a_press_off_the_control_its_surface_covers() {
 
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::Control {
+        vec![TestAction::Document(Published::Gesture {
             path: "demo/item".to_owned(),
             action: ControlAction::Activate,
         })],
@@ -1826,7 +1829,10 @@ fn the_settings_button_leaf_opens_settings_on_press() {
     );
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::OpenSettings)]
+        vec![TestAction::Document(control_event(
+            "demo/settings",
+            ControlAction::Activate
+        ))]
     );
 
     root.handle_pointer_event(pointer_up(10.0, 50.0))
@@ -1998,7 +2004,7 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
                     id: "context",
                     size: Some((w: Fill, h: Fixed(26.0))),
                     read: Model(id: "library.breadcrumb"),
-                    write: Model(id: "library.scope"),
+                    write: Command(id: "library.select_scope"),
                     scope_items: ["ZVUK", "LOCAL"],
                     scope: Model(id: "library.scope"),
                 ),
@@ -2062,7 +2068,7 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
         );
         assert_eq!(
             root.take_actions(),
-            vec![TestAction::Document(UiEvent::Control {
+            vec![TestAction::Document(Published::Gesture {
                 path: "demo/context".to_owned(),
                 action: ControlAction::SelectIndex(0),
             })],
@@ -2082,7 +2088,7 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
         );
         assert_eq!(
             root.take_actions(),
-            vec![TestAction::Document(UiEvent::Window(
+            vec![TestAction::Document(Published::window(
                 WindowCommand::Resize(WindowEdge::East),
             ))],
             "{module_id} root resize must answer before the open picker"
@@ -2133,7 +2139,7 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
         );
         assert_eq!(
             root.take_actions(),
-            vec![TestAction::Document(UiEvent::Control {
+            vec![TestAction::Document(Published::Gesture {
                 path: "demo/context".to_owned(),
                 action: ControlAction::SelectIndex(1),
             })],
@@ -2188,7 +2194,7 @@ fn scope_strip_root() -> (MasonryRoot<TestAction>, (f32, f32)) {
         id: "context",
         size: Some((w: Fill, h: Fixed(26.0))),
         read: Model(id: "library.breadcrumb"),
-        write: Model(id: "library.scope"),
+        write: Command(id: "library.select_scope"),
         scope_items: ["ZVUK", "LOCAL"],
         scope: Model(id: "library.scope"),
     ),
@@ -2270,7 +2276,7 @@ fn titlebar_window_layer_honours_engine_and_leaf_owned_modules() {
         );
         assert_eq!(
             root.take_actions(),
-            vec![TestAction::Document(UiEvent::Window(WindowCommand::Drag))],
+            vec![TestAction::Document(Published::window(WindowCommand::Drag))],
             "{module_id} must retain the neutral window action in its native leaf layer"
         );
     }
@@ -2294,7 +2300,7 @@ fn outer_resize_layer_precedes_content_only_on_the_window_edge() {
             CaptureProbe {
                 observations: Rc::clone(&observations),
             },
-            |()| TestAction::Document(UiEvent::OpenSettings),
+            |()| TestAction::Document(Published::window(WindowCommand::Minimize)),
         );
     let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
@@ -2306,7 +2312,7 @@ fn outer_resize_layer_precedes_content_only_on_the_window_edge() {
     );
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::Window(
+        vec![TestAction::Document(Published::window(
             WindowCommand::Resize(WindowEdge::West),
         ))],
         "the outer layer must own the west edge before document content"
@@ -2373,7 +2379,7 @@ fn wheel_actions() -> Vec<WheelAction> {
 
 fn assert_step(actions: &[TestAction], path: &str, expected: f32) {
     let [
-        TestAction::Document(UiEvent::Control {
+        TestAction::Document(Published::Gesture {
             path: actual,
             action: ControlAction::StepScalar(steps),
         }),
@@ -2387,7 +2393,7 @@ fn assert_step(actions: &[TestAction], path: &str, expected: f32) {
 
 fn assert_scalar_value(actions: &[TestAction], path: &str, expected: f32) {
     let [
-        TestAction::Document(UiEvent::Control {
+        TestAction::Document(Published::Gesture {
             path: actual,
             action: ControlAction::SetScalar(value),
         }),
@@ -2443,7 +2449,11 @@ impl CustomWidget for PressExtension {
 }
 
 fn press_kinds() -> CustomKinds {
-    CustomKinds::default().with(PRESS_KIND, || PressExtension, |()| UiEvent::OpenSettings)
+    CustomKinds::default().with(
+        PRESS_KIND,
+        || PressExtension,
+        |()| UiEvent::Window(WindowCommand::Minimize),
+    )
 }
 
 #[kithara::test]
@@ -2666,8 +2676,9 @@ fn a_retained_preset_press_release_is_painted_and_publishes_the_selected_name() 
         .unwrap_or_else(|error| panic!("PresetSelector release must route: {error}"));
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::SelectPreset(
-            builtin::MICRO_PRESET.to_owned(),
+        vec![TestAction::Document(control_event(
+            "demo/presets",
+            ControlAction::Text(builtin::MICRO_PRESET.to_owned()),
         ))]
     );
     let (released, _) = root
@@ -2682,8 +2693,9 @@ fn a_retained_preset_press_release_is_painted_and_publishes_the_selected_name() 
         .unwrap_or_else(|error| panic!("second PresetSelector release must route: {error}"));
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::SelectPreset(
-            builtin::PLAYER_PRESET.to_owned(),
+        vec![TestAction::Document(control_event(
+            "demo/presets",
+            ControlAction::Text(builtin::PLAYER_PRESET.to_owned()),
         ))]
     );
 }
@@ -2743,7 +2755,7 @@ impl Reads for DrivenReads {
 fn driven_root(
     root: &str,
     reads: &DrivenReads,
-) -> (CompiledUi, MasonryState, MasonryRoot<UiEvent>) {
+) -> (CompiledUi, MasonryState, MasonryRoot<Published>) {
     let registry = fixture_registry();
     let ui = fixture_ui("driven-fixture", root, &registry);
     let state = MasonryState::default();
@@ -2758,10 +2770,10 @@ fn driven_root(
 
 /// Whether a refresh of `root` moved the object mounted at `path`.
 fn refresh_moves(
-    root: &mut MasonryRoot<UiEvent>,
+    root: &mut MasonryRoot<Published>,
     state: &MasonryState,
     path: &str,
-    refresh: impl FnOnce(&mut MasonryRoot<UiEvent>),
+    refresh: impl FnOnce(&mut MasonryRoot<Published>),
 ) -> bool {
     let id = state
         .widget_id(path)
@@ -3063,7 +3075,7 @@ fn a_mounted_tree_row_click_emits_its_typed_index_action() {
     );
     assert_eq!(
         root.take_actions(),
-        vec![UiEvent::Control {
+        vec![Published::Gesture {
             path: "demo/browser".to_owned(),
             action: ControlAction::SelectIndex(expected),
         }],
@@ -3121,7 +3133,10 @@ fn a_mounted_tree_search_ime_commit_emits_the_complete_query() {
     );
     assert_eq!(
         root.take_actions(),
-        vec![UiEvent::LibraryQuery("needle".to_owned())],
+        vec![control_event(
+            "demo/browser/search",
+            ControlAction::Text("needle".to_owned())
+        )],
         "the focused retained search target must publish the complete committed query"
     );
 }
@@ -3579,6 +3594,11 @@ fn fixture_registry() -> FixtureRegistry {
         EndpointDesc::new(ValueKind::Scalar),
     );
     registry.insert(
+        EndpointCategory::Command,
+        "library.select_scope",
+        EndpointDesc::new(ValueKind::Index),
+    );
+    registry.insert(
         EndpointCategory::Model,
         "library.tree",
         EndpointDesc::new(ValueKind::Tree),
@@ -3722,7 +3742,7 @@ fn the_retained_box_answers_where_it_shows_a_row() {
 
     assert_eq!(
         root.take_actions(),
-        vec![TestAction::Document(UiEvent::Control {
+        vec![TestAction::Document(Published::Gesture {
             path: "demo/first".to_owned(),
             action: ControlAction::Activate,
         })]
@@ -3739,7 +3759,7 @@ fn the_retained_box_hides_the_rows_it_scrolled_past() {
     press_release(&mut unboxed, at);
     assert_eq!(
         unboxed.take_actions(),
-        vec![TestAction::Document(UiEvent::Control {
+        vec![TestAction::Document(Published::Gesture {
             path: "demo/fourth".to_owned(),
             action: ControlAction::Activate,
         })],
@@ -3778,16 +3798,11 @@ fn seeking_wave_root(extra: &str, takes_drops: bool) -> MasonryRoot<TestAction> 
     registry.insert(
         EndpointCategory::Command,
         "demo.load",
-        EndpointDesc::new(ValueKind::Trigger),
-    );
-    registry.insert(
-        EndpointCategory::Model,
-        "demo.drag.over",
-        EndpointDesc::new(ValueKind::Bool),
+        EndpointDesc::new(ValueKind::Text),
     );
     let reads = FixtureReads;
     let takes = if takes_drops {
-        r#"drop: Some((write: Command(id: "demo.load"), read: Model(id: "demo.drag.over"))),"#
+        r#"drop: Some((write: Command(id: "demo.load"))),"#
     } else {
         ""
     };
@@ -3853,7 +3868,7 @@ fn a_hand_drawn_across_the_retained_wave_seeks() {
             assert!(
                 published.iter().any(|action| matches!(
                     action,
-                    TestAction::Document(UiEvent::Control {
+                    TestAction::Document(Published::Gesture {
                         action: ControlAction::SetScalar(_),
                         path,
                     }) if path.ends_with("/wave")
@@ -3878,23 +3893,12 @@ fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) 
     registry.insert(
         EndpointCategory::Command,
         "deck.queue.load",
-        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
-    );
-    registry.insert(
-        EndpointCategory::Model,
-        "ui.drag.over",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
-    registry.insert(
-        EndpointCategory::Model,
-        "ui.drag.track",
-        EndpointDesc::new(ValueKind::Text),
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
     );
     let mut resolver = MemResolver::default();
     resolver.insert(
         "studio.klayout.ron",
         r#"(schema: "kithara.layout", version: 1, id: "studio", resize_edges: true,
-            dragged: Some(Model(id: "ui.drag.track")),
             root: Split(axis: Vertical, children: [
                 (node: Module(instance: "bar", source: "bar.kmodule.ron",
                     size: (w: Fill, h: Fixed(42.0)))),
@@ -3917,10 +3921,7 @@ fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) 
         "deck.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "app-deck",
             parameters: ["deck", "letter"],
-            drop: Some((
-                write: Command(id: "deck.queue.load", with: { "deck": "$deck" }),
-                read: Model(id: "ui.drag.over", with: { "deck": "$deck" }),
-            )),
+            drop: Some((write: Command(id: "deck.queue.load", with: { "deck": "$deck" }))),
             root: Column(background: BgInset, children: [
                 Wave(
                     id: "wave",
@@ -4015,7 +4016,7 @@ fn published_seek(published: &[TestAction]) -> bool {
     published.iter().any(|action| {
         matches!(
             action,
-            TestAction::Document(UiEvent::Control {
+            TestAction::Document(Published::Gesture {
                 action: ControlAction::SetScalar(_),
                 path,
             }) if path.ends_with("/wave")
@@ -4066,7 +4067,7 @@ fn a_waveform_that_arrives_after_the_mount_still_seeks() {
 /// The seek a scrub published, if it published one.
 fn seek_value(published: &[TestAction]) -> Option<f64> {
     published.iter().find_map(|action| match action {
-        TestAction::Document(UiEvent::Control {
+        TestAction::Document(Published::Gesture {
             action: ControlAction::SetScalar(value),
             path,
         }) if path.ends_with("/wave") => Some(*value),
@@ -4108,7 +4109,6 @@ impl Reads for DragReads {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
         match id {
             "library.visible_tracks" => Some(ReadValue::Table(&LATE_TABLE_ROWS[..])),
-            "demo.drag.over" => Some(ReadValue::Bool(false)),
             _ => FixtureReads.get(endpoint),
         }
     }
@@ -4120,19 +4120,13 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
     registry.insert(
         EndpointCategory::Command,
         "demo.load",
-        EndpointDesc::new(ValueKind::Trigger),
-    );
-    registry.insert(
-        EndpointCategory::Model,
-        "demo.drag.over",
-        EndpointDesc::new(ValueKind::Bool),
+        EndpointDesc::new(ValueKind::Text),
     );
     let reads = DragReads;
     let mut resolver = MemResolver::default();
     resolver.insert(
         "fixture.klayout.ron",
         r#"(schema: "kithara.layout", version: 1, id: "fixture",
-            dragged: Some(Model(id: "library.breadcrumb")),
             root: Split(axis: Horizontal, children: [
                 (node: Module(instance: "library", source: "library.kmodule.ron",
                     size: (w: Fixed(200.0), h: Fill))),
@@ -4155,7 +4149,7 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
     resolver.insert(
         "deck.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "deck", chrome: Plain,
-            drop: Some((write: Command(id: "demo.load"), read: Model(id: "demo.drag.over"))),
+            drop: Some((write: Command(id: "demo.load"))),
             root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
                 Text(id: "name", style: MicroLabel, label: "DECK", size: (w: Fill, h: Fill)),
             ]))"#,
@@ -4201,12 +4195,12 @@ fn drag_a_track_onto_the_deck(root: &mut MasonryRoot<TestAction>) -> Vec<TestAct
 }
 
 /// Whether the published events carry this one, on a path under `instance`.
-fn published_drag(published: &[TestAction], instance: &str, phase: DragPhase) -> bool {
+fn published_drag(published: &[TestAction], instance: &str, step: CarryStep) -> bool {
     published.iter().any(|action| {
         matches!(
             action,
-            TestAction::Document(UiEvent::Control { action, path })
-                if *action == ControlAction::Drag(phase) && path.starts_with(instance)
+            TestAction::Document(Published::Carry { step: Carry(carried), path })
+                if *carried == step && path.starts_with(instance)
         )
     })
 }
@@ -4217,7 +4211,7 @@ fn a_track_pulled_out_of_the_list_reports_its_drag() {
     let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
 
     assert!(
-        published_drag(&published, "library", DragPhase::Start(1)),
+        published_drag(&published, "library", CarryStep::Start(1)),
         "the list a track is pulled out of must report the drag, published {published:?}"
     );
 }
@@ -4228,7 +4222,7 @@ fn a_module_that_takes_drops_reports_the_hand_crossing_it() {
     let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
 
     assert!(
-        published_drag(&published, "deck", DragPhase::Over(true)),
+        published_drag(&published, "deck", CarryStep::Over(true)),
         "a module that takes drops must report the hand above it, published {published:?}"
     );
 }
@@ -4346,7 +4340,7 @@ fn a_track_released_away_from_its_list_still_reports_the_drop() {
     let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
 
     assert!(
-        published_drag(&published, "library", DragPhase::Drop),
+        published_drag(&published, "library", CarryStep::Drop),
         "a track released away from its list must still report the drop, published {published:?}"
     );
 }
@@ -4475,7 +4469,7 @@ fn a_press_on_a_module_header_folds_the_module_away() {
 
     assert_eq!(
         root.take_actions(),
-        [UiEvent::ToggleModule("shell".to_owned())]
+        [control_event("demo/header", ControlAction::Activate)]
     );
 }
 
@@ -4518,7 +4512,7 @@ const SCENE: &str = r#"Stage(id: "stage", size: (w: Fill, h: Fill), children: [
         child: Spacer(id: "sprite", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
 ])"#;
 
-fn scene_root(reads: &ScenePoint) -> (CompiledUi, MasonryState, MasonryRoot<UiEvent>) {
+fn scene_root(reads: &ScenePoint) -> (CompiledUi, MasonryState, MasonryRoot<Published>) {
     let mut registry = fixture_registry();
     registry.insert(
         EndpointCategory::Model,
@@ -4543,7 +4537,7 @@ fn scene_root(reads: &ScenePoint) -> (CompiledUi, MasonryState, MasonryRoot<UiEv
     (ui, state, root)
 }
 
-fn window_origin(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Point {
+fn window_origin(root: &MasonryRoot<Published>, state: &MasonryState, path: &str) -> Point {
     let id = state
         .widget_id(path)
         .unwrap_or_else(|| panic!("`{path}` must stay addressable"));
@@ -4556,7 +4550,7 @@ fn window_origin(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) 
 
 /// Where a placement stands in its own stage, which is what the document names
 /// and what the window around it must not change.
-fn stands_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Point {
+fn stands_at(root: &MasonryRoot<Published>, state: &MasonryState, path: &str) -> Point {
     let origin = window_origin(root, state, path);
     let stage = window_origin(root, state, "demo/mark");
     Point::new(origin.x - stage.x, origin.y - stage.y)
@@ -4564,7 +4558,7 @@ fn stands_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> P
 
 /// Presses the middle of a placement's child and pulls it that far, leaving it
 /// there.
-fn carry(root: &mut MasonryRoot<UiEvent>, from: Point, by: (f64, f64)) -> Vec<UiEvent> {
+fn carry(root: &mut MasonryRoot<Published>, from: Point, by: (f64, f64)) -> Vec<Published> {
     let to = Point::new(from.x + by.0, from.y + by.1);
     root.handle_pointer_event(pointer_move(from.x, from.y))
         .unwrap_or_else(|error| panic!("the hover must route: {error}"));
@@ -4578,15 +4572,15 @@ fn carry(root: &mut MasonryRoot<UiEvent>, from: Point, by: (f64, f64)) -> Vec<Ui
 }
 
 /// The middle of the box a placement's child was laid out into.
-fn middle(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Point {
+fn middle(root: &MasonryRoot<Published>, state: &MasonryState, path: &str) -> Point {
     let origin = window_origin(root, state, path);
     Point::new(origin.x + 20.0, origin.y + 10.0)
 }
 
 /// Where the last publication left the carried placement.
-fn published_point(published: &[UiEvent]) -> Option<Pt> {
+fn published_point(published: &[Published]) -> Option<Pt> {
     published.iter().rev().find_map(|event| match event {
-        UiEvent::Control {
+        Published::Gesture {
             action: ControlAction::Place(at),
             path,
         } if path == "demo/carry" => Some(*at),
@@ -4672,4 +4666,209 @@ fn a_magnet_takes_a_drag_that_ends_in_reach() {
     let published = carry(&mut root, from, (50.0, 0.0));
 
     assert_eq!(published_point(&published), Some(Pt { x: 100.0, y: 24.0 }));
+}
+
+fn dropping_root(ui: &CompiledUi, reads: &drop_fixture::DropReads) -> MasonryRoot<TestAction> {
+    let host = MasonryHost::map_actions(ctx(ui, reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(ui, reads), host);
+    let mut root = masonry_root(
+        output,
+        drop_fixture::WIDTH.as_(),
+        drop_fixture::HEIGHT.as_(),
+    );
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the drop fixture must compose: {error}"));
+    root
+}
+
+fn hand(root: &mut MasonryRoot<TestAction>, event: PointerEvent) {
+    root.handle_pointer_event(event)
+        .unwrap_or_else(|error| panic!("the hand must route: {error}"));
+}
+
+fn move_to(root: &mut MasonryRoot<TestAction>, (x, y): (f32, f32)) {
+    hand(root, pointer_move(x.into(), y.into()));
+}
+
+fn pick_up_and_carry(root: &mut MasonryRoot<TestAction>) {
+    let (x, y) = drop_fixture::FROM;
+    move_to(root, drop_fixture::FROM);
+    hand(root, pointer_down(x.into(), y.into()));
+    for at in drop_fixture::CARRY {
+        move_to(root, at);
+    }
+    move_to(root, drop_fixture::OVER_THE_DECK);
+}
+
+fn let_go(root: &mut MasonryRoot<TestAction>) {
+    let (x, y) = drop_fixture::OVER_THE_DECK;
+    hand(root, pointer_up(x.into(), y.into()));
+    drop(root.take_actions());
+}
+
+impl drop_fixture::DropHost for MasonryRoot<TestAction> {
+    fn carry_to(&mut self, _ui: &CompiledUi, _reads: &drop_fixture::DropReads, at: (f32, f32)) {
+        move_to(self, at);
+    }
+
+    fn let_go(
+        &mut self,
+        _ui: &CompiledUi,
+        _reads: &drop_fixture::DropReads,
+        at: (f32, f32),
+    ) -> Vec<Published> {
+        hand(self, pointer_up(at.0.into(), at.1.into()));
+        document_actions(self)
+    }
+
+    fn open(ui: &CompiledUi, reads: &drop_fixture::DropReads) -> Self {
+        dropping_root(ui, reads)
+    }
+
+    fn pick_up(&mut self, _ui: &CompiledUi, _reads: &drop_fixture::DropReads, at: (f32, f32)) {
+        move_to(self, at);
+        hand(self, pointer_down(at.0.into(), at.1.into()));
+    }
+
+    fn refresh(&mut self, ui: &CompiledUi, reads: &drop_fixture::DropReads) {
+        MasonryRoot::refresh(self, ctx(ui, reads));
+    }
+}
+
+drop_fixture::drop_suite!(MasonryRoot<TestAction>);
+
+fn document_actions(root: &mut MasonryRoot<TestAction>) -> Vec<Published> {
+    root.take_actions()
+        .into_iter()
+        .filter_map(|action| match action {
+            TestAction::Document(event) => Some(event),
+            TestAction::Wheel(_) => None,
+        })
+        .collect()
+}
+
+fn press_drag_release(root: &mut MasonryRoot<TestAction>) -> Vec<Published> {
+    let (x, y) = drop_fixture::BORDER;
+    move_to(root, drop_fixture::BORDER);
+    hand(root, pointer_down(x.into(), y.into()));
+    move_to(root, drop_fixture::WIDER);
+    let (x, y) = drop_fixture::WIDER;
+    hand(root, pointer_up(x.into(), y.into()));
+    document_actions(root)
+}
+
+#[kithara::test]
+fn a_table_without_write_width_offers_no_column_resize() {
+    let ui = drop_fixture::compiled_with_columns();
+    let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+    let mut root = dropping_root(&ui, &reads);
+
+    let published = press_drag_release(&mut root);
+
+    assert_eq!(published, []);
+}
+
+#[kithara::test]
+fn a_table_with_write_width_resizes_the_column_dragged_by_its_border() {
+    let ui = drop_fixture::compiled_with_column_widths();
+    let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+    let mut root = dropping_root(&ui, &reads);
+
+    let published = press_drag_release(&mut root);
+
+    assert!(
+        published.iter().any(
+            |event| matches!(event, Published::Gesture { path, .. } if path == drop_fixture::RESIZED)
+        ),
+        "the border drag must publish the column's width: {published:?}"
+    );
+}
+
+#[kithara::test]
+fn a_zone_is_lit_only_while_a_carried_row_is_over_it() {
+    let ui = drop_fixture::compiled();
+    let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+    let mut root = dropping_root(&ui, &reads);
+    let skin = builtin::skin();
+    let accent = skin.rgba(skin.chrome.drop_zone_color);
+    let idle = painted_in(&mut root, accent);
+
+    move_to(&mut root, drop_fixture::OVER_THE_DECK);
+    let hovered_empty = painted_in(&mut root, accent);
+    pick_up_and_carry(&mut root);
+    let carried_over = painted_in(&mut root, accent);
+    move_to(&mut root, drop_fixture::AWAY);
+    let carried_away = painted_in(&mut root, accent);
+    move_to(&mut root, drop_fixture::OVER_THE_DECK);
+    let_go(&mut root);
+    let released = painted_in(&mut root, accent);
+
+    assert_eq!(
+        [hovered_empty, released],
+        [idle, idle],
+        "the zone is unlit while nothing is carried over it"
+    );
+    assert!(
+        carried_over > carried_away,
+        "the zone lights for a carried row over it: {carried_over} accent paints over the deck, \
+         {carried_away} away from it, where the ghost frame is the only accent"
+    );
+}
+
+#[kithara::test]
+fn the_ghost_carries_the_dragged_rows_title_until_it_is_let_go() {
+    let ui = drop_fixture::compiled();
+    let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Listed);
+    let mut root = dropping_root(&ui, &reads);
+
+    let skin = builtin::skin();
+    let mut text = TextContext::from(skin.text_resources());
+    let title = text.shape(drop_fixture::DRAGGED_TITLE, skin.drag.text, None);
+    let title: Vec<u32> = title
+        .segments()
+        .iter()
+        .flat_map(|segment| segment.glyphs().iter().map(|glyph| glyph.id))
+        .collect();
+    let shown = painted_runs(&mut root, &title);
+
+    pick_up_and_carry(&mut root);
+    let carried = painted_runs(&mut root, &title);
+    let_go(&mut root);
+    let released = painted_runs(&mut root, &title);
+
+    assert_eq!(
+        [carried, released],
+        [shown + 1, shown],
+        "the ghost draws the dragged row's title while it is carried, beside the row itself"
+    );
+}
+
+fn painted_in(root: &mut MasonryRoot<TestAction>, color: Rgba) -> usize {
+    let packed = paint_color(color).premultiply().to_rgba8().to_u32();
+    let (scene, _access) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("the retained host must draw: {error}"));
+    scene
+        .encoding()
+        .draw_data
+        .iter()
+        .filter(|word| **word == packed)
+        .count()
+}
+
+fn painted_runs(root: &mut MasonryRoot<TestAction>, glyphs: &[u32]) -> usize {
+    let (scene, _access) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("the retained host must draw: {error}"));
+    let drawn: Vec<u32> = scene
+        .encoding()
+        .resources
+        .glyphs
+        .iter()
+        .map(|glyph| glyph.id)
+        .collect();
+    drawn
+        .windows(glyphs.len())
+        .filter(|window| *window == glyphs)
+        .count()
 }

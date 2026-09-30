@@ -147,10 +147,12 @@ macro_rules! controls {
             $crate::expand::ControlSpec::Table {
                 columns,
                 columns_state,
+                resizable,
             } => with.apply(
                 &$crate::mount::Table::builder()
                     .columns(columns)
                     .maybe_columns_state(columns_state.as_ref())
+                    .resizable(*resizable)
                     .build(),
             ),
             $crate::expand::ControlSpec::Tree { query } => with.apply(

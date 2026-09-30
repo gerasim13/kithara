@@ -15,6 +15,8 @@ pub enum ValueKind {
     Waveform,
     PortalMap,
     Range,
+    /// A position in a list the control offers, counted from its first item.
+    Index,
     Table,
     Tree,
 }

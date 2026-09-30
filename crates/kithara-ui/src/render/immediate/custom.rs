@@ -20,7 +20,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Rect},
     interact::iced as iced_interact,
     render::{
-        Skin, UiEvent,
+        Published, Skin,
         controls::{PaintState, Probe, snapped},
         custom::{CustomKinds, MountedCustom, Repaint, Size2, SizeLimits, TextMeasurer},
     },
@@ -64,7 +64,7 @@ impl Probe for Redrawn {
 struct CustomState {
     drawn: Option<IcedInstant>,
     paint: PaintState<()>,
-    widget: RefCell<Option<Box<dyn MountedCustom<UiEvent>>>>,
+    widget: RefCell<Option<Box<dyn MountedCustom<Published>>>>,
     kind: String,
 }
 
@@ -118,7 +118,7 @@ impl Custom<'_> {
     }
 }
 
-impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
+impl IcedWidget<Published, Theme, Renderer> for Custom<'_> {
     fn draw(
         &self,
         tree: &Tree,
@@ -193,7 +193,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
         cursor: Cursor,
         _renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
+        shell: &mut Shell<'_, Published>,
         _viewport: &Rectangle,
     ) {
         let state = self.state_for(tree);
@@ -242,7 +242,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
     }
 }
 
-impl<'a> From<Custom<'a>> for Element<'a, UiEvent> {
+impl<'a> From<Custom<'a>> for Element<'a, Published> {
     fn from(custom: Custom<'a>) -> Self {
         Self::new(custom)
     }
@@ -270,7 +270,7 @@ mod tests {
         draw::Rgba,
         ids::SourceUri,
         interact::{Hit, Input, Outcome, PointerOwnership, PointerPhase},
-        render::{CustomSkin, custom::CustomWidget, fonts::SANS},
+        render::{CustomSkin, UiEvent, WindowCommand, custom::CustomWidget, fonts::SANS},
         skin::parse_skin_over,
     };
 
@@ -332,7 +332,7 @@ mod tests {
         CustomKinds::default().with(
             consts::KIND,
             move || PressExtension(repaint),
-            |()| UiEvent::OpenSettings,
+            |()| UiEvent::Window(WindowCommand::Minimize),
         )
     }
 
@@ -383,8 +383,8 @@ mod tests {
 
     /// One press delivered to a mounted extension, with what the host published
     /// and whether it kept the event to itself.
-    fn press(kinds: &CustomKinds) -> (Vec<UiEvent>, bool) {
-        let mut element: Element<'_, UiEvent> =
+    fn press(kinds: &CustomKinds) -> (Vec<Published>, bool) {
+        let mut element: Element<'_, Published> =
             Custom::new(consts::KIND, Some(kinds), builtin::skin()).into();
         let renderer = renderer();
         let mut tree = Tree::new(element.as_widget());
@@ -414,7 +414,7 @@ mod tests {
     /// The frame schedule the host asked for after one delivered animation
     /// frame.
     fn after_a_frame(kinds: &CustomKinds) -> window::RedrawRequest {
-        let mut element: Element<'_, UiEvent> =
+        let mut element: Element<'_, Published> =
             Custom::new(consts::KIND, Some(kinds), builtin::skin()).into();
         let renderer = renderer();
         let mut tree = Tree::new(element.as_widget());
@@ -447,7 +447,7 @@ mod tests {
     fn a_press_leaves_as_the_event_the_registry_maps_it_to() {
         let (messages, _) = press(&kinds(Repaint::None));
 
-        assert_eq!(messages, [UiEvent::OpenSettings]);
+        assert_eq!(messages, [Published::window(WindowCommand::Minimize)]);
     }
 
     #[kithara::test]

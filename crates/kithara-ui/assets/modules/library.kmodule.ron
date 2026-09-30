@@ -2,12 +2,13 @@
     schema: "kithara.module",
     version: 1,
     id: "library",
-    parameters: ["read", "columns"],
+    parameters: ["read", "select", "columns"],
     root: Column(
         children: [
             Table(
                 id: "tracks",
                 read: Model(id: "$read"),
+                write: Command(id: "$select"),
                 columns: "$columns",
             ),
         ],

@@ -241,6 +241,7 @@ impl AudioPlayer {
         self.inner.set_observer(observer);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_playing_rate(&self, rate: f32) {
         self.inner.set_playing_rate(rate);
     }

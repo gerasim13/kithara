@@ -35,6 +35,16 @@ pub enum CrossfaderBus {
     Bypass,
 }
 
+/// A point on the session output a consumer group can attach to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Tap {
+    /// The limited mix, before the metronome: broadcast and oracles.
+    Master,
+    /// What the device hears: the limited mix with the metronome click.
+    Output,
+}
+
 /// Equal-power crossfader coefficient for `bus` at `position`, which runs `0.0`
 /// (fully toward A) to `1.0` (fully toward B). Stateless.
 ///

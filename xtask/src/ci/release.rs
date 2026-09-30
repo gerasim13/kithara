@@ -10,7 +10,7 @@ use super::{process::Process, run::PipelineKind};
 use crate::{
     android,
     config::{KitharaExt, PublishStep},
-    publish,
+    consts, publish,
     release::{self, sha256},
     wasm,
 };
@@ -155,10 +155,10 @@ fn package_docs(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -
 
 pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
     process.require_os(&["macos"], "WASM release")?;
-    process.run(
+    build_wasm_bundle(
+        process,
         ctx.config.tools.program("just"),
-        &["platform", "wasm", "build", "--profile", "release"],
-        "release WASM bundle",
+        &required_env("CI_COMMIT_SHA")?,
     )?;
     zip_directory(
         process,
@@ -169,6 +169,16 @@ pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
     write_checksum(&ctx.root.join(&ext.release.wasm_asset))?;
     wasm::render_docs(&ctx.root.join(&ext.release.docs_channel("web")?.archive))?;
     package_docs(process, ctx, ext, "web")
+}
+
+/// Builds the web bundle for the commit it ships, which is the only build
+/// that tells the FFI crate what to embed.
+fn build_wasm_bundle(process: &Process, just: &str, revision: &str) -> Result<()> {
+    let mut command = process.command(just);
+    command
+        .args(["platform", "wasm", "build", "--profile", "release"])
+        .env(consts::BUILD_REVISION_ENV, revision);
+    process.run_command(&mut command, "release WASM bundle")
 }
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
@@ -365,6 +375,30 @@ fn required_env(name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ci::process::Recording;
+
+    /// The web bundle embeds the commit it describes only when packaging
+    /// names it, so the release names the commit it is built from.
+    #[test]
+    fn the_release_bundle_is_told_the_commit_it_is_built_from() {
+        let process = Process::recording(Path::new("/checkout"), Recording::default());
+
+        build_wasm_bundle(&process, "just", "0123abcd").unwrap();
+
+        let recording = process.recorded().unwrap();
+        let steps = recording.steps();
+        let [step] = steps else {
+            panic!("one step: {steps:?}");
+        };
+        assert_eq!(
+            step.args,
+            ["platform", "wasm", "build", "--profile", "release"]
+        );
+        assert_eq!(
+            step.env.get(consts::BUILD_REVISION_ENV).map(String::as_str),
+            Some("0123abcd")
+        );
+    }
 
     #[test]
     fn provenance_names_the_commit_and_every_asset() {

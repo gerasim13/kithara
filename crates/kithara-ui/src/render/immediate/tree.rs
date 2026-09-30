@@ -7,7 +7,7 @@ use iced::{
 use crate::{
     atoms::tree::face::Tree as TreeFace,
     module::IconName,
-    render::{IcedSkin, InputOwner, ReadValue, Skin, UiEvent, Widget, search_input, tree_rows},
+    render::{IcedSkin, InputOwner, Published, ReadValue, Skin, Widget, search_input, tree_rows},
 };
 
 #[derive(bon::Builder)]
@@ -20,7 +20,7 @@ pub(crate) struct Tree<'path, 'query, 'value, 'data, 'skin> {
 }
 
 impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
-    fn view(self) -> Element<'a, UiEvent> {
+    fn view(self) -> Element<'a, Published> {
         let Some(ReadValue::Tree(rows)) = self.value else {
             return Space::new().into();
         };
@@ -53,7 +53,7 @@ fn search_bar<'a>(
     query: &str,
     skin: &'a Skin,
     owner: InputOwner,
-) -> Element<'a, UiEvent> {
+) -> Element<'a, Published> {
     let icon = container(IconName::Search.view(
         skin.tree.search_icon_size,
         skin.color(skin.tree.search_icon_color),

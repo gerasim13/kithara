@@ -129,7 +129,7 @@
                         ),
                         Pressable(
                             id: "modules-head",
-                            press: Command(id: "ui.menu.toggle_group", with: { "group": "mod" }),
+                            press: View(id: "group-mod"),
                             child: Row(
                                 size: (w: Fill, h: Fixed(26.0)),
                                 pad_x: 10.0,
@@ -143,7 +143,7 @@
                                         active_icon: ChevronDown,
                                         style: Menu,
                                         color: Muted,
-                                        active: Model(id: "ui.menu.group_open", with: { "group": "mod" }),
+                                        active: View(id: "group-mod"),
                                     ),
                                     Text(
                                         id: "modules-title",
@@ -162,7 +162,7 @@
                         ),
                         Optional(
                             id: "modules-block",
-                            hidden: Model(id: "ui.menu.group_hidden", with: { "group": "mod" }),
+                            hidden: View(id: "group-mod", invert: true),
                             child: Row(
                                 id: "modules-grid",
                                 size: (w: Fill, h: Shrink),
@@ -227,7 +227,7 @@
                         ),
                         Optional(
                             id: "modules-space-block",
-                            hidden: Model(id: "ui.menu.group_hidden", with: { "group": "mod" }),
+                            hidden: View(id: "group-mod", invert: true),
                             child: Row(
                                 id: "modules-space",
                                 size: (w: Fill, h: Fixed(8.0)),
@@ -237,7 +237,7 @@
                         ),
                         Pressable(
                             id: "layouts-head",
-                            press: Command(id: "ui.menu.toggle_group", with: { "group": "lay" }),
+                            press: View(id: "group-lay"),
                             child: Row(
                                 size: (w: Fill, h: Fixed(26.0)),
                                 pad_x: 10.0,
@@ -251,7 +251,7 @@
                                         active_icon: ChevronDown,
                                         style: Menu,
                                         color: Muted,
-                                        active: Model(id: "ui.menu.group_open", with: { "group": "lay" }),
+                                        active: View(id: "group-lay"),
                                     ),
                                     Text(
                                         id: "layouts-title",
@@ -271,7 +271,7 @@
                         ),
                         Optional(
                             id: "layouts-block",
-                            hidden: Model(id: "ui.menu.group_hidden", with: { "group": "lay" }),
+                            hidden: View(id: "group-lay", invert: true),
                             child: Column(
                                 id: "layouts-list",
                                 size: (w: Fill, h: Shrink),

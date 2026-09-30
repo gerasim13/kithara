@@ -11,7 +11,10 @@ use kithara_sync::{
     TopologyOperation,
 };
 
-use crate::{PlayerMember, api::HostLevel};
+use crate::{
+    PlayerMember,
+    api::{HostLevel, Tap},
+};
 
 /// Opens the audio stream a session runs on and hands back the object that
 /// owns it. Firewheel no longer holds the backend, so the session keeps the
@@ -23,7 +26,10 @@ pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
     ApplyMix { levels: Box<[HostLevel]> },
-    EnableOutput { outputs: OutputGroup },
+    AttachOutputs { tap: Tap, outputs: OutputGroup },
+    DetachOutputs { tap: Tap },
+    SetMetronome { on: bool },
+    SetMetronomeLevel { level: f32 },
     Shutdown,
 }
 

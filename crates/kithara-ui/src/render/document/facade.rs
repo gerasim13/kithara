@@ -62,7 +62,7 @@ where
     H: Host,
 {
     let content = compiled(node, ctx, &mut host);
-    host.window(content, ctx.ui.dragged.as_ref(), ctx.ui.resize_edges)
+    host.window(content, ctx.ui.resize_edges)
 }
 
 fn compiled<H>(node: &CompiledNode, ctx: Ctx<'_, '_>, host: &mut H) -> H::Output
@@ -141,7 +141,7 @@ where
                     _ => None,
                 });
             let content_hosted = consts::HOSTED_MODULES.contains(&ctx.ui.resolve(*module));
-            let chrome_hosted = *chrome == ChromeStyle::Full || drop.is_some();
+            let chrome_hosted = *chrome == ChromeStyle::Full || *drop;
             let content = (!collapsed).then(|| {
                 let child = expanded(
                     root,
@@ -183,7 +183,7 @@ where
                     frame: *frame,
                     corners: *corners,
                     round: *round,
-                    drop: drop.as_ref(),
+                    drop: *drop,
                 },
                 content,
             )

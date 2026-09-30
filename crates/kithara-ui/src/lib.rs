@@ -27,14 +27,11 @@ pub mod view;
 
 pub use doc::{envelope, layout, module, package, param, skin, text};
 pub use kithara_ui_draw::geom;
+pub use kithara_ui_input as interact;
 #[cfg(feature = "render")]
-pub use {
-    kithara_ui_draw as draw, kithara_ui_input as interact, kithara_ui_lottie as lottie,
-    kithara_ui_shaping as shaping,
-};
+pub use {kithara_ui_draw as draw, kithara_ui_lottie as lottie, kithara_ui_shaping as shaping};
 
 mod doc;
-mod require;
 mod resolve;
 mod room;
 mod shader;

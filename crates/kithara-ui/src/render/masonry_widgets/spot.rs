@@ -5,7 +5,7 @@ use masonry::core::EventCtx;
 use crate::{
     draw::Pt,
     interact::{CursorShape, Hit, Input, PointerOwnership, recognizers::Carry},
-    render::{ControlAction, Snap, UiEvent, control_event, masonry::custom::HostAction},
+    render::{ControlAction, Published, Snap, control_event, masonry::custom::HostAction},
 };
 
 /// One placement of a stage: where in the scene its child stands, and — where
@@ -28,7 +28,7 @@ pub(crate) struct Spot {
 pub(crate) struct Grip {
     carry: Carry,
     snap: Option<Snap>,
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    map_event: Rc<dyn Fn(Published) -> HostAction>,
     path: String,
 }
 
@@ -36,7 +36,7 @@ impl Grip {
     pub(crate) fn new(
         path: String,
         snap: Option<Snap>,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
     ) -> Self {
         Self {
             path,

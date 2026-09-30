@@ -5,7 +5,6 @@
     parameters: ["deck", "letter"],
     drop: Some((
         write: Command(id: "deck.queue.load", with: { "deck": "$deck" }),
-        read: Model(id: "ui.drag.over", with: { "deck": "$deck" }),
     )),
     root: Column(
         background: BgInset,
@@ -17,6 +16,7 @@
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
                 zoom: Model(id: "deck.view.zoom", with: { "deck": "$deck" }),
+                write_zoom: Model(id: "deck.view.zoom", with: { "deck": "$deck" }),
             ),
             Row(
                 id: "transport",
@@ -85,6 +85,7 @@
                         frame: (top: false, right: false, bottom: false, left: true),
                         size: (w: Shrink, h: Fill),
                         write: Parameter(id: "deck.tempo.rate", with: { "deck": "$deck" }),
+                        reset: Command(id: "deck.tempo.reset", with: { "deck": "$deck" }),
                         children: [
                             Text(id: "tempo-label", style: MicroLabel, label: "@deck.tempo.caption"),
                             Text(

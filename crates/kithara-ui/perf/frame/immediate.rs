@@ -23,7 +23,7 @@ use iced_wgpu::{Engine, Renderer as WgpuRenderer};
 use kithara_ui::{
     compile::CompiledUi,
     draw::Rect,
-    render::{Clock, UiEvent, custom::CustomKinds, fonts::SANS, tree},
+    render::{Clock, Published, custom::CustomKinds, fonts::SANS, tree},
     view,
 };
 
@@ -91,7 +91,7 @@ impl FrameHost for Immediate {
             mem::take(&mut self.cache),
             &mut self.renderer,
         );
-        let mut messages: Vec<UiEvent> = Vec::new();
+        let mut messages: Vec<Published> = Vec::new();
         self.scheduled = !self.pending.is_empty();
         for (event, at) in mem::take(&mut self.pending) {
             let (state, statuses) = interface.update(
@@ -207,7 +207,7 @@ pub(crate) fn laid_out_rect(
 /// in how a Row is wrapped fails here instead of silently naming another node.
 fn control_rect(ui: &CompiledUi, root: Layout<'_>) -> Rect {
     assert!(
-        !ui.resize_edges && ui.dragged.is_none(),
+        !ui.resize_edges,
         "the frame-perf layout must not wrap its module in a window layer"
     );
     let mut at = root;

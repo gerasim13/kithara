@@ -5,6 +5,7 @@
     title: Some("FULL / ALL SIDES"),
     chip: Some("12E"),
     chrome: Full,
+    collapse: Some(Command(id: "gallery.module.collapse", with: { "module": "gallery-chrome-full-all" })),
     root: Column(
         pad: Some(14.0),
         children: [

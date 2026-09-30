@@ -1,6 +1,6 @@
 use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, ValueKind},
-    render::{ReadValue, StereoLevels},
+    render::{ReadValue, StereoLevels, WriteValue},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -41,21 +41,32 @@ impl MixerState {
     const MID: usize = 1;
     const XONE_LO: usize = 3;
 
-    pub(crate) fn activate(&mut self, path: &str) -> bool {
-        let target = match path {
-            "mixer-standard/a-cue" | "mixer-xone/a-cue" => Some(&mut self.cue[Self::A]),
-            "mixer-standard/b-cue" | "mixer-xone/b-cue" => Some(&mut self.cue[Self::B]),
-            "mixer-standard/a-fx1" | "mixer-xone/a-fx1" => Some(&mut self.fx[Self::A][Self::FX1]),
-            "mixer-standard/a-fx2" | "mixer-xone/a-fx2" => Some(&mut self.fx[Self::A][Self::FX2]),
-            "mixer-standard/b-fx1" | "mixer-xone/b-fx1" => Some(&mut self.fx[Self::B][Self::FX1]),
-            "mixer-standard/b-fx2" | "mixer-xone/b-fx2" => Some(&mut self.fx[Self::B][Self::FX2]),
-            _ => None,
-        };
-        let Some(value) = target else {
-            return false;
-        };
-        *value = !*value;
-        true
+    pub(crate) fn write(&mut self, id: &str, value: &WriteValue) {
+        match value {
+            WriteValue::Trigger => {
+                if let Some(flag) = self.flag(id) {
+                    *flag = !*flag;
+                }
+            }
+            WriteValue::Scalar(value) => {
+                if let Some(scalar) = self.scalar(id) {
+                    *scalar = value.clamp(0.0, 1.0);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn flag(&mut self, id: &str) -> Option<&mut bool> {
+        Some(match id {
+            "mixer.channel.a.toggle_cue" => &mut self.cue[Self::A],
+            "mixer.channel.b.toggle_cue" => &mut self.cue[Self::B],
+            "mixer.channel.a.toggle_fx1" => &mut self.fx[Self::A][Self::FX1],
+            "mixer.channel.a.toggle_fx2" => &mut self.fx[Self::A][Self::FX2],
+            "mixer.channel.b.toggle_fx1" => &mut self.fx[Self::B][Self::FX1],
+            "mixer.channel.b.toggle_fx2" => &mut self.fx[Self::B][Self::FX2],
+            _ => return None,
+        })
     }
 
     pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
@@ -105,35 +116,29 @@ impl MixerState {
         }
     }
 
-    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
-        let value = value.clamp(0.0, 1.0);
-        let target = match path {
-            "mixer-standard/a-hi" => Some(&mut self.standard[Self::A][Self::HI]),
-            "mixer-standard/a-mid" => Some(&mut self.standard[Self::A][Self::MID]),
-            "mixer-standard/a-lo" => Some(&mut self.standard[Self::A][Self::LO]),
-            "mixer-standard/a-filter" => Some(&mut self.standard[Self::A][Self::FILTER]),
-            "mixer-standard/b-hi" => Some(&mut self.standard[Self::B][Self::HI]),
-            "mixer-standard/b-mid" => Some(&mut self.standard[Self::B][Self::MID]),
-            "mixer-standard/b-lo" => Some(&mut self.standard[Self::B][Self::LO]),
-            "mixer-standard/b-filter" => Some(&mut self.standard[Self::B][Self::FILTER]),
-            "mixer-xone/a-hi" => Some(&mut self.xone[Self::A][Self::HI]),
-            "mixer-xone/a-hi-mid" => Some(&mut self.xone[Self::A][Self::HI_MID]),
-            "mixer-xone/a-lo-mid" => Some(&mut self.xone[Self::A][Self::LO_MID]),
-            "mixer-xone/a-lo" => Some(&mut self.xone[Self::A][Self::XONE_LO]),
-            "mixer-xone/b-hi" => Some(&mut self.xone[Self::B][Self::HI]),
-            "mixer-xone/b-hi-mid" => Some(&mut self.xone[Self::B][Self::HI_MID]),
-            "mixer-xone/b-lo-mid" => Some(&mut self.xone[Self::B][Self::LO_MID]),
-            "mixer-xone/b-lo" => Some(&mut self.xone[Self::B][Self::XONE_LO]),
-            "mixer-standard/a-fader" | "mixer-xone/a-fader" => Some(&mut self.faders[Self::A]),
-            "mixer-standard/b-fader" | "mixer-xone/b-fader" => Some(&mut self.faders[Self::B]),
-            "mixer-standard/xfade" | "mixer-xone/xfade" => Some(&mut self.crossfader),
-            _ => None,
-        };
-        let Some(target) = target else {
-            return false;
-        };
-        *target = value;
-        true
+    fn scalar(&mut self, id: &str) -> Option<&mut f64> {
+        Some(match id {
+            "mixer.standard.a.hi" => &mut self.standard[Self::A][Self::HI],
+            "mixer.standard.a.mid" => &mut self.standard[Self::A][Self::MID],
+            "mixer.standard.a.lo" => &mut self.standard[Self::A][Self::LO],
+            "mixer.standard.a.filter" => &mut self.standard[Self::A][Self::FILTER],
+            "mixer.standard.b.hi" => &mut self.standard[Self::B][Self::HI],
+            "mixer.standard.b.mid" => &mut self.standard[Self::B][Self::MID],
+            "mixer.standard.b.lo" => &mut self.standard[Self::B][Self::LO],
+            "mixer.standard.b.filter" => &mut self.standard[Self::B][Self::FILTER],
+            "mixer.xone.a.hi" => &mut self.xone[Self::A][Self::HI],
+            "mixer.xone.a.hi_mid" => &mut self.xone[Self::A][Self::HI_MID],
+            "mixer.xone.a.lo_mid" => &mut self.xone[Self::A][Self::LO_MID],
+            "mixer.xone.a.lo" => &mut self.xone[Self::A][Self::XONE_LO],
+            "mixer.xone.b.hi" => &mut self.xone[Self::B][Self::HI],
+            "mixer.xone.b.hi_mid" => &mut self.xone[Self::B][Self::HI_MID],
+            "mixer.xone.b.lo_mid" => &mut self.xone[Self::B][Self::LO_MID],
+            "mixer.xone.b.lo" => &mut self.xone[Self::B][Self::XONE_LO],
+            "mixer.channel.a.fader" => &mut self.faders[Self::A],
+            "mixer.channel.b.fader" => &mut self.faders[Self::B],
+            "mixer.xfade" => &mut self.crossfader,
+            _ => return None,
+        })
     }
 }
 
@@ -213,10 +218,10 @@ mod tests {
         let mut mixer = MixerState::default();
 
         assert_eq!(mixer.get("mixer.xfade"), Some(ReadValue::Scalar(0.5)));
-        assert!(mixer.set_scalar("mixer-standard/xfade", 0.27));
+        mixer.write("mixer.xfade", &WriteValue::Scalar(0.27));
         assert_eq!(mixer.get("mixer.xfade"), Some(ReadValue::Scalar(0.27)));
 
-        assert!(mixer.set_scalar("mixer-xone/a-fader", 0.41));
+        mixer.write("mixer.channel.a.fader", &WriteValue::Scalar(0.41));
         assert_eq!(
             mixer.get("mixer.channel.a.fader"),
             Some(ReadValue::Scalar(0.41))
@@ -235,12 +240,12 @@ mod tests {
             mixer.get("mixer.channel.a.cue"),
             Some(ReadValue::Bool(true))
         );
-        assert!(mixer.activate("mixer-xone/a-cue"));
+        mixer.write("mixer.channel.a.toggle_cue", &WriteValue::Trigger);
         assert_eq!(
             mixer.get("mixer.channel.a.cue"),
             Some(ReadValue::Bool(false))
         );
-        assert!(mixer.activate("mixer-standard/b-fx1"));
+        mixer.write("mixer.channel.b.toggle_fx1", &WriteValue::Trigger);
         assert_eq!(
             mixer.get("mixer.channel.b.fx1"),
             Some(ReadValue::Bool(true))

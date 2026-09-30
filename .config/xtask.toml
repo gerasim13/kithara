@@ -1798,13 +1798,15 @@ artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 # suite - including `rtsan-async`, which the three Linux lanes below do not
 # cover - on the pinned nightly's instrumented sanitizer, on the platform that
 # ships it. The Linux lanes run the same file/HLS/tripwire suites under the
-# stable-toolchain standalone backend instead, so they can run on every push
-# rather than only nightly; `test.just` defaults an unset
-# `KITHARA_RTSAN_BACKEND` to instrumented, so they pin `standalone`
-# themselves. Same detector, two platforms, two backends - not duplication.
+# standalone backend instead, which needs no sanitizer support from the
+# compiler, so they can run on every push rather than only nightly;
+# `test.just` defaults an unset `KITHARA_RTSAN_BACKEND` to instrumented, so
+# they pin `standalone` themselves. Same detector, two platforms, two
+# backends - not duplication.
 [ext.ci.lanes.deep-rtsan]
 cache_group = "macos"
 label = "deep Apple"
+freshness = "checksum"
 os = "macos"
 tools = ["cargo", "just"]
 program = "just"
@@ -1833,6 +1835,7 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-fast]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1841,7 +1844,7 @@ steps = [
   { args = [
     "test",
     "rtsan",
-  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STABLE_TOOLCHAIN = "{pin.stable_toolchain}" } },
+  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
 kinds = []
@@ -1851,6 +1854,7 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-file]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1859,7 +1863,7 @@ steps = [
   { args = [
     "test",
     "rtsan-file",
-  ], label = "RTSan file playback", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STABLE_TOOLCHAIN = "{pin.stable_toolchain}" } },
+  ], label = "RTSan file playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
 kinds = []
@@ -1869,6 +1873,7 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-hls]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1877,7 +1882,7 @@ steps = [
   { args = [
     "test",
     "rtsan-hls",
-  ], label = "RTSan HLS playback", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STABLE_TOOLCHAIN = "{pin.stable_toolchain}" } },
+  ], label = "RTSan HLS playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
 kinds = []
@@ -2171,6 +2176,7 @@ cache_group = "linux"
 github_runner = "kithara-test-simulated"
 github_runner_main = "kithara-trusted-snapshot"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2189,7 +2195,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2199,6 +2205,7 @@ timeout_minutes = 60
 [ext.ci.lanes.linux-doc]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2207,7 +2214,7 @@ steps = [
     "test",
     "run",
     "--lane=doc",
-  ], label = "Linux doc lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -2217,6 +2224,7 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-loom]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2225,7 +2233,7 @@ steps = [
     "test",
     "run",
     "--lane=loom",
-  ], label = "Linux loom lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -2240,6 +2248,7 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-tooling]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2248,7 +2257,7 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Linux tooling lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -2258,6 +2267,7 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-harness]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2266,7 +2276,7 @@ steps = [
     "test",
     "run",
     "--lane=harness",
-  ], label = "Linux harness lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -2276,6 +2286,7 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-fixtures]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2284,13 +2295,13 @@ steps = [
     "test",
     "run",
     "--lane=fixtures",
-  ], label = "Linux fixtures lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
   { args = [
     "test",
     "run",
     "-E",
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
-  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
 ]
 role = "gate"
 kinds = ["weekly"]
@@ -2300,6 +2311,7 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-broadcast]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2308,7 +2320,7 @@ steps = [
     "test",
     "run",
     "--lane=broadcast",
-  ], label = "Linux broadcast lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -2318,6 +2330,7 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-integration-regressions]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2326,7 +2339,7 @@ steps = [
     "test",
     "run",
     "--lane=integration-regressions",
-  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -2339,6 +2352,7 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-selenium-firefox]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2347,7 +2361,7 @@ steps = [
     "test",
     "run",
     "--lane=selenium-firefox",
-  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
 kinds = ["weekly"]
@@ -2456,6 +2470,7 @@ timeout_minutes = 60
 cache_group = "linux"
 github_runner = "kithara-test-real"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 fetch_depth = 1
 tools = ["cargo", "just"]
@@ -2467,7 +2482,7 @@ steps = [
     "run",
     "--flash=off",
     "--timings",
-  ], label = "real-clock suite", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2478,6 +2493,7 @@ timeout_minutes = 120
 [ext.ci.lanes.linux-support]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 fetch_depth = 0
 tools = ["cargo", "just"]
@@ -2490,7 +2506,7 @@ steps = [
     "--lane=tooling",
     "--lane=harness",
     "--lane=fixtures",
-  ], label = "support suites this push touches", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "support suites this push touches" },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -2499,6 +2515,7 @@ timeout_minutes = 60
 [ext.ci.lanes.linux-usdt]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2509,35 +2526,35 @@ steps = [
     "--lane=usdt-warp",
     "--profile",
     "ci",
-  ], label = "USDT rate-response contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-play-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls",
     "--profile",
     "ci",
-  ], label = "USDT HLS contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "USDT HLS contracts", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls-stress",
     "--profile",
     "ci",
-  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-queue",
     "--profile",
     "ci",
-  ], label = "USDT queue contracts", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2909,6 +2926,7 @@ timeout_minutes = 60
 [ext.ci.lanes.apple-test]
 cache_group = "macos"
 label = "Apple"
+freshness = "checksum"
 os = "macos"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
@@ -2926,7 +2944,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple flash and no-block gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash and no-block gate" },
 ]
 role = "platforms"
 kinds = [
@@ -2946,6 +2964,7 @@ timeout_minutes = 60
 [ext.ci.lanes.apple-test-flash-off]
 cache_group = "macos"
 label = "Apple"
+freshness = "checksum"
 os = "macos"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
@@ -2961,7 +2980,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate", env = { CARGO_BUILD_FINGERPRINT = "content", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true", RUSTUP_TOOLCHAIN = "{pin.nightly_toolchain}" } },
+  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use kithara_ui::{
     builtin,
     render::{
-        ControlAction, ReadValue, Reads, Skin, StereoLevels, TreeRow, WaveBucket, WaveformView,
+        ReadValue, Reads, Scope, Skin, StereoLevels, TreeRow, WaveBucket, WaveformView, WriteValue,
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -64,7 +64,6 @@ impl Feed {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct DemoReads {
-    table_widths: BTreeMap<String, f64>,
     collapsed: BTreeSet<String>,
     clock: ClockState,
     context: ContextState,
@@ -79,7 +78,6 @@ pub struct DemoReads {
     quality: QualityState,
     scene: SceneState,
     stress: StressState,
-    #[field(set, vis = "pub")]
     library_query: String,
     tree_expanded: Vec<bool>,
     tree_rows: Vec<TreeRow<'static>>,
@@ -88,6 +86,7 @@ pub struct DemoReads {
     wave_downbeats: Vec<f32>,
     waveform: Vec<WaveBucket>,
     table_columns: [bool; 9],
+    table_widths: BTreeMap<String, f64>,
     vis_levels: [f32; 2],
     knobs: [f64; 4],
     button_cue: bool,
@@ -179,8 +178,8 @@ impl Default for DemoReads {
                 consts::ZOOM,
             ),
             table_columns: consts::TABLE_QUEUE,
-            table_preset: consts::TABLE_QUEUE_PRESET,
             table_widths: BTreeMap::new(),
+            table_preset: consts::TABLE_QUEUE_PRESET,
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
             motion_phase: consts::MOTION_START,
@@ -199,88 +198,122 @@ impl Default for DemoReads {
 }
 
 impl DemoReads {
-    fn activate(&mut self, path: &str) {
-        if self.clock.activate(path) {
+    /// Answers one write a page declares, by the endpoint it names and the
+    /// scope the page filled in.
+    pub fn write(&mut self, key: &str, value: WriteValue) {
+        let (id, scope) = Scope::split(key);
+        if value == WriteValue::Trigger
+            && let Some(flag) = self.flag(id)
+        {
+            *flag = !*flag;
             return;
         }
-        if self.pivot.activate(path) {
-            return;
-        }
-        if self.menu.activate(path) {
-            return;
-        }
-        if self.context.activate(path) {
-            return;
-        }
-        if self.scene.activate(path) {
-            return;
-        }
-        if self.quality.activate(path) {
-            return;
-        }
-        if self.mixer.activate(path) {
-            return;
-        }
-        if self.transport.activate(path) {
-            return;
-        }
-        match path {
-            "atoms/toggles/toggle-on" | "cells/toggle-on" => self.toggle_on = !self.toggle_on,
-            "atoms/toggles/toggle-off" | "cells/toggle-off" => self.toggle_off = !self.toggle_off,
-            "atoms/toggles/checkbox-on" | "cells/checkbox-on" => {
-                self.checkbox_on = !self.checkbox_on;
-            }
-            "atoms/toggles/checkbox-off" | "cells/checkbox-off" => {
-                self.checkbox_off = !self.checkbox_off;
-            }
-            "atoms/chips/active" => self.chip_active = !self.chip_active,
-            "atoms/chips/inactive" => self.chip_inactive = !self.chip_inactive,
-            "buttons/play" => self.button_play = !self.button_play,
-            "buttons/cue" => self.button_cue = !self.button_cue,
-            "buttons/sync" => self.button_sync = !self.button_sync,
-            "table/reset-columns" => self.reset_table_columns(),
-            "vis/next" => self.vis_preset = (self.vis_preset + 1) % CATALOG.vis_presets.len(),
-            "vis/previous" => {
-                self.vis_preset =
-                    (self.vis_preset + CATALOG.vis_presets.len() - 1) % CATALOG.vis_presets.len();
-            }
-            path if path.starts_with("table/column-") => {
-                self.toggle_table_column(&path["table/column-".len()..]);
-            }
-            path if let Some(skin) = path
-                .strip_prefix("skins/")
-                .and_then(|rest| rest.strip_suffix("/item")) =>
-            {
-                self.select_skin(skin);
-            }
-            path if let Some(family) = path
-                .strip_prefix("assets/")
-                .and_then(|rest| rest.strip_suffix("/item")) =>
-            {
-                self.select_font(family);
-            }
-            path if path.ends_with("/transport/sync") => {
-                self.button_sync = !self.button_sync;
-            }
-            path if path.ends_with("/play") => self.transport.toggle_play(),
+        let mut parts = id.split('.');
+        match (parts.next(), parts.next()) {
+            (Some("clock"), _) | (Some("deck"), Some("key")) => self.clock.write(id, scope, &value),
+            (Some("pivot"), _) => self.pivot.write(id, scope, &value),
+            (Some("mixer"), _) => self.mixer.write(id, &value),
+            (Some("bench"), _) => self.stress.write(id, &value),
+            (Some("ui"), _) => self.menu.write(id, scope, &value),
+            (Some("deck"), Some("stream")) => self.quality.write(id, scope, &value),
+            (Some("deck"), _) => self.transport.write(id, &value),
+            (Some("gallery"), Some("menu")) => self.context.write(id, scope, &value),
+            (Some("gallery"), Some("scene")) => self.scene.write(id, &value),
+            (Some("gallery"), _) => self.gallery_write(id, scope, value),
+            (Some("library"), _) => self.library_write(id, value),
+            (Some("demo" | "vis" | "player"), _) => self.demo_write(id, value),
             _ => {}
         }
     }
 
-    pub fn apply(&mut self, path: &str, action: &ControlAction) {
-        match action {
-            ControlAction::SetScalar(value) => self.set_scalar(path, *value),
-            ControlAction::Activate => self.activate(path),
-            ControlAction::SecondaryActivate => self.context.secondary(path),
-            ControlAction::SelectIndex(index) => self.select_index(path, *index),
-            ControlAction::Place(at) => {
-                self.scene.place(path, *at);
+    fn gallery_write(&mut self, id: &str, scope: Scope<'_>, value: WriteValue) {
+        match (id, value) {
+            ("gallery.skin.select", WriteValue::Trigger) => {
+                if let Some(skin) = scope.get("choice") {
+                    self.select_skin(skin);
+                }
             }
-            ControlAction::StepScalar(steps) if path.contains("clock") => {
-                self.clock.step(f64::from(*steps) * 0.01);
+            ("gallery.font.select", WriteValue::Trigger) => {
+                if let Some(family) = scope.get("choice") {
+                    self.select_font(family);
+                }
+            }
+            ("gallery.module.collapse", WriteValue::Trigger) => {
+                if let Some(module) = scope.get("module")
+                    && !self.collapsed.remove(module)
+                {
+                    self.collapsed.insert(module.to_owned());
+                }
+            }
+            ("gallery.table.select_preset", WriteValue::Index(index)) => {
+                self.set_table_preset(index);
+            }
+            ("gallery.table.toggle_column", WriteValue::Trigger) => {
+                if let Some(column) = scope.get("column") {
+                    self.toggle_table_column(column);
+                }
+            }
+            ("gallery.table.reset_columns", WriteValue::Trigger) => {
+                self.set_table_preset(self.table_preset);
+            }
+            ("gallery.table.width", WriteValue::Scalar(value)) => {
+                if let Some(column) = scope.get("column") {
+                    self.set_table_width(column, value);
+                }
+            }
+            ("gallery.sprite.scrub", WriteValue::Scalar(value)) => {
+                self.sprite_scrub = value.clamp(0.0, 1.0).as_();
+            }
+            ("gallery.lottie.scrub", WriteValue::Scalar(value)) => {
+                self.lottie_scrub = value.clamp(0.0, 1.0).as_();
             }
             _ => {}
         }
+    }
+
+    fn library_write(&mut self, id: &str, value: WriteValue) {
+        match (id, value) {
+            ("library.select_scope", WriteValue::Index(index)) => self.library_scope = index,
+            ("library.select_tree_row", WriteValue::Index(index)) => self.select_tree_row(index),
+            ("library.query", WriteValue::Text(query)) => self.library_query = query,
+            _ => {}
+        }
+    }
+
+    fn demo_write(&mut self, id: &str, value: WriteValue) {
+        let presets = CATALOG.vis_presets.len();
+        match (id, value) {
+            ("vis.next", WriteValue::Trigger) => self.vis_preset = (self.vis_preset + 1) % presets,
+            ("vis.previous", WriteValue::Trigger) => {
+                self.vis_preset = (self.vis_preset + presets - 1) % presets;
+            }
+            ("demo.cells.select", WriteValue::Index(index)) => self.segmented_index = index.as_(),
+            (id, WriteValue::Scalar(value)) if let Some(knob) = knob(id) => {
+                self.knobs[knob] = value.clamp(0.0, 1.0);
+            }
+            ("demo.levels.volume", WriteValue::Scalar(value)) => {
+                self.levels_volume = value.clamp(0.0, 1.0);
+            }
+            ("demo.volume" | "player.output.volume", WriteValue::Scalar(value)) => {
+                self.volume = value.clamp(0.0, 1.0);
+            }
+            _ => {}
+        }
+    }
+
+    fn flag(&mut self, id: &str) -> Option<&mut bool> {
+        Some(match id {
+            "demo.toggle.toggle_on" => &mut self.toggle_on,
+            "demo.toggle.toggle_off" => &mut self.toggle_off,
+            "demo.checkbox.toggle_on" => &mut self.checkbox_on,
+            "demo.checkbox.toggle_off" => &mut self.checkbox_off,
+            "demo.chip.toggle_active" => &mut self.chip_active,
+            "demo.chip.toggle_inactive" => &mut self.chip_inactive,
+            "demo.button.toggle_play" => &mut self.button_play,
+            "demo.button.toggle_cue" => &mut self.button_cue,
+            "demo.button.toggle_sync" | "deck.transport.toggle_sync" => &mut self.button_sync,
+            _ => return None,
+        })
     }
 
     /// Whether the application moves a reading on the page it is showing.
@@ -311,29 +344,11 @@ impl DemoReads {
         }
     }
 
-    fn reset_table_columns(&mut self) {
-        self.set_table_preset(self.table_preset);
-    }
-
     /// Sets the specimen in the family of that name. A name no shipped family
     /// answers to leaves the specimen in the one it is set in.
     fn select_font(&mut self, family: &str) {
         if let Some(index) = FONT_FAMILIES.iter().position(|named| *named == family) {
             self.active_font = index;
-        }
-    }
-
-    fn select_index(&mut self, path: &str, index: usize) {
-        if path == "cells/beat" {
-            self.segmented_index = index.as_();
-        } else if path == "table/column-preset" {
-            self.set_table_preset(index);
-        } else if path == "library2/context" {
-            self.library_scope = index;
-        } else if matches!(path, "tree/browser" | "library2/browser") {
-            self.select_tree_row(index);
-        } else if path == "vis/shader" && index < CATALOG.vis_presets.len() {
-            self.vis_preset = index;
         }
     }
 
@@ -359,48 +374,6 @@ impl DemoReads {
             self.tree_selected = base_index;
         }
         self.rebuild_tree();
-    }
-
-    fn set_scalar(&mut self, path: &str, value: f64) {
-        if self.pivot.set_scalar(path, value) {
-            return;
-        }
-        if self.mixer.set_scalar(path, value) {
-            return;
-        }
-        if self.stress.set_scalar(path, value) {
-            return;
-        }
-        if let Some((_, name)) = path.rsplit_once("/width/") {
-            self.set_table_width(name, value);
-            return;
-        }
-        let value = value.clamp(0.0, 1.0);
-        if path == "sprites/scrub" {
-            self.sprite_scrub = value.as_();
-        } else if path == "lottie/scrub" {
-            self.lottie_scrub = value.as_();
-        } else if path.ends_with("/loop_start") {
-            self.transport.set_loop_start(value);
-        } else if path.ends_with("/loop_end") {
-            self.transport.set_loop_end(value);
-        } else if path.ends_with("/zoom") {
-            self.transport.set_zoom(value);
-        } else if let Some(index) = match path {
-            "atoms/knobs/size-26" => Some(0),
-            "atoms/knobs/size-28" => Some(1),
-            "atoms/knobs/size-34" => Some(2),
-            "atoms/knobs/size-38" => Some(3),
-            _ => None,
-        } {
-            self.knobs[index] = value;
-        } else if path.starts_with("atoms/meters/") {
-            self.levels_volume = value;
-        } else if path.starts_with("faders/") || path.ends_with("/volume") {
-            self.volume = value;
-        } else if path.ends_with("/wave") {
-            self.transport.seek_normalized(value);
-        }
     }
 
     fn set_table_preset(&mut self, index: usize) {
@@ -517,12 +490,6 @@ impl DemoReads {
         ];
     }
 
-    pub fn toggle_module(&mut self, module: String) {
-        if !self.collapsed.remove(&module) {
-            self.collapsed.insert(module);
-        }
-    }
-
     fn toggle_table_column(&mut self, name: &str) {
         let Some(index) = consts::table_columns()
             .iter()
@@ -573,9 +540,6 @@ impl Reads for DemoReads {
             return Some(ReadValue::Scalar(f64::from(index)));
         }
         if let Some(name) = endpoint.strip_prefix("gallery.table.columns.width.") {
-            consts::table_columns()
-                .iter()
-                .find(|column| column.id() == name)?;
             return self.table_widths.get(name).copied().map(ReadValue::Scalar);
         }
         if let Some(name) = endpoint.strip_prefix("gallery.table.columns.") {
@@ -667,10 +631,7 @@ impl Reads for DemoReads {
             "ui.preset" => ReadValue::Text("player"),
             "demo.bpm" => ReadValue::Text(consts::BPM),
             "demo.remain" | "deck.playback.remain" => ReadValue::Text(consts::REMAIN),
-            "demo.knob.26" => ReadValue::Scalar(self.knobs[0]),
-            "demo.knob.28" => ReadValue::Scalar(self.knobs[1]),
-            "demo.knob.34" => ReadValue::Scalar(self.knobs[2]),
-            "demo.knob.38" => ReadValue::Scalar(self.knobs[3]),
+            id if let Some(knob) = knob(id) => ReadValue::Scalar(self.knobs[knob]),
             "demo.levels" => ReadValue::Stereo(StereoLevels {
                 l: 0.66,
                 r: 0.52,
@@ -731,4 +692,8 @@ fn beat_grid() -> (Vec<f32>, Vec<f32>) {
         .collect();
     let downbeats = beats.iter().step_by(4).copied().collect();
     (beats, downbeats)
+}
+
+fn knob(id: &str) -> Option<usize> {
+    consts::KNOBS.iter().position(|knob| *knob == id)
 }

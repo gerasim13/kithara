@@ -395,46 +395,34 @@ pub(super) const fn control_id(node: &ControlNode) -> Option<&NodeId> {
     }
 }
 
-pub(crate) fn check_module_footer(
+pub(crate) fn check_module_bindings(
     doc: &ModuleDoc,
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
-    let Some(binding) = doc.footer.as_ref() else {
-        return Ok(());
-    };
-    check_binding(
-        binding,
-        BindingSide::Read,
-        Some(ValueKind::Text),
-        "root/footer",
-        origin,
-        endpoints,
-    )
-}
-
-pub(crate) fn check_module_drop(
-    doc: &ModuleDoc,
-    origin: &SourceUri,
-    endpoints: &dyn EndpointRegistry,
-) -> Result<(), UiDocError> {
-    let Some(drop) = doc.drop.as_ref() else {
-        return Ok(());
-    };
-    check_binding(
-        &drop.write,
-        BindingSide::Write,
-        Some(ValueKind::Trigger),
-        "root/drop",
-        origin,
-        endpoints,
-    )?;
-    check_binding(
-        &drop.read,
-        BindingSide::Read,
-        Some(ValueKind::Bool),
-        "root/drop",
-        origin,
-        endpoints,
-    )
+    for (binding, side, kind, path) in [
+        (
+            doc.footer.as_ref(),
+            BindingSide::Read,
+            ValueKind::Text,
+            "root/footer",
+        ),
+        (
+            doc.drop.as_ref().map(|drop| &drop.write),
+            BindingSide::Write,
+            ValueKind::Text,
+            "root/drop",
+        ),
+        (
+            doc.collapse.as_ref(),
+            BindingSide::Write,
+            ValueKind::Trigger,
+            "root/collapse",
+        ),
+    ] {
+        if let Some(binding) = binding {
+            check_binding(binding, side, Some(kind), path, origin, endpoints)?;
+        }
+    }
+    Ok(())
 }

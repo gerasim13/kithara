@@ -136,7 +136,7 @@ impl WindowSurface {
 
 #[cfg(feature = "iced")]
 impl<'a> crate::render::Widget<'a> for WindowSurface {
-    fn view(self) -> Element<'a, crate::render::UiEvent> {
+    fn view(self) -> Element<'a, crate::render::Published> {
         crate::render::window_layer(self.program())
     }
 }
@@ -186,7 +186,7 @@ mod tests {
     use crate::{
         draw::{Pt, Rect},
         interact::{CursorShape, Input, Outcome, PointerPhase, mouse as mouse_input},
-        render::{UiEvent, WindowCommand, WindowEdge, window},
+        render::{Published, WindowCommand, WindowEdge, window},
     };
 
     fn pointer_down() -> Input<'static> {
@@ -326,7 +326,7 @@ mod tests {
             assert_eq!(
                 action.into_inner(),
                 (
-                    Some(UiEvent::Window(WindowCommand::Resize(edge))),
+                    Some(Published::window(WindowCommand::Resize(edge))),
                     RedrawRequest::Wait,
                     event::Status::Captured,
                 ),

@@ -15,7 +15,7 @@ use iced::{
     Color, Subscription, Task, Theme, theme, theme::Base, time as iced_time, window,
     window::Settings,
 };
-use kithara_ui::render::{UiEvent, WindowCommand, fonts};
+use kithara_ui::render::{Published, WindowCommand, fonts};
 use kithara_ui_gallery::{app, capture, cli};
 #[cfg(feature = "masonry")]
 use kithara_ui_gallery::{custom, demo, fixture, host};
@@ -163,7 +163,7 @@ fn mount(args: &Args) -> (Gallery, Task<Message>) {
 /// ending the program from two places.
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close =
-        window::close_requests().map(|_| Message::Ui(UiEvent::Window(WindowCommand::Close)));
+        window::close_requests().map(|_| Message::Ui(Published::window(WindowCommand::Close)));
     if state.capture.is_none() && state.moves() {
         Subscription::batch([close, iced_time::every(state.step).map(|_| Message::Tick)])
     } else {

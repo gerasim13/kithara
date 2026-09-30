@@ -102,11 +102,14 @@ mod tests {
     fn overflow_changes_at_the_exact_minimum_width_boundary() {
         let skin = crate::builtin::skin();
         let columns = column_layouts(
-            &[
-                column("index", 28.0, false),
-                column("title", 180.0, true),
-                column("artist", 200.0, false),
-            ],
+            (
+                &[
+                    column("index", 28.0, false),
+                    column("title", 180.0, true),
+                    column("artist", 200.0, false),
+                ],
+                true,
+            ),
             &ColumnReads(None),
             None,
             skin,

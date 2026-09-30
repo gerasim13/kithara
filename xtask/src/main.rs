@@ -8,6 +8,7 @@ mod apple_docgen;
 mod child;
 mod ci;
 mod config;
+mod job;
 mod mutants;
 mod parity;
 mod publish;
@@ -96,6 +97,7 @@ fn main() -> std::process::ExitCode {
 
 fn work() -> anyhow::Result<()> {
     let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_target(false)
         .without_time()
         .compact()

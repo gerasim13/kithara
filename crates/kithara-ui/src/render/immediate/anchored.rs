@@ -405,6 +405,14 @@ where
             .move_to(surface.position())
     }
 
+    fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
+        if let Some(content) = layout.children().next() {
+            self.content
+                .as_widget_mut()
+                .operate(self.tree, content, renderer, operation);
+        }
+    }
+
     fn mouse_interaction(
         &self,
         layout: Layout<'_>,
@@ -467,7 +475,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        render::{ControlAction, UiEvent, control_event, fonts::SANS},
+        render::{ControlAction, Published, WindowCommand, control_event, fonts::SANS},
     };
 
     mod consts {
@@ -863,12 +871,12 @@ mod tests {
         );
     }
 
-    fn anchored(open: bool) -> Anchored<'static, UiEvent> {
-        let anchor: Element<'static, UiEvent> = Space::new()
+    fn anchored(open: bool) -> Anchored<'static, Published> {
+        let anchor: Element<'static, Published> = Space::new()
             .width(Length::Fixed(36.0))
             .height(Length::Fixed(36.0))
             .into();
-        let content: Element<'static, UiEvent> = Space::new().width(Length::Fixed(298.0)).into();
+        let content: Element<'static, Published> = Space::new().width(Length::Fixed(298.0)).into();
         Anchored::new(
             anchor,
             content,
@@ -882,8 +890,8 @@ mod tests {
         )
     }
 
-    fn dispatch_open_popover_press(point: Point) -> (Rectangle, Vec<UiEvent>, bool) {
-        let anchor: Element<'static, UiEvent> = Space::new()
+    fn dispatch_open_popover_press(point: Point) -> (Rectangle, Vec<Published>, bool) {
+        let anchor: Element<'static, Published> = Space::new()
             .width(Length::Fixed(36.0))
             .height(Length::Fixed(36.0))
             .into();
@@ -892,9 +900,9 @@ mod tests {
                 .width(Length::Fixed(298.0))
                 .height(Length::Fixed(400.0)),
         )
-        .on_press(UiEvent::OpenSettings)
+        .on_press(Published::window(WindowCommand::Minimize))
         .into();
-        let mut element: Element<'static, UiEvent> = Anchored::new(
+        let mut element: Element<'static, Published> = Anchored::new(
             anchor,
             content,
             true,
@@ -954,7 +962,7 @@ mod tests {
         assert!(!surface.contains(outside));
         assert_eq!(
             messages,
-            [UiEvent::Control {
+            [Published::Gesture {
                 path: "menu".to_owned(),
                 action: ControlAction::Activate,
             }]
@@ -969,7 +977,7 @@ mod tests {
 
         assert_eq!(surface, consts::POPOVER);
         assert!(surface.contains(inside));
-        assert_eq!(messages, [UiEvent::OpenSettings]);
+        assert_eq!(messages, [Published::window(WindowCommand::Minimize)]);
         assert!(captured, "the popover content owns the inside press");
     }
 

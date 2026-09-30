@@ -16,6 +16,10 @@ mod consts {
     // child at 100 ms keeps the wrapper's exit latency below a measurable CI phase.
     pub(super) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
     pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    // A job waits on the lease only while the host's cache cleanup holds it,
+    // which ends within one eviction pass.
+    pub(super) const LOCK_POLL: Duration = Duration::from_secs(1);
+    pub(super) const LOCK_ANNOUNCE: Duration = Duration::from_secs(30);
 }
 
 struct Heartbeat {
@@ -45,6 +49,38 @@ impl Drop for Heartbeat {
     }
 }
 
+/// Takes the lease's shared lock. Only the host's cache cleanup takes it
+/// exclusively, so a wait names it; this helper has no logger, and stderr is
+/// the job log.
+fn hold_shared(file: &fs::File, lease: &Path) -> io::Result<()> {
+    let started = Instant::now();
+    let mut announced: Option<Instant> = None;
+    loop {
+        match file.try_lock_shared() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) => {}
+            Err(fs::TryLockError::Error(error)) => return Err(error),
+        }
+        if announced.is_none_or(|at| at.elapsed() >= consts::LOCK_ANNOUNCE) {
+            eprintln!(
+                "waiting for the CI build target lease {} ({} s so far): a cache cleanup holds it",
+                lease.display(),
+                started.elapsed().as_secs()
+            );
+            announced = Some(Instant::now());
+        }
+        thread::sleep(consts::LOCK_POLL);
+    }
+    if announced.is_some() {
+        eprintln!(
+            "took the CI build target lease {} after {} s",
+            lease.display(),
+            started.elapsed().as_secs()
+        );
+    }
+    Ok(())
+}
+
 fn main() {
     match run() {
         Ok(status) => process::exit(status.code().unwrap_or(1)),
@@ -70,7 +106,7 @@ fn run() -> io::Result<ExitStatus> {
         .read(true)
         .write(true)
         .open(&lease)?;
-    file.lock_shared()?;
+    hold_shared(&file, &lease)?;
     let heartbeat = Heartbeat::start(&lease)?;
     let _ = env::current_exe().and_then(fs::remove_file);
     let mut child = Command::new(command).args(args).spawn()?;

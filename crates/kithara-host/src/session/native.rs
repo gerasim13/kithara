@@ -6,7 +6,6 @@ use firewheel::{
 };
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
-use kithara_effects::LimiterConfig;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
@@ -23,7 +22,7 @@ use super::{
     },
     state::{RootView, SessionState},
 };
-use crate::{PlayerMember, error::PlayError};
+use crate::{PlayerMember, error::PlayError, rt::SessionOutput};
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
@@ -101,7 +100,7 @@ fn engine_thread<T, S>(
     root_view: RootView,
     sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
-    limiter: LimiterConfig,
+    output: SessionOutput,
     start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
@@ -112,7 +111,7 @@ fn engine_thread<T, S>(
         sample_rate,
         requested_max_block_frames,
         None,
-        limiter,
+        output,
         start_stream_fn,
     );
     debug!("[KITHARA-ROUTE] native session worker started");
@@ -136,7 +135,7 @@ fn spawn_session_client<T, S>(
     root_view: RootView,
     sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
-    limiter: LimiterConfig,
+    output: SessionOutput,
     start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) -> Arc<SessionClient<S>>
 where
@@ -151,7 +150,7 @@ where
             root_view,
             sample_rate,
             requested_max_block_frames,
-            limiter,
+            output,
             start_stream_fn,
         );
     });
@@ -198,7 +197,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root_view: RootView,
     sample_rate: NonZeroU32,
     output_block_frames: Option<NonZeroU32>,
-    limiter: LimiterConfig,
+    output: SessionOutput,
 ) -> Arc<dyn HostDispatcher<S>> {
     spawn_session_client::<CpalStream, S>(
         "kithara-engine",
@@ -206,7 +205,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         root_view,
         sample_rate,
         output_block_frames,
-        limiter,
+        output,
         move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
     )
 }

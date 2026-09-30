@@ -9,11 +9,13 @@
         children: [
             Popover(
                 id: "eq-menu",
-                open: Model(id: "deck.eq.menu_open", with: { "deck": "$deck" }),
+                open: View(id: "$deck"),
                 at: Pointer,
+                dismiss: OnAnyAction,
                 anchor: Pressable(
                     id: "eq-menu-anchor",
-                    press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
+                    press: View(id: "$deck", set: Off),
+                    secondary: View(id: "$deck", set: On),
                     child: Column(
                         id: "eq",
                         gap: 0.0,
@@ -56,7 +58,7 @@
                         ),
                         Pressable(
                             id: "eq-3",
-                            press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
+                            press: Command(id: "deck.eq.mode", with: { "deck": "$deck", "bands": "3" }),
                             child: Include(
                                 id: "eq-3-row",
                                 source: "app-strip/eq-mode-row.kmodule.ron",
@@ -69,7 +71,7 @@
                         ),
                         Pressable(
                             id: "eq-4",
-                            press: Command(id: "deck.eq.menu", with: { "deck": "$deck" }),
+                            press: Command(id: "deck.eq.mode", with: { "deck": "$deck", "bands": "4" }),
                             child: Include(
                                 id: "eq-4-row",
                                 source: "app-strip/eq-mode-row.kmodule.ron",

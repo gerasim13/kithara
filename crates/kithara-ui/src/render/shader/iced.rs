@@ -20,11 +20,11 @@ use num_traits::cast::AsPrimitive as _;
 use super::{ShaderFrame, logical_extent};
 use crate::{
     draw::ImageId,
-    render::{UiEvent, document::Ctx},
+    render::{Published, document::Ctx},
     shader::ShaderSpec,
 };
 
-pub(crate) fn view<'a>(spec: &ShaderSpec, path: &str, ctx: Ctx<'_, '_>) -> Element<'a, UiEvent> {
+pub(crate) fn view<'a>(spec: &ShaderSpec, path: &str, ctx: Ctx<'_, '_>) -> Element<'a, Published> {
     let frame = match ShaderFrame::read(spec, path, &ctx, ctx.ui) {
         Ok(frame) => frame,
         Err(error) => {
@@ -41,7 +41,7 @@ pub(crate) fn view<'a>(spec: &ShaderSpec, path: &str, ctx: Ctx<'_, '_>) -> Eleme
 #[derive(Clone, Debug)]
 struct Program(ShaderFrame);
 
-impl shader::Program<UiEvent> for Program {
+impl shader::Program<Published> for Program {
     type Primitive = Primitive;
     type State = ();
 
