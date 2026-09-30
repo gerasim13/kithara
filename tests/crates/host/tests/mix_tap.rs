@@ -33,9 +33,18 @@ pub(super) async fn play_constant(
     harness: OfflinePlayer,
     constant_half: &'static [u8],
 ) -> OfflinePlayer {
+    play_resource(harness, move || make_resource(constant_half)).await
+}
+
+/// Queues the resource `make` builds on `harness`'s player, plays it and
+/// renders the first block.
+pub(super) async fn play_resource(
+    harness: OfflinePlayer,
+    make: impl FnOnce() -> Resource + Send + 'static,
+) -> OfflinePlayer {
     harness
         .with_player(move |player| {
-            player.insert(make_resource(constant_half), TrackId::allocate(), None);
+            player.insert(make(), TrackId::allocate(), None);
             player
                 .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");

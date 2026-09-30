@@ -3,19 +3,27 @@
 use std::num::NonZeroU32;
 
 use kithara::{
+    audio::mock::TestPcmReader,
     effects::LimiterConfig,
     host::{HostConfig, Tap},
     play::{PlayError, Tempo},
+    signal::AudioSpec,
     warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
 };
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
-    offline::{OfflineHostHarness, OfflinePlayer, TapProbe},
+    offline::{
+        OfflineHostHarness, OfflinePlayer, OfflinePlayerOptions, TapProbe, resource_from_reader,
+    },
 };
-use kithara_test_fixtures::integration_fixtures::constant_half;
+use kithara_test_fixtures::{
+    analysis_beat_fixtures::sine_440_long, integration_fixtures::constant_half,
+};
 
-use super::mix_tap::{ROOMY_CAPACITY, play_constant, playing_harness, render_blocks};
+use super::mix_tap::{
+    ROOMY_CAPACITY, play_constant, play_resource, playing_harness, render_blocks,
+};
 
 mod consts {
     pub(super) const SAMPLE_RATE: u32 = 44_100;
@@ -50,6 +58,16 @@ mod consts {
     pub(super) const LOUD_CEILING: f32 = 0.25;
     pub(super) const LOUD_LEVEL: f32 = 0.2;
     pub(super) const TOO_LOUD_LEVEL: f32 = 0.5;
+    /// The Host tempo a ride starts from.
+    pub(super) const RIDE_FROM_BPM: u32 = 120;
+    /// The Host tempo a ride ends at.
+    pub(super) const RIDE_TO_BPM: u32 = 145;
+    /// Beats a ride holds at each end: two bars.
+    pub(super) const HOLD_BEATS: usize = 8;
+    /// Blocks a tempo change may take to reach the published grid.
+    pub(super) const GRID_WAIT_BLOCKS: usize = 4;
+    /// Blocks rendered after a ride's last beat so its click ends in the take.
+    pub(super) const CLICK_TAIL_BLOCKS: usize = 2;
 }
 
 /// One click the output tap sounded: the first frame it sounds on, how many
@@ -118,6 +136,36 @@ fn host_beats(grid: &BeatGridSnapshot, frames: std::ops::Range<u64>) -> Vec<(u64
         .take_while(|(frame, _)| *frame < frames.end)
         .filter(|(frame, _)| frames.contains(frame))
         .collect()
+}
+
+/// The first Host beat of `grid` at or after `frame`, with whether it opens a
+/// bar.
+fn beat_from(grid: &BeatGridSnapshot, frame: u64) -> (u64, bool) {
+    (0_i64..)
+        .map(|ordinal| {
+            (
+                beat_frame(grid, ordinal),
+                ordinal % consts::BEATS_PER_BAR == 0,
+            )
+        })
+        .find(|(beat, _)| *beat >= frame)
+        .expect("the Host grid runs past every frame")
+}
+
+/// The Host tempo of every beat of a ride: two bars at
+/// [`consts::RIDE_FROM_BPM`], one BPM more on each beat up to
+/// [`consts::RIDE_TO_BPM`], two bars there.
+fn ride() -> Vec<u32> {
+    let hold = |bpm| std::iter::repeat_n(bpm, consts::HOLD_BEATS);
+    hold(consts::RIDE_FROM_BPM)
+        .chain(consts::RIDE_FROM_BPM + 1..=consts::RIDE_TO_BPM)
+        .chain(hold(consts::RIDE_TO_BPM))
+        .collect()
+}
+
+fn peak(pcm: &[f32]) -> f32 {
+    pcm.iter()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
 }
 
 fn capacity(frames: u64) -> usize {
@@ -465,6 +513,136 @@ async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
 }
 
 #[kithara::test(tokio)]
+async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride(
+    sine_440_long: Vec<f32>,
+) {
+    let channels = usize::from(consts::CHANNELS);
+    let frames = u64::try_from(sine_440_long.len() / channels).expect("fixture length");
+    let tone: Vec<f32> = sine_440_long.into_iter().step_by(channels).collect();
+    let tone_peak = peak(&tone);
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+    let harness = play_resource(
+        OfflinePlayer::with_sample_rate(
+            OfflinePlayerOptions::builder().build(),
+            consts::SAMPLE_RATE,
+        )
+        .await,
+        move || {
+            resource_from_reader(TestPcmReader::with_samples(
+                AudioSpec::new(consts::CHANNELS, rate),
+                tone,
+            ))
+        },
+    )
+    .await;
+    let host = harness.host();
+    let mut master = host
+        .attach_tap(Tap::Master, capacity(frames))
+        .await
+        .expect("master tap");
+    let mut output = host
+        .attach_tap(Tap::Output, capacity(frames))
+        .await
+        .expect("output tap");
+    host.set_metronome(true).await.expect("metronome on");
+    let start = host.position();
+
+    // WHY: A tempo change commits one block after it is set, onto a grid
+    // retargeted from that frame. Setting it on the block boundary just after
+    // a click sounds keeps every beat out of that window, so each beat is
+    // placed by the grid of the step it belongs to.
+    let mut beats = Vec::new();
+    let mut bpm = None;
+    for step in ride() {
+        let from = host.position();
+        if bpm != Some(step) {
+            let revision = host.session_grid().await.revision();
+            let tempo = Tempo::new(f64::from(step)).expect("ride tempo");
+            host.with(move |host| host.set_tempo(tempo))
+                .await
+                .expect("Host tempo");
+            let mut waited = 0;
+            while host.session_grid().await.revision() == revision {
+                assert!(
+                    waited < consts::GRID_WAIT_BLOCKS,
+                    "the Host publishes the {step} BPM grid"
+                );
+                render_blocks(&harness, 1).await;
+                waited += 1;
+            }
+            bpm = Some(step);
+        }
+        let (beat, downbeat) = beat_from(&host.session_grid().await, from);
+        while host.position() <= beat + consts::SILENT_FOOT {
+            render_blocks(&harness, 1).await;
+        }
+        beats.push((beat, downbeat));
+    }
+    render_blocks(&harness, consts::CLICK_TAIL_BLOCKS).await;
+    harness.close().await;
+
+    let output_drops = output.drops();
+    let master_drops = master.drops();
+    let output = output.drain();
+    let master = master.drain();
+    if let Some(mut artifact) =
+        AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
+            .expect("listening artifact")
+    {
+        artifact.push(&output);
+    }
+    assert_eq!(
+        (output_drops, master_drops),
+        (0, 0),
+        "the taps keep every frame"
+    );
+    assert_eq!(
+        output.len(),
+        master.len(),
+        "both taps see every rendered frame"
+    );
+    assert_eq!(
+        peak(&master),
+        tone_peak,
+        "the deck plays the tone at its own level under the metronome"
+    );
+    // WHY: Outside a click the metronome passes the mix unchanged, so the
+    // output differs from the master only where a click sounds and ducks it.
+    let clicked: Vec<f32> = output
+        .iter()
+        .zip(&master)
+        .map(|(output, master)| output - master)
+        .collect();
+    let heard = clicks(&clicked);
+    assert_eq!(
+        heard
+            .iter()
+            .map(|click| click.frame + start)
+            .collect::<Vec<_>>(),
+        beats
+            .iter()
+            .map(|(frame, _)| frame + consts::SILENT_FOOT)
+            .collect::<Vec<_>>(),
+        "one click rises from every Host beat of the ride, and nowhere else"
+    );
+    let softest_downbeat = heard
+        .iter()
+        .zip(&beats)
+        .filter(|(_, (_, downbeat))| *downbeat)
+        .fold(f32::INFINITY, |softest, (click, _)| softest.min(click.peak));
+    let loudest_beat = heard
+        .iter()
+        .zip(&beats)
+        .filter(|(_, (_, downbeat))| !*downbeat)
+        .fold(0.0_f32, |loudest, (click, _)| loudest.max(click.peak));
+    assert!(
+        softest_downbeat > loudest_beat,
+        "every downbeat clicks louder over the tone than any beat: \
+         {softest_downbeat} against {loudest_beat}"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling(
     constant_half: &'static [u8],
 ) {
@@ -504,12 +682,10 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
     harness.close().await;
 
     let output = output.drain();
-    let peak = output
-        .iter()
-        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    let loudest = peak(&output);
     assert!(
-        peak <= consts::LOUD_CEILING * (1.0 + 4.0 * f32::EPSILON),
-        "the ducked mix plus the click stays under the ceiling: {peak}"
+        loudest <= consts::LOUD_CEILING * (1.0 + 4.0 * f32::EPSILON),
+        "the ducked mix plus the click stays under the ceiling: {loudest}"
     );
     assert_eq!(
         output, rendered,

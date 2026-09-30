@@ -23,6 +23,13 @@ pub fn sine_440() -> Vec<f32> {
     samples(&assets::beat_input_sine_440())
 }
 
+/// Twenty seconds of the [`sine_440`] tone.
+#[kithara::fixture]
+#[must_use]
+pub fn sine_440_long() -> Vec<f32> {
+    samples(&assets::beat_input_sine_440_long())
+}
+
 /// Prepared PCM for beat analysis contracts.
 #[kithara::fixture]
 #[must_use]

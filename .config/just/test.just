@@ -150,10 +150,12 @@ wasm BROWSER="chrome" SUITE="all":
         --test webcodecs_browser
     fi
 
-# Render the same active no-SYNC scenarios into listening artifacts, then the
-# SYNC and Warp scenarios on Richie Hawtin - The Tunnel; the SYNC captures
-# carry the Host metronome from its output tap. The recorders are ignored in
-# ordinary CI so filesystem work cannot consume their behavioral-test deadlines.
+# Render the same active no-SYNC scenarios into listening artifacts, the Host
+# metronome over a sine deck through a tempo ride, then the SYNC and Warp
+# scenarios on Richie Hawtin - The Tunnel; the metronome and SYNC captures come
+# from the Host output tap, clicks included. Recorders that only write artifacts
+# are ignored in ordinary CI so filesystem work cannot consume their
+# behavioral-test deadlines.
 [positional-arguments]
 audio-artifacts OUTPUT:
     #!/usr/bin/env bash
@@ -169,8 +171,8 @@ audio-artifacts OUTPUT:
         -E 'test(/no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-host-tests --test host \
-        --run-ignored=only \
-        -E 'test(=no_sync_real_media::matrix::record_no_sync_real_media_artifacts)'
+        --run-ignored=all \
+        -E 'test(=no_sync_real_media::matrix::record_no_sync_real_media_artifacts) | test(=metronome::the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-sync-tests --test sync \
         --run-ignored=all \
