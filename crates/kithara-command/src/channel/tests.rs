@@ -402,3 +402,20 @@ fn a_repeated_target_applies_only_when_its_entries_agree() {
 
     assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1), (0, 3)]);
 }
+
+#[kithara::test]
+fn a_dropped_due_batch_comes_back_unanswered() {
+    let (mut sender, mut inbox) = pair(1, 0);
+    let seq = send(&mut sender, When::Next, batch(1, &[]));
+    inbox.drain();
+    drop(inbox.next_due(Frame(0), BLOCK));
+    let receipt = sender
+        .receipts()
+        .next()
+        .expect("the dropped batch is answered");
+    assert_eq!(receipt.seq(), seq);
+    let (outcome, returned): Parts = receipt.into();
+    assert_eq!(outcome, Outcome::Rejected(Rejection::Unanswered));
+    assert_eq!(returned.commands, [1]);
+    assert!(sender.send(When::Next, batch(2, &[])).is_ok());
+}

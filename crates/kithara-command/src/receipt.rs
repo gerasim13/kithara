@@ -9,6 +9,8 @@ pub enum Rejection<R> {
     Stale,
     /// The executor refused it for a reason of its own domain.
     Refused(R),
+    /// The executor dropped it once due without answering it.
+    Unanswered,
 }
 
 /// What became of a batch.
