@@ -86,50 +86,41 @@ impl<D: DriverIo> Atomic<D> {
         self.inner.commit_in_place(Some(data.len() as u64))
     }
 
+    #[cfg(test)]
     pub(super) fn read_settled<R>(&self, read: impl FnOnce(&ResourceWriter<D>) -> R) -> R {
         let _handover = self.handover.read();
         read(&self.inner)
     }
 
-    /// Whether the given range is fully covered by available data.
-    #[must_use]
-    pub fn contains_range(&self, range: Range<u64>) -> bool {
-        self.read_settled(|inner| inner.contains_range(range))
-    }
-
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        self.read_settled(ResourceRead::len)
-    }
-
-    /// Read data at the given offset into `buf`.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.read_settled(|inner| inner.read_at(offset, buf))
-    }
-
-    /// Read the entire resource into a caller buffer; returns bytes read.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        self.read_settled(|inner| inner.read_into(buf))
-    }
-
-    /// Runtime status of the inner resource.
-    #[must_use]
-    pub fn status(&self) -> ResourceStatus {
-        self.read_settled(ResourceRead::status)
-    }
-
     delegate::delegate! {
         to self.inner {
+            /// Whether the given range is fully covered by available data.
+            #[must_use]
+            #[expr({ let _handover = self.handover.read(); $ })]
+            pub fn contains_range(&self, range: Range<u64>) -> bool;
+            /// Committed length, if known.
+            #[must_use]
+            #[expr({ let _handover = self.handover.read(); $ })]
+            pub fn len(&self) -> Option<u64>;
             /// Backing file path, if any.
             #[must_use]
             pub fn path(&self) -> Option<&Path>;
+            /// Read data at the given offset into `buf`.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the read fails.
+            #[expr({ let _handover = self.handover.read(); $ })]
+            pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            /// Read the entire resource into a caller buffer; returns bytes read.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the read fails.
+            #[expr({ let _handover = self.handover.read(); $ })]
+            pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize>;
+            /// Runtime status of the inner resource.
+            #[must_use]
+            #[expr({ let _handover = self.handover.read(); $ })]
+            pub fn status(&self) -> ResourceStatus;
             /// Wait until the given byte range is available.
             ///
             /// # Errors
