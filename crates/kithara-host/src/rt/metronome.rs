@@ -28,10 +28,14 @@ mod consts {
     pub(super) const DOWNBEAT_HZ: f64 = 2_200.0;
     /// Rise of a click from silence to its peak. A raised-cosine rise and
     /// fall keep the click and its duck band-limited. Between samples the
-    /// duck's modulation still folds the mix's highest content back over the
-    /// limiter's true-peak ceiling: by under a hundredth of a decibel at the
-    /// default level, by up to about a third of a decibel at a level equal to
-    /// the ceiling over loud content near Nyquist.
+    /// duck's modulation still folds the mix's content near Nyquist back over
+    /// the limiter's true-peak ceiling, the more so the louder the click and
+    /// the closer that content sits to Nyquist. Measured with a full-scale
+    /// tone at 44.1 kHz: under a thousandth of a decibel up to 16 kHz; from
+    /// about 1 kHz under Nyquist, about a hundredth of a decibel at the
+    /// default level and a few hundredths at a level equal to the ceiling;
+    /// within a few hundred hertz of Nyquist, tenths of a decibel and about
+    /// two decibels.
     pub(super) const ATTACK_SECONDS: f64 = 0.002;
     /// Fall of a click from its peak back to silence.
     pub(super) const DECAY_SECONDS: f64 = 0.008;
