@@ -72,8 +72,8 @@ mod consts {
     pub(super) const LOUD_CEILING: f32 = 0.25;
     /// Peak of a downbeat click as a share of [`LOUD_CEILING`].
     pub(super) const LOUD_LEVEL: f32 = 0.8;
-    /// The shallowest duck [`LOUD_LEVEL`] allows: the ducked mix plus the
-    /// click meets the ceiling exactly.
+    /// The shallowest duck that keeps [`LOUD_LEVEL`] under the ceiling: the
+    /// ducked mix plus the click meets it exactly.
     pub(super) const LOUD_DUCK: f32 = 0.8;
     /// The Host tempo a ride starts from.
     pub(super) const RIDE_FROM_BPM: u32 = 120;
@@ -92,7 +92,7 @@ mod consts {
     /// The default metronome level: a downbeat click at the limiter ceiling.
     pub(super) const FULL_LEVEL: f32 = 1.0;
     pub(super) const HALF_LEVEL: f32 = 0.5;
-    /// Over the default duck: a level the Host refuses.
+    /// Over one: a level the Host refuses.
     pub(super) const OVER_LEVEL: f32 = 1.5;
     /// Blocks the first click may take to sound once the tempo commits.
     pub(super) const FIRST_CLICK_BLOCKS: u64 = 4;

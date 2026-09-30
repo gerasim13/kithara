@@ -213,8 +213,8 @@ impl<S> Host<S> {
     /// # Errors
     ///
     /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`
-    /// unless `0 < level <=` the configured duck, keeping the last level, or
-    /// an error when graph dispatch fails.
+    /// unless `0 < level <= 1`, keeping the last level, or an error when
+    /// graph dispatch fails.
     pub fn set_metronome_level(&self, level: f32) -> Result<(), PlayError> {
         self.exec_host_ok(HostCmd::SetMetronomeLevel { level }, "metronome level")
     }

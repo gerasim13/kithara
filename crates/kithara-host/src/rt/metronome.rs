@@ -61,7 +61,8 @@ mod consts {
 /// raised-cosine rise and a raised-cosine fall; under it the mix is ducked
 /// by the same rise, held down through the fall and the hold, and returned
 /// by a raised-cosine release. A duck at least as deep as the level keeps
-/// the ducked mix plus the click under the limiter ceiling at every sample.
+/// the ducked mix plus the click under the limiter ceiling at every sample;
+/// a shallower duck, or none, lets a loud mix plus the click pass it.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
@@ -70,7 +71,7 @@ pub struct MetronomeConfig {
     /// click peaks at five eighths of it.
     level: f32,
     /// Share of the mix the duck takes away while the click sounds: one
-    /// mutes the mix.
+    /// mutes the mix, zero leaves it whole.
     duck: f32,
     /// Fall of a click from its peak back to silence.
     decay: Duration,
@@ -85,7 +86,7 @@ impl MetronomeConfig {
     /// # Errors
     ///
     /// Returns [`PlayError::InvalidParameter`] naming `metronome_level` unless
-    /// `0 < level <= 1`, `metronome_duck` unless `level <= duck <= 1`,
+    /// `0 < level <= 1`, `metronome_duck` unless `0 <= duck <= 1`,
     /// `metronome_decay` unless the decay is 8 to 50 ms, `metronome_hold`
     /// unless the hold is at most 1 s, and `metronome_release` unless the
     /// release is 8 ms to 1 s.
@@ -109,7 +110,7 @@ impl MetronomeConfig {
             }
         };
         check(level > 0.0 && level <= 1.0, "metronome_level", level)?;
-        check((level..=1.0).contains(&duck), "metronome_duck", duck)?;
+        check((0.0..=1.0).contains(&duck), "metronome_duck", duck)?;
         check(
             (consts::MIN_DECAY..=consts::MAX_DECAY).contains(&decay),
             "metronome_decay",
@@ -140,9 +141,9 @@ impl MetronomeConfig {
     /// # Errors
     ///
     /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`
-    /// unless `0 < level <= duck`.
+    /// unless `0 < level <= 1`.
     pub fn with_level(self, level: f32) -> Result<Self, PlayError> {
-        if level > 0.0 && level <= self.duck {
+        if level > 0.0 && level <= 1.0 {
             Ok(Self { level, ..self })
         } else {
             Err(invalid("metronome_level", level))
@@ -560,7 +561,8 @@ mod tests {
         const FRAMES: usize = 8_192;
 
         // WHY: A full duck under a click at the ceiling, the shallowest duck
-        // a level allows, and a click rising in the release of the last.
+        // that keeps a level under the ceiling, and a click rising in the
+        // release of the last.
         for (level, duck) in [(1.0, 1.0), (0.8, 0.8)] {
             let node = MetronomeNode::new(true, config(level, duck), CEILING);
             for from in [0.0, 0.5] {
@@ -811,7 +813,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_metronome_duck_sits_between_the_level_and_one() {
+    fn a_metronome_duck_sits_between_zero_and_one() {
         let duck = |depth| MetronomeConfig::builder().level(0.5).duck(depth).build();
         let refused = |depth| {
             matches!(
@@ -820,12 +822,10 @@ mod tests {
             )
         };
         assert!(refused(f32::NAN), "NaN");
-        assert!(
-            refused(0.49),
-            "too shallow to keep the click under the ceiling"
-        );
+        assert!(refused(-0.01), "a duck that lifts the mix");
         assert!(refused(1.01), "deeper than muting the mix");
-        assert!(duck(0.5).is_ok(), "as deep as the level");
+        assert!(duck(0.0).is_ok(), "no duck");
+        assert!(duck(0.49).is_ok(), "shallower than the level");
         assert!(duck(1.0).is_ok(), "a full duck");
     }
 
@@ -864,20 +864,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_metronome_level_set_later_sits_above_zero_and_at_most_the_duck() {
+    fn a_metronome_level_set_later_sits_above_zero_and_at_most_one() {
         let base = config(0.5, 0.5);
-        for level in [f32::NAN, 0.0, 0.51] {
+        for level in [f32::NAN, 0.0, 1.01] {
             assert!(
                 matches!(
                     base.with_level(level),
                     Err(PlayError::InvalidParameter { name, .. }) if name == "metronome_level"
                 ),
-                "a level of {level} under a duck of 0.5 is refused"
+                "a level of {level} is refused"
             );
         }
-        for level in [0.25, 0.5] {
+        for level in [0.25, 0.5, 1.0] {
             assert_eq!(
-                base.with_level(level).expect("a level under the duck"),
+                base.with_level(level).expect("a level in its bounds"),
                 MetronomeConfig { level, ..base },
                 "a new level keeps the duck and the click's shape"
             );
