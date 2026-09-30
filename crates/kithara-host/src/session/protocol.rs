@@ -28,6 +28,7 @@ pub(crate) enum HostCmd<S> {
     ApplyMix { levels: Box<[HostLevel]> },
     AttachOutputs { tap: Tap, outputs: OutputGroup },
     DetachOutputs { tap: Tap },
+    SetMetronome { on: bool },
     Shutdown,
 }
 

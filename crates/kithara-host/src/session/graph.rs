@@ -127,7 +127,8 @@ pub(super) mod tap {
 
     fn source<T, S>(state: &SessionState<T, S>, tap: Tap) -> Option<NodeID> {
         match tap {
-            Tap::Master | Tap::Output => state.session_limiter_node_id,
+            Tap::Master => state.session_limiter_node_id,
+            Tap::Output => state.session_metronome_node_id,
         }
     }
 
@@ -344,6 +345,8 @@ pub(super) mod lifecycle {
             state.session_output_node_id = None;
             state.session_output_memo = None;
             state.session_limiter_node_id = None;
+            state.session_metronome_node_id = None;
+            state.session_metronome_memo = None;
         }
         Ok(())
     }
@@ -499,6 +502,19 @@ pub(super) mod controls {
         ) {
             memo.volume = Volume::Linear(mode.gain());
             let mut queue = fw_ctx.event_queue(session_id);
+            memo.update_memo(&mut queue);
+        }
+    }
+
+    pub(in crate::session) fn set_metronome<T, S>(state: &mut SessionState<T, S>, on: bool) {
+        state.metronome = on;
+        if let (Some(fw_ctx), Some(id), Some(memo)) = (
+            &mut state.ctx,
+            state.session_metronome_node_id,
+            &mut state.session_metronome_memo,
+        ) {
+            memo.enabled = on;
+            let mut queue = fw_ctx.event_queue(id);
             memo.update_memo(&mut queue);
         }
     }
@@ -878,6 +894,40 @@ mod tests {
             Reply::Err(error) => panic!("transport snapshot failed: {error}"),
             _ => panic!("transport query returned an unexpected reply"),
         }
+    }
+
+    #[kithara::test]
+    fn a_session_tick_publishes_the_session_grid_the_graph_committed() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let player = register(&mut state);
+        start(&mut state, player);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(124.0).expect("invariant: fixture tempo is valid"),
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(deliver_one_block(), "transport commit must be rendered");
+
+        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+
+        let committed = state
+            .transport_control
+            .as_mut()
+            .expect("a running stream keeps transport control")
+            .observation()
+            .snapshot()
+            .expect("the rendered block committed the tempo")
+            .session_grid();
+        assert_eq!(
+            state.root_view.grid(),
+            committed,
+            "with no synchronization command, the session tick publishes the committed grid"
+        );
     }
 
     /// Stopping is the verb a host reaches for when playback ends, and it must

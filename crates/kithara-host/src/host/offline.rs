@@ -14,6 +14,7 @@ use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 use super::{Host, HostConfig};
 use crate::{
     PlayerMember,
+    rt::SessionOutput,
     session::{
         HostDispatcher, RootView,
         offline::{OfflineSessionClient, OfflineTaskConfig},
@@ -63,6 +64,7 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
         #[builder(default)] limiter: LimiterConfig,
+        #[builder(default = crate::consts::DEFAULT_METRONOME_LEVEL)] metronome_level: f32,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
         #[builder(default = default_dispatcher_config())] dispatcher: DispatcherConfig,
         #[builder(default = TaskConfig::new())] task: TaskConfig,
@@ -74,6 +76,7 @@ impl<S> HostConfig<S> {
             declick_frames,
             declared_latency,
             limiter,
+            metronome_level,
             worker,
             task,
             dispatcher: Box::new(dispatcher),
@@ -107,6 +110,7 @@ where
             declick_frames,
             declared_latency,
             limiter,
+            metronome_level,
             worker,
             dispatcher,
             task,
@@ -123,7 +127,7 @@ where
             root_view,
             OfflineTaskConfig {
                 declared_latency,
-                limiter,
+                output: SessionOutput::new(limiter, metronome_level)?,
                 declick_frames,
                 max_block_frames,
                 sample_rate,

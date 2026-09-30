@@ -44,6 +44,10 @@ where
             tap::detach(state, target);
             HostReply::Ok
         }
+        HostCmd::SetMetronome { on } => {
+            controls::set_metronome(state, on);
+            HostReply::Ok
+        }
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
@@ -298,7 +302,10 @@ pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Reply {
     if stream_died(state) {
         return restart_dead_stream(state);
     }
-    Reply::Ok
+    match transport::observe_commits(state) {
+        Ok(()) => Reply::Ok,
+        Err(error) => Reply::Err(error.into()),
+    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1480,6 +1487,35 @@ mod tests {
         assert!(
             state.taps.slot(Tap::Master).is_none() && state.taps.slot(Tap::Output).is_none(),
             "idle teardown must clear both taps with the context they lived in"
+        );
+    }
+
+    #[kithara::test]
+    fn the_metronome_flag_survives_an_idle_teardown() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::SetMetronome { on: true }),
+            HostReply::Ok
+        ));
+
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
+            Reply::Ok
+        ));
+        assert!(state.session_metronome_node_id.is_none());
+        start_player_cmd(&mut state, id);
+
+        assert!(state.metronome, "the flag outlives the context");
+        assert!(
+            state
+                .session_metronome_memo
+                .as_ref()
+                .is_some_and(|memo| memo.enabled),
+            "the rebuilt metronome node starts switched on"
         );
     }
 

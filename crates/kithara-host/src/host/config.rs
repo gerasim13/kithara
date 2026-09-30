@@ -23,6 +23,8 @@ pub enum HostConfig<S> {
         output_block_frames: Option<NonZeroU32>,
         /// Session output limiter policy.
         limiter: LimiterConfig,
+        /// Peak of a downbeat click; a beat click sounds at five eighths of it.
+        metronome_level: f32,
         marker: PhantomData<fn() -> S>,
     },
     /// Device-free finite renderer.
@@ -41,6 +43,8 @@ pub enum HostConfig<S> {
         declared_latency: Duration,
         /// Session output limiter policy.
         limiter: LimiterConfig,
+        /// Peak of a downbeat click; a beat click sounds at five eighths of it.
+        metronome_level: f32,
         /// Shared worker configuration for the session scheduler.
         worker: WorkerConfig,
         /// Dispatcher budgets for the single offline session task.
@@ -62,11 +66,13 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
         #[builder(default)] limiter: LimiterConfig,
+        #[builder(default = consts::DEFAULT_METRONOME_LEVEL)] metronome_level: f32,
     ) -> Self {
         Self::Realtime {
             sample_rate_hint,
             output_block_frames,
             limiter,
+            metronome_level,
             marker: PhantomData,
         }
     }

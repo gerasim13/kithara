@@ -10,7 +10,7 @@ use firewheel::{
 };
 use kithara_bufpool::PoolRegion;
 use kithara_dsp::param::SmootherConfig;
-use kithara_effects::{GainDb, LimiterConfig, eq::EqBandConfig};
+use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
@@ -29,7 +29,7 @@ use crate::{
     PlayerMember,
     api::{SessionDuckingMode, SlotId, Tap},
     bridge::SharedEq,
-    rt::{LimiterNode, MasterEqNode},
+    rt::{MasterEqNode, MetronomeNode, SessionOutput},
 };
 
 #[derive(Debug)]
@@ -227,7 +227,11 @@ impl RootView {
 pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
     pub(super) root: GroupState<PlayerMember>,
-    pub(super) limiter: LimiterConfig,
+    pub(super) output: SessionOutput,
+    /// Whether the Host metronome clicks; outlives the context.
+    pub(super) metronome: bool,
+    pub(super) session_metronome_memo: Option<Memo<MetronomeNode>>,
+    pub(super) session_metronome_node_id: Option<NodeID>,
     pub(super) ctx: Option<FirewheelContext>,
     pub(super) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
@@ -277,7 +281,7 @@ impl<T, S> SessionState<T, S> {
         sample_rate: NonZeroU32,
         requested_max_block_frames: Option<NonZeroU32>,
         requested_declick_frames: Option<NonZeroU32>,
-        limiter: LimiterConfig,
+        output: SessionOutput,
         start_stream_fn: F,
     ) -> Self
     where
@@ -289,7 +293,10 @@ impl<T, S> SessionState<T, S> {
         let state = Self {
             requested_max_block_frames,
             requested_declick_frames,
-            limiter,
+            output,
+            metronome: false,
+            session_metronome_memo: None,
+            session_metronome_node_id: None,
             root,
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
@@ -464,14 +471,17 @@ fn ensure_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
 
 fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     debug!("[KITHARA-ROUTE] creating session output graph");
-    let limiter = LimiterNode::new(state.limiter);
+    let limiter = state.output.limiter();
+    let metronome = state.output.metronome(state.metronome);
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
     let session_node = VolumeNode::from_linear(state.session_ducking.gain());
     let session_memo = Memo::new(session_node);
+    let metronome_memo = Memo::new(metronome);
     let session_id = add_graph_node(fw_ctx, session_node)?;
     let limiter_id = add_graph_node(fw_ctx, limiter)?;
+    let metronome_id = add_graph_node(fw_ctx, metronome)?;
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
         .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
@@ -479,9 +489,14 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
             SessionError::Graph(format!("connect session output to limiter failed: {err}"))
         })?;
     fw_ctx
-        .connect(limiter_id, graph_out, &[(0, 0), (1, 1)], false)
+        .connect(limiter_id, metronome_id, &[(0, 0), (1, 1)], false)
         .map_err(|err| {
-            SessionError::Graph(format!("connect limiter to graph_out failed: {err}"))
+            SessionError::Graph(format!("connect limiter to metronome failed: {err}"))
+        })?;
+    fw_ctx
+        .connect(metronome_id, graph_out, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect metronome to graph_out failed: {err}"))
         })?;
     if let Err(err) = fw_ctx.update() {
         warn!("session graph update after output init failed: {err:?}");
@@ -489,10 +504,13 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     state.session_output_node_id = Some(session_id);
     state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
+    state.session_metronome_node_id = Some(metronome_id);
+    state.session_metronome_memo = Some(metronome_memo);
     tap::install_requested(state)?;
     debug!(
         ?session_id,
         ?limiter_id,
+        ?metronome_id,
         "[KITHARA-ROUTE] session output graph ready"
     );
     Ok(())

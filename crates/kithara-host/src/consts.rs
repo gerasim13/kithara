@@ -24,3 +24,6 @@ pub(crate) const TRANSPORT_BLOCK_FRAMES: usize = 480;
 
 #[cfg(test)]
 pub(crate) const TRANSPORT_SAMPLE_RATE: u32 = 48_000;
+
+/// Peak of the Host metronome's downbeat click.
+pub(crate) const DEFAULT_METRONOME_LEVEL: f32 = 0.144;

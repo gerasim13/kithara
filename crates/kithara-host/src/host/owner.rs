@@ -23,6 +23,7 @@ use super::{
 use crate::{
     PlayerMember,
     api::{HostLevel, Tap},
+    rt::SessionOutput,
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
@@ -197,6 +198,15 @@ impl<S> Host<S> {
         self.exec_host_ok(HostCmd::DetachOutputs { tap }, "output detach")
     }
 
+    /// Switches the Host metronome; switching it off lets a sounding click finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when graph dispatch fails.
+    pub fn set_metronome(&self, on: bool) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::SetMetronome { on }, "metronome")
+    }
+
     /// Restart the current output route while preserving Host-owned graph state.
     ///
     /// # Errors
@@ -330,6 +340,7 @@ where
                 sample_rate_hint,
                 output_block_frames,
                 limiter,
+                metronome_level,
                 ..
             } => {
                 let root = Self::session_root(sample_rate_hint)?;
@@ -338,7 +349,7 @@ where
                     root.view.clone(),
                     root.sample_rate,
                     output_block_frames,
-                    limiter,
+                    SessionOutput::new(limiter, metronome_level)?,
                 )
                 .resolve()?;
                 Ok(Self::owner(

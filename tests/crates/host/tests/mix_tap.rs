@@ -18,7 +18,7 @@ const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const TRACK_SECS: f64 = 0.1;
 const BLOCKS: usize = 20;
-const ROOMY_CAPACITY: usize = 65_536;
+pub(super) const ROOMY_CAPACITY: usize = 65_536;
 
 fn make_resource(constant_half: &'static [u8]) -> Resource {
     let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
@@ -29,9 +29,10 @@ fn make_resource(constant_half: &'static [u8]) -> Resource {
     ))
 }
 
-async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayer {
-    let harness =
-        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
+pub(super) async fn play_constant(
+    harness: OfflinePlayer,
+    constant_half: &'static [u8],
+) -> OfflinePlayer {
     harness
         .with_player(move |player| {
             player.insert(make_resource(constant_half), TrackId::allocate(), None);
@@ -45,7 +46,13 @@ async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayer {
     harness
 }
 
-async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
+pub(super) async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayer {
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
+    play_constant(harness, constant_half).await
+}
+
+pub(super) async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES * 2);
     for _ in 0..blocks {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);

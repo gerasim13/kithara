@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
-use kithara_effects::LimiterConfig;
 use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
@@ -13,6 +12,7 @@ use super::{
 };
 use crate::{
     PlayerMember,
+    rt::SessionOutput,
     session::{HostDispatcher, RootView},
 };
 
@@ -53,7 +53,7 @@ impl<S> Platform<S> {
         view: RootView,
         sample_rate: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
-        limiter: LimiterConfig,
+        output: SessionOutput,
     ) -> StartedPlatform<S>
     where
         S: HasPool<f32> + Send + Sync + 'static,
@@ -63,7 +63,7 @@ impl<S> Platform<S> {
             view,
             sample_rate,
             output_block_frames,
-            limiter,
+            output,
         );
         (dispatcher, Self::owner())
     }

@@ -444,8 +444,9 @@ fn refresh_observation<T, S>(
     Ok(observation)
 }
 
-/// Brings the root group up to what the render graph has committed, before a
-/// synchronization command reads it.
+/// Brings the root group up to what the render graph has committed: on every
+/// session tick and offline block, and before a synchronization command reads
+/// it, so the Host grid follows the tempo it clicks with no deck ticking.
 ///
 /// Nothing is committed while no graph runs or a route restart holds the
 /// session grid. Delivering a pending abort and reporting a rejected commit
