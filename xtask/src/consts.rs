@@ -437,6 +437,12 @@ pub(crate) const SOURCES_FILE: &str = ".kithara-lane-sources";
 /// Stands for content a build the record did not see may have used.
 pub(crate) const UNKNOWN_BLOB: &str = "unknown";
 
+/// Asks the pinned nightly's cargo to judge what rustc read by checksum.
+pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNESS";
+
+/// The toolchain rustup runs a step's cargo with.
+pub(crate) const TOOLCHAIN_ENV: &str = "RUSTUP_TOOLCHAIN";
+
 /// Hours a lane slot keeps a build unit its builds stopped using, unless the
 /// project config names another window.
 pub(crate) const LANE_UNIT_WINDOW_HOURS: u64 = 24;
