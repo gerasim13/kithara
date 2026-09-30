@@ -391,8 +391,7 @@ fn overlay_session() -> HostConfig<TestPools> {
             MetronomeConfig::builder()
                 .level(consts::OVERLAY_LEVEL)
                 .duck(consts::NO_DUCK)
-                .build()
-                .expect("a metronome without a duck"),
+                .build(),
         )
         .build()
 }

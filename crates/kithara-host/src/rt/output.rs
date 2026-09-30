@@ -1,6 +1,9 @@
 use kithara_effects::LimiterConfig;
 
-use super::{LimiterNode, MetronomeConfig, MetronomeNode};
+use super::{
+    LimiterNode, MetronomeNode,
+    metronome::{MetronomeConfig, MetronomeConfigLevelUpdate, MetronomeConfigUpdate},
+};
 use crate::PlayError;
 
 /// The session output chain after the mix: the limiter, then the metronome
@@ -12,8 +15,20 @@ pub(crate) struct SessionOutput {
 }
 
 impl SessionOutput {
-    pub(crate) const fn new(limiter: LimiterConfig, metronome: MetronomeConfig) -> Self {
-        Self { limiter, metronome }
+    /// The output chain a session starts with.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::InvalidParameter`] naming the first metronome
+    /// field out of its bounds.
+    pub(crate) fn new(
+        limiter: LimiterConfig,
+        metronome: MetronomeConfig,
+    ) -> Result<Self, PlayError> {
+        Ok(Self {
+            limiter,
+            metronome: metronome.validated()?,
+        })
     }
 
     pub(crate) fn limiter(&self) -> LimiterNode {
@@ -26,7 +41,9 @@ impl SessionOutput {
 
     /// Keeps `level` for every metronome node built from here on.
     pub(crate) fn set_metronome_level(&mut self, level: f32) -> Result<(), PlayError> {
-        self.metronome = self.metronome.with_level(level)?;
-        Ok(())
+        self.metronome.apply_update(MetronomeConfigUpdate {
+            level: MetronomeConfigLevelUpdate::Set { value: level },
+            ..MetronomeConfigUpdate::default()
+        })
     }
 }

@@ -118,6 +118,7 @@ where
         else {
             unreachable!("offline runtime requires offline Host config");
         };
+        let output = SessionOutput::new(limiter, metronome)?;
         let worker = Worker::new(worker);
         let dispatcher = worker.dispatcher(*dispatcher);
         let (client, task_handle) = crate::session::offline::spawn(
@@ -127,7 +128,7 @@ where
             root_view,
             OfflineTaskConfig {
                 declared_latency,
-                output: SessionOutput::new(limiter, metronome),
+                output,
                 declick_frames,
                 max_block_frames,
                 sample_rate,

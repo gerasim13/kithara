@@ -714,8 +714,7 @@ impl ProductHarness {
                 MetronomeConfig::builder()
                     .level(METRONOME_DUCK)
                     .duck(METRONOME_DUCK)
-                    .build()
-                    .expect("scenario metronome config"),
+                    .build(),
             )
             .build();
         let trace = usdt_trace::scope();

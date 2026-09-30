@@ -13,6 +13,7 @@ use firewheel::{
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
+use kithara_config::Config;
 use kithara_platform::time::Duration;
 use kithara_play::rt::read_render_context;
 use kithara_signal::SessionFrame;
@@ -63,110 +64,84 @@ mod consts {
 /// by a raised-cosine release. A duck at least as deep as the level keeps
 /// the ducked mix plus the click under the limiter ceiling at every sample;
 /// a shallower duck, or none, lets a loud mix plus the click pass it.
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(get, copy)]
+///
+/// The builder takes any values; the Host checks them when it starts and
+/// refuses a config out of the bounds each field names.
+#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[config(
+    default,
+    update,
+    builder(state_mod(vis = "pub")),
+    patch(validate = Self::validated, error = PlayError)
+)]
 #[non_exhaustive]
 pub struct MetronomeConfig {
-    /// Peak of a downbeat click as a share of the limiter ceiling; a beat
-    /// click peaks at five eighths of it.
+    /// Peak of a downbeat click as a share of the limiter ceiling, above
+    /// zero and at most one; a beat click peaks at five eighths of it.
+    #[config(value, update, builder(default = consts::DEFAULT_LEVEL), field(get, copy))]
     level: f32,
-    /// Share of the mix the duck takes away while the click sounds: one
-    /// mutes the mix, zero leaves it whole.
+    /// Share of the mix the duck takes away while the click sounds, from
+    /// zero to one: one mutes the mix, zero leaves it whole.
+    #[config(value, builder(default = consts::DEFAULT_DUCK), field(get, copy))]
     duck: f32,
-    /// Fall of a click from its peak back to silence.
+    /// Fall of a click from its peak back to silence, 8 to 50 ms.
+    #[config(value, builder(default = consts::DEFAULT_DECAY), field(get, copy))]
     decay: Duration,
-    /// How long the duck keeps the mix down after the click has fallen.
+    /// How long the duck keeps the mix down after the click has fallen, at
+    /// most 1 s.
+    #[config(value, builder(default = consts::DEFAULT_HOLD), field(get, copy))]
     hold: Duration,
-    /// How long the duck takes to return the mix after its hold.
+    /// How long the duck takes to return the mix after its hold, 8 ms to 1 s.
+    #[config(value, builder(default = consts::DEFAULT_RELEASE), field(get, copy))]
     release: Duration,
 }
 
-#[bon::bon]
 impl MetronomeConfig {
+    /// This config if every field sits within its bounds: the one check a
+    /// Host start and a runtime update both pass through.
+    ///
     /// # Errors
     ///
-    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level` unless
-    /// `0 < level <= 1`, `metronome_duck` unless `0 <= duck <= 1`,
-    /// `metronome_decay` unless the decay is 8 to 50 ms, `metronome_hold`
-    /// unless the hold is at most 1 s, and `metronome_release` unless the
-    /// release is 8 ms to 1 s.
-    #[builder(
-        builder_type(vis = "pub"),
-        start_fn(name = builder, vis = "pub"),
-        finish_fn(vis = "pub")
-    )]
-    fn new(
-        #[builder(default = consts::DEFAULT_LEVEL)] level: f32,
-        #[builder(default = consts::DEFAULT_DUCK)] duck: f32,
-        #[builder(default = consts::DEFAULT_DECAY)] decay: Duration,
-        #[builder(default = consts::DEFAULT_HOLD)] hold: Duration,
-        #[builder(default = consts::DEFAULT_RELEASE)] release: Duration,
-    ) -> Result<Self, PlayError> {
+    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`,
+    /// `metronome_duck`, `metronome_decay`, `metronome_hold` or
+    /// `metronome_release` for the first field out of its bounds.
+    pub(crate) fn validated(self) -> Result<Self, PlayError> {
         let check = |valid: bool, name: &str, value: f32| {
             if valid {
                 Ok(())
             } else {
-                Err(invalid(name, value))
+                Err(PlayError::InvalidParameter {
+                    name: name.to_owned(),
+                    value,
+                })
             }
         };
-        check(level > 0.0 && level <= 1.0, "metronome_level", level)?;
-        check((0.0..=1.0).contains(&duck), "metronome_duck", duck)?;
         check(
-            (consts::MIN_DECAY..=consts::MAX_DECAY).contains(&decay),
+            self.level > 0.0 && self.level <= 1.0,
+            "metronome_level",
+            self.level,
+        )?;
+        check(
+            (0.0..=1.0).contains(&self.duck),
+            "metronome_duck",
+            self.duck,
+        )?;
+        check(
+            (consts::MIN_DECAY..=consts::MAX_DECAY).contains(&self.decay),
             "metronome_decay",
-            decay.as_secs_f32(),
+            self.decay.as_secs_f32(),
         )?;
         check(
-            hold <= consts::MAX_HOLD,
+            self.hold <= consts::MAX_HOLD,
             "metronome_hold",
-            hold.as_secs_f32(),
+            self.hold.as_secs_f32(),
         )?;
         check(
-            (consts::MIN_RELEASE..=consts::MAX_RELEASE).contains(&release),
+            (consts::MIN_RELEASE..=consts::MAX_RELEASE).contains(&self.release),
             "metronome_release",
-            release.as_secs_f32(),
+            self.release.as_secs_f32(),
         )?;
-        Ok(Self {
-            level,
-            duck,
-            decay,
-            hold,
-            release,
-        })
-    }
-
-    /// This config with its click at `level`, keeping the duck and the
-    /// click's shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`
-    /// unless `0 < level <= 1`.
-    pub fn with_level(self, level: f32) -> Result<Self, PlayError> {
-        if level > 0.0 && level <= 1.0 {
-            Ok(Self { level, ..self })
-        } else {
-            Err(invalid("metronome_level", level))
-        }
-    }
-}
-
-fn invalid(name: &str, value: f32) -> PlayError {
-    PlayError::InvalidParameter {
-        name: name.to_owned(),
-        value,
-    }
-}
-
-impl Default for MetronomeConfig {
-    fn default() -> Self {
-        Self {
-            level: consts::DEFAULT_LEVEL,
-            duck: consts::DEFAULT_DUCK,
-            decay: consts::DEFAULT_DECAY,
-            hold: consts::DEFAULT_HOLD,
-            release: consts::DEFAULT_RELEASE,
-        }
+        Ok(self)
     }
 }
 
@@ -548,11 +523,7 @@ mod tests {
     }
 
     fn config(level: f32, duck: f32) -> MetronomeConfig {
-        MetronomeConfig::builder()
-            .level(level)
-            .duck(duck)
-            .build()
-            .expect("a metronome config in its bounds")
+        MetronomeConfig::builder().level(level).duck(duck).build()
     }
 
     #[kithara::test]
@@ -622,8 +593,7 @@ mod tests {
             .decay(Duration::from_millis(8))
             .hold(Duration::ZERO)
             .release(Duration::from_millis(8))
-            .build()
-            .expect("the sharpest click shape");
+            .build();
         for (mix, config) in [
             (vec![0.0; held.len()], MetronomeConfig::default()),
             (held.clone(), MetronomeConfig::default()),
@@ -749,8 +719,7 @@ mod tests {
         let config = MetronomeConfig::builder()
             .hold(Duration::ZERO)
             .release(Duration::from_secs(1))
-            .build()
-            .expect("a one second release");
+            .build();
         let node = MetronomeNode::new(true, config, ceiling());
         let render = |mix: f32| {
             let mut left = vec![mix; FRAMES];
@@ -795,7 +764,7 @@ mod tests {
     fn a_metronome_level_sits_above_zero_and_at_most_one() {
         let refused = |level| {
             matches!(
-                MetronomeConfig::builder().level(level).build(),
+                MetronomeConfig::builder().level(level).build().validated(),
                 Err(PlayError::InvalidParameter { name, .. }) if name == "metronome_level"
             )
         };
@@ -803,18 +772,32 @@ mod tests {
         assert!(refused(0.0), "zero");
         assert!(refused(1.01), "over the ceiling");
         assert!(
-            MetronomeConfig::builder().level(0.01).build().is_ok(),
+            MetronomeConfig::builder()
+                .level(0.01)
+                .build()
+                .validated()
+                .is_ok(),
             "a quiet click"
         );
         assert!(
-            MetronomeConfig::builder().level(1.0).build().is_ok(),
+            MetronomeConfig::builder()
+                .level(1.0)
+                .build()
+                .validated()
+                .is_ok(),
             "a click at the ceiling"
         );
     }
 
     #[kithara::test]
     fn a_metronome_duck_sits_between_zero_and_one() {
-        let duck = |depth| MetronomeConfig::builder().level(0.5).duck(depth).build();
+        let duck = |depth| {
+            MetronomeConfig::builder()
+                .level(0.5)
+                .duck(depth)
+                .build()
+                .validated()
+        };
         let refused = |depth| {
             matches!(
                 duck(depth),
@@ -837,9 +820,14 @@ mod tests {
                 Err(PlayError::InvalidParameter { name, .. }) if name == parameter
             )
         };
-        let decay = |decay| MetronomeConfig::builder().decay(decay).build();
-        let hold = |hold| MetronomeConfig::builder().hold(hold).build();
-        let release = |release| MetronomeConfig::builder().release(release).build();
+        let decay = |decay| MetronomeConfig::builder().decay(decay).build().validated();
+        let hold = |hold| MetronomeConfig::builder().hold(hold).build().validated();
+        let release = |release| {
+            MetronomeConfig::builder()
+                .release(release)
+                .build()
+                .validated()
+        };
         let millis = Duration::from_millis;
         assert!(refused(decay(millis(7)), "metronome_decay"), "decay 7 ms");
         assert!(decay(millis(8)).is_ok(), "decay 8 ms");
@@ -864,20 +852,31 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_metronome_level_set_later_sits_above_zero_and_at_most_one() {
+    fn a_metronome_level_update_commits_only_a_level_in_its_bounds() {
         let base = config(0.5, 0.5);
+        let set = |level| MetronomeConfigUpdate {
+            level: MetronomeConfigLevelUpdate::Set { value: level },
+            ..MetronomeConfigUpdate::default()
+        };
         for level in [f32::NAN, 0.0, 1.01] {
+            let mut updated = base;
+            let refused = updated.apply_update(set(level));
             assert!(
                 matches!(
-                    base.with_level(level),
+                    &refused,
                     Err(PlayError::InvalidParameter { name, .. }) if name == "metronome_level"
                 ),
-                "a level of {level} is refused"
+                "a level of {level} is refused: {refused:?}"
             );
+            assert_eq!(updated, base, "a refused level keeps the last config");
         }
         for level in [0.25, 0.5, 1.0] {
+            let mut updated = base;
+            updated
+                .apply_update(set(level))
+                .expect("a level in its bounds");
             assert_eq!(
-                base.with_level(level).expect("a level in its bounds"),
+                updated,
                 MetronomeConfig { level, ..base },
                 "a new level keeps the duck and the click's shape"
             );

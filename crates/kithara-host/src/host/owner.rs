@@ -345,7 +345,9 @@ where
     /// Creates one Host with its configured realtime or offline session.
     ///
     /// # Errors
-    /// Returns an error when the session root or selected runtime cannot start.
+    /// Returns [`PlayError::InvalidParameter`] naming the first metronome
+    /// field out of its bounds, or an error when the session root or selected
+    /// runtime cannot start.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         match config {
             HostConfig::Realtime {
@@ -355,13 +357,14 @@ where
                 metronome,
                 ..
             } => {
+                let output = SessionOutput::new(limiter, metronome)?;
                 let root = Self::session_root(sample_rate_hint)?;
                 let (dispatcher, platform) = Platform::realtime(
                     root.group,
                     root.view.clone(),
                     root.sample_rate,
                     output_block_frames,
-                    SessionOutput::new(limiter, metronome),
+                    output,
                 )
                 .resolve()?;
                 Ok(Self::owner(

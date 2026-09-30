@@ -5363,6 +5363,7 @@ dependencies = [
  "firewheel-web-audio",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-dsp",
  "kithara-effects",
  "kithara-events",

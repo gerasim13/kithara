@@ -123,7 +123,8 @@ where
         sample_rate,
         None,
         None,
-        SessionOutput::new(LimiterConfig::default(), MetronomeConfig::default()),
+        SessionOutput::new(LimiterConfig::default(), MetronomeConfig::default())
+            .expect("the default output chain"),
         start_stream_fn,
     )
 }

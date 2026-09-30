@@ -727,8 +727,7 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
             MetronomeConfig::builder()
                 .level(consts::LOUD_LEVEL)
                 .duck(consts::LOUD_DUCK)
-                .build()
-                .expect("loud metronome"),
+                .build(),
         )
         .build();
     // WHY: A deck at twice the ceiling from its first frame, with no fade in,
@@ -1034,4 +1033,30 @@ async fn a_refused_metronome_level_keeps_the_last_level() {
     let heard = clicks(&take);
     assert_clicks_on(&heard, &beats);
     assert_click_levels(&heard, &beats, consts::FULL_LEVEL);
+}
+
+#[kithara::test(tokio)]
+async fn a_host_refuses_a_metronome_config_out_of_its_bounds() {
+    for (metronome, parameter) in [
+        (
+            MetronomeConfig::builder().level(consts::OVER_LEVEL).build(),
+            "metronome_level",
+        ),
+        (
+            MetronomeConfig::builder().duck(-0.01).build(),
+            "metronome_duck",
+        ),
+    ] {
+        let refused =
+            OfflineHostHarness::new(HostConfig::offline(pools()).metronome(metronome).build())
+                .await
+                .err();
+        assert!(
+            matches!(
+                &refused,
+                Some(PlayError::InvalidParameter { name, .. }) if name == parameter
+            ),
+            "a Host with {metronome:?} is refused naming {parameter}: {refused:?}"
+        );
+    }
 }
