@@ -443,6 +443,9 @@ pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNE
 /// The toolchain rustup runs a step's cargo with.
 pub(crate) const TOOLCHAIN_ENV: &str = "RUSTUP_TOOLCHAIN";
 
+/// The commit web release packaging tells the FFI build it is built from.
+pub(crate) const BUILD_REVISION_ENV: &str = "KITHARA_BUILD_REVISION";
+
 /// Hours a lane slot keeps a build unit its builds stopped using, unless the
 /// project config names another window.
 pub(crate) const LANE_UNIT_WINDOW_HOURS: u64 = 24;
