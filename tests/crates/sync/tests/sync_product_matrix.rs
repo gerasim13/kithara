@@ -17,7 +17,7 @@ use kithara::{
 use kithara::{
     beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
     hls::AbrMode,
-    host::{HostConfig, HostOwned, Tap},
+    host::{HostConfig, HostOwned, MetronomeConfig, Tap},
     platform::{
         sync::Arc,
         time::{self, Duration, Instant},
@@ -59,6 +59,10 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Room in the master tap for one `render`, which renders at most a second.
 const MASTER_TAP_SECONDS: usize = 2;
 const START_BPM: f64 = 120.0;
+/// The metronome over the scenario music: the duck takes a fifth of the mix
+/// under a click, so the beat the click sits on keeps its attack, and the
+/// click peaks at that fifth of the ceiling, the most the duck leaves room for.
+const METRONOME_DUCK: f32 = 0.2;
 /// A deadline of ~85 ms at 48 kHz: many times what one player's ring holds
 /// at the bounded render quantum.
 const LOOSE_RESPONSE_BUDGET: usize = 4_096;
@@ -706,6 +710,13 @@ impl ProductHarness {
         let session = HostConfig::offline(pools)
             .sample_rate(sample_rate)
             .max_block_frames(render_block_frames)
+            .metronome(
+                MetronomeConfig::builder()
+                    .level(METRONOME_DUCK)
+                    .duck(METRONOME_DUCK)
+                    .build()
+                    .expect("scenario metronome config"),
+            )
             .build();
         let trace = usdt_trace::scope();
         let host = OfflineHostHarness::new(session)
