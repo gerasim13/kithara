@@ -56,6 +56,7 @@ pub(super) fn install(
             cpuset, "runner service installed"
         );
     }
+    install_slice()?;
     install_cleanup_timer(&installed_images(host, pins)?)?;
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
@@ -195,6 +196,49 @@ fn cleanup_timer() -> &'static str {
      WantedBy=timers.target\n"
 }
 
+/// The budget the whole fleet shares, generated here so that rewriting the
+/// units can never again leave them outside it.
+///
+/// The host livelocked three times in September with swap exhausted and
+/// nothing in the logs: twenty-seven runners carried 488G of individual
+/// ceilings on a 123G machine, and none of those ceilings ever fired, because
+/// the machine died of their sum. Past `MemoryHigh` the kernel throttles and
+/// reclaims inside the slice; at `MemoryMax` it kills inside the fleet, never
+/// the services the machine runs besides it. Both are shares of the machine's
+/// memory, so the budget follows the hardware. Swap takes no share, so half of
+/// what the machine has is named in bytes, and the other half stays with the
+/// rest of the machine.
+fn slice(meminfo: &str) -> Result<String> {
+    let swap = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("SwapTotal:"))
+        .and_then(|value| value.trim().strip_suffix("kB"))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .context("reading SwapTotal from /proc/meminfo")?;
+    Ok(format!(
+        "[Unit]\n\
+         Description=Kithara CI runner fleet\n\
+         Before=slices.target\n\n\
+         [Slice]\n\
+         MemoryHigh=65%\n\
+         MemoryMax=72%\n\
+         MemorySwapMax={half}K\n",
+        half = swap / 2,
+    ))
+}
+
+fn install_slice() -> Result<()> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").context("reading /proc/meminfo")?;
+    let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(consts::SERVICE_SLICE);
+    std::fs::write(&path, slice(&meminfo)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    info!(
+        unit = consts::SERVICE_SLICE,
+        "fleet memory budget installed"
+    );
+    Ok(())
+}
+
 fn install_cleanup_timer(keep: &[String]) -> Result<()> {
     let service = cleanup_unit(keep);
     for (name, body) in [
@@ -277,6 +321,7 @@ fn unit(
          --network {network} \
          --cpuset-cpus {cpuset} \
          --memory {memory} \
+         --cgroup-parent {cgroup_parent} \
          --pids-limit {pids} \
          --security-opt no-new-privileges \
          --env-file {env_file}",
@@ -284,6 +329,7 @@ fn unit(
         network = job.network,
         cpuset = job.cpuset,
         memory = job.memory,
+        cgroup_parent = job.cgroup_parent,
         pids = Container::PIDS_LIMIT,
         env_file = job.env_file,
     )?;
@@ -510,6 +556,55 @@ mod tests {
         );
         assert!(
             text.contains(&format!("--env-file {}", env_file(runner))),
+            "{text}"
+        );
+    }
+
+    /// No single runner's ceiling ever fired: the host died of the sum of them.
+    /// Every runner therefore lives in the one slice that caps the fleet.
+    #[test]
+    fn every_runner_draws_on_the_fleet_memory_budget() {
+        let host = host_fixture();
+        for runner in &host.runners {
+            let text = unit(
+                &host,
+                runner,
+                "0,1,2",
+                &fixture().pins,
+                "/usr/local/bin/kithara-ci",
+            )
+            .expect("the unit must render");
+            assert!(
+                text.contains(&format!("--cgroup-parent {}", consts::SERVICE_SLICE)),
+                "{text}"
+            );
+        }
+    }
+
+    /// The fleet may throttle and then die inside its slice, never take the
+    /// memory or the swap the rest of the machine runs on.
+    #[test]
+    fn the_fleet_slice_leaves_memory_and_swap_to_the_rest_of_the_machine() {
+        let text = slice(
+            "MemTotal:       128848504 kB\n\
+             SwapTotal:       33554428 kB\n",
+        )
+        .expect("the slice must render");
+
+        let percent = |key: &str| -> u32 {
+            let line = text
+                .lines()
+                .find_map(|line| line.strip_prefix(key))
+                .unwrap_or_else(|| panic!("{key} missing:\n{text}"));
+            line.trim_end_matches('%')
+                .parse()
+                .unwrap_or_else(|_| panic!("{key} is not a share of memory:\n{text}"))
+        };
+        let high = percent("MemoryHigh=");
+        let max = percent("MemoryMax=");
+        assert!(high < max && max < 100, "{text}");
+        assert!(
+            text.contains(&format!("MemorySwapMax={}K", 33_554_428 / 2)),
             "{text}"
         );
     }

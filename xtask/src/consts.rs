@@ -773,6 +773,9 @@ pub(crate) const SERVICE_SYSTEMD_ROOT: &str = "/etc/systemd/system";
 /// starting from no particular directory would not.
 pub(crate) const SERVICE_EXECUTABLE: &str = "/usr/local/bin/kithara-ci";
 
+/// The slice every runner container is started under, which caps the fleet.
+pub(crate) const SERVICE_SLICE: &str = "kithara-ci.slice";
+
 pub(crate) const SERVICE_CLEANUP_UNIT: &str = "kithara-ci-cleanup.service";
 
 pub(crate) const SERVICE_CLEANUP_TIMER: &str = "kithara-ci-cleanup.timer";

@@ -25,6 +25,10 @@ pub(super) struct Container<'a> {
     /// [`super::services::cpuset`].
     pub(super) cpuset: String,
     pub(super) memory: &'a str,
+    /// The slice that caps the fleet as a whole. A runner's own `memory` never
+    /// fired: the host livelocked on the sum of ceilings several times its
+    /// memory, so every container draws on one budget instead.
+    pub(super) cgroup_parent: &'static str,
     pub(super) devices: &'a [PathBuf],
     pub(super) groups: &'a [u32],
     /// Where the just-in-time registration is left for it. Minted per start and
@@ -159,6 +163,7 @@ pub(super) fn container<'a>(
         network: &host.network,
         cpuset,
         memory: &runner.memory,
+        cgroup_parent: consts::SERVICE_SLICE,
         devices: &runner.devices,
         groups: &runner.groups,
         env_file: super::services::env_file(runner),
