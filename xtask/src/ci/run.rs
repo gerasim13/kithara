@@ -17,7 +17,7 @@ use super::{
     verdict,
 };
 use crate::{
-    config::{CiLaneConfig, KitharaExt},
+    config::{CiLaneConfig, KitharaExt, LaneFreshness},
     consts,
 };
 
@@ -380,17 +380,16 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         )?;
     let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
     ci_config.pins.validate_tool_pins(&ctx.config.tools)?;
+    let declared = ext.ci.lanes.get(&args.lane);
     let environment = CiEnvironment::prepare(
         ctx,
         &ci_config,
         lane.cache_group(),
-        ext.ci
-            .lanes
-            .get(&args.lane)
-            .is_some_and(|lane| lane.target_snapshot.is_some()),
+        declared.is_some_and(|declared| declared.target_snapshot.is_some()),
         Some(LaneTarget {
             name: &args.lane,
             window: ext.ci.lane_unit_window(),
+            freshness: declared.map_or_else(LaneFreshness::default, |declared| declared.freshness),
         }),
     )?;
     info!(

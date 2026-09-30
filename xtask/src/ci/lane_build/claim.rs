@@ -1,13 +1,14 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Result};
 use kithara_devtools::lock::FileLock;
 
-use super::{pool::SlotPool, prune, sources, tracked};
+use super::{pool::SlotPool, prune, sources, tracked, units};
+use crate::config::LaneFreshness;
 
 /// One job's hold on a lane slot.
 #[derive(fieldwork::Fieldwork)]
@@ -19,42 +20,65 @@ pub(crate) struct LaneBuild {
         get(vis = "pub(crate)", doc = "The directory Cargo builds in.")
     )]
     dir: PathBuf,
-    claimed: sources::Claimed,
+    claim: Claim,
+}
+
+/// How the claim made the slot honest for the checkout.
+enum Claim {
+    Mtime(sources::Claimed),
+    Checksum(units::Claimed),
 }
 
 impl LaneBuild {
     /// Takes the first free slot of the pool and prunes the units its builds
-    /// stopped using, then stamps the checkout's files the slot may hold
-    /// artifacts of other content for.
-    pub(crate) fn claim(project_root: &Path, pool: &SlotPool, window: Duration) -> Result<Self> {
+    /// stopped using, then makes the slot honest for the checkout: an mtime
+    /// lane stamps the files the slot may hold artifacts of other content
+    /// for, a checksum lane decides every build-script run.
+    pub(crate) fn claim(
+        project_root: &Path,
+        pool: &SlotPool,
+        window: Duration,
+        freshness: LaneFreshness,
+    ) -> Result<Self> {
         let (dir, lock) = pool.take()?;
         fs::create_dir_all(&dir)
             .with_context(|| format!("creating lane build directory {}", dir.display()))?;
         prune::prune(&dir, window)?;
-        let claimed = sources::claim(project_root, &dir, tracked::list(project_root)?)?;
+        let tracked = tracked::list(project_root)?;
+        let claim = match freshness {
+            LaneFreshness::Mtime => Claim::Mtime(sources::claim(project_root, &dir, tracked)?),
+            LaneFreshness::Checksum => Claim::Checksum(units::claim(
+                project_root,
+                &dir,
+                tracked,
+                SystemTime::now(),
+            )?),
+        };
         Ok(Self {
             _lock: lock,
             dir,
-            claimed,
+            claim,
         })
     }
 
-    /// Records what the job's builds came from.
+    /// Records what the job's builds left.
     pub(crate) fn settle(&self, succeeded: bool) -> Result<()> {
-        self.claimed.settle(succeeded)
+        match &self.claim {
+            Claim::Mtime(claimed) => claimed.settle(succeeded),
+            Claim::Checksum(claimed) => claimed.settle(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::SystemTime};
-
     use super::*;
     use crate::{
         ci::{
             environment::CacheTrust,
             lane_build::fixture::{git_checkout, set_mtime},
         },
+        config::LaneFreshness,
         consts,
     };
 
@@ -72,7 +96,8 @@ mod tests {
         }
         set_mtime(&old.join("lib"), SystemTime::now() - 2 * consts::DAY);
 
-        let _claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
+        let _claim =
+            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
 
         assert!(
             !old.exists(),

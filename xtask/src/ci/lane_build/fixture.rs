@@ -2,14 +2,15 @@
 
 use std::{
     fs::{self, File},
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
     time::SystemTime,
 };
 
 use tempfile::TempDir;
 
-use super::tracked::Sources;
+use super::{pool::SlotPool, tracked::Sources};
+use crate::{ci::environment::CacheTrust, consts};
 
 /// Sources from `(path, blob)` pairs.
 pub(super) fn sources(entries: &[(&str, &str)]) -> Sources {
@@ -61,4 +62,34 @@ pub(super) fn set_mtime(path: &Path, at: SystemTime) {
 
 pub(super) fn mtime(path: &Path) -> SystemTime {
     fs::metadata(path).unwrap().modified().unwrap()
+}
+
+/// A git checkout of the one-package workspace `probe`, plus `files`.
+pub(super) fn cargo_checkout(files: &[(&str, &str)]) -> TempDir {
+    let mut all = vec![("Cargo.toml", consts::PROBE_MANIFEST), ("src/lib.rs", "")];
+    all.extend_from_slice(files);
+    git_checkout(&all)
+}
+
+/// The pool of lane `test` under the fleet root `lanes`.
+pub(super) fn pool(lanes: &Path) -> SlotPool {
+    SlotPool::fleet(lanes, CacheTrust::Review, "test")
+}
+
+/// The slot a claim of [`pool`] takes when no other job holds one.
+pub(super) fn slot(lanes: &Path) -> PathBuf {
+    lanes.join("review-lane-test-0")
+}
+
+/// Leaves a build-script run at `key` (`<profile>/build/<run>`) whose
+/// `output` holds `output`, under a profile cargo would recognise, and
+/// returns that `output` file.
+pub(super) fn write_unit(lane: &Path, key: &str, output: &str) -> PathBuf {
+    let (profile, _) = key.split_once("/build/").unwrap();
+    fs::create_dir_all(lane.join(profile).join(".fingerprint")).unwrap();
+    let run = lane.join(key);
+    fs::create_dir_all(&run).unwrap();
+    let file = run.join("output");
+    fs::write(&file, output).unwrap();
+    file
 }

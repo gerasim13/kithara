@@ -21,7 +21,7 @@ use super::{
     lane_build::{LaneBuild, SlotPool},
     run::CacheGroup,
 };
-use crate::{consts, job::is_gitlab};
+use crate::{config::LaneFreshness, consts, job::is_gitlab};
 
 struct SccacheSlot {
     index: usize,
@@ -552,12 +552,13 @@ pub(super) fn process_var(name: &str) -> Option<OsString> {
     env::var_os(name)
 }
 
-/// A lane asking for a build directory of its own, and how long that directory
-/// keeps a build unit the lane stopped using.
+/// A lane asking for a build directory of its own, how long that directory
+/// keeps a build unit the lane stopped using, and how a claim keeps it honest.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LaneTarget<'a> {
     pub(crate) name: &'a str,
     pub(crate) window: Duration,
+    pub(crate) freshness: LaneFreshness,
 }
 
 enum TargetOwner<'a> {
@@ -610,7 +611,11 @@ fn target_owner<'a>(
 /// takes one of.
 enum Target {
     Dir(PathBuf),
-    Pool { pool: SlotPool, window: Duration },
+    Pool {
+        pool: SlotPool,
+        window: Duration,
+        freshness: LaneFreshness,
+    },
 }
 
 fn build_target_dir(
@@ -627,12 +632,14 @@ fn build_target_dir(
             return Ok(Target::Pool {
                 pool: SlotPool::fleet(&root, trust, lane.name),
                 window: lane.window,
+                freshness: lane.freshness,
             });
         }
         TargetOwner::ScopedLane(lane) => {
             return Ok(Target::Pool {
                 pool: SlotPool::executor(&slots, target_scope, lane.name),
                 window: lane.window,
+                freshness: lane.freshness,
             });
         }
         TargetOwner::Job(job_id) => {
@@ -664,8 +671,12 @@ fn prepare_build_target(
                     .with_context(|| format!("creating CI build cache {}", dir.display()))?;
                 (dir, None)
             }
-            Target::Pool { pool, window } => {
-                let build = LaneBuild::claim(project_root, &pool, window)?;
+            Target::Pool {
+                pool,
+                window,
+                freshness,
+            } => {
+                let build = LaneBuild::claim(project_root, &pool, window, freshness)?;
                 (build.dir().to_path_buf(), Some(build))
             }
         };
@@ -1232,6 +1243,7 @@ mod tests {
                 Some(LaneTarget {
                     name: "apple-lint",
                     window: consts::DAY,
+                    freshness: LaneFreshness::Mtime,
                 }),
             )
             .unwrap();
@@ -1505,14 +1517,17 @@ mod tests {
                 LaneTarget {
                     name,
                     window: consts::DAY,
+                    freshness: LaneFreshness::Mtime,
                 },
             ),
         )
         .unwrap()
         {
-            Target::Pool { pool, window } => {
-                LaneBuild::claim(checkout.path(), &pool, window).unwrap()
-            }
+            Target::Pool {
+                pool,
+                window,
+                freshness,
+            } => LaneBuild::claim(checkout.path(), &pool, window, freshness).unwrap(),
             Target::Dir(dir) => panic!(
                 "a lane on the fleet's root builds in {}, not in a slot",
                 dir.display()

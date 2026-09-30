@@ -142,7 +142,8 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let (dir, cargo_dir, build) = match target(&args.lane, lane, var)? {
         Target::Slot(pool) => {
-            let build = LaneBuild::claim(&ctx.root, &pool, ext.ci.lane_unit_window())?;
+            let build =
+                LaneBuild::claim(&ctx.root, &pool, ext.ci.lane_unit_window(), lane.freshness)?;
             let dir = build.dir().to_path_buf();
             let cargo_dir = hand_over(&ctx.root, &dir, var)?;
             (Some(dir), Some(cargo_dir), Some(build))
@@ -346,18 +347,24 @@ mod tests {
         assert!(status.success(), "git init");
     }
 
-    /// A workspace at `root` declaring one lane whose only step succeeds.
-    fn trivial_lane(root: &Path) -> (Ctx, LaneArgs) {
+    /// A workspace at `root` declaring one lane of the given freshness whose
+    /// only step succeeds.
+    fn trivial_lane(root: &Path, freshness: &str) -> (Ctx, LaneArgs) {
         if cfg!(windows) {
-            lane_running(root, "cmd", r#"["/C", "exit", "0"]"#)
+            lane_running(root, "cmd", r#"["/C", "exit", "0"]"#, freshness)
         } else {
-            lane_running(root, "sh", r#"["-c", "exit 0"]"#)
+            lane_running(root, "sh", r#"["-c", "exit 0"]"#, freshness)
         }
     }
 
-    /// A workspace at `root` declaring one lane whose only step runs
-    /// `program` with `step_args`, a TOML array.
-    fn lane_running(root: &Path, program: &str, step_args: &str) -> (Ctx, LaneArgs) {
+    /// A workspace at `root` declaring one lane of the given freshness whose
+    /// only step runs `program` with `step_args`, a TOML array.
+    fn lane_running(
+        root: &Path,
+        program: &str,
+        step_args: &str,
+        freshness: &str,
+    ) -> (Ctx, LaneArgs) {
         let root = root.to_path_buf();
         fixture()
             .pins
@@ -375,6 +382,7 @@ pins = "ci-pins.toml"
 
 [ext.ci.lanes.trivial]
 cache_group = "host"
+freshness = "{freshness}"
 label = "fixture"
 os = "{os}"
 program = "{program}"
@@ -406,7 +414,7 @@ args = {step_args}
     #[test]
     fn a_lane_reaches_its_own_work_with_no_host_profile_resolved() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
-        let (ctx, args) = trivial_lane(temp.path());
+        let (ctx, args) = trivial_lane(temp.path(), "mtime");
 
         let result = run_in(&args, &ctx, &environment(&[]));
 
@@ -422,7 +430,7 @@ args = {step_args}
     fn a_lane_on_the_fleet_builds_in_a_slot_and_tells_the_job_where() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let lanes = tempfile::tempdir().expect("create the fleet's build root");
-        let (ctx, args) = trivial_lane(temp.path());
+        let (ctx, args) = trivial_lane(temp.path(), "mtime");
         git_init(temp.path());
         let github_env = temp.path().join("github-env");
         fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
@@ -451,6 +459,32 @@ args = {step_args}
         );
     }
 
+    /// A checksum lane decides its build-script runs at the claim and records
+    /// them at the settle, and keeps no record of the checkout's mtimes.
+    #[test]
+    fn a_checksum_lane_records_its_build_script_runs() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let lanes = tempfile::tempdir().expect("create the fleet's build root");
+        let (ctx, args) = trivial_lane(temp.path(), "checksum");
+        fs::write(temp.path().join("Cargo.toml"), consts::PROBE_MANIFEST)
+            .expect("write the workspace manifest");
+        fs::create_dir_all(temp.path().join("src")).expect("create the package sources");
+        fs::write(temp.path().join("src/lib.rs"), "").expect("write the package library");
+        git_init(temp.path());
+        let root = lanes.path().to_str().expect("a UTF-8 build root");
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[(consts::TARGET_ROOT_ENV, root)]),
+        )
+        .expect("lane runs");
+
+        let slot = lanes.path().join("review-lane-trivial-0");
+        assert!(slot.join(consts::UNITS_FILE).exists());
+        assert!(!slot.join(consts::SOURCES_FILE).exists());
+    }
+
     /// A job compiling through the cache says what the cache carried for it;
     /// one that compiles without it has no cache to ask.
     #[cfg(unix)]
@@ -471,7 +505,7 @@ args = {step_args}
         .expect("write the cache double");
         fs::set_permissions(&sccache, fs::Permissions::from_mode(0o755))
             .expect("make the cache double runnable");
-        let (mut ctx, args) = trivial_lane(temp.path());
+        let (mut ctx, args) = trivial_lane(temp.path(), "mtime");
         ctx.config.tools =
             toml::from_str(&format!("[sccache]\nprogram = \"{}\"\n", sccache.display()))
                 .expect("parse the tools table");
@@ -503,7 +537,7 @@ args = {step_args}
             r#"["-c", "printf '%s\\n%s' \"$CARGO_TARGET_DIR\" \"$(cd \"$CARGO_TARGET_DIR\" && pwd -P)\" > '{}'"]"#,
             seen.display()
         );
-        let (ctx, args) = lane_running(temp.path(), "sh", &record);
+        let (ctx, args) = lane_running(temp.path(), "sh", &record, "mtime");
         git_init(temp.path());
         let root = [(
             consts::TARGET_ROOT_ENV,
@@ -549,7 +583,7 @@ args = {step_args}
     fn a_lane_outside_a_ci_job_keeps_the_checkouts_own_target() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let lanes = tempfile::tempdir().expect("create the fleet's build root");
-        let (ctx, args) = trivial_lane(temp.path());
+        let (ctx, args) = trivial_lane(temp.path(), "mtime");
         git_init(temp.path());
         let own = temp.path().join("target/debug/own-build");
         fs::create_dir_all(own.parent().expect("a build file has a directory"))
@@ -577,7 +611,7 @@ args = {step_args}
     fn a_lane_that_cannot_tell_the_job_where_it_built_still_runs() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let lanes = tempfile::tempdir().expect("create the fleet's build root");
-        let (ctx, args) = trivial_lane(temp.path());
+        let (ctx, args) = trivial_lane(temp.path(), "mtime");
         git_init(temp.path());
         let github_env = temp.path().join("missing/github-env");
         let root = lanes.path().to_str().expect("a UTF-8 build root");

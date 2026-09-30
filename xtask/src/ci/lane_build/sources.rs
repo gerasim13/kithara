@@ -150,13 +150,16 @@ fn write_sources(record: &Path, sources: &Sources) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ci::{
-        environment::CacheTrust,
-        lane_build::{
-            LaneBuild, SlotPool,
-            fixture::{git_checkout, mtime, set_mtime, sources},
-            tracked,
+    use crate::{
+        ci::{
+            environment::CacheTrust,
+            lane_build::{
+                LaneBuild, SlotPool,
+                fixture::{git_checkout, mtime, set_mtime, sources},
+                tracked,
+            },
         },
+        config::LaneFreshness,
     };
 
     /// A git checkout holding `lib.rs`, whose mtime is the epoch.
@@ -201,14 +204,16 @@ mod tests {
         )
         .unwrap();
 
-        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
+        let claim =
+            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
 
         assert_eq!(claim.dir(), slot.as_path());
         assert!(mtime(&file) > SystemTime::UNIX_EPOCH, "stamped");
         claim.settle(true).unwrap();
         drop(claim);
         set_mtime(&file, SystemTime::UNIX_EPOCH);
-        let _claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
+        let _claim =
+            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
         assert_eq!(
             mtime(&file),
             SystemTime::UNIX_EPOCH,
@@ -230,13 +235,15 @@ mod tests {
         fs::create_dir_all(&unit).unwrap();
         fs::write(unit.join("lib-lib"), "hash").unwrap();
 
-        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
+        let claim =
+            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
         assert!(mtime(&file) > SystemTime::UNIX_EPOCH, "stamped");
         claim.settle(false).unwrap();
         drop(claim);
 
         set_mtime(&file, SystemTime::UNIX_EPOCH);
-        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
+        let claim =
+            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
         assert!(
             mtime(&file) > SystemTime::UNIX_EPOCH,
             "a failed lane leaves the unseen content recorded"
@@ -250,12 +257,14 @@ mod tests {
         let lanes = tempfile::tempdir().unwrap();
         let pool = SlotPool::fleet(lanes.path(), CacheTrust::Review, "test");
 
-        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
+        let claim =
+            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
         claim.settle(false).unwrap();
         drop(claim);
         set_mtime(&file, SystemTime::UNIX_EPOCH);
 
-        let _claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
+        let _claim =
+            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
         assert!(
             mtime(&file) > SystemTime::UNIX_EPOCH,
             "a failed lane cannot certify cached artifacts"

@@ -434,6 +434,10 @@ pub(crate) const LANE_TARGET_ENV: &str = "KITHARA_LANE_TARGET";
 /// The content the directory's artifacts may have been built from.
 pub(crate) const SOURCES_FILE: &str = ".kithara-lane-sources";
 
+/// The build-script runs a checksum lane's slot kept, and what each was run
+/// against. A change to its format renames the file.
+pub(crate) const UNITS_FILE: &str = ".kithara-lane-units.json";
+
 /// Stands for content a build the record did not see may have used.
 pub(crate) const UNKNOWN_BLOB: &str = "unknown";
 
@@ -463,6 +467,19 @@ pub(crate) const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[cfg(test)]
 pub(crate) const FIXTURE_FAILURE_EXIT_CODE: i32 = 7;
+
+/// A build-script run of the one-package workspace `probe`.
+#[cfg(test)]
+pub(crate) const PROBE_BUILD_RUN: &str = "debug/build/probe-0123456789abcdef";
+
+/// A workspace of one package, `probe`, that cargo can describe.
+#[cfg(test)]
+pub(crate) const PROBE_MANIFEST: &str =
+    "[workspace]\n\n[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
+
+/// A run of `probe`'s script that watches its tracked library source.
+#[cfg(test)]
+pub(crate) const PROBE_DIRECTIVE: &str = "cargo::rerun-if-changed=src/lib.rs\n";
 
 pub(crate) const CONNECTION_REFUSED_CODE: Option<&str> = if cfg!(target_os = "macos") {
     Some("(os error 61)")
