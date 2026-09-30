@@ -388,11 +388,12 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
     }
 }
 
-/// Every lane that runs the suite builds in a directory named after it on a
-/// root runners share, so the artefacts a lane finds were built by whichever
-/// branch ran it last. Only a checksum lane has cargo judge what rustc read by
-/// content and has its claim decide every build-script run, so a lane that
-/// runs the suite and is judged by mtime could run another branch's tests.
+/// Every lane that runs the suite, whole or under the real-time sanitizer,
+/// builds in a directory named after it on a root runners share, so the
+/// artefacts a lane finds were built by whichever branch ran it last. Only a
+/// checksum lane has cargo judge what rustc read by content and has its claim
+/// decide every build-script run, so a lane that runs the suite and is judged
+/// by mtime could run another branch's tests.
 #[test]
 fn every_test_lane_judges_freshness_by_checksum() {
     let root = workspace_root();
@@ -410,7 +411,7 @@ fn every_test_lane_judges_freshness_by_checksum() {
             .iter()
             .filter_map(toml::Value::as_str)
             .collect();
-        args.starts_with(&["test", "run"])
+        matches!(args.as_slice(), ["test", recipe, ..] if *recipe == "run" || recipe.starts_with("rtsan"))
     };
     let mut checked = 0;
     for (name, lane) in lanes {

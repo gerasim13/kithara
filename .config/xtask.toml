@@ -1798,13 +1798,15 @@ artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 # suite - including `rtsan-async`, which the three Linux lanes below do not
 # cover - on the pinned nightly's instrumented sanitizer, on the platform that
 # ships it. The Linux lanes run the same file/HLS/tripwire suites under the
-# stable-toolchain standalone backend instead, so they can run on every push
-# rather than only nightly; `test.just` defaults an unset
-# `KITHARA_RTSAN_BACKEND` to instrumented, so they pin `standalone`
-# themselves. Same detector, two platforms, two backends - not duplication.
+# standalone backend instead, which needs no sanitizer support from the
+# compiler, so they can run on every push rather than only nightly;
+# `test.just` defaults an unset `KITHARA_RTSAN_BACKEND` to instrumented, so
+# they pin `standalone` themselves. Same detector, two platforms, two
+# backends - not duplication.
 [ext.ci.lanes.deep-rtsan]
 cache_group = "macos"
 label = "deep Apple"
+freshness = "checksum"
 os = "macos"
 tools = ["cargo", "just"]
 program = "just"
@@ -1833,6 +1835,7 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-fast]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1841,7 +1844,7 @@ steps = [
   { args = [
     "test",
     "rtsan",
-  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STABLE_TOOLCHAIN = "{pin.stable_toolchain}" } },
+  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
 kinds = []
@@ -1851,6 +1854,7 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-file]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1859,7 +1863,7 @@ steps = [
   { args = [
     "test",
     "rtsan-file",
-  ], label = "RTSan file playback", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STABLE_TOOLCHAIN = "{pin.stable_toolchain}" } },
+  ], label = "RTSan file playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
 kinds = []
@@ -1869,6 +1873,7 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-hls]
 cache_group = "linux"
 label = "Linux"
+freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1877,7 +1882,7 @@ steps = [
   { args = [
     "test",
     "rtsan-hls",
-  ], label = "RTSan HLS playback", env = { KITHARA_RTSAN_BACKEND = "standalone", KITHARA_STABLE_TOOLCHAIN = "{pin.stable_toolchain}" } },
+  ], label = "RTSan HLS playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
 kinds = []

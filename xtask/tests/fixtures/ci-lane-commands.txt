@@ -813,202 +813,290 @@
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / platforms
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / merge-request
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / quarantine
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / main
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / nightly
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / weekly
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / release
   <require os> macos
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / main
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / release
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / main
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / release
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / main
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / release
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    KITHARA_STABLE_TOOLCHAIN=1.97.1
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-ui / branch
   <require os> linux
   <require tools> cargo just
