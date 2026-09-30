@@ -17,5 +17,6 @@ pub use api::{CrossfaderBus, HostLevel, Tap, crossfader_gain};
 pub use error::PlayError;
 pub use host::{Host, HostConfig, HostOwned, PlayerMember};
 pub use kithara_play::SessionSampleRate;
+pub use rt::MetronomeConfig;
 pub use session::TransportEvent;
 mod consts;

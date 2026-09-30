@@ -1,29 +1,18 @@
 use kithara_effects::LimiterConfig;
 
-use super::{LimiterNode, MetronomeNode, metronome::Duck};
-use crate::PlayError;
+use super::{LimiterNode, MetronomeConfig, MetronomeNode};
 
 /// The session output chain after the mix: the limiter, then the metronome
 /// whose click ducks the limited signal under it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SessionOutput {
     limiter: LimiterConfig,
-    duck: Duck,
+    metronome: MetronomeConfig,
 }
 
 impl SessionOutput {
-    /// # Errors
-    ///
-    /// Returns [`PlayError::InvalidParameter`] unless
-    /// `0 < metronome_level <= limiter.ceiling()` and
-    /// `metronome_level / limiter.ceiling() <= metronome_duck <= 1`.
-    pub(crate) fn new(
-        limiter: LimiterConfig,
-        metronome_level: f32,
-        metronome_duck: f32,
-    ) -> Result<Self, PlayError> {
-        let duck = Duck::new(metronome_level, metronome_duck, limiter.ceiling())?;
-        Ok(Self { limiter, duck })
+    pub(crate) const fn new(limiter: LimiterConfig, metronome: MetronomeConfig) -> Self {
+        Self { limiter, metronome }
     }
 
     pub(crate) fn limiter(&self) -> LimiterNode {
@@ -31,6 +20,6 @@ impl SessionOutput {
     }
 
     pub(crate) fn metronome(&self, enabled: bool) -> MetronomeNode {
-        MetronomeNode::new(enabled, self.duck)
+        MetronomeNode::new(enabled, self.metronome, self.limiter.ceiling())
     }
 }

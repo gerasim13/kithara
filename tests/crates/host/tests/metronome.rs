@@ -5,8 +5,8 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     effects::LimiterConfig,
-    host::{HostConfig, Tap},
-    play::{PlayError, Tempo},
+    host::{HostConfig, MetronomeConfig, Tap},
+    play::Tempo,
     signal::AudioSpec,
     warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
 };
@@ -37,10 +37,11 @@ mod consts {
     pub(super) const BPM: f64 = 124.0;
     pub(super) const BLOCKS: u64 = 700;
     pub(super) const BEATS_PER_BAR: i64 = 4;
-    /// Peak of a downbeat click at the default metronome level.
-    pub(super) const DOWNBEAT_PEAK: f32 = 0.5;
+    /// Peak of a downbeat click at the default metronome level: the default
+    /// limiter ceiling.
+    pub(super) const DOWNBEAT_PEAK: f32 = 0.98;
     /// Peak of a beat click: five eighths of a downbeat.
-    pub(super) const BEAT_PEAK: f32 = 0.3125;
+    pub(super) const BEAT_PEAK: f32 = 0.6125;
     pub(super) const PEAK_TOLERANCE: f32 = 1e-6;
     /// How far under its level a click's sampled peak may fall: the samples
     /// nearest the crests of the tone around the envelope's peak miss the
@@ -49,23 +50,31 @@ mod consts {
     /// A click rises from silence: its beat frame carries the silent foot of
     /// the rise, so it first sounds one frame later.
     pub(super) const SILENT_FOOT: u64 = 1;
-    /// Frames of one click at [`SAMPLE_RATE`]: its 2 ms rise and 8 ms fall.
-    pub(super) const CLICK_FRAMES: u64 = 441;
+    /// Frames of one click at [`SAMPLE_RATE`]: its 2 ms rise and its default
+    /// 35 ms fall.
+    pub(super) const CLICK_FRAMES: u64 = 1632;
+    /// Frames of the 2 ms rise of a click and its duck at [`SAMPLE_RATE`].
+    pub(super) const ATTACK_FRAMES: u64 = 88;
+    /// Frames the default duck holds the deck silent after a click at
+    /// [`SAMPLE_RATE`]: 20 ms.
+    pub(super) const HOLD_FRAMES: u64 = 882;
+    /// Frames the default duck takes to return the deck at [`SAMPLE_RATE`]:
+    /// 80 ms.
+    pub(super) const RELEASE_FRAMES: u64 = 3528;
+    /// How far the gain the duck leaves the deck may stray from its curve.
+    pub(super) const GAIN_TOLERANCE: f32 = 1e-6;
     /// Blocks rendered after a pause so the deck's fade-out has settled.
     pub(super) const SETTLE_BLOCKS: usize = 4;
     /// Blocks rendered with every deck paused: more than two beats at [`BPM`].
     pub(super) const PAUSED_BLOCKS: usize = 100;
-    /// Blocks rendered over a loud mix with one click in them.
-    pub(super) const LOUD_BLOCKS: usize = 8;
+    /// Blocks rendered over a loud mix: a click with its whole duck.
+    pub(super) const LOUD_BLOCKS: usize = 16;
     pub(super) const LOUD_CEILING: f32 = 0.25;
-    pub(super) const LOUD_LEVEL: f32 = 0.2;
-    /// The shallowest duck [`LOUD_LEVEL`] allows under [`LOUD_CEILING`]: the
-    /// ducked mix plus the click meets the ceiling exactly.
+    /// Peak of a downbeat click as a share of [`LOUD_CEILING`].
+    pub(super) const LOUD_LEVEL: f32 = 0.8;
+    /// The shallowest duck [`LOUD_LEVEL`] allows: the ducked mix plus the
+    /// click meets the ceiling exactly.
     pub(super) const LOUD_DUCK: f32 = 0.8;
-    /// Half of [`LOUD_DUCK`]: too shallow to keep a click at [`LOUD_LEVEL`]
-    /// under [`LOUD_CEILING`].
-    pub(super) const SHALLOW_DUCK: f32 = 0.4;
-    pub(super) const TOO_LOUD_LEVEL: f32 = 0.5;
     /// The Host tempo a ride starts from.
     pub(super) const RIDE_FROM_BPM: u32 = 120;
     /// The Host tempo a ride ends at.
@@ -699,8 +708,13 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
                 .build()
                 .expect("limiter ceiling"),
         )
-        .metronome_level(consts::LOUD_LEVEL)
-        .metronome_duck(consts::LOUD_DUCK)
+        .metronome(
+            MetronomeConfig::builder()
+                .level(consts::LOUD_LEVEL)
+                .duck(consts::LOUD_DUCK)
+                .build()
+                .expect("loud metronome"),
+        )
         .build();
     let harness = play_constant(OfflinePlayer::new(session).await, constant_half).await;
     let mut master = harness
@@ -788,8 +802,15 @@ async fn deck_under_clicks(level: f32) -> (Vec<f32>, Vec<f32>) {
     (output.drain(), master.drain())
 }
 
+/// The samples of every channel of `pcm` over `frames`.
+fn span(pcm: &[f32], frames: std::ops::Range<u64>) -> &[f32] {
+    let channels = u64::from(consts::CHANNELS);
+    let sample = |frame: u64| usize::try_from(frame * channels).expect("sample index");
+    &pcm[sample(frames.start)..sample(frames.end)]
+}
+
 #[kithara::test(tokio)]
-async fn a_full_duck_mutes_the_deck_at_the_peak_of_every_click() {
+async fn a_full_duck_mutes_the_deck_through_the_hold_and_returns_it_over_the_release() {
     let (loud, loud_master) = deck_under_clicks(consts::DECK_LOUD).await;
     let (soft, soft_master) = deck_under_clicks(consts::DECK_SOFT).await;
 
@@ -799,78 +820,87 @@ async fn a_full_duck_mutes_the_deck_at_the_peak_of_every_click() {
         "both runs render the same frames"
     );
     let channels = usize::from(consts::CHANNELS);
-    // WHY: Both runs click the same beats with the same clicks, so where
-    // their outputs agree while their decks differ, no deck reaches the
-    // output: the duck's gain is zero there.
-    let deck_muted: Vec<bool> = loud
-        .chunks_exact(channels)
-        .zip(soft.chunks_exact(channels))
-        .zip(
-            loud_master
-                .chunks_exact(channels)
-                .zip(soft_master.chunks_exact(channels)),
-        )
-        .map(|((loud, soft), (loud_master, soft_master))| {
-            loud == soft && loud_master != soft_master
-        })
-        .collect();
-    let clicked: Vec<f32> = loud
+    let frames = u64::try_from(loud.len() / channels).expect("frame count");
+    let ducked: Vec<f32> = loud
         .iter()
         .zip(&loud_master)
         .map(|(output, master)| output - master)
         .collect();
-    let heard = clicks(&clicked);
+    // WHY: A click and its duck rise together from the silent foot on the
+    // beat frame, so the output first leaves the master one frame after it.
+    let beats: Vec<u64> = clicks(&ducked)
+        .iter()
+        .map(|click| click.frame - consts::SILENT_FOOT)
+        .collect();
     assert!(
-        heard.len() > 1,
-        "the render holds a downbeat click and a beat click: {heard:?}"
+        beats.len() > 1,
+        "the render holds several clicks: {beats:?}"
     );
-    for click in &heard {
-        let start = usize::try_from(click.frame).expect("click frame");
-        let frames = usize::try_from(click.frames).expect("click length");
+    let hold_end = consts::CLICK_FRAMES + consts::HOLD_FRAMES;
+    let release_end = hold_end + consts::RELEASE_FRAMES;
+    let max_step = std::f32::consts::PI / (2.0 * consts::RELEASE_FRAMES as f32);
+    for (index, &beat) in beats.iter().enumerate() {
+        let next = beats.get(index + 1).copied().unwrap_or(frames);
         assert!(
-            deck_muted
-                .iter()
-                .skip(start)
-                .take(frames)
-                .any(|muted| *muted),
-            "the click mutes the deck at its peak: {click:?}"
+            beat + release_end <= next,
+            "the duck of the beat on frame {beat} ends in the render before the next click"
         );
-    }
-}
 
-#[kithara::test(tokio)]
-async fn a_metronome_level_above_the_limiter_ceiling_refuses_the_host() {
-    let config = HostConfig::offline(pools())
-        .limiter(
-            LimiterConfig::builder()
-                .ceiling(consts::LOUD_CEILING)
-                .build()
-                .expect("limiter ceiling"),
-        )
-        .metronome_level(consts::TOO_LOUD_LEVEL)
-        .build();
-    match OfflineHostHarness::new(config).await {
-        Err(PlayError::InvalidParameter { name, .. }) => assert_eq!(name, "metronome_level"),
-        Err(error) => panic!("a level over the ceiling is an invalid parameter: {error}"),
-        Ok(_) => panic!("a level over the ceiling must refuse the Host"),
-    }
-}
+        // WHY: Both runs click the same beats with the same clicks, so where
+        // their outputs agree while their decks differ, no deck reaches the
+        // output.
+        let held = beat + consts::ATTACK_FRAMES..beat + hold_end;
+        assert!(
+            span(&loud, held.clone()) == span(&soft, held.clone())
+                && span(&loud_master, held.clone())
+                    .iter()
+                    .zip(span(&soft_master, held))
+                    .all(|(loud, soft)| loud != soft),
+            "from the peak of the click on frame {beat} through its hold no deck reaches the output"
+        );
 
-#[kithara::test(tokio)]
-async fn a_metronome_duck_too_shallow_for_the_level_refuses_the_host() {
-    let config = HostConfig::offline(pools())
-        .limiter(
-            LimiterConfig::builder()
-                .ceiling(consts::LOUD_CEILING)
-                .build()
-                .expect("limiter ceiling"),
-        )
-        .metronome_level(consts::LOUD_LEVEL)
-        .metronome_duck(consts::SHALLOW_DUCK)
-        .build();
-    match OfflineHostHarness::new(config).await {
-        Err(PlayError::InvalidParameter { name, .. }) => assert_eq!(name, "metronome_duck"),
-        Err(error) => panic!("a duck too shallow for the level is an invalid parameter: {error}"),
-        Ok(_) => panic!("a duck too shallow for the level must refuse the Host"),
+        let released = beat + hold_end..beat + release_end;
+        let gains: Vec<f32> = span(&loud, released.clone())
+            .iter()
+            .zip(span(&soft, released.clone()))
+            .zip(
+                span(&loud_master, released.clone())
+                    .iter()
+                    .zip(span(&soft_master, released)),
+            )
+            .map(|((loud, soft), (loud_master, soft_master))| {
+                (loud - soft) / (loud_master - soft_master)
+            })
+            .collect();
+        for channel in 0..channels {
+            let gains: Vec<f32> = gains
+                .iter()
+                .skip(channel)
+                .step_by(channels)
+                .copied()
+                .collect();
+            let (Some(first), Some(last)) = (gains.first(), gains.last()) else {
+                panic!("the release spans frames");
+            };
+            assert!(
+                first.abs() <= consts::GAIN_TOLERANCE && 1.0 - last <= max_step,
+                "the release of the beat on frame {beat} returns the deck from silence to its level: {first} to {last}"
+            );
+            let jump = gains.windows(2).find(|pair| {
+                pair[1] < pair[0] - consts::GAIN_TOLERANCE
+                    || pair[1] - pair[0] > max_step + consts::GAIN_TOLERANCE
+            });
+            assert!(
+                jump.is_none(),
+                "the release of the beat on frame {beat} rises smoothly: {jump:?}"
+            );
+        }
+
+        let after = beat + release_end..next;
+        assert!(
+            span(&loud, after.clone()) == span(&loud_master, after.clone())
+                && span(&soft, after.clone()) == span(&soft_master, after),
+            "after the release of the beat on frame {beat} the output is the master bit-exactly"
+        );
     }
 }

@@ -5,6 +5,7 @@ mod metronome;
 mod output;
 mod tap;
 
+pub use metronome::MetronomeConfig;
 pub(crate) use metronome::MetronomeNode;
 pub(crate) use output::SessionOutput;
 pub(crate) use tap::TapNode;
