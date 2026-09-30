@@ -23,6 +23,9 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["subscriber"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+assert_no_alloc = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }
 
