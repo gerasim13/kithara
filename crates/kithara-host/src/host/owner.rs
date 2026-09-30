@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::HostLevel,
+    api::{HostLevel, Tap},
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
@@ -126,17 +126,7 @@ impl<S> Host<S> {
         I: IntoIterator<Item = HostLevel>,
     {
         let levels = levels.into_iter().collect();
-        match self
-            .dispatcher
-            .exec_host(HostCmd::ApplyMix { levels })
-            .map_err(PlayError::from)?
-        {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for mix update".into(),
-            )),
-        }
+        self.exec_host_ok(HostCmd::ApplyMix { levels }, "mix update")
     }
 
     pub(super) fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
@@ -169,31 +159,6 @@ impl<S> Host<S> {
         require_topology_change(self.dispatcher.transact_current(operations))
     }
 
-    /// Removes the post-limiter output group.
-    ///
-    /// # Errors
-    /// Returns an error when graph dispatch fails.
-    pub fn disable_outputs(&self) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::DisableMixTap)
-    }
-
-    /// Installs one post-limiter group for simultaneous independent outputs.
-    ///
-    /// # Errors
-    /// Returns an error when an output group is active or graph dispatch fails.
-    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
-        match self
-            .dispatcher
-            .exec_host(HostCmd::EnableOutput { outputs })?
-        {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for output group".into(),
-            )),
-        }
-    }
-
     fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
         match self.dispatcher.exec(cmd)? {
             Reply::Ok => Ok(()),
@@ -202,6 +167,34 @@ impl<S> Host<S> {
                 "unexpected host reply for session command".into(),
             )),
         }
+    }
+
+    fn exec_host_ok(&self, cmd: HostCmd<S>, what: &'static str) -> Result<(), PlayError> {
+        match self.dispatcher.exec_host(cmd).map_err(PlayError::from)? {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(format!(
+                "unexpected host reply for {what}"
+            ))),
+        }
+    }
+
+    /// Attaches one output group to `tap`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `tap` already has a consumer or graph dispatch fails.
+    pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::AttachOutputs { tap, outputs }, "output attach")
+    }
+
+    /// Removes the output group attached to `tap`, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when graph dispatch fails.
+    pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::DetachOutputs { tap }, "output detach")
     }
 
     /// Restart the current output route while preserving Host-owned graph state.

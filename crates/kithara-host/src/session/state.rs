@@ -27,7 +27,7 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::{SessionDuckingMode, SlotId},
+    api::{SessionDuckingMode, SlotId, Tap},
     bridge::SharedEq,
     rt::{LimiterNode, MasterEqNode},
 };
@@ -146,9 +146,24 @@ pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConf
     (eq_layout, gains)
 }
 
-pub(super) enum MixTap {
+pub(super) enum TapSlot {
     Requested(OutputGroup),
     Installed(NodeID),
+}
+
+#[derive(Default)]
+pub(super) struct Taps {
+    master: Option<TapSlot>,
+    output: Option<TapSlot>,
+}
+
+impl Taps {
+    pub(super) fn slot(&mut self, tap: Tap) -> &mut Option<TapSlot> {
+        match tap {
+            Tap::Master => &mut self.master,
+            Tap::Output => &mut self.output,
+        }
+    }
 }
 
 struct RootSnapshot {
@@ -214,7 +229,7 @@ pub(crate) struct SessionState<T, S> {
     pub(super) root: GroupState<PlayerMember>,
     pub(super) limiter: LimiterConfig,
     pub(super) ctx: Option<FirewheelContext>,
-    pub(super) mix_tap: Option<MixTap>,
+    pub(super) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
     pub(super) requested_declick_frames: Option<NonZeroU32>,
@@ -281,7 +296,7 @@ impl<T, S> SessionState<T, S> {
             ctx: None,
             stream: None,
             transport_control: None,
-            mix_tap: None,
+            taps: Taps::default(),
             next_player_id: 1,
             sample_rate_hint: sample_rate.get(),
             session_ducking: SessionDuckingMode::Off,
@@ -474,7 +489,7 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     state.session_output_node_id = Some(session_id);
     state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
-    tap::install_requested(state, limiter_id)?;
+    tap::install_requested(state)?;
     debug!(
         ?session_id,
         ?limiter_id,

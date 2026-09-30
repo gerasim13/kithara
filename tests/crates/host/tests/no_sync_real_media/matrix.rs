@@ -4,7 +4,7 @@ use kithara::{
     bufpool::PoolRegion,
     events::{EventBus, TrackId},
     hls::AbrMode,
-    host::HostConfig,
+    host::{HostConfig, Tap},
     platform::{
         sync::Arc,
         time::{self, Duration},
@@ -494,7 +494,10 @@ async fn capture_pass(
     }
 
     let mut tap = host
-        .enable_mix_tap(requested_frames * usize::from(CHANNELS) + BLOCK_FRAMES)
+        .attach_tap(
+            Tap::Master,
+            requested_frames * usize::from(CHANNELS) + BLOCK_FRAMES,
+        )
         .await
         .unwrap_or_else(|error| panic!("{} {label}: enable mix tap: {error}", case.label));
     let positions_before = decks
@@ -538,7 +541,7 @@ async fn capture_pass(
         &zero_blocks,
         failures,
     );
-    disable_mix_tap(case.label, label, host, failures).await;
+    detach_tap(case.label, label, host, failures).await;
     assess_position_advance(
         case,
         label,
@@ -814,13 +817,13 @@ async fn settle_controls(
     }
 }
 
-async fn disable_mix_tap(
+async fn detach_tap(
     case: &str,
     label: &str,
     host: &OfflineHostHarness<TestPools>,
     failures: &mut Vec<String>,
 ) {
-    if let Err(error) = host.disable_mix_tap().await {
+    if let Err(error) = host.detach_tap(Tap::Master).await {
         failures.push(format!(
             "{case} {label}: disable mix tap dispatch failed: {error}",
         ));

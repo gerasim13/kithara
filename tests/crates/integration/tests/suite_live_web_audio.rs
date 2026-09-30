@@ -17,7 +17,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    host::{CrossfaderBus, Host, HostConfig, HostOwned, crossfader_gain, wasm},
+    host::{CrossfaderBus, Host, HostConfig, HostOwned, Tap, crossfader_gain, wasm},
     output::OutputGroup,
     platform::{
         sync::{
@@ -226,7 +226,8 @@ async fn live_web_audio_plays_at_session_rate() {
     let drops = Arc::new(AtomicU64::new(0));
     let mut outputs = OutputGroup::new();
     outputs.push(MixTapWriter::new(pcm_tx, Arc::clone(&drops)));
-    host.enable_outputs(outputs).expect("install the mix tap");
+    host.attach_outputs(Tap::Master, outputs)
+        .expect("install the mix tap");
 
     let stage = Arc::new(AtomicU64::new(0));
     spawn_player_worker(sender, Arc::clone(&stage));
@@ -495,7 +496,8 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     let drops = Arc::new(AtomicU64::new(0));
     let mut outputs = OutputGroup::new();
     outputs.push(MixTapWriter::new(pcm_tx, Arc::clone(&drops)));
-    host.enable_outputs(outputs).expect("install the mix tap");
+    host.attach_outputs(Tap::Master, outputs)
+        .expect("install the mix tap");
 
     let pair = Arc::new(DeckPair::new(0.0));
     spawn_deck_pair_worker(sender, Arc::clone(&pair));

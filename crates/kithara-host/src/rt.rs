@@ -43,7 +43,7 @@ impl AudioNode for TapNode {
 
     fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
         Ok(AudioNodeInfo::new()
-            .debug_name("session_mix_tap")
+            .debug_name("session_tap")
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::STEREO,
                 num_outputs: ChannelCount::ZERO,
