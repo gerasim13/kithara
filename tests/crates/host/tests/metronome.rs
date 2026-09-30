@@ -33,6 +33,13 @@ mod consts {
     /// Peak of a beat click: five eighths of a downbeat.
     pub(super) const BEAT_PEAK: f32 = 0.09;
     pub(super) const PEAK_TOLERANCE: f32 = 1e-6;
+    /// How far under its level a click's sampled peak may fall: the samples
+    /// nearest the crests of the tone around the envelope's peak miss the
+    /// crest by less than this at every rate from 44.1 kHz.
+    pub(super) const PEAK_SHORTFALL: f32 = 0.01;
+    /// A click rises from silence: its beat frame carries the silent foot of
+    /// the rise, so it first sounds one frame later.
+    pub(super) const SILENT_FOOT: u64 = 1;
     /// Blocks rendered after a pause so the deck's fade-out has settled.
     pub(super) const SETTLE_BLOCKS: usize = 4;
     /// Blocks rendered with every deck paused: more than two beats at [`BPM`].
@@ -44,7 +51,7 @@ mod consts {
     pub(super) const TOO_LOUD_LEVEL: f32 = 0.5;
 }
 
-/// One click the output tap sounded: the frame it starts on, how many
+/// One click the output tap sounded: the first frame it sounds on, how many
 /// frames it sounds for and its peak.
 #[derive(Debug)]
 struct Click {
@@ -181,8 +188,11 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
     );
     assert_eq!(
         heard.iter().map(|click| click.frame).collect::<Vec<_>>(),
-        beats.iter().map(|(frame, _)| *frame).collect::<Vec<_>>(),
-        "one click starts on the frame of every Host beat, and nowhere else"
+        beats
+            .iter()
+            .map(|(frame, _)| frame + consts::SILENT_FOOT)
+            .collect::<Vec<_>>(),
+        "one click rises from the frame of every Host beat, and nowhere else"
     );
     for (click, (_, downbeat)) in heard.iter().zip(&beats) {
         let expected = if *downbeat {
@@ -191,7 +201,8 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
             consts::BEAT_PEAK
         };
         assert!(
-            (click.peak - expected).abs() <= consts::PEAK_TOLERANCE,
+            click.peak <= expected + consts::PEAK_TOLERANCE
+                && click.peak >= expected * (1.0 - consts::PEAK_SHORTFALL),
             "a {} click peaks at {expected}: {click:?}",
             if *downbeat { "downbeat" } else { "beat" }
         );
@@ -210,7 +221,8 @@ async fn a_click_a_route_restart_interrupts_ends_when_it_would_have_at_the_new_r
         panic!("one click sounds before beat 1: {whole:?}");
     };
 
-    let head_frames = first.frames / 2;
+    let span = first.frames + consts::SILENT_FOOT;
+    let head_frames = span / 2;
     host.render_forward(head_frames).await;
     let head = clicks(&tap.drain());
     host.set_sample_rate(NonZeroU32::new(consts::RESTART_RATE).expect("restart rate"))
@@ -222,14 +234,14 @@ async fn a_click_a_route_restart_interrupts_ends_when_it_would_have_at_the_new_r
 
     assert_eq!(
         head.iter().map(|click| click.frames).collect::<Vec<_>>(),
-        [head_frames],
+        [head_frames - consts::SILENT_FOOT],
         "beat 1's click is sounding when the route restarts"
     );
     let [tail] = tail.as_slice() else {
         panic!("only the interrupted click sounds after the restart: {tail:?}");
     };
     let scale = f64::from(consts::RESTART_RATE) / f64::from(consts::SAMPLE_RATE);
-    let expected = (first.frames - head_frames) as f64 * scale;
+    let expected = (span - head_frames) as f64 * scale;
     assert_eq!(tail.frame, 0, "the click carries on across the restart");
     assert!(
         (tail.frames as f64 - expected).abs() <= scale,
@@ -344,7 +356,7 @@ async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
         .collect();
     let beats: Vec<u64> = host_beats(&grid, start..end)
         .into_iter()
-        .map(|(frame, _)| frame)
+        .map(|(frame, _)| frame + consts::SILENT_FOOT)
         .collect();
     assert!(!beats.is_empty(), "the render spans Host beats");
     assert_eq!(

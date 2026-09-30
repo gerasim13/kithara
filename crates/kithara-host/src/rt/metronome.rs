@@ -1,4 +1,7 @@
-use core::num::NonZeroU32;
+use core::{
+    f64::consts::{PI, TAU},
+    num::NonZeroU32,
+};
 
 use firewheel::{
     StreamInfo,
@@ -23,8 +26,13 @@ mod consts {
     pub(super) const BEAT_HZ: f64 = 1_760.0;
     /// Tone of a downbeat click.
     pub(super) const DOWNBEAT_HZ: f64 = 2_200.0;
-    /// How long one click sounds.
-    pub(super) const CLICK_SECONDS: f64 = 0.01;
+    /// Rise of a click from silence to its peak. A raised-cosine rise and
+    /// fall keep the click and its duck band-limited, so the ducked mix plus
+    /// the click stays under the limiter's true-peak ceiling between samples
+    /// too.
+    pub(super) const ATTACK_SECONDS: f64 = 0.002;
+    /// Fall of a click from its peak back to silence.
+    pub(super) const DECAY_SECONDS: f64 = 0.008;
     /// The session transport counts bars of four beats from session beat 0.
     pub(super) const BEATS_PER_BAR: i64 = 4;
     /// Peak of a beat click relative to a downbeat click.
@@ -70,8 +78,8 @@ impl MetronomeNode {
     }
 }
 
-/// One sounding click: a falling saw under a linear decay, ducking the mix
-/// by its own envelope.
+/// One sounding click: a sine tone under a raised-cosine rise and fall,
+/// ducking the mix by its own envelope.
 #[derive(Clone, Copy, Debug)]
 struct Click {
     elapsed: f64,
@@ -108,17 +116,23 @@ impl Click {
     /// Ducks `left`/`right` under the click and adds it. Returns whether the
     /// click still sounds after these frames.
     fn render(&mut self, left: &mut [f32], right: &mut [f32]) -> bool {
-        let frames = (consts::CLICK_SECONDS * self.rate).round();
+        let attack = (consts::ATTACK_SECONDS * self.rate).round().max(1.0);
+        let decay = (consts::DECAY_SECONDS * self.rate).round().max(1.0);
+        let frames = attack + decay;
         let cycles_per_frame = self.hz / self.rate;
         for (l, r) in left.iter_mut().zip(right) {
             if self.elapsed >= frames {
                 break;
             }
             let phase = (self.elapsed * cycles_per_frame).fract();
-            let envelope = 1.0 - self.elapsed / frames;
+            let envelope = if self.elapsed < attack {
+                0.5 * (1.0 - (PI * self.elapsed / attack).cos())
+            } else {
+                0.5 * (1.0 + (PI * (self.elapsed - attack) / decay).cos())
+            };
             self.elapsed += 1.0;
             let gain = (1.0 - self.duck * envelope).to_f32().unwrap_or_default();
-            let click = (self.peak * phase.mul_add(2.0, -1.0) * envelope)
+            let click = (self.peak * (TAU * phase).sin() * envelope)
                 .to_f32()
                 .unwrap_or_default();
             *l = l.mul_add(gain, click);
@@ -301,6 +315,10 @@ impl AudioNodeProcessor for MetronomeProcessor {
 
 #[cfg(test)]
 mod tests {
+    use core::f32::consts::PI;
+
+    use kithara_effects::mock::reconstructed_peak;
+
     use super::*;
 
     #[kithara::test]
@@ -325,6 +343,46 @@ mod tests {
                 assert!(
                     left.iter().any(|sample| *sample != level),
                     "the click sounds over the mix"
+                );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn a_click_keeps_the_true_peak_under_the_ceiling() {
+        const CEILING: f32 = 0.98;
+        // WHY: The limiter's own tests bound the oracle's disagreement with a
+        // sample-rate signal at this resolution.
+        const RESOLUTION_DB: f32 = 0.0002;
+        const RISE_FRAMES: f32 = 512.0;
+        const ONSET: usize = 1_024;
+        const FRAMES: u16 = 2_048;
+
+        let rate = NonZeroU32::new(44_100).expect("test rate");
+        let held: Vec<f32> = (0..FRAMES)
+            .map(|frame| {
+                let rise = (f32::from(frame) / RISE_FRAMES).min(1.0);
+                CEILING * 0.5 * (1.0 - (PI * rise).cos())
+            })
+            .collect();
+        let silence = vec![0.0; held.len()];
+        for (mix, level) in [
+            (silence, CEILING),
+            (held, crate::consts::DEFAULT_METRONOME_LEVEL),
+        ] {
+            let duck = Duck::new(level, CEILING).expect("level at most the ceiling");
+            for downbeat in [true, false] {
+                let mut left = mix.clone();
+                let mut right = mix.clone();
+                Click::new(downbeat, rate, duck).render(
+                    left.get_mut(ONSET..).expect("onset inside the mix"),
+                    right.get_mut(ONSET..).expect("onset inside the mix"),
+                );
+                let peak = reconstructed_peak(&left);
+                let over_db = 20.0 * (peak / CEILING).log10();
+                assert!(
+                    over_db <= RESOLUTION_DB,
+                    "a click at {level} reconstructs to {peak}, {over_db} dB over the ceiling"
                 );
             }
         }
