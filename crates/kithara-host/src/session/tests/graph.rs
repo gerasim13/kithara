@@ -136,6 +136,24 @@ pub(crate) fn attach_player<T>(state: &mut SessionState<T, TestPools>) -> BeatGr
     grid_id
 }
 
+#[cfg(test)]
+pub(crate) fn root_with_player(
+    sample_rate: NonZeroU32,
+) -> (GroupState<PlayerMember>, RootView, BeatGridId) {
+    let host_grid_id = BeatGridId::allocate().expect("fixture host grid id");
+    let mut root = GroupState::unavailable(
+        host_grid_id,
+        sample_rate,
+        SessionEpoch::new(0),
+        SyncMemberKind::Group,
+        SyncMode::Off,
+    );
+    let player_grid_id = BeatGridId::allocate().expect("fixture player grid id");
+    attach_member(&mut root, player_grid_id, pools(), sample_rate);
+    let root_view = RootView::new(&root, sample_rate);
+    (root, root_view, player_grid_id)
+}
+
 fn attach_player_with_id<T, S>(
     state: &mut SessionState<T, S>,
     grid_id: BeatGridId,
@@ -143,8 +161,20 @@ fn attach_player_with_id<T, S>(
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let sample_rate = state.root_view.grid().axis().sample_rate();
+    attach_member(&mut state.root, grid_id, pools, sample_rate);
+    state.publish_root();
+}
+
+fn attach_member<S>(
+    root: &mut GroupState<PlayerMember>,
+    grid_id: BeatGridId,
+    pools: PoolRegion<S>,
+    sample_rate: NonZeroU32,
+) where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(grid_id)
@@ -152,13 +182,8 @@ fn attach_player_with_id<T, S>(
             .worker(worker)
             .build(),
     );
-    let base = state
-        .root
-        .topology()
-        .expect("fixture host topology")
-        .stamp();
-    let admission = state
-        .root
+    let base = root.topology().expect("fixture host topology").stamp();
+    let admission = root
         .transact(SyncOperation::Topology {
             base,
             operations: Box::new([TopologyOperation::Attach {
@@ -170,7 +195,6 @@ fn attach_player_with_id<T, S>(
         })
         .expect("fixture player attachment");
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
-    state.publish_root();
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]

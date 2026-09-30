@@ -1,5 +1,9 @@
 use std::num::NonZeroU32;
 
+use kithara_platform::time::Duration;
+
+pub(crate) const SESSION_PUMP_INTERVAL: Duration = Duration::from_millis(10);
+
 pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
     None => unreachable!(),

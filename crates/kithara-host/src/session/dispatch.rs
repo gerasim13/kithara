@@ -516,7 +516,7 @@ mod tests {
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     };
-    use kithara_play::DEFAULT_GATE_SMOOTHING;
+    use kithara_play::{DEFAULT_GATE_SMOOTHING, Tempo};
     use kithara_sync::SyncGroupSnapshot;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -533,7 +533,10 @@ mod tests {
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, SessionState, TapSlot},
-            tests::graph::{attach_player, state as test_state},
+            tests::{
+                graph::{attach_player, state as test_state},
+                ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
+            },
         },
     };
 
@@ -1198,6 +1201,60 @@ mod tests {
             "a stream drop observed during a host command drain must restart the stream"
         );
         assert!(!state.stream_needs_restart);
+    }
+
+    #[kithara::test]
+    fn empty_host_drain_publishes_a_rendered_transport_commit() {
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
+        let (writer, mut reader) = MasterRing::open(512, 4);
+        let mut writer = Some(writer);
+        let mut state: SessionState<RingBackend, TestPools> = test_state(move |ctx, _| {
+            RingBackend::start(
+                ctx,
+                RingBackendConfig::new(
+                    sample_rate,
+                    RingLayout::Stereo,
+                    writer.take().ok_or("backend already started")?,
+                ),
+            )
+            .map_err(|err| err.to_string())
+        });
+        crate::session::state::ensure_ctx(&mut state, sample_rate.get())
+            .expect("active browser graph");
+        let stream = state.stream.as_mut().expect("stream started");
+        stream.arm();
+        stream.render_block(0).expect("initial render");
+        let _ = reader.drain(512);
+        assert_eq!(
+            state.root_view.grid().state(),
+            BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
+        );
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(90.0).expect("valid tempo"),
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(matches!(tick_session(&mut state), Reply::Ok));
+        for clock_samples in [512, 1024, 1536] {
+            state
+                .stream
+                .as_mut()
+                .expect("active stream")
+                .render_block(clock_samples)
+                .expect("changed graph renders");
+            let _ = reader.drain(512);
+        }
+        let before = state.root_view.grid();
+        let (_tx, rx) = mpsc::channel::<HostCmdMsg<TestPools>>();
+
+        drain_host_channel(&mut state, &rx, |_| {});
+
+        assert!(state.root_view.grid().revision() > before.revision());
     }
 
     #[kithara::test]

@@ -9,20 +9,21 @@ use kithara_bufpool::HasPool;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
+    time::Instant,
 };
 use kithara_play::{SessionSampleRate, StreamShape};
 use kithara_sync::GroupState;
 use tracing::{debug, warn};
 
 use super::{
-    dispatch::run_host_cmd,
+    dispatch::{run_host_cmd, tick_session},
     protocol::{
         Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
         SessionDispatcher,
     },
     state::{RootView, SessionState},
 };
-use crate::{PlayerMember, error::PlayError, rt::SessionOutput};
+use crate::{PlayerMember, consts, error::PlayError, rt::SessionOutput};
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
@@ -94,6 +95,34 @@ fn complete_shutdown<T, S>(
     }
 }
 
+fn receive_message<S>(
+    cmd_rx: &mpsc::Receiver<HostCmdMsg<S>>,
+    active: bool,
+    deadline: Instant,
+) -> Result<Option<HostCmdMsg<S>>, mpsc::RecvTimeoutError> {
+    if active {
+        match cmd_rx.recv_timeout(deadline) {
+            Ok(message) => Ok(Some(message)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(error) => Err(error),
+        }
+    } else {
+        cmd_rx
+            .recv()
+            .map(Some)
+            .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+    }
+}
+
+fn service_due_tick<T, S>(state: &mut SessionState<T, S>, deadline: &mut Instant) {
+    if state.ctx.is_some() && Instant::now() >= *deadline {
+        if let Reply::Err(error) = tick_session(state) {
+            warn!(?error, "native session tick failed");
+        }
+        *deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
+    }
+}
+
 fn engine_thread<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
     root: GroupState<PlayerMember>,
@@ -115,16 +144,23 @@ fn engine_thread<T, S>(
         start_stream_fn,
     );
     debug!("[KITHARA-ROUTE] native session worker started");
-    while let Ok(HostCmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
-        if matches!(&cmd, HostCmd::Shutdown) {
-            complete_shutdown(cmd_rx, state, &reply_tx);
-            debug!("[KITHARA-ROUTE] native session worker stopped");
-            return;
+    let mut deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
+    loop {
+        let Ok(message) = receive_message(&cmd_rx, state.ctx.is_some(), deadline) else {
+            break;
+        };
+        if let Some(HostCmdMsg { cmd, reply_tx }) = message {
+            if matches!(&cmd, HostCmd::Shutdown) {
+                complete_shutdown(cmd_rx, state, &reply_tx);
+                debug!("[KITHARA-ROUTE] native session worker stopped");
+                return;
+            }
+            let reply = run_host_cmd(&mut state, cmd);
+            if reply_tx.send(reply).is_err() {
+                warn!("[KITHARA-ROUTE] native session reply receiver dropped");
+            }
         }
-        let reply = run_host_cmd(&mut state, cmd);
-        if reply_tx.send(reply).is_err() {
-            warn!("[KITHARA-ROUTE] native session reply receiver dropped");
-        }
+        service_due_tick(&mut state, &mut deadline);
     }
     debug!("[KITHARA-ROUTE] native session worker stopped");
 }
@@ -212,9 +248,24 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
+    use kithara_effects::LimiterConfig;
+    use kithara_events::EventBus;
+    use kithara_platform::time::Duration;
+    use kithara_play::{DEFAULT_GATE_SMOOTHING, Tempo};
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara, wait_until,
+    };
+    use kithara_warp::BeatGridState;
 
     use super::*;
+    use crate::{
+        MetronomeConfig,
+        session::tests::{
+            graph::root_with_player,
+            ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
+        },
+    };
 
     #[kithara::test]
     fn output_block_override_preserves_the_backend_default_or_sets_128() {
@@ -227,5 +278,153 @@ mod tests {
         let frames = NonZeroU32::new(128).expect("test block size is non-zero");
         let configured = cpal_config(44_100, Some(frames));
         assert_eq!(configured.output.desired_block_frames, Some(128));
+    }
+
+    #[kithara::test]
+    fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
+        let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test wait runtime");
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
+        let (root, root_view, player_grid_id) = root_with_player(sample_rate);
+        let (writer, mut reader) = MasterRing::open(512, 4);
+        let mut writer = Some(writer);
+        let (stream_tx, stream_rx) = mpsc::channel();
+        let client = spawn_session_client::<Arc<Mutex<RingBackend>>, TestPools>(
+            "host-pump-regression",
+            root,
+            root_view.clone(),
+            sample_rate,
+            None,
+            SessionOutput::new(LimiterConfig::default(), MetronomeConfig::default())
+                .expect("valid output config"),
+            move |ctx, _| {
+                let backend = RingBackend::start(
+                    ctx,
+                    RingBackendConfig::new(
+                        sample_rate,
+                        RingLayout::Stereo,
+                        writer.take().ok_or("backend already started")?,
+                    ),
+                )
+                .map_err(|err| err.to_string())?;
+                let stream = Arc::new(Mutex::new(backend));
+                stream_tx
+                    .send(Arc::clone(&stream))
+                    .map_err(|err| err.to_string())?;
+                Ok(stream)
+            },
+        );
+
+        let player_id = match client.exec(Cmd::RegisterPlayer {
+            grid_id: player_grid_id,
+            bus: EventBus::default(),
+            eq_layout: Vec::new(),
+            gate_smoothing: DEFAULT_GATE_SMOOTHING,
+            pools: pools(),
+            sample_rate: sample_rate.get(),
+        }) {
+            Ok(Reply::PlayerRegistered(registered)) => registered.id,
+            Ok(Reply::Err(error)) => panic!("register fixture player: {error}"),
+            Err(error) => panic!("register fixture player: {error}"),
+            _ => panic!("unexpected register fixture player reply"),
+        };
+        assert!(matches!(
+            client.exec(Cmd::StartPlayer {
+                player_id,
+                sample_rate: sample_rate.get(),
+                master_volume: 1.0,
+                render_quantum_frames: None,
+                response_budget_frames: None,
+            }),
+            Ok(Reply::Ok)
+        ));
+        let stream = stream_rx.recv().expect("active graph backend");
+        stream.lock().arm();
+        stream.lock().render_block(0).expect("initial render");
+        let _ = reader.drain(512);
+        assert_eq!(
+            root_view.grid().state(),
+            BeatGridState::Unavailable(kithara_warp::BeatGridUnavailable::NoGeometry)
+        );
+        let tempo = Tempo::new(90.0).expect("valid tempo");
+        assert!(matches!(
+            client.exec(Cmd::SetSessionTempo { tempo }),
+            Ok(Reply::Ok)
+        ));
+        let before = root_view.grid();
+        let mut clock_samples = 512;
+        runtime
+            .block_on(wait_until(
+                Duration::from_secs(2),
+                "native Host delivers graph change",
+                || {
+                    stream
+                        .lock()
+                        .render_block(clock_samples)
+                        .expect("render graph");
+                    clock_samples += 512;
+                    let _ = reader.drain(512);
+                    root_view.grid().state() == BeatGridState::Live
+                },
+            ))
+            .expect("committed transport reaches the read-only Host view without another command");
+        assert!(root_view.grid().revision() > before.revision());
+
+        assert!(matches!(
+            client.exec_host(HostCmd::SetMetronome { on: true }),
+            Ok(HostReply::Ok)
+        ));
+        let mut on_blocks = 0;
+        runtime
+            .block_on(wait_until(
+                Duration::from_secs(3),
+                "idle native metronome sounds",
+                || {
+                    let mut sounded = false;
+                    for _ in 0..100 {
+                        stream
+                            .lock()
+                            .render_block(clock_samples)
+                            .expect("render metronome");
+                        clock_samples += 512;
+                        on_blocks += 1;
+                        sounded |= reader.drain(512).iter().any(|sample| sample.abs() > 0.01);
+                    }
+                    sounded
+                },
+            ))
+            .unwrap_or_else(|error| {
+                panic!("metronome on reaches PCM: {error}; blocks={on_blocks}")
+            });
+
+        assert!(matches!(
+            client.exec_host(HostCmd::SetMetronome { on: false }),
+            Ok(HostReply::Ok)
+        ));
+        runtime
+            .block_on(wait_until(
+                Duration::from_secs(4),
+                "idle native metronome stays off",
+                || {
+                    let mut silent = true;
+                    for _ in 0..100 {
+                        stream
+                            .lock()
+                            .render_block(clock_samples)
+                            .expect("render after metronome off");
+                        clock_samples += 512;
+                        let pcm = reader.drain(512);
+                        silent &= pcm.iter().all(|sample| sample.abs() < 1e-6);
+                    }
+                    silent
+                },
+            ))
+            .expect("the muted capture spans more than one beat");
+        assert!(matches!(
+            client.exec_host(HostCmd::Shutdown),
+            Ok(HostReply::Ok)
+        ));
     }
 }
