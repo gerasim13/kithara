@@ -15,9 +15,14 @@ impl SessionOutput {
     /// # Errors
     ///
     /// Returns [`PlayError::InvalidParameter`] unless
-    /// `0 < metronome_level <= limiter.ceiling()`.
-    pub(crate) fn new(limiter: LimiterConfig, metronome_level: f32) -> Result<Self, PlayError> {
-        let duck = Duck::new(metronome_level, limiter.ceiling())?;
+    /// `0 < metronome_level <= limiter.ceiling()` and
+    /// `metronome_level / limiter.ceiling() <= metronome_duck <= 1`.
+    pub(crate) fn new(
+        limiter: LimiterConfig,
+        metronome_level: f32,
+        metronome_duck: f32,
+    ) -> Result<Self, PlayError> {
+        let duck = Duck::new(metronome_level, metronome_duck, limiter.ceiling())?;
         Ok(Self { limiter, duck })
     }
 

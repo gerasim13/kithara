@@ -126,6 +126,7 @@ where
         SessionOutput::new(
             LimiterConfig::default(),
             crate::consts::DEFAULT_METRONOME_LEVEL,
+            crate::consts::DEFAULT_METRONOME_DUCK,
         )
         .expect("default session output"),
         start_stream_fn,

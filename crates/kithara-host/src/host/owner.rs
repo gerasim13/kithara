@@ -341,6 +341,7 @@ where
                 output_block_frames,
                 limiter,
                 metronome_level,
+                metronome_duck,
                 ..
             } => {
                 let root = Self::session_root(sample_rate_hint)?;
@@ -349,7 +350,7 @@ where
                     root.view.clone(),
                     root.sample_rate,
                     output_block_frames,
-                    SessionOutput::new(limiter, metronome_level)?,
+                    SessionOutput::new(limiter, metronome_level, metronome_duck)?,
                 )
                 .resolve()?;
                 Ok(Self::owner(

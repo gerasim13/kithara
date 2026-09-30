@@ -25,6 +25,10 @@ pub enum HostConfig<S> {
         limiter: LimiterConfig,
         /// Peak of a downbeat click; a beat click sounds at five eighths of it.
         metronome_level: f32,
+        /// How deep a click ducks the mix at its own peak: from the level over
+        /// the limiter ceiling, which keeps the click under the ceiling, to
+        /// one, which mutes the mix.
+        metronome_duck: f32,
         marker: PhantomData<fn() -> S>,
     },
     /// Device-free finite renderer.
@@ -45,6 +49,10 @@ pub enum HostConfig<S> {
         limiter: LimiterConfig,
         /// Peak of a downbeat click; a beat click sounds at five eighths of it.
         metronome_level: f32,
+        /// How deep a click ducks the mix at its own peak: from the level over
+        /// the limiter ceiling, which keeps the click under the ceiling, to
+        /// one, which mutes the mix.
+        metronome_duck: f32,
         /// Shared worker configuration for the session scheduler.
         worker: WorkerConfig,
         /// Dispatcher budgets for the single offline session task.
@@ -67,12 +75,14 @@ impl<S> HostConfig<S> {
         output_block_frames: Option<NonZeroU32>,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default = consts::DEFAULT_METRONOME_LEVEL)] metronome_level: f32,
+        #[builder(default = consts::DEFAULT_METRONOME_DUCK)] metronome_duck: f32,
     ) -> Self {
         Self::Realtime {
             sample_rate_hint,
             output_block_frames,
             limiter,
             metronome_level,
+            metronome_duck,
             marker: PhantomData,
         }
     }

@@ -38,9 +38,9 @@ mod consts {
     pub(super) const BLOCKS: u64 = 700;
     pub(super) const BEATS_PER_BAR: i64 = 4;
     /// Peak of a downbeat click at the default metronome level.
-    pub(super) const DOWNBEAT_PEAK: f32 = 0.144;
+    pub(super) const DOWNBEAT_PEAK: f32 = 0.5;
     /// Peak of a beat click: five eighths of a downbeat.
-    pub(super) const BEAT_PEAK: f32 = 0.09;
+    pub(super) const BEAT_PEAK: f32 = 0.3125;
     pub(super) const PEAK_TOLERANCE: f32 = 1e-6;
     /// How far under its level a click's sampled peak may fall: the samples
     /// nearest the crests of the tone around the envelope's peak miss the
@@ -57,6 +57,12 @@ mod consts {
     pub(super) const LOUD_BLOCKS: usize = 8;
     pub(super) const LOUD_CEILING: f32 = 0.25;
     pub(super) const LOUD_LEVEL: f32 = 0.2;
+    /// The shallowest duck [`LOUD_LEVEL`] allows under [`LOUD_CEILING`]: the
+    /// ducked mix plus the click meets the ceiling exactly.
+    pub(super) const LOUD_DUCK: f32 = 0.8;
+    /// Half of [`LOUD_DUCK`]: too shallow to keep a click at [`LOUD_LEVEL`]
+    /// under [`LOUD_CEILING`].
+    pub(super) const SHALLOW_DUCK: f32 = 0.4;
     pub(super) const TOO_LOUD_LEVEL: f32 = 0.5;
     /// The Host tempo a ride starts from.
     pub(super) const RIDE_FROM_BPM: u32 = 120;
@@ -68,6 +74,10 @@ mod consts {
     pub(super) const GRID_WAIT_BLOCKS: usize = 4;
     /// Blocks rendered after a ride's last beat so its click ends in the take.
     pub(super) const CLICK_TAIL_BLOCKS: usize = 2;
+    /// The louder of two decks that differ in nothing else.
+    pub(super) const DECK_LOUD: f32 = 0.5;
+    /// The softer of two decks that differ in nothing else.
+    pub(super) const DECK_SOFT: f32 = 0.25;
 }
 
 /// One click the output tap sounded: the first frame it sounds on, how many
@@ -108,6 +118,24 @@ fn clicks(pcm: &[f32]) -> Vec<Click> {
         last_sounding = Some(frame);
     }
     found
+}
+
+/// Every click in `heard` peaks at the level of the Host beat it rises from:
+/// a downbeat's or a beat's.
+fn assert_click_levels(heard: &[Click], beats: &[(u64, bool)]) {
+    for (click, (_, downbeat)) in heard.iter().zip(beats) {
+        let expected = if *downbeat {
+            consts::DOWNBEAT_PEAK
+        } else {
+            consts::BEAT_PEAK
+        };
+        assert!(
+            click.peak <= expected + consts::PEAK_TOLERANCE
+                && click.peak >= expected * (1.0 - consts::PEAK_SHORTFALL),
+            "a {} click peaks at {expected}: {click:?}",
+            if *downbeat { "downbeat" } else { "beat" }
+        );
+    }
 }
 
 /// The session frame of Host beat `ordinal`.
@@ -246,19 +274,7 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
             .collect::<Vec<_>>(),
         "one click rises from the frame of every Host beat, and nowhere else"
     );
-    for (click, (_, downbeat)) in heard.iter().zip(&beats) {
-        let expected = if *downbeat {
-            consts::DOWNBEAT_PEAK
-        } else {
-            consts::BEAT_PEAK
-        };
-        assert!(
-            click.peak <= expected + consts::PEAK_TOLERANCE
-                && click.peak >= expected * (1.0 - consts::PEAK_SHORTFALL),
-            "a {} click peaks at {expected}: {click:?}",
-            if *downbeat { "downbeat" } else { "beat" }
-        );
-    }
+    assert_click_levels(&heard, &beats);
 }
 
 #[kithara::test(tokio)]
@@ -512,14 +528,19 @@ async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
     );
 }
 
-#[kithara::test(tokio)]
-async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride(
-    sine_440_long: Vec<f32>,
-) {
-    let channels = usize::from(consts::CHANNELS);
-    let frames = u64::try_from(sine_440_long.len() / channels).expect("fixture length");
-    let tone: Vec<f32> = sine_440_long.into_iter().step_by(channels).collect();
-    let tone_peak = peak(&tone);
+/// A tempo ride rendered over a deck: both taps, the session frame they
+/// start on and every Host beat of the ride with whether it opens a bar.
+struct Ride {
+    output: Vec<f32>,
+    master: Vec<f32>,
+    start: u64,
+    beats: Vec<(u64, bool)>,
+}
+
+/// Rides the Host tempo from [`consts::RIDE_FROM_BPM`] to
+/// [`consts::RIDE_TO_BPM`] with the metronome on over a deck playing `tone`.
+async fn ride_over(tone: Vec<f32>) -> Ride {
+    let frames = u64::try_from(tone.len()).expect("tone length");
     let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
     let harness = play_resource(
         OfflinePlayer::with_sample_rate(
@@ -581,65 +602,83 @@ async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_rid
     render_blocks(&harness, consts::CLICK_TAIL_BLOCKS).await;
     harness.close().await;
 
-    let output_drops = output.drops();
-    let master_drops = master.drops();
-    let output = output.drain();
-    let master = master.drain();
+    assert_eq!(
+        (output.drops(), master.drops()),
+        (0, 0),
+        "the taps keep every frame"
+    );
+    let ride = Ride {
+        output: output.drain(),
+        master: master.drain(),
+        start,
+        beats,
+    };
+    assert_eq!(
+        ride.output.len(),
+        ride.master.len(),
+        "both taps see every rendered frame"
+    );
+    ride
+}
+
+#[kithara::test(tokio)]
+async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride(
+    sine_440_long: Vec<f32>,
+) {
+    let tone: Vec<f32> = sine_440_long
+        .into_iter()
+        .step_by(usize::from(consts::CHANNELS))
+        .collect();
+    let tone_peak = peak(&tone);
+    let half_tone = tone.iter().map(|sample| sample / 2.0).collect();
+    let full = ride_over(tone).await;
+    let half = ride_over(half_tone).await;
+
     if let Some(mut artifact) =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
             .expect("listening artifact")
     {
-        artifact.push(&output);
+        artifact.push(&full.output);
     }
     assert_eq!(
-        (output_drops, master_drops),
-        (0, 0),
-        "the taps keep every frame"
-    );
-    assert_eq!(
-        output.len(),
-        master.len(),
-        "both taps see every rendered frame"
-    );
-    assert_eq!(
-        peak(&master),
+        peak(&full.master),
         tone_peak,
         "the deck plays the tone at its own level under the metronome"
     );
-    // WHY: Outside a click the metronome passes the mix unchanged, so the
-    // output differs from the master only where a click sounds and ducks it.
-    let clicked: Vec<f32> = output
+    assert_eq!(
+        (half.start, &half.beats),
+        (full.start, &full.beats),
+        "a quieter deck rides the same Host beats"
+    );
+    assert!(
+        half.master
+            .iter()
+            .copied()
+            .eq(full.master.iter().map(|sample| sample / 2.0)),
+        "the deck at half its level mixes to exactly half the master"
+    );
+    // WHY: Each output frame is the frame's mix under the duck plus the
+    // click, and both rides duck and click alike. Twice the half ride's
+    // output less the full ride's cancels the mix and leaves the click.
+    let clicked: Vec<f32> = half
+        .output
         .iter()
-        .zip(&master)
-        .map(|(output, master)| output - master)
+        .zip(&full.output)
+        .map(|(half, full)| half.mul_add(2.0, -full))
         .collect();
     let heard = clicks(&clicked);
     assert_eq!(
         heard
             .iter()
-            .map(|click| click.frame + start)
+            .map(|click| click.frame + full.start)
             .collect::<Vec<_>>(),
-        beats
+        full.beats
             .iter()
             .map(|(frame, _)| frame + consts::SILENT_FOOT)
             .collect::<Vec<_>>(),
         "one click rises from every Host beat of the ride, and nowhere else"
     );
-    let softest_downbeat = heard
-        .iter()
-        .zip(&beats)
-        .filter(|(_, (_, downbeat))| *downbeat)
-        .fold(f32::INFINITY, |softest, (click, _)| softest.min(click.peak));
-    let loudest_beat = heard
-        .iter()
-        .zip(&beats)
-        .filter(|(_, (_, downbeat))| !*downbeat)
-        .fold(0.0_f32, |loudest, (click, _)| loudest.max(click.peak));
-    assert!(
-        softest_downbeat > loudest_beat,
-        "every downbeat clicks louder over the tone than any beat: \
-         {softest_downbeat} against {loudest_beat}"
-    );
+    assert_click_levels(&heard, &full.beats);
 }
 
 #[kithara::test(tokio)]
@@ -655,6 +694,7 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
                 .expect("limiter ceiling"),
         )
         .metronome_level(consts::LOUD_LEVEL)
+        .metronome_duck(consts::LOUD_DUCK)
         .build();
     let harness = play_constant(OfflinePlayer::new(session).await, constant_half).await;
     let mut master = harness
@@ -694,6 +734,104 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
     assert_ne!(output, master.drain(), "a click sounds over the loud mix");
 }
 
+/// The output and master taps of a player at the default Host config whose
+/// deck holds `level` while the metronome clicks at [`consts::BPM`] for
+/// [`consts::PAUSED_BLOCKS`] blocks.
+async fn deck_under_clicks(level: f32) -> (Vec<f32>, Vec<f32>) {
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+    // WHY: One block plays before the taps attach and one more keeps the
+    // deck sounding past the last rendered frame.
+    let deck_blocks = u64::try_from(consts::PAUSED_BLOCKS + 2).expect("block count");
+    let frames = u64::from(consts::BLOCK_FRAMES) * deck_blocks;
+    let deck = vec![level; usize::try_from(frames).expect("deck length")];
+    let harness = play_resource(
+        OfflinePlayer::with_sample_rate(
+            OfflinePlayerOptions::builder().build(),
+            consts::SAMPLE_RATE,
+        )
+        .await,
+        move || {
+            resource_from_reader(TestPcmReader::with_samples(
+                AudioSpec::new(consts::CHANNELS, rate),
+                deck,
+            ))
+        },
+    )
+    .await;
+    let host = harness.host();
+    let mut master = host
+        .attach_tap(Tap::Master, capacity(frames))
+        .await
+        .expect("master tap");
+    let mut output = host
+        .attach_tap(Tap::Output, capacity(frames))
+        .await
+        .expect("output tap");
+    host.set_metronome(true).await.expect("metronome on");
+    let tempo = tempo();
+    host.with(move |host| host.set_tempo(tempo))
+        .await
+        .expect("Host tempo");
+    render_blocks(&harness, consts::PAUSED_BLOCKS).await;
+    harness.close().await;
+    assert_eq!(
+        (output.drops(), master.drops()),
+        (0, 0),
+        "the taps keep every frame"
+    );
+    (output.drain(), master.drain())
+}
+
+#[kithara::test(tokio)]
+async fn a_full_duck_mutes_the_deck_at_the_peak_of_every_click() {
+    let (loud, loud_master) = deck_under_clicks(consts::DECK_LOUD).await;
+    let (soft, soft_master) = deck_under_clicks(consts::DECK_SOFT).await;
+
+    assert_eq!(
+        (loud.len(), soft.len(), soft_master.len()),
+        (loud_master.len(), loud_master.len(), loud_master.len()),
+        "both runs render the same frames"
+    );
+    let channels = usize::from(consts::CHANNELS);
+    // WHY: Both runs click the same beats with the same clicks, so where
+    // their outputs agree while their decks differ, no deck reaches the
+    // output: the duck's gain is zero there.
+    let deck_muted: Vec<bool> = loud
+        .chunks_exact(channels)
+        .zip(soft.chunks_exact(channels))
+        .zip(
+            loud_master
+                .chunks_exact(channels)
+                .zip(soft_master.chunks_exact(channels)),
+        )
+        .map(|((loud, soft), (loud_master, soft_master))| {
+            loud == soft && loud_master != soft_master
+        })
+        .collect();
+    let clicked: Vec<f32> = loud
+        .iter()
+        .zip(&loud_master)
+        .map(|(output, master)| output - master)
+        .collect();
+    let heard = clicks(&clicked);
+    assert!(
+        heard.len() > 1,
+        "the render holds a downbeat click and a beat click: {heard:?}"
+    );
+    for click in &heard {
+        let start = usize::try_from(click.frame).expect("click frame");
+        let frames = usize::try_from(click.frames).expect("click length");
+        assert!(
+            deck_muted
+                .iter()
+                .skip(start)
+                .take(frames)
+                .any(|muted| *muted),
+            "the click mutes the deck at its peak: {click:?}"
+        );
+    }
+}
+
 #[kithara::test(tokio)]
 async fn a_metronome_level_above_the_limiter_ceiling_refuses_the_host() {
     let config = HostConfig::offline(pools())
@@ -709,5 +847,24 @@ async fn a_metronome_level_above_the_limiter_ceiling_refuses_the_host() {
         Err(PlayError::InvalidParameter { name, .. }) => assert_eq!(name, "metronome_level"),
         Err(error) => panic!("a level over the ceiling is an invalid parameter: {error}"),
         Ok(_) => panic!("a level over the ceiling must refuse the Host"),
+    }
+}
+
+#[kithara::test(tokio)]
+async fn a_metronome_duck_too_shallow_for_the_level_refuses_the_host() {
+    let config = HostConfig::offline(pools())
+        .limiter(
+            LimiterConfig::builder()
+                .ceiling(consts::LOUD_CEILING)
+                .build()
+                .expect("limiter ceiling"),
+        )
+        .metronome_level(consts::LOUD_LEVEL)
+        .metronome_duck(consts::SHALLOW_DUCK)
+        .build();
+    match OfflineHostHarness::new(config).await {
+        Err(PlayError::InvalidParameter { name, .. }) => assert_eq!(name, "metronome_duck"),
+        Err(error) => panic!("a duck too shallow for the level is an invalid parameter: {error}"),
+        Ok(_) => panic!("a duck too shallow for the level must refuse the Host"),
     }
 }

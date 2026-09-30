@@ -30,12 +30,11 @@ mod consts {
     /// fall keep the click and its duck band-limited. Between samples the
     /// duck's modulation still folds the mix's content near Nyquist back over
     /// the limiter's true-peak ceiling, the more so the louder the click and
-    /// the closer that content sits to Nyquist. Measured with a full-scale
-    /// tone at 44.1 kHz: under a thousandth of a decibel up to 16 kHz; from
-    /// about 1 kHz under Nyquist, about a hundredth of a decibel at the
-    /// default level and a few hundredths at a level equal to the ceiling;
-    /// within a few hundred hertz of Nyquist, tenths of a decibel and about
-    /// two decibels.
+    /// the closer that content sits to Nyquist. Measured with a tone at the
+    /// ceiling at 44.1 kHz under a full duck: under a thousandth of a decibel
+    /// up to 16 kHz and about a thousandth up to 20 kHz; above 20 kHz, up to
+    /// about two hundredths of a decibel at the default level and about four
+    /// tenths at a level equal to the ceiling.
     pub(super) const ATTACK_SECONDS: f64 = 0.002;
     /// Fall of a click from its peak back to silence.
     pub(super) const DECAY_SECONDS: f64 = 0.008;
@@ -45,27 +44,37 @@ mod consts {
     pub(super) const BEAT_RATIO: f64 = 0.625;
 }
 
-/// The downbeat click peak and the limiter ceiling the click ducks the mix
-/// under: the ducked mix plus the click never exceeds the ceiling at a
-/// sample.
+/// The downbeat click peak and how deep a click ducks the mix at its own
+/// peak. A depth of at least the level over the limiter ceiling keeps the
+/// ducked mix plus the click under the ceiling at a sample; a depth of one
+/// mutes the mix at the peak of every click.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Duck {
     level: f32,
-    ceiling: f32,
+    depth: f32,
 }
 
 impl Duck {
     /// # Errors
     ///
-    /// Returns [`PlayError::InvalidParameter`] unless `0 < level <= ceiling`.
-    pub(crate) fn new(level: f32, ceiling: f32) -> Result<Self, PlayError> {
+    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level` unless
+    /// `0 < level <= ceiling`, and naming `metronome_duck` unless
+    /// `level / ceiling <= depth <= 1`.
+    pub(crate) fn new(level: f32, depth: f32, ceiling: f32) -> Result<Self, PlayError> {
+        let refused = |name: &str, value| PlayError::InvalidParameter {
+            name: name.to_owned(),
+            value,
+        };
         if level > 0.0 && level <= ceiling {
-            Ok(Self { level, ceiling })
+            // WHY: The product of two `f32` values is exact in `f64`, so a
+            // depth of exactly the level over the ceiling is kept.
+            if depth <= 1.0 && f64::from(depth) * f64::from(ceiling) >= f64::from(level) {
+                Ok(Self { level, depth })
+            } else {
+                Err(refused("metronome_duck", depth))
+            }
         } else {
-            Err(PlayError::InvalidParameter {
-                name: "metronome_level".to_owned(),
-                value: level,
-            })
+            Err(refused("metronome_level", level))
         }
     }
 }
@@ -109,7 +118,7 @@ impl Click {
             rate: f64::from(sample_rate.get()),
             hz,
             peak,
-            duck: peak / f64::from(duck.ceiling),
+            duck: f64::from(duck.depth),
         }
     }
 
@@ -362,34 +371,40 @@ mod tests {
         const CEILING: f32 = 0.25;
         const FRAMES: usize = 512;
 
-        let duck = Duck::new(0.2, CEILING).expect("level under the ceiling");
         let rate = NonZeroU32::new(44_100).expect("test rate");
-        for downbeat in [true, false] {
-            for level in [CEILING, -CEILING] {
-                let mut left = [level; FRAMES];
-                let mut right = [level; FRAMES];
-                Click::new(downbeat, rate, duck).render(&mut left, &mut right);
-                let bound = CEILING * (1.0 + 4.0 * f32::EPSILON);
-                assert!(
-                    left.iter()
-                        .chain(&right)
-                        .all(|sample| sample.abs() <= bound),
-                    "a click over a {level} mix stays under the ceiling"
-                );
-                assert!(
-                    left.iter().any(|sample| *sample != level),
-                    "the click sounds over the mix"
-                );
+        // WHY: 0.8 is exactly 0.2 over 0.25 in `f32`: the shallowest duck
+        // the level allows under the ceiling.
+        for depth in [0.8, 1.0] {
+            let duck = Duck::new(0.2, depth, CEILING).expect("a duck under the ceiling");
+            for downbeat in [true, false] {
+                for level in [CEILING, -CEILING] {
+                    let mut left = [level; FRAMES];
+                    let mut right = [level; FRAMES];
+                    Click::new(downbeat, rate, duck).render(&mut left, &mut right);
+                    let bound = CEILING * (1.0 + 4.0 * f32::EPSILON);
+                    assert!(
+                        left.iter()
+                            .chain(&right)
+                            .all(|sample| sample.abs() <= bound),
+                        "a click ducking {depth} over a {level} mix stays under the ceiling"
+                    );
+                    assert!(
+                        left.iter().any(|sample| *sample != level),
+                        "the click sounds over the mix"
+                    );
+                }
             }
         }
     }
 
     #[kithara::test]
-    fn a_click_keeps_the_true_peak_under_the_ceiling() {
+    fn a_click_holds_the_true_peak_to_the_documented_bound() {
         const CEILING: f32 = 0.98;
-        // WHY: The limiter's own tests bound the oracle's disagreement with a
-        // sample-rate signal at this resolution.
-        const RESOLUTION_DB: f32 = 0.0002;
+        // WHY: The overshoot documented on `consts::ATTACK_SECONDS` for mix
+        // content up to 16 kHz. Under a full duck a mix held at the ceiling
+        // reconstructs about a ten-thousandth of a decibel over it, where the
+        // envelope's fall ends on a step in its curvature.
+        const DOCUMENTED_OVER_DB: f32 = 0.001;
         const RISE_FRAMES: f32 = 512.0;
         const ONSET: usize = 1_024;
         const FRAMES: u16 = 2_048;
@@ -416,12 +431,20 @@ mod tests {
             })
             .collect();
         let silence = vec![0.0; held.len()];
-        for (mix, level) in [
-            (silence, CEILING),
-            (held, crate::consts::DEFAULT_METRONOME_LEVEL),
-            (tone, CEILING),
+        let held_again = held.clone();
+        for (mix, level, depth) in [
+            (silence, CEILING, 1.0),
+            (
+                held,
+                crate::consts::DEFAULT_METRONOME_LEVEL,
+                crate::consts::DEFAULT_METRONOME_DUCK,
+            ),
+            // WHY: 0.5 is exactly half the ceiling over the ceiling in
+            // `f32`: the shallowest duck that level allows.
+            (held_again, CEILING / 2.0, 0.5),
+            (tone, CEILING, 1.0),
         ] {
-            let duck = Duck::new(level, CEILING).expect("level at most the ceiling");
+            let duck = Duck::new(level, depth, CEILING).expect("a duck under the ceiling");
             for downbeat in [true, false] {
                 let mut left = mix.clone();
                 let mut right = mix.clone();
@@ -432,8 +455,8 @@ mod tests {
                 let peak = reconstructed_peak(&left);
                 let over_db = 20.0 * (peak / CEILING).log10();
                 assert!(
-                    over_db <= RESOLUTION_DB,
-                    "a click at {level} reconstructs to {peak}, {over_db} dB over the ceiling"
+                    over_db <= DOCUMENTED_OVER_DB,
+                    "a click at {level} ducking {depth} reconstructs to {peak}, {over_db} dB over the ceiling"
                 );
             }
         }
@@ -478,7 +501,12 @@ mod tests {
     #[kithara::test]
     fn a_seek_forward_clicks_none_of_the_beats_it_jumps_over() {
         const TARGET: f64 = 40.25;
-        let duck = Duck::new(crate::consts::DEFAULT_METRONOME_LEVEL, 0.98).expect("default level");
+        let duck = Duck::new(
+            crate::consts::DEFAULT_METRONOME_LEVEL,
+            crate::consts::DEFAULT_METRONOME_DUCK,
+            0.98,
+        )
+        .expect("default duck");
         let mut metronome = Metronome::default();
         let seek = past_beat_one(&mut metronome, duck);
 
@@ -501,7 +529,12 @@ mod tests {
     #[kithara::test]
     fn a_seek_backward_clicks_the_beats_it_plays_again() {
         const TARGET: f64 = 0.99;
-        let duck = Duck::new(crate::consts::DEFAULT_METRONOME_LEVEL, 0.98).expect("default level");
+        let duck = Duck::new(
+            crate::consts::DEFAULT_METRONOME_LEVEL,
+            crate::consts::DEFAULT_METRONOME_DUCK,
+            0.98,
+        )
+        .expect("default duck");
         let mut metronome = Metronome::default();
         let seek = past_beat_one(&mut metronome, duck);
         let anchor = transport(seek, TARGET);
@@ -529,9 +562,36 @@ mod tests {
 
     #[kithara::test]
     fn a_metronome_level_sits_above_zero_and_at_most_the_ceiling() {
-        assert!(Duck::new(f32::NAN, 0.98).is_err(), "NaN");
-        assert!(Duck::new(0.0, 0.98).is_err(), "zero");
-        assert!(Duck::new(0.99, 0.98).is_err(), "over the ceiling");
-        assert!(Duck::new(0.98, 0.98).is_ok(), "at the ceiling");
+        let refused = |level| {
+            matches!(
+                Duck::new(level, 1.0, 0.98),
+                Err(PlayError::InvalidParameter { name, .. }) if name == "metronome_level"
+            )
+        };
+        assert!(refused(f32::NAN), "NaN");
+        assert!(refused(0.0), "zero");
+        assert!(refused(0.99), "over the ceiling");
+        assert!(Duck::new(0.98, 1.0, 0.98).is_ok(), "at the ceiling");
+    }
+
+    #[kithara::test]
+    fn a_metronome_duck_sits_between_the_level_over_the_ceiling_and_one() {
+        let refused = |depth| {
+            matches!(
+                Duck::new(0.49, depth, 0.98),
+                Err(PlayError::InvalidParameter { name, .. }) if name == "metronome_duck"
+            )
+        };
+        assert!(refused(f32::NAN), "NaN");
+        assert!(
+            refused(0.49),
+            "too shallow to keep the click under the ceiling"
+        );
+        assert!(
+            Duck::new(0.49, 0.5, 0.98).is_ok(),
+            "the level over the ceiling"
+        );
+        assert!(Duck::new(0.49, 1.0, 0.98).is_ok(), "a full duck");
+        assert!(refused(1.01), "deeper than muting the mix");
     }
 }
