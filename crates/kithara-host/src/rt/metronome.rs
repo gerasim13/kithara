@@ -105,10 +105,7 @@ impl MetronomeConfig {
             if valid {
                 Ok(())
             } else {
-                Err(PlayError::InvalidParameter {
-                    name: name.to_owned(),
-                    value,
-                })
+                Err(invalid(name, value))
             }
         };
         check(level > 0.0 && level <= 1.0, "metronome_level", level)?;
@@ -135,6 +132,28 @@ impl MetronomeConfig {
             hold,
             release,
         })
+    }
+
+    /// This config with its click at `level`, keeping the duck and the
+    /// click's shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`
+    /// unless `0 < level <= duck`.
+    pub fn with_level(self, level: f32) -> Result<Self, PlayError> {
+        if level > 0.0 && level <= self.duck {
+            Ok(Self { level, ..self })
+        } else {
+            Err(invalid("metronome_level", level))
+        }
+    }
+}
+
+fn invalid(name: &str, value: f32) -> PlayError {
+    PlayError::InvalidParameter {
+        name: name.to_owned(),
+        value,
     }
 }
 
@@ -842,5 +861,26 @@ mod tests {
             refused(release(millis(1_001)), "metronome_release"),
             "release 1.001 s"
         );
+    }
+
+    #[kithara::test]
+    fn a_metronome_level_set_later_sits_above_zero_and_at_most_the_duck() {
+        let base = config(0.5, 0.5);
+        for level in [f32::NAN, 0.0, 0.51] {
+            assert!(
+                matches!(
+                    base.with_level(level),
+                    Err(PlayError::InvalidParameter { name, .. }) if name == "metronome_level"
+                ),
+                "a level of {level} under a duck of 0.5 is refused"
+            );
+        }
+        for level in [0.25, 0.5] {
+            assert_eq!(
+                base.with_level(level).expect("a level under the duck"),
+                MetronomeConfig { level, ..base },
+                "a new level keeps the duck and the click's shape"
+            );
+        }
     }
 }

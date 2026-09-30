@@ -48,6 +48,8 @@ where
             controls::set_metronome(state, on);
             HostReply::Ok
         }
+        HostCmd::SetMetronomeLevel { level } => controls::set_metronome_level(state, level)
+            .map_or_else(HostReply::Err, |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }

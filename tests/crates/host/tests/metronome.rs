@@ -6,7 +6,7 @@ use kithara::{
     audio::mock::TestPcmReader,
     effects::LimiterConfig,
     host::{HostConfig, MetronomeConfig, Tap},
-    play::Tempo,
+    play::{PlayError, Tempo},
     signal::AudioSpec,
     warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
 };
@@ -89,6 +89,18 @@ mod consts {
     pub(super) const DECK_LOUD: f32 = 0.5;
     /// The softer of two decks that differ in nothing else.
     pub(super) const DECK_SOFT: f32 = 0.25;
+    /// The default metronome level: a downbeat click at the limiter ceiling.
+    pub(super) const FULL_LEVEL: f32 = 1.0;
+    pub(super) const HALF_LEVEL: f32 = 0.5;
+    /// Over the default duck: a level the Host refuses.
+    pub(super) const OVER_LEVEL: f32 = 1.5;
+    /// Blocks the first click may take to sound once the tempo commits.
+    pub(super) const FIRST_CLICK_BLOCKS: u64 = 4;
+    /// A quarter of the attack: rendered in these steps, a level change
+    /// lands before the first click peaks.
+    pub(super) const LEVEL_STEP_FRAMES: u64 = ATTACK_FRAMES / 4;
+    /// The Host beat whose click ends a render of a level change: a bar on.
+    pub(super) const LEVEL_BEATS: i64 = 4;
 }
 
 /// One click the output tap sounded: the first frame it sounds on, how many
@@ -131,15 +143,16 @@ fn clicks(pcm: &[f32]) -> Vec<Click> {
     found
 }
 
-/// Every click in `heard` peaks at the level of the Host beat it rises from:
-/// a downbeat's or a beat's.
-fn assert_click_levels(heard: &[Click], beats: &[(u64, bool)]) {
+/// Every click in `heard` peaks at the peak of the Host beat it rises from,
+/// a downbeat's or a beat's, at metronome `level`.
+fn assert_click_levels(heard: &[Click], beats: &[(u64, bool)], level: f32) {
     for (click, (_, downbeat)) in heard.iter().zip(beats) {
-        let expected = if *downbeat {
-            consts::DOWNBEAT_PEAK
-        } else {
-            consts::BEAT_PEAK
-        };
+        let expected = level
+            * if *downbeat {
+                consts::DOWNBEAT_PEAK
+            } else {
+                consts::BEAT_PEAK
+            };
         assert!(
             click.peak <= expected + consts::PEAK_TOLERANCE
                 && click.peak >= expected * (1.0 - consts::PEAK_SHORTFALL),
@@ -285,7 +298,7 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
             .collect::<Vec<_>>(),
         "one click rises from the frame of every Host beat, and nowhere else"
     );
-    assert_click_levels(&heard, &beats);
+    assert_click_levels(&heard, &beats, consts::FULL_LEVEL);
 }
 
 #[kithara::test(tokio)]
@@ -693,7 +706,7 @@ async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_rid
         .iter()
         .find(|click| click.frames > consts::CLICK_FRAMES);
     assert!(long.is_none(), "no ride click outlasts one click: {long:?}");
-    assert_click_levels(&heard, &full.beats);
+    assert_click_levels(&heard, &full.beats, consts::FULL_LEVEL);
 }
 
 #[kithara::test(tokio)]
@@ -903,4 +916,90 @@ async fn a_full_duck_mutes_the_deck_through_the_hold_and_returns_it_over_the_rel
             "after the release of the beat on frame {beat} the output is the master bit-exactly"
         );
     }
+}
+
+/// Renders `host` to the end of the click of Host beat
+/// [`consts::LEVEL_BEATS`] and returns the output tap's take with the Host
+/// beats inside it.
+async fn render_to_the_level_beat(
+    host: &OfflineHostHarness<TestPools>,
+    tap: &mut TapProbe,
+    mut take: Vec<f32>,
+) -> (Vec<f32>, Vec<(u64, bool)>) {
+    let grid = host.session_grid().await;
+    let end = beat_frame(&grid, consts::LEVEL_BEATS) + consts::CLICK_FRAMES;
+    host.render_forward(end - host.position()).await;
+    take.extend(tap.drain());
+    (take, host_beats(&grid, 0..end))
+}
+
+/// The clicks of `take` rise from the frame of every Host beat in `beats`,
+/// and nowhere else.
+fn assert_clicks_on(take: &[Click], beats: &[(u64, bool)]) {
+    assert!(
+        beats.len() > 1,
+        "the take spans more than one beat: {beats:?}"
+    );
+    assert_eq!(
+        take.iter().map(|click| click.frame).collect::<Vec<_>>(),
+        beats
+            .iter()
+            .map(|(frame, _)| frame + consts::SILENT_FOOT)
+            .collect::<Vec<_>>(),
+        "one click rises from the frame of every Host beat, and nowhere else"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_metronome_level_set_mid_click_sounds_from_the_next_click() {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, consts::BLOCKS * block).await;
+    let bound = host.position() + consts::FIRST_CLICK_BLOCKS * block;
+    let mut take = tap.drain();
+    while clicks(&take).is_empty() && host.position() < bound {
+        host.render_forward(consts::LEVEL_STEP_FRAMES).await;
+        take.extend(tap.drain());
+    }
+    let heard = clicks(&take);
+    let [first] = heard.as_slice() else {
+        panic!("the first click sounds within a few blocks of the tempo: {heard:?}");
+    };
+    assert!(
+        first.frame - consts::SILENT_FOOT + consts::ATTACK_FRAMES > host.position(),
+        "the first click has not peaked when its level changes: {first:?}"
+    );
+    host.set_metronome_level(consts::HALF_LEVEL)
+        .await
+        .expect("half the level");
+    let (take, beats) = render_to_the_level_beat(&host, &mut tap, take).await;
+    host.close().await;
+
+    let heard = clicks(&take);
+    assert_clicks_on(&heard, &beats);
+    assert_click_levels(&heard[..1], &beats[..1], consts::FULL_LEVEL);
+    assert_click_levels(&heard[1..], &beats[1..], consts::HALF_LEVEL);
+}
+
+#[kithara::test(tokio)]
+async fn a_refused_metronome_level_keeps_the_last_level() {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, consts::BLOCKS * block).await;
+    for level in [consts::OVER_LEVEL, 0.0] {
+        let refused = host.set_metronome_level(level).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(PlayError::InvalidParameter { name, .. }) if name == "metronome_level"
+            ),
+            "a level of {level} is refused: {refused:?}"
+        );
+    }
+    host.render_forward(block).await;
+    let primed = tap.drain();
+    let (take, beats) = render_to_the_level_beat(&host, &mut tap, primed).await;
+    host.close().await;
+
+    let heard = clicks(&take);
+    assert_clicks_on(&heard, &beats);
+    assert_click_levels(&heard, &beats, consts::FULL_LEVEL);
 }

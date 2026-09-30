@@ -333,6 +333,12 @@ where
             .await
     }
 
+    pub async fn set_metronome_level(&self, level: f32) -> Result<(), PlayError> {
+        self.off
+            .call(move |state| state.host.set_metronome_level(level))
+            .await
+    }
+
     pub async fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
     where
         I: IntoIterator<Item = HostLevel>,

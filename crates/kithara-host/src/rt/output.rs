@@ -1,6 +1,7 @@
 use kithara_effects::LimiterConfig;
 
 use super::{LimiterNode, MetronomeConfig, MetronomeNode};
+use crate::PlayError;
 
 /// The session output chain after the mix: the limiter, then the metronome
 /// whose click ducks the limited signal under it.
@@ -21,5 +22,11 @@ impl SessionOutput {
 
     pub(crate) fn metronome(&self, enabled: bool) -> MetronomeNode {
         MetronomeNode::new(enabled, self.metronome, self.limiter.ceiling())
+    }
+
+    /// Keeps `level` for every metronome node built from here on.
+    pub(crate) fn set_metronome_level(&mut self, level: f32) -> Result<(), PlayError> {
+        self.metronome = self.metronome.with_level(level)?;
+        Ok(())
     }
 }

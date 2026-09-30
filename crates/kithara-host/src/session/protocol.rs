@@ -29,6 +29,7 @@ pub(crate) enum HostCmd<S> {
     AttachOutputs { tap: Tap, outputs: OutputGroup },
     DetachOutputs { tap: Tap },
     SetMetronome { on: bool },
+    SetMetronomeLevel { level: f32 },
     Shutdown,
 }
 

@@ -207,6 +207,18 @@ impl<S> Host<S> {
         self.exec_host_ok(HostCmd::SetMetronome { on }, "metronome")
     }
 
+    /// Sets the metronome level; the next click sounds at it, and a sounding
+    /// click finishes at its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`
+    /// unless `0 < level <=` the configured duck, keeping the last level, or
+    /// an error when graph dispatch fails.
+    pub fn set_metronome_level(&self, level: f32) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::SetMetronomeLevel { level }, "metronome level")
+    }
+
     /// Restart the current output route while preserving Host-owned graph state.
     ///
     /// # Errors

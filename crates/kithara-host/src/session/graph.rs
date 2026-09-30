@@ -23,6 +23,7 @@ use super::{
     transport::SessionTransportState,
 };
 use crate::{
+    PlayError,
     api::{SessionDuckingMode, SlotId},
     bridge::slot_channels,
     rt::{MasterEqNode, PlayerNode, TapNode},
@@ -517,6 +518,24 @@ pub(super) mod controls {
             let mut queue = fw_ctx.event_queue(id);
             memo.update_memo(&mut queue);
         }
+    }
+
+    /// The next click sounds at `level`; a sounding click keeps its own.
+    pub(in crate::session) fn set_metronome_level<T, S>(
+        state: &mut SessionState<T, S>,
+        level: f32,
+    ) -> Result<(), PlayError> {
+        state.output.set_metronome_level(level)?;
+        if let (Some(fw_ctx), Some(id), Some(memo)) = (
+            &mut state.ctx,
+            state.session_metronome_node_id,
+            &mut state.session_metronome_memo,
+        ) {
+            memo.level = level;
+            let mut queue = fw_ctx.event_queue(id);
+            memo.update_memo(&mut queue);
+        }
+        Ok(())
     }
 
     /// Validates the whole request before mutating anything, so an invalid
