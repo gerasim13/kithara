@@ -387,7 +387,7 @@ mod tests {
 
         let recording = process.recorded().unwrap();
         let steps = recording.steps();
-        let [step] = &steps[..] else {
+        let [step] = steps else {
             panic!("one step: {steps:?}");
         };
         assert_eq!(
