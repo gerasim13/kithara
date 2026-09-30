@@ -229,6 +229,13 @@ impl AudioPlayer {
         .to_owned()
     }
 
+    /// Last playback-rate target accepted for delivery to the worker.
+    #[wasm_bindgen(js_name = playingRate)]
+    #[must_use]
+    pub fn playing_rate_js(&self) -> f32 {
+        self.inner.playing_rate()
+    }
+
     #[wasm_bindgen(js_name = previous)]
     pub fn previous_js(&self) -> Result<(), JsValue> {
         self.inner
@@ -460,6 +467,15 @@ impl AudioPlayer {
         };
         self.inner
             .set_playback_order(order)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// # Errors
+    /// Returns a JS error for a non-finite rate or a rejected worker command.
+    #[wasm_bindgen(js_name = setPlayingRate)]
+    pub fn set_playing_rate_js(&self, rate: f32) -> Result<(), JsValue> {
+        self.inner
+            .try_set_playing_rate(rate)
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 

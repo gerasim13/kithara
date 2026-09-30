@@ -398,6 +398,18 @@ impl WasmInner {
         Ok(())
     }
 
+    pub(crate) fn try_set_playing_rate(&self, rate: f32) -> Result<(), FfiError> {
+        if !rate.is_finite() {
+            return Err(FfiError::InvalidArgument {
+                reason: "playing rate must be finite".into(),
+            });
+        }
+        let target = rate.max(kithara::play::StretchControls::MIN_SPEED);
+        self.try_send(WorkerCmd::SetPlayingRate(target))?;
+        self.playing_rate.store(target);
+        Ok(())
+    }
+
     pub(crate) fn set_repeat_mode(&self, mode: FfiRepeatMode) -> Result<(), FfiError> {
         let mode = RepeatMode::try_from(mode).map_err(|rejected| FfiError::InvalidArgument {
             reason: format!("repeat mode {rejected:?} is not supported"),
@@ -470,8 +482,6 @@ impl WasmInner {
         to self.playing_rate {
             #[call(load)]
             pub(crate) fn playing_rate(&self) -> f32;
-            #[call(store)]
-            pub(crate) fn set_playing_rate(&self, rate: f32);
         }
         to self.volume {
             #[call(load)]
