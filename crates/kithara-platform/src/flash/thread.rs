@@ -29,14 +29,18 @@ impl GateBackend {
     /// only guards a missed edge from wedging the waiter, at the cost of one clock hop per poll
     /// interval.
     #[inline]
-    pub(crate) fn park_timeout(&self, duration: Duration) {
+    pub(crate) fn park_timeout(&self, duration: Duration, poll_deadline: bool) {
         match self {
             Self::Engine => {
                 let key = ThreadKey::of(current().id());
                 crate::flash::system::park_timed_unparkable(
                     duration,
                     key,
-                    crate::flash::system::ParkRole::Backstop,
+                    if poll_deadline {
+                        crate::flash::system::ParkRole::Deadline
+                    } else {
+                        crate::flash::system::ParkRole::Backstop
+                    },
                 );
             }
             Self::Native => crate::backend::thread::park_timeout(duration),

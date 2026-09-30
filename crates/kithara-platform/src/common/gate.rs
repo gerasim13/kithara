@@ -154,6 +154,30 @@ impl Default for ThreadGate {
 }
 
 impl ThreadGate {
+    /// Wait for an edge or a required poll deadline under Flash.
+    /// Use this when work can arrive without a matching [`WaitGate::signal`].
+    pub fn wait_poll_timeout(&self, since: u64, timeout: Duration) -> bool {
+        self.wait_timeout_inner(since, timeout, true)
+    }
+
+    fn wait_timeout_inner(&self, since: u64, timeout: Duration, poll_deadline: bool) -> bool {
+        self.register();
+        let deadline = thread::gate_instant(&self.backend) + timeout;
+        let result = loop {
+            let state = self.state.load(Ordering::SeqCst);
+            if Self::sequence(state) != since {
+                break true;
+            }
+            let now = thread::gate_instant(&self.backend);
+            if now >= deadline {
+                break Self::sequence(self.state.load(Ordering::SeqCst)) != since;
+            }
+            self.backend.park_timeout(deadline - now, poll_deadline);
+        };
+        self.state.fetch_and(Self::SEQUENCE_MASK, Ordering::SeqCst);
+        result
+    }
+
     const SEQUENCE_MASK: u64 = !Self::WAITING;
     const WAITING: u64 = 1 << 63;
 
@@ -212,21 +236,7 @@ impl WaitGate for ThreadGate {
     }
 
     fn wait_timeout(&self, since: u64, timeout: Duration) -> bool {
-        self.register();
-        let deadline = thread::gate_instant(&self.backend) + timeout;
-        let result = loop {
-            let state = self.state.load(Ordering::SeqCst);
-            if Self::sequence(state) != since {
-                break true;
-            }
-            let now = thread::gate_instant(&self.backend);
-            if now >= deadline {
-                break Self::sequence(self.state.load(Ordering::SeqCst)) != since;
-            }
-            self.backend.park_timeout(deadline - now);
-        };
-        self.state.fetch_and(Self::SEQUENCE_MASK, Ordering::SeqCst);
-        result
+        self.wait_timeout_inner(since, timeout, false)
     }
 }
 

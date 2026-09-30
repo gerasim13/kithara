@@ -23,11 +23,23 @@ impl Wake {
     }
 
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
+        self.wait(timeout, false)
+    }
+
+    pub(crate) fn wait_poll_timeout(&self, timeout: Duration) -> bool {
+        self.wait(timeout, true)
+    }
+
+    fn wait(&self, timeout: Duration, poll_deadline: bool) -> bool {
         if self.take_deferred() {
             return true;
         }
         let since = self.inner.seen.load(Ordering::Relaxed);
-        let woken = self.inner.gate.wait_timeout(since, timeout);
+        let woken = if poll_deadline {
+            self.inner.gate.wait_poll_timeout(since, timeout)
+        } else {
+            self.inner.gate.wait_timeout(since, timeout)
+        };
         self.inner
             .seen
             .store(self.inner.gate.current(), Ordering::Relaxed);
