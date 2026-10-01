@@ -146,6 +146,7 @@ fn compare(expected: &Features, actual: &Features) -> Result<()> {
         if package.ends_with("-tests")
             || package.starts_with("kithara-test-")
             || package == "kithara-core-test-fixtures"
+            || package == "kithara-fixture-media"
         {
             continue;
         }
@@ -292,5 +293,14 @@ mod tests {
         let product = Features::new();
         compare(&product, &parse("kithara-encode v1|\n").unwrap()).unwrap();
         assert!(compare(&product, &parse("kithara-encode v1|ffmpeg\n").unwrap()).is_err());
+    }
+
+    #[test]
+    fn fixture_media_is_test_only() {
+        compare(
+            &Features::new(),
+            &parse("kithara-fixture-media v1|native\n").unwrap(),
+        )
+        .unwrap();
     }
 }
