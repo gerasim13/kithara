@@ -159,7 +159,11 @@ pub async fn packaged_hls() -> CreatedHls {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara::platform::{flash::real_io, time::Duration, tokio};
+    use kithara::platform::{
+        flash::real_io,
+        time::{self, Duration},
+        tokio,
+    };
 
     use super::packaged_ladder;
     use crate::{TestServerHelper, kithara};

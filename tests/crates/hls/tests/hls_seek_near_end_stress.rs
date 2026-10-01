@@ -9,7 +9,7 @@ use kithara::{
     decode::DecoderBackend,
     events::{EventReceiver, TrackId},
     platform::{
-        time::{Duration, timeout},
+        time::{self, Duration, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
     play::{ResourceConfig, ResourceSrc},

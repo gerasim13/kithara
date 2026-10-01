@@ -5,7 +5,11 @@ use kithara::{
     download::DownloaderEvent,
     events::EventBus,
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, sync::Arc, time::Duration},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        time::{self, Duration},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{

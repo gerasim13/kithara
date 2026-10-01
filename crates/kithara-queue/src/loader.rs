@@ -374,7 +374,7 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::{
         sync::atomic::{AtomicUsize, Ordering},
-        time::Duration,
+        time::{self, Duration},
         tokio::sync::oneshot,
     };
     use kithara_play::{
@@ -545,7 +545,7 @@ mod tests {
 
         fixture.loader.cancel.cancel();
 
-        let result = kithara_platform::tokio::time::timeout(Duration::from_secs(1), handle)
+        let result = time::timeout(Duration::from_secs(1), handle)
             .await
             .expect("cancellation must wake the pending loader")
             .expect("loader task must not panic");

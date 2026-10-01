@@ -216,7 +216,12 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use kithara_platform::{sync::Arc, thread, time::Duration, tokio::sync::oneshot};
+    use kithara_platform::{
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+        tokio::sync::oneshot,
+    };
     use kithara_test_utils::kithara;
 
     use super::OffThread;

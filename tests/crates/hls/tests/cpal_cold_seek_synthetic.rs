@@ -4,7 +4,7 @@ use kithara::{
     audio::AudioEvent,
     decode::DecoderBackend,
     host::HostConfig,
-    platform::time::Duration,
+    platform::time::{self, Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };

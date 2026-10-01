@@ -13,7 +13,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
-        time::Duration,
+        time::{self, Duration},
     },
 };
 use kithara_integration_tests::bufpool_ext::pools;

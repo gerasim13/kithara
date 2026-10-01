@@ -6,7 +6,13 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+        tokio::task,
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{

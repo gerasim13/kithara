@@ -5,7 +5,7 @@ use std::{num::NonZeroU32, path::Path};
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
     events::TrackId,
-    platform::time::{Duration, Instant},
+    platform::time::{self, Duration, Instant},
     play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
     stream::AudioCodec,
 };

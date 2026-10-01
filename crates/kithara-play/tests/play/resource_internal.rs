@@ -9,7 +9,7 @@
 
 use kithara_audio::{AudioEvent, ReadOutcome, mock::TestPcmReader};
 use kithara_events::EventBus;
-use kithara_platform::time::Duration;
+use kithara_platform::time::{self, Duration};
 use kithara_play::Resource;
 use kithara_test_fixtures::integration_fixtures::default_pcm;
 use kithara_test_utils::kithara;
