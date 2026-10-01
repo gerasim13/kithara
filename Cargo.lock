@@ -5379,7 +5379,6 @@ dependencies = [
  "firewheel-web-audio",
  "kithara-audio",
  "kithara-bufpool",
- "kithara-config",
  "kithara-dsp",
  "kithara-effects",
  "kithara-events",
@@ -5394,12 +5393,10 @@ dependencies = [
  "kithara-warp",
  "kithara-worker",
  "kithara-workspace-hack",
- "num-traits",
  "portable-atomic",
  "ringbuf",
  "thiserror 2.0.18",
  "tracing",
- "triple_buffer 8.1.1",
  "wasm-bindgen-test",
 ]
 
@@ -5591,7 +5588,6 @@ dependencies = [
 name = "kithara-play"
 version = "0.0.1-alpha5"
 dependencies = [
- "arc-swap",
  "axum",
  "bon",
  "bytes",
@@ -5619,7 +5615,6 @@ dependencies = [
  "kithara-file",
  "kithara-hls",
  "kithara-net",
- "kithara-output",
  "kithara-platform",
  "kithara-play",
  "kithara-render",
@@ -5640,7 +5635,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha2 0.11.0",
- "smallvec",
  "thiserror 2.0.18",
  "tracing",
  "unimock",

@@ -106,7 +106,6 @@ kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
-kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-render = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
@@ -119,7 +118,6 @@ kithara-waveform = { workspace = true, default-features = false }
 kithara-worker = { workspace = true }
 
 # Utilities
-arc-swap = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
@@ -137,7 +135,6 @@ ringbuf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

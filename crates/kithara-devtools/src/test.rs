@@ -1078,7 +1078,7 @@ mod tests {
 
         for (name, feature) in [
             ("usdt-warp", "kithara-warp-tests/usdt"),
-            ("usdt-play-scheduler", "kithara-play/usdt"),
+            ("usdt-play-scheduler", "kithara-render/usdt"),
             ("usdt-hls", "kithara-hls-tests/usdt"),
             ("usdt-hls-stress", "kithara-hls-tests/usdt"),
             ("usdt-queue", "kithara-queue-tests/usdt"),

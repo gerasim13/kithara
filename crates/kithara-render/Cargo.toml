@@ -9,33 +9,33 @@ description = "Playback worker and realtime audio rendering."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `Patch` expansion uses `humantime-serde` for `#[patch(humantime)]` fields.
+ignored = ["humantime-serde"]
+
 [features]
 default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-stream/client-reqwest",
-    "kithara-file/client-reqwest",
     "kithara-audio/client-reqwest",
     "kithara-decode/client-reqwest",
     "kithara-abr/client-reqwest",
 ]
 client-wreq = [
     "kithara-stream/client-wreq",
-    "kithara-file/client-wreq",
     "kithara-audio/client-wreq",
     "kithara-decode/client-wreq",
     "kithara-abr/client-wreq",
 ]
 tls-rustls = [
     "kithara-stream/tls-rustls",
-    "kithara-file/tls-rustls",
     "kithara-audio/tls-rustls",
     "kithara-decode/tls-rustls",
     "kithara-abr/tls-rustls",
 ]
 tls-native = [
     "kithara-stream/tls-native",
-    "kithara-file/tls-native",
     "kithara-audio/tls-native",
     "kithara-decode/tls-native",
     "kithara-abr/tls-native",
