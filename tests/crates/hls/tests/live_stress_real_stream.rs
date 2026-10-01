@@ -3,7 +3,6 @@ use std::{
     fs,
     num::NonZeroUsize,
     path::Path,
-    sync::Mutex,
     task::Poll,
 };
 
@@ -14,7 +13,6 @@ use kithara::platform::time;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
-    abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     decode::DecoderBackend,
@@ -22,13 +20,7 @@ use kithara::{
     events::EventBus,
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::Duration,
-        tokio,
-        tokio::{sync::broadcast::error::RecvError, task::spawn},
-    },
+    platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     signal::AudioChunk,
     stream::Stream,
@@ -40,7 +32,6 @@ use kithara_integration_tests::{
 use kithara_integration_tests::{
     TestServerHelper, abr_switch_trigger, auto,
     bufpool_ext::{Pools, TestPools, pools},
-    event::TestEvent,
     mixed_encrypted, mixed_plain,
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
@@ -99,11 +90,6 @@ enum SeekRegression {
 
 type LiveAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
 
-#[derive(Default)]
-struct LiveStats {
-    variant_switches: usize,
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn file_count_and_size(path: &Path) -> (u64, u64) {
     fn walk(path: &Path, files: &mut u64, bytes: &mut u64) {
@@ -130,8 +116,11 @@ fn file_count_and_size(path: &Path) -> (u64, u64) {
     (files, bytes)
 }
 
-fn variant_switches(stats: &Arc<Mutex<LiveStats>>) -> usize {
-    stats.lock().expect("stats lock poisoned").variant_switches
+fn abr_switched(audio: &LiveAudio) -> bool {
+    audio
+        .abr_handle()
+        .and_then(|abr| abr.current_variant_index())
+        .is_some_and(|variant| variant != 0)
 }
 
 fn switch_trigger_downloader(pools: &Pools, cancel: &CancelToken) -> Downloader {
@@ -176,45 +165,16 @@ async fn build_live_audio(
         .expect("audio creation")
 }
 
-fn spawn_live_stats_task(
-    audio: &mut LiveAudio,
-) -> (Arc<Mutex<LiveStats>>, tokio::task::JoinHandle<()>) {
-    let stats = Arc::new(Mutex::new(LiveStats::default()));
-    let stats_bg = Arc::clone(&stats);
-    let mut events = audio.event_bus().subscribe();
-    let events_task = spawn(async move {
-        loop {
-            let event = match events.recv().await {
-                Ok(env) => env.event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            };
-            if let TestEvent::Abr(AbrEvent::VariantApplied { .. }) = event {
-                let mut locked = stats_bg.lock().expect("stats lock poisoned");
-                locked.variant_switches = locked.variant_switches.saturating_add(1);
-            }
-        }
-    });
-    (stats, events_task)
-}
-
 #[cfg(not(target_arch = "wasm32"))]
-fn warmup_until_variant_switch(
-    audio: &mut LiveAudio,
-    stats: &Arc<Mutex<LiveStats>>,
-    stage_prefix: &str,
-) {
+fn warmup_until_variant_switch(audio: &mut LiveAudio, stage_prefix: &str) {
     let stage = format!("{stage_prefix}_warmup");
-    for _ in 0..consts::WARMUP_CHUNK_BUDGET {
+    while !abr_switched(audio) {
         if next_chunk(audio, &stage).is_none() {
-            break;
-        }
-        if variant_switches(stats) > 0 {
             break;
         }
     }
     assert!(
-        variant_switches(stats) > 0,
+        abr_switched(audio),
         "ABR must switch off the initial variant during the {stage_prefix} warmup"
     );
 }
@@ -386,12 +346,10 @@ async fn live_ephemeral_revisit_sequence_regression(
     #[cfg(target_arch = "wasm32")]
     let _ = audio.preload();
 
-    let (stats, events_task) = spawn_live_stats_task(&mut audio);
-
     #[cfg(not(target_arch = "wasm32"))]
     spawn_blocking(move || {
         let _ = audio.preload();
-        warmup_until_variant_switch(&mut audio, &stats, label);
+        warmup_until_variant_switch(&mut audio, label);
 
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
@@ -449,16 +407,13 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     #[cfg(target_arch = "wasm32")]
     {
-        for _ in 0..consts::WARMUP_CHUNK_BUDGET {
+        while !abr_switched(&audio) {
             if next_chunk(&mut audio, "repro_warmup").await.is_none() {
-                break;
-            }
-            if variant_switches(&stats) > 0 {
                 break;
             }
         }
         assert!(
-            variant_switches(&stats) > 0,
+            abr_switched(&audio),
             "{label} ABR must switch off the initial variant during the warmup"
         );
 
@@ -518,8 +473,6 @@ async fn live_ephemeral_revisit_sequence_regression(
 
         drop(audio);
     }
-
-    let _ = events_task.await;
 }
 
 #[kithara::test(
@@ -543,8 +496,6 @@ async fn live_real_stream_seek_regression(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut audio = build_live_audio(&worker, &pools, url, 24).await;
-    let (stats, events_task) = spawn_live_stats_task(&mut audio);
-
     spawn_blocking(move || {
         let _ = audio.preload();
         let (stage, seek_positions) = match regression {
@@ -571,7 +522,7 @@ async fn live_real_stream_seek_regression(
                 )
             }
         };
-        warmup_until_variant_switch(&mut audio, &stats, stage);
+        warmup_until_variant_switch(&mut audio, stage);
 
         for (idx, pos_secs) in seek_positions.into_iter().enumerate() {
             audio
@@ -587,8 +538,6 @@ async fn live_real_stream_seek_regression(
     })
     .await
     .expect("read phase join");
-
-    let _ = events_task.await;
 }
 
 #[kithara::test(
