@@ -6,6 +6,7 @@ use std::{
 };
 
 use fs4::FileExt;
+use kithara_platform::time::{Duration, SystemTime};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -13,6 +14,10 @@ mod consts {
     /// Leading digest bytes kept in an asset id. 128 bits: short enough to read in
     /// a path, wide enough that the build script's collision check never fires.
     pub(super) const ASSET_ID_BYTES: usize = 16;
+
+    /// Seconds from the epoch to the instant every entry is dated to:
+    /// 2000-01-01T00:00:00Z.
+    pub(super) const WRITTEN_AT_SECS: u64 = 946_684_800;
 }
 
 /// Absolute store root, required at build time and optional as a runtime override.
@@ -310,16 +315,20 @@ pub fn read_entry(namespace: &Path, id: &str, ext: &str) -> Option<Vec<u8>> {
 
 /// Writes one entry atomically: temporary file, `sync_all`, rename.
 ///
+/// Every entry is dated to one fixed instant, so a build script that watches
+/// it reads only its absence as a change, never a refill.
+///
 /// # Errors
 ///
 /// Returns the underlying error when the namespace cannot be created or the
-/// bytes cannot be written, synced, or renamed into place.
+/// bytes cannot be written, dated, synced, or renamed into place.
 pub fn write_entry(namespace: &Path, id: &str, ext: &str, bytes: &[u8]) -> io::Result<PathBuf> {
     fs::create_dir_all(namespace)?;
     let tmp_path = namespace.join(format!("{id}.{ext}.tmp.{}", std::process::id()));
     let write = (|| -> io::Result<()> {
         let mut file = File::create(&tmp_path)?;
         file.write_all(bytes)?;
+        file.set_modified(written_at())?;
         file.sync_all()
     })();
     if let Err(error) = write {
@@ -329,6 +338,28 @@ pub fn write_entry(namespace: &Path, id: &str, ext: &str, bytes: &[u8]) -> io::R
     let final_path = entry_path(namespace, id, ext);
     fs::rename(&tmp_path, &final_path)?;
     Ok(final_path)
+}
+
+/// The instant every entry and stamp is dated to.
+fn written_at() -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(consts::WRITTEN_AT_SECS)
+}
+
+/// Writes the namespace's stamp unless it already holds `fingerprint`, dated
+/// like an entry, and returns its path. A build script watches it to notice
+/// the namespace's removal.
+///
+/// # Errors
+///
+/// Returns the underlying error when the stamp cannot be written or dated.
+pub fn write_stamp(namespace: &Path, fingerprint: &str) -> io::Result<PathBuf> {
+    let stamp = namespace.join(".stamp");
+    if fs::read(&stamp).ok().as_deref() != Some(fingerprint.as_bytes()) {
+        let mut file = File::create(&stamp)?;
+        file.write_all(fingerprint.as_bytes())?;
+        file.set_modified(written_at())?;
+    }
+    Ok(stamp)
 }
 
 /// Held while one entry is produced; serializes producers across processes.
@@ -482,6 +513,33 @@ mod tests {
             .collect();
 
         assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
+    }
+
+    /// A build script watches entries and the stamp by date, and a date its
+    /// own run wrote would read as a change on the next build, so every write
+    /// dates them to one instant and a rewrite changes only their bytes.
+    #[kithara::test(native)]
+    fn entries_and_the_stamp_keep_one_date_across_rewrites() {
+        let dir = TempDir::new().expect("temp dir");
+        let namespace = dir.path().join("fingerprint");
+        let date = |path: &Path| {
+            fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .expect("read the date")
+        };
+        let entry = write_entry(&namespace, "id", "wav", b"one").expect("write entry");
+        let stamp = write_stamp(&namespace, "v1").expect("write stamp");
+
+        assert_eq!(date(&entry), written_at());
+        assert_eq!(date(&stamp), written_at());
+
+        write_entry(&namespace, "id", "wav", b"two").expect("rewrite entry");
+        write_stamp(&namespace, "v2").expect("rewrite stamp");
+
+        assert_eq!(date(&entry), written_at());
+        assert_eq!(date(&stamp), written_at());
+        assert_eq!(fs::read(&entry).expect("read entry"), b"two");
+        assert_eq!(fs::read(&stamp).expect("read stamp"), b"v2");
     }
 
     #[kithara::test(native, flash(false))]

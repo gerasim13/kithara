@@ -345,13 +345,9 @@ pub fn generate() {
         );
     }
 
-    // Written once per namespace so its mtime stays put on a no-op rerun. The
-    // stamp tracks namespace removal; the declarations above track entries.
-    let stamp = namespace.join(".stamp");
-    if fs::read(&stamp).ok().as_deref() != Some(fingerprint.as_bytes()) {
-        fs::write(&stamp, fingerprint.as_bytes())
-            .unwrap_or_else(|error| panic!("kithara-test-fixtures: write stamp: {error}"));
-    }
+    // The stamp tracks namespace removal; the declarations above track entries.
+    let stamp = store::write_stamp(&namespace, fingerprint)
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: write stamp: {error}"));
     println!("cargo:rerun-if-changed={}", stamp.display());
 
     let out_dir =

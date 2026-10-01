@@ -5260,6 +5260,7 @@ dependencies = [
  "fs4",
  "hex",
  "kithara-encode",
+ "kithara-platform",
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",

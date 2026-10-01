@@ -20,6 +20,7 @@ native = [
     "dep:fs4",
     "dep:hex",
     "dep:kithara-encode",
+    "dep:kithara-platform",
     "dep:kithara-stream",
     "dep:serde",
     "dep:sha2",
@@ -35,6 +36,7 @@ kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-encode = { workspace = true, default-features = false, optional = true }
+kithara-platform = { workspace = true, optional = true }
 kithara-stream = { workspace = true, default-features = false, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 

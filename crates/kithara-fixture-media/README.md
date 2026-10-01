@@ -41,7 +41,9 @@ assert_eq!(body.len(), 44 + 4_410 * 2 * 2);
 
 <tr><td><code>store::asset_id</code> / <code>store::formatted_asset_id</code></td><td>The stable identity of one case, the second keyed by its format sample</td></tr>
 
-<tr><td><code>store::read_entry</code> / <code>store::write_entry</code></td><td>A hit-or-miss read and an atomic write; an empty file counts as a miss</td></tr>
+<tr><td><code>store::read_entry</code> / <code>store::write_entry</code></td><td>A hit-or-miss read and an atomic write dated to one fixed instant; an empty file counts as a miss</td></tr>
+
+<tr><td><code>store::write_stamp</code></td><td>The namespace stamp a build script watches to notice the namespace's removal</td></tr>
 
 <tr><td><code>store::lock_entry</code></td><td>The exclusive producer lock for one entry</td></tr>
 
