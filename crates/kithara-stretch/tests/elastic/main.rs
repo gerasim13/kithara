@@ -30,7 +30,8 @@ fn conformance_backends() -> ElasticBackendConfig {
     let signalsmith = SignalsmithConfig::builder()
         .block_frames(NonZeroUsize::new(416).expect("fixture block is non-zero"))
         .interval_frames(NonZeroUsize::new(64).expect("fixture interval is non-zero"))
-        .build();
+        .build()
+        .expect("valid Signalsmith geometry");
     let bungee = BungeeConfig::builder()
         .log2_synthesis_hop_adjust(-3)
         .build();

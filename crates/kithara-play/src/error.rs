@@ -78,6 +78,9 @@ pub enum PlayError {
     #[error("invalid parameter value: {name}={value}")]
     InvalidParameter { name: String, value: f32 },
 
+    #[error("invalid player configuration: {reason}")]
+    InvalidConfiguration { reason: String },
+
     #[error("mix level {level} is not a finite value in 0.0..=1.0")]
     MixLevel { level: f32 },
 

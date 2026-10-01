@@ -45,7 +45,8 @@ fn response_backends() -> ElasticBackendConfig {
             SignalsmithConfig::builder()
                 .block_frames(NonZeroUsize::new(224).expect("case block is non-zero"))
                 .interval_frames(NonZeroUsize::new(32).expect("case interval is non-zero"))
-                .build(),
+                .build()
+                .expect("valid Signalsmith geometry"),
         )
         .bungee(
             BungeeConfig::builder()

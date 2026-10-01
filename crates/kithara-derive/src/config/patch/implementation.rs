@@ -54,8 +54,8 @@ struct DocumentField<'a> {
 
 /// What the struct as a whole said about refusing a merged configuration.
 struct Refusal {
-    /// `fn(Self) -> Result<Self, Error>`, the one gate every route in holds,
-    /// when the configuration judges itself as a whole.
+    /// `fn(Self) -> Result<Self, Error>`, shared by the routes that declare
+    /// validation of the whole configuration.
     validate: Option<Check>,
 }
 
@@ -467,8 +467,8 @@ fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
     refusal_from_attributes(&input.attrs, input.ident.span())
 }
 
-/// The check `#[patch(validate = ..., error = ...)]` declares, which is every
-/// route into the configuration's commit gate, a document merge or not.
+/// The check `#[patch(validate = ..., error = ...)]` declares for document
+/// merges, runtime updates, and builders that opt into `validate_builder`.
 #[cfg(feature = "config")]
 pub(crate) fn validation(
     attributes: &[Attribute],

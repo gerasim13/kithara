@@ -7,7 +7,7 @@ mod revision;
 mod support;
 
 pub use actuator::Warp;
-pub use config::{WarpConfig, WarpConfigPatch};
+pub use config::{WarpConfig, WarpConfigPatch, WarpConfigPatchError};
 pub use cursor::WarpCursor;
 pub use map::WarpMap;
 pub use plan::{WarpPlan, WarpPlanError, WarpPlanSlot};

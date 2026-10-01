@@ -59,7 +59,8 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
                         .interval_frames(
                             std::num::NonZeroUsize::new(32).expect("non-zero interval"),
                         )
-                        .build(),
+                        .build()
+                        .expect("valid Signalsmith geometry"),
                 )
                 .build(),
         )

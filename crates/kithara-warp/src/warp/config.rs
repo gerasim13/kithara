@@ -7,7 +7,9 @@ use kithara_platform::sync::Arc;
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
+use kithara_stretch::{
+    ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError,
+};
 
 use crate::{StretchControls, WarpPlan, WarpPlanSlot, consts};
 
@@ -15,7 +17,7 @@ use crate::{StretchControls, WarpPlan, WarpPlanSlot, consts};
 ///
 /// [`WarpConfigPatch`] is what a configuration document may say about it.
 #[derive(Clone, Debug, Patch, Config)]
-#[config(builder(state_mod(vis = "pub")))]
+#[config(builder(state_mod(vis = "pub")), patch(fallible))]
 #[non_exhaustive]
 pub struct WarpConfig {
     /// Explicit projected selection prepared by the musical policy owner.
@@ -37,7 +39,7 @@ pub struct WarpConfig {
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
-    #[config(nested, builder(default), field(get, copy), patch(nested))]
+    #[config(nested, builder(default), field(get, copy), patch(nested, fallible))]
     backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
     #[config(value, builder(default = consts::DEFAULT_SOURCE_BLOCK_FRAMES), field(get, copy))]
@@ -133,7 +135,7 @@ mod tests {
         patch.backends.signalsmith.block_frames = NonZeroUsize::new(512);
         patch.backends.signalsmith.interval_frames = NonZeroUsize::new(16);
 
-        config.apply(patch);
+        config.apply(patch).expect("valid backend geometry patch");
 
         let backends = config.backends();
         assert_eq!(
@@ -142,11 +144,34 @@ mod tests {
                 .block_frames(NonZeroUsize::new(512).expect("fixture block is non-zero"))
                 .interval_frames(NonZeroUsize::new(16).expect("fixture interval is non-zero"))
                 .build()
+                .expect("valid Signalsmith geometry")
         );
         assert_eq!(
             backends.bungee().log2_synthesis_hop_adjust(),
             -2,
             "a patch that never names Bungee must not reset its geometry"
         );
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    #[kithara::test]
+    fn rejected_backend_geometry_keeps_the_entire_warp_config() {
+        let mut config = WarpConfig::builder().build();
+        let previous_source_limit = config.source_block_frames();
+        let mut patch = WarpConfigPatch::default();
+        patch.source_block_frames = NonZeroUsize::new(64);
+        patch.backends.signalsmith.block_frames = NonZeroUsize::new(16);
+        patch.backends.signalsmith.interval_frames = NonZeroUsize::new(32);
+
+        assert!(matches!(
+            config.apply(patch),
+            Err(WarpConfigPatchError::Backends(_))
+        ));
+        assert_eq!(config.source_block_frames(), previous_source_limit);
+        assert_eq!(config.backends().signalsmith().block_frames(), None);
+        assert_eq!(config.backends().signalsmith().interval_frames(), None);
     }
 }

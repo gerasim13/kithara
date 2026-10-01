@@ -550,7 +550,7 @@ mod tests {
             .session(mock::session())
             .sample_rate(NonZeroU32::new(44_100).expect("44100 is not zero"))
             .build();
-        config.apply(patch);
+        config.apply(patch).expect("valid player document patch");
 
         let player = PlayerImpl::new(config);
         let mut config = resource_config("https://example.com/song.mp3");

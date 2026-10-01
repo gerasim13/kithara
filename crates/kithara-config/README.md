@@ -24,7 +24,15 @@ public value. The derive generates a bon builder (`X::builder()`), whose
 per-field options live in the field's `builder(...)` group and whose top-level
 options live in the type's; `builder(skip)` or `builder(skip = value)` leaves a
 field out of the builder. `field(get)` and `field(get, copy)` add accessors,
-`#[config(default)]` derives `Default` through the builder, and
+`#[config(validate_builder, patch(validate = Self::check, error = Error))]`
+makes `build()` return `Result<Self, Error>` through that same domain check.
+`builder(existing)` keeps a domain constructor's bon builder when it must
+consume inputs and retain only their prepared effective value. A fallible
+`#[config(default)]` checks its declared defaults and treats their rejection
+as a programming error.
+Ordinary builders may use `kithara_config::bon` with an absolute
+`#[builder(crate = ::kithara_config::bon)]` expansion path, without a direct
+bon dependency in the consuming crate.
 `#[config(debug)]` derives `Debug` without the fields marked `debug(skip)`. For
 a projected field stored in a wrapper, `wrap(default = value, with = Wrapper::new)`
 derives the builder default and setter conversion. `Patch` reads the type's and
@@ -43,7 +51,7 @@ explicit operations.
 The derive emits `<Name>Values` with public snapshot fields, preserving field
 documentation. Resource generics stay on the original owner; snapshot types
 must not depend on them. Domain constructors and methods remain responsible for
-validation and effects.
+preparation and effects.
 
 See the [workspace architecture](https://github.com/zvuk/kithara/wiki/kithara)
 for domain ownership boundaries.

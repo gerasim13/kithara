@@ -1,8 +1,7 @@
 use std::{num::NonZeroUsize, ops::RangeInclusive};
 
-use bon::bon;
 use kithara_bufpool::PoolRegion;
-use kithara_config::Config;
+use kithara_config::{Config, bon::bon};
 use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
@@ -13,7 +12,7 @@ use crate::{StretchKind, consts};
 ///
 /// [`SignalsmithConfigPatch`] is what a configuration document may say about it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch, Config)]
-#[config(builder(state_mod(vis = "pub")))]
+#[config(validate_builder, builder(state_mod(vis = "pub")), patch(validate = Self::validate, error = ElasticError))]
 #[non_exhaustive]
 pub struct SignalsmithConfig {
     /// Custom analysis block size in source frames; absent selects the native preset.
@@ -55,76 +54,68 @@ pub struct BungeeConfig {
 /// [`ElasticBackendConfigPatch`] is what a configuration document may say
 /// about it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch, Config)]
-#[config(builder(state_mod(vis = "pub")))]
+#[config(builder(state_mod(vis = "pub")), patch(fallible))]
 #[non_exhaustive]
 pub struct ElasticBackendConfig {
     #[config(nested, builder(default), field(get), patch(nested))]
     bungee: BungeeConfig,
-    #[config(nested, builder(default), field(get), patch(nested))]
+    #[config(nested, builder(default), field(get), patch(nested, fallible))]
     signalsmith: SignalsmithConfig,
 }
 
 /// Numeric continuity policy for exact-span planning.
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(get, copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[config(validate_builder, patch(validate = Self::validate, error = ElasticError))]
 #[non_exhaustive]
 pub struct ElasticSpanConfig {
     /// Source-frame tolerance for adjacent spans; defaults to `1e-6`.
+    #[config(value, builder(default = consts::CONTINUITY_TOLERANCE), field(get, copy))]
     continuity_tolerance: f64,
     /// Per-block source-frame correction limit; defaults to one frame.
+    #[config(value, builder(default = consts::MAX_CORRECTION_PER_BLOCK), field(get, copy))]
     max_correction_per_block: f64,
     /// Accepted boundary phase error; defaults to one source frame.
+    #[config(value, builder(default = consts::MAX_PHASE_ERROR), field(get, copy))]
     max_phase_error: f64,
 }
 
-#[bon]
 impl ElasticSpanConfig {
-    #[builder(
-        builder_type(vis = "pub"),
-        start_fn(name = builder, vis = "pub"),
-        finish_fn(vis = "pub")
-    )]
-    fn new(
-        #[builder(default = consts::CONTINUITY_TOLERANCE)] continuity_tolerance: f64,
-        #[builder(default = consts::MAX_PHASE_ERROR)] max_phase_error: f64,
-        #[builder(default = consts::MAX_CORRECTION_PER_BLOCK)] max_correction_per_block: f64,
-    ) -> Result<Self, ElasticError> {
+    fn validate(self) -> Result<Self, ElasticError> {
         if let Some((field, value)) = [
-            ("continuity_tolerance", continuity_tolerance),
-            ("max_phase_error", max_phase_error),
-            ("max_correction_per_block", max_correction_per_block),
+            ("continuity_tolerance", self.continuity_tolerance),
+            ("max_phase_error", self.max_phase_error),
+            ("max_correction_per_block", self.max_correction_per_block),
         ]
         .into_iter()
         .find(|(_, value)| !value.is_finite() || *value <= 0.0)
         {
             return Err(ElasticError::InvalidSpanConfig { field, value });
         }
-        Ok(Self {
-            continuity_tolerance,
-            max_correction_per_block,
-            max_phase_error,
-        })
+        Ok(self)
     }
 }
 
 /// Engine preparation resources and fixed frame limits.
-#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[derive(Clone, Debug, Config, fieldwork::Fieldwork)]
+#[config(builder(existing))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct ElasticConfig<S> {
+    #[config(nested)]
     #[field(get(copy), vis = "pub(crate)")]
     backends: ElasticBackendConfig,
+    #[config(skip = "effective prepared geometry")]
     #[field(get(copy), vis = "pub(crate)")]
     shape: ElasticShape,
     /// Shared pool region used by engines that need planar scratch.
-    #[field(get)]
+    #[config(skip = "injected shared pool region", field(get))]
     pools: PoolRegion<S>,
     /// Selected compiled implementation.
-    #[field(get(copy))]
+    #[config(value, field(get, copy))]
     backend: StretchKind,
 }
 
-#[bon]
+#[bon(crate = ::kithara_config::bon)]
 impl<S> ElasticConfig<S> {
     /// Builds a validated preparation config with its shared pool region.
     ///
@@ -151,7 +142,6 @@ impl<S> ElasticConfig<S> {
         )]
         rate_envelope: RangeInclusive<f64>,
     ) -> Result<Self, ElasticError> {
-        backends.signalsmith.validate()?;
         if sample_rate == 0 {
             return Err(ElasticError::InvalidSampleRate);
         }
@@ -325,6 +315,10 @@ mod tests {
         assert_eq!(config.continuity_tolerance(), 1.0e-5);
         assert_eq!(config.max_phase_error(), 0.5);
         assert_eq!(config.max_correction_per_block(), 0.25);
+        let values = config.values();
+        assert_eq!(values.continuity_tolerance, 1.0e-5);
+        assert_eq!(values.max_phase_error, 0.5);
+        assert_eq!(values.max_correction_per_block, 0.25);
     }
 
     #[kithara::test]
@@ -392,7 +386,8 @@ mod tests {
         let signalsmith = SignalsmithConfig::builder()
             .block_frames(NonZeroUsize::new(512).expect("fixture block is non-zero"))
             .interval_frames(NonZeroUsize::new(16).expect("fixture interval is non-zero"))
-            .build();
+            .build()
+            .expect("valid Signalsmith geometry");
         let bungee = BungeeConfig::builder()
             .log2_synthesis_hop_adjust(-2)
             .build();
@@ -411,25 +406,17 @@ mod tests {
             .expect("fixture backend geometry is valid");
 
         assert_eq!(config.backends(), backends);
+        assert_eq!(
+            config.values().backends.signalsmith.block_frames,
+            backends.signalsmith().block_frames()
+        );
     }
 
     #[kithara::test]
-    fn signalsmith_geometry_rejects_an_interval_larger_than_its_block() {
-        let signalsmith = SignalsmithConfig::builder()
+    fn signalsmith_builder_rejects_an_interval_larger_than_its_block() {
+        let result = SignalsmithConfig::builder()
             .block_frames(NonZeroUsize::new(16).expect("fixture block is non-zero"))
             .interval_frames(NonZeroUsize::new(32).expect("fixture interval is non-zero"))
-            .build();
-        let backends = ElasticBackendConfig::builder()
-            .signalsmith(signalsmith)
-            .build();
-
-        let result = ElasticConfig::builder()
-            .backends(backends)
-            .pools(pools())
-            .sample_rate(48_000)
-            .channels(2)
-            .max_source_frames(960)
-            .max_output_frames(480)
             .build();
 
         assert!(matches!(
@@ -443,25 +430,13 @@ mod tests {
     #[kithara::test]
     #[case::block_only(true)]
     #[case::interval_only(false)]
-    fn signalsmith_custom_geometry_requires_both_values(#[case] block_only: bool) {
+    fn signalsmith_builder_requires_both_custom_values(#[case] block_only: bool) {
         let frames = NonZeroUsize::new(32).expect("fixture geometry is non-zero");
-        let signalsmith = if block_only {
+        let result = if block_only {
             SignalsmithConfig::builder().block_frames(frames).build()
         } else {
             SignalsmithConfig::builder().interval_frames(frames).build()
         };
-        let result = ElasticConfig::builder()
-            .backends(
-                ElasticBackendConfig::builder()
-                    .signalsmith(signalsmith)
-                    .build(),
-            )
-            .pools(pools())
-            .sample_rate(48_000)
-            .channels(2)
-            .max_source_frames(960)
-            .max_output_frames(480)
-            .build();
 
         assert!(matches!(
             result,

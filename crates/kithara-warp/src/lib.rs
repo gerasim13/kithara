@@ -45,7 +45,7 @@ pub use temporal::{
 ))]
 pub use temporal::{StretchKind, WarpCapabilities};
 pub use warp::{
-    Warp, WarpConfig, WarpConfigPatch, WarpCursor, WarpMap, WarpMapRevision, WarpPlan,
-    WarpPlanError, WarpPlanSlot, supports_playback_rate,
+    Warp, WarpConfig, WarpConfigPatch, WarpConfigPatchError, WarpCursor, WarpMap, WarpMapRevision,
+    WarpPlan, WarpPlanError, WarpPlanSlot, supports_playback_rate,
 };
 mod consts;

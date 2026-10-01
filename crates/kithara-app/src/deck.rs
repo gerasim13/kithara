@@ -120,7 +120,11 @@ impl Deck {
             )
             .worker(config.worker.clone())
             .build();
-        player_config.apply(config.player.clone());
+        player_config
+            .apply(config.player.clone())
+            .map_err(|error| PlayError::InvalidConfiguration {
+                reason: error.to_string(),
+            })?;
         let player = PlayerImpl::new(player_config);
         let mut queue_config = QueueConfig::builder()
             .player(player)

@@ -1,5 +1,6 @@
 //! Owned snapshots of retained settings, with builders and accessors.
 
+pub use bon;
 /// `#[derive(Config)]` generates the builder, accessors, `Default`, `Debug`,
 /// the owned snapshot and explicitly selected runtime updates of a struct,
 /// every facet declared through `#[config(...)]`. `construction` classifies a

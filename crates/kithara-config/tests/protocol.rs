@@ -13,7 +13,7 @@ struct Levels {
 }
 
 #[derive(Clone, Patch, Config)]
-#[config(default, update, patch(validate = Self::validated, error = Error))]
+#[config(default, update, validate_builder, patch(validate = Self::validated, error = Error))]
 struct Bounded {
     #[config(value, update, builder(default = 2), field(get, copy))]
     level: u32,
@@ -52,6 +52,22 @@ fn a_judged_update_commits_whole_or_not_at_all() {
         .expect("a cleared limit admits any level");
     assert_eq!(bounded.level(), 7);
     assert_eq!(bounded.values().limit, None);
+}
+
+#[kithara::test]
+fn a_judged_builder_uses_the_same_check_as_updates() {
+    assert!(Bounded::builder().level(5).build().is_err());
+    let mut bounded = Bounded::builder()
+        .level(4)
+        .build()
+        .expect("boundary value is valid");
+    bounded
+        .apply_update(BoundedUpdate {
+            level: BoundedLevelUpdate::Reset,
+            ..BoundedUpdate::default()
+        })
+        .expect("declared default is valid");
+    assert_eq!(bounded.level(), 2);
 }
 
 #[derive(Config)]

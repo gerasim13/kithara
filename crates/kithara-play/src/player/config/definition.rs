@@ -11,7 +11,7 @@ use kithara_platform::{
     atomic::{RelaxedAtomicBool, RelaxedAtomicF32},
     sync::Arc,
 };
-use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch};
+use kithara_warp::{BeatGridId, WarpConfig, WarpConfigPatch, WarpConfigPatchError};
 
 use crate::{PlayWorker, consts, session::SessionBinding};
 
@@ -43,7 +43,7 @@ fn default_event_bus_capacity() -> NonZeroUsize {
 ///
 /// [`EngineConfig`]: crate::EngineConfig
 #[derive(Patch, Config)]
-#[config(debug, builder(state_mod(vis = "pub")))]
+#[config(debug, builder(state_mod(vis = "pub")), patch(fallible))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
 pub struct PlayerConfig<S> {
@@ -176,7 +176,7 @@ pub struct PlayerConfig<S> {
     #[config(
         nested,
         builder(default = WarpConfig::builder().build()),
-        patch(nested)
+        patch(nested, fallible)
     )]
     pub(crate) warp: WarpConfig,
 }
@@ -233,7 +233,9 @@ mod tests {
 mod document_tests {
     use kithara_test_utils::kithara;
 
-    use super::{GaplessMode, PlayerConfigPatch, tests::config};
+    use super::{
+        GaplessMode, NonZeroUsize, PlayerConfigPatch, PlayerConfigPatchError, tests::config,
+    };
 
     #[kithara::test(native, flash(false))]
     fn zero_event_bus_capacity_is_rejected() {
@@ -290,7 +292,7 @@ mod document_tests {
         // assertion by coincidence.
         config.default_rate.store(2.5);
 
-        config.apply(patch);
+        config.apply(patch).expect("valid player document patch");
 
         assert!((config.crossfade_duration.load() - 2.0).abs() < f32::EPSILON);
         assert!(
@@ -326,12 +328,39 @@ mod document_tests {
         // whole-struct reset would go red here rather than pass by coincidence.
         config.crossfade_duration.store(2.5);
 
-        config.apply(patch);
+        config.apply(patch).expect("valid player document patch");
 
         assert_eq!(config.gapless_mode, GaplessMode::Disabled);
         assert!(
             (config.crossfade_duration.load() - 2.5).abs() < f32::EPSILON,
             "a sibling field must survive the patch"
+        );
+    }
+
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    #[kithara::test]
+    fn rejected_warp_geometry_preserves_player_settings() {
+        let mut config = config();
+        let previous_slots = config.max_slots;
+        let mut patch = PlayerConfigPatch::default();
+        patch.max_slots = Some(previous_slots + 1);
+        patch.warp.backends.signalsmith.block_frames = NonZeroUsize::new(16);
+        patch.warp.backends.signalsmith.interval_frames = NonZeroUsize::new(32);
+
+        assert!(matches!(
+            config.apply(patch),
+            Err(PlayerConfigPatchError::Warp(_))
+        ));
+        assert_eq!(config.max_slots, previous_slots);
+        assert_eq!(
+            kithara_config::Config::values(&config.warp)
+                .backends
+                .signalsmith
+                .block_frames,
+            None
         );
     }
 }

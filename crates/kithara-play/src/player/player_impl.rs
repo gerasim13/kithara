@@ -55,6 +55,11 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
     }
 
     /// Create a new player with the given configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied warp configuration violates its validated
+    /// backend geometry invariant while applying the internal render quantum.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
         config.normalize_live_values();
@@ -62,7 +67,10 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
         {
             let mut patch = WarpConfigPatch::default();
             patch.render_quantum_frames = NonZeroUsize::new(32);
-            config.warp.apply(patch);
+            config
+                .warp
+                .apply(patch)
+                .expect("only a nonzero render quantum changes on valid backend geometry");
         }
         let pools = config.worker.pools().clone();
         // The player's one member is its own track geometry: a grid it keeps

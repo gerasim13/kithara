@@ -6,7 +6,6 @@ use syn::{
 };
 
 use super::field::{self, Construction, Member};
-#[cfg(feature = "patch")]
 use crate::config::patch::{Check, validation};
 
 /// What `#[config(...)]` on the type itself declares.
@@ -20,6 +19,8 @@ struct Options {
     values_vis: Option<Visibility>,
     /// bon's top-level options for the generated builder.
     builder: Option<TokenStream>,
+    existing_builder: bool,
+    validate_builder: bool,
 }
 
 impl Options {
@@ -42,12 +43,19 @@ impl Options {
                     options.construction = true;
                 } else if meta.path.is_ident("update") {
                     options.runtime_update = true;
+                } else if meta.path.is_ident("validate_builder") {
+                    options.validate_builder = true;
                 } else if meta.path.is_ident("sdk") {
                     options.sdk = true;
                 } else if meta.path.is_ident("debug") {
                     options.debug = true;
                 } else if meta.path.is_ident("builder") {
-                    options.builder = Some(group(&meta)?);
+                    let group = group(&meta)?;
+                    if group.to_string() == "existing" {
+                        options.existing_builder = true;
+                    } else {
+                        options.builder = Some(group);
+                    }
                 } else if meta.path.is_ident("patch") {
                     // `Patch` reads this group; the update gate below reads its check.
                     group(&meta)?;
@@ -56,7 +64,7 @@ impl Options {
                     options.values_vis = Some(syn::parse_str(&visibility.value())?);
                 } else {
                     return Err(meta.error(
-                        "expected construction, default, update, sdk, debug, builder(...), \
+                        "expected construction, default, update, validate_builder, sdk, debug, builder(...), \
                          patch(...), or values_vis",
                     ));
                 }
@@ -72,6 +80,12 @@ impl Options {
             return Err(syn::Error::new_spanned(
                 &item.ident,
                 "construction inputs cannot declare retained defaults, updates, SDK records, or values visibility",
+            ));
+        }
+        if options.existing_builder && options.validate_builder {
+            return Err(syn::Error::new_spanned(
+                &item.ident,
+                "validate_builder requires a generated builder",
             ));
         }
         Ok(options)
@@ -126,9 +140,28 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             "debug(skip) requires `#[config(debug)]` on the type",
         ));
     }
-    let builder = builder(&item, &options, &members);
+    let check = validation(&item.attrs, item.ident.span())?;
+    let fallible = options.validate_builder;
+    if fallible && check.is_none() {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "validate_builder requires patch(validate = ..., error = ...)",
+        ));
+    }
+    let builder = if options.existing_builder {
+        None
+    } else {
+        Some(builder(
+            &item,
+            &options,
+            &members,
+            if fallible { check } else { None },
+        ))
+    };
     let accessors = accessors(&item, &members);
-    let default = options.built_default.then(|| built_default(&item));
+    let default = options
+        .built_default
+        .then(|| built_default(&item, fallible));
     let debug = options.debug.then(|| debug(&item, &members));
     let snapshot = (!options.construction)
         .then(|| snapshot(&item, &options, &members))
@@ -140,7 +173,12 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
 /// the type's constructor is `X::builder()`. Skipped fields are bound in
 /// declaration order before any argument moves into `Self`, so their
 /// expressions read the arguments and the skipped fields above them.
-fn builder(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> TokenStream {
+fn builder(
+    item: &DeriveInput,
+    options: &Options,
+    members: &[Member<'_>],
+    check: Option<Check>,
+) -> TokenStream {
     let name = &item.ident;
     let visibility = &item.vis;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
@@ -163,15 +201,23 @@ fn builder(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Tok
                 Some(quote!(let #field: #ty = #value;))
             }
         });
-    let fields = members.iter().map(|member| member.name);
+    let fields: Vec<&Ident> = members.iter().map(|member| member.name).collect();
+    let (result, body) = if let Some(Check { with, error }) = check {
+        (
+            quote!(::core::result::Result<Self, #error>),
+            quote!(#with(Self { #(#fields),* })),
+        )
+    } else {
+        (quote!(Self), quote!(Self { #(#fields),* }))
+    };
     quote! {
         #[::kithara_config::__private::bon::bon(crate = ::kithara_config::__private::bon)]
         #[automatically_derived]
         impl #impl_generics #name #ty_generics #where_clause {
             #top
-            #visibility fn new(#(#arguments),*) -> Self {
+            #visibility fn new(#(#arguments),*) -> #result {
                 #(#initialisers)*
-                Self { #(#fields),* }
+                #body
             }
         }
     }
@@ -195,14 +241,24 @@ fn accessors(item: &DeriveInput, members: &[Member<'_>]) -> Option<TokenStream> 
     })
 }
 
-fn built_default(item: &DeriveInput) -> TokenStream {
+fn built_default(item: &DeriveInput, fallible: bool) -> TokenStream {
     let name = &item.ident;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    // Declared defaults are an infallible contract; a rejected set is a code defect.
+    let build = if fallible {
+        quote! {
+            Self::builder().build().unwrap_or_else(|_| {
+                ::core::panic!(concat!("invalid declared defaults for ", stringify!(#name)))
+            })
+        }
+    } else {
+        quote!(Self::builder().build())
+    };
     quote! {
         #[automatically_derived]
         impl #impl_generics ::core::default::Default for #name #ty_generics #where_clause {
             fn default() -> Self {
-                Self::builder().build()
+                #build
             }
         }
     }
@@ -512,6 +568,30 @@ mod tests {
                 "construction accepted retained-only options: {options}"
             );
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn validated_builders_require_a_declared_domain_check() {
+        assert_eq!(
+            refusal(quote! {
+                #[config(validate_builder)]
+                struct Settings {
+                    #[config(value)]
+                    limit: usize,
+                }
+            }),
+            "validate_builder requires patch(validate = ..., error = ...)"
+        );
+        assert_eq!(
+            refusal(quote! {
+                #[config(builder(existing), validate_builder, patch(validate = Self::check, error = Error))]
+                struct Settings {
+                    #[config(value)]
+                    limit: usize,
+                }
+            }),
+            "validate_builder requires a generated builder"
+        );
     }
 
     #[kithara::test(native, flash(false))]
