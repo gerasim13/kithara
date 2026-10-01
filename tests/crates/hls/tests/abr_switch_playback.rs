@@ -34,7 +34,7 @@ use kithara_integration_tests::{
     },
     served_mp3,
 };
-use kithara_test_utils::{TestTempDir, temp_dir, virtual_pace};
+use kithara_test_utils::{TestTempDir, pace, temp_dir};
 use tracing::info;
 use url::Url;
 
@@ -204,7 +204,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(
         loop {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    virtual_pace(Duration::from_millis(10));
+                    pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     total_samples += count.get() as u64;
@@ -555,7 +555,7 @@ async fn stream_continues_after_seek(
         while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
+                Ok(ReadOutcome::Pending { .. }) => pace(Duration::from_millis(5)),
                 Ok(ReadOutcome::Eof { .. }) => panic!("[{label}] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
@@ -571,7 +571,7 @@ async fn stream_continues_after_seek(
             while samples < samples_per_seek {
                 match audio.read(&mut buf) {
                     Ok(ReadOutcome::Pending { .. }) => {
-                        virtual_pace(Duration::from_millis(10));
+                        pace(Duration::from_millis(10));
                     }
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         samples += count.get() as u64;
@@ -590,7 +590,7 @@ async fn stream_continues_after_seek(
         while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    virtual_pace(Duration::from_millis(10));
+                    pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     post_seek_samples += count.get() as u64;
@@ -654,7 +654,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
         loop {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    virtual_pace(Duration::from_millis(10));
+                    pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     total_samples += count.get() as u64;
@@ -736,7 +736,7 @@ async fn seek_after_eof_mmap_produces_samples(
         while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
+                Ok(ReadOutcome::Pending { .. }) => pace(Duration::from_millis(5)),
                 Ok(ReadOutcome::Eof { .. }) => panic!("[{label}] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
@@ -756,7 +756,7 @@ async fn seek_after_eof_mmap_produces_samples(
             while samples < samples_per_seek {
                 match audio.read(&mut buf) {
                     Ok(ReadOutcome::Pending { .. }) => {
-                        virtual_pace(Duration::from_millis(10));
+                        pace(Duration::from_millis(10));
                     }
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         samples += count.get() as u64;
@@ -817,7 +817,7 @@ async fn mp3_stream_continues_after_seek(
         while warmup_samples < 17_640 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
+                Ok(ReadOutcome::Pending { .. }) => pace(Duration::from_millis(5)),
                 Ok(ReadOutcome::Eof { .. }) => panic!("[mp3] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
@@ -833,7 +833,7 @@ async fn mp3_stream_continues_after_seek(
             while samples < samples_per_seek {
                 match audio.read(&mut buf) {
                     Ok(ReadOutcome::Pending { .. }) => {
-                        virtual_pace(Duration::from_millis(10));
+                        pace(Duration::from_millis(10));
                     }
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         samples += count.get() as u64;
@@ -852,7 +852,7 @@ async fn mp3_stream_continues_after_seek(
         while post_seek_samples < samples_per_seek {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
-                    virtual_pace(Duration::from_millis(10));
+                    pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     post_seek_samples += count.get() as u64;

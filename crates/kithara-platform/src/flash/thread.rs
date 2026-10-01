@@ -220,20 +220,6 @@ pub fn park_timeout(duration: Duration) {
     }
 }
 
-/// Park onto the quiescence engine UNCONDITIONALLY (no `flash_enabled()`
-/// consult), mirroring [`park_timeout`]'s flash arm. The lexical test rewriter
-/// (`flash::virtual_park_timeout`) targets this so a flash test body's
-/// `park_timeout` collapses onto virtual time without setting the `active`
-/// mode flag.
-#[inline]
-pub(crate) fn park_timeout_virtual(duration: Duration) {
-    crate::flash::system::park_timed_unparkable(
-        duration,
-        ThreadKey::of(current().id()),
-        crate::flash::system::ParkRole::Deadline,
-    );
-}
-
 /// Unpark a thread parked in [`park_timeout`].
 ///
 /// Native (non-sim) / wasm: delegates to the OS/runtime `Thread::unpark`.

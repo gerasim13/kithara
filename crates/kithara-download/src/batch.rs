@@ -5,7 +5,6 @@ use kithara_events::EventBus;
 use kithara_net::{HttpClient, NetError, NetObserver, Observer, Retryability};
 use kithara_platform::{
     CancelGroup, CancelToken,
-    flash::virtual_now,
     sync::Arc,
     time::{Duration, Instant, WallInstant},
     tokio,
@@ -225,23 +224,25 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     });
 }
 
-/// Stamped in the flash dispatch, read in the real-time fetch task.
+/// Stamped in the dispatch and read in the fetch task.
 #[derive(Clone, Copy)]
 struct FetchStart {
-    virtual_clock: Instant,
+    clock: Instant,
     wall: WallInstant,
 }
 
 impl FetchStart {
+    #[kithara::flash(true)]
     fn elapsed(self) -> Duration {
         self.wall
             .elapsed()
-            .max(virtual_now().saturating_duration_since(self.virtual_clock))
+            .max(Instant::now().saturating_duration_since(self.clock))
     }
 
+    #[kithara::flash(true)]
     fn now() -> Self {
         Self {
-            virtual_clock: virtual_now(),
+            clock: Instant::now(),
             wall: WallInstant::now(),
         }
     }

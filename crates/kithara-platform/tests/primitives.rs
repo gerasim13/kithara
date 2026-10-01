@@ -7,21 +7,37 @@
 use kithara_test_dylib as _;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod clock {
+    use kithara_platform::{
+        thread,
+        time::{Duration, Instant, WallInstant},
+    };
+    use kithara_test_utils::kithara;
+
+    #[kithara::test]
+    fn ordinary_now_and_sleep_use_the_same_clock() {
+        let started = Instant::now();
+        thread::sleep(Duration::from_millis(5));
+        assert!(started.elapsed() >= Duration::from_millis(5));
+    }
+
+    #[kithara::test(flash(false))]
+    fn flash_false_keeps_real_time() {
+        let started = WallInstant::now();
+        thread::sleep(Duration::from_millis(5));
+        assert!(started.elapsed() >= Duration::from_millis(5));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 mod mpsc {
     use std::time::Duration;
 
     use kithara_platform::{sync::mpsc::*, time::Instant};
     use kithara_test_utils::kithara;
 
-    /// `flash(false)`: these tests build a `kithara_platform::time::Instant`
-    /// deadline and pass it to the crate's own `recv_timeout`. The lexical
-    /// flash rewrite would retarget `Instant::now()` onto
-    /// `::kithara_platform::flash::virtual_now`, whose `Instant` resolves through
-    /// the dev-dep copy of `kithara_platform` (`kithara-test-utils` pulls a
-    /// non-flash copy) — a different `Instant` type than the one the method
-    /// expects. They do not test flash time behaviour, so opting out of the
-    /// rewrite keeps a single `Instant`.
-    #[kithara::test(flash(false))]
+    /// The same public `Instant::now()` deadline must work in both clock lanes.
+    #[kithara::test]
     fn recv_sync_timeout_returns_delivered_value_before_deadline() {
         let (tx, rx) = channel::<u32>();
         tx.send(7).expect("send to live receiver");
@@ -29,14 +45,14 @@ mod mpsc {
         assert_eq!(rx.recv_timeout(deadline), Ok(7));
     }
 
-    #[kithara::test(flash(false))]
+    #[kithara::test]
     fn recv_sync_timeout_times_out_when_no_value_arrives() {
         let (_tx, rx) = channel::<u32>();
         let deadline = Instant::now() + Duration::from_millis(10);
         assert_eq!(rx.recv_timeout(deadline), Err(RecvTimeoutError::Timeout));
     }
 
-    #[kithara::test(flash(false))]
+    #[kithara::test]
     fn recv_sync_timeout_reports_disconnect_when_senders_dropped() {
         let (tx, rx) = channel::<u32>();
         drop(tx);
@@ -65,11 +81,7 @@ mod thread {
         }
     }
 
-    /// `flash(false)`: a real park/unpark timing test. It measures REAL
-    /// wall-clock with `std::time::Instant` (not the platform clock) and asserts
-    /// the unpark wakes within 250ms. The lexical flash rewrite would retarget
-    /// `Instant::now()` onto the engine `virtual_now`, changing the clock
-    /// and leaving the `std::time::Instant` import unused, so opt out.
+    /// This timing assertion measures real wall time, including under flash.
     #[kithara::test(flash(false))]
     fn park_timeout_returns_after_unpark() {
         #[cfg(not(target_arch = "wasm32"))]

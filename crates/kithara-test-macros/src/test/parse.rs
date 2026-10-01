@@ -7,8 +7,7 @@ use syn::{
 #[derive(Default)]
 pub(crate) struct TestArgs {
     /// `flash(true|false)`; `None` defaults to `true` at expansion. `true` runs
-    /// the lexical body-only time-call rewrite + sets the per-test ambient gate;
-    /// `false` sets ambient off and does NOT rewrite (the body runs REAL).
+    /// ambient and active flash mode for the test body; `false` keeps both off.
     pub(crate) flash: Option<bool>,
     /// `hang_timeout_secs(N)`: the liveness budget `#[kithara::hang_watchdog]`
     /// arms with inside this test. Shortens the REAL wait a watchdog park costs

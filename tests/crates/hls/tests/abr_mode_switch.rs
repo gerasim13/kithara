@@ -17,7 +17,7 @@ use kithara::{
         CancelToken,
         sync::{Arc, Mutex},
         thread::paced_backoff,
-        time::Duration,
+        time::{Duration, Instant},
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},

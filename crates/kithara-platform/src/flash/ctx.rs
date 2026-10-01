@@ -7,12 +7,12 @@ use std::{cell::Cell, panic::Location};
 /// [`flash_ambient`] once at construction. Default = REAL (both false).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::flash) struct Mode {
-    /// Dynamic: "is flash propagating on this callstack right now?" Pushed by
-    /// a prod `#[kithara::flash(true)]` guard (only when ambient).
+    /// Dynamic: "is flash propagating on this callstack right now?" Set by the
+    /// test macro for its body and by `#[kithara::flash(bool)]` for nested regions.
     active: bool,
     /// Per-test gate: "is this test flash-eligible?" Set by the test macro,
     /// propagated across spawn. A gate — only [`push_active`] consults it to
-    /// decide whether a prod flash region may take effect.
+    /// decide whether an active region may take effect.
     ambient: bool,
 }
 
@@ -102,7 +102,7 @@ pub(in crate::flash) struct ModeSnapshot {
     set: Mode,
 }
 
-/// Push a dynamic flash mode: `active = on && ambient` (a prod flash region
+/// Push a dynamic flash mode: `active = on && ambient` (an active region
 /// takes effect only under the ambient gate; `on = false` always carves
 /// REAL). Returns the scope's [`ModeSnapshot`] for its drop. Writer: the
 /// `FlashScope` RAII scope only.

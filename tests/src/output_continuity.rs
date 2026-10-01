@@ -8,7 +8,7 @@ use kithara::{
     events::EventReceiver,
     platform::time::{Duration, Instant},
 };
-use kithara_test_utils::virtual_pace;
+use kithara_test_utils::pace;
 
 use crate::{event::TestEvent, offline::OfflinePlayer};
 
@@ -135,7 +135,7 @@ pub async fn render_until_audible(
         {
             return;
         }
-        virtual_pace(block_budget.saturating_sub(elapsed));
+        pace(block_budget.saturating_sub(elapsed));
     }
     panic!("{label}: no audible block within {AUDIBLE_WARMUP_BLOCKS} rendered blocks");
 }
@@ -171,16 +171,8 @@ pub async fn render_offline_window(
         } else {
             current_silence += 1;
         }
-        // Inter-block pacing MUST drive the virtual clock so the decode worker
-        // (a `spawn_named` flash pacer parked on the engine) advances and fills
-        // the producer ring before the next `render` samples it. `virtual_pace`
-        // is the `#[kithara::flash]`-guarded sleep: inside the test driver's poll
-        // it is a BRIDGED wait that releases the task's `active_async` slot, lets
-        // the clock jump, and re-acquires on resume — so the worker delivers real
-        // PCM exactly as on the real clock instead of the render zero-filling
-        // silence on underrun. Off the flash feature / off ambient it is a real
-        // wall-clock sleep.
-        virtual_pace(block_budget.saturating_sub(elapsed));
+        // Let the decode worker fill the producer ring before the next render.
+        pace(block_budget.saturating_sub(elapsed));
     }
 
     if current_silence > max_silence {

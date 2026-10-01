@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
 };
-use kithara_test_utils::virtual_pace;
+use kithara_test_utils::pace;
 use tracing::info;
 use url::Url;
 
@@ -80,7 +80,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(
                 Ok(ChunkOutcome::Chunk(_)) => chunks_read += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => {
-                    virtual_pace(Duration::from_micros(100));
+                    pace(Duration::from_micros(100));
                 }
                 Err(e) => panic!("warmup decode error: {e}"),
             }
@@ -95,13 +95,13 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(
                     drained += 1;
                     // Load-bearing pacing: the reader must lag the network so
                     // the cap=1 LRU evicts segments behind/under the reader.
-                    virtual_pace(Duration::from_millis(consts::READER_SLEEP_MS));
+                    pace(Duration::from_millis(consts::READER_SLEEP_MS));
                 }
                 Ok(ChunkOutcome::Eof { .. }) => {
                     reached_eof = true;
                 }
                 Ok(ChunkOutcome::Pending { .. }) => {
-                    virtual_pace(Duration::from_micros(100));
+                    pace(Duration::from_micros(100));
                 }
                 Err(e) => panic!("drain decode error: {e}"),
             }

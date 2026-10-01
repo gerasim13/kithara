@@ -13,10 +13,11 @@ use std::{
 use kithara_test_utils::kithara;
 
 use super::{
-    Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, participate, reset,
+    Duration, FlashSleep, Instant, advance, ambient_scope, enter_dynamic, flash_enabled,
+    participate, reset,
     system::{FlashInner, credit, forward},
-    time::TimeoutError,
-    virtual_sleep, virtual_timeout, yield_now,
+    time::{FlashTimeout, TimeoutError},
+    yield_now,
 };
 use crate::{
     consts,
@@ -461,7 +462,7 @@ fn a_deadline_less_waiter_of_a_parked_task_is_not_marked_as_pinning() {
 /// A task left `RUNNABLE` by a wake keeps its slot until it is re-polled — but
 /// on a `current_thread` runtime the only thread that can re-poll it is the
 /// `block_on` thread, and a synchronous engine wait taken INSIDE a poll (a
-/// render loop's `virtual_pace`) blocks exactly that thread. The bridged branch
+/// render loop's deliberate pace) blocks exactly that thread. The bridged branch
 /// releases the BLOCKING task's slot, not the stranded one's, so the stranded
 /// task pins the clock, the pace deadline never fires, and the poll that would
 /// clear the pin never runs — the crossfade hang, whose sixteen dumps all named
@@ -575,10 +576,10 @@ fn a_timeout_arms_its_deadline_before_the_work_it_guards_moves_the_clock() {
     reset();
     let waker = Waker::from(Arc::new(NoopWake));
     let mut cx = Context::from_waker(&waker);
-    let mut guarded = Box::pin(virtual_timeout(
-        Duration::from_millis(100),
-        virtual_sleep(Duration::from_millis(150)),
-    ));
+    let mut guarded = Box::pin(FlashTimeout {
+        future: FlashSleep::new(Duration::from_millis(150)),
+        sleep: FlashSleep::new(Duration::from_millis(100)),
+    });
 
     assert!(
         matches!(

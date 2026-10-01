@@ -6,5 +6,4 @@
 
 use kithara_test_dylib as _;
 
-mod flash_lexical;
 mod timeout_guard;

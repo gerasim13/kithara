@@ -59,11 +59,14 @@ pub(crate) fn emit_async_runtime_test(
                 ::kithara_test_utils::kithara_platform::flash::participate(
                     ::kithara_test_utils::kithara_platform::flash::with_ambient(
                         #flash,
-                        ::kithara_test_utils::no_block::watch_root(
-                            #fn_name_str,
-                            async {
-                                #inner_body
-                            },
+                        ::kithara_test_utils::kithara_platform::flash::dynamic(
+                            #flash,
+                            ::kithara_test_utils::no_block::watch_root(
+                                #fn_name_str,
+                                async {
+                                    #inner_body
+                                },
+                            ),
                         ),
                     ),
                     ::core::panic::Location::caller(),
@@ -182,11 +185,14 @@ pub(crate) fn emit_async_timeout_test(
                                         __timeout_dur,
                                         ::kithara_test_utils::kithara_platform::flash::with_ambient(
                                             #flash,
-                                            ::kithara_test_utils::no_block::watch_root(
-                                                #fn_name_str,
-                                                async {
-                                                    #inner_body
-                                                },
+                                            ::kithara_test_utils::kithara_platform::flash::dynamic(
+                                                #flash,
+                                                ::kithara_test_utils::no_block::watch_root(
+                                                    #fn_name_str,
+                                                    async {
+                                                        #inner_body
+                                                    },
+                                                ),
                                             ),
                                         ),
                                     )

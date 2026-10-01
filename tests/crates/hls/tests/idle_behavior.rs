@@ -9,7 +9,10 @@ use kithara::{
     audio::{AudioConfig, AudioControl},
     events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{sync::Arc, time::Duration},
+    platform::{
+        sync::Arc,
+        time::{self, Duration},
+    },
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{

@@ -11,13 +11,10 @@ pub use crate::{
     flash::Instant,
 };
 
-/// `sleep` under `flash` (native): real-vs-virtual is decided by the per-
-/// thread real-time flag at first poll (the thread that actually awaits). On a
-/// real-time thread (the test driver, marked by [`crate::flash::flash_real`])
-/// it is a true `tokio` timer; otherwise it registers a virtual deadline on the
-/// quiescence engine, so the wait collapses (the clock jumps once all
-/// participants park) and consumes no real wall-clock. The decision lives at
-/// this single chokepoint — consumers just call `kithara_platform::time::sleep`.
+/// `sleep` under `flash` (native): the active mode is read on the thread that
+/// polls this future. Real mode uses a `tokio` timer; active flash mode registers
+/// a virtual deadline on the quiescence engine. Consumers call this same API in
+/// both modes.
 pub async fn sleep(duration: Duration) {
     if crate::flash::flash_enabled() {
         crate::flash::FlashSleep::new(duration).await;
@@ -56,8 +53,7 @@ pin_project! {
     /// afterwards would date the deadline from a clock that work had already
     /// moved - a longer inner wait would then outlive the shorter timeout. Once
     /// armed, the future is polled first, so a ready result wins a tie with the
-    /// deadline. `pub(crate)`: also constructed by the flash control surface's
-    /// `virtual_timeout`.
+    /// deadline. `pub(crate)`: also constructed by the platform's clock tests.
     pub(crate) struct FlashTimeout<F> {
         #[pin]
         pub(crate) future: F,

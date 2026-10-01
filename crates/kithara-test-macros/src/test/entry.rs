@@ -6,9 +6,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{
-    Attribute, Error, Expr, Ident, ItemFn, ReturnType, parse_macro_input, visit_mut::VisitMut,
-};
+use syn::{Attribute, Error, Expr, Ident, ItemFn, ReturnType, parse_macro_input};
 
 use super::{
     case::{Case, case_ident, extract_cases, is_case_attr},
@@ -16,7 +14,6 @@ use super::{
     expand_sync::{emit_native_only_one, emit_one_test},
     fixture_args::{ParamInfo, extract_params, make_preamble},
     parse::TestArgs,
-    rewrite::FlashRewrite,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
         make_sync_test_attrs, make_tracing_init, make_wasm_serial_guard, wrap_with_timeout,
@@ -38,7 +35,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
+fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
     if args.is_loom && func.sig.asyncness.is_some() {
         return Err(Error::new_spanned(
             func.sig.asyncness,
@@ -57,35 +54,8 @@ fn generate(args: TestArgs, mut func: ItemFn) -> syn::Result<TokenStream2> {
     let remaining_attrs: Vec<_> = func.attrs.iter().filter(|a| !is_case_attr(a)).collect();
     let params = extract_params(&func)?;
 
-    // Flash containment (default `true`). Under `flash(true)` lexically retarget
-    // the BODY's direct time-primitive calls onto the unconditional
-    // `virtual_*` variants (so the body collapses without setting
-    // `FLASH_ACTIVE`, leaving callee prod fns on REAL); under `flash(false)`
-    // leave the body untouched. The ambient holder is NOT injected here:
-    // each emit path adds its own (see `shared::make_ambient_stmt`) —
-    // sync/wasm bodies hold a body-head `ambient_scope` for their whole
-    // extent, while async-native bodies carry ONLY the per-poll
-    // `with_ambient` wrapper (a body-held scope inside the cancellable
-    // timeout would tear down non-LIFO on Elapsed). Off the `flash` feature
-    // both `virtual_*` and `ambient_scope` are real-aliases / no-ops, so the
-    // emitted body is behaviour-identical to the original.
-    let flash = args.flash.unwrap_or(true);
-    if flash {
-        let mut rewrite = FlashRewrite::default();
-        rewrite.visit_block_mut(&mut func.block);
-        if let Some((span, name)) = rewrite.bare_time_calls.first() {
-            return Err(Error::new(
-                *span,
-                format!(
-                    "bare `{name}(...)` in a flash test body stays on the REAL clock: the \
-                     flash rewriter matches the last two path segments (`time::{name}`) and \
-                     cannot see a single-segment call — a mixed-clock hazard. Import the \
-                     module (`use kithara_platform::time;`) and call `time::{name}(...)`, \
-                     or mark the test `flash(false)`."
-                ),
-            ));
-        }
-    }
+    // The emit paths enter dynamic flash after installing ambient. Ordinary
+    // platform time calls then use the same mode in the body and its callees.
 
     let ctx = GenCtx {
         args: &args,

@@ -3,9 +3,8 @@
 extern crate self as kithara_test_utils;
 
 /// Re-export of `kithara-platform` so the `#[kithara::test]` macro can reach the
-/// flash control surface (`ambient_scope`, the lexical-rewrite `virtual_*`
-/// targets) through a path present in EVERY crate that uses the macro — they all
-/// depend on `kithara-test-utils` (it vends the macro), but not all depend on
+/// flash control surface through a path present in EVERY crate that uses the
+/// macro. They all depend on `kithara-test-utils`, but not all depend on
 /// `kithara-platform` directly. The macro emits
 /// `::kithara_test_utils::kithara_platform::flash::…` for its body-injected
 /// flash wrapping.
@@ -46,7 +45,7 @@ pub use cancel::{cancel_token, cancel_token_cancelled};
 #[cfg(all(feature = "http-server", not(target_arch = "wasm32")))]
 pub use http_server::TestHttpServer;
 #[cfg(not(target_arch = "wasm32"))]
-pub use pace::virtual_pace;
+pub use pace::pace;
 pub use rng::Xorshift64;
 #[cfg(feature = "temp-dir")]
 pub use temp_dir::{TestTempDir, temp_dir, temp_path};

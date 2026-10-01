@@ -16,10 +16,7 @@ use super::{
     system::{self, FLASH},
 };
 pub use crate::common::time::Duration;
-use crate::{
-    flash::time::{FlashTimeout, TimeoutError},
-    sync::Arc,
-};
+use crate::sync::Arc;
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
 /// or body-chunk await in `kithara-net`). While at least one scope is live the
@@ -69,7 +66,8 @@ impl FlashSleep {
     /// Register the deadline (and run the advance rule) WITHOUT consuming a
     /// grant. The engine computes a deadline from the clock it reads at
     /// registration, so a caller whose deadline must bound work that can itself
-    /// move the clock has to arm before running that work - see [`FlashTimeout`].
+    /// move the clock has to arm before running that work - see
+    /// [`crate::flash::time::FlashTimeout`].
     /// Idempotent: arming an already-armed sleep is a no-op.
     pub(crate) fn arm(mut self: Pin<&mut Self>, cx: &mut Context<'_>) {
         if self.handle.is_some() {
@@ -234,45 +232,6 @@ pub fn log_hang_dump(context: &str) {
     tracing::error!(target: "flash::hang", "{}", hang_dump(context));
 }
 
-/// Virtual `sleep` that hits the quiescence engine UNCONDITIONALLY (no
-/// `flash_enabled()` consult). The lexical test rewriter ([`#[kithara::test(flash(true))]`])
-/// retargets a test body's direct `time::sleep` calls here, so the BODY's own
-/// waits collapse onto virtual time without setting the active mode flag — a
-/// prod fn the body calls keeps its stateless time reads on REAL.
-pub fn virtual_sleep(duration: Duration) -> impl Future<Output = ()> {
-    FlashSleep::new(duration)
-}
-
-/// Virtual `timeout` that hits the engine UNCONDITIONALLY (see
-/// [`virtual_sleep`]). Races `future` against an engine-backed deadline.
-///
-/// # Errors
-///
-/// Returns [`TimeoutError`] if the future does not complete within `duration`.
-pub async fn virtual_timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
-where
-    F: Future,
-{
-    FlashTimeout {
-        future,
-        sleep: FlashSleep::new(duration),
-    }
-    .await
-}
-
-/// Virtual `Instant::now` read UNCONDITIONALLY from the engine clock (see
-/// [`virtual_sleep`]). Mirrors [`Instant::now`]'s flash arm.
-#[must_use]
-pub fn virtual_now() -> Instant {
-    Instant::now_virtual()
-}
-
-/// Virtual `park_timeout` that hits the engine UNCONDITIONALLY (see
-/// [`virtual_sleep`]). Mirrors [`crate::thread::park_timeout`]'s flash arm.
-pub fn virtual_park_timeout(duration: Duration) {
-    crate::thread::park_timeout_virtual(duration);
-}
-
 /// Folds seconds and subsec nanoseconds via `u64` arithmetic rather than a `u128` intermediate,
 /// avoiding a cast.
 pub(super) fn duration_to_nanos(d: Duration) -> u64 {
@@ -308,7 +267,7 @@ pub(crate) fn reset() {
     FLASH.reset();
 }
 
-/// RAII guard for a prod `#[kithara::flash(bool)]` region. `on=true` activates
+/// RAII guard for a `#[kithara::flash(bool)]` or test-body region. `on=true` activates
 /// flash for the dynamic extent IFF the test is flash-eligible (ambient);
 /// `on=false` carves REAL inside a flash region. Saves/restores the previous
 /// whole `Mode` so regions nest bidirectionally (LIFO premise — see
@@ -327,7 +286,7 @@ impl Drop for FlashScope {
 /// always carves real. Returns a guard that restores the previous mode on drop.
 ///
 /// MACRO-INTERNAL: this is the private expansion target of the
-/// `#[kithara::flash(bool)]` guard macro (sync arm). Do NOT call it by hand —
+/// `#[kithara::flash(bool)]` and `#[kithara::test]` macros. Do NOT call it by hand —
 /// annotate the function with `#[kithara::flash(true|false)]` instead. Direct
 /// use is rejected by `just lint`. It stays `pub` only because the macro
 /// expands `::kithara_platform::flash::enter_dynamic` into the annotated crate.
@@ -504,13 +463,11 @@ impl Instant {
         Self(FLASH.clock.real_now_nanos())
     }
 
-    /// The virtual `now`, read UNCONDITIONALLY from the engine clock (no
-    /// `flash_enabled()` consult). The lexical test rewriter (`virtual_now`)
-    /// targets this directly so a flash test body's `Instant::now` collapses
-    /// onto virtual time without setting the active mode flag.
+    /// Read the engine clock for platform internals that already selected the
+    /// flash branch. Callers use [`Self::now`] to select real or flash time.
     #[inline]
     #[must_use]
-    pub fn now_virtual() -> Self {
+    pub(crate) fn now_virtual() -> Self {
         Self(FLASH.clock.now_nanos())
     }
 

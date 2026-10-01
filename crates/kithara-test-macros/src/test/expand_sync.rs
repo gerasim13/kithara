@@ -25,10 +25,8 @@ pub(crate) fn emit_one_test(
 ) -> TokenStream2 {
     let tracing_init = make_tracing_init(args, remaining_attrs);
     let ambient = make_ambient_stmt(args);
-    // Plain body for the async-NATIVE emissions (their sole ambient holder is
-    // the per-poll `with_ambient`; a body-held scope there tears down non-LIFO
-    // on a timeout cancel); held body for the wasm and sync emissions, where
-    // the body-head `ambient_scope` is the sole ambient writer.
+    // Async-native emissions install mode per poll; wasm and sync emissions
+    // hold both ambient and active scopes in the body.
     let full_plain = quote! { #tracing_init #preamble #(#body_stmts)* };
     let full_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
     let serial_attr = make_serial_attr(args);

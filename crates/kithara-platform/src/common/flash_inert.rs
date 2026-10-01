@@ -7,10 +7,6 @@ use std::{
 };
 
 pub use crate::time::Instant;
-use crate::{
-    common::time::TimeoutError,
-    time::{sleep, timeout},
-};
 
 /// Off the sim path a spawned task needs no quiescence accounting, so the
 /// participant wrapper is the future itself. Under `flash` this is the
@@ -136,45 +132,6 @@ impl Future for Yield {
             }
         }
     }
-}
-
-/// Off the sim path the lexical test rewriter's `virtual_*` targets alias
-/// the REAL primitives, so a rewritten test body behaves identically to its
-/// unrewritten form (the rewrite is a no-op when `flash` is off). The
-/// `#[kithara::test]` macro emits these into EVERY test body, so they must
-/// resolve in the off-feature + wasm configs.
-#[inline]
-pub fn virtual_sleep(duration: Duration) -> impl Future<Output = ()> {
-    sleep(duration)
-}
-
-/// Off-feature real alias for the rewriter's virtual `timeout` (see
-/// [`virtual_sleep`]).
-///
-/// # Errors
-///
-/// Returns [`TimeoutError`] if the future does not complete within `duration`.
-#[inline]
-pub async fn virtual_timeout<F>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>
-where
-    F: Future,
-{
-    timeout(duration, future).await
-}
-
-/// Off-feature real alias for the rewriter's virtual `Instant::now` (see
-/// [`virtual_sleep`]).
-#[inline]
-#[must_use]
-pub fn virtual_now() -> Instant {
-    Instant::now()
-}
-
-/// Off-feature real alias for the rewriter's virtual `park_timeout` (see
-/// [`virtual_sleep`]).
-#[inline]
-pub fn virtual_park_timeout(duration: Duration) {
-    crate::thread::park_timeout(duration);
 }
 
 /// Off the sim path a real I/O operation needs no pacing (time is already

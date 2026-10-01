@@ -89,17 +89,19 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-/// Body-held flash ambient holder — ONLY for emit paths without a per-poll
+/// Body-held flash mode — ONLY for emit paths without a per-poll
 /// `with_ambient` wrapper (native sync, wasm), where it is the sole ambient
-/// writer of the body. The async-native emissions must NOT carry it: a second
-/// holder living in the async body's state inside the cancellable timeout
-/// tears down non-LIFO on `Elapsed` (stale ambient resurrect, caught by the
-/// platform's `restore_mode` guard).
+/// writer of the body. The active guard follows ambient so ordinary platform
+/// time calls select the virtual clock. Async-native emissions must NOT carry
+/// these guards: a body-held scope inside the cancellable timeout tears down
+/// non-LIFO on `Elapsed`.
 pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
     let flash = args.flash.unwrap_or(true);
     quote! {
         let __flash_ambient =
             ::kithara_test_utils::kithara_platform::flash::ambient_scope(#flash);
+        let __flash_active =
+            ::kithara_test_utils::kithara_platform::flash::enter_dynamic(#flash);
     }
 }
 

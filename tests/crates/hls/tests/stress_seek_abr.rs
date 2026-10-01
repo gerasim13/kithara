@@ -6,7 +6,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     platform::{
         sync::Arc,
-        time::Duration,
+        time::{Duration, Instant},
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},

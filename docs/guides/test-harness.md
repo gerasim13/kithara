@@ -50,7 +50,7 @@ helper; if it lacks a knob, extend it in its owner.
 | Wait on playback position, events, loader | `waits::*`, `render_until_position` | `tests/src::waits` |
 | Temp dir or path | `temp_dir`, `temp_path`, `TestTempDir` (feature `temp-dir`) | `kithara-test-utils` |
 | Cancel token | `cancel_token`, `cancel_token_cancelled` | `kithara-test-utils` |
-| Flash-aware pacing | `virtual_pace` | `kithara-test-utils` |
+| Deliberate pacing | `pace` | `kithara-test-utils` |
 | Seeded randomness | `Xorshift64` | `kithara-test-utils` |
 | Log capture | `#[kithara::test(tracing("<filter>"))]` | `kithara-test-macros` |
 | Buffer pools | `bufpool::{pools, pools_with_budget, TestPools}` | `kithara-test-utils` |
