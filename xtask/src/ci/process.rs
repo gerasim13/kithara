@@ -673,7 +673,7 @@ mod tests {
     }
 
     /// A step read from its output hands both streams over in the order they
-    /// were written, and a failure keeps the tail that says why.
+    /// were written, and a failure keeps the tail that says why, not the head.
     #[cfg(unix)]
     #[test]
     fn a_transcript_holds_both_streams_and_a_failure_keeps_its_tail() {
@@ -687,7 +687,10 @@ mod tests {
             .unwrap();
         let error = process
             .transcript(
-                Command::new("sh").args(["-c", "echo last >&2; exit 3"]),
+                Command::new("sh").args([
+                    "-c",
+                    "echo first; for _ in $(seq 40); do echo -; done; echo last >&2; exit 3",
+                ]),
                 "failing",
             )
             .unwrap_err();
@@ -697,5 +700,6 @@ mod tests {
             .downcast_ref::<ChildFailure>()
             .expect("a child failure");
         assert!(failure.to_string().contains("last"), "{failure}");
+        assert!(!failure.to_string().contains("first"), "{failure}");
     }
 }

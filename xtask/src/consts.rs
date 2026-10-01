@@ -446,8 +446,10 @@ pub(crate) const UNKNOWN_BLOB: &str = "unknown";
 pub(crate) const HELD_LINE: &str = "held";
 
 /// What a rebuild check adds to the step it repeats: build without running,
-/// and have cargo say why it builds each unit.
-pub(crate) const REBUILD_CHECK_ARGS: [&str; 2] = ["--no-run", "--cargo-verbose"];
+/// have cargo say why it builds each unit, and say it in plain text, since a
+/// runner that forces colour wraps cargo's status words in escapes.
+pub(crate) const REBUILD_CHECK_ARGS: [&str; 4] =
+    ["--no-run", "--cargo-verbose", "--color", "never"];
 
 /// Lines of a captured command's output a failure carries.
 pub(crate) const TRANSCRIPT_TAIL_LINES: usize = 40;

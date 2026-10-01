@@ -2033,7 +2033,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2046,7 +2046,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2059,7 +2059,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2072,7 +2072,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2085,7 +2085,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2098,7 +2098,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2111,7 +2111,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2124,7 +2124,7 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --flash=off --no-run --cargo-verbose
+  just test run --flash=off --no-run --cargo-verbose --color never
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang

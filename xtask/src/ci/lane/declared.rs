@@ -45,7 +45,7 @@ pub(crate) fn run(
         && !process.is_recording()
     {
         bail!(
-            "{} checks its rebuild against the next claim of its lane slot, and this run holds no slot",
+            "{} checks its rebuild by replaying its lane slot's next claim, which only `ci lane` on the fleet hands it",
             step.label
         );
     }
@@ -466,9 +466,9 @@ mod tests {
         assert!(!env.contains_key(consts::TOOLCHAIN_ENV), "{env:?}");
     }
 
-    /// The check repeats its step with the same variables, building only and
-    /// with cargo saying why it builds each unit, and without the timings
-    /// report a build that compiles nothing would still rewrite.
+    /// The check repeats its step with the same variables, building only, with
+    /// cargo saying in plain text why it builds each unit, and without the
+    /// timings report a build that compiles nothing would still rewrite.
     #[test]
     fn a_rebuild_check_repeats_its_step_building_only() {
         let mut lane = checksum_lane(LaneFreshness::Checksum);
@@ -481,12 +481,22 @@ mod tests {
             panic!("the suite and its check: {steps:?}")
         };
         assert_eq!(check.label, "suite rebuild check");
-        assert_eq!(check.args, ["test", "run", "--no-run", "--cargo-verbose"]);
+        assert_eq!(
+            check.args,
+            [
+                "test",
+                "run",
+                "--no-run",
+                "--cargo-verbose",
+                "--color",
+                "never"
+            ]
+        );
         assert_eq!(check.env, suite.env);
     }
 
-    /// Off the fleet nothing claims a slot, so nothing could replay the next
-    /// claim; the lane refuses before its suite spends a build.
+    /// Only `ci lane` on the fleet hands the check the claim it replays; any
+    /// other run refuses before its suite spends a build.
     #[test]
     fn a_rebuild_check_without_a_slot_refuses_before_the_suite_runs() {
         let mut lane = checksum_lane(LaneFreshness::Checksum);
@@ -503,7 +513,7 @@ mod tests {
         )
         .expect_err("no slot to replay");
 
-        assert!(error.to_string().contains("holds no slot"), "{error}");
+        assert!(error.to_string().contains("ci lane"), "{error}");
     }
 
     #[test]
