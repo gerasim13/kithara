@@ -370,15 +370,16 @@ mod panic_dump_tests {
     use kithara_platform::{thread::sleep, time::Duration};
     use tracing_subscriber::layer::SubscriberExt;
 
-    use super::super::{HangDetector, install_panic_dump, suppress_expected_panic_dumps};
+    use super::super::{
+        HangDetector, install_panic_dump, resolve_dump_dir, suppress_expected_panic_dumps,
+    };
     use crate::kithara;
 
-    /// Panic dumps land where `resolve_dump_dir` sends them with no explicit
-    /// dir and no env override: the system temp directory. Filenames carry the
-    /// pid, and each test filters by its own unique panic message.
+    /// Panic dumps land where `resolve_dump_dir` sends them. Filenames carry
+    /// the pid, and each test filters by its own unique panic message.
     fn panic_dumps_containing(needle: &str) -> Vec<PathBuf> {
         let pid = format!("-{}-", std::process::id());
-        std::fs::read_dir(std::env::temp_dir())
+        std::fs::read_dir(resolve_dump_dir(None))
             .unwrap()
             .filter_map(Result::ok)
             .filter(|entry| {

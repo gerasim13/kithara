@@ -4,7 +4,7 @@ use std::path::Path;
 
 use kithara::{
     events::TrackId,
-    platform::time::Duration,
+    platform::time::{self, Duration, Instant},
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
 };
 use kithara_integration_tests::{

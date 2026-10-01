@@ -17,6 +17,7 @@ pub async fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
 }
 
 #[cfg(target_os = "android")]
+#[kithara::flash(io)]
 async fn decode_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     let base = std::env::var("KITHARA_TEST_SERVER_URL")
         .context("Android PCM oracle requires KITHARA_TEST_SERVER_URL")?;
@@ -39,6 +40,7 @@ async fn decode_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(target_os = "android"))]
+#[kithara::flash(io)]
 async fn decode_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     let directory = tempfile::tempdir().context("creating FFmpeg input directory")?;
     let input = directory.path().join("fragment.m4a");

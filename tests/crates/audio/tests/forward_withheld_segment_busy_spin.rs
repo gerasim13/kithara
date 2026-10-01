@@ -20,7 +20,7 @@ use kithara::{
         CancelToken,
         sync::Arc,
         thread,
-        time::{Duration, Instant},
+        time::{self, Duration, Instant},
         tokio,
         tokio::task::spawn_blocking,
     },

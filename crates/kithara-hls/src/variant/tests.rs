@@ -14,7 +14,7 @@ use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
