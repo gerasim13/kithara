@@ -465,14 +465,13 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return action
         }
 
-        // The platform, not the engine, owns the output during an
-        // interruption: the audio callback stops and every value it publishes
-        // freezes. The engine is told before the transport acts on it.
-        notifyInterruption(type, options: interruptionOptions(notification))
-
         if action.pause {
             pause()
         }
+        // Queue the pause before recording the last audio callback tick. A
+        // callback after that tick must have seen the pause command.
+        notifyInterruption(type, options: interruptionOptions(notification))
+
         // A rebuild attempted before the platform session is active again is
         // retried by the session worker.
         if action.rebuildOutput {
