@@ -23,10 +23,10 @@ use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Notify},
-    time::{self, Duration, Instant},
+    time::{self, Duration, Instant, WallInstant},
     tokio::task::spawn as tokio_spawn,
 };
-use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara};
+use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara, pace};
 use url::Url;
 
 use super::{
@@ -497,6 +497,111 @@ async fn run_real_time_ahead(by: Duration) {
     // The first real read anchors the engine's real clock.
     let _anchor = Instant::now();
     time::sleep(by).await;
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn server_delay_is_part_of_streamed_request_duration() {
+    const DELAY: Duration = Duration::from_millis(250);
+
+    let app = Router::new().route(
+        "/data",
+        get(|| async {
+            time::sleep(DELAY).await;
+            Bytes::from(vec![0_u8; 20_000])
+        }),
+    );
+    let server = TestHttpServer::new(app).await;
+    let gate = CompletionGate::new(1);
+    let gate_cb = Arc::clone(&gate);
+    let cmd = FetchCmd::get(server.url("/data"))
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(move |_bytes, _headers, _error| {
+            gate_cb.complete();
+        }))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(peer).with_bus(bus);
+
+    gate.wait().await;
+    let (bytes, duration) = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|envelope| match envelope.event {
+            TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                bytes_transferred,
+                duration,
+                ..
+            }) => Some((bytes_transferred, duration)),
+            _ => None,
+        })
+        .expect("streaming fetch completion event");
+    assert_eq!(bytes, 20_000);
+    assert!(duration >= DELAY, "server delay missing: {duration:?}");
+    drop(handle);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn streamed_request_duration_uses_wall_time() {
+    const UNRELATED_DELAY: Duration = Duration::from_secs(2);
+
+    let app = Router::new().route("/data", get(|| async { Bytes::from(vec![0_u8; 20_000]) }));
+    let server = TestHttpServer::new(app).await;
+    let measured = Arc::new(Mutex::new(None::<(Duration, Duration)>));
+    let measured_cb = Arc::clone(&measured);
+    let gate = CompletionGate::new(1);
+    let gate_cb = Arc::clone(&gate);
+    let cmd = FetchCmd::get(server.url("/data"))
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_response(Box::new(move |_headers| {
+            let wall = WallInstant::now();
+            let clock = Instant::now();
+            pace(UNRELATED_DELAY);
+            *measured_cb.lock() = Some((
+                wall.elapsed(),
+                Instant::now().saturating_duration_since(clock),
+            ));
+        }))
+        .on_complete(Box::new(move |_bytes, _headers, _error| {
+            gate_cb.complete();
+        }))
+        .build();
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cmd])),
+        yielded: Notify::default(),
+    });
+    let bus = EventBus::new(16);
+    let mut events = bus.subscribe();
+    let dl = Downloader::new(test_config());
+    let handle = dl.register(peer).with_bus(bus);
+
+    gate.wait().await;
+    let (bytes, duration) = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|envelope| match envelope.event {
+            TestEvent::Downloader(DownloaderEvent::RequestCompleted {
+                bytes_transferred,
+                duration,
+                ..
+            }) => Some((bytes_transferred, duration)),
+            _ => None,
+        })
+        .expect("streaming fetch completion event");
+    let (wall, clock_elapsed) = (*measured.lock()).expect("clock sample");
+    assert!(bytes >= 16_000, "ABR needs a full-size network sample");
+    assert!(
+        clock_elapsed >= UNRELATED_DELAY,
+        "the paced delay must advance the test clock"
+    );
+    assert!(
+        duration < wall + Duration::from_secs(1),
+        "request duration {duration:?} exceeds wall time {wall:?}"
+    );
+    drop(handle);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

@@ -168,7 +168,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let peer_id = internal.peer_id;
     let request_id = internal.request_id;
     let wait_in_queue = Instant::now().saturating_duration_since(internal.enqueued_at);
-    let started = FetchStart::now();
+    let started = WallInstant::now();
     let mut cmd = internal.cmd;
     let writer = cmd.take_writer();
     let on_complete_cb = cmd.take_on_complete();
@@ -222,30 +222,6 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
         capacity_notify.notify_one();
         fetch_waker.wake();
     });
-}
-
-/// Stamped in the dispatch and read in the fetch task.
-#[derive(Clone, Copy)]
-struct FetchStart {
-    clock: Instant,
-    wall: WallInstant,
-}
-
-impl FetchStart {
-    #[kithara::flash(true)]
-    fn elapsed(self) -> Duration {
-        self.wall
-            .elapsed()
-            .max(Instant::now().saturating_duration_since(self.clock))
-    }
-
-    #[kithara::flash(true)]
-    fn now() -> Self {
-        Self {
-            clock: Instant::now(),
-            wall: WallInstant::now(),
-        }
-    }
 }
 
 /// Race `fut` against a `soft_timeout` timer. When the timer wins, publish
@@ -394,7 +370,7 @@ struct DeliveryContext<'a> {
     peer_cancel: &'a CancelToken,
     peer_id: AbrPeerId,
     abr: Arc<AbrController>,
-    started: FetchStart,
+    started: WallInstant,
     bus: Option<EventBus>,
     epoch_cancel: Option<&'a CancelToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,

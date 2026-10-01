@@ -5,11 +5,15 @@ mod kithara {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Arc, Barrier};
+use std::sync::Barrier;
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::thread;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::StorageError;
@@ -23,6 +27,54 @@ use crate::{
 fn create_resource() -> MemResource {
     let pools = pools();
     MemResource::new(CancelToken::never(), byte_buffer(&pools))
+}
+
+#[kithara::test]
+fn displaced_committed_snapshot_is_reclaimed_by_next_writer() {
+    let pools = pools();
+    let (driver, _) = MemDriver::open(
+        MemOptions::builder()
+            .buffer(byte_buffer(&pools))
+            .initial_data(b"first".to_vec())
+            .build(),
+    )
+    .unwrap();
+    let reader = driver.committed.load();
+    let old: Weak<Vec<u8>> = Arc::downgrade(reader.as_ref().unwrap());
+
+    driver.reactivate().unwrap();
+    driver.write_at(0, b"second", false).unwrap();
+    driver.commit(Some(6)).unwrap();
+    drop(reader);
+    assert!(old.upgrade().is_some(), "reader drop freed displaced bytes");
+
+    driver.reactivate().unwrap();
+    driver.write_at(0, b"third!", false).unwrap();
+    driver.commit(Some(6)).unwrap();
+    assert!(old.upgrade().is_none(), "next writer must reclaim bytes");
+}
+
+#[kithara::test]
+fn clearing_committed_bytes_retires_the_snapshot() {
+    let pools = pools();
+    let (driver, _) = MemDriver::open(
+        MemOptions::builder()
+            .buffer(byte_buffer(&pools))
+            .initial_data(b"first".to_vec())
+            .build(),
+    )
+    .unwrap();
+    let reader = driver.committed.load();
+    let old: Weak<Vec<u8>> = Arc::downgrade(reader.as_ref().unwrap());
+
+    driver.commit(Some(0)).unwrap();
+    assert_eq!(driver.committed_len(), None);
+    drop(reader);
+    assert!(old.upgrade().is_some(), "clear left reader to free bytes");
+
+    driver.write_at(0, b"next", false).unwrap();
+    driver.commit(Some(4)).unwrap();
+    assert!(old.upgrade().is_none(), "next writer must reclaim bytes");
 }
 
 fn with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {

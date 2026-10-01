@@ -7,7 +7,7 @@ use bon::Builder;
 use kithara_bufpool::ByteBuffer;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Retired},
 };
 use rangemap::RangeSet;
 
@@ -52,6 +52,7 @@ pub(super) struct MemState {
 pub struct MemDriver {
     /// Immutable committed snapshot for the lock-free read fast path.
     pub(super) committed: ArcSwapOption<Vec<u8>>,
+    pub(super) retired: Mutex<Retired<Vec<u8>>>,
     pub(super) state: Mutex<MemState>,
 }
 
@@ -62,6 +63,7 @@ impl fmt::Debug for MemDriver {
             .field("len", &state.len)
             .field("capacity", &state.buf.capacity())
             .field("committed", &self.committed.load().is_some())
+            .field("retired", &"writer-owned")
             .finish()
     }
 }
@@ -120,6 +122,7 @@ impl Driver for MemDriver {
 
         let driver = Self {
             committed,
+            retired: Mutex::default(),
             state: Mutex::new(MemState { len, buf: buffer }),
         };
 

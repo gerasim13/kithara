@@ -24,7 +24,9 @@ impl DriverIo for MmapDriver {
     /// still-published committed snapshot; commit flushes that temp generation's dirty pages before
     /// dropping the map and renaming, so the republished mmap sees them.
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.retired.lock().collect();
         let mut mmap_guard = self.mmap.lock();
+        let mut displaced = None;
 
         let rewrite_temp: Option<PathBuf> = match &*mmap_guard {
             MmapState::Active(m) if m.path() != self.path => Some(m.path().to_path_buf()),
@@ -67,9 +69,9 @@ impl DriverIo for MmapDriver {
 
                 let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
                 *mmap_guard = MmapState::Committed(Arc::clone(&arc));
-                self.committed.store(Some(arc));
+                displaced = self.committed.swap(Some(arc));
             } else {
-                self.committed.store(None);
+                displaced = self.committed.swap(None);
                 *mmap_guard = MmapState::Empty;
                 if let Some(temp) = rewrite_temp.as_deref() {
                     let _ = fs::remove_file(temp);
@@ -92,12 +94,15 @@ impl DriverIo for MmapDriver {
                 if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
                     let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
                     *mmap_guard = MmapState::Committed(Arc::clone(&arc));
-                    self.committed.store(Some(arc));
+                    displaced = self.committed.swap(Some(arc));
                 }
             }
         }
 
         drop(mmap_guard);
+        if let Some(displaced) = displaced {
+            self.retired.lock().retire(displaced);
+        }
         Ok(())
     }
 
@@ -176,9 +181,15 @@ impl DriverIo for MmapDriver {
         if let MmapState::Active(mmap) = &*mmap_guard {
             mmap.flush()?;
         }
+        let displaced = self.committed.swap(None);
         *mmap_guard = MmapState::Empty;
         drop(mmap_guard);
-        self.committed.store(None);
+        let mut retired = self.retired.lock();
+        if let Some(displaced) = displaced {
+            retired.retire(displaced);
+        }
+        retired.collect();
+        drop(retired);
         Ok(())
     }
 
@@ -221,44 +232,51 @@ impl DriverIo for MmapDriver {
     #[kithara::measure]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         let end = offset + data.len() as u64;
+        self.retired.lock().collect();
         let mut mmap_guard = self.mmap.lock();
-
-        if committed {
-            match (&*mmap_guard, self.mode) {
-                (MmapState::Committed(_), OpenMode::ReadWrite) => {
-                    let rw = MemoryMappedFile::open_rw(&self.path)?;
-                    self.committed.store(None);
-                    *mmap_guard = MmapState::Active(rw);
-                }
-                (MmapState::Active(_), _)
-                | (MmapState::Empty, OpenMode::Auto | OpenMode::ReadWrite) => {}
-                _ => {
-                    return Err(StorageError::Failed(
-                        "cannot write to committed resource".to_string(),
-                    ));
+        let mut displaced = None;
+        let result = (|| {
+            if committed {
+                match (&*mmap_guard, self.mode) {
+                    (MmapState::Committed(_), OpenMode::ReadWrite) => {
+                        let rw = MemoryMappedFile::open_rw(&self.path)?;
+                        displaced = self.committed.swap(None);
+                        *mmap_guard = MmapState::Active(rw);
+                    }
+                    (MmapState::Active(_), _)
+                    | (MmapState::Empty, OpenMode::Auto | OpenMode::ReadWrite) => {}
+                    _ => {
+                        return Err(StorageError::Failed(
+                            "cannot write to committed resource".to_string(),
+                        ));
+                    }
                 }
             }
-        }
 
-        if matches!(*mmap_guard, MmapState::Empty) {
-            let size = end.max(self.initial_len);
-            let mmap = MemoryMappedFile::create_rw(&self.path, size)?;
-            *mmap_guard = MmapState::Active(mmap);
-        }
+            if matches!(*mmap_guard, MmapState::Empty) {
+                let size = end.max(self.initial_len);
+                let mmap = MemoryMappedFile::create_rw(&self.path, size)?;
+                *mmap_guard = MmapState::Active(mmap);
+            }
 
-        let MmapState::Active(mmap) = &*mmap_guard else {
-            return Err(StorageError::Failed(
-                "cannot write to committed resource".to_string(),
-            ));
-        };
-        if end > mmap.len() {
-            let new_size = end.max(mmap.len() * self.growth_factor);
-            mmap.resize(new_size)?;
-        }
+            let MmapState::Active(mmap) = &*mmap_guard else {
+                return Err(StorageError::Failed(
+                    "cannot write to committed resource".to_string(),
+                ));
+            };
+            if end > mmap.len() {
+                let new_size = end.max(mmap.len() * self.growth_factor);
+                mmap.resize(new_size)?;
+            }
 
-        mmap.update_region(offset, data)?;
+            mmap.update_region(offset, data)?;
+            Ok(())
+        })();
         drop(mmap_guard);
-        Ok(())
+        if let Some(displaced) = displaced {
+            self.retired.lock().retire(displaced);
+        }
+        result
     }
 }
 
