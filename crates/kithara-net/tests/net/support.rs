@@ -15,12 +15,18 @@ impl<N: Net> DelayedNet<N> {
     pub(crate) const fn new(inner: N, delay: Duration) -> Self {
         Self { delay, inner }
     }
+
+    async fn wait(&self) {
+        if !self.delay.is_zero() {
+            sleep(self.delay).await;
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl<N: Net> Net for DelayedNet<N> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        sleep(self.delay).await;
+        self.wait().await;
         self.inner.get_bytes(url, headers).await
     }
 
@@ -30,12 +36,12 @@ impl<N: Net> Net for DelayedNet<N> {
         body: Bytes,
         headers: Option<Headers>,
     ) -> Result<Bytes, NetError> {
-        sleep(self.delay).await;
+        self.wait().await;
         self.inner.post_bytes(url, body, headers).await
     }
 
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        sleep(self.delay).await;
+        self.wait().await;
         self.inner.stream(url, headers).await
     }
 
@@ -45,12 +51,12 @@ impl<N: Net> Net for DelayedNet<N> {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        sleep(self.delay).await;
+        self.wait().await;
         self.inner.get_range(url, range, headers).await
     }
 
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        sleep(self.delay).await;
+        self.wait().await;
         self.inner.head(url, headers).await
     }
 }

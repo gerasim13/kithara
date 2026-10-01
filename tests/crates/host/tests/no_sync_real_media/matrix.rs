@@ -1036,6 +1036,7 @@ async fn prepare_deck(
     }
 }
 
+#[kithara::flash(io)]
 async fn open_resource(
     case: &Case,
     deck_index: usize,

@@ -153,9 +153,14 @@ fn play_retries_a_failed_track_from_a_thread_without_a_runtime() {
     player
         .append(test_item("/nonexistent/kithara-ffi/missing.mp3"))
         .expect("queue accepts the item");
-    failed_rx.recv().expect("the missing file fails to load");
+    wait_for_failure(&failed_rx);
 
     player.play();
 
     assert_eq!(player.item_count(), 1);
+}
+
+#[kithara::flash(io)]
+fn wait_for_failure(receiver: &std::sync::mpsc::Receiver<()>) {
+    receiver.recv().expect("the missing file fails to load");
 }

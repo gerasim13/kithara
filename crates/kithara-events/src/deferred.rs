@@ -82,6 +82,7 @@ impl<E: EventSet> DeferredBus<E> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::time::{Duration, sleep};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -152,9 +153,8 @@ mod tests {
         deferred.enqueue(progress(1));
         deferred.enqueue(progress(2));
 
-        // Leaving the enqueue tick puts a stamp taken there below `before`.
-        let enqueued = ts_micros();
-        while ts_micros() <= enqueued {}
+        // Advance the active clock beyond the enqueue tick before flushing.
+        sleep(Duration::from_micros(1)).await;
         let before = ts_micros();
         deferred.flush();
         let after = ts_micros();

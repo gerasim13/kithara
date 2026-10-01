@@ -5,7 +5,7 @@ use kithara_audio::{
 use kithara_events::DeferredBus;
 use kithara_platform::{
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, WallInstant},
 };
 use kithara_signal::AudioChunk;
 use kithara_stream::{PlayheadWrite, SeekObserve};
@@ -242,7 +242,7 @@ where
             self.complete_preload();
         }
 
-        let start = Instant::now();
+        let start = WallInstant::now();
         let result = match self.source.step_track() {
             TrackStep::Produced(fetch) => {
                 self.record_load(start.elapsed(), &fetch);
