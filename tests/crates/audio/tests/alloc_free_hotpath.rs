@@ -1,13 +1,14 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use assert_no_alloc::*;
+#[cfg(not(target_os = "android"))]
+use kithara::resampler::glide::GlideBackend;
 use kithara::{
     self,
     bufpool::{PoolConfig, SampleBuffer},
     resampler::{
         Resampler, ResamplerConfig, ResamplerControl, ResamplerMode, ResamplerOptions,
-        ResamplerQuality, ResamplerSettings, create_resampler, glide::GlideBackend,
-        rubato::RubatoBackend,
+        ResamplerQuality, ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
     warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
@@ -152,6 +153,7 @@ fn build_resampler(pools: &Pools, source_rate: u32, target_rate: u32) -> impl Re
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
+#[cfg(not(target_os = "android"))]
 fn build_glide(pools: &Pools) -> impl Resampler + ResamplerControl {
     let settings = ResamplerSettings::builder()
         .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
@@ -234,6 +236,7 @@ fn resampler_process_is_allocation_free(
 
 /// Leaving passthrough settles the filter; `1.25` and `0.8` retune it on
 /// both sides of unity.
+#[cfg(not(target_os = "android"))]
 #[kithara::test]
 fn glide_resampler_process_is_allocation_free(allocation_planar: Vec<f32>) {
     let pools = eager_pools(64, 16_384);
