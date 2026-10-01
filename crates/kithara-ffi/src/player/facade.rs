@@ -323,7 +323,7 @@ impl AudioPlayer {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use std::sync::mpsc::{Receiver, Sender, channel};
+    use kithara::platform::sync::mpsc::{Receiver, Sender, channel};
 
     use super::*;
     use crate::types::FfiPlayerEvent;
@@ -341,7 +341,7 @@ mod tests {
     /// Blocks on the fact rather than on a deadline: the observer runs on the
     /// event-bridge thread, so a local timeout would race it. A mode change
     /// that never arrives is a hang, and the harness bounds hangs.
-    #[kithara::flash(io)]
+    #[kithara::allow_block]
     fn received_repeat_mode(receiver: &Receiver<FfiPlayerEvent>, expected: FfiRepeatMode) -> bool {
         while let Ok(event) = receiver.recv() {
             if matches!(

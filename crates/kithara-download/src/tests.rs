@@ -558,13 +558,7 @@ async fn streamed_request_duration_uses_wall_time() {
     let cmd = FetchCmd::get(server.url("/data"))
         .writer(Box::new(|_chunk: &[u8]| Ok(())))
         .on_response(Box::new(move |_headers| {
-            let wall = WallInstant::now();
-            let clock = Instant::now();
-            pace(UNRELATED_DELAY);
-            *measured_cb.lock() = Some((
-                wall.elapsed(),
-                Instant::now().saturating_duration_since(clock),
-            ));
+            *measured_cb.lock() = Some(measure_paced_delay(UNRELATED_DELAY));
         }))
         .on_complete(Box::new(move |_bytes, _headers, _error| {
             gate_cb.complete();
@@ -602,6 +596,17 @@ async fn streamed_request_duration_uses_wall_time() {
         "request duration {duration:?} exceeds wall time {wall:?}"
     );
     drop(handle);
+}
+
+#[kithara::flash(true)]
+fn measure_paced_delay(delay: Duration) -> (Duration, Duration) {
+    let wall = WallInstant::now();
+    let clock = Instant::now();
+    pace(delay);
+    (
+        wall.elapsed(),
+        Instant::now().saturating_duration_since(clock),
+    )
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
