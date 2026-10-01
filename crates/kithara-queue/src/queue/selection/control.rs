@@ -100,7 +100,10 @@ where
             self.autoplay_target.store(CrossfadeArm::Disarmed);
         }
         let default = self.config.crossfade_settings();
-        let settings = transition.settings(default).validate()?;
+        let settings = transition
+            .settings(default)
+            .validate()
+            .map_err(kithara_play::PlayError::from)?;
         let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)
     }

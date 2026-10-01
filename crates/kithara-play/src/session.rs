@@ -754,3 +754,22 @@ mod tests {
         assert_eq!(capture.queries.load(Ordering::Relaxed), 0);
     }
 }
+
+impl From<kithara_render::ResponseError> for SessionError {
+    fn from(error: kithara_render::ResponseError) -> Self {
+        match error {
+            kithara_render::ResponseError::GeometryOverflow => Self::ResponseGeometryOverflow,
+            kithara_render::ResponseError::BudgetExceeded {
+                max_block_frames,
+                render_quantum_frames,
+                required_frames,
+                budget_frames,
+            } => Self::ResponseBudgetExceeded {
+                max_block_frames,
+                render_quantum_frames,
+                required_frames,
+                budget_frames,
+            },
+        }
+    }
+}

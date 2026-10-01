@@ -436,6 +436,54 @@ impl Resource {
     }
 }
 
+impl kithara_render::RenderResource for Resource {
+    fn spec(&self) -> AudioSpec {
+        Self::spec(self)
+    }
+    fn cached_span(&self) -> Duration {
+        Self::cached_span(self)
+    }
+    fn decoded_frontier(&self) -> Duration {
+        Self::decoded_frontier(self)
+    }
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        Self::read_planar(self, output)
+    }
+    fn duration(&self) -> Option<Duration> {
+        Self::duration(self)
+    }
+    fn playback_rate(&self) -> f32 {
+        Self::playback_rate(self)
+    }
+    fn apply_playback_rate(&self, rate: f32) -> f32 {
+        Self::apply_playback_rate(self, rate)
+    }
+    fn render_reader(&self) -> Option<RenderReader> {
+        Self::render_reader(self)
+    }
+    fn sync_seek(&mut self) {
+        Self::sync_seek(self);
+    }
+    fn clear_render(&self) {
+        Self::clear_render(self);
+    }
+    fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
+        Self::seek_handle(self)
+    }
+    fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+        Self::set_host_sample_rate(self, sample_rate);
+    }
+    fn set_service_class(&self, class: ServiceClass) {
+        Self::set_service_class(self, class);
+    }
+    fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
+        Self::publish_render(self, context, frontier);
+    }
+}
+
 /// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
 /// source to the shared `kithara-analysis` worker.
 ///
@@ -775,7 +823,7 @@ mod tests {
         let expected_advance =
             f64::from(block_frames) * f64::from(effective_rate) / f64::from(consts::SAMPLE_RATE);
         assert!((first_advance - expected_advance).abs() < f64::EPSILON);
-        assert_eq!(processor.playback().rate.load(), effective_rate);
+        assert_eq!(processor.playback().snapshot().rate(), effective_rate);
         let notifications = rate_notifications(&mut control);
         if supports_playback_rate() {
             assert_eq!(notifications, [1.5]);
@@ -805,7 +853,7 @@ mod tests {
         process_block(&mut processor, &mut extra);
 
         assert_eq!(controls.speed(), 1.5);
-        assert_eq!(processor.playback().rate.load(), effective_rate);
+        assert_eq!(processor.playback().snapshot().rate(), effective_rate);
         assert_eq!(
             processor
                 .track(next_id)

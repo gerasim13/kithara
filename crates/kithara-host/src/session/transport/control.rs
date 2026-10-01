@@ -1,18 +1,18 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
-use kithara_signal::SessionFrame;
-use kithara_sync::{ParentGridUpdate, SyncError};
-use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
-
-use super::{
+use kithara_render::transport_rt::{
     commit::{
         SessionGridGeneration, SessionTransportCommit, TransportBoundary, TransportCommitResult,
         TransportCommitStamp, TransportObservation,
     },
-    event::TransportEvent,
     process::converge_transport_restart,
 };
+use kithara_signal::SessionFrame;
+use kithara_sync::{ParentGridUpdate, SyncError};
+use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
+
+use super::event::TransportEvent;
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
     session::{SessionError, dispatch::stream_died, state::SessionState},
@@ -103,7 +103,7 @@ pub(crate) fn set_tempo<T, S>(
     let (target_frame, sample_rate) = commit_boundary(state)?;
     let next = SessionTransportCommit::new(
         tempo,
-        accepted.is_none_or(|commit| commit.is_playing()),
+        accepted.is_none_or(SessionTransportCommit::is_playing),
         revision,
     );
     let stamp =

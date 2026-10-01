@@ -925,6 +925,18 @@ prefix_args = [
   "test-release",
 ]
 
+[test.lanes.render]
+program = "cargo"
+owns = ["crates/kithara-render/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-render",
+  "--cargo-profile",
+  "test-release",
+]
+
 [test.lanes.storage]
 program = "cargo"
 owns = ["crates/kithara-storage/"]
@@ -1298,15 +1310,15 @@ prefix_args = [
   "nextest",
   "run",
   "-p",
-  "kithara-play",
+  "kithara-render",
   "--cargo-profile",
   "test-release",
   "--lib",
 ]
-default_features = ["kithara-play/usdt"]
+default_features = ["kithara-render/usdt"]
 default_flash = false
 suffix_args = ["-E", "test(/worker::node::scheduler_tests::probed::/)"]
-owns = ["crates/kithara-play/src/worker/node.rs"]
+owns = ["crates/kithara-render/src/worker/node.rs"]
 
 [test.lanes.usdt-hls]
 program = "cargo"

@@ -63,20 +63,22 @@ webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
-stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
-stretch-bungee = ["kithara-warp/stretch-bungee"]
-stretch-glide = ["kithara-warp/stretch-glide"]
+stretch-signalsmith = ["kithara-warp/stretch-signalsmith", "kithara-render/stretch-signalsmith"]
+stretch-bungee = ["kithara-warp/stretch-bungee", "kithara-render/stretch-bungee"]
+stretch-glide = ["kithara-warp/stretch-glide", "kithara-render/stretch-glide"]
 usdt = [
+    "kithara-render/usdt",
     "kithara-effects/usdt",
     "kithara-test-utils/usdt",
     "kithara-sync/usdt",
     "kithara-warp/usdt",
     "kithara-worker/usdt",
 ]
-flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
-mock = ["dep:unimock", "kithara-effects/mock", "kithara-stream/mock"]
-no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash", "kithara-render/flash"]
+mock = ["dep:unimock", "kithara-effects/mock", "kithara-stream/mock", "kithara-render/mock"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block", "kithara-render/no-block"]
 perf = [
+    "kithara-render/perf",
     "dep:hotpath",
     "hotpath/hotpath",
     "kithara-audio/perf",
@@ -106,6 +108,7 @@ kithara-hls = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-render = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-sync = { workspace = true, default-features = false }

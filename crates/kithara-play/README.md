@@ -15,7 +15,7 @@
 # kithara-play
 
 The playback orchestration crate behind Kithara. It provides concrete player,
-engine, resource, session, and real-time rendering surfaces for queue, FFI, app,
+engine, resource, and session surfaces for queue, FFI, app,
 and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
 Enable `perf` on native profiling builds for permanent `hotpath` timing at the
 playback worker boundary; ordinary builds compile the probes out.
@@ -59,14 +59,14 @@ to the single `decoder` field.
 
 ## Key Types
 
-- `PlayWorker` owns playback pools and a dedicated dispatcher derived from an
-  optional shared `kithara-worker` base.
+- `kithara-render::PlayWorker` owns playback pools and a dedicated dispatcher
+  derived from an optional shared `kithara-worker` base.
 - `EngineImpl` owns session dispatch, slot registration, and master output
   state.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, item
   handover, and one clone of its explicitly supplied `PlayWorker`.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
-- `PlayerNode` is the public real-time audio graph node.
+- `kithara-render::PlayerNode` is the real-time audio graph node.
 - `policy` owns domain-aware cache identity and DRM request routing above the
   filesystem, network, and cryptography crates.
 - `Equalizer` is the remaining mockable trait surface.
@@ -97,8 +97,7 @@ File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
 
 The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
-`effects/`, `player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/`, and
-`worker/`, plus the target-gated `wasm` surface. Concrete output-session state,
+`effects/`, `player/{state,flow}/`, `resource/`, and `session/`, plus the target-gated `wasm` surface. Concrete output-session state,
 graph dispatch, and platform clients live in `kithara-host`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-play) for detailed contracts, invariants, and internals.

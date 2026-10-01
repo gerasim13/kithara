@@ -18,9 +18,3 @@ pub(crate) const RING_ADMISSION_SAMPLE_RATE: u32 = 48_000;
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const RING_ADMISSION_BLOCK_FRAMES: u32 = 512;
-
-#[cfg(test)]
-pub(crate) const TRANSPORT_BLOCK_FRAMES: usize = 480;
-
-#[cfg(test)]
-pub(crate) const TRANSPORT_SAMPLE_RATE: u32 = 48_000;

@@ -319,7 +319,9 @@ impl TryFrom<FfiCrossfadeSettings> for CrossfadeSettings {
                 });
             }
         };
-        Self::new(value.duration, curve, value.depth, value.position).map_err(FfiError::from)
+        Self::new(value.duration, curve, value.depth, value.position)
+            .map_err(PlayError::from)
+            .map_err(FfiError::from)
     }
 }
 

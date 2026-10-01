@@ -39,6 +39,7 @@ members = [
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-record",
+    "crates/kithara-render",
     "crates/kithara-resampler",
     "crates/kithara-ring",
     "crates/kithara-signal",
@@ -116,6 +117,7 @@ default-members = [
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-record",
+    "crates/kithara-render",
     "crates/kithara-resampler",
     "crates/kithara-ring",
     "crates/kithara-signal",
@@ -317,6 +319,7 @@ kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha5" 
 kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha5", default-features = false }
 kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha5", default-features = false }
 kithara-record = { path = "crates/kithara-record", version = "0.0.1-alpha5" }
+kithara-render = { path = "crates/kithara-render", version = "0.0.1-alpha5", default-features = false }
 kithara-resampler = { path = "crates/kithara-resampler", version = "0.0.1-alpha5", default-features = false }
 kithara-ring = { path = "crates/kithara-ring", version = "0.0.1-alpha5" }
 kithara-signal = { path = "crates/kithara-signal", version = "0.0.1-alpha5" }

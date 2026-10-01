@@ -434,8 +434,7 @@ mod tests {
             .slot()
             .and_then(|slot| player.core.engine.slot_playback(slot))
             .expect("the slot must carry playback state");
-        playback.position.store(62.3);
-        playback.duration.store(64.295);
+        playback.adopt(0, 62.3, 64.295);
 
         assert_eq!(player.duration_seconds(), Some(162.0));
         assert_eq!(player.position_seconds(), Some(0.0));
@@ -470,8 +469,7 @@ mod tests {
             .slot()
             .and_then(|slot| player.core.engine.slot_playback(slot))
             .expect("the slot must carry playback state");
-        playback.position.store(62.3);
-        playback.duration.store(64.295);
+        playback.adopt(0, 62.3, 64.295);
         while player.send_to_slot(PlayerCmd::SetPaused(false)).is_ok() {}
 
         player.commit_next(1).expect("commit_next must succeed");

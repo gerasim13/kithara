@@ -15,7 +15,8 @@
 # kithara-host
 
 `kithara-host` owns Kithara's multi-player session, shared Firewheel output
-graph, session transport, and platform audio backend. A player/deck remains in
+graph and platform audio backend. The transport and output processors live in
+`kithara-render`. A player/deck remains in
 `kithara-play`; beat-grid and synchronization contracts remain in
 `kithara-warp`.
 

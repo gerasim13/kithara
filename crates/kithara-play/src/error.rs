@@ -1,5 +1,6 @@
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
+use kithara_render::{RenderError, ResponseError};
 
 use crate::{api::SlotId, session::SessionError};
 
@@ -129,5 +130,20 @@ impl From<SessionError> for PlayError {
             }
             error => Self::Session(error),
         }
+    }
+}
+
+impl From<RenderError> for PlayError {
+    fn from(error: RenderError) -> Self {
+        match error {
+            RenderError::InvalidParameter { name, value } => Self::InvalidParameter { name, value },
+            RenderError::EqBandOutOfRange { band, bands } => Self::EqBandOutOfRange { band, bands },
+        }
+    }
+}
+
+impl From<ResponseError> for PlayError {
+    fn from(error: ResponseError) -> Self {
+        Self::Session(error.into())
     }
 }

@@ -1,0 +1,146 @@
+[package]
+name = "kithara-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Playback worker and realtime audio rendering."
+keywords = ["audio", "player", "dj", "crossfade", "playback"]
+categories = ["multimedia::audio"]
+
+[features]
+default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+# HTTP backend forwarding to every kithara-net-reaching dep.
+client-reqwest = [
+    "kithara-stream/client-reqwest",
+    "kithara-file/client-reqwest",
+    "kithara-audio/client-reqwest",
+    "kithara-decode/client-reqwest",
+    "kithara-abr/client-reqwest",
+]
+client-wreq = [
+    "kithara-stream/client-wreq",
+    "kithara-file/client-wreq",
+    "kithara-audio/client-wreq",
+    "kithara-decode/client-wreq",
+    "kithara-abr/client-wreq",
+]
+tls-rustls = [
+    "kithara-stream/tls-rustls",
+    "kithara-file/tls-rustls",
+    "kithara-audio/tls-rustls",
+    "kithara-decode/tls-rustls",
+    "kithara-abr/tls-rustls",
+]
+tls-native = [
+    "kithara-stream/tls-native",
+    "kithara-file/tls-native",
+    "kithara-audio/tls-native",
+    "kithara-decode/tls-native",
+    "kithara-abr/tls-native",
+]
+apple = ["kithara-audio/apple", "kithara-decode/apple"]
+apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
+# Software decoder pass-through. Required when not opting into a hardware
+# backend, since `kithara-decode`'s `DecoderBackend` enum needs at least
+# one variant available. WASM has no hardware decoder (apple/android are
+# native-only).
+symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
+webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs"]
+fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
+resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide"]
+resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
+stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
+stretch-bungee = ["kithara-warp/stretch-bungee"]
+stretch-glide = ["kithara-warp/stretch-glide"]
+usdt = ["kithara-effects/usdt", "kithara-test-utils/usdt", "kithara-warp/usdt", "kithara-worker/usdt"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+mock = ["dep:unimock", "kithara-effects/mock", "kithara-stream/mock"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
+perf = [
+    "dep:hotpath",
+    "hotpath/hotpath",
+    "kithara-audio/perf",
+    "kithara-decode/perf",
+    "kithara-warp/perf",
+    "kithara-worker/perf",
+]
+
+[dependencies]
+kithara-abr = { workspace = true, default-features = false }
+# Kithara sub-crates
+kithara-audio = { workspace = true, default-features = false }
+kithara-beat = { workspace = true }
+kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
+kithara-decode = { workspace = true, default-features = false }
+kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
+kithara-dsp = { workspace = true }
+kithara-effects = { workspace = true }
+kithara-events = { workspace = true }
+kithara-output = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, default-features = false, features = ["render"] }
+kithara-worker = { workspace = true }
+
+# Utilities
+arc-swap = { workspace = true }
+bon = { workspace = true }
+delegate = { workspace = true }
+derive-where = { workspace = true }
+fieldwork = { workspace = true }
+
+# Audio engine
+firewheel = { workspace = true }
+humantime-serde = { workspace = true }
+num-traits = { workspace = true }
+
+# Async & channels
+ringbuf = { workspace = true }
+serde = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+triple_buffer = { workspace = true }
+
+unimock = { workspace = true, optional = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# hotpath profiling does not build on wasm32; keep it off the wasm closure.
+hotpath = { workspace = true, optional = true }
+
+[dev-dependencies]
+kithara-assets = { workspace = true }
+kithara-audio = { workspace = true, features = ["usdt", "mock"] }
+kithara-beat = { workspace = true }
+kithara-bufpool = { workspace = true }
+kithara-effects = { workspace = true, features = ["mock"] }
+kithara-file = { workspace = true, default-features = false }
+kithara-host = { workspace = true, default-features = false }
+kithara-play = { workspace = true, default-features = false }
+kithara-test-fixtures = { workspace = true, default-features = false }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+
+bytes = { workspace = true }
+unimock = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
+
+axum = { workspace = true }
+serde_yaml_ng = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
+[lints]
+workspace = true
