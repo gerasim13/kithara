@@ -1,9 +1,6 @@
-use std::sync::LazyLock;
+use std::{sync::LazyLock, thread};
 
-use kithara::platform::{
-    thread,
-    tokio::runtime::{self, Builder as RuntimeBuilder},
-};
+use kithara::platform::tokio::runtime::{self, Builder as RuntimeBuilder};
 
 /// Shared tokio runtime handle for FFI background tasks (event bridges, polling).
 ///
@@ -15,6 +12,7 @@ pub(crate) static FFI_RUNTIME: LazyLock<runtime::Handle> = LazyLock::new(|| {
         .build()
         .expect("BUG: tokio current-thread runtime build cannot fail in normal startup");
     let handle = rt.handle().clone();
+    // This process-wide runtime outlives its callers; each task carries its own context.
     thread::spawn(move || {
         rt.block_on(std::future::pending::<()>());
     });

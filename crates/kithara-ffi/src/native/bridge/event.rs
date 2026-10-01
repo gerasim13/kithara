@@ -228,7 +228,7 @@ impl EventBridge {
         router: Arc<Router>,
         cancel: CancelToken,
     ) {
-        crate::FFI_RUNTIME.spawn(async move {
+        tokio::task::spawn_on(&crate::FFI_RUNTIME, async move {
             loop {
                 tokio::select! {
                     () = cancel.cancelled() => break,

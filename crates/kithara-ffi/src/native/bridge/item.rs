@@ -193,7 +193,7 @@ impl ItemEventBridge {
         cancel: CancelToken,
     ) -> Self {
         let task_cancel = cancel.clone();
-        crate::FFI_RUNTIME.spawn(async move {
+        tokio::task::spawn_on(&crate::FFI_RUNTIME, async move {
             loop {
                 tokio::select! {
                     () = task_cancel.cancelled() => break,
