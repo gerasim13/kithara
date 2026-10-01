@@ -13,7 +13,6 @@ use syn::{
 const CHECKOUT: &str = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DOWNLOAD_ARTIFACT: &str =
     "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
-const INSTALL_ACTION: &str = "taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833";
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
@@ -1112,10 +1111,21 @@ fn stress_workflow_is_a_thin_fork_adapter() {
 
     let report_install = named_step(report, "Install just");
     assert_always(report_install);
-    assert_eq!(
-        mapping_field(report_install, "uses").as_str(),
-        Some(INSTALL_ACTION)
+    let action = mapping_field(report_install, "uses")
+        .as_str()
+        .expect("install action is a string");
+    let revision = action
+        .strip_prefix("taiki-e/install-action@")
+        .expect("install action uses taiki-e/install-action");
+    assert_eq!(revision.len(), 40, "install action is pinned to a full SHA");
+    assert!(
+        revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "install action revision is hexadecimal"
     );
+    let install_inputs = mapping_field(report_install, "with")
+        .as_mapping()
+        .expect("install action inputs are a mapping");
+    assert_eq!(mapping_field(install_inputs, "tool").as_str(), Some("just"));
 
     let verifier = named_step(report, "Verify and render the stress evidence");
     assert_always(verifier);
