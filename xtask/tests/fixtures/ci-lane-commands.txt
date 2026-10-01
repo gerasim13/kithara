@@ -2033,10 +2033,20 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / platforms
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2049,10 +2059,20 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / quarantine
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2065,10 +2085,20 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / nightly
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
@@ -2081,10 +2111,20 @@
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / release
   <require os> linux
   <require tools> cargo just
   just test run --flash=off --timings
+    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+  just test run --flash=off --no-run --cargo-verbose
     CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang

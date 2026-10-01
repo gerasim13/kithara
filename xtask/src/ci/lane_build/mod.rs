@@ -18,6 +18,8 @@
 //! claim keeps a run only when the content of every checkout path it watches
 //! is the content recorded, and nothing else it watches changed since, then
 //! dates every artifact at the claim so no fresh checkout reads as newer.
+//! A rebuild check replays that claim after the job's build, so cargo can say
+//! what the next job of the same commit would build.
 
 mod claim;
 #[cfg(test)]

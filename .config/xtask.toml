@@ -2466,6 +2466,7 @@ timeout_minutes = 60
 # two builds differ. `{target}` keeps it inside the leased build-cache
 # directory rather than a fixed path under `{root}` that the lease eviction
 # and reclaim machinery would not know about.
+# The rebuild check then asks cargo what the next job of this commit would build.
 [ext.ci.lanes.linux-test-real-clock]
 cache_group = "linux"
 github_runner = "kithara-test-real"
@@ -2482,7 +2483,7 @@ steps = [
     "run",
     "--flash=off",
     "--timings",
-  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
+  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]

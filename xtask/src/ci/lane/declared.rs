@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, env, ffi::OsString, path::PathBuf, time::Instant};
+use std::{
+    collections::BTreeMap,
+    env,
+    ffi::{OsStr, OsString},
+    path::PathBuf,
+    time::Instant,
+};
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
@@ -7,8 +13,8 @@ use tracing::warn;
 
 use crate::{
     ci::{
-        cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
-        run::PipelineKind,
+        cache::snapshot, config::CiPins, environment::CacheTrust, lane_build::LaneBuild,
+        process::Process, run::PipelineKind,
     },
     config::{CiLaneConfig, CiLanePin, CiLaneStep, LaneFreshness},
     consts,
@@ -16,7 +22,9 @@ use crate::{
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
 /// declines, the platform it refuses to run anywhere but on, the tools it needs,
-/// the versions those tools have to report, then its commands in order.
+/// the versions those tools have to report, then its commands in order. A step
+/// that checks its rebuild is repeated building only, after `claim` replays
+/// the claim the next job of this commit would make.
 ///
 /// A lane whose whole content is this needs no Rust of its own; the ones that
 /// keep a function are the ones that do something a parameter cannot say.
@@ -26,10 +34,20 @@ pub(crate) fn run(
     pins: &CiPins,
     tools: &ToolsConfig,
     kind: PipelineKind,
+    claim: Option<&LaneBuild>,
 ) -> Result<()> {
     let kind = kind_name(kind);
     if let Some(reason) = lane.kinds_refused.get(&kind) {
         bail!("{reason}");
+    }
+    if let Some(step) = lane.steps.iter().find(|step| step.rebuild_check)
+        && claim.is_none()
+        && !process.is_recording()
+    {
+        bail!(
+            "{} checks its rebuild against the next claim of its lane slot, and this run holds no slot",
+            step.label
+        );
     }
     if !lane.os.is_empty() {
         process.require_os(&lane.os, &lane.label)?;
@@ -76,6 +94,9 @@ pub(crate) fn run(
             process.command(&program).args(&args).envs(&vars),
             &step.label,
         )?;
+        if step.rebuild_check {
+            rebuild_check(process, claim, &program, &args, &vars, &step.label)?;
+        }
     }
     if !process.is_recording() && lane.publishes_sources {
         publish_source_layer(process, tools, &kind)?;
@@ -98,6 +119,49 @@ pub(crate) fn run(
         }
     }
     Ok(())
+}
+
+/// Asks cargo what the next job of this commit would build: replays the claim
+/// that job would make, then repeats the step building only, with cargo saying
+/// why it builds each unit. The timings report is left out: a build that
+/// compiles nothing would still replace the suite's own.
+fn rebuild_check(
+    process: &Process,
+    claim: Option<&LaneBuild>,
+    program: &OsStr,
+    args: &[String],
+    vars: &BTreeMap<String, String>,
+    label: &str,
+) -> Result<()> {
+    if let Some(claim) = claim {
+        claim.replay()?;
+    }
+    let repeat = args
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| !arg.starts_with("--timings"))
+        .chain(consts::REBUILD_CHECK_ARGS);
+    let label = format!("{label} rebuild check");
+    let transcript =
+        process.transcript(process.command(program).args(repeat).envs(vars), &label)?;
+    let rebuilt = rebuilt(&transcript);
+    if !rebuilt.is_empty() {
+        bail!(
+            "{label}: the next job of this commit would build again:\n{}",
+            rebuilt.join("\n")
+        );
+    }
+    Ok(())
+}
+
+/// Cargo's status lines for units it would build: `Dirty` says why, and
+/// `Compiling` also names a unit it never built.
+fn rebuilt(transcript: &str) -> Vec<&str> {
+    transcript
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("Dirty ") || line.starts_with("Compiling "))
+        .collect()
 }
 
 /// Put the lane's compiled artifacts in place, and say what that cost.
@@ -366,6 +430,7 @@ mod tests {
             &fixture().pins,
             &ToolsConfig::default(),
             PipelineKind::Branch,
+            None,
         )
         .unwrap();
         process.recorded().unwrap().steps().to_vec()
@@ -399,6 +464,59 @@ mod tests {
         let env = &steps[0].env;
         assert!(!env.contains_key(consts::CHECKSUM_FRESHNESS_ENV), "{env:?}");
         assert!(!env.contains_key(consts::TOOLCHAIN_ENV), "{env:?}");
+    }
+
+    /// The check repeats its step with the same variables, building only and
+    /// with cargo saying why it builds each unit, and without the timings
+    /// report a build that compiles nothing would still rewrite.
+    #[test]
+    fn a_rebuild_check_repeats_its_step_building_only() {
+        let mut lane = checksum_lane(LaneFreshness::Checksum);
+        lane.steps[0].args.push("--timings".to_owned());
+        lane.steps[0].rebuild_check = true;
+
+        let steps = recorded(&lane);
+
+        let [suite, check] = steps.as_slice() else {
+            panic!("the suite and its check: {steps:?}")
+        };
+        assert_eq!(check.label, "suite rebuild check");
+        assert_eq!(check.args, ["test", "run", "--no-run", "--cargo-verbose"]);
+        assert_eq!(check.env, suite.env);
+    }
+
+    /// Off the fleet nothing claims a slot, so nothing could replay the next
+    /// claim; the lane refuses before its suite spends a build.
+    #[test]
+    fn a_rebuild_check_without_a_slot_refuses_before_the_suite_runs() {
+        let mut lane = checksum_lane(LaneFreshness::Checksum);
+        lane.steps[0].rebuild_check = true;
+        let process = Process::new(Path::new("/checkout"), BTreeMap::new());
+
+        let error = run(
+            &process,
+            &lane,
+            &fixture().pins,
+            &ToolsConfig::default(),
+            PipelineKind::Branch,
+            None,
+        )
+        .expect_err("no slot to replay");
+
+        assert!(error.to_string().contains("holds no slot"), "{error}");
+    }
+
+    #[test]
+    fn a_rebuild_is_read_from_cargos_status_lines() {
+        let transcript = "       Fresh serde v1.0.0\n       Dirty probe v0.0.0 (/w): the file `src/lib.rs` has changed\n   Compiling probe v0.0.0 (/w)\n     Running `rustc --crate-name probe`\nwarning: Compiling is mentioned, not reported\n";
+
+        assert_eq!(
+            rebuilt(transcript),
+            [
+                "Dirty probe v0.0.0 (/w): the file `src/lib.rs` has changed",
+                "Compiling probe v0.0.0 (/w)",
+            ]
+        );
     }
 
     #[test]

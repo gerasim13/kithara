@@ -165,7 +165,14 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         executor_vars(cargo_dir.as_deref(), args.kind, build.is_some()),
     );
     let outcome = crate::ci::run::journalled(&process, &args.lane, || {
-        let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind);
+        let result = declared::run(
+            &process,
+            lane,
+            &pins,
+            &ctx.config.tools,
+            args.kind,
+            build.as_ref(),
+        );
         if var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty()) {
             let on_github =
                 crate::job::github_in(&|name| var(name).and_then(|value| value.into_string().ok()));
@@ -351,20 +358,15 @@ mod tests {
     /// only step succeeds.
     fn trivial_lane(root: &Path, freshness: &str) -> (Ctx, LaneArgs) {
         if cfg!(windows) {
-            lane_running(root, "cmd", r#"["/C", "exit", "0"]"#, freshness)
+            lane_running(root, "cmd", r#"args = ["/C", "exit", "0"]"#, freshness)
         } else {
-            lane_running(root, "sh", r#"["-c", "exit 0"]"#, freshness)
+            lane_running(root, "sh", r#"args = ["-c", "exit 0"]"#, freshness)
         }
     }
 
     /// A workspace at `root` declaring one lane of the given freshness whose
-    /// only step runs `program` with `step_args`, a TOML array.
-    fn lane_running(
-        root: &Path,
-        program: &str,
-        step_args: &str,
-        freshness: &str,
-    ) -> (Ctx, LaneArgs) {
+    /// only step, labelled `run`, runs `program` as the TOML lines `step` say.
+    fn lane_running(root: &Path, program: &str, step: &str, freshness: &str) -> (Ctx, LaneArgs) {
         let root = root.to_path_buf();
         fixture()
             .pins
@@ -391,7 +393,7 @@ timeout_minutes = 1
 
 [[ext.ci.lanes.trivial.steps]]
 label = "run"
-args = {step_args}
+{step}
 "#
         );
         let ctx = Ctx::new(
@@ -485,6 +487,59 @@ args = {step_args}
         assert!(!slot.join(consts::SOURCES_FILE).exists());
     }
 
+    /// The rebuild check asks cargo, after the claim the next job would make,
+    /// what that job would build, and fails the lane on any unit named; a
+    /// suite the next job reuses whole passes.
+    #[cfg(unix)]
+    #[test]
+    fn a_rebuild_check_fails_a_suite_the_next_job_would_build_again() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let lanes = tempfile::tempdir().expect("create the fleet's build root");
+        let status = temp.path().join("status");
+        let just = temp.path().join("just");
+        fs::write(
+            &just,
+            format!(
+                "#!/bin/sh\ncase \"$*\" in *--no-run*) cat '{}' >&2 ;; esac\n",
+                status.display()
+            ),
+        )
+        .expect("write the just double");
+        fs::set_permissions(&just, fs::Permissions::from_mode(0o755))
+            .expect("make the just double runnable");
+        let (mut ctx, args) = lane_running(
+            temp.path(),
+            "just",
+            "args = [\"test\", \"run\", \"--timings\"]\nrebuild_check = true",
+            "checksum",
+        );
+        ctx.config.tools = toml::from_str(&format!("[just]\nprogram = \"{}\"\n", just.display()))
+            .expect("parse the tools table");
+        fs::write(temp.path().join("Cargo.toml"), consts::PROBE_MANIFEST)
+            .expect("write the workspace manifest");
+        fs::create_dir_all(temp.path().join("src")).expect("create the package sources");
+        fs::write(temp.path().join("src/lib.rs"), "").expect("write the package library");
+        git_init(temp.path());
+        let root = [(
+            consts::TARGET_ROOT_ENV,
+            lanes.path().to_str().expect("a UTF-8 build root"),
+        )];
+        let fleet = environment(&root);
+
+        fs::write(&status, "   Compiling probe v0.0.0 (/w)\n").expect("write cargo's answer");
+        let error = run_in(&args, &ctx, &fleet)
+            .expect_err("a unit the next job would build fails the lane");
+        assert!(
+            format!("{error:#}").contains("Compiling probe v0.0.0"),
+            "{error:#}"
+        );
+
+        fs::write(&status, "       Fresh probe v0.0.0 (/w)\n").expect("write cargo's answer");
+        run_in(&args, &ctx, &fleet).expect("a suite the next job reuses whole passes");
+    }
+
     /// A job compiling through the cache says what the cache carried for it;
     /// one that compiles without it has no cache to ask.
     #[cfg(unix)]
@@ -534,7 +589,7 @@ args = {step_args}
         let lanes = tempfile::tempdir().expect("create the fleet's build root");
         let seen = temp.path().join("seen");
         let record = format!(
-            r#"["-c", "printf '%s\\n%s' \"$CARGO_TARGET_DIR\" \"$(cd \"$CARGO_TARGET_DIR\" && pwd -P)\" > '{}'"]"#,
+            r#"args = ["-c", "printf '%s\\n%s' \"$CARGO_TARGET_DIR\" \"$(cd \"$CARGO_TARGET_DIR\" && pwd -P)\" > '{}'"]"#,
             seen.display()
         );
         let (ctx, args) = lane_running(temp.path(), "sh", &record, "mtime");

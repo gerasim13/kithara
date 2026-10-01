@@ -409,11 +409,10 @@ pub(super) fn claim(
 ) -> Result<Claimed> {
     let checkout = Checkout::new(project_root, dir, tracked)?;
     let packages = workspace_packages(&checkout.root)?;
-    let units = discover(&checkout.build, &packages)?;
-    let record = checkout.build.join(consts::UNITS_FILE);
-    let kept = keep_fresh(&checkout, &units, &read_records(&record)?, at)?;
-    write_records(&record, &kept)?;
-    Ok(Claimed { checkout, packages })
+    let recorded = read_records(&checkout.build.join(consts::UNITS_FILE))?;
+    let claimed = Claimed { checkout, packages };
+    claimed.decide(&recorded, at)?;
+    Ok(claimed)
 }
 
 impl Claimed {
@@ -424,6 +423,21 @@ impl Claimed {
             &self.checkout.build.join(consts::UNITS_FILE),
             &record_all(&self.checkout, &self.packages)?,
         )
+    }
+
+    /// Decides the runs the job left as the next claim of this commit would
+    /// once the job settled, so a rebuild check can ask cargo what that claim
+    /// leaves it to build.
+    pub(super) fn replay(&self, at: SystemTime) -> Result<()> {
+        self.decide(&record_all(&self.checkout, &self.packages)?, at)
+    }
+
+    /// Keeps each run `recorded` still vouches for, aligns the directory to
+    /// `at`, and records the kept runs alone.
+    fn decide(&self, recorded: &Records, at: SystemTime) -> Result<()> {
+        let units = discover(&self.checkout.build, &self.packages)?;
+        let kept = keep_fresh(&self.checkout, &units, recorded, at)?;
+        write_records(&self.checkout.build.join(consts::UNITS_FILE), &kept)
     }
 }
 
@@ -672,6 +686,31 @@ mod tests {
 
         let _claim = claim_slot(checkout.path(), lanes.path());
         assert!(!output.exists());
+    }
+
+    /// A rebuild check asks cargo what the next claim of this commit leaves it
+    /// to build, so the replay keeps and drops what that claim would, before
+    /// the job has settled.
+    #[test]
+    fn a_replay_decides_every_run_as_the_next_claim_would() {
+        let checkout = cargo_checkout(&[]);
+        let lanes = tempfile::tempdir().unwrap();
+        let lane = slot(lanes.path());
+        let claim = claim_slot(checkout.path(), lanes.path());
+        let kept = write_unit(&lane, PROBE_BUILD_RUN, PROBE_DIRECTIVE);
+        let dropped = write_unit(
+            &lane,
+            "debug/build/probe-fedcba9876543210",
+            "cargo::rustc-cfg=probe\n",
+        );
+
+        claim.replay().unwrap();
+
+        assert!(kept.exists(), "a run whose watches still hold is kept");
+        assert!(
+            !dropped.exists(),
+            "a run the next claim cannot vouch for is dropped"
+        );
     }
 
     /// Other lanes on the same runner read the checkout's mtimes, so a

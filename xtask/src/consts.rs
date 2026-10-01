@@ -445,6 +445,13 @@ pub(crate) const UNKNOWN_BLOB: &str = "unknown";
 /// left behind tells the next claim that its builds were recorded first.
 pub(crate) const HELD_LINE: &str = "held";
 
+/// What a rebuild check adds to the step it repeats: build without running,
+/// and have cargo say why it builds each unit.
+pub(crate) const REBUILD_CHECK_ARGS: [&str; 2] = ["--no-run", "--cargo-verbose"];
+
+/// Lines of a captured command's output a failure carries.
+pub(crate) const TRANSCRIPT_TAIL_LINES: usize = 40;
+
 /// Asks the pinned nightly's cargo to judge what rustc read by checksum.
 pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNESS";
 

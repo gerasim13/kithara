@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::{OsStr, OsString},
+    io::{Read as _, Seek as _},
     path::{Path as FsPath, PathBuf},
     process::{Child, Command, Output},
     sync::Mutex,
@@ -11,6 +12,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use kithara_devtools::verdict::ChildFailure;
 use tracing::{debug, info, warn};
+
+use crate::consts;
 
 /// One thing a lane asked the executor to do, captured instead of done. The
 /// snapshot built from these is what says a lane still resolves to the command
@@ -198,6 +201,46 @@ impl Process {
             return Err(ChildFailure::inherited(label.to_owned(), status.code()));
         }
         Ok(())
+    }
+
+    /// Runs `command` with both of its streams in one file and returns what it
+    /// wrote, for a step whose verdict is read from its output. A file, not a
+    /// pipe: a server the command leaves running would hold a pipe open, and
+    /// reading it would never end. A failure carries the output's last lines.
+    pub(crate) fn transcript(&self, command: &mut Command, label: &str) -> Result<String> {
+        if self.record(Step::of(command, label, &self.root)) {
+            return Ok(String::new());
+        }
+        let mut file = tempfile::tempfile().context("creating a transcript file")?;
+        command
+            .stdout(file.try_clone().context("sharing the transcript file")?)
+            .stderr(file.try_clone().context("sharing the transcript file")?);
+        info!(step = label, root = %self.root.display(), "starting");
+        let started = Instant::now();
+        let status = command
+            .status()
+            .with_context(|| format!("failed to start {label}"))?;
+        let elapsed = started.elapsed();
+        self.time(label, elapsed, status.success());
+        info!(step = label, seconds = elapsed.as_secs_f64(), "done");
+        let mut bytes = Vec::new();
+        file.rewind()
+            .and_then(|()| file.read_to_end(&mut bytes))
+            .context("reading the transcript")?;
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        if !status.success() {
+            let lines: Vec<&str> = text.lines().collect();
+            let tail = lines
+                .get(lines.len().saturating_sub(consts::TRANSCRIPT_TAIL_LINES)..)
+                .unwrap_or_default()
+                .join("\n");
+            return Err(ChildFailure::captured(
+                label.to_owned(),
+                status.code(),
+                tail,
+            ));
+        }
+        Ok(text)
     }
 
     /// Record how long a step took. A step that never ran is not recorded, so
@@ -627,5 +670,32 @@ mod tests {
                 .to_string()
                 .contains("failed to start missing fixture")
         );
+    }
+
+    /// A step read from its output hands both streams over in the order they
+    /// were written, and a failure keeps the tail that says why.
+    #[cfg(unix)]
+    #[test]
+    fn a_transcript_holds_both_streams_and_a_failure_keeps_its_tail() {
+        let process = Process::new(FsPath::new("/"), BTreeMap::new());
+
+        let text = process
+            .transcript(
+                Command::new("sh").args(["-c", "echo out; echo err >&2"]),
+                "both",
+            )
+            .unwrap();
+        let error = process
+            .transcript(
+                Command::new("sh").args(["-c", "echo last >&2; exit 3"]),
+                "failing",
+            )
+            .unwrap_err();
+
+        assert_eq!(text, "out\nerr\n");
+        let failure = error
+            .downcast_ref::<ChildFailure>()
+            .expect("a child failure");
+        assert!(failure.to_string().contains("last"), "{failure}");
     }
 }
