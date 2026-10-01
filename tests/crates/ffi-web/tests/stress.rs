@@ -2,15 +2,15 @@ use std::num::NonZeroUsize;
 
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Date, Promise};
-use kithara::audio::{AudioEvent, SeekLifecycleStage};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ReadOutcome,
+        SeekLifecycleStage,
+    },
     events::EventBus,
     hls::{Hls, HlsConfig},
-    // `Instant` is not imported: the test macro virtualises the clock inside
-    // every test body, and naming it here shadows nothing but a warning.
-    platform::time::Duration,
+    platform::time::{Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };

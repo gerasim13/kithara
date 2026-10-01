@@ -823,7 +823,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         progress_probe.drain(&mut progress_rx);
         if read_count == 0 {
             pending_reads += 1;
-            time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
             progress_probe.observe_idle();
             continue;
         }
@@ -862,7 +862,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let decode_audio =
         open_packaged_hls_audio(&url, store, play_worker(&region), codec, backend).await;
     let mut resource = resource_from_reader(decode_audio);
-    time::timeout(consts::READ_TIMEOUT, resource.preload())
+    timeout(consts::READ_TIMEOUT, resource.preload())
         .await
         .expect("packaged HLS preload must complete")
         .expect("packaged HLS preload must succeed");
@@ -1074,7 +1074,7 @@ async fn stress_offline_crossfade_no_gaps(
                 .build();
             let audio = w.open(audio_config).await.expect("HLS audio");
             let mut r = resource_from_reader(audio);
-            time::timeout(consts::READ_TIMEOUT, r.preload())
+            timeout(consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload")
                 .expect("HLS preload result");
@@ -1083,7 +1083,7 @@ async fn stress_offline_crossfade_no_gaps(
     };
 
     let mut mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(consts::READ_TIMEOUT, mp3_1.preload())
+    timeout(consts::READ_TIMEOUT, mp3_1.preload())
         .await
         .expect("mp3_1 preload deadline")
         .expect("mp3_1 preload");
@@ -1091,7 +1091,7 @@ async fn stress_offline_crossfade_no_gaps(
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR).await;
 
     let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(consts::READ_TIMEOUT, hls_1.preload())
+    timeout(consts::READ_TIMEOUT, hls_1.preload())
         .await
         .expect("hls_1 preload deadline")
         .expect("hls_1 preload");
@@ -1099,7 +1099,7 @@ async fn stress_offline_crossfade_no_gaps(
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR).await;
 
     let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(consts::READ_TIMEOUT, mp3_2.preload())
+    timeout(consts::READ_TIMEOUT, mp3_2.preload())
         .await
         .expect("mp3_2 preload deadline")
         .expect("mp3_2 preload");
@@ -1107,7 +1107,7 @@ async fn stress_offline_crossfade_no_gaps(
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR).await;
 
     let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(consts::READ_TIMEOUT, mp3_3.preload())
+    timeout(consts::READ_TIMEOUT, mp3_3.preload())
         .await
         .expect("mp3_3 preload deadline")
         .expect("mp3_3 preload");
@@ -1213,7 +1213,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
                 Instant::now() <= deadline,
                 "path={path}: timed out waiting for PCM data"
             );
-            time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
         let _ = saw_eof;
         (total, resource.position())
@@ -1310,7 +1310,7 @@ async fn local_resource_decodes_with_duration(
             "{url}: timed out waiting for PCM (pos={:?}, samples={samples})",
             resource.position()
         );
-        time::sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_millis(5)).await;
     }
 
     assert!(samples > 0, "{url}: must decode PCM samples");

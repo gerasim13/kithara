@@ -343,11 +343,11 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     for target in scrub_targets {
         let _ = queue.run(move |q| q.seek(target)).await;
         check_not_advanced(&format!("after seek({target:.2}s)"));
-        time::sleep(Duration::from_millis(120)).await;
+        sleep(Duration::from_millis(120)).await;
         check_not_advanced(&format!("post-seek({target:.2}s)+120ms"));
     }
 
-    time::sleep(Duration::from_secs(5)).await;
+    sleep(Duration::from_secs(5)).await;
     check_not_advanced("after 5s settle");
 
     tick.stop().await;

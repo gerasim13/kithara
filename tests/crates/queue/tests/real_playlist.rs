@@ -381,7 +381,7 @@ async fn track_plays_end_to_end(
     // the two endpoints carry cancels instead of adding.
     let start_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let cursor_start = ctx.queue.host().position();
-    time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let cursor_end = ctx.queue.host().position();
     assert_playhead_tracks_renderer(
@@ -483,7 +483,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 
     let before_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     ctx.queue.run(move |q| q.pause()).await;
-    time::sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(2)).await;
     let during_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     assert!(
         (during_pause - before_pause).abs() < 0.5,

@@ -9,7 +9,7 @@ use kithara::{
     decode::DecoderBackend,
     events::{EventReceiver, TrackId},
     platform::{
-        time::{self, Duration, timeout},
+        time::{Duration, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
     play::{ResourceConfig, ResourceSrc},
@@ -518,7 +518,7 @@ async fn hls_seek_near_end_fresh_player_stress(
     for iter in 0..consts::FRESH_ITERATIONS {
         let offset = consts::NEAR_END_OFFSETS_S[(iter as usize) % consts::NEAR_END_OFFSETS_S.len()];
         let phase = Cell::new(AttemptPhase::Setup);
-        let outcome = match time::timeout(
+        let outcome = match timeout(
             consts::ITER_DEADLINE,
             run_one_attempt(iter, &url, offset, backend, &phase),
         )

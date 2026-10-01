@@ -168,7 +168,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     // retry backoff collapses, so a real storm fires within the (virtual)
     // timeout; its absence (timeout elapses with no `RequestStarted`) proves the
     // failed resource scheduled no retry.
-    let retried = time::timeout(Duration::from_secs(3), async {
+    let retried = timeout(Duration::from_secs(3), async {
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Downloader(DownloaderEvent::RequestStarted { .. })) => break true,

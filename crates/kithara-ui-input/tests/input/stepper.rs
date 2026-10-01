@@ -1,4 +1,4 @@
-use kithara_platform::time::Duration;
+use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 use kithara_ui_draw::{Pt, Rect};
 use kithara_ui_input::{

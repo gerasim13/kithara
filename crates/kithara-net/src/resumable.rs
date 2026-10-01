@@ -298,7 +298,10 @@ fn content_length(stream: &ByteStream) -> Option<u64> {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use kithara_platform::sync::{Arc, Mutex};
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        time::Instant,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;

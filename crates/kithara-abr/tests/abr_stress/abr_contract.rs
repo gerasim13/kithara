@@ -1,7 +1,7 @@
 //! ABR state-machine contract tests.
 
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_platform::time::Duration;
+use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 
 fn fresh_state(idx: usize) -> AbrState {

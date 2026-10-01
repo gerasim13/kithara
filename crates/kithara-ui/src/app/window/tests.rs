@@ -1,4 +1,4 @@
-use kithara_platform::time::{Duration, WallInstant};
+use kithara_platform::time::{Duration, Instant, WallInstant};
 use kithara_test_utils::kithara;
 use masonry::vello::wgpu::SurfaceError;
 use winit::dpi::PhysicalPosition;

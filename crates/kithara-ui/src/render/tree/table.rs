@@ -133,6 +133,7 @@ mod tests {
         advanced::layout::{Layout, Node},
         mouse::Cursor,
     };
+    use kithara_platform::time::Instant;
     use kithara_test_utils::kithara;
 
     use super::*;

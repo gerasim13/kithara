@@ -9,7 +9,10 @@ use kithara::{
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
     host::HostConfig,
-    platform::{sync::Arc, time::Duration},
+    platform::{
+        sync::Arc,
+        time::{Duration, timeout},
+    },
     play::{PlayWorker, PlayWorkerConfig, Resource},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
@@ -128,7 +131,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
                 .build();
             let audio = w.open(audio_cfg).await.expect("create HLS audio");
             let mut r: Resource = resource_from_reader(audio);
-            time::timeout(consts::READ_TIMEOUT, r.preload())
+            timeout(consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload")
                 .expect("HLS preload result");
@@ -152,7 +155,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
         .await;
 
         let mut mp3 = make_mp3(worker.clone()).await;
-        time::timeout(consts::READ_TIMEOUT, mp3.preload())
+        timeout(consts::READ_TIMEOUT, mp3.preload())
             .await
             .expect("MP3 preload")
             .expect("MP3 preload result");

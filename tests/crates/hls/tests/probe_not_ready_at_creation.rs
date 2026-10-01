@@ -20,8 +20,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        // The alias keeps the construction deadline on the caller's wall clock.
-        time::{Duration, Instant, Instant as RealInstant},
+        time::{Duration, Instant, WallInstant},
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig},
@@ -111,7 +110,7 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFix
             .cancel(cancel.clone())
             .build(),
     );
-    let started = RealInstant::now();
+    let started = WallInstant::now();
     let result = worker.open(audio_config(&server, &pools, &cancel)).await;
     let elapsed = started.elapsed();
 

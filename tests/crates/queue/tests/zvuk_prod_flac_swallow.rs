@@ -9,7 +9,10 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
+    platform::{
+        CancelToken,
+        time::{Duration, Instant, sleep},
+    },
     play::{PlayWorker, PlayWorkerConfig, Resource},
     queue::TrackSource,
 };
@@ -185,7 +188,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         }
         let elapsed = started.elapsed().as_secs_f64();
         if window_secs > elapsed {
-            time::sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
+            sleep(Duration::from_secs_f64(window_secs - elapsed)).await;
         }
     }
 

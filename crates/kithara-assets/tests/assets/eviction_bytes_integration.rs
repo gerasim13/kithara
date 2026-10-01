@@ -3,7 +3,10 @@
 
 use bytes::Bytes;
 use kithara_assets::{AcquisitionResult, AssetScope, AssetStore, StorageBackend, WriteSide};
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, sleep},
+};
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     cancel_token, kithara, temp_dir,
@@ -64,7 +67,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         writer_a.commit(Some(data_a.len() as u64)).unwrap();
     }
 
-    time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     {
         let scope_b = asset_scope_with_root_and_limit(
@@ -85,7 +88,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         writer_b.commit(Some(data_b.len() as u64)).unwrap();
     }
 
-    time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     {
         let scope_c = asset_scope_with_root_and_limit(
@@ -105,7 +108,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         writer_c.commit(Some(1)).unwrap();
     }
 
-    time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     let asset_a_path = dir.join(asset_a_name).join("media/a.bin");
     assert!(

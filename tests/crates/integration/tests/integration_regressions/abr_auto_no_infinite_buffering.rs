@@ -6,7 +6,11 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{
+        CancelToken,
+        time::{Duration, sleep, timeout},
+        tokio::task::spawn_blocking,
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -70,7 +74,7 @@ async fn abr_mode_storm_does_not_wedge_loading(
             .set_mode(mode)
             .expect("storm variant must exist in the fixture");
         handle.set_max_bandwidth_bps(CAPS[variant]);
-        time::sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
     }
     handle
         .set_mode(AbrMode::Auto(None))
@@ -80,7 +84,7 @@ async fn abr_mode_storm_does_not_wedge_loading(
     // The storm lands while the stream is still fetching its delayed first
     // segment — the state the report describes. The assertion stays on the
     // reported symptom: a stream that never yields bytes.
-    let bytes = time::timeout(
+    let bytes = timeout(
         READ_DEADLINE,
         spawn_blocking(move || {
             let mut buffer = [0u8; 64 * 1024];
