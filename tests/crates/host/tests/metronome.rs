@@ -10,8 +10,9 @@ use kithara::{
     signal::AudioSpec,
     warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
 };
+#[cfg(not(target_os = "android"))]
+use kithara_integration_tests::audio_artifact::{AudioArtifactTap, artifact_label};
 use kithara_integration_tests::{
-    audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     offline::{
         OfflineHostHarness, OfflinePlayer, OfflinePlayerOptions, TapProbe, resource_from_reader,
@@ -270,6 +271,7 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
     let grid = host.session_grid().await;
     host.close().await;
 
+    #[cfg(not(target_os = "android"))]
     if let Some(mut artifact) =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
             .expect("listening artifact")
@@ -661,6 +663,7 @@ async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_rid
     let full = ride_over(tone).await;
     let half = ride_over(half_tone).await;
 
+    #[cfg(not(target_os = "android"))]
     if let Some(mut artifact) =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
             .expect("listening artifact")
