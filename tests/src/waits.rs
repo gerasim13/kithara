@@ -283,9 +283,11 @@ where
 }
 
 /// Wait until `track_id`'s loader finishes, driven by
-/// `QueueEvent::TrackStatusChanged` (parks on the virtual clock). A fast-path
-/// and `Lagged` re-read guard against an already-terminal status or a dropped
-/// event.
+/// `QueueEvent::TrackStatusChanged`. Loading can include real file I/O, so the
+/// virtual deadline advances at real pace while the load is in flight. A
+/// fast-path and `Lagged` re-read guard against an already-terminal status or
+/// a dropped event.
+#[kithara::flash(io)]
 pub async fn wait_for_loader_done_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,

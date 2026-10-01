@@ -3,7 +3,13 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+        tokio::task::spawn_blocking,
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{

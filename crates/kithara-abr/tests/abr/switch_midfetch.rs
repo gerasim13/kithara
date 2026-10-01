@@ -1,5 +1,8 @@
 use kithara_abr::{AbrMode, AbrState, AbrView, VariantIndex};
-use kithara_platform::{sync::Arc, time::Duration as StdDuration};
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration as StdDuration, Instant},
+};
 use kithara_test_utils::kithara;
 
 use super::common::{fast_settings, variants};

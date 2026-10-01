@@ -165,13 +165,13 @@ async fn next_queue_event<F>(
 where
     F: FnMut(&QueueEvent) -> bool,
 {
-    let start = kithara::platform::time::Instant::now();
+    let start = time::Instant::now();
     loop {
         let remaining = deadline.saturating_sub(start.elapsed());
         if remaining.is_zero() {
             return None;
         }
-        match kithara::platform::time::timeout(remaining, rx.recv())
+        match time::timeout(remaining, rx.recv())
             .await
             .map(|r| r.map(|env| env.event))
         {
@@ -248,7 +248,7 @@ where
 /// proof that the loader is parked on the gate (not merely slow), and
 /// synchronizes on an observable rather than on wall-clock timing.
 async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> Result<(), String> {
-    let start = kithara::platform::time::Instant::now();
+    let start = time::Instant::now();
     loop {
         if gate.requested() >= 1 {
             return Ok(());
@@ -599,7 +599,7 @@ async fn concurrent_completion_race_does_not_barge_in(
             .run(move |q| q.select(slow_id, Transition::None))
             .await
             .unwrap_or_else(|e| panic!("[iter {iter}] select slow: {e}"));
-        time::sleep(consts::RACE_GAP).await;
+        sleep(consts::RACE_GAP).await;
         queue
             .run(move |q| q.select(fast_id, Transition::None))
             .await
@@ -612,7 +612,7 @@ async fn concurrent_completion_race_does_not_barge_in(
         // watch as a hard safety cap, not as a pacing wait — every step blocks
         // on the next real current-track change. The initial `current()`
         // snapshot catches a change that landed before we start consuming.
-        let watch = kithara::platform::time::Instant::now();
+        let watch = time::Instant::now();
         let mut history: Vec<Option<TrackId>> = vec![queue.current().map(|e| e.id)];
         let mut saw_fast = history.last().copied().flatten() == Some(fast_id);
         loop {
