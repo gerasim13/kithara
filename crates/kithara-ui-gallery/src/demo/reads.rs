@@ -288,14 +288,16 @@ impl DemoReads {
                 self.vis_preset = (self.vis_preset + presets - 1) % presets;
             }
             ("demo.cells.select", WriteValue::Index(index)) => self.segmented_index = index.as_(),
-            (id, WriteValue::Scalar(value)) if let Some(knob) = knob(id) => {
-                self.knobs[knob] = value.clamp(0.0, 1.0);
-            }
             ("demo.levels.volume", WriteValue::Scalar(value)) => {
                 self.levels_volume = value.clamp(0.0, 1.0);
             }
             ("demo.volume" | "player.output.volume", WriteValue::Scalar(value)) => {
                 self.volume = value.clamp(0.0, 1.0);
+            }
+            (id, WriteValue::Scalar(value)) => {
+                if let Some(knob) = knob(id) {
+                    self.knobs[knob] = value.clamp(0.0, 1.0);
+                }
             }
             _ => {}
         }
@@ -413,17 +415,16 @@ impl DemoReads {
     }
 
     fn shell(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        let value = match endpoint {
-            endpoint if let Some(skin) = endpoint.strip_prefix("gallery.skin.") => {
-                builtin::skins()[self.active_skin].id() == skin
-            }
-            endpoint if let Some(rest) = endpoint.strip_prefix("gallery.font.") => {
-                let active = FONT_FAMILIES[self.active_font];
-                rest.strip_suffix(".hidden")
-                    .map_or_else(|| active == rest, |family| active != family)
-            }
-            _ => return None,
-        };
+        if let Some(skin) = endpoint.strip_prefix("gallery.skin.") {
+            return Some(ReadValue::Bool(
+                builtin::skins()[self.active_skin].id() == skin,
+            ));
+        }
+        let rest = endpoint.strip_prefix("gallery.font.")?;
+        let active = FONT_FAMILIES[self.active_font];
+        let value = rest
+            .strip_suffix(".hidden")
+            .map_or_else(|| active == rest, |family| active != family);
         Some(ReadValue::Bool(value))
     }
 
@@ -631,7 +632,6 @@ impl Reads for DemoReads {
             "ui.preset" => ReadValue::Text("player"),
             "demo.bpm" => ReadValue::Text(consts::BPM),
             "demo.remain" | "deck.playback.remain" => ReadValue::Text(consts::REMAIN),
-            id if let Some(knob) = knob(id) => ReadValue::Scalar(self.knobs[knob]),
             "demo.levels" => ReadValue::Stereo(StereoLevels {
                 l: 0.66,
                 r: 0.52,
@@ -647,7 +647,7 @@ impl Reads for DemoReads {
             "demo.button.cue" => ReadValue::Bool(self.button_cue),
             "demo.cells.segmented" => ReadValue::Scalar(self.segmented_index),
             "gallery.table.preset" => ReadValue::Scalar(self.table_preset.as_()),
-            _ => return None,
+            id => return knob(id).map(|knob| ReadValue::Scalar(self.knobs[knob])),
         };
         Some(value)
     }

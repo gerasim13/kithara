@@ -43,7 +43,13 @@ apple = [
     "stretch-glide",
     "analysis-beat",
 ]
-android = ["kithara/android", "stretch-signalsmith", "stretch-glide", "analysis-beat"]
+android = [
+    "kithara/android",
+    "kithara/resample-glide",
+    "stretch-signalsmith",
+    "stretch-glide",
+    "analysis-beat",
+]
 analysis = ["analysis-waveform", "beat-dsp"]
 analysis-beat = ["kithara/analysis-beat"]
 analysis-waveform = ["kithara/analysis-waveform"]

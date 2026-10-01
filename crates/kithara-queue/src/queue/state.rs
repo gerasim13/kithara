@@ -489,7 +489,20 @@ pub(crate) mod tests {
     #[cfg_attr(miri, kithara::test)]
     fn close_waits_for_an_admitted_queue_mutation() {
         let queue = make_queue();
+        #[cfg(miri)]
         let deadline = Instant::now() + Duration::from_secs(5);
+        macro_rules! recv_stage {
+            ($rx:expr, $message:literal) => {{
+                #[cfg(miri)]
+                {
+                    $rx.recv_timeout(deadline).expect($message)
+                }
+                #[cfg(not(miri))]
+                {
+                    $rx.recv().expect($message)
+                }
+            }};
+        }
         let mutation_control = queue.control.clone();
         let close_control = queue.control.clone();
         let (entered_tx, entered_rx) = mpsc::channel();
@@ -505,9 +518,7 @@ pub(crate) mod tests {
                 .expect("test receiver remains alive");
         });
 
-        entered_rx
-            .recv_timeout(deadline)
-            .expect("mutation must enter the queue admission gate");
+        recv_stage!(entered_rx, "mutation must enter the queue admission gate");
         let (close_started_tx, close_started_rx) = mpsc::channel();
         let (close_tx, close_rx) = mpsc::channel();
         let close = thread::spawn(move || {
@@ -519,22 +530,19 @@ pub(crate) mod tests {
                 .expect("test receiver remains alive");
         });
 
-        close_started_rx
-            .recv_timeout(deadline)
-            .expect("close thread must reach the admission attempt");
+        recv_stage!(
+            close_started_rx,
+            "close thread must reach the admission attempt"
+        );
         kithara_test_utils::test::wall_sleep(Duration::from_millis(50));
         assert!(
             matches!(close_rx.try_recv(), Err(TryRecvError::Empty)),
             "close must not overtake an admitted queue mutation"
         );
         release_tx.send(()).expect("mutation thread remains alive");
-        mutation_rx
-            .recv_timeout(deadline)
-            .expect("mutation must complete after release")
+        recv_stage!(mutation_rx, "mutation must complete after release")
             .expect("admitted mutation remains open");
-        close_rx
-            .recv_timeout(deadline)
-            .expect("close must complete after the mutation")
+        recv_stage!(close_rx, "close must complete after the mutation")
             .expect("unstarted fixture must close");
         mutation.join().expect("mutation thread must not panic");
         close.join().expect("close thread must not panic");
