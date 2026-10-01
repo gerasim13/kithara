@@ -82,7 +82,7 @@ help:
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="${CARGO_TARGET_DIR:-$PWD/target}"; if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then if [[ "$system" = Linux ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/cargo"; else owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; build_target="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust/target-$system-$arch-$owner"; fi; fi; mkdir -p "$build_target"; export CARGO_HOME="$KITHARA_CI_CACHE_ROOT/$trust/$(rustc --print cfg | sed -n 's/^target_os="\(.*\)"$/\1/p')-$(rustc --print cfg | sed -n 's/^target_arch="\(.*\)"$/\1/p')/cargo"; mkdir -p "$CARGO_HOME"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="${CARGO_TARGET_DIR:-$PWD/target}"; if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then if [[ "$system" = Linux ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/cargo"; else build_target=$(just _xtask-self-target) || exit $?; fi; fi; mkdir -p "$build_target"; export CARGO_HOME="$KITHARA_CI_CACHE_ROOT/$trust/$(rustc --print cfg | sed -n 's/^target_os="\(.*\)"$/\1/p')-$(rustc --print cfg | sed -n 's/^target_arch="\(.*\)"$/\1/p')/cargo"; mkdir -p "$CARGO_HOME"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]
@@ -92,7 +92,8 @@ _xtask-unleased *ARGS: _xtask-ready
 
 [no-exit-message]
 _xtask-refresh:
-    @if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then \
+    @target=$(just _xtask-self-target) || exit $?; export CARGO_TARGET_DIR="$target"; \
+    if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then \
       if just _xtask-cached strict self-cache refresh --force </dev/null; then exit 0; fi; \
       printf 'warning: cached xtask self-cache maintenance failed; rebuilding from source\n' >&2; \
     fi; exec just _xtask-bootstrap --force </dev/null
@@ -100,7 +101,14 @@ _xtask-refresh:
 [no-exit-message]
 [private]
 _xtask-ready:
-    @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || exit $?; case "$state" in current) ;; stale) exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
+    @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || exit $?; case "$state" in current) ;; stale) target=$(just _xtask-self-target) || exit $?; CARGO_TARGET_DIR="$target" exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
+
+# Where the self-cache builds: the checkout's own directory locally, and on
+# CI the bootstrap namespace the host cleaner owns, never a lane's directory.
+[no-exit-message]
+[private]
+_xtask-self-target:
+    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then printf '%s\n' "$PWD/target/xtask-self-cache"; exit 0; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; printf '%s\n' "$KITHARA_CI_CACHE_ROOT/bootstrap/$trust/target-$(uname -s)-$(uname -m)-$owner"
 
 # The one build with no caches of its own. Their variables are normally produced
 # by `CiEnvironment`, inside the binary this build is compiling. Its target and
@@ -115,7 +123,7 @@ _xtask-ready:
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target="$PWD/target/xtask-self-cache"; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; root="$KITHARA_CI_CACHE_ROOT/bootstrap/$trust"; system=$(uname -s); arch=$(uname -m); owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; export SCCACHE_DIR="$root/sccache"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-$trust-$system-$arch-$owner.sock"; fi; target="$root/target-$system-$arch-$owner"; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target=$(just _xtask-self-target) || exit $?; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then root="${target%/*}"; export SCCACHE_DIR="$root/sccache"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-${root##*/}-${target##*/target-}.sock"; fi; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 # The pointer to the active generation lives beside the generations it names,
 # inside the Git directory. A CI runner cleans the working tree before every

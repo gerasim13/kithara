@@ -267,6 +267,7 @@ case "${1-}" in
     case "${2-}" in
       probe) ;;
       status) printf 'current\n' ;;
+      refresh) printf 'target=%s\n' "${CARGO_TARGET_DIR-}" >> "$SELF_CACHE_CARGO_LOG" ;;
       *) exit 2 ;;
     esac
     ;;
@@ -955,6 +956,82 @@ fn an_unnamed_cargo_target_directory_builds_inside_the_checkout() -> Result<()> 
     assert_eq!(
         fs::read_to_string(&fixture.cargo_log)?,
         cargo_build_log(&root, &root.join("target/xtask-self-cache"))
+    );
+    Ok(())
+}
+
+/// A CI job may find the checkout's `target` still linked to the lane slot
+/// the previous job built in, so a stale self-cache refreshed into `target`
+/// would leave xtask's units in a lane directory no claim recorded. The
+/// refresh builds where the bootstrap does.
+#[test]
+fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    fs::write(
+        fixture.root.join("xtask/src/main.rs"),
+        "fn main() { changed(); }\n",
+    )?;
+    let cache = fixture._temp.path().join("cache");
+    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
+    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
+
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask-ready"])?
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CI_CONCURRENT_ID")
+        .env("KITHARA_CACHE_TRUST", "review")
+        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "the fixture cargo refuses every build"
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.cargo_log)?,
+        cargo_build_log(
+            &fs::canonicalize(&fixture.root)?,
+            &cache.join(format!(
+                "bootstrap/review/target-{}-{}-local",
+                system.trim(),
+                arch.trim()
+            )),
+        )
+    );
+    Ok(())
+}
+
+/// Outside CI the refresh builds where `_xtask-bootstrap` does, not in a
+/// build directory the caller happened to export.
+#[test]
+fn a_local_refresh_builds_where_the_local_bootstrap_does() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.install_fake_transport()?;
+    let lane = fixture._temp.path().join("lane");
+
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask-refresh"])?
+        .env("CARGO_TARGET_DIR", &lane)
+        .output()?;
+
+    assert_success(&output);
+    let log = fs::read_to_string(&fixture.cargo_log)?;
+    let target = PathBuf::from(
+        log.trim()
+            .strip_prefix("target=")
+            .context("the refresh logged its target")?,
+    );
+    assert!(target.ends_with("target/xtask-self-cache"), "{log}");
+    assert_eq!(
+        fs::canonicalize(
+            target
+                .parent()
+                .and_then(Path::parent)
+                .context("the target has a workspace root")?
+        )?,
+        fs::canonicalize(&fixture.root)?
     );
     Ok(())
 }
