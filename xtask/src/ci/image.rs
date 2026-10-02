@@ -143,7 +143,7 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
     let mut args = vec![
         ("RUST_VERSION", pins.stable_toolchain.clone()),
         ("RUST_BASE_DIGEST", pins.linux_base_digest.clone()),
-        ("SCCACHE_S3_IMAGE", pins.sccache_s3_image.clone()),
+        ("CACHE_CLIENT_IMAGE", pins.cache_client_image.clone()),
         ("MSRV_TOOLCHAIN", pins.msrv_toolchain.clone()),
         ("NIGHTLY_TOOLCHAIN", pins.nightly_toolchain.clone()),
         ("LOCKBUD_TOOLCHAIN", pins.lockbud_toolchain.clone()),

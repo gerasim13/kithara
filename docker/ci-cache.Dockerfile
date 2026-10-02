@@ -1,11 +1,16 @@
-ARG CACHE_IMAGE
+ARG CACHE_SERVER_IMAGE
+ARG CACHE_CLIENT_IMAGE
 ARG RUST_VERSION
 ARG RUST_BASE_DIGEST
-FROM ${CACHE_IMAGE} AS cache
+FROM ${CACHE_SERVER_IMAGE} AS server
+FROM ${CACHE_CLIENT_IMAGE} AS client
 FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST}
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
+# The workspace's crates.io patches live here; without them the lock names
+# sources the build cannot find.
+COPY .cargo/config.toml .cargo/config.toml
 COPY crates crates
 COPY tests tests
 COPY xtask xtask
@@ -14,7 +19,8 @@ RUN --mount=type=cache,target=/build/target \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo build --locked -p xtask --bin xtask \
     && cp target/debug/xtask /usr/local/bin/xtask
-COPY --from=cache /usr/bin/minio /usr/bin/mc /usr/bin/docker-entrypoint.sh /usr/bin/
+COPY --from=server /usr/bin/rustfs /usr/bin/rustfs
+COPY --from=client /usr/bin/rc /usr/bin/rc
 WORKDIR /
-ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/rustfs"]
 CMD ["server", "/data"]

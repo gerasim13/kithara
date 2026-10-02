@@ -195,7 +195,8 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
             let status = compose(env_file)?
                 .args(arguments)
-                .env("KITHARA_CACHE_IMAGE", &pins.sccache_s3_image)
+                .env("KITHARA_CACHE_SERVER_IMAGE", &pins.cache_server_image)
+                .env("KITHARA_CACHE_CLIENT_IMAGE", &pins.cache_client_image)
                 .env("KITHARA_RUST_VERSION", &pins.stable_toolchain)
                 .env("KITHARA_RUST_DIGEST", &pins.linux_base_digest)
                 .status()
@@ -369,6 +370,38 @@ mod tests {
                 .is_some_and(|file| file.starts_with("${CACHE_ENV_FILE")),
             "initialize must read the file CACHE_ENV_FILE names"
         );
+    }
+
+    /// A named volume lives wherever the Docker daemon keeps it - inside
+    /// colima's virtual machine on the Mac - so a stack brought up after that
+    /// daemon was reset starts with an empty store and a new admin password,
+    /// and every client key the runners hold stops working. Everything the
+    /// stack keeps has to sit in a directory the host names on its own disk.
+    #[test]
+    fn the_stack_keeps_its_state_only_in_directories_the_host_names() {
+        let stack: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            &fs::read_to_string(workspace_root().join(consts::CACHE_COMPOSE_FILE)).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            stack.get("volumes").is_none(),
+            "the stack declares named volumes"
+        );
+        let services = stack["services"].as_mapping().unwrap();
+        let mut mounts = 0;
+        for (name, service) in services {
+            for mount in service["volumes"].as_sequence().into_iter().flatten() {
+                let mount = mount.as_str().unwrap();
+                let (source, _) = mount.split_once("}:").unwrap_or((mount, ""));
+                assert!(
+                    source.starts_with("${CACHE_") && source.contains("_VOLUME:?"),
+                    "{name:?} mounts {mount}, which is not a host directory the environment must name"
+                );
+                mounts += 1;
+            }
+        }
+        assert!(mounts > 0, "the stack mounts nothing");
     }
 
     #[test]

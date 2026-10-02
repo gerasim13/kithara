@@ -209,13 +209,26 @@ a regression.
 
 ## Object cache service
 
-Each host runs its own MinIO stack, the compose project `kithara-ci-cache`
-published on `127.0.0.1:19000`; the two hosts share no cache.
+Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
+published on `127.0.0.1:19000`; the two hosts share no cache. Jobs and
+`initialize` reach it through the `rc` client.
 `docker/ci-cache.compose.yml` declares it, and
 `docker/ci-cache/linux.env.example` and `docker/ci-cache/macos.env.example`
 give the shape of the environment each is started with. The environment itself
-lives on the host, outside the repository, because it names volumes and quotas
-of that machine.
+lives on the host, outside the repository, because it names directories and
+quotas of that machine.
+
+Everything the stack keeps - the admin credentials, the objects, the client
+keys - sits in a directory on the host's disk that the environment names. A
+named volume lives wherever the Docker daemon keeps it, inside colima's
+virtual machine on the Mac, so a reset of that daemon would take the store and
+the admin password with it, and every client key the runners hold would stop
+working.
+
+The server is pinned to a preview build. RustFS 1.0.0 answers a bucket quota
+request with 503 for about ten seconds after it reports ready
+(rustfs/rustfs#8014), so an `initialize` started on a fresh stack fails at its
+first quota.
 
 The image carries `xtask`, and `ci cache initialize` builds every bucket
 policy from `ci::cache::provision`. So the copy of this repository the image
@@ -249,8 +262,8 @@ what a `ListBucket` denial always looks like - so it read as a broken client
 rather than a policy that had never been updated.
 
 Quotas are per scope and applied at initialize. Changing one afterwards is
-`mc quota set` against the live bucket; editing the environment file changes
-only what the next initialize would apply.
+`rc bucket quota set` against the live bucket; editing the environment file
+changes only what the next initialize would apply.
 
 The two drift, and the drift is the danger: the live buckets had been raised by
 hand to 200 GiB trusted and 800 GiB review while the environment the stack was
