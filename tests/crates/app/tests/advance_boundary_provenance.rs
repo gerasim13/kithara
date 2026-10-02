@@ -14,14 +14,15 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     warp::{StretchControls, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::PcmPattern,
-    offline::{OfflinePlayer, OfflinePlayerOptions},
+    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::signal::{
     FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, deinterleave_left,
@@ -1263,31 +1264,10 @@ async fn append_loaded(
         .run(queue, move |q| q.append(source))
         .await
         .expect("open queue accepts a fixture source");
-    wait_loaded_from(&mut events, id).await;
+    wait_for_loader_done_event(&mut events, queue, id, LOCAL_LOAD_DEADLINE)
+        .await
+        .unwrap_or_else(|err| panic!("fixture track {id:?} must load through Queue loader: {err}"));
     id
-}
-
-async fn wait_loaded_from(events: &mut EventReceiver<TestEvent>, id: kithara::events::TrackId) {
-    let loaded = time::timeout(Duration::from_secs(20), async {
-        while let Ok(envelope) = events.recv().await {
-            if matches!(
-                envelope.event,
-                TestEvent::Queue(QueueEvent::TrackStatusChanged {
-                    id: seen,
-                    status: TrackStatus::Loaded,
-                }) if seen == id
-            ) {
-                return true;
-            }
-        }
-        false
-    })
-    .await
-    .unwrap_or(false);
-    assert!(
-        loaded,
-        "fixture track {id:?} must load through Queue loader"
-    );
 }
 
 #[kithara::flash(true)]
