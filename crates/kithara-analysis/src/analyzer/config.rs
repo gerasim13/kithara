@@ -17,39 +17,35 @@ use crate::consts;
 /// it, and [`BeatAnalysisConfigPatchError`] what the merge refuses with. The
 /// refusal is declared here rather than read off the fields, so the merge
 /// keeps one signature whichever detector the build selects.
-#[derive(Clone, Config, fieldwork::Fieldwork, Patch)]
+#[derive(Clone, Config, Patch)]
 #[config(builder(state_mod(vis = "pub")), patch(fallible))]
 #[non_exhaustive]
-#[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
-    #[config(skip = "resampler backend strategy", patch(skip))]
+    #[config(skip = "resampler backend strategy", patch(skip), field(get))]
     resampler_backend: B,
-    #[config(value, builder(default = consts::DEFAULT_BEAT_RESAMPLER_QUALITY))]
-    #[field(get(copy))]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_RESAMPLER_QUALITY), field(get, copy))]
     pub resampler_quality: ResamplerQuality,
-    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS))]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS), field(get, copy))]
     pub detector_min_window_seconds: u32,
-    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS))]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS), field(get, copy))]
     pub detector_overlap_seconds: u32,
-    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS))]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS), field(get, copy))]
     pub detector_window_seconds: u32,
-    #[config(value, builder(default = consts::DEFAULT_BEAT_TARGET_RATE))]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_TARGET_RATE), field(get, copy))]
     pub target_rate: u32,
-    #[config(value, builder(default = consts::DEFAULT_BEAT_BLOCK_FRAMES))]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_BLOCK_FRAMES), field(get, copy))]
     pub block_frames: usize,
     /// Reaches the detector's peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.
     #[cfg(feature = "beat-nn")]
-    #[config(nested, builder(default), patch(nested))]
-    #[field(get(copy))]
+    #[config(nested, builder(default), patch(nested), field(get, copy))]
     pub beat: BeatConfig,
     /// The tempo the signal detector searches. A document patches it key by
     /// key under `tempo:`, and [`Tempo`] judges the merged policy as a whole
     /// before it is committed, so a band the comb never scores is refused by
     /// name instead of searched.
     #[cfg(feature = "beat-dsp")]
-    #[config(value, builder(default), patch(nested, fallible))]
-    #[field(get(copy))]
+    #[config(value, builder(default), patch(nested, fallible), field(get, copy))]
     tempo: Tempo,
 }
 
