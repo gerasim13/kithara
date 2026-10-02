@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
-use kithara_config::ConfigOwner;
 use kithara_events::EventBus;
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{keep_worker_alive, spawn};
@@ -28,7 +27,8 @@ use crate::RequestId;
 /// Protocols obtain a [`PeerHandle`] via [`register`](Self::register) and
 /// issue fetches through [`PeerHandle::execute`]. The download loop runs while
 /// any clone or [`PeerHandle`] is alive, and stops when the last one drops.
-#[derive(Clone, derive_more::Debug)]
+#[derive(Clone, derive_more::Debug, kithara_config::ConfigOwner)]
+#[config_owner(super::DownloaderConfig, inner.config)]
 pub struct Downloader {
     #[debug(skip)]
     inner: Arc<DownloaderInner>,
@@ -106,14 +106,6 @@ impl DownloaderInner {
         let nz = std::num::NonZeroU64::new(raw.max(1))
             .expect("BUG: next_request_id starts at 1; fetch_add never yields 0");
         RequestId::new(nz)
-    }
-}
-
-impl ConfigOwner for Downloader {
-    type Config = super::DownloaderConfig;
-
-    fn config(&self) -> &Self::Config {
-        &self.inner.config
     }
 }
 

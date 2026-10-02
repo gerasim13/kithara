@@ -8,3 +8,6 @@ pub(crate) use patch::expand;
 
 #[cfg(feature = "config")]
 pub(crate) mod retained;
+
+#[cfg(feature = "config")]
+pub(crate) mod owner;

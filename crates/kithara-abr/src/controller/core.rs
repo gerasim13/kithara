@@ -5,7 +5,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_config::{Config, ConfigOwner};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -104,7 +104,8 @@ pub struct AbrSettings {
 /// Holds the bandwidth estimator (one per controller) and a map of
 /// registered peers. Constructed via [`AbrController::new`]; peers are
 /// attached with [`AbrController::register`].
-#[derive(fieldwork::Fieldwork)]
+#[derive(fieldwork::Fieldwork, kithara_config::ConfigOwner)]
+#[config_owner(settings)]
 #[fieldwork(opt_in, get)]
 pub struct AbrController {
     #[field(get)]
@@ -114,14 +115,6 @@ pub struct AbrController {
     pub(super) tick_waker: Mutex<Option<Waker>>,
     next_peer_id: AtomicU64,
     scope: CancelScope,
-}
-
-impl ConfigOwner for AbrController {
-    type Config = AbrSettings;
-
-    fn config(&self) -> &Self::Config {
-        &self.settings
-    }
 }
 
 impl AbrController {

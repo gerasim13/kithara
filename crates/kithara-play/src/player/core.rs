@@ -80,6 +80,8 @@ pub(crate) struct PlayerCore<S> {
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
 #[doc(hidden)]
+#[derive(kithara_config::ConfigOwner)]
+#[config_owner(PlayerConfig<S>, core.config)]
 pub struct PlayerRuntime<S> {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore<S>,
@@ -87,14 +89,6 @@ pub struct PlayerRuntime<S> {
     /// admitted, so a contender parks on the gate instead of blocking a lock.
     pub(super) operations: ExclusiveGate,
     pub(super) lifecycle: PlayerLifecycle,
-}
-
-impl<S> kithara_config::ConfigOwner for PlayerRuntime<S> {
-    type Config = PlayerConfig<S>;
-
-    fn config(&self) -> &Self::Config {
-        &self.core.config
-    }
 }
 
 impl<S> PlayerRuntime<S> {

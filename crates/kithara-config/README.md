@@ -19,6 +19,9 @@ that governs its behavior and reads settings from it; `ConfigOwner::config`
 exposes that canonical object. A mutable setting is changed in the retained
 configuration, not in a second owner field. `UpdatableConfig` gives typed live
 changes a common API. Rejected changes leave the accepted configuration intact.
+`#[derive(ConfigOwner)]` implements the owner accessor from
+`#[config_owner(field)]`. For a nested field, give its type and path as
+`#[config_owner(ConfigType, field.path)]`.
 Owners still decide when to prepare and publish derived state, especially across
 realtime and thread boundaries. Buffers, counters, handles and observed results
 remain operational state. `Config::values` returns an owned observation snapshot;

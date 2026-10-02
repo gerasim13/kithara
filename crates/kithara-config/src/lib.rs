@@ -11,7 +11,7 @@ pub use bon;
 /// struct Unclassified { value: u32 }
 /// ```
 pub use kithara_derive::Config;
-pub use kithara_derive::Patch;
+pub use kithara_derive::{ConfigOwner, Patch};
 
 mod config;
 pub use config::{Config, ConfigOwner, UpdatableConfig};

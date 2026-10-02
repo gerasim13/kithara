@@ -1,6 +1,6 @@
 use std::io::Error;
 
-use kithara_config::{Config, Patch, UpdatableConfig};
+use kithara_config::{Config, ConfigOwner, Patch, UpdatableConfig};
 use kithara_test_utils::kithara;
 
 #[derive(Clone, Patch, Config)]
@@ -73,6 +73,39 @@ fn a_judged_builder_uses_the_same_check_as_updates() {
         })
         .expect("declared default is valid");
     assert_eq!(bounded.level(), 2);
+}
+
+#[derive(ConfigOwner)]
+#[config_owner(config)]
+struct Owner {
+    config: Bounded,
+}
+
+#[derive(ConfigOwner)]
+#[config_owner(Bounded, inner.config)]
+struct NestedOwner {
+    inner: std::sync::Arc<Owner>,
+}
+
+#[kithara::test]
+fn derived_owners_borrow_the_same_updated_config_through_nested_fields() {
+    let mut owner = Owner {
+        config: Bounded::default(),
+    };
+    owner
+        .config
+        .apply_update(BoundedUpdate {
+            level: BoundedLevelUpdate::Set { value: 3 },
+            ..BoundedUpdate::default()
+        })
+        .expect("level stays within the limit");
+    assert!(std::ptr::eq(owner.config(), &owner.config));
+
+    let nested = NestedOwner {
+        inner: std::sync::Arc::new(owner),
+    };
+    assert!(std::ptr::eq(nested.config(), &nested.inner.config));
+    assert_eq!(nested.config().values().level, 3);
 }
 
 #[derive(Config)]
