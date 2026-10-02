@@ -1,4 +1,4 @@
-use bon::Builder;
+use kithara_config::Config;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
@@ -8,10 +8,10 @@ pub enum RubatoAlgorithm {
     Fft,
 }
 
-#[derive(Clone, Copy, Debug, Default, Builder, Eq, PartialEq)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Copy, Debug, Default, Config, Eq, PartialEq)]
+#[config(builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 pub struct RubatoConfig {
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub algorithm: RubatoAlgorithm,
 }

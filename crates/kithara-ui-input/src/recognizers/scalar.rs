@@ -55,7 +55,8 @@ impl Track {
     }
 }
 
-#[derive(bon::Builder)]
+#[derive(kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub struct Scalar {
     hover: Hover,
     reset: Option<f32>,

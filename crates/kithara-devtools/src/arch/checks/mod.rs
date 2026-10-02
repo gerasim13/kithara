@@ -5,6 +5,7 @@
 
 pub(crate) mod arc_clone_hotspots;
 pub(crate) mod args_wrapper_struct;
+pub(crate) mod bon_dependency;
 pub(crate) mod cancel_root_sites;
 pub(crate) mod canonical_types;
 pub(crate) mod cfg_density;

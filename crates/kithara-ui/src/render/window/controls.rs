@@ -11,7 +11,8 @@ use crate::{
     solve::{Length, Size},
 };
 
-#[derive(bon::Builder)]
+#[derive(kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct WindowControls<'skin> {
     skin: &'skin Skin,
     style: WindowControlsStyle,

@@ -17,7 +17,8 @@ use crate::{
 };
 
 /// Small canvas representation of compiled split and module geometry.
-#[derive(bon::Builder)]
+#[derive(kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 #[non_exhaustive]
 pub struct LayoutPreview<'a> {
     ui: &'a CompiledUi,

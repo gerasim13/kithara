@@ -221,7 +221,6 @@ where
         stream_peer.peer_handle(),
         config.pools.clone(),
     );
-    playlist_cache.set_master_url(config.url.clone());
     playlist_cache.set_base_url(config.base_url.clone());
     playlist_cache.set_headers(config.headers.clone());
 

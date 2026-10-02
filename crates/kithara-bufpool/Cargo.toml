@@ -21,7 +21,6 @@ kithara-platform = { workspace = true }
 kithara-ring = { workspace = true }
 kithara-test-macros = { workspace = true }
 
-bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }

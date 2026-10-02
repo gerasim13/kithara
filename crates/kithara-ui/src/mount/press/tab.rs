@@ -1,4 +1,4 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::{
     ids::InternId,
@@ -7,6 +7,7 @@ use crate::{
 
 /// A full-width tab heading one page of a panel.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)), composes_size = false)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Tab {

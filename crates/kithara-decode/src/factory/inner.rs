@@ -4,8 +4,8 @@ use std::{
     sync::atomic::AtomicU64,
 };
 
-use bon::Builder;
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_config::Config;
 use kithara_platform::sync::Arc;
 #[cfg(all(test, feature = "resample-rubato"))]
 use kithara_resampler::rubato::RubatoBackend;
@@ -83,48 +83,55 @@ pub enum DecoderBackend {
 ///
 /// This describes conversion that is part of decoder construction, not the
 /// playback graph's effects chain. Backend choice is encoded by `B`.
-#[derive(Clone, Builder)]
+#[derive(Clone, Config)]
 #[non_exhaustive]
 #[derive(derive_more::Debug)]
 #[debug(bound(B: ResamplerBackend))]
 pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
+    #[config(skip = "resampler backend strategy")]
     #[debug("{:?}", self.backend.name())]
     pub backend: B,
+    #[config(value)]
     pub target_sample_rate: NonZeroU32,
-    #[builder(default)]
+    #[config(nested, builder(default))]
     pub options: ResamplerOptions,
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub quality: ResamplerQuality,
 }
 
 /// Configuration for `DecoderFactory`.
-#[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Config)]
+#[config(construction, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 pub struct DecoderConfig<B, S> {
     /// Which decoder backend to use. See [`DecoderBackend`].
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub backend: DecoderBackend,
     /// Handle for dynamic byte length updates (HLS).
+    #[config(skip = "transferred to the decoder")]
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Optional byte-map handle over the underlying source.
+    #[config(skip = "transferred to the decoder")]
     pub byte_map: Option<Arc<dyn ByteMap>>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
-    #[builder(into)]
+    #[config(skip = "consumed by the decoder probe", builder(into))]
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
     /// [`ComposedDecoder`] by the chosen backend path.
+    #[config(skip = "transferred to the composed decoder")]
     pub hooks: Option<BoxedEventSink>,
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
+    #[config(skip = "transferred to the resampled decoder")]
     pub resampler: Option<DecoderResamplerConfig<B>>,
     /// Shared typed buffer-pool facade propagated from the host.
+    #[config(skip = "transferred to decoder owners")]
     pub pools: PoolRegion<S>,
     /// Enable gapless trim wiring through the per-backend codec.
-    #[builder(default = true)]
+    #[config(value, builder(default = true))]
     pub gapless: bool,
     /// Epoch counter for decoder recreation tracking.
-    #[builder(default)]
+    #[config(skip = "transferred to decoder runtime state", builder(default))]
     pub epoch: u64,
 }
 

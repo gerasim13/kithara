@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::{ids::InternId, module::ChipStyle};
 
 /// A small labelled toggle that reads as a tag.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.chip.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Chip {

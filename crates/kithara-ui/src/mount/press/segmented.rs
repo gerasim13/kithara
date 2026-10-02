@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::ids::InternId;
 
 /// A row of mutually exclusive segments, one of them picked.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.segmented.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Segmented<'a> {

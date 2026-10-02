@@ -50,7 +50,8 @@ pub trait App {
 }
 
 /// Everything a host needs besides the application itself.
-#[derive(bon::Builder, Clone, Copy)]
+#[derive(kithara_config::bon::Builder, Clone, Copy)]
+#[builder(crate = ::kithara_config::bon)]
 #[non_exhaustive]
 pub struct Config<'a> {
     /// The caption catalog every `@key` in the document resolves against.

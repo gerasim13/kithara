@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_config::Config;
 use kithara_platform::{
     sync::{Arc, mpsc, mpsc::TryRecvError},
     time::Duration,
@@ -47,12 +48,20 @@ struct OfflineSessionTask<S> {
     position: u64,
 }
 
+#[derive(Config)]
+#[config(construction)]
 pub(crate) struct OfflineTaskConfig<S> {
+    #[config(skip = "applied to the offline backend")]
     pub(crate) declared_latency: Duration,
+    #[config(skip = "transferred to session output")]
     pub(crate) output: SessionOutput,
+    #[config(skip = "transferred to session state")]
     pub(crate) declick_frames: NonZeroU32,
+    #[config(skip = "transferred to the offline task")]
     pub(crate) max_block_frames: NonZeroU32,
+    #[config(skip = "transferred to session state")]
     pub(crate) sample_rate: NonZeroU32,
+    #[config(skip = "transferred to the offline task")]
     pub(crate) pools: PoolRegion<S>,
 }
 

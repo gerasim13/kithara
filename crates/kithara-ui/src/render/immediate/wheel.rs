@@ -10,7 +10,8 @@ use crate::{
     render::{Published, Widget, step},
 };
 
-#[derive(bon::Builder)]
+#[derive(kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct WheelSurface<'path> {
     path: &'path str,
 }

@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_worker::Worker;
@@ -9,53 +9,56 @@ use kithara_worker::Worker;
 use crate::consts;
 
 /// Configuration for one shared playback worker.
-#[derive(Builder, fieldwork::Fieldwork, Patch)]
+#[derive(Config, fieldwork::Fieldwork, Patch)]
+#[config(construction)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayWorkerConfig<S> {
     /// Typed pool facade shared by every Player and resource registered with the worker.
-    #[builder(start_fn)]
+    #[config(skip = "transferred to the playback worker", builder(start_fn))]
     #[field(get)]
     #[patch(skip)]
     pub(crate) pools: PoolRegion<S>,
     /// Poll interval for RT-safe deferred wakes while the final ring is full.
-    #[builder(default = consts::BACKPRESSURE_POLL_INTERVAL)]
+    #[config(value, builder(default = consts::BACKPRESSURE_POLL_INTERVAL))]
     #[field(get, copy)]
     #[patch(humantime)]
     pub(crate) backpressure_poll_interval: Duration,
     /// Park duration when no playback task expects progress.
-    #[builder(default = Duration::from_millis(100))]
+    #[config(value, builder(default = Duration::from_millis(100)))]
     #[field(get, copy)]
     #[patch(humantime)]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow playback tick.
-    #[builder(default = Duration::from_millis(10))]
+    #[config(value, builder(default = Duration::from_millis(10)))]
     #[field(get, copy)]
     #[patch(humantime)]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while live playback tasks are waiting.
-    #[builder(default = consts::ACTIVE_WAIT_TIMEOUT)]
+    #[config(value, builder(default = consts::ACTIVE_WAIT_TIMEOUT))]
     #[field(get, copy)]
     #[patch(humantime)]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
-    #[builder(default = consts::FAIRNESS_YIELD_INTERVAL)]
+    #[config(value, builder(default = consts::FAIRNESS_YIELD_INTERVAL))]
     #[field(get, copy)]
     pub(crate) fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive ticks for one track visit.
-    #[builder(default = consts::TASK_BURST)]
+    #[config(value, builder(default = consts::TASK_BURST))]
     #[field(get, copy)]
     pub(crate) task_burst: NonZeroU32,
     /// Maximum number of simultaneously registered track render chains.
-    #[builder(default = consts::CAPACITY)]
+    #[config(value, builder(default = consts::CAPACITY))]
     #[field(get, copy)]
     pub(crate) capacity: NonZeroUsize,
     /// Parent cancellation token for this playback dispatcher lifetime. Not a
     /// document key: the caller owns the token tree.
+    #[config(skip = "composed into the playback cancel scope")]
     #[patch(skip)]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional base worker shared with other domain workers. Not a document
     /// key: a live worker is an object only code can hand over.
+    #[config(skip = "transferred to the playback worker")]
     #[patch(skip)]
     pub(crate) worker: Option<Worker>,
 }

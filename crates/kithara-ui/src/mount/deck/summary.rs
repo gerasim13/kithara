@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::module::DeckSummaryStyle;
 
 /// The deck's headline: what is loaded and how it is playing.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.deck.summary_size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Summary {

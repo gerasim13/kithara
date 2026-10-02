@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use bon::Builder;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{CancelGroup, time::Duration};
 
@@ -8,50 +8,51 @@ use crate::{Observer, observer::Event};
 
 /// Scheduler thread budgets and observer.
 #[non_exhaustive]
-#[derive(Builder, Patch)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Config, Patch)]
+#[config(construction, builder(state_mod(vis = "pub")))]
 pub struct DispatcherConfig {
     /// Where this dispatcher reports its passes. Not a document key: an
     /// observer is a live object only code can hand over.
-    #[builder(
+    #[config(skip = "transferred to the dispatcher loop", builder(
         default = Box::new(NoopObserver),
         with = |observer: impl Observer| Box::new(observer)
-    )]
+    ))]
     #[patch(skip)]
     pub(crate) observer: Box<dyn Observer>,
     /// Poll interval for deferred wakes while a task's sink is full.
-    #[builder(default = Duration::from_millis(10))]
+    #[config(value, builder(default = Duration::from_millis(10)))]
     #[patch(humantime)]
     pub(crate) backpressure_poll_interval: Duration,
     /// Park duration when no task expects progress.
-    #[builder(default = Duration::from_millis(100))]
+    #[config(value, builder(default = Duration::from_millis(100)))]
     #[patch(humantime)]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow tick.
-    #[builder(default = Duration::from_millis(10))]
+    #[config(value, builder(default = Duration::from_millis(10)))]
     #[patch(humantime)]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while tasks are waiting.
-    #[builder(default = Duration::from_millis(10))]
+    #[config(value, builder(default = Duration::from_millis(10)))]
     #[patch(humantime)]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
-    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
+    #[config(value, builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN)))]
     pub(crate) fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive ticks for one task visit.
-    #[builder(default = NonZeroU32::new(32).unwrap_or(NonZeroU32::MIN))]
+    #[config(value, builder(default = NonZeroU32::new(32).unwrap_or(NonZeroU32::MIN)))]
     pub(crate) task_burst: NonZeroU32,
     /// Maximum number of simultaneously registered tasks.
-    #[builder(default = NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN))]
+    #[config(value, builder(default = NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN)))]
     pub(crate) capacity: NonZeroUsize,
     /// Parent cancellation group for this dispatcher's lifetime. Not a
     /// document key: the caller owns the token tree.
+    #[config(skip = "composed into the dispatcher cancel group")]
     #[patch(skip)]
     pub(crate) cancel: Option<CancelGroup>,
     /// Thread name for this dispatcher. Not a document key: each dispatcher
     /// names itself where it is built, and one document key would rename
     /// every one of them at once.
-    #[builder(into)]
+    #[config(skip = "transferred to the dispatcher thread", builder(into))]
     #[patch(skip)]
     pub(crate) name: String,
 }

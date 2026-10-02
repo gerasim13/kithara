@@ -1,6 +1,6 @@
 use std::io;
 
-use bon::Builder;
+use kithara_config::bon::Builder;
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use kithara_platform::CancelToken;
 use url::Url;
@@ -54,7 +54,7 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 /// establishes the HTTP connection and returns a
 /// [`FetchResponse`](super::FetchResponse) with headers and a body stream.
 #[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[builder(crate = ::kithara_config::bon, state_mod(vis = "pub"))]
 #[non_exhaustive]
 #[derive(derive_more::Debug)]
 pub struct FetchCmd {

@@ -24,7 +24,8 @@ use crate::{
     skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
 };
 
-#[derive(bon::Builder)]
+#[derive(kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct Text<'value, 'data, 'skin> {
     skin: &'skin Skin,
     active_color: Option<ColorRole>,

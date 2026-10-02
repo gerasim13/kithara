@@ -12,7 +12,7 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_signal::AudioSpec;
-use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake};
+use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Wake, Worker};
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
@@ -232,7 +232,7 @@ impl Broadcast {
             .with_max_compute_tasks(config.max_compute_tasks)
             .with_priority(config.priority);
         let task = BroadcastTask::new(
-            config,
+            &config,
             pcm_rx,
             format_rx,
             Arc::clone(&control),
@@ -279,6 +279,7 @@ impl Broadcast {
             wake,
             completed: Mutex::new(Some(completed_rx)),
             url: Arc::from(format!("http://{addr}/master.m3u8")),
+            _worker: config.worker,
         };
         Ok((output, handle))
     }
@@ -296,6 +297,7 @@ pub struct BroadcastHandle {
     completed: Mutex<Option<mpsc::Receiver<()>>>,
     task: TaskHandle,
     wake: Wake,
+    _worker: Worker,
 }
 
 impl BroadcastHandle {

@@ -1,7 +1,8 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 /// A horizontal fader centred on its midpoint.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.crossfader.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Crossfader {

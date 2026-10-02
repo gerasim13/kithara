@@ -1,4 +1,4 @@
-use bon::Builder;
+use kithara_config::Config;
 use num_traits::cast::AsPrimitive;
 
 use crate::{GainDb, consts};
@@ -25,21 +25,17 @@ impl From<u8> for FilterKind {
 }
 
 /// Configuration for a single EQ band.
-#[derive(Debug, Clone, Copy, PartialEq, Builder, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Debug, Clone, Copy, PartialEq, Config)]
+#[config(default, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
-#[fieldwork(get)]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct EqBandConfig {
-    #[builder(default)]
-    #[field(get(copy))]
+    #[config(value, builder(default), field(get, copy))]
     kind: FilterKind,
-    #[builder(default)]
-    #[field(get(copy))]
+    #[config(value, builder(default), field(get, copy))]
     gain_db: GainDb,
-    #[builder(default = consts::DEFAULT_FREQ)]
+    #[config(value, builder(default = consts::DEFAULT_FREQ), field(get, copy))]
     frequency: f32,
-    #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
+    #[config(value, builder(default = std::f32::consts::FRAC_1_SQRT_2), field(get, copy))]
     q_factor: f32,
 }
 

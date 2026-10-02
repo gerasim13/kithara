@@ -4,8 +4,8 @@ use std::{
     task::Waker,
 };
 
-use bon::Builder;
 use dashmap::DashMap;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -38,63 +38,64 @@ impl AbrPeerId {
 }
 
 /// ABR controller settings.
-#[derive(Clone, Debug, Builder, Patch)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Debug, Config, Patch)]
+#[config(default, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
-    #[builder(default = consts::BANDWIDTH_EMIT_MIN_INTERVAL)]
+    #[config(value, builder(default = consts::BANDWIDTH_EMIT_MIN_INTERVAL))]
     #[patch(humantime)]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
-    #[builder(default = consts::BUFFER_EMIT_MIN_DELTA)]
+    #[config(value, builder(default = consts::BUFFER_EMIT_MIN_DELTA))]
     #[patch(humantime)]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
-    #[builder(default = consts::BUFFER_EMIT_MIN_INTERVAL)]
+    #[config(value, builder(default = consts::BUFFER_EMIT_MIN_INTERVAL))]
     #[patch(humantime)]
     pub buffer_emit_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
-    #[builder(default = consts::MIN_BUFFER_FOR_UP_SWITCH)]
+    #[config(value, builder(default = consts::MIN_BUFFER_FOR_UP_SWITCH))]
     #[patch(humantime)]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
-    #[builder(default = consts::MIN_SWITCH_INTERVAL)]
+    #[config(value, builder(default = consts::MIN_SWITCH_INTERVAL))]
     #[patch(humantime)]
     pub min_switch_interval: Duration,
     /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
     /// sample still reaches the estimator; this bounds only how often the
     /// raw per-fetch rate is published to the bus.
-    #[builder(default = consts::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
+    #[config(value, builder(default = consts::THROUGHPUT_SAMPLE_MIN_INTERVAL))]
     #[patch(humantime)]
     pub throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
-    #[builder(default = consts::URGENT_DOWNSWITCH_BUFFER)]
+    #[config(value, builder(default = consts::URGENT_DOWNSWITCH_BUFFER))]
     #[patch(humantime)]
     pub urgent_downswitch_buffer: Duration,
     /// Optional parent cancellation token for the controller scope.
     ///
     /// `Some` derives a child scope from the supplied parent; `None` gives the
     /// controller a standalone scope.
+    #[config(skip = "composed into the controller scope")]
     #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
-    #[builder(required, default = Some(consts::INITIAL_THROUGHPUT_BPS))]
+    #[config(skip = "seeded into the estimator", builder(required, default = Some(consts::INITIAL_THROUGHPUT_BPS)))]
     pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
+    #[config(value)]
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
-    #[builder(default = consts::BANDWIDTH_EMIT_MIN_DELTA_RATIO)]
+    #[config(value, builder(default = consts::BANDWIDTH_EMIT_MIN_DELTA_RATIO))]
     pub bandwidth_emit_min_delta_ratio: f64,
     /// Hysteresis ratio for down-switch.
-    #[builder(default = consts::DOWN_HYSTERESIS_RATIO)]
+    #[config(value, builder(default = consts::DOWN_HYSTERESIS_RATIO))]
     pub down_hysteresis_ratio: f64,
     /// Safety factor applied to the throughput estimate before comparing.
-    #[builder(default = consts::THROUGHPUT_SAFETY_FACTOR)]
+    #[config(value, builder(default = consts::THROUGHPUT_SAFETY_FACTOR))]
     pub throughput_safety_factor: f64,
     /// Hysteresis ratio for up-switch.
-    #[builder(default = consts::UP_HYSTERESIS_RATIO)]
+    #[config(value, builder(default = consts::UP_HYSTERESIS_RATIO))]
     pub up_hysteresis_ratio: f64,
 }
 

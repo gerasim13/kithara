@@ -10,7 +10,8 @@ use crate::{
 };
 
 /// What a document asks a button to be, before a skin resolves it.
-#[derive(bon::Builder, Clone, Copy)]
+#[derive(kithara_config::bon::Builder, Clone, Copy)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct ButtonConfig {
     style: ButtonStyle,
     frame: Option<FrameSides>,

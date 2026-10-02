@@ -3,8 +3,8 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use kithara_config::Config;
 use serde::Deserialize;
 
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode};
@@ -26,31 +26,33 @@ pub struct RatioGlide {
     pub target_ratio: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Builder, Deserialize)]
-#[builder(const, state_mod(vis = "pub"))]
+#[derive(Clone, Copy, Debug, PartialEq, Config, Deserialize)]
+#[config(default, builder(state_mod(vis = "pub")))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct ResamplerOptions {
-    #[builder(default = 8.0)]
+    #[config(value, builder(default = 8.0))]
     pub max_ratio_adjustment: f64,
-    #[builder(default = 0.0001)]
+    #[config(value, builder(default = 0.0001))]
     pub passthrough_tolerance: f64,
-    #[builder(default = 4_096)]
+    #[config(value, builder(default = 4_096))]
     pub chunk_size: usize,
 }
 
-#[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Config)]
+#[config(construction, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
 pub struct ResamplerSettings<S> {
+    #[config(skip = "used to prepare the resampler")]
     pub channels: NonZeroUsize,
+    #[config(skip = "injected pool region")]
     pub pools: PoolRegion<S>,
+    #[config(skip = "used to prepare the resampler")]
     pub mode: ResamplerMode,
-    #[builder(default)]
+    #[config(skip = "transferred to the selected backend", builder(default))]
     pub options: ResamplerOptions,
-    #[builder(default)]
+    #[config(skip = "used to prepare the resampler", builder(default))]
     pub quality: ResamplerQuality,
 }
 
@@ -82,12 +84,14 @@ impl<S> ResamplerSettings<S> {
     }
 }
 
-#[derive(Builder)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Config)]
+#[config(construction, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; B: Clone)]
 pub struct ResamplerConfig<B, S> {
+    #[config(skip = "selected backend resource")]
     pub backend: B,
+    #[config(skip = "construction settings")]
     pub settings: ResamplerSettings<S>,
 }
 

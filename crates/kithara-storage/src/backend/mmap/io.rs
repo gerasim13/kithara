@@ -29,7 +29,7 @@ impl DriverIo for MmapDriver {
         let mut displaced = None;
 
         let rewrite_temp: Option<PathBuf> = match &*mmap_guard {
-            MmapState::Active(m) if m.path() != self.path => Some(m.path().to_path_buf()),
+            MmapState::Active(m) if m.path() != self.config.path => Some(m.path().to_path_buf()),
             _ => None,
         };
 
@@ -48,7 +48,7 @@ impl DriverIo for MmapDriver {
 
                 *mmap_guard = MmapState::Empty;
 
-                let source = rewrite_temp.as_deref().unwrap_or(&self.path);
+                let source = rewrite_temp.as_deref().unwrap_or(&self.config.path);
 
                 if needs_truncate {
                     let file_len = fs::metadata(source).map_or(0, |m| m.len());
@@ -63,11 +63,11 @@ impl DriverIo for MmapDriver {
                 }
 
                 if let Some(temp) = rewrite_temp.as_deref() {
-                    fs::rename(temp, &self.path)
+                    fs::rename(temp, &self.config.path)
                         .map_err(|e| StorageError::Failed(format!("rewrite rename: {e}")))?;
                 }
 
-                let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
+                let arc = Arc::new(MemoryMappedFile::open_ro(&self.config.path)?);
                 *mmap_guard = MmapState::Committed(Arc::clone(&arc));
                 displaced = self.committed.swap(Some(arc));
             } else {
@@ -76,7 +76,7 @@ impl DriverIo for MmapDriver {
                 if let Some(temp) = rewrite_temp.as_deref() {
                     let _ = fs::remove_file(temp);
                 }
-                let _ = fs::write(&self.path, b"");
+                let _ = fs::write(&self.config.path, b"");
             }
         } else {
             let is_active = matches!(*mmap_guard, MmapState::Active(_));
@@ -88,11 +88,13 @@ impl DriverIo for MmapDriver {
                 }
                 *mmap_guard = MmapState::Empty;
                 if let Some(temp) = rewrite_temp.as_deref() {
-                    fs::rename(temp, &self.path)
+                    fs::rename(temp, &self.config.path)
                         .map_err(|e| StorageError::Failed(format!("rewrite rename: {e}")))?;
                 }
-                if self.path.exists() && fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
-                    let arc = Arc::new(MemoryMappedFile::open_ro(&self.path)?);
+                if self.config.path.exists()
+                    && fs::metadata(&self.config.path).is_ok_and(|m| m.len() > 0)
+                {
+                    let arc = Arc::new(MemoryMappedFile::open_ro(&self.config.path)?);
                     *mmap_guard = MmapState::Committed(Arc::clone(&arc));
                     displaced = self.committed.swap(Some(arc));
                 }
@@ -115,7 +117,7 @@ impl DriverIo for MmapDriver {
     }
 
     fn path(&self) -> Option<&Path> {
-        Some(&self.path)
+        Some(&self.config.path)
     }
 
     /// Leaves an already-active mapping alone as long as its file still exists; otherwise
@@ -130,7 +132,7 @@ impl DriverIo for MmapDriver {
             MmapState::Active(_) | MmapState::Committed(_) | MmapState::Empty => {
                 let temp = self.rewrite_temp_path();
                 let _ = fs::remove_file(&temp);
-                let rw = MemoryMappedFile::create_rw(&temp, self.initial_len)?;
+                let rw = MemoryMappedFile::create_rw(&temp, self.config.initial_len)?;
                 *mmap_guard = MmapState::Active(rw);
             }
         }
@@ -237,9 +239,9 @@ impl DriverIo for MmapDriver {
         let mut displaced = None;
         let result = (|| {
             if committed {
-                match (&*mmap_guard, self.mode) {
+                match (&*mmap_guard, self.config.mode) {
                     (MmapState::Committed(_), OpenMode::ReadWrite) => {
-                        let rw = MemoryMappedFile::open_rw(&self.path)?;
+                        let rw = MemoryMappedFile::open_rw(&self.config.path)?;
                         displaced = self.committed.swap(None);
                         *mmap_guard = MmapState::Active(rw);
                     }
@@ -254,8 +256,8 @@ impl DriverIo for MmapDriver {
             }
 
             if matches!(*mmap_guard, MmapState::Empty) {
-                let size = end.max(self.initial_len);
-                let mmap = MemoryMappedFile::create_rw(&self.path, size)?;
+                let size = end.max(self.config.initial_len);
+                let mmap = MemoryMappedFile::create_rw(&self.config.path, size)?;
                 *mmap_guard = MmapState::Active(mmap);
             }
 
@@ -265,7 +267,7 @@ impl DriverIo for MmapDriver {
                 ));
             };
             if end > mmap.len() {
-                let new_size = end.max(mmap.len() * self.growth_factor);
+                let new_size = end.max(mmap.len() * self.config.growth_factor);
                 mmap.resize(new_size)?;
             }
 
@@ -283,9 +285,9 @@ impl DriverIo for MmapDriver {
 impl MmapDriver {
     /// Path the new generation of a re-download is written to, kept separate
     /// from the committed file so the published RO snapshot is never aliased.
-    /// [`commit`](DriverIo::commit) renames it onto `self.path` atomically.
+    /// [`commit`](DriverIo::commit) renames it onto `self.config.path` atomically.
     fn rewrite_temp_path(&self) -> PathBuf {
-        let mut name = self.path.clone().into_os_string();
+        let mut name = self.config.path.clone().into_os_string();
         name.push(".kithara-rewrite");
         PathBuf::from(name)
     }

@@ -132,12 +132,18 @@ impl Drop for Slot {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, kithara_config::Config)]
 pub(super) struct SchedulerBudgets {
+    #[config(value)]
     pub(super) backpressure_poll_interval: Duration,
+    #[config(value)]
     pub(super) idle_timeout: Duration,
+    #[config(value)]
     pub(super) slow_tick_threshold: Duration,
+    #[config(value)]
     pub(super) wait_timeout: Duration,
+    #[config(value)]
     pub(super) fairness_yield_interval: u32,
+    #[config(value)]
     pub(super) task_burst: u32,
 }

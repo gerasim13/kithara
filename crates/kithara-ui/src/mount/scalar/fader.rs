@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::{ids::InternId, module::FaderStyle};
 
 /// A rail and a cap, dragged along the rail.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.fader.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Fader {

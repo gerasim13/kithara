@@ -37,11 +37,11 @@ iced = ["dep:iced", "kithara-derive/mirror"]
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
-kithara-derive = { workspace = true, features = ["built-default", "patch"] }
+kithara-config = { workspace = true }
+kithara-derive = { workspace = true, features = ["patch"] }
 kithara-platform = { workspace = true, optional = true }
 kithara-ui-shaping = { workspace = true, optional = true, features = ["shape"] }
 
-bon = { workspace = true }
 derive-where = { workspace = true, optional = true }
 derive_more = { workspace = true, optional = true }
 fieldwork = { workspace = true, optional = true }

@@ -22,6 +22,13 @@ pub struct RetryNet<N> {
 }
 
 impl<N: Net> RetryNet<N> {
+    delegate::delegate! {
+        to self {
+            #[field(&inner)]
+            pub(crate) const fn inner(&self) -> &N;
+        }
+    }
+
     pub const fn new(
         inner: N,
         retry_policy: RetryPolicy,

@@ -3,9 +3,9 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
-use bon::{Builder, bon};
 use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
 use kithara_bufpool::HasPool;
+use kithara_config::{Config, bon::bon};
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_net::Headers;
@@ -40,7 +40,7 @@ use crate::{
 /// every [`PlanCtx`] the peer constructs afterwards. Kept apart from the
 /// per-activation runtime handles so a new parameter lands in the config and
 /// not in another positional argument.
-#[derive(Clone, Copy, Debug, Builder)]
+#[derive(Clone, Copy, Debug, Config)]
 pub(crate) struct PlanConfig {
     /// Max bytes the downloader may be ahead of the reader before
     /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
@@ -53,21 +53,23 @@ pub(crate) struct PlanConfig {
     ///
     /// `Init` is always emitted regardless — the fMP4 demuxer needs
     /// it before any segment can decode.
+    #[config(value)]
     pub(crate) look_ahead_bytes: Option<u64>,
     /// Max media segments the downloader may keep ahead of the reader.
     /// This is derived from small ephemeral cache capacity, where byte-only
     /// lookahead can otherwise prefetch more resources than the cache can retain
     /// and trigger eviction/rebuild thrash.
+    #[config(value)]
     pub(crate) look_ahead_segments: Option<usize>,
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) size_probe_method: SizeProbeMethod,
     /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
     /// gets before an acquire failure settles it terminally.
-    #[builder(default = consts::DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
+    #[config(value, builder(default = consts::DEFAULT_ACQUIRE_ATTEMPT_BUDGET))]
     pub(crate) acquire_attempt_budget: u8,
     /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
     /// may emit.
-    #[builder(default = consts::DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    #[config(value, builder(default = consts::DEFAULT_DOWNLOAD_BATCH_SIZE))]
     pub(crate) prefetch_budget: usize,
 }
 
@@ -376,7 +378,7 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
         .clamp(MIN_BYTES, MAX_PRECOMMIT_BYTES)
 }
 
-#[bon]
+#[bon(crate = ::kithara_config::bon)]
 impl<S> HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,

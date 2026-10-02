@@ -2,7 +2,7 @@
 
 use std::ops::RangeInclusive;
 
-use bon::bon;
+use kithara_config::bon::bon;
 use kithara_derive::Patch;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
@@ -74,7 +74,7 @@ pub struct Tempo {
     tolerance: f32,
 }
 
-#[bon]
+#[bon(crate = ::kithara_config::bon)]
 impl Tempo {
     /// A policy over the defaults: band and prior in BPM, tolerance in
     /// seconds, drift in BPM per second measured at the prior, so one rate

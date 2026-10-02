@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::ids::InternId;
 
 /// The deck's tempo, editable in place.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.deck.bpm_size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Bpm {

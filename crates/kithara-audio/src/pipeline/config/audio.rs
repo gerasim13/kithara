@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use bon::Builder;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::CancelToken;
@@ -35,13 +35,13 @@ pub enum ConsumerWakeMode {
 /// and the optional PCM observer.
 ///
 /// [`AudioConfigPatch`] is what a configuration document may say about it.
-#[derive(Builder, fieldwork::Fieldwork, Patch)]
-#[builder(start_fn = for_stream)]
+#[derive(Config, fieldwork::Fieldwork, Patch)]
+#[config(construction, builder(start_fn = for_stream))]
 #[non_exhaustive]
 #[fieldwork(opt_in, get)]
 pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    #[builder(start_fn)]
+    #[config(skip = "transferred to the stream", builder(start_fn))]
     #[field(get)]
     #[patch(skip)]
     pub(crate) stream: T::Config,
@@ -51,18 +51,19 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// would make a player-bound resource publish reads inline on the render
     /// callback.
     #[field(get, copy)]
-    #[builder(default)]
+    #[config(value, builder(default))]
     #[patch(skip)]
     pub consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
     #[field(get, copy)]
-    #[builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
+    #[config(value, builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")))]
     pub preload_chunks: NonZeroUsize,
     /// Target sample rate of the audio host (for resampling). Not a document
     /// key: this is the rate the audio host actually opened, and the
     /// resource-preparation step that shares a player's engine always
     /// overwrites it with the engine's master or configured rate. A document
     /// value would be overwritten by the first host that disagrees with it.
+    #[config(skip = "transferred to the host sample-rate owner")]
     #[field(get, copy)]
     #[patch(skip)]
     pub host_sample_rate: Option<NonZeroU32>,
@@ -71,36 +72,40 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// host whose audio callback can never block; only an offline harness or
     /// a player's own session policy sets this explicitly.
     #[field(get, copy)]
-    #[builder(default)]
+    #[config(value, builder(default))]
     #[patch(skip)]
     pub block_on_underrun: bool,
     /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
     /// wasm32.
     #[field(get, copy)]
-    #[builder(default = consts::AUDIO_BUFFER_CHUNKS)]
+    #[config(value, builder(default = consts::AUDIO_BUFFER_CHUNKS))]
     pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.
-    #[builder(default)]
+    #[config(skip = "transferred to decoder dependencies", builder(default))]
     #[field(get)]
     #[patch(nested)]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Unified event bus (optional — if not provided, one is created internally).
-    #[builder(name = events)]
+    #[config(skip = "transferred to the event bus", builder(name = events))]
     #[patch(skip)]
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for the audio pipeline.
+    #[config(skip = "composed into the audio cancel scope")]
     #[patch(skip)]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional format hint (file extension like "mp3", "wav")
+    #[config(skip = "transferred to decoder construction")]
     #[patch(skip)]
     pub(crate) hint: Option<String>,
     /// Media info hint for format detection
+    #[config(skip = "transferred to decoder construction")]
     #[patch(skip)]
     pub(crate) media_info: Option<MediaInfo>,
     /// Optional bounded, nonblocking observer of decoder-output PCM.
     /// [`kithara_signal::AudioChunk::meta`] describes its post-conversion format;
     /// it runs before playback effects and owns any asynchronous copy.
+    #[config(skip = "transferred to the decoded source")]
     #[patch(skip)]
     pub(crate) observer: Option<Box<dyn AudioObserver>>,
 }

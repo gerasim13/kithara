@@ -3,6 +3,7 @@
 use dashmap::DashMap;
 use kithara_assets::{AssetScope, ResourceKey};
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_config::Config;
 use kithara_download::PeerHandle;
 use kithara_net::Headers;
 use kithara_platform::{
@@ -38,11 +39,12 @@ where
     fetch: PlaylistPeer<S>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Config)]
 struct PlaylistConfig {
+    #[config(value)]
     base_url: Option<Url>,
+    #[config(value)]
     headers: Option<Headers>,
-    master_url: Option<Url>,
 }
 
 impl<S> PlaylistCache<S>
@@ -53,7 +55,7 @@ where
     pub fn new(scope: AssetScope<S>, downloader: PeerHandle, pools: PoolRegion<S>) -> Self {
         Self {
             fetch: PlaylistPeer::new(downloader, scope, pools),
-            config: Arc::new(RwLock::default()),
+            config: Arc::new(RwLock::new(PlaylistConfig::builder().build())),
             master: Arc::new(OnceCell::default()),
             media: Arc::new(DashMap::new()),
         }
@@ -138,9 +140,5 @@ where
 
     pub fn set_headers(&self, headers: Option<Headers>) {
         self.config.write().headers = headers;
-    }
-
-    pub fn set_master_url(&self, url: Url) {
-        self.config.write().master_url = Some(url);
     }
 }

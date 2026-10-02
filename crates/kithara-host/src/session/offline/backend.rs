@@ -2,20 +2,23 @@ use std::num::NonZeroU32;
 
 use audioadapter_buffers::direct::InterleavedSlice;
 use bevy_platform::time::Instant;
-use bon::Builder;
 use firewheel::{
     ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
     processor::FirewheelProcessor,
 };
+use kithara_config::Config;
 use kithara_platform::time::Duration;
 
 use super::{OfflineSessionError, task::consts::CHANNELS};
 
-#[derive(Builder, Clone, Copy)]
-#[builder(state_mod(vis = "pub(crate)"))]
+#[derive(Config, Clone, Copy)]
+#[config(construction, builder(state_mod(vis = "pub(crate)")))]
 pub(super) struct BackendConfig {
+    #[config(skip = "applied to the activated backend")]
     pub(super) declared_latency: Duration,
+    #[config(skip = "applied to the activated backend")]
     pub(super) block_frames: NonZeroU32,
+    #[config(skip = "transferred to the offline stream")]
     pub(super) sample_rate: NonZeroU32,
 }
 

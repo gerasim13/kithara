@@ -175,6 +175,27 @@ fn decide_downswitch_when_bandwidth_drops() {
 }
 
 #[kithara::test]
+fn configured_bandwidth_cap_forces_a_lower_variant() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
+    let variants = test_variants_3();
+    let settings = settings_fast();
+    let settings = AbrSettings {
+        max_bandwidth_bps: Some(512_000),
+        ..settings
+    };
+    let view = view_with_bw(Some(3_000_000), &variants, &settings);
+
+    let decision = state.decide(&view, Instant::now());
+    assert_eq!(decision.reason(), AbrReason::DownSwitch);
+    assert_eq!(decision.target(), VariantIndex::new(1));
+
+    state.set_max_bandwidth_bps(Some(256_000));
+    let decision = state.decide(&view, Instant::now());
+    assert_eq!(decision.reason(), AbrReason::DownSwitch);
+    assert_eq!(decision.target(), VariantIndex::new(0));
+}
+
+#[kithara::test]
 fn decide_urgent_downswitch_when_buffer_low() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
     let variants = test_variants_3();

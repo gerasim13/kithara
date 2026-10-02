@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::{ids::InternId, module::Tone};
 
 /// A caption with a value beside it, toned by the document.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.readout.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Readout {

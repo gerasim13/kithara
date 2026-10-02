@@ -42,7 +42,7 @@ fn default_dispatcher_config() -> DispatcherConfig {
         .build()
 }
 
-#[bon::bon]
+#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
 impl<S> HostConfig<S> {
     /// Maximum frames processed by one backend/task quantum.
     #[must_use]
@@ -126,14 +126,14 @@ where
             task,
             root,
             root_view,
-            OfflineTaskConfig {
-                declared_latency,
-                output,
-                declick_frames,
-                max_block_frames,
-                sample_rate,
-                pools,
-            },
+            OfflineTaskConfig::builder()
+                .declared_latency(declared_latency)
+                .output(output)
+                .declick_frames(declick_frames)
+                .max_block_frames(max_block_frames)
+                .sample_rate(sample_rate)
+                .pools(pools)
+                .build(),
         )?;
         let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();
         Ok((

@@ -1,7 +1,7 @@
 use std::{fmt, ops::Range, path::Path};
 
-use bon::bon;
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_config::bon::bon;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
@@ -29,7 +29,7 @@ impl<R: fmt::Debug, S> fmt::Debug for ProcessedReader<R, S> {
     }
 }
 
-#[bon]
+#[bon(crate = ::kithara_config::bon)]
 impl<R, S> ProcessedReader<R, S>
 where
     R: ReadSide,

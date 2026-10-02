@@ -88,8 +88,7 @@ pub(super) struct DownloaderInner {
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
     pub(super) cancel: CancelToken,
-    pub(super) demand_throttle: Duration,
-    pub(super) soft_timeout: Duration,
+    pub(super) config: super::config::DownloaderPolicy,
     pub(super) client: HttpClient,
     /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
     pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
@@ -97,8 +96,6 @@ pub(super) struct DownloaderInner {
     pub(super) runtime: Option<tokio::runtime::Handle>,
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
-    pub(super) max_concurrent: usize,
-    pub(super) peer_cmd_channel_capacity: usize,
     /// Monotonic source of [`crate::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
@@ -131,7 +128,12 @@ impl Downloader {
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let soft_timeout = config.soft_timeout;
+        let policy = super::config::DownloaderPolicy {
+            demand_throttle: config.demand_throttle,
+            soft_timeout: config.soft_timeout,
+            max_concurrent: config.max_concurrent,
+            peer_cmd_channel_capacity: config.peer_cmd_channel_capacity,
+        };
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         let cancel = CancelScope::new(config.cancel).token();
@@ -143,15 +145,12 @@ impl Downloader {
                 cancel: cancel.clone(),
             }),
             inner: Arc::new(DownloaderInner {
-                soft_timeout,
+                config: policy,
                 #[cfg(not(target_arch = "wasm32"))]
                 runtime,
                 abr,
                 cancel,
                 client: config.client,
-                max_concurrent: config.max_concurrent,
-                peer_cmd_channel_capacity: config.peer_cmd_channel_capacity,
-                demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
                 capacity_notify: Arc::new(Notify::default()),
@@ -184,7 +183,7 @@ impl Downloader {
         self.ensure_spawned();
         let cancel = CancelScope::new(Some(self.inner.cancel.clone()));
         let cancel_token = cancel.token();
-        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.peer_cmd_channel_capacity);
+        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.config.peer_cmd_channel_capacity);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;

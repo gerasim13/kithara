@@ -3,8 +3,8 @@
 use std::fmt;
 
 use arc_swap::ArcSwapOption;
-use bon::Builder;
 use kithara_bufpool::ByteBuffer;
+use kithara_config::Config;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Retired},
@@ -20,17 +20,20 @@ use crate::{
 };
 
 /// Options for creating a [`MemResource`].
-#[derive(Debug, Builder)]
+#[derive(Debug, Config)]
+#[config(construction)]
 #[non_exhaustive]
 pub struct MemOptions {
     /// Pool-owned working buffer for this resource.
+    #[config(skip = "transferred to the driver state")]
     pub buffer: ByteBuffer,
     /// Pre-fill the resource with this data (committed on creation).
+    #[config(skip = "consumed when the resource is opened")]
     pub initial_data: Option<Vec<u8>>,
     /// Initial capacity hint in bytes.
     /// The buffer starts with this capacity but grows as needed on writes.
     /// Defaults to 0 (start empty, grow on demand).
-    #[builder(default)]
+    #[config(skip = "consumed to reserve the initial buffer", builder(default))]
     pub capacity: usize,
 }
 

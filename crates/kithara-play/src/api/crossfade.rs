@@ -1,3 +1,4 @@
+use kithara_config::Config;
 use kithara_dsp::fade::FadeCurve;
 
 use crate::PlayError;
@@ -20,11 +21,16 @@ pub enum CrossfadeCurve {
     EqualPower,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, Config)]
+#[config(builder(existing))]
 pub struct CrossfadeSettings {
+    #[config(value)]
     pub curve: CrossfadeCurve,
+    #[config(value)]
     pub depth: f32,
+    #[config(value)]
     pub duration: f32,
+    #[config(value)]
     pub position: f32,
 }
 
@@ -39,7 +45,13 @@ impl Default for CrossfadeSettings {
     }
 }
 
+#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
 impl CrossfadeSettings {
+    #[builder(
+        builder_type(vis = "pub"),
+        start_fn(name = builder, vis = "pub"),
+        finish_fn(vis = "pub")
+    )]
     pub fn new(
         duration: f32,
         curve: CrossfadeCurve,
@@ -137,6 +149,15 @@ mod tests {
         let settings = CrossfadeSettings::new(1.0, CrossfadeCurve::EqualPower, 0.0, 0.5)
             .expect("valid settings");
         assert_eq!(settings.gains(0.25), (0.75, 0.25));
+        assert!(
+            CrossfadeSettings::builder()
+                .duration(-1.0)
+                .curve(CrossfadeCurve::Linear)
+                .depth(1.0)
+                .position(0.5)
+                .build()
+                .is_err()
+        );
         for invalid in [f32::NAN, f32::INFINITY, -1.0] {
             assert!(CrossfadeSettings::new(invalid, CrossfadeCurve::Linear, 1.0, 0.5).is_err());
         }

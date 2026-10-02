@@ -4,8 +4,8 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
@@ -16,99 +16,100 @@ use crate::{BroadcastError, BroadcastResult, consts};
 /// Audio, segmentation, retention, and origin settings for a live broadcast.
 ///
 /// [`BroadcastConfigPatch`] is what a configuration document may say about it.
-#[derive(Builder, Patch)]
+#[derive(Config, Patch)]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
 pub struct BroadcastConfig<S> {
     /// Shared worker used to schedule the packager task.
-    #[builder(start_fn)]
+    #[config(skip = "transferred to the broadcast dispatcher", builder(start_fn))]
     #[patch(skip)]
     pub worker: Worker,
     /// Typed pool facade used for bounded packager scratch.
-    #[builder(start_fn)]
+    #[config(skip = "transferred to the packager buffers", builder(start_fn))]
     #[patch(skip)]
     pub pools: PoolRegion<S>,
     /// Codec emitted into HLS media segments. Not a document key:
     /// [`BroadcastConfig::validate`] admits one profile, so every value a
     /// document could name but the default is refused at startup.
-    #[builder(default = AudioCodec::AacLc)]
+    #[config(value, builder(default = AudioCodec::AacLc))]
     #[patch(skip)]
     pub codec: AudioCodec,
     /// Container carried by HLS media segments. Not a document key for the
     /// same reason [`Self::codec`] is not.
-    #[builder(default = ContainerFormat::Adts)]
+    #[config(value, builder(default = ContainerFormat::Adts))]
     #[patch(skip)]
     pub container: ContainerFormat,
     /// Dispatcher park duration when the broadcast has no work.
-    #[builder(default = Duration::from_millis(100))]
+    #[config(value, builder(default = Duration::from_millis(100)))]
     #[patch(humantime)]
     pub idle_timeout: Duration,
     /// Media duration a segment is cut at.
-    #[builder(default = Duration::from_secs(4))]
+    #[config(value, builder(default = Duration::from_secs(4)))]
     #[patch(humantime)]
     pub segment_target: Duration,
     /// Threshold for reporting a slow packager tick.
-    #[builder(default = Duration::from_millis(10))]
+    #[config(value, builder(default = Duration::from_millis(10)))]
     #[patch(humantime)]
     pub slow_tick_threshold: Duration,
     /// Maximum time a graceful stop waits for the bounded PCM tail.
-    #[builder(default = Duration::from_secs(10))]
+    #[config(value, builder(default = Duration::from_secs(10)))]
     #[patch(humantime)]
     pub stop_timeout: Duration,
     /// Dispatcher wait duration between deferred RT wakes.
-    #[builder(default = Duration::from_millis(2))]
+    #[config(value, builder(default = Duration::from_millis(2)))]
     #[patch(humantime)]
     pub wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
-    #[builder(default = consts::FAIRNESS_YIELD_INTERVAL)]
+    #[config(value, builder(default = consts::FAIRNESS_YIELD_INTERVAL))]
     pub fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive packager ticks in one dispatcher visit.
-    #[builder(default = NonZeroU32::MIN)]
+    #[config(value, builder(default = NonZeroU32::MIN))]
     pub task_burst: NonZeroU32,
     /// Maximum stereo PCM frames waiting between RT and the packager worker.
-    #[builder(default = consts::BUFFER_FRAMES)]
+    #[config(value, builder(default = consts::BUFFER_FRAMES))]
     pub buffer_frames: NonZeroUsize,
     /// Maximum tasks admitted to the broadcast dispatcher.
-    #[builder(default = NonZeroUsize::MIN)]
+    #[config(value, builder(default = NonZeroUsize::MIN))]
     pub dispatcher_capacity: NonZeroUsize,
     /// Maximum queued master-format generations waiting for the packager.
-    #[builder(default = consts::GENERATION_CAPACITY)]
+    #[config(value, builder(default = consts::GENERATION_CAPACITY))]
     pub generation_capacity: NonZeroUsize,
     /// Maximum compute jobs admitted for the packager task.
-    #[builder(default = NonZeroUsize::MIN)]
+    #[config(value, builder(default = NonZeroUsize::MIN))]
     pub max_compute_tasks: NonZeroUsize,
     /// Maximum stereo PCM frames packaged during one worker tick.
-    #[builder(default = consts::TICK_FRAMES)]
+    #[config(value, builder(default = consts::TICK_FRAMES))]
     pub tick_frames: NonZeroUsize,
     /// Optional cancellation parent for the broadcast lifetime.
+    #[config(skip = "composed into the broadcast cancel scope")]
     #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Packager task priority. Not a document key: `Priority` carries no
     /// `Deserialize`, and giving `kithara-worker` one for a knob nobody has
     /// asked to tune widens that crate's surface for nothing.
-    #[builder(default = Priority::new(0))]
+    #[config(value, builder(default = Priority::new(0)))]
     #[patch(skip)]
     pub priority: Priority,
     /// Loopback on an ephemeral port.
-    #[builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
+    #[config(value, builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)))]
     pub bind: SocketAddr,
     /// Channel count of the mix.
-    #[builder(default = 2)]
+    #[config(value, builder(default = 2))]
     pub channels: u16,
     /// Sample rate of the mix. Not a document key: the packager overwrites it
     /// with the master format it measured, so a named value would not survive
     /// the first format change.
-    #[builder(default = 48_000)]
+    #[config(value, builder(default = 48_000))]
     #[patch(skip)]
     pub sample_rate: u32,
     /// AAC-LC bit rate the encoder targets.
-    #[builder(default = 128_000)]
+    #[config(value, builder(default = 128_000))]
     pub bit_rate: u64,
     /// Segments kept fetchable past the playlist window.
-    #[builder(default = 3)]
+    #[config(value, builder(default = 3))]
     pub grace: usize,
     /// Segments a client sees in the playlist.
-    #[builder(default = 6)]
+    #[config(value, builder(default = 6))]
     pub window: usize,
 }
 
@@ -143,22 +144,12 @@ impl<S> fmt::Debug for BroadcastConfig<S> {
 }
 
 impl<S> BroadcastConfig<S> {
-    const MILLIS_PER_SECOND: u64 = 1_000;
-    const MIN_TARGETS: u64 = 3;
-
     pub(crate) fn target_seconds(&self) -> BroadcastResult<u64> {
         Ok(self.target_ticks()?.div_ceil(u64::from(self.sample_rate)))
     }
 
     pub(crate) fn target_ticks(&self) -> BroadcastResult<u64> {
-        u64::try_from(self.segment_target.as_millis())
-            .ok()
-            .and_then(|millis| millis.checked_mul(u64::from(self.sample_rate)))
-            .map(|ticks| ticks / Self::MILLIS_PER_SECOND)
-            .filter(|ticks| *ticks > 0)
-            .ok_or(BroadcastError::InvalidConfig {
-                field: "segment_target",
-            })
+        BroadcastRuntimeConfig::from(self).target_ticks()
     }
 
     pub(crate) fn validate(&self) -> BroadcastResult<()> {
@@ -188,20 +179,7 @@ impl<S> BroadcastConfig<S> {
             });
         }
 
-        let window = u64::try_from(self.window)
-            .map_err(|_| BroadcastError::InvalidConfig { field: "window" })?;
-        let span_ts = window
-            .checked_mul(self.target_ticks()?)
-            .ok_or(BroadcastError::InvalidConfig { field: "window" })?;
-        let minimum_ts = Self::MIN_TARGETS * self.target_seconds()? * u64::from(self.sample_rate);
-        if span_ts < minimum_ts {
-            return Err(BroadcastError::PlaylistTooShort {
-                span_ts,
-                minimum_ts,
-                window: self.window,
-            });
-        }
-        Ok(())
+        BroadcastRuntimeConfig::from(self).validate_span()
     }
 
     /// Copy this configuration with the measured master sample rate.
@@ -211,6 +189,70 @@ impl<S> BroadcastConfig<S> {
             sample_rate,
             ..self.clone()
         }
+    }
+}
+
+/// Settings the packager still needs after startup resources are transferred.
+#[derive(Clone, Copy, Config)]
+pub(crate) struct BroadcastRuntimeConfig {
+    #[config(value)]
+    pub(crate) bit_rate: u64,
+    #[config(value)]
+    pub(crate) channels: u16,
+    #[config(value)]
+    pub(crate) generation_capacity: usize,
+    #[config(value)]
+    pub(crate) sample_rate: u32,
+    #[config(value)]
+    pub(crate) segment_target: Duration,
+    #[config(value)]
+    pub(crate) window: usize,
+}
+
+impl<S> From<&BroadcastConfig<S>> for BroadcastRuntimeConfig {
+    fn from(config: &BroadcastConfig<S>) -> Self {
+        Self::builder()
+            .bit_rate(config.bit_rate)
+            .channels(config.channels)
+            .generation_capacity(config.generation_capacity.get())
+            .sample_rate(config.sample_rate)
+            .segment_target(config.segment_target)
+            .window(config.window)
+            .build()
+    }
+}
+
+impl BroadcastRuntimeConfig {
+    const MILLIS_PER_SECOND: u64 = 1_000;
+    const MIN_TARGETS: u64 = 3;
+
+    pub(crate) fn target_ticks(self) -> BroadcastResult<u64> {
+        u64::try_from(self.segment_target.as_millis())
+            .ok()
+            .and_then(|millis| millis.checked_mul(u64::from(self.sample_rate)))
+            .map(|ticks| ticks / Self::MILLIS_PER_SECOND)
+            .filter(|ticks| *ticks > 0)
+            .ok_or(BroadcastError::InvalidConfig {
+                field: "segment_target",
+            })
+    }
+
+    pub(crate) fn validate_span(self) -> BroadcastResult<()> {
+        let window = u64::try_from(self.window)
+            .map_err(|_| BroadcastError::InvalidConfig { field: "window" })?;
+        let span_ts = window
+            .checked_mul(self.target_ticks()?)
+            .ok_or(BroadcastError::InvalidConfig { field: "window" })?;
+        let target_seconds = self.target_ticks()?.div_ceil(u64::from(self.sample_rate));
+        let minimum_ts = Self::MIN_TARGETS * target_seconds * u64::from(self.sample_rate);
+        if span_ts < minimum_ts {
+            return Err(BroadcastError::PlaylistTooShort {
+                span_ts,
+                minimum_ts,
+                window: self.window,
+            });
+        }
+        Ok(())
     }
 }
 

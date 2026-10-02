@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::ids::InternId;
 
 /// A labelled picker the document opens.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.select.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Select {

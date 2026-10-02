@@ -1,8 +1,8 @@
-use bon::Builder;
 use kithara_beat::{BeatMark, RawBeats};
 #[cfg(test)]
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_bufpool::{PoolError, SampleBuffer};
+use kithara_config::Config;
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -37,29 +37,30 @@ pub(crate) mod consts {
     pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v5";
 }
 
-#[derive(Builder, Debug, Clone, PartialEq, kithara_derive::BuiltDefault)]
+#[derive(Config, Debug, Clone, PartialEq)]
+#[config(default)]
 pub(crate) struct GridParams {
-    #[builder(default = consts::MAX_BAR_RATIO)]
+    #[config(value, builder(default = consts::MAX_BAR_RATIO))]
     pub(crate) max_bar_ratio: f64,
-    #[builder(default = consts::MEDIAN_TRUST_RATIO)]
+    #[config(value, builder(default = consts::MEDIAN_TRUST_RATIO))]
     pub(crate) median_trust_ratio: f64,
-    #[builder(default = consts::MERGE_RATIO_EPS)]
+    #[config(value, builder(default = consts::MERGE_RATIO_EPS))]
     pub(crate) merge_ratio_eps: f64,
-    #[builder(default = consts::MIN_BAR_RATIO)]
+    #[config(value, builder(default = consts::MIN_BAR_RATIO))]
     pub(crate) min_bar_ratio: f64,
-    #[builder(default = consts::MIN_GAP_RATIO)]
+    #[config(value, builder(default = consts::MIN_GAP_RATIO))]
     pub(crate) min_gap_ratio: f64,
-    #[builder(default = consts::OUTLIER_RATIO)]
+    #[config(value, builder(default = consts::OUTLIER_RATIO))]
     pub(crate) outlier_ratio: f64,
-    #[builder(default = consts::RESIDUAL_MS)]
+    #[config(value, builder(default = consts::RESIDUAL_MS))]
     pub(crate) residual_ms: f64,
-    #[builder(default = consts::ALIGN_BARS)]
+    #[config(value, builder(default = consts::ALIGN_BARS))]
     pub(crate) align_bars: usize,
-    #[builder(default = consts::MIN_LEAF_BARS)]
+    #[config(value, builder(default = consts::MIN_LEAF_BARS))]
     pub(crate) min_leaf_bars: usize,
-    #[builder(default = consts::OUTLIER_WINDOW)]
+    #[config(value, builder(default = consts::OUTLIER_WINDOW))]
     pub(crate) outlier_window: usize,
-    #[builder(default = consts::STABLE_WINDOW_BARS)]
+    #[config(value, builder(default = consts::STABLE_WINDOW_BARS))]
     pub(crate) stable_window_bars: usize,
 }
 

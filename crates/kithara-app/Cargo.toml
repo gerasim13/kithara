@@ -87,13 +87,13 @@ kithara = { workspace = true, default-features = false, features = [
 ] }
 kithara-app-document = { workspace = true }
 kithara-assets = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-events = { workspace = true }
 kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
-bon = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }

@@ -4,9 +4,9 @@
 use std::env;
 use std::{num::NonZeroUsize, path::PathBuf};
 
-use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
@@ -93,58 +93,70 @@ impl<'de> Deserialize<'de> for StorageBackend {
 /// document may name and the wiring a caller hands over.
 ///
 /// [`AssetStoreConfigPatch`] is what a document may say about it.
-#[derive(Builder, Patch)]
-#[builder(
+#[derive(Config, Patch)]
+#[config(construction, builder(
     start_fn = for_pools,
     finish_fn = into_config,
     builder_type(name = AssetStoreBuilder, vis = "pub"),
     state_mod(vis = "pub")
-)]
+))]
 #[non_exhaustive]
 pub struct AssetStoreConfig<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Buffer-pool facade every layer of the store shares.
-    #[builder(start_fn)]
+    #[config(skip = "transferred to store runtime owners", builder(start_fn))]
     #[patch(skip)]
     pub pools: PoolRegion<S>,
     /// Where resources live. Unset resolves to a disk root under a fresh
     /// temp directory, which is a different place on every launch.
+    #[config(skip = "transferred to the selected storage backend")]
     pub backend: Option<StorageBackend>,
     /// Resources the in-memory cache retains before it evicts the
     /// least-recently-used one. Applies to both backends.
+    #[config(value)]
     pub cache_capacity: Option<NonZeroUsize>,
     /// Master cancel token for the store subtree.
+    #[config(skip = "composed into the store cancel scope")]
     #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Event bus the eviction and lease layers publish on.
+    #[config(skip = "transferred to store observers")]
     #[patch(skip)]
     pub event_bus: Option<EventBus>,
     /// Shared index-flush hub. Created per store when absent.
+    #[config(skip = "transferred to the flush owner")]
     #[patch(skip)]
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Resource-key layout registry. Empty when absent.
+    #[config(skip = "transferred to the layout owner")]
     #[patch(skip)]
     pub layouts: Option<AssetLayoutRegistry>,
     /// Assets the eviction policy keeps before it drops the coldest one.
+    #[config(value)]
     pub max_assets: Option<usize>,
     /// Bytes the eviction policy keeps before it drops the coldest asset.
+    #[config(value)]
     pub max_bytes: Option<u64>,
     /// Resources one in-memory asset holds. **Memory backend only** — the disk
     /// backend never reads it, so naming it beside `backend: disk` (or beside
     /// no backend at all, which resolves to disk) configures nothing.
+    #[config(value)]
     pub mem_resource_capacity: Option<usize>,
     /// Bytes read, transformed, and written per pass when a resource is
     /// processed on commit. Unset leaves the processing layer's own default.
+    #[config(value)]
     pub processing_chunk_size: Option<usize>,
     /// Recheck cadence for a reader blocked on the processing readiness gate.
     /// Unset leaves the processing layer's own default.
+    #[config(value)]
     #[patch(humantime)]
     pub processing_gate_poll_interval: Option<Duration>,
     /// Bytes a fresh segment's temp file is reserved at. **Disk backend
     /// only** — the memory backend has no temp file to reserve. Unset leaves
     /// the disk backend's own default.
+    #[config(value)]
     pub segment_reservation: Option<u64>,
 }
 

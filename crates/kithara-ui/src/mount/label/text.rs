@@ -1,4 +1,4 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::{
     expand::Binding,
@@ -11,6 +11,7 @@ use crate::{
 
 /// A run of text the document supplies or reads.
 #[derive(Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct Text<'a> {
     pub(crate) active: Option<&'a Binding>,
     pub(crate) active_color: Option<ColorRole>,

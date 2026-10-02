@@ -1,4 +1,4 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::{
     module::WindowControlsStyle,
@@ -9,6 +9,7 @@ use crate::{
 
 /// The close, minimise and maximise buttons.
 #[derive(Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct Controls {
     pub(crate) style: WindowControlsStyle,
 }

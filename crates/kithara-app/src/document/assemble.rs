@@ -32,7 +32,7 @@ pub enum AssembleError {
     DrawPool(PoolError),
 }
 
-#[bon::bon]
+#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
 impl AppConfig {
     /// Assembles what `document` describes over `pools`.
     ///

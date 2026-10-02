@@ -1,7 +1,8 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 /// A vertical pair of level bars with a volume cap.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.vu_vertical.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct VuVertical {

@@ -16,11 +16,10 @@ resample-rubato = ["dep:rubato"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
-kithara-derive = { workspace = true, features = ["built-default"] }
+kithara-config = { workspace = true }
 kithara-dsp = { workspace = true, optional = true }
 
 bitflags = { workspace = true }
-bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }

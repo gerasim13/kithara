@@ -34,7 +34,8 @@ pub(crate) enum Grip {
 /// where the two handles currently are to pick one. A host that rebuilds its
 /// tree every frame gets that for free; a host that keeps its widgets is told
 /// the new interval through [`Self::at`].
-#[derive(Clone, Copy, bon::Builder)]
+#[derive(Clone, Copy, kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct Span {
     cursor: CursorShape,
     value: ScalarRange,
@@ -77,7 +78,8 @@ impl Span {
 /// because the value it counts from is fresh each time. A host that keeps its
 /// widgets cannot: it is told the new value instead, and has to re-make the
 /// recognizer from it — which it can only do from the description.
-#[derive(Clone, Copy, bon::Builder)]
+#[derive(Clone, Copy, kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct Drag {
     cursor: CursorShape,
     reset: Option<f32>,

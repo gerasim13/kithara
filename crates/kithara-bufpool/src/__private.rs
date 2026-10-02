@@ -1,5 +1,5 @@
 #[doc(hidden)]
-pub use bon;
+pub use kithara_config::bon;
 
 #[doc(hidden)]
 pub use crate::key::PoolAccess;

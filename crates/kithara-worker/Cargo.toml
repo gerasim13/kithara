@@ -17,12 +17,12 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
-bon = { workspace = true }
 delegate = { workspace = true }
 fieldwork = { workspace = true }
 hotpath = { workspace = true, optional = true }

@@ -1,4 +1,4 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 #[cfg(feature = "render")]
 use num_traits::cast::AsPrimitive;
 
@@ -11,6 +11,7 @@ use crate::ids::InternId;
 /// own clock gets an animation without the application owning a timer; one that
 /// binds it to something else scrubs the sheet by hand from the same field.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.vis.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Sprite {

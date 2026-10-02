@@ -117,6 +117,7 @@ usdt = ["dep:kithara", "kithara/usdt"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
+kithara-config = { workspace = true }
 kithara-events = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "http-server", "subscriber", "temp-dir"] }
 
@@ -126,9 +127,7 @@ aes = { workspace = true }
 # Async traits
 anyhow = { workspace = true }
 base64 = { workspace = true }
-
 # Misc
-bon = { workspace = true }
 
 # Channels/buffers
 bytes = { workspace = true }

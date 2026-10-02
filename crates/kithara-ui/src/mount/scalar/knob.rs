@@ -1,9 +1,10 @@
-use bon::Builder;
+use kithara_config::bon::Builder;
 
 use crate::ids::InternId;
 
 /// A rotary control dragged along the vertical axis.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.knob.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Knob {

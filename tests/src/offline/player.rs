@@ -51,7 +51,8 @@ enum PlayerSlot {
 }
 
 /// Product player settings a test varies.
-#[derive(Clone, bon::Builder)]
+#[derive(Clone, kithara_config::bon::Builder)]
+#[builder(crate = ::kithara_config::bon)]
 pub struct OfflinePlayerOptions {
     #[builder(default = DEFAULT_CROSSFADE_DURATION)]
     crossfade_duration: f32,

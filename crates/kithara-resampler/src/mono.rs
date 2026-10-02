@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use bon::Builder;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_config::Config;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use crate::{
@@ -9,20 +9,24 @@ use crate::{
     ResamplerMode, ResamplerOptions, ResamplerQuality, ResamplerSettings, create_resampler,
 };
 
-#[derive(Clone, Builder, derive_more::Debug)]
+#[derive(Clone, Config, derive_more::Debug)]
 #[debug(bound(B: ResamplerBackend))]
-#[builder(state_mod(vis = "pub"))]
+#[config(construction, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 pub struct MonoStreamConfig<B, S> {
+    #[config(skip = "selected backend resource")]
     #[debug("{:?}", self.backend.name())]
     pub backend: B,
+    #[config(skip = "used to prepare the resampler")]
     pub source_sample_rate: NonZeroU32,
+    #[config(skip = "used to prepare the resampler")]
     pub target_sample_rate: NonZeroU32,
+    #[config(skip = "injected pool region")]
     #[debug("<injected>")]
     pub pools: PoolRegion<S>,
-    #[builder(default)]
+    #[config(skip = "transferred to the selected backend", builder(default))]
     pub options: ResamplerOptions,
-    #[builder(default)]
+    #[config(skip = "used to prepare the resampler", builder(default))]
     pub quality: ResamplerQuality,
 }
 

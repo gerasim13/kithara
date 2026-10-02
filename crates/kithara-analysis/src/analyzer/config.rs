@@ -1,10 +1,10 @@
 use std::fmt;
 
-use bon::Builder;
 #[cfg(feature = "beat-nn")]
 use kithara_beat::{BeatConfig, BeatConfigPatch};
 #[cfg(feature = "beat-dsp")]
 use kithara_beat::{Tempo, TempoPatch, TempoPatchError};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
@@ -17,31 +17,32 @@ use crate::consts;
 /// it, and [`BeatAnalysisConfigPatchError`] what the merge refuses with. The
 /// refusal is declared here rather than read off the fields, so the merge
 /// keeps one signature whichever detector the build selects.
-#[derive(Clone, Builder, fieldwork::Fieldwork, Patch)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Config, fieldwork::Fieldwork, Patch)]
+#[config(builder(state_mod(vis = "pub")))]
 #[patch(fallible)]
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
+    #[config(skip = "resampler backend strategy")]
     #[patch(skip)]
     resampler_backend: B,
-    #[builder(default = consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_RESAMPLER_QUALITY))]
     #[field(get(copy))]
     pub resampler_quality: ResamplerQuality,
-    #[builder(default = consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS)]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS))]
     pub detector_min_window_seconds: u32,
-    #[builder(default = consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS))]
     pub detector_overlap_seconds: u32,
-    #[builder(default = consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS))]
     pub detector_window_seconds: u32,
-    #[builder(default = consts::DEFAULT_BEAT_TARGET_RATE)]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_TARGET_RATE))]
     pub target_rate: u32,
-    #[builder(default = consts::DEFAULT_BEAT_BLOCK_FRAMES)]
+    #[config(value, builder(default = consts::DEFAULT_BEAT_BLOCK_FRAMES))]
     pub block_frames: usize,
     /// Reaches the detector's peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.
     #[cfg(feature = "beat-nn")]
-    #[builder(default)]
+    #[config(nested, builder(default))]
     #[field(get(copy))]
     #[patch(nested)]
     pub beat: BeatConfig,
@@ -50,7 +51,7 @@ pub struct BeatAnalysisConfig<B> {
     /// before it is committed, so a band the comb never scores is refused by
     /// name instead of searched.
     #[cfg(feature = "beat-dsp")]
-    #[builder(default)]
+    #[config(value, builder(default))]
     #[field(get(copy))]
     #[patch(nested, fallible)]
     tempo: Tempo,

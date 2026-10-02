@@ -1,17 +1,22 @@
 use std::num::NonZeroUsize;
 
+use kithara_config::Config;
 use kithara_platform::CancelGroup;
 
 use crate::Priority;
 
 /// Admission, cancellation, priority, and compute budget for one task.
 #[non_exhaustive]
-#[derive(Clone, fieldwork::Fieldwork)]
+#[derive(Clone, Config, fieldwork::Fieldwork)]
+#[config(construction)]
 #[fieldwork(with)]
 pub struct TaskConfig {
+    #[config(value)]
     pub(crate) max_compute_tasks: NonZeroUsize,
+    #[config(skip = "composed into the task cancel group")]
     #[field(option_set_some)]
     pub(crate) cancel: Option<CancelGroup>,
+    #[config(value)]
     pub(crate) priority: Priority,
 }
 

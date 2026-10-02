@@ -1,8 +1,8 @@
 use std::{num::NonZeroUsize, ops::Range};
 
-use bon::Builder;
 use kithara_assets::{AssetReader, ReadSide};
 use kithara_bufpool::HasPool;
+use kithara_config::Config;
 use kithara_download::PeerHandle;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -24,16 +24,23 @@ use super::{
 use crate::{TotalBytesSource, coord::FileCoord, error::SourceError as FileSourceError};
 
 /// Inputs for constructing a local/cached file source.
-#[derive(Clone, Builder)]
+#[derive(Clone, Config)]
+#[config(construction)]
 pub(crate) struct FileLocalConfig<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    #[config(skip = "transferred to the file source")]
     coord: Arc<FileCoord>,
+    #[config(skip = "transferred to the file source")]
     reader: AssetReader<S>,
+    #[config(skip = "transferred to the file source")]
     cancel: CancelToken,
+    #[config(skip = "transferred to the file source")]
     bus: EventBus,
+    #[config(skip = "consumed by the codec probe")]
     cached_codec: Option<AudioCodec>,
+    #[config(value)]
     reader_event_capacity: usize,
 }
 

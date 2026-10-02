@@ -19,12 +19,11 @@ dsp = ["kithara-dsp/spectrum"]
 [dependencies]
 kithara-blob = { workspace = true }
 kithara-bufpool = { workspace = true }
-kithara-derive = { workspace = true, features = ["built-default"] }
+kithara-config = { workspace = true }
 kithara-dsp = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 
-bon = { workspace = true }
 delegate = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }

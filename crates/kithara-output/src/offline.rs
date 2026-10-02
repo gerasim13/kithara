@@ -1,12 +1,13 @@
 use std::{error::Error as StdError, ops::Range};
 
-use bon::Builder;
+use kithara_config::bon::Builder;
 use kithara_platform::CancelToken;
 use kithara_signal::AudioSpec;
 use thiserror::Error;
 
 /// One exact, finite output-frame range to render.
 #[derive(Clone, Debug, Builder)]
+#[builder(crate = ::kithara_config::bon)]
 #[non_exhaustive]
 pub struct OfflineRenderRequest {
     /// Output signal format expected by the caller and sink.

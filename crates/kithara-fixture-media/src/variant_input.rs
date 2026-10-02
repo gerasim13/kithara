@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bon::Builder;
+use kithara_config::bon::Builder;
 use kithara_stream::AudioCodec;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,7 @@ use crate::{
 
 /// Complete immutable input identity of one build-time encoded HLS variant.
 #[derive(Builder, Debug, Clone)]
+#[builder(crate = ::kithara_config::bon)]
 #[non_exhaustive]
 pub struct VariantInput {
     pub codec: AudioCodec,
