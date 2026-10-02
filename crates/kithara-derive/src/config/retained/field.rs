@@ -21,6 +21,7 @@ pub(super) struct Member<'a> {
     pub(super) ty: &'a Type,
     pub(super) construction: Construction,
     pub(super) accessor: Option<TokenStream>,
+    pub(super) owner_accessor: Option<TokenStream>,
     /// Whether the generated `Debug` prints the field.
     pub(super) debugged: bool,
     pub(super) retained: Option<Retained>,
@@ -219,6 +220,15 @@ pub(super) fn expand<'a>(
         builder = Some(quote!(default = #with(#default), with = |value: #wire| #with(value)));
     }
     let construction = construction(name, ty, &surface, builder.as_ref())?;
+    let owner_accessor = accessor.map(|copy| {
+        let output = if copy { quote!(#ty) } else { quote!(&#ty) };
+        quote! {
+            #(#surface)*
+            fn #name(&self) -> #output {
+                self.config().#name()
+            }
+        }
+    });
     let accessor = accessor.map(|copy| {
         let (output, body) = if copy {
             (quote!(#ty), quote!(self.#name))
@@ -243,6 +253,7 @@ pub(super) fn expand<'a>(
         ty,
         construction,
         accessor,
+        owner_accessor,
         debugged: !debug_skipped,
         retained,
     })

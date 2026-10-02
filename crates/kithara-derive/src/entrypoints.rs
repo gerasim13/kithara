@@ -10,7 +10,7 @@ macro_rules! config_derives {
         }
 
         /// Implements `ConfigOwner` by borrowing the named retained configuration field.
-        #[proc_macro_derive(ConfigOwner, attributes(config_owner))]
+        #[proc_macro_derive(ConfigOwner, attributes(config_owner, config_owner_mut))]
         pub fn config_owner(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             config::owner::expand(input.into())
                 .unwrap_or_else(syn::Error::into_compile_error)

@@ -22,6 +22,13 @@ changes a common API. Rejected changes leave the accepted configuration intact.
 `#[derive(ConfigOwner)]` implements the owner accessor from
 `#[config_owner(field)]`. For a nested field, give its type and path as
 `#[config_owner(ConfigType, field.path)]`.
+With `#[config(owner_access)]`, fields marked `field(get)` also produce a
+`<Config>OwnerAccess` trait. Import
+that trait to call the same getter on any `ConfigOwner` of that type; the method
+borrows the retained configuration directly. For an exclusively owned mutable
+configuration, `#[config_owner_mut]` on the owner derive adds `ConfigOwnerMut`
+and its `apply_config_update` method. Shared and realtime owners keep their
+domain application method so they can prepare and publish accepted changes.
 Owners still decide when to prepare and publish derived state, especially across
 realtime and thread boundaries. Buffers, counters, handles and observed results
 remain operational state. `Config::values` returns an owned observation snapshot;

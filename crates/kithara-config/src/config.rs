@@ -32,6 +32,28 @@ pub trait ConfigOwner {
     fn config(&self) -> &Self::Config;
 }
 
+/// An owner whose accepted configuration can be changed through a mutable borrow.
+///
+/// Owners with shared or realtime state keep their own application boundary.
+pub trait ConfigOwnerMut: ConfigOwner {
+    /// The same configuration returned by [`ConfigOwner::config`].
+    fn config_mut(&mut self) -> &mut Self::Config;
+
+    /// Apply a typed change through the configuration's validation contract.
+    ///
+    /// # Errors
+    /// Returns the configuration's validation error without changing accepted values.
+    fn apply_config_update(
+        &mut self,
+        update: <Self::Config as UpdatableConfig>::Update,
+    ) -> Result<(), <Self::Config as UpdatableConfig>::Error>
+    where
+        Self::Config: UpdatableConfig,
+    {
+        self.config_mut().apply_update(update)
+    }
+}
+
 /// A configuration with typed, validated live changes.
 ///
 /// Domain preparation and publication still happen at the owner's boundary.

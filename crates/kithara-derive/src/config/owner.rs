@@ -80,6 +80,33 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let config = spec.config.as_ref().unwrap_or(&field.ty);
     let path = spec.path.iter();
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let mutable: Vec<_> = input
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("config_owner_mut"))
+        .collect();
+    if mutable.len() > 1 {
+        return Err(syn::Error::new_spanned(
+            mutable[1],
+            "duplicate config_owner_mut attribute",
+        ));
+    }
+    let mutable_impl = mutable.first().map(|attribute| {
+        if !matches!(&attribute.meta, syn::Meta::Path(_)) {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                "config_owner_mut takes no arguments",
+            ));
+        }
+        let path = spec.path.iter();
+        Ok(quote! {
+            impl #impl_generics ::kithara_config::ConfigOwnerMut for #name #ty_generics #where_clause {
+                fn config_mut(&mut self) -> &mut Self::Config {
+                    &mut self.#(#path).*
+                }
+            }
+        })
+    }).transpose()?;
     Ok(quote! {
         impl #impl_generics ::kithara_config::ConfigOwner for #name #ty_generics #where_clause {
             type Config = #config;
@@ -88,5 +115,6 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 &self.#(#path).*
             }
         }
+        #mutable_impl
     })
 }

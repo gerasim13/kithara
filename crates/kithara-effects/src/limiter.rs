@@ -26,7 +26,7 @@ pub enum LimiterError {
 
 /// Output ceiling and gain recovery of one [`PeakLimiter`].
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(builder(existing))]
+#[config(builder(existing), owner_access)]
 #[non_exhaustive]
 pub struct LimiterConfig {
     /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
@@ -72,7 +72,8 @@ impl Default for LimiterConfig {
 
 /// Stereo-linked, zero-lookahead peak limiter: immediate attack, exponential release toward unity,
 /// and a unity bypass below the ceiling that is exact for normal finite samples.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, kithara_config::ConfigOwner)]
+#[config_owner(config)]
 #[non_exhaustive]
 pub struct PeakLimiter {
     /// The last `DETECTOR_HALF_WIDTH` input samples of every channel, oldest first, so a
@@ -273,8 +274,8 @@ impl PeakLimiter {
     /// for one frame.
     #[inline]
     fn step(&mut self, peak: f32) -> f32 {
-        let required = if peak > self.config.ceiling {
-            self.config.ceiling / peak
+        let required = if peak > self.ceiling() {
+            self.ceiling() / peak
         } else {
             1.0
         };

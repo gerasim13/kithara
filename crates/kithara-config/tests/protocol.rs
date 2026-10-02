@@ -1,6 +1,6 @@
 use std::io::Error;
 
-use kithara_config::{Config, ConfigOwner, Patch, UpdatableConfig};
+use kithara_config::{Config, ConfigOwner, ConfigOwnerMut, Patch, UpdatableConfig};
 use kithara_test_utils::kithara;
 
 #[derive(Clone, Patch, Config)]
@@ -13,7 +13,7 @@ struct Levels {
 }
 
 #[derive(Clone, Patch, Config)]
-#[config(default, update, validate_builder, patch(validate = Self::validated, error = Error))]
+#[config(default, update, owner_access, validate_builder, patch(validate = Self::validated, error = Error))]
 struct Bounded {
     #[config(value, update, builder(default = 2), field(get, copy))]
     level: u32,
@@ -77,6 +77,7 @@ fn a_judged_builder_uses_the_same_check_as_updates() {
 
 #[derive(ConfigOwner)]
 #[config_owner(config)]
+#[config_owner_mut]
 struct Owner {
     config: Bounded,
 }
@@ -87,25 +88,73 @@ struct NestedOwner {
     inner: std::sync::Arc<Owner>,
 }
 
+#[derive(Config)]
+#[config(owner_access, builder(none))]
+struct GenericResource<T>
+where
+    T: Send + Sync,
+{
+    #[config(skip = "borrowed by its runtime owner", field(get))]
+    resource: T,
+}
+
+#[derive(ConfigOwner)]
+#[config_owner(GenericResource<T>, inner.config)]
+struct GenericOwner<T>
+where
+    T: Send + Sync,
+{
+    inner: Box<GenericInner<T>>,
+}
+
+struct GenericInner<T>
+where
+    T: Send + Sync,
+{
+    config: GenericResource<T>,
+}
+
 #[kithara::test]
 fn derived_owners_borrow_the_same_updated_config_through_nested_fields() {
     let mut owner = Owner {
         config: Bounded::default(),
     };
     owner
-        .config
-        .apply_update(BoundedUpdate {
+        .apply_config_update(BoundedUpdate {
             level: BoundedLevelUpdate::Set { value: 3 },
             ..BoundedUpdate::default()
         })
         .expect("level stays within the limit");
     assert!(std::ptr::eq(owner.config(), &owner.config));
+    assert_eq!(owner.level(), 3);
+    assert!(
+        owner
+            .apply_config_update(BoundedUpdate {
+                level: BoundedLevelUpdate::Set { value: 7 },
+                ..BoundedUpdate::default()
+            })
+            .is_err()
+    );
+    assert_eq!(owner.level(), 3);
 
     let nested = NestedOwner {
         inner: std::sync::Arc::new(owner),
     };
     assert!(std::ptr::eq(nested.config(), &nested.inner.config));
+    assert_eq!(nested.level(), 3);
     assert_eq!(nested.config().values().level, 3);
+}
+
+#[kithara::test]
+fn generic_owner_access_borrows_the_original_resource() {
+    let owner = GenericOwner {
+        inner: Box::new(GenericInner {
+            config: GenericResource {
+                resource: String::from("owned"),
+            },
+        }),
+    };
+    assert!(std::ptr::eq(owner.resource(), &owner.inner.config.resource));
 }
 
 #[derive(Config)]

@@ -14,6 +14,7 @@ struct Options {
     built_default: bool,
     construction: bool,
     runtime_update: bool,
+    owner_access: bool,
     sdk: bool,
     debug: bool,
     values_vis: Option<Visibility>,
@@ -44,6 +45,8 @@ impl Options {
                     options.construction = true;
                 } else if meta.path.is_ident("update") {
                     options.runtime_update = true;
+                } else if meta.path.is_ident("owner_access") {
+                    options.owner_access = true;
                 } else if meta.path.is_ident("validate_builder") {
                     options.validate_builder = true;
                 } else if meta.path.is_ident("sdk") {
@@ -68,7 +71,7 @@ impl Options {
                 } else {
                     return Err(meta.error(
                         "expected construction, default, update, validate_builder, sdk, debug, builder(...), \
-                         patch(...), or values_vis",
+                         owner_access, patch(...), or values_vis",
                     ));
                 }
                 Ok(())
@@ -77,12 +80,13 @@ impl Options {
         if options.construction
             && (options.built_default
                 || options.runtime_update
+                || options.owner_access
                 || options.sdk
                 || options.values_vis.is_some())
         {
             return Err(syn::Error::new_spanned(
                 &item.ident,
-                "construction inputs cannot declare retained defaults, updates, SDK records, or values visibility",
+                "construction inputs cannot declare retained defaults, updates, owner access, SDK records, or values visibility",
             ));
         }
         if (options.existing_builder || options.no_builder) && options.validate_builder {
@@ -135,6 +139,12 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         .iter()
         .map(|field| field::expand(field, &item, !options.construction))
         .collect::<Result<Vec<_>>>()?;
+    if options.owner_access && members.iter().all(|member| member.owner_accessor.is_none()) {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "owner_access requires a field(get) accessor",
+        ));
+    }
     if !options.debug
         && let Some(member) = members.iter().find(|member| !member.debugged)
     {
@@ -162,6 +172,10 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         ))
     };
     let accessors = accessors(&item, &members);
+    let owner_accessors = options
+        .owner_access
+        .then(|| owner_accessors(&item, &members))
+        .flatten();
     let default = options
         .built_default
         .then(|| built_default(&item, fallible));
@@ -169,7 +183,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let snapshot = (!options.construction)
         .then(|| snapshot(&item, &options, &members))
         .transpose()?;
-    Ok(quote! { #builder #accessors #default #debug #snapshot })
+    Ok(quote! { #builder #accessors #owner_accessors #default #debug #snapshot })
 }
 
 /// A bon function builder over `new`, which bon keeps private and hidden:
@@ -241,6 +255,41 @@ fn accessors(item: &DeriveInput, members: &[Member<'_>]) -> Option<TokenStream> 
         impl #impl_generics #name #ty_generics #where_clause {
             #(#accessors)*
         }
+    })
+}
+
+fn owner_accessors(item: &DeriveInput, members: &[Member<'_>]) -> Option<TokenStream> {
+    let methods: Vec<&TokenStream> = members
+        .iter()
+        .filter_map(|member| member.owner_accessor.as_ref())
+        .collect();
+    if methods.is_empty() {
+        return None;
+    }
+    let name = &item.ident;
+    let visibility = &item.vis;
+    let trait_name = format_ident!("{name}OwnerAccess");
+    let (trait_generics, ty_generics, trait_where) = item.generics.split_for_impl();
+    let mut blanket = item.generics.clone();
+    blanket
+        .params
+        .insert(0, syn::parse_quote!(__KitharaConfigOwner));
+    blanket
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(
+            __KitharaConfigOwner: ::kithara_config::ConfigOwner<Config = #name #ty_generics>
+        ));
+    let (impl_generics, _, impl_where) = blanket.split_for_impl();
+    Some(quote! {
+        #visibility trait #trait_name #trait_generics:
+            ::kithara_config::ConfigOwner<Config = #name #ty_generics> #trait_where
+        {
+            #(#methods)*
+        }
+
+        #[automatically_derived]
+        impl #impl_generics #trait_name #ty_generics for __KitharaConfigOwner #impl_where {}
     })
 }
 
