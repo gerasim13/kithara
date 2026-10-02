@@ -19,18 +19,15 @@ pub struct ToolsConfig {
 /// What one role is, where to get it, and what pins its version.
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct ToolEntry {
     /// What to tell an operator who does not have it.
-    #[config(value)]
     pub install_hint: String,
     /// Key in `.config/ci-pins.toml` `[cargo_tools]` pinning this role's
     /// version. Empty for a platform toolchain the machine owns rather than
     /// this repository.
-    #[config(value)]
     pub pin: String,
     /// Program to spawn. Empty means the role name itself.
-    #[config(value)]
     pub program: String,
 }
 

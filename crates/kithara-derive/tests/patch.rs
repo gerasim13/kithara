@@ -119,3 +119,23 @@ fn rejected_nested_patch_commits_nothing() {
     assert_eq!(owner.settings, original);
     assert_eq!(owner.other, Some(11));
 }
+
+#[derive(Patch)]
+#[config(fields(patch(skip)))]
+struct PrivateFields {
+    private: u32,
+    #[config(patch(attribute(serde(rename = "level"))))]
+    public: u32,
+}
+
+#[kithara::test(native, flash(false))]
+fn patch_field_defaults_work_without_the_config_derive() {
+    let mut config = PrivateFields {
+        private: 2,
+        public: 3,
+    };
+    config.apply(serde_yaml_ng::from_str("level: 7").unwrap());
+    assert_eq!(config.public, 7);
+    assert_eq!(config.private, 2);
+    assert!(serde_yaml_ng::from_str::<PrivateFieldsPatch>("private: 9").is_err());
+}

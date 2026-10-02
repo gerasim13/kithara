@@ -14,7 +14,7 @@ mod ui;
 mod vocabulary;
 
 #[cfg(feature = "config")]
-config_derives!();
+config::retained::config_derives!();
 
 /// Implements `Default` by calling the type's existing no-input builder.
 #[cfg(feature = "built-default")]

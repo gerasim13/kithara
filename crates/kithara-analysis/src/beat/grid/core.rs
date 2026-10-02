@@ -38,29 +38,29 @@ pub(crate) mod consts {
 }
 
 #[derive(Config, Debug, Clone, PartialEq)]
-#[config(default)]
+#[config(default, fields(value))]
 pub(crate) struct GridParams {
-    #[config(value, builder(default = consts::MAX_BAR_RATIO))]
+    #[config(builder(default = consts::MAX_BAR_RATIO))]
     pub(crate) max_bar_ratio: f64,
-    #[config(value, builder(default = consts::MEDIAN_TRUST_RATIO))]
+    #[config(builder(default = consts::MEDIAN_TRUST_RATIO))]
     pub(crate) median_trust_ratio: f64,
-    #[config(value, builder(default = consts::MERGE_RATIO_EPS))]
+    #[config(builder(default = consts::MERGE_RATIO_EPS))]
     pub(crate) merge_ratio_eps: f64,
-    #[config(value, builder(default = consts::MIN_BAR_RATIO))]
+    #[config(builder(default = consts::MIN_BAR_RATIO))]
     pub(crate) min_bar_ratio: f64,
-    #[config(value, builder(default = consts::MIN_GAP_RATIO))]
+    #[config(builder(default = consts::MIN_GAP_RATIO))]
     pub(crate) min_gap_ratio: f64,
-    #[config(value, builder(default = consts::OUTLIER_RATIO))]
+    #[config(builder(default = consts::OUTLIER_RATIO))]
     pub(crate) outlier_ratio: f64,
-    #[config(value, builder(default = consts::RESIDUAL_MS))]
+    #[config(builder(default = consts::RESIDUAL_MS))]
     pub(crate) residual_ms: f64,
-    #[config(value, builder(default = consts::ALIGN_BARS))]
+    #[config(builder(default = consts::ALIGN_BARS))]
     pub(crate) align_bars: usize,
-    #[config(value, builder(default = consts::MIN_LEAF_BARS))]
+    #[config(builder(default = consts::MIN_LEAF_BARS))]
     pub(crate) min_leaf_bars: usize,
-    #[config(value, builder(default = consts::OUTLIER_WINDOW))]
+    #[config(builder(default = consts::OUTLIER_WINDOW))]
     pub(crate) outlier_window: usize,
-    #[config(value, builder(default = consts::STABLE_WINDOW_BARS))]
+    #[config(builder(default = consts::STABLE_WINDOW_BARS))]
     pub(crate) stable_window_bars: usize,
 }
 

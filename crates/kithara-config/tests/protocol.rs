@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 #[derive(Clone, Patch, Config)]
 #[config(default, debug, update)]
 struct Levels {
-    #[config(value, update, builder(default = 2), field(get, copy))]
+    #[config(value, update, builder(default = 2), get(copy))]
     level: u32,
     #[config(value, update, builder(required, default = Some(4)))]
     limit: Option<u32>,
@@ -15,7 +15,7 @@ struct Levels {
 #[derive(Clone, Patch, Config)]
 #[config(default, update, owner_access, validate_builder, patch(validate = Self::validated, error = Error))]
 struct Bounded {
-    #[config(value, update, builder(default = 2), field(get, copy))]
+    #[config(value, update, builder(default = 2), get(copy))]
     level: u32,
     #[config(value, update, builder(required, default = Some(4)))]
     limit: Option<u32>,
@@ -89,7 +89,7 @@ struct NestedOwner {
 }
 
 #[derive(Config)]
-#[config(owner_access, builder(none), field(get))]
+#[config(owner_access, builder(none), fields(get(ref)))]
 struct GenericResource<T>
 where
     T: Send + Sync,
@@ -115,15 +115,15 @@ where
 }
 
 #[derive(Config)]
-#[config(builder(none), fields(value), field(get, copy))]
+#[config(builder(none), fields(value, get(copy)))]
 struct ValueFields {
     level: u32,
-    #[config(skip = "runtime resource", field(get))]
+    #[config(skip = "runtime resource", get(ref))]
     resource: String,
 }
 
 #[derive(Config)]
-#[config(builder(none), fields(nested), field(get))]
+#[config(builder(none), fields(nested, get(ref)))]
 struct NestedFields {
     settings: ValueFields,
     #[config(value)]
@@ -134,7 +134,7 @@ struct NestedFields {
 #[config(construction)]
 struct ConstructionInputs {
     resource: String,
-    #[config(field(get))]
+    #[config(get(ref))]
     label: String,
 }
 
@@ -238,6 +238,7 @@ impl<T> Wrapped<T> {
 }
 
 #[derive(Patch, Config)]
+#[config(fields(builder(default)))]
 struct WrappedConfig {
     #[config(
         value(u32, self.level.0),
@@ -245,6 +246,55 @@ struct WrappedConfig {
         patch(wire = u32, from = Wrapped::new)
     )]
     level: Wrapped<u32>,
+}
+
+#[derive(Config, Patch)]
+#[config(
+    default,
+    debug,
+    update,
+    fields(
+        value,
+        get(copy),
+        builder(default = 2),
+        update,
+        patch(skip),
+        debug(skip)
+    )
+)]
+struct SharedOptions {
+    first: u32,
+    #[config(builder(default = 3), patch(attribute(serde(rename = "level"))))]
+    second: u32,
+    #[config(
+        skip = "owned runtime resource",
+        get(skip),
+        builder(default),
+        update(false)
+    )]
+    resource: String,
+}
+
+#[kithara::test]
+fn shared_field_options_keep_builders_updates_and_patch_exclusions_independent() {
+    let mut config = SharedOptions::default();
+    assert_eq!(config.first(), 2);
+    assert_eq!(config.second(), 3);
+    assert_eq!(format!("{config:?}"), "SharedOptions { .. }");
+    config.apply(SharedOptionsPatch { second: Some(9) });
+    assert_eq!(config.second(), 9);
+    config.apply_update(SharedOptionsUpdate {
+        first: SharedOptionsFirstUpdate::Set { value: 8 },
+        ..SharedOptionsUpdate::default()
+    });
+    assert_eq!(config.first(), 8);
+    config.apply_update(SharedOptionsUpdate {
+        first: SharedOptionsFirstUpdate::Reset,
+        second: SharedOptionsSecondUpdate::Reset,
+    });
+    assert_eq!(config.first(), 2);
+    assert_eq!(config.second(), 3);
+    assert!(config.resource.is_empty());
 }
 
 #[kithara::test]

@@ -22,7 +22,7 @@ use crate::{ActionAtItemEnd, PlaybackOrder, consts, navigation::NavigationState}
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
 #[derive(Patch, Config)]
-#[config(debug, builder(state_mod(vis = "pub")))]
+#[config(debug, builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
 pub struct QueueConfig<S>
 where
@@ -33,7 +33,7 @@ where
     pub(crate) navigation: Option<Arc<Mutex<NavigationState>>>,
 
     /// Max concurrent background prefetch loads. Default: 3.
-    #[config(value, sdk, builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS))]
+    #[config(sdk, builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS))]
     pub max_concurrent_loads: NonZeroUsize,
 
     /// Master cancel for the queue. `Some` threads the app master so the
@@ -64,20 +64,20 @@ where
     /// the value already reaches 10 setter and 14 read call sites as a bare
     /// `f32`, and converting the type would only churn those for a
     /// formatting preference.
-    #[config(value, sdk, builder(default = consts::DEFAULT_PREFETCH_DURATION))]
+    #[config(sdk, builder(default = consts::DEFAULT_PREFETCH_DURATION))]
     pub prefetch_duration: f32,
 
     /// Whether the queue starts playback by itself once the first track
     /// appended to a queue with nothing selected finishes loading. Off by
     /// default: the embedding decides when playback starts. A document cannot
     /// name it, because starting playback is the embedding's choice.
-    #[config(value, sdk, builder(default = false), patch(skip))]
+    #[config(sdk, builder(default = false), patch(skip))]
     pub should_autoplay: bool,
 
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
-    #[config(value, sdk, builder(default = 100))]
+    #[config(sdk, builder(default = 100))]
     pub max_history_size: usize,
 
     /// Initial queue traversal order; subsequent changes belong to navigation.

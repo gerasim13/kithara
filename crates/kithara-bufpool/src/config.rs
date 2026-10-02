@@ -5,24 +5,24 @@ use crate::Percent;
 
 /// Policy for one physical buffer pool in a region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Patch, Config)]
+#[config(fields(value))]
 pub struct PoolConfig {
     /// Maximum share of the region budget this pool may hold.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub(crate) max_share: Percent,
     /// Number of reusable payloads allocated during region construction.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub(crate) initial_buffers: usize,
     /// Element capacity of each initially allocated payload.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub(crate) initial_capacity: usize,
     /// Maximum number of retained buffers across all shards.
-    #[config(value)]
     pub(crate) max_buffers: usize,
     /// Drop returned buffers above this capacity. Zero disables the ceiling.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub(crate) max_retained_capacity: usize,
     /// Capacity retained when an oversized buffer returns to the pool.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub(crate) trim_capacity: usize,
 }
 

@@ -34,26 +34,26 @@ pub enum GaplessMode {
 /// louder "near-silence" too — at the cost of false positives on
 /// quiet music.
 #[derive(Debug, Clone, Copy, PartialEq, kithara_config::Config, Deserialize)]
-#[config(default, builder(state_mod(vis = "pub")))]
+#[config(default, builder(state_mod(vis = "pub")), fields(value))]
 #[serde(default, deny_unknown_fields)]
 pub struct SilenceTrimParams {
     /// When true, also trim trailing silence at EOF using the same
     /// threshold. Disabled by default because tail content is more
     /// often intentional (decay, reverb).
-    #[config(value, builder(default = false))]
+    #[config(builder(default = false))]
     pub trim_trailing: bool,
     /// Silence floor in dB below full scale. Default `45.0` ≈ -45 dB ≈ `5.6e-3`.
-    #[config(value, builder(default = 45.0))]
+    #[config(builder(default = 45.0))]
     pub threshold_db: f32,
     /// Minimum number of contiguous silent leading frames before any
     /// trim is applied. Below this threshold we leave the audio alone
     /// to avoid clipping intentional micro-pauses.
-    #[config(value, builder(default = 256))]
+    #[config(builder(default = 256))]
     pub min_trim_frames: u64,
     /// Maximum frames the leading scan looks at before giving up. If
     /// the whole window is silent (very long fade-in) we keep the
     /// audio as-is — better safe than sorry.
-    #[config(value, builder(default = 4096))]
+    #[config(builder(default = 4096))]
     pub scan_window_frames: u64,
 }
 

@@ -27,15 +27,15 @@ pub struct RatioGlide {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Config, Deserialize)]
-#[config(default, builder(state_mod(vis = "pub")))]
+#[config(default, builder(state_mod(vis = "pub")), fields(value))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ResamplerOptions {
-    #[config(value, builder(default = 8.0))]
+    #[config(builder(default = 8.0))]
     pub max_ratio_adjustment: f64,
-    #[config(value, builder(default = 0.0001))]
+    #[config(builder(default = 0.0001))]
     pub passthrough_tolerance: f64,
-    #[config(value, builder(default = 4_096))]
+    #[config(builder(default = 4_096))]
     pub chunk_size: usize,
 }
 

@@ -26,14 +26,12 @@ pub enum LimiterError {
 
 /// Output ceiling and gain recovery of one [`PeakLimiter`].
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(builder(existing), owner_access)]
+#[config(builder(existing), owner_access, fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct LimiterConfig {
     /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
-    #[config(value, field(get, copy))]
     ceiling: f32,
     /// Milliseconds the gain takes to recover toward unity.
-    #[config(value, field(get, copy))]
     release_ms: f32,
 }
 

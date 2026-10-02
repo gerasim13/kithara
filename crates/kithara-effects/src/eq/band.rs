@@ -26,16 +26,18 @@ impl From<u8> for FilterKind {
 
 /// Configuration for a single EQ band.
 #[derive(Debug, Clone, Copy, PartialEq, Config)]
-#[config(default, builder(state_mod(vis = "pub")))]
+#[config(
+    default,
+    builder(state_mod(vis = "pub")),
+    fields(value, get(copy), builder(default))
+)]
 #[non_exhaustive]
 pub struct EqBandConfig {
-    #[config(value, builder(default), field(get, copy))]
     kind: FilterKind,
-    #[config(value, builder(default), field(get, copy))]
     gain_db: GainDb,
-    #[config(value, builder(default = consts::DEFAULT_FREQ), field(get, copy))]
+    #[config(builder(default = consts::DEFAULT_FREQ))]
     frequency: f32,
-    #[config(value, builder(default = std::f32::consts::FRAC_1_SQRT_2), field(get, copy))]
+    #[config(builder(default = std::f32::consts::FRAC_1_SQRT_2))]
     q_factor: f32,
 }
 

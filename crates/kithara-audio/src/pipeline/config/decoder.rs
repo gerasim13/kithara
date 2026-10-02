@@ -6,10 +6,10 @@ use kithara_derive::Patch;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
 #[derive(Clone, Debug, Config)]
-#[config(builder(state_mod(vis = "pub")), fields(value), field(get, copy))]
+#[config(builder(state_mod(vis = "pub")), fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct DecoderResamplerSettings<B = NoResamplerBackend> {
-    #[config(skip = "backend strategy selected by the caller", field(get))]
+    #[config(skip = "backend strategy selected by the caller", get(ref))]
     pub(crate) backend: B,
     #[config(builder(default))]
     pub(crate) options: ResamplerOptions,
@@ -34,9 +34,9 @@ where
 #[config(default, builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
 pub struct AudioDecoderConfig<B = NoResamplerBackend> {
-    #[config(builder(default), field(get, copy))]
+    #[config(builder(default), get(copy))]
     pub(crate) backend: DecoderBackend,
-    #[config(builder(default), field(get, copy))]
+    #[config(builder(default), get(copy))]
     pub(crate) gapless_mode: GaplessMode,
     /// Not a document key: `DecoderResamplerSettings` carries the resampler
     /// backend itself, an object the construction site hands over and no

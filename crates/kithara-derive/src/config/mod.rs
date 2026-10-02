@@ -1,5 +1,7 @@
 #[cfg(feature = "built-default")]
 pub(crate) mod built;
+#[cfg(feature = "config")]
+mod field;
 #[cfg(feature = "patch")]
 mod patch;
 

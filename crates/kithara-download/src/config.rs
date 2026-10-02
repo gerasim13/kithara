@@ -6,7 +6,7 @@ use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Config, Patch)]
-#[config(builder(start_fn = for_client))]
+#[config(builder(start_fn = for_client), fields(value))]
 #[non_exhaustive]
 pub struct DownloaderConfig {
     /// HTTP client used for all fetches. Cloned by the Downloader to
@@ -28,14 +28,14 @@ pub struct DownloaderConfig {
     pub(crate) abr_settings: AbrSettings,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
-    #[config(value, builder(default = Duration::ZERO), patch(humantime))]
+    #[config(builder(default = Duration::ZERO), patch(humantime))]
     pub(crate) demand_throttle: Duration,
     /// Soft timeout. When a fetch has not produced a response within
     /// this duration, the Downloader publishes
     /// [`DownloaderEvent::LoadSlow`](crate::DownloaderEvent::LoadSlow)
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
-    #[config(value, builder(default = Duration::from_secs(2)), patch(humantime))]
+    #[config(builder(default = Duration::from_secs(2)), patch(humantime))]
     pub(crate) soft_timeout: Duration,
     /// Optional parent cancel. `Some` → the download loop's scope is a child
     /// of it (composed); `None` → the Downloader owns a standalone scope. The
@@ -49,7 +49,7 @@ pub struct DownloaderConfig {
     #[config(skip = "runtime resource retained by the downloader", patch(skip))]
     pub(crate) runtime: Option<Handle>,
     /// Maximum number of concurrent in-flight fetch commands.
-    #[config(value, builder(default = 5))]
+    #[config(builder(default = 5))]
     pub(crate) max_concurrent: usize,
     /// Capacity of the per-peer bounded command channel. A peer that fills
     /// it backpressures its own producer instead of the download loop, so
@@ -57,7 +57,7 @@ pub struct DownloaderConfig {
     /// default is deep enough that a peer's planning burst does not block on
     /// the download loop, shallow enough that a stalled fetcher stops the
     /// producer rather than growing an unbounded backlog.
-    #[config(value, builder(default = 32))]
+    #[config(builder(default = 32))]
     pub(crate) peer_cmd_channel_capacity: usize,
 }
 

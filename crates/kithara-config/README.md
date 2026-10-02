@@ -22,7 +22,7 @@ changes a common API. Rejected changes leave the accepted configuration intact.
 `#[derive(ConfigOwner)]` implements the owner accessor from
 `#[config_owner(field)]`. For a nested field, give its type and path as
 `#[config_owner(ConfigType, field.path)]`.
-With `#[config(owner_access)]`, fields marked `field(get)` also produce a
+With `#[config(owner_access)]`, fields marked `get(ref)` also produce a
 `<Config>OwnerAccess` trait. Import
 that trait to call the same getter on any `ConfigOwner` of that type; the method
 borrows the retained configuration directly. For an exclusively owned mutable
@@ -44,10 +44,30 @@ explicit field roles still override it.
 public value. The derive generates a bon builder (`X::builder()`), whose
 per-field options live in the field's `builder(...)` group and whose top-level
 options live in the type's; `builder(skip)` or `builder(skip = value)` leaves a
-field out of the builder. `field(get)` and `field(get, copy)` add accessors; on
-the type they apply to every field, with explicit field declarations overriding
-that default. A generic resource can use `field(get)` to stay borrowed when the
-other fields use the type's `field(get, copy)`.
+field out of the builder. `get(ref)` borrows the original field and `get(copy)`
+returns it through `Copy`; `get(skip)` disables an inherited getter.
+
+`fields(...)` on the type accepts the same options as `config(...)` on a field:
+roles, getters, `builder(...)`, `patch(...)`, `debug(skip)`, `update`, and
+`wrap(...)`. Each explicit field facet overrides its inherited counterpart;
+a group replaces the whole inherited group. `update(false)` disables an
+inherited runtime update. A field's explicit builder or wrapper replaces the
+inherited construction settings. Snapshot exclusion does not exclude a getter,
+builder argument, or document patch: each facet declares its own policy.
+Duplicate or conflicting options within one declaration are errors.
+
+```rust
+use kithara_config::Config;
+
+#[derive(Config)]
+#[config(fields(value, get(copy), builder(default)))]
+pub struct Settings {
+    retries: u32,
+    #[config(skip = "owned runtime resource", get(ref))]
+    resource: String,
+}
+```
+
 `#[config(validate_builder, patch(validate = Self::check, error = Error))]`
 makes `build()` return `Result<Self, Error>` through that same domain check.
 `builder(existing)` keeps a domain constructor's bon builder when it must
@@ -65,7 +85,7 @@ derives the builder default and setter conversion. `Patch` reads the type's and
 each field's `patch(...)` group.
 
 `#[config(update)]` opts a retained configuration into typed runtime changes;
-each writable field also uses `#[config(value, update)]`. The derive emits a
+writable fields use `#[config(value, update)]` or inherit `fields(value, update)`. The derive emits a
 concrete update enum per property and a `<Name>Update` record. Optional values
 distinguish `Set`, `Clear`, and `Unchanged`; `Reset` is emitted only when the
 same field declares a builder default. A configuration that declares

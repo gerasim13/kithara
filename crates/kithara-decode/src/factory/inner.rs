@@ -84,6 +84,7 @@ pub enum DecoderBackend {
 /// This describes conversion that is part of decoder construction, not the
 /// playback graph's effects chain. Backend choice is encoded by `B`.
 #[derive(Clone, Config)]
+#[config(fields(value))]
 #[non_exhaustive]
 #[derive(derive_more::Debug)]
 #[debug(bound(B: ResamplerBackend))]
@@ -91,11 +92,10 @@ pub struct DecoderResamplerConfig<B = NoResamplerBackend> {
     #[config(skip = "resampler backend strategy")]
     #[debug("{:?}", self.backend.name())]
     pub backend: B,
-    #[config(value)]
     pub target_sample_rate: NonZeroU32,
     #[config(nested, builder(default))]
     pub options: ResamplerOptions,
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub quality: ResamplerQuality,
 }
 

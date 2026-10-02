@@ -20,27 +20,27 @@ use crate::{
 
 /// Options for opening a [`MmapResource`].
 #[derive(Debug, Clone, Config)]
-#[config(builder(start_fn = for_path))]
+#[config(builder(start_fn = for_path), fields(value))]
 #[non_exhaustive]
 pub struct MmapOptions {
     /// Path to the backing file.
-    #[config(value, builder(start_fn))]
+    #[config(builder(start_fn))]
     pub path: PathBuf,
     /// Open mode controlling read/write behavior for existing files.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub mode: OpenMode,
     /// Multiplier applied to the current mapping length when a write runs
     /// past its end. The mapping grows to the larger of the write's end and
     /// `len * growth_factor`, so a factor of 1 grows to exactly what each
     /// write needs and re-maps on every one. The default doubles, which keeps
     /// the number of re-maps logarithmic in the final size.
-    #[config(value, builder(default = 2))]
+    #[config(builder(default = 2))]
     pub growth_factor: u64,
     /// Size a new file is created at. Ignored for existing files. The default
     /// is one page-aligned block: enough that a small resource is written
     /// without a single re-map, small enough that a resource that turns out to
     /// be empty costs one sparse block.
-    #[config(value, builder(default = 64 * 1024))]
+    #[config(builder(default = 64 * 1024))]
     pub initial_len: u64,
 }
 

@@ -70,7 +70,7 @@ impl AppDrm {
 /// crate's own defaults, which the configuration document patches through
 /// [`AppConfigPatch`].
 #[derive(Clone, Config, Patch)]
-#[config(builder(state_mod(vis = "pub")))]
+#[config(builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
 pub struct AppConfig {
     /// App-owned DRM policy and its opaque key-request registry.
@@ -87,7 +87,7 @@ pub struct AppConfig {
     )]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
     /// Fixed source duration covered by one progressive analysis chunk.
-    #[config(value, builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN)))]
+    #[config(builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN)))]
     pub analysis_chunk_seconds: NonZeroU32,
     /// One playback worker shared by every deck in this app session.
     #[config(skip = "owned by the app playback worker", patch(skip))]
@@ -109,20 +109,20 @@ pub struct AppConfig {
     pub downloader: Downloader,
     /// Color palette for the UI. A document names it under `app.palette`,
     /// one color at a time.
-    #[config(value, builder(default), patch(nested))]
+    #[config(builder(default), patch(nested))]
     pub palette: Palette,
     /// What the document's `audio:` section says about every track's audio
     /// pipeline, carried as a patch because no `AudioConfig` exists until a
     /// track does. Reached through `audio`, not through [`AppConfigPatch`].
-    #[config(value, builder(default), patch(skip))]
+    #[config(builder(default), patch(skip))]
     pub audio: AudioConfigPatch,
     /// What the document's `hls:` section says about every HLS track. Carried
     /// as a patch for the same reason [`AppConfig::audio`] is.
-    #[config(value, builder(default), patch(skip))]
+    #[config(builder(default), patch(skip))]
     pub hls: HlsConfigPatch,
     /// What the document's `file:` section says about every file track.
     /// Carried as a patch for the same reason [`AppConfig::audio`] is.
-    #[config(value, builder(default), patch(skip))]
+    #[config(builder(default), patch(skip))]
     pub file: FileConfigPatch,
     /// UI-level knobs threaded into every compiled document, including the
     /// draw-pool limits [`UiConfig::draw_buffers`] is built from. A document
@@ -130,10 +130,10 @@ pub struct AppConfig {
     /// [`AppConfig::audio`] is reached through `audio` — not through
     /// [`AppConfigPatch`].
     #[cfg(feature = "gui")]
-    #[config(value, builder(default), patch(skip))]
+    #[config(builder(default), patch(skip))]
     pub ui: UiConfig,
     /// Log filter directives.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub log_directives: Vec<String>,
     /// Audio file URLs or paths to play.
     #[config(
@@ -143,12 +143,12 @@ pub struct AppConfig {
     )]
     pub tracks: Vec<String>,
     /// Accept invalid TLS certificates. Test servers only.
-    #[config(value, builder(default = false), patch(skip))]
+    #[config(builder(default = false), patch(skip))]
     pub should_accept_invalid_certs: bool,
     /// What the document's `player:` section says about every deck's player,
     /// carried as a patch because no `PlayerConfig` exists until a deck does.
     /// Reached through `player`, not through [`AppConfigPatch`].
-    #[config(value, builder(default), patch(skip))]
+    #[config(builder(default), patch(skip))]
     pub player: PlayerConfigPatch,
     /// Complete live-broadcast construction config for this app session. The
     /// document's `broadcast:` section is applied to it in `main`, where the
@@ -158,20 +158,18 @@ pub struct AppConfig {
     pub broadcast: Option<AppBroadcastConfig>,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
-    #[config(value, builder(default = 96_000))]
+    #[config(builder(default = 96_000))]
     pub waveform_max_buckets: usize,
     /// Band count of the EQ layout every deck's player graph is built with.
-    #[config(value, builder(default = 3))]
+    #[config(builder(default = 3))]
     pub eq_bands: usize,
     /// Output rate this application asks its audio session for. `None` leaves
     /// `HostConfig`'s own default standing: the Host owns the product default
     /// and refuses a player whose rate disagrees, so this names an override
     /// and every deck's player still reads the rate back off the Host.
-    #[config(value)]
     pub sample_rate: Option<NonZeroU32>,
     /// Native output callback size the audio session is asked for. `None`
     /// leaves the backend's own block size in place.
-    #[config(value)]
     pub output_block_frames: Option<NonZeroU32>,
     /// Where this application reads its UI package from. What is found there
     /// is laid over the documents this build carries, so the interface can be
@@ -182,22 +180,21 @@ pub struct AppConfig {
     /// Three sources name it, most specific first: `--ui-package` on the
     /// command line, then the document's `app.ui_package`, then the package a
     /// release lays out beside the executable.
-    #[config(value)]
     pub ui_package: Option<PathBuf>,
     /// What the document's `queue:` section says about every deck's queue,
     /// carried as a patch for the same reason [`AppConfig::player`] is.
-    #[config(value, builder(default), patch(skip))]
+    #[config(builder(default), patch(skip))]
     pub queue: QueueConfigPatch,
     /// Live heap a debug build tolerates before it prints the allocating
     /// stack and aborts. `0` lifts the ceiling. A release build installs no
     /// counting allocator, so this is read only under `debug_assertions`.
-    #[config(value, builder(default = crate::memory::DEFAULT_LIMIT_BYTES))]
+    #[config(builder(default = crate::memory::DEFAULT_LIMIT_BYTES))]
     pub memory_limit_bytes: usize,
     /// What the document's `dispatcher:` section says about the background
     /// dispatchers the app builds, carried as a patch for the same reason
     /// [`AppConfig::player`] is: each construction site keeps its own thread
     /// name and lays this over the rest.
-    #[config(value, builder(default), patch(skip))]
+    #[config(builder(default), patch(skip))]
     pub dispatcher: DispatcherConfigPatch,
 }
 

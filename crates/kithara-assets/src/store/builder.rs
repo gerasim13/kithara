@@ -97,7 +97,7 @@ impl<'de> Deserialize<'de> for StorageBackend {
     finish_fn = into_config,
     builder_type(name = AssetStoreBuilder, vis = "pub"),
     state_mod(vis = "pub")
-))]
+), fields(value))]
 #[non_exhaustive]
 pub struct AssetStoreConfig<S>
 where
@@ -116,7 +116,7 @@ where
     pub backend: Option<StorageBackend>,
     /// Resources the in-memory cache retains before it evicts the
     /// least-recently-used one. Applies to both backends.
-    #[config(value, field(get, copy))]
+    #[config(get(copy))]
     pub cache_capacity: Option<NonZeroUsize>,
     /// Master cancel token for the store subtree.
     #[config(skip = "composed into the store cancel scope", patch(skip))]
@@ -131,28 +131,28 @@ where
     #[config(skip = "transferred to the layout owner", patch(skip))]
     pub layouts: Option<AssetLayoutRegistry>,
     /// Assets the eviction policy keeps before it drops the coldest one.
-    #[config(value, field(get, copy))]
+    #[config(get(copy))]
     pub max_assets: Option<usize>,
     /// Bytes the eviction policy keeps before it drops the coldest asset.
-    #[config(value, field(get, copy))]
+    #[config(get(copy))]
     pub max_bytes: Option<u64>,
     /// Resources one in-memory asset holds. **Memory backend only** — the disk
     /// backend never reads it, so naming it beside `backend: disk` (or beside
     /// no backend at all, which resolves to disk) configures nothing.
-    #[config(value, field(get, copy))]
+    #[config(get(copy))]
     pub mem_resource_capacity: Option<usize>,
     /// Bytes read, transformed, and written per pass when a resource is
     /// processed on commit. Unset leaves the processing layer's own default.
-    #[config(value, field(get, copy))]
+    #[config(get(copy))]
     pub processing_chunk_size: Option<usize>,
     /// Recheck cadence for a reader blocked on the processing readiness gate.
     /// Unset leaves the processing layer's own default.
-    #[config(value, patch(humantime), field(get, copy))]
+    #[config(patch(humantime), get(copy))]
     pub processing_gate_poll_interval: Option<Duration>,
     /// Bytes a fresh segment's temp file is reserved at. **Disk backend
     /// only** — the memory backend has no temp file to reserve. Unset leaves
     /// the disk backend's own default.
-    #[config(value, field(get, copy))]
+    #[config(get(copy))]
     pub segment_reservation: Option<u64>,
 }
 

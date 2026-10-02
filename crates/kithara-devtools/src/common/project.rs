@@ -16,61 +16,43 @@ use crate::consts;
 /// fills in only what it uses.
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(nested))]
 pub struct ProjectConfig {
-    #[config(nested)]
     pub architecture: ArchitectureConfig,
-    #[config(nested)]
     pub audit_clippy: AuditClippyConfig,
-    #[config(nested)]
     pub ci_report: CiReportConfig,
-    #[config(nested)]
     pub health: HealthConfig,
-    #[config(nested)]
     pub lint_exclude: LintExcludeConfig,
-    #[config(nested)]
     pub orphans: OrphansConfig,
-    #[config(nested)]
     pub perf: PerfConfig,
-    #[config(nested)]
     pub project: ProjectIdentity,
-    #[config(nested)]
     pub quality: QualityConfig,
-    #[config(nested)]
     pub stress: StressConfig,
     #[serde(default)]
     #[config(value)]
     pub ext: Table,
-    #[config(nested)]
     pub test: TestCommandConfig,
-    #[config(nested)]
     pub tools: crate::common::tools::ToolsConfig,
     #[serde(default, rename = "workspace-scan")]
-    #[config(nested)]
     pub workspace_scan: WorkspaceScan,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(nested))]
 pub struct ArchitectureConfig {
-    #[config(nested)]
     pub filters: ArchitectureFilterConfig,
-    #[config(nested)]
     pub render: ArchitectureRenderBudgets,
-    #[config(nested)]
     pub runtime: ArchitectureRuntimeConfig,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct ArchitectureFilterConfig {
-    #[config(value)]
     pub exclude_crates: Vec<String>,
-    #[config(value)]
     pub exclude_modules: Vec<String>,
 }
 
@@ -78,11 +60,9 @@ pub struct ArchitectureFilterConfig {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct ArchitectureRenderBudgets {
-    #[config(value)]
     pub findings: usize,
-    #[config(value)]
     pub relations: usize,
 }
 
@@ -98,16 +78,14 @@ impl Default for ArchitectureRenderBudgets {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct ArchitectureRuntimeConfig {
-    #[config(value)]
     pub scenarios: Vec<RuntimeScenarioConfig>,
     /// Wall-clock budget for the rust-analyzer session the semantic overlay
     /// runs on. Workspace loading and every call-hierarchy request share the
     /// one deadline, so the overlay reports `timed_out` rather than holding
     /// the visualization open indefinitely.
     #[serde(default = "default_semantic_timeout_secs")]
-    #[config(value)]
     pub semantic_timeout_secs: u64,
 }
 
@@ -240,19 +218,16 @@ pub struct AuditClippyConfig {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct CiReportConfig {
     /// Rows of the CRAP table carried into the report. The whole table runs to
     /// five figures of lines and a step summary is capped at a megabyte.
-    #[config(value)]
     pub crap_rows: usize,
     /// Lines of the duplication report carried into the report. It leads with
     /// the crate-level map and the explainable candidates, which is the part
     /// worth reading without opening the artifact.
-    #[config(value)]
     pub similarity_rows: usize,
     /// Contours listed under the architecture complexity index, worst first.
-    #[config(value)]
     pub top_contours: usize,
 }
 
@@ -269,15 +244,13 @@ impl Default for CiReportConfig {
 /// Workspace-wide Rust file scan exclusions.
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct WorkspaceScan {
-    #[config(value)]
     pub exclude: Vec<String>,
     /// Directories a scope token may name outside `crates/`. A token whose
     /// first component is one of these resolves to a workspace path rather
     /// than to a crate.
     #[serde(default = "default_top_level_dirs")]
-    #[config(value)]
     pub top_level_dirs: Vec<String>,
 }
 
@@ -296,18 +269,16 @@ fn default_top_level_dirs() -> Vec<String> {
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct OrphansConfig {
     /// Packages excluded from the default `cargo modules orphans` sweep
     /// (generated/helper/macro crates and per-target-gated crates that the
     /// default rust-analyzer view flags as false-positive orphans).
-    #[config(value)]
     pub exclude_packages: Vec<String>,
     /// Upper bound on concurrent `cargo modules` runs. Each holds a whole
     /// rust-analyzer database, so the sweep is capped by what the job's
     /// memory holds as well as by its cores.
     #[serde(default = "default_orphans_max_parallelism")]
-    #[config(value)]
     pub max_parallelism: usize,
 }
 
@@ -326,12 +297,10 @@ const fn default_orphans_max_parallelism() -> usize {
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(nested))]
 pub struct QualityConfig {
     /// Repository-specific heavyweight stages used by `quality assess --depth deep`.
-    #[config(nested)]
     pub assessment: QualityAssessmentConfig,
-    #[config(nested)]
     pub render: QualityRenderBudgets,
     /// Trait directory whose every `pub trait` must carry workspace mock coverage.
     #[config(value)]
@@ -342,13 +311,10 @@ pub struct QualityConfig {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct QualityRenderBudgets {
-    #[config(value)]
     pub architecture_hotspots: usize,
-    #[config(value)]
     pub findings: usize,
-    #[config(value)]
     pub summary_rows: usize,
 }
 
@@ -364,70 +330,55 @@ impl Default for QualityRenderBudgets {
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct QualityAssessmentConfig {
-    #[config(value)]
     pub deep_stages: Vec<QualityAssessmentStageConfig>,
-    #[config(value)]
     pub not_applicable_tools: Vec<QualityAssessmentToolPolicyConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct QualityAssessmentStageConfig {
-    #[config(value)]
     pub name: String,
-    #[config(value)]
     pub command: Vec<String>,
-    #[config(value)]
     pub expected_artifacts: Vec<String>,
-    #[config(value)]
     pub platforms: Vec<String>,
-    #[config(value)]
     pub tools: Vec<String>,
-    #[config(value)]
     pub complete_only: bool,
-    #[config(value)]
     pub hard_invariant: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct QualityAssessmentToolPolicyConfig {
-    #[config(value)]
     pub reason: String,
-    #[config(value)]
     pub tool: String,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct LintExcludeConfig {
     /// Inline-module names / `::`-paths whose violations are dropped from every
     /// lint namespace, regardless of file.
-    #[config(value)]
     pub modules: Vec<String>,
     /// Workspace-relative globs whose violations are dropped from every lint
     /// namespace (`arch`, `style`, `idioms`) so baselines measure production
     /// debt, not test code. `#[cfg(test)]` blocks are stripped automatically
     /// (AST) on top of this — no glob can match inline test modules.
-    #[config(value)]
     pub paths: Vec<String>,
     /// ast-grep rule IDs that must scan the FULL tree — tests included —
     /// bypassing [`Self::paths`]. Hard-correctness bans (e.g. `arch.no-direct-time`)
     /// where test code is NOT exempt: routing time through one primitive only
     /// works if tests obey it too. Run in a second ast-grep pass per rule with
     /// no exclude globs; the rule's own `files:` / `ignores:` scope it.
-    #[config(value)]
     pub scan_all_rules: Vec<String>,
     /// Build tooling, dropped by [`Self::runtime_paths`] alone: it is not a
     /// runtime path, so architecture and idiom rules have nothing to say about
     /// it, and their lexical rules misfire on the lint engine's own sources,
     /// which carry the patterns they detect. `style` keeps these files.
-    #[config(value)]
     pub tooling_paths: Vec<String>,
 }
 
@@ -454,42 +405,33 @@ pub struct ProjectIdentity {
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct HealthConfig {
     /// Package whose dependency closure the unsafe-code census is rooted at.
-    #[config(value)]
     pub geiger_package: String,
     /// Directory the per-stage logs are written to.
     #[serde(default = "default_health_logs_dir")]
-    #[config(value)]
     pub logs_dir: String,
     /// Document the run's verdict and per-stage log tails are written to.
     #[serde(default = "default_health_report_path")]
-    #[config(value)]
     pub report_path: String,
     /// Feature-set rules a crate states with `compile_error!`.
-    #[config(value)]
     pub feature_invariants: Vec<FeatureInvariant>,
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
-    #[config(value)]
     pub feature_powerset_exclude: Vec<String>,
     /// Crates whose deadlock findings the stage reports without failing on.
     /// Only this workspace's own crates belong here: a dependency is out of
     /// the verdict already, and this list is for a finding that has an owner
     /// and a place it is being fixed.
-    #[config(value)]
     pub lockbud_exclude: Vec<String>,
     /// Crates whose manifest a generator owns, so "is this dependency used?"
     /// is a question about the generator rather than about the code.
-    #[config(value)]
     pub machete_exclude: Vec<String>,
     /// Packages the semver stage compares against the baseline branch.
-    #[config(value)]
     pub semver_packages: Vec<String>,
     /// Trailing log lines each stage inlines into the report before it sends
     /// the reader to the full log on disk.
     #[serde(default = "default_health_stdout_tail_lines")]
-    #[config(value)]
     pub stdout_tail_lines: usize,
 }
 
@@ -528,25 +470,20 @@ const fn default_health_stdout_tail_lines() -> usize {
 /// repeated beside it.
 #[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct FeatureInvariant {
     /// Feature whose presence marks a crate as carrying this rule.
-    #[config(value)]
     pub when_feature: String,
     /// Features every combination carries. A group of one is expressed here:
     /// `--at-least-one-of` needs two or more names, and where only one backend
     /// survives its target gate there is nothing to choose between.
-    #[config(value)]
     pub always: Vec<String>,
     /// Groups the powerset must pick from rather than leave empty.
-    #[config(value)]
     pub at_least_one_of: Vec<Vec<String>>,
     /// Groups the powerset must pick at most one member of.
-    #[config(value)]
     pub mutually_exclusive: Vec<Vec<String>>,
     /// Features no combination carries: a shared name that selects nothing,
     /// or one whose input no runner can produce.
-    #[config(value)]
     pub never: Vec<String>,
 }
 
@@ -577,16 +514,12 @@ impl FeatureInvariant {
 #[derive(Clone, Debug, Deserialize, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct PerfConfig {
-    #[config(value)]
     pub frame_prefix: Option<String>,
     #[serde(default = "default_perf_nextest_profile")]
-    #[config(value)]
     pub nextest_profile: String,
-    #[config(value)]
     pub primary_lane: String,
-    #[config(value)]
     pub lanes: Vec<PerfLane>,
 }
 
@@ -604,11 +537,9 @@ impl Default for PerfConfig {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct PerfLane {
-    #[config(value)]
     pub backend: String,
-    #[config(value)]
     pub flash: bool,
 }
 
@@ -618,30 +549,22 @@ fn default_perf_nextest_profile() -> String {
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct TestCommandConfig {
-    #[config(value)]
     pub lanes: BTreeMap<String, TestLaneConfig>,
-    #[config(value)]
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
-    #[config(value)]
     pub default_backend: String,
-    #[config(value)]
     pub default_lane: String,
-    #[config(value)]
     pub feature_arg: String,
-    #[config(value)]
     pub loom_lane: String,
     /// The file that owns every runner profile, so a lane's verdict reads the
     /// retry count and the report location where they are declared rather than
     /// keeping a second copy of them here.
-    #[config(value)]
     pub nextest_config: String,
     #[config(nested)]
     pub flash: TestFlashConfig,
     #[config(nested)]
     pub no_block: TestNoBlockConfig,
-    #[config(value)]
     pub features: Vec<String>,
     /// Tests whose retried pass a lane tolerates, each naming the issue that
     /// owns the defect.
@@ -650,11 +573,9 @@ pub struct TestCommandConfig {
     /// attempt's evidence, not to let the lane pass on it, so an entry here is
     /// a visible act in the diff with an owner attached — not a list a lane
     /// grows to stay green.
-    #[config(value)]
     pub known_flakes: Vec<KnownFlake>,
     /// Paths that belong to no single lane: a change to one of them runs every
     /// lane that declares `owns`, because the routing itself moved.
-    #[config(value)]
     pub shared_paths: Vec<String>,
 }
 
@@ -662,23 +583,19 @@ pub struct TestCommandConfig {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct KnownFlake {
     /// The issue that owns the defect, so the entry names who removes it.
-    #[config(value)]
     pub issue: String,
     /// `<suite>::<test>`, exactly as the `JUnit` report names the case.
-    #[config(value)]
     pub test: String,
 }
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct TestFlashConfig {
-    #[config(value)]
     pub features: Vec<String>,
-    #[config(value)]
     pub default: bool,
 }
 
@@ -693,11 +610,9 @@ impl Default for TestFlashConfig {
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct TestNoBlockConfig {
-    #[config(value)]
     pub features: Vec<String>,
-    #[config(value)]
     pub default: bool,
 }
 
@@ -711,35 +626,25 @@ pub struct TestNetBackendConfig {
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct TestLaneConfig {
     /// Environment the lane runs with, so what the lane exercises is named by
     /// the lane rather than by whatever the caller happened to export.
-    #[config(value)]
     pub env: BTreeMap<String, String>,
     /// Backend profile used when the caller does not select one.
-    #[config(value)]
     pub default_backend: Option<String>,
-    #[config(value)]
     pub default_flash: Option<bool>,
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
-    #[config(value)]
     pub default_no_block: Option<bool>,
-    #[config(value)]
     pub passthrough: String,
-    #[config(value)]
     pub program: String,
-    #[config(value)]
     pub default_features: Vec<String>,
     /// Source prefixes this lane is the test for. `just test run --touched`
     /// runs the lane when the branch changed a path under one of them; a lane
     /// that owns nothing is never selected that way.
-    #[config(value)]
     pub owns: Vec<String>,
-    #[config(value)]
     pub prefix_args: Vec<String>,
-    #[config(value)]
     pub suffix_args: Vec<String>,
     /// Toggles whose feature none of this lane's packages declares.
     ///
@@ -749,16 +654,14 @@ pub struct TestLaneConfig {
     /// selected package and fails the whole run when none of them declares it,
     /// so a run-wide request has to leave such a lane alone. Valid entries are
     /// `flash` and `no-block`.
-    #[config(value)]
     pub undeclared_toggles: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct StressConfig {
-    #[config(value)]
     pub modes: BTreeMap<String, StressModeConfig>,
     #[config(nested)]
     pub artifacts: StressArtifactConfig,
@@ -768,7 +671,6 @@ pub struct StressConfig {
     pub evidence: StressEvidenceConfig,
     #[config(nested)]
     pub render: StressRenderBudgets,
-    #[config(value)]
     pub backend: String,
     /// The directory a lane builds into, relative to the checkout it builds.
     ///
@@ -778,63 +680,41 @@ pub struct StressConfig {
     /// disappeared mid-run and every remaining repeat failed to exec in
     /// milliseconds. Naming the directory here is what makes the artifacts the
     /// lane runs belong to the revision the lane was asked about.
-    #[config(value)]
     pub build_dir: String,
-    #[config(value)]
     pub default_filter: String,
-    #[config(value)]
     pub lane: String,
-    #[config(value)]
     pub nextest_config: String,
-    #[config(value)]
     pub nextest_profile: String,
-    #[config(value)]
     pub raw_output: String,
-    #[config(value)]
     pub report_output: String,
-    #[config(value)]
     pub test_threads: String,
     /// The lanes one run is made of, executed in order. More than one is the
     /// normal case: a clock the fixtures' delays collapse under answers a
     /// different question than a clock they survive, and a run covering
     /// only one of them cannot say which of the two a flake belongs to.
-    #[config(value)]
     pub default_modes: Vec<String>,
-    #[config(value)]
     pub workflow_job_timeout_minutes: u64,
-    #[config(value)]
     pub default_count: usize,
-    #[config(value)]
     pub max_count: usize,
-    #[config(value)]
     pub max_test_threads: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct StressArtifactConfig {
-    #[config(value)]
     pub envelope_dir: Option<String>,
-    #[config(value)]
     pub line_log: Option<String>,
     /// Per-attempt exit codes of a lane that repeats a command. A sanitizer
     /// leaves no per-test verdict, so this is the whole of what such a lane
     /// can be counted by.
-    #[config(value)]
     pub attempts: String,
-    #[config(value)]
     pub inventory: String,
-    #[config(value)]
     pub junit: String,
-    #[config(value)]
     pub log: String,
-    #[config(value)]
     pub manifest: String,
-    #[config(value)]
     pub pressure: String,
-    #[config(value)]
     pub report: String,
     /// Where the test runner leaves its report, relative to the subject
     /// checkout.
@@ -842,7 +722,6 @@ pub struct StressArtifactConfig {
     /// nextest's store is rooted at the workspace root and does not follow
     /// `CARGO_TARGET_DIR`, so the report stays put while the build is sent to
     /// the run's own directory.
-    #[config(value)]
     pub subject_junit: String,
 }
 
@@ -858,11 +737,9 @@ pub struct StressEnvironmentConfig {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct StressModeConfig {
-    #[config(value)]
     pub raw_path_env: BTreeMap<String, String>,
-    #[config(value)]
     pub set_env: BTreeMap<String, String>,
     /// Where this command leaves a `JUnit` report, relative to the checkout
     /// root rather than to `build_dir`: the runner's store anchors on the
@@ -872,7 +749,6 @@ pub struct StressModeConfig {
     /// runner that writes a report anyway, that report is what turns "something
     /// aborted" into "this test aborted, this often". The runner overwrites the
     /// file every attempt, so the lane keeps a copy of each.
-    #[config(value)]
     pub attempt_junit: Option<String>,
     /// A command this lane runs instead of the configured test runner.
     ///
@@ -881,9 +757,7 @@ pub struct StressModeConfig {
     /// belongs to the recipe that owns it rather than to a second copy here.
     /// The run launches the command and reads what it leaves behind. Empty
     /// means the lane runs the configured test runner and is measured per test.
-    #[config(value)]
     pub command: Vec<String>,
-    #[config(value)]
     pub features: Vec<String>,
     /// Whether the command performs the run's repeats itself.
     ///
@@ -894,34 +768,23 @@ pub struct StressModeConfig {
     /// run drives directly. Launched once per repeat instead, the same lane
     /// pays a rebuild and a cold start each time and can report only an exit
     /// code — and an exit code names no test.
-    #[config(value)]
     pub owns_repeats: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct StressEvidenceConfig {
-    #[config(value)]
     pub envelope_marker: Option<String>,
-    #[config(value)]
     pub envelope_schema: Option<String>,
-    #[config(value)]
     pub envelope_text_field: Option<String>,
-    #[config(value)]
     pub holder_marker: Option<String>,
-    #[config(value)]
     pub line_marker: Option<String>,
-    #[config(value)]
     pub primitive_marker: Option<String>,
-    #[config(value)]
     pub wait_marker: Option<String>,
-    #[config(value)]
     pub direct_markers: Vec<String>,
-    #[config(value)]
     pub envelope_suffix_markers: Vec<String>,
-    #[config(value)]
     pub source_excludes: Vec<String>,
 }
 
@@ -938,25 +801,16 @@ pub struct StressEvidenceConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct StressRenderBudgets {
-    #[config(value)]
     pub cell_chars: usize,
-    #[config(value)]
     pub divergence_rows: usize,
-    #[config(value)]
     pub failure_rows: usize,
-    #[config(value)]
     pub finding_rows: usize,
-    #[config(value)]
     pub iterations_per_test: usize,
-    #[config(value)]
     pub pass_only_rows_per_test: usize,
-    #[config(value)]
     pub problem_rows: usize,
-    #[config(value)]
     pub signature_examples: usize,
-    #[config(value)]
     pub signature_rows: usize,
 }
 

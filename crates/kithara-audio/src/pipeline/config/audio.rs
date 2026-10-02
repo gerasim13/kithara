@@ -44,7 +44,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
         skip = "transferred to the stream",
         builder(start_fn),
         patch(skip),
-        field(get)
+        get(ref)
     )]
     pub(crate) stream: T::Config,
     /// Consumer wake capability for ring pops and reader-event delivery. Not
@@ -52,10 +52,10 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// with its session's wake policy, and declaring `ImmediateOffRt` here
     /// would make a player-bound resource publish reads inline on the render
     /// callback.
-    #[config(value, builder(default), patch(skip), field(get, copy))]
+    #[config(value, builder(default), patch(skip), get(copy))]
     pub consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
-    #[config(value, builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")), field(get, copy))]
+    #[config(value, builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")), get(copy))]
     pub preload_chunks: NonZeroUsize,
     /// Target sample rate of the audio host (for resampling). Not a document
     /// key: this is the rate the audio host actually opened, and the
@@ -65,18 +65,18 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[config(
         skip = "transferred to the host sample-rate owner",
         patch(skip),
-        field(get, copy)
+        get(copy)
     )]
     pub host_sample_rate: Option<NonZeroU32>,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling. Not a document key: the shipped binary is a real-time
     /// host whose audio callback can never block; only an offline harness or
     /// a player's own session policy sets this explicitly.
-    #[config(value, builder(default), patch(skip), field(get, copy))]
+    #[config(value, builder(default), patch(skip), get(copy))]
     pub block_on_underrun: bool,
     /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
     /// wasm32.
-    #[config(value, builder(default = consts::AUDIO_BUFFER_CHUNKS), field(get, copy))]
+    #[config(value, builder(default = consts::AUDIO_BUFFER_CHUNKS), get(copy))]
     pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.
@@ -84,7 +84,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
         skip = "transferred to decoder dependencies",
         builder(default),
         patch(nested),
-        field(get)
+        get(ref)
     )]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Unified event bus (optional — if not provided, one is created internally).

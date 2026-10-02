@@ -11,13 +11,13 @@ use crate::consts;
 #[derive_where::derive_where(Clone)]
 pub struct EqConfig<S> {
     /// Typed pool facade shared with the owning playback region.
-    #[config(skip = "injected pool region", builder(start_fn), field(get))]
+    #[config(skip = "injected pool region", builder(start_fn), get(ref))]
     pools: PoolRegion<S>,
     /// Runtime gain and layout transition smoothing.
     #[config(
         skip = "consumed by prepared DSP smoothers",
         builder(default = consts::DEFAULT_EQ_SMOOTHING),
-        field(get, copy)
+        get(copy)
     )]
     smoothing: SmootherConfig,
 }

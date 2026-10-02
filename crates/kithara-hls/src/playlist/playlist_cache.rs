@@ -40,10 +40,9 @@ where
 }
 
 #[derive(Default, Clone, Config)]
+#[config(fields(value))]
 struct PlaylistConfig {
-    #[config(value)]
     base_url: Option<Url>,
-    #[config(value)]
     headers: Option<Headers>,
 }
 

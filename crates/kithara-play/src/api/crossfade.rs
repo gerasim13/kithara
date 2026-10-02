@@ -22,15 +22,11 @@ pub enum CrossfadeCurve {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, Config)]
-#[config(builder(existing))]
+#[config(builder(existing), fields(value))]
 pub struct CrossfadeSettings {
-    #[config(value)]
     pub curve: CrossfadeCurve,
-    #[config(value)]
     pub depth: f32,
-    #[config(value)]
     pub duration: f32,
-    #[config(value)]
     pub position: f32,
 }
 

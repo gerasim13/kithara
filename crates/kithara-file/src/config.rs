@@ -36,7 +36,7 @@ where
         skip = "retained source identity has no patch representation",
         builder(start_fn),
         patch(skip),
-        field(get)
+        get(ref)
     )]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
@@ -75,7 +75,7 @@ where
     #[config(
         skip = "retained request headers have no patch representation",
         patch(skip),
-        field(get)
+        get(ref)
     )]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
@@ -94,7 +94,7 @@ where
     /// pass emits at most one progress event per decoded chunk, so the default
     /// bounds the worst-case post-seek skip burst without blocking the decode
     /// core.
-    #[config(value, builder(default = 256), field(get, copy))]
+    #[config(value, builder(default = 256), get(copy))]
     pub reader_event_capacity: usize,
 }
 
