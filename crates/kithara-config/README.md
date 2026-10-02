@@ -37,14 +37,17 @@ it does not become another mutable store or promise realtime safety.
 `#[derive(Config)]` builds the whole configuration type from one `#[config(...)]`
 attribute. Retained fields explicitly select `value`, `nested`, or `skip = "reason"`;
 `construction` classifies unmarked fields as consumed inputs. For homogeneous
-retained fields, `fields(value)` sets their default role while explicit field
-roles still override it.
+retained fields, `fields(value)` or `fields(nested)` sets their default role while
+explicit field roles still override it.
 
 `value(Type, expression)` projects a borrowed or internal field into an owned
 public value. The derive generates a bon builder (`X::builder()`), whose
 per-field options live in the field's `builder(...)` group and whose top-level
 options live in the type's; `builder(skip)` or `builder(skip = value)` leaves a
-field out of the builder. `field(get)` and `field(get, copy)` add accessors,
+field out of the builder. `field(get)` and `field(get, copy)` add accessors; on
+the type they apply to every field, with explicit field declarations overriding
+that default. A generic resource can use `field(get)` to stay borrowed when the
+other fields use the type's `field(get, copy)`.
 `#[config(validate_builder, patch(validate = Self::check, error = Error))]`
 makes `build()` return `Result<Self, Error>` through that same domain check.
 `builder(existing)` keeps a domain constructor's bon builder when it must

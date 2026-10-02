@@ -5,18 +5,15 @@ use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode};
 use kithara_derive::Patch;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
-#[derive(Clone, Debug, Config, fieldwork::Fieldwork)]
-#[config(builder(state_mod(vis = "pub")))]
+#[derive(Clone, Debug, Config)]
+#[config(builder(state_mod(vis = "pub")), fields(value), field(get, copy))]
 #[non_exhaustive]
-#[fieldwork(get)]
 pub struct DecoderResamplerSettings<B = NoResamplerBackend> {
-    #[config(skip = "backend strategy selected by the caller")]
+    #[config(skip = "backend strategy selected by the caller", field(get))]
     pub(crate) backend: B,
-    #[config(value, builder(default))]
-    #[field(get(copy))]
+    #[config(builder(default))]
     pub(crate) options: ResamplerOptions,
-    #[config(value, builder(default))]
-    #[field(get(copy))]
+    #[config(builder(default))]
     pub(crate) quality: ResamplerQuality,
 }
 
@@ -33,16 +30,13 @@ where
 ///
 /// [`AudioDecoderConfigPatch`] is what a configuration document may say about
 /// it, reached through `audio.decoder`.
-#[derive(Clone, Debug, Config, fieldwork::Fieldwork, Patch)]
-#[config(default, builder(state_mod(vis = "pub")))]
+#[derive(Clone, Debug, Config, Patch)]
+#[config(default, builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
-#[fieldwork(opt_in, get)]
 pub struct AudioDecoderConfig<B = NoResamplerBackend> {
-    #[config(value, builder(default))]
-    #[field(get, copy)]
+    #[config(builder(default), field(get, copy))]
     pub(crate) backend: DecoderBackend,
-    #[config(value, builder(default))]
-    #[field(get, copy)]
+    #[config(builder(default), field(get, copy))]
     pub(crate) gapless_mode: GaplessMode,
     /// Not a document key: `DecoderResamplerSettings` carries the resampler
     /// backend itself, an object the construction site hands over and no

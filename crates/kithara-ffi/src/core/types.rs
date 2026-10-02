@@ -117,16 +117,14 @@ pub struct FfiKeyRule {
 /// [`crate::item::AudioPlayerItem::new`].
 #[derive(Clone, Debug, kithara_config::Config)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub struct FfiItemConfig {
-    #[config(value)]
     pub abr_mode: Option<FfiAbrMode>,
     /// Optional caller-facing content id. When absent, the item exposes
     /// its internally allocated queue id as `audioId` for the standalone
     /// Kithara API.
     #[config(skip = "caller identity transferred to AudioPlayerItem")]
     pub audio_id: Option<TrackId>,
-    #[config(value)]
     pub headers: Option<std::collections::HashMap<String, String>>,
     /// Optional caller-facing queue-item uuid. When absent, the item
     /// exposes the legacy UUIDv5-derived handle.
@@ -137,21 +135,17 @@ pub struct FfiItemConfig {
     /// (`/Users/…/song.flac`). Parsed via
     /// [`kithara::play::ResourceSrc::parse`] at insert time, then passed
     /// to [`kithara::play::ResourceConfig::for_src`].
-    #[config(value)]
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a
     /// live HLS feed (radio / broadcast); the player skips end-of-stream
     /// gating and `is_playable` always returns `true` for the item.
     /// Defaults to `false`. Auto-detection from the manifest is a
     /// future improvement.
-    #[config(value)]
     pub is_live_stream: bool,
     /// Peak bitrate ceiling in bits/sec. `0.0` means no cap.
-    #[config(value)]
     pub preferred_peak_bitrate: f64,
     /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
     /// means no cap.
-    #[config(value)]
     pub preferred_peak_bitrate_expensive: f64,
 }
 

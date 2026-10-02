@@ -13,7 +13,8 @@ use crate::config::patch::{Check, validation};
 struct Options {
     built_default: bool,
     construction: bool,
-    value_fields: bool,
+    field_role: Option<field::Role>,
+    accessor: Option<bool>,
     runtime_update: bool,
     owner_access: bool,
     sdk: bool,
@@ -55,10 +56,14 @@ impl Options {
                     "debug" => options.debug = true,
                     "fields" => {
                         let role: syn::Path = syn::parse2(group(&meta)?)?;
-                        if !role.is_ident("value") {
-                            return Err(meta.error("expected fields(value)"));
-                        }
-                        options.value_fields = true;
+                        options.field_role = Some(match role.get_ident() {
+                            Some(role) if role == "value" => field::Role::Value,
+                            Some(role) if role == "nested" => field::Role::Nested,
+                            _ => return Err(meta.error("expected fields(value) or fields(nested)")),
+                        });
+                    }
+                    "field" => {
+                        options.accessor = Some(field::copied(&meta.path, group(&meta)?)?);
                     }
                     "builder" => {
                         let group = group(&meta)?;
@@ -78,7 +83,7 @@ impl Options {
                     }
                     _ => {
                         return Err(meta.error(
-                            "expected construction, default, fields(value), update, validate_builder, sdk, debug, builder(...), \
+                            "expected construction, default, fields(value), fields(nested), field(...), update, validate_builder, sdk, debug, builder(...), \
                              owner_access, patch(...), or values_vis",
                         ));
                     }
@@ -146,7 +151,15 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let members = fields
         .named
         .iter()
-        .map(|field| field::expand(field, &item, !options.construction, options.value_fields))
+        .map(|field| {
+            field::expand(
+                field,
+                &item,
+                !options.construction,
+                options.field_role.as_ref(),
+                options.accessor,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     if options.owner_access && members.iter().all(|member| member.owner_accessor.is_none()) {
         return Err(syn::Error::new_spanned(
@@ -519,6 +532,8 @@ mod tests {
         for options in [
             quote!(default, default),
             quote!(debug, debug),
+            quote!(fields(value), fields(nested)),
+            quote!(field(get), field(get, copy)),
             quote!(builder(on(String, into)), builder(on(u32, into))),
             quote!(values_vis = "pub", values_vis = "pub(crate)"),
         ] {

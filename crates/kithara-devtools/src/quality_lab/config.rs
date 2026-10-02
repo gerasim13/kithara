@@ -12,13 +12,11 @@ use crate::consts;
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(nested))]
 pub(super) struct QualityLabConfig {
-    #[config(nested)]
     pub(super) profiles: Profiles,
     #[config(value)]
     pub(super) output_dir: String,
-    #[config(nested)]
     pub(super) tools: Tools,
     #[config(skip = "checked when loading the schema")]
     pub(super) schema_version: u32,
@@ -26,13 +24,10 @@ pub(super) struct QualityLabConfig {
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(nested))]
 pub(super) struct Profiles {
-    #[config(nested)]
     pub(super) coverage: ProfileConfig,
-    #[config(nested)]
     pub(super) manual: ProfileConfig,
-    #[config(nested)]
     pub(super) scheduled: ProfileConfig,
 }
 
@@ -48,29 +43,22 @@ impl Profiles {
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub(super) struct ProfileConfig {
-    #[config(value)]
     pub(super) tools: Vec<Tool>,
-    #[config(value)]
     pub(super) timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(nested))]
 pub(super) struct Tools {
     #[serde(rename = "cargo-crap")]
-    #[config(nested)]
     cargo_crap: ToolConfig,
     #[serde(rename = "cargo-dupes")]
-    #[config(nested)]
     cargo_dupes: ToolConfig,
-    #[config(nested)]
     cha: ToolConfig,
-    #[config(nested)]
     pmat: ToolConfig,
-    #[config(nested)]
     rustqual: ToolConfig,
 }
 
@@ -88,11 +76,9 @@ impl Tools {
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
-#[config(builder(none))]
+#[config(builder(none), fields(value))]
 pub(super) struct ToolConfig {
-    #[config(value)]
     pub(super) version: String,
-    #[config(value)]
     pub(super) timeout_secs: u64,
 }
 

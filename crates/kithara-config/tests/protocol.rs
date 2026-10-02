@@ -89,12 +89,12 @@ struct NestedOwner {
 }
 
 #[derive(Config)]
-#[config(owner_access, builder(none))]
+#[config(owner_access, builder(none), field(get))]
 struct GenericResource<T>
 where
     T: Send + Sync,
 {
-    #[config(skip = "borrowed by its runtime owner", field(get))]
+    #[config(skip = "borrowed by its runtime owner")]
     resource: T,
 }
 
@@ -115,12 +115,19 @@ where
 }
 
 #[derive(Config)]
-#[config(builder(none), fields(value))]
+#[config(builder(none), fields(value), field(get, copy))]
 struct ValueFields {
-    #[config(field(get, copy))]
     level: u32,
-    #[config(skip = "runtime resource")]
+    #[config(skip = "runtime resource", field(get))]
     resource: String,
+}
+
+#[derive(Config)]
+#[config(builder(none), fields(nested), field(get))]
+struct NestedFields {
+    settings: ValueFields,
+    #[config(value)]
+    label: String,
 }
 
 #[derive(Config)]
@@ -150,6 +157,23 @@ fn type_level_value_role_allows_explicit_resource_exclusion() {
     assert_eq!(config.level(), 3);
     assert_eq!(config.values().level, 3);
     assert_eq!(config.resource, "owned");
+    assert!(std::ptr::eq(config.resource(), &config.resource));
+}
+
+#[kithara::test]
+fn nested_field_defaults_preserve_value_overrides_and_borrowed_getters() {
+    let config = NestedFields {
+        settings: ValueFields {
+            level: 5,
+            resource: String::from("owned"),
+        },
+        label: String::from("nested"),
+    };
+    assert!(std::ptr::eq(config.settings(), &config.settings));
+    assert!(std::ptr::eq(config.label(), &config.label));
+    let values = config.values();
+    assert_eq!(values.settings.level, 5);
+    assert_eq!(values.label, "nested");
 }
 
 #[kithara::test]
@@ -196,11 +220,10 @@ fn generic_owner_access_borrows_the_original_resource() {
 }
 
 #[derive(Config)]
-#[config(debug)]
+#[config(debug, fields(nested))]
 struct Session<'a> {
     #[config(skip = "borrowed construction resource", debug(skip))]
     resource: &'a str,
-    #[config(nested)]
     levels: Levels,
     #[config(skip = "derived from the levels it opens with", builder(skip = levels.level()))]
     opened: u32,

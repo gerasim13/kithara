@@ -8,7 +8,8 @@ use syn::{
 
 use super::implementation::{docs, group};
 
-enum Role {
+#[derive(Clone)]
+pub(super) enum Role {
     Value,
     Projection(Box<(Type, Expr)>),
     Nested,
@@ -184,7 +185,8 @@ pub(super) fn expand<'a>(
     field: &'a Field,
     owner: &DeriveInput,
     snapshot: bool,
-    value_default: bool,
+    role_default: Option<&Role>,
+    accessor_default: Option<bool>,
 ) -> Result<Member<'a>> {
     let Declaration {
         role,
@@ -196,7 +198,7 @@ pub(super) fn expand<'a>(
         wrap,
     } = Declaration::parse(field)?;
     let role = role
-        .or_else(|| value_default.then_some(Role::Value))
+        .or_else(|| role_default.cloned())
         .or_else(|| (!snapshot).then_some(Role::Skip))
         .ok_or_else(|| syn::Error::new_spanned(field, "missing config field role"))?;
     validate_role(field, &role, update, sdk, snapshot)?;
@@ -224,6 +226,7 @@ pub(super) fn expand<'a>(
         builder = Some(quote!(default = #with(#default), with = |value: #wire| #with(value)));
     }
     let construction = construction(name, ty, &surface, builder.as_ref())?;
+    let accessor = accessor.or(accessor_default);
     let owner_accessor = accessor.map(|copy| {
         let output = if copy { quote!(#ty) } else { quote!(&#ty) };
         quote! {
@@ -326,7 +329,7 @@ fn construction(
 }
 
 /// Reads a `field(...)` group: `get` returns a reference, `get, copy` a copy.
-fn copied(group: &Path, arguments: TokenStream) -> Result<bool> {
+pub(super) fn copied(group: &Path, arguments: TokenStream) -> Result<bool> {
     let mut get = false;
     let mut copy = false;
     for option in Punctuated::<Meta, Token![,]>::parse_terminated.parse2(arguments)? {
