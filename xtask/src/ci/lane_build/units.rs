@@ -1,12 +1,14 @@
-//! A checksum lane's cargo checksums what rustc read, so a rustc unit is
-//! rebuilt exactly when its inputs changed, whoever built it last. A
-//! build-script run is still judged by the mtimes of what it named, which a
-//! persistent checkout and another branch's build make meaningless. So the
-//! claim decides every run itself: a run is kept only while everything it
-//! named holds the content it was run against, and is otherwise removed so
-//! cargo runs it again. Every artifact left is then aligned to the claim
-//! instant, so no dependency reads newer than its dependent. The checkout
-//! itself is never written.
+//! A checksum lane's cargo checksums the sources rustc read, so a rustc unit
+//! is rebuilt when its own sources change, whoever built it last; that a
+//! dependency was rebuilt reaches it only as a dependency output newer than
+//! its own. A build-script run is still judged by the mtimes of what it
+//! named, which a persistent checkout and another branch's build make
+//! meaningless. So the claim decides every run itself: a run is kept only
+//! while everything it named holds the content it was run against, and is
+//! otherwise removed so cargo runs it again. Every artifact left is then moved
+//! past the claim instant in the order it had, so no fresh checkout reads
+//! newer than an artifact and a dependency rebuilt after its dependent still
+//! does. The checkout itself is never written.
 
 use std::{
     collections::BTreeMap,
@@ -275,11 +277,14 @@ fn outside_changed(unit: &Unit, checkout: &Checkout, reference: SystemTime) -> R
     Ok(false)
 }
 
-/// Sets every artifact under the lane's profiles to `at`, so no dependency
-/// reads newer than a unit depending on it. Cargo's own records
-/// (`.fingerprint`, `incremental`) and what build scripts wrote (`out`) keep
-/// their mtimes, and a link is never followed.
+/// Moves every artifact under the lane's profiles to `at` or later in the
+/// order of their mtimes, [`consts::ALIGN_STEP`] apart, with artifacts of one mtime
+/// kept at one. Cargo marks a unit stale only when a dependency's output is
+/// newer than its own, so a dependency rebuilt after its dependent stays
+/// newer. Cargo's own records (`.fingerprint`, `incremental`) and what build
+/// scripts wrote (`out`) keep their mtimes, and a link is never followed.
 fn align(dir: &Path, at: SystemTime) -> Result<()> {
+    let mut artifacts = BTreeMap::new();
     for profile in profiles(dir)? {
         for entry in
             fs::read_dir(&profile).with_context(|| format!("listing {}", profile.display()))?
@@ -294,20 +299,32 @@ fn align(dir: &Path, at: SystemTime) -> Result<()> {
                         {
                             let path = entry?.path();
                             if path.file_name() != Some(OsStr::new("out")) {
-                                touch_tree(&path, at)?;
+                                collect(&path, &mut artifacts)?;
                             }
                         }
                     }
                 }
-                _ => touch_tree(&path, at)?,
+                _ => collect(&path, &mut artifacts)?,
             }
         }
+    }
+    let mut moved = at;
+    for paths in artifacts.values() {
+        for path in paths {
+            File::options()
+                .write(true)
+                .open(path)
+                .and_then(|file| file.set_modified(moved))
+                .with_context(|| format!("aligning {}", path.display()))?;
+        }
+        moved += consts::ALIGN_STEP;
     }
     Ok(())
 }
 
-/// Sets `path`, and every file under it, to `at`, never following a link.
-fn touch_tree(path: &Path, at: SystemTime) -> Result<()> {
+/// Adds `path`, and every file under it, to `artifacts` by mtime, never
+/// following a link.
+fn collect(path: &Path, artifacts: &mut BTreeMap<SystemTime, Vec<PathBuf>>) -> Result<()> {
     let metadata =
         fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
     if metadata.is_symlink() {
@@ -315,15 +332,15 @@ fn touch_tree(path: &Path, at: SystemTime) -> Result<()> {
     }
     if metadata.is_dir() {
         for entry in fs::read_dir(path).with_context(|| format!("listing {}", path.display()))? {
-            touch_tree(&entry?.path(), at)?;
+            collect(&entry?.path(), artifacts)?;
         }
         return Ok(());
     }
-    File::options()
-        .write(true)
-        .open(path)
-        .and_then(|file| file.set_modified(at))
-        .with_context(|| format!("aligning {}", path.display()))
+    artifacts
+        .entry(metadata.modified()?)
+        .or_default()
+        .push(path.to_path_buf());
+    Ok(())
 }
 
 fn read_records(path: &Path) -> Result<Records> {
@@ -359,7 +376,7 @@ pub(super) fn record_all(
 
 /// Keeps each run whose record still holds and whose unnamed watches did not
 /// change since, and removes every other run's `output`, so cargo runs that
-/// script again. Then aligns the directory to `at` and returns the kept runs'
+/// script again. Then aligns the directory from `at` and returns the kept runs'
 /// records as alignment left them.
 pub(super) fn keep_fresh(
     checkout: &Checkout,
@@ -399,7 +416,7 @@ pub(super) struct Claimed {
 }
 
 /// Decides every run in the lane directory against the checkout, aligns the
-/// directory to `at`, and records only the runs it kept, so a job that dies
+/// directory from `at`, and records only the runs it kept, so a job that dies
 /// leaves no record of a run it may have changed.
 pub(super) fn claim(
     project_root: &Path,
@@ -432,7 +449,7 @@ impl Claimed {
         self.decide(&record_all(&self.checkout, &self.packages)?, at)
     }
 
-    /// Keeps each run `recorded` still vouches for, aligns the directory to
+    /// Keeps each run `recorded` still vouches for, aligns the directory from
     /// `at`, and records the kept runs alone.
     fn decide(&self, recorded: &Records, at: SystemTime) -> Result<()> {
         let units = discover(&self.checkout.build, &self.packages)?;
@@ -761,6 +778,46 @@ mod tests {
         assert_eq!(mtime(&rlib), mtime(&output));
         assert_eq!(mtime(&fingerprint), SystemTime::UNIX_EPOCH);
         assert_eq!(mtime(&generated), SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn a_dependency_rebuilt_after_its_dependent_stays_newer_than_it() {
+        let checkout = cargo_checkout(&[]);
+        let lanes = tempfile::tempdir().unwrap();
+        let lane = slot(lanes.path());
+        let deps = lane.join("debug/deps");
+        let dependent = deps.join("libuser-0123456789abcdef.rlib");
+        let rebuilt = [
+            deps.join("libprobe-fedcba9876543210.rlib"),
+            deps.join("libprobe-fedcba9876543210.rmeta"),
+        ];
+        run_lane(checkout.path(), lanes.path(), || {
+            fs::create_dir_all(lane.join("debug/.fingerprint")).unwrap();
+            fs::create_dir_all(&deps).unwrap();
+            for file in rebuilt.iter().chain([&dependent]) {
+                fs::write(file, "artifact").unwrap();
+            }
+            set_mtime(&dependent, SystemTime::UNIX_EPOCH);
+            for file in &rebuilt {
+                set_mtime(file, SystemTime::UNIX_EPOCH + DAY);
+            }
+        });
+
+        let _claim = claim_slot(checkout.path(), lanes.path());
+
+        assert!(
+            mtime(&dependent) > mtime(&checkout.path().join("src/lib.rs")),
+            "no fresh checkout reads newer than an artifact"
+        );
+        assert!(
+            mtime(&rebuilt[0]) > mtime(&dependent),
+            "cargo still sees the dependency rebuilt after its dependent"
+        );
+        assert_eq!(
+            mtime(&rebuilt[0]),
+            mtime(&rebuilt[1]),
+            "artifacts written at one instant stay at one instant"
+        );
     }
 
     #[cfg(unix)]

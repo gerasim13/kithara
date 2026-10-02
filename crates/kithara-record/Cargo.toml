@@ -11,6 +11,7 @@ categories = ["multimedia::audio"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
+assets = ["dep:kithara-assets", "dep:tracing"]
 client-apple = ["kithara-encode/client-apple"]
 client-reqwest = ["kithara-encode/client-reqwest"]
 client-wreq = ["kithara-encode/client-wreq"]
@@ -18,6 +19,7 @@ tls-native = ["kithara-encode/tls-native"]
 tls-rustls = ["kithara-encode/tls-rustls"]
 
 [dependencies]
+kithara-assets = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 kithara-config = { workspace = true }
 kithara-encode = { workspace = true, default-features = false }
@@ -28,6 +30,7 @@ kithara-worker = { workspace = true }
 
 ringbuf = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true }

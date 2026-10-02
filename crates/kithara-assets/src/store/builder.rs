@@ -231,12 +231,9 @@ where
         }
 
         let cancel = CancelScope::new(cancel).token();
-        let hub =
-            flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
+        // The disk branch returns above; these indices belong to the memory store.
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
-        pins.attach_to(&hub);
-        lru.attach_to(&hub);
         let active_resources = Arc::new(DashMap::new());
         let deleter: Arc<dyn AssetDeleter> = Arc::new(MemAssetDeleter::new(
             availability.clone(),
@@ -503,6 +500,19 @@ mod tests {
         std::iter::from_fn(|| events.try_recv().ok())
             .map(|envelope| envelope.event)
             .collect()
+    }
+
+    #[kithara::test]
+    fn memory_store_does_not_start_a_persistence_worker() {
+        let hub = FlushHub::new(CancelScope::new(None).token(), FlushPolicy::default());
+        let store = AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Memory)
+            .flush_hub(Arc::clone(&hub))
+            .build();
+
+        assert!(!hub.has_worker());
+        drop(store);
+        assert!(!hub.has_worker());
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

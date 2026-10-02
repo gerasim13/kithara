@@ -146,11 +146,14 @@ fn compare(expected: &Features, actual: &Features) -> Result<()> {
         if package.ends_with("-tests")
             || package.starts_with("kithara-test-")
             || package == "kithara-core-test-fixtures"
+            || package == "kithara-fixture-media"
         {
             continue;
         }
         let product = expected.get(package);
-        if product.is_none() && package != "kithara-encode" {
+        // Listening artifacts use the portable encoder and recording core in
+        // tests; neither package belongs to the player artifact.
+        if product.is_none() && !matches!(package.as_str(), "kithara-encode" | "kithara-record") {
             bail!(
                 "Android composition mismatch: {package} is in tests but absent from the artifact"
             );
@@ -189,6 +192,7 @@ fn relevant<'a>(
                 ("kithara-ffi", "dev" | "test")
                     | ("kithara" | "kithara-host", "offline")
                     | ("kithara-platform", "signal")
+                    | ("kithara-record", "assets")
             ) {
                 return false;
             }
@@ -292,5 +296,29 @@ mod tests {
         let product = Features::new();
         compare(&product, &parse("kithara-encode v1|\n").unwrap()).unwrap();
         assert!(compare(&product, &parse("kithara-encode v1|ffmpeg\n").unwrap()).is_err());
+    }
+
+    #[test]
+    fn listening_artifact_recording_does_not_change_product_composition() {
+        let product = parse("kithara-assets v1|\n").unwrap();
+        let tests =
+            parse("kithara-assets v1|\nkithara-encode v1|\nkithara-record v1|assets\n").unwrap();
+        compare(&product, &tests).unwrap();
+        assert!(
+            compare(
+                &product,
+                &parse("kithara-assets v1|extra\nkithara-record v1|assets\n").unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fixture_media_is_test_only() {
+        compare(
+            &Features::new(),
+            &parse("kithara-fixture-media v1|native\n").unwrap(),
+        )
+        .unwrap();
     }
 }

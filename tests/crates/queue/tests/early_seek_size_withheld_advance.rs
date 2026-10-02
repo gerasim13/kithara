@@ -25,19 +25,16 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{self, Duration},
-    },
+    platform::{CancelToken, time::Duration},
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig,
         ResourceSrc,
     },
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     CreatedHls, SegmentGateHandle, TestServerHelper, event::TestEvent, hls_server::packaged_ladder,
-    kithara, offline::OfflineHostHarness,
+    kithara, offline::OfflineHostHarness, waits::wait_for_loader_done_event,
 };
 use kithara_test_utils::TestTempDir;
 
@@ -262,12 +259,16 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         .run(&queue, move |q| q.append(target))
         .await
         .expect("append gated HLS track");
-    wait_loaded(&mut queue_events, id0).await;
+    wait_for_loader_done_event(&mut queue_events, &queue, id0, Duration::from_secs(20))
+        .await
+        .expect("first track must load through Queue loader");
     let _id1 = harness
         .run(&queue, move |q| q.append(next))
         .await
         .expect("append successor HLS track");
-    wait_loaded(&mut queue_events, _id1).await;
+    wait_for_loader_done_event(&mut queue_events, &queue, _id1, Duration::from_secs(20))
+        .await
+        .expect("successor track must load through Queue loader");
 
     harness
         .run(&queue, move |q| q.select(id0, Transition::None))
@@ -373,29 +374,6 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
     drop(queue);
     drop(hls);
     harness.close().await;
-}
-
-async fn wait_loaded(
-    events: &mut kithara::events::EventReceiver<TestEvent>,
-    id: kithara::events::TrackId,
-) {
-    let loaded = time::timeout(Duration::from_secs(20), async {
-        while let Ok(envelope) = events.recv().await {
-            if matches!(
-                envelope.event,
-                TestEvent::Queue(QueueEvent::TrackStatusChanged {
-                    id: seen,
-                    status: TrackStatus::Loaded,
-                }) if seen == id
-            ) {
-                return true;
-            }
-        }
-        false
-    })
-    .await
-    .unwrap_or(false);
-    assert!(loaded, "track {id:?} must load through Queue loader");
 }
 
 #[kithara::fixture]

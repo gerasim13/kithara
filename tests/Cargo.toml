@@ -29,6 +29,8 @@ default = ["all", "usdt"]
 # and enable only their helper closure below.
 all = [
     "audio",
+    "dep:kithara-encode",
+    "dep:kithara-record",
     "dep:kithara-app",
     "dep:kithara-devtools",
     "kithara/queue",
@@ -198,6 +200,8 @@ kithara = { workspace = true, default-features = false, optional = true, feature
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true }
 kithara-dsp = { workspace = true }
+kithara-encode = { workspace = true, default-features = false, optional = true }
+kithara-record = { workspace = true, features = ["assets"], optional = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "hls", "hls-inputs", "signal"] }
 
 assert_no_alloc = { workspace = true }

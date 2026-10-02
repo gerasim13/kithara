@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn the_snapshot_names_every_live_thread() {
         let lines = snapshot();
         assert!(!lines.is_empty(), "at least this thread is live");
@@ -98,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     fn the_snapshot_is_empty_without_proc() {
         assert!(snapshot().is_empty());
     }

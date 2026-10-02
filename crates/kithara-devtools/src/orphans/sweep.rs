@@ -37,6 +37,7 @@ pub struct OrphansArgs {
 struct Job {
     build_script: Option<PathBuf>,
     src: PathBuf,
+    target_root: PathBuf,
     label: String,
     package: String,
     selector: Vec<String>,
@@ -55,6 +56,7 @@ struct Report {
     label: String,
     package: String,
     declared: Vec<PathBuf>,
+    target_root: PathBuf,
     orphans: Vec<Finding>,
 }
 
@@ -65,6 +67,7 @@ impl Report {
             label: job.label.clone(),
             orphans: Vec::new(),
             declared: Vec::new(),
+            target_root: job.target_root.clone(),
             failure: Some(failure),
         }
     }
@@ -74,6 +77,7 @@ impl Report {
 #[derive(Default)]
 struct Merged {
     declared: HashSet<PathBuf>,
+    target_roots: HashSet<PathBuf>,
     failures: Vec<String>,
     orphans: Vec<Finding>,
 }
@@ -201,6 +205,7 @@ fn merge(reports: Vec<Report>) -> BTreeMap<String, Merged> {
     let mut merged: BTreeMap<String, Merged> = BTreeMap::new();
     for report in reports {
         let entry = merged.entry(report.package).or_default();
+        entry.target_roots.insert(report.target_root);
         if let Some(failure) = report.failure {
             entry
                 .failures
@@ -214,9 +219,9 @@ fn merge(reports: Vec<Report>) -> BTreeMap<String, Merged> {
         }
     }
     for entry in merged.values_mut() {
-        entry
-            .orphans
-            .retain(|finding| !entry.declared.contains(&finding.path));
+        entry.orphans.retain(|finding| {
+            !entry.declared.contains(&finding.path) && !entry.target_roots.contains(&finding.path)
+        });
     }
     merged
 }
@@ -309,6 +314,7 @@ fn examine(job: &Job, root: &Path, program: &str) -> Report {
         package: job.package.clone(),
         label: job.label.clone(),
         declared: filtered,
+        target_root: normalize(&job.target_root),
         failure: None,
     }
 }
@@ -399,6 +405,7 @@ fn scope(metadata: &Metadata, wanted: &[String], excluded: &[String]) -> (Vec<Jo
                 selector,
                 package: name.clone(),
                 src: src.clone(),
+                target_root: target.src_path.clone().into_std_path_buf(),
                 build_script: build_script.clone(),
             });
         }
@@ -556,6 +563,7 @@ mod tests {
         Report {
             orphans,
             declared,
+            target_root: PathBuf::from(format!("/workspace/crates/x/src/{label}.rs")),
             package: "x".to_owned(),
             label: label.to_owned(),
             failure: None,
@@ -589,6 +597,23 @@ mod tests {
                 Vec::new(),
             ),
             report("bin x", Vec::new(), vec![stray]),
+        ]);
+
+        assert!(merged["x"].orphans.is_empty());
+    }
+
+    #[test]
+    fn a_cargo_binary_root_is_not_an_orphan_of_its_package() {
+        let bindgen = PathBuf::from("/workspace/crates/x/src/bindgen.rs");
+        let mut binary = report("bin", Vec::new(), Vec::new());
+        binary.target_root = bindgen;
+        let merged = merge(vec![
+            report(
+                "lib",
+                found("warning: orphaned module `bindgen` at crates/x/src/bindgen.rs"),
+                Vec::new(),
+            ),
+            binary,
         ]);
 
         assert!(merged["x"].orphans.is_empty());

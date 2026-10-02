@@ -11,22 +11,20 @@
 //! middle of one.
 
 use kithara::{
-    events::{EventReceiver, TrackId},
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{self, Duration},
     },
     play::{ResourceConfig, ResourceSrc},
-    queue::{
-        AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
-        Transition,
-    },
+    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
     kithara,
     offline::{OfflinePlayer, OfflinePlayerOptions},
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::assets;
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -39,25 +37,6 @@ const CROSSFADE_SECS: f32 = 1.0;
 const NO_CROSSFADE_SECS: f32 = 0.0;
 /// Two tracks plus slack; the loop leaves as soon as the queue ends.
 const BLOCK_BUDGET: usize = 3_000;
-
-async fn wait_for_loaded(receiver: &mut EventReceiver<TestEvent>, id: TrackId) {
-    time::timeout(Duration::from_secs(30), async {
-        while let Ok(envelope) = receiver.recv().await {
-            if matches!(
-                envelope.event,
-                TestEvent::Queue(QueueEvent::TrackStatusChanged {
-                    id: seen,
-                    status: TrackStatus::Loaded,
-                }) if seen == id
-            ) {
-                return;
-            }
-        }
-        panic!("queue event stream closed before track {id:?} loaded");
-    })
-    .await
-    .expect("queued MP3 must load");
-}
 
 /// What the queue did over the whole playthrough.
 #[derive(Default)]
@@ -129,7 +108,9 @@ async fn play_queue(
             })
             .await
             .expect("append streamed MP3");
-        wait_for_loaded(&mut receiver, id).await;
+        wait_for_loader_done_event(&mut receiver, &queue, id, Duration::from_secs(30))
+            .await
+            .expect("queued MP3 must load");
         tracks.push(id);
     }
     let (first, second) = (tracks[0], tracks[1]);

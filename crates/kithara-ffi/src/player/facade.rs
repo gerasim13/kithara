@@ -366,5 +366,6 @@ mod tests {
 
         assert_eq!(player.repeat_mode(), FfiRepeatMode::All);
         assert!(received_repeat_mode(&receiver, FfiRepeatMode::All));
+        drop(player);
     }
 }

@@ -90,7 +90,7 @@ kithara-assets = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-events = { workspace = true }
-kithara-record = { workspace = true }
+kithara-record = { workspace = true, features = ["assets"] }
 kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
@@ -105,7 +105,6 @@ obfstr = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
