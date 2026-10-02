@@ -3,52 +3,20 @@
 use std::{fmt, num::NonZeroUsize, path::Path};
 
 use dashmap::DashSet;
-use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::ResourceStatus;
 use lru::LruCache;
 
-use super::handle::{CachedReader, CachedWriter, EnforceCapacity};
+use super::{
+    handle::{CachedReader, CachedWriter, EnforceCapacity},
+    policy::CachePolicy,
+};
 use crate::{
-    consts,
     decorator::{Assets, Capabilities},
     error::AssetsResult,
     layout::ResourceKey,
     resource::{AcquisitionResult, AssetResourceState, ReadSide, RequestIdentity, WriteSide},
-    store::AssetStoreConfig,
 };
-
-/// Capacity settings read by a cache from its retained configuration.
-pub trait CachePolicy: Clone + Send + Sync + 'static {
-    /// Base number of entries before pinned entries extend the cache.
-    fn capacity(&self) -> NonZeroUsize;
-    /// Optional byte limit used when a cached reader or writer is released.
-    fn max_bytes(&self) -> Option<u64>;
-}
-
-impl CachePolicy for (NonZeroUsize, Option<u64>) {
-    fn capacity(&self) -> NonZeroUsize {
-        self.0
-    }
-
-    fn max_bytes(&self) -> Option<u64> {
-        self.1
-    }
-}
-
-impl<S> CachePolicy for Arc<AssetStoreConfig<S>>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn capacity(&self) -> NonZeroUsize {
-        self.cache_capacity
-            .unwrap_or(consts::DEFAULT_CACHE_CAPACITY)
-    }
-
-    fn max_bytes(&self) -> Option<u64> {
-        self.max_bytes
-    }
-}
 
 /// Opaque byte discriminator for cache entries. `Debug` is redacted: the
 /// bytes can be key material (e.g. AES `key||iv`).
@@ -836,6 +804,36 @@ mod tests {
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(dir, CancelToken::never()));
         CachedAssets::new(disk, capacity, None, false)
+    }
+
+    #[derive(Clone)]
+    struct MockCachePolicy(Arc<Mutex<NonZeroUsize>>);
+
+    impl CachePolicy for MockCachePolicy {
+        fn capacity(&self) -> NonZeroUsize {
+            *self.0.lock()
+        }
+
+        fn max_bytes(&self) -> Option<u64> {
+            None
+        }
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn cache_reads_capacity_from_its_policy_on_each_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let capacity = Arc::new(Mutex::new(NonZeroUsize::new(3).unwrap()));
+        let disk = Arc::new(DiskAssetStore::new(dir.path(), CancelToken::never()));
+        let cached =
+            CachedAssets::with_policy(disk, MockCachePolicy(Arc::clone(&capacity)), None, false);
+        for i in 0..3 {
+            let key = ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s"));
+            commit_writer(cached.acquire_resource(&key, None).unwrap(), b"data");
+        }
+        *capacity.lock() = NonZeroUsize::new(1).unwrap();
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "seg_3.m4s");
+        commit_writer(cached.acquire_resource(&key, None).unwrap(), b"data");
+        assert_eq!(cached.cache.lock().len(), 1);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

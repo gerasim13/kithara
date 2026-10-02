@@ -1,5 +1,7 @@
 mod handle;
 mod layer;
+mod policy;
 
 pub use handle::{CachedReader, CachedWriter};
-pub use layer::{CachePolicy, CachedAssets};
+pub use layer::CachedAssets;
+pub use policy::CachePolicy;
