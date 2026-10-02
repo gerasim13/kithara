@@ -42,7 +42,7 @@ fn default_dispatcher_config() -> DispatcherConfig {
         .build()
 }
 
-#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
+#[bon::bon]
 impl<S> HostConfig<S> {
     /// Maximum frames processed by one backend/task quantum.
     #[must_use]

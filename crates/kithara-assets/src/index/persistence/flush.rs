@@ -9,6 +9,7 @@ use std::{
 };
 
 use dashmap::DashSet;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{
     CancelToken,
@@ -47,18 +48,20 @@ pub(crate) trait Flushable: Send + Sync {
 }
 
 /// Tunables for [`FlushHub`].
-#[derive(Clone, Debug, Patch)]
+#[derive(Clone, Debug, Config, Patch)]
+#[config(builder(none))]
 pub struct FlushPolicy {
     /// Coalesce window: when the worker sees a signal, it sleeps this
     /// long before draining dirty sources, so a burst of mutations
     /// produces a single flush. Ignored when `force_every_n_ops` is
     /// reached.
-    #[patch(humantime)]
+    #[config(value, patch(humantime))]
     pub debounce: Duration,
     /// Cap on coalescing: if `signal()` is called this many times
     /// without a flush, the worker bypasses `debounce` and flushes
     /// immediately. Protects against sustained bursts that would
     /// otherwise grow the in-memory backlog without bound.
+    #[config(value)]
     pub force_every_n_ops: NonZeroUsize,
 }
 

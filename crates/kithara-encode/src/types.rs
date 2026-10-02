@@ -1,4 +1,4 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
 #[cfg(any(feature = "ffmpeg", feature = "fdk-aac"))]
@@ -90,7 +90,6 @@ impl BytesEncodeRequest<'_> {
 
 /// Packaged encode request producing compressed access units for muxing.
 #[derive(Builder)]
-#[builder(crate = ::kithara_config::bon)]
 #[non_exhaustive]
 pub struct PackagedEncodeRequest<'a> {
     pub pcm: &'a dyn PcmSource,

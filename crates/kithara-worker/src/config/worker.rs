@@ -16,20 +16,17 @@ pub struct WorkerConfig {
     #[config(value)]
     #[field(with)]
     pub(crate) max_compute_tasks: NonZeroUsize,
-    #[config(skip = "composed into the worker cancel scope")]
+    #[config(skip = "composed into the worker cancel scope", patch(skip))]
     #[field(with, option_set_some)]
-    #[patch(skip)]
     pub(crate) cancel: Option<CancelToken>,
-    #[config(skip = "transferred to the worker")]
+    #[config(skip = "transferred to the worker", patch(skip))]
     #[field(with, option_set_some)]
-    #[patch(skip)]
     pub(crate) runtime: Option<Handle>,
     /// The compute pool this worker admits jobs to. A document names it as a
     /// [`ComputePool`], which is the same choice minus [`PoolConfig::Shared`]:
     /// that variant carries a live `rayon::ThreadPool` only code can hand
     /// over, so it is not a thing a document can spell.
-    #[config(skip = "transferred to the compute runtime", builder(skip = PoolConfig::Disabled))]
-    #[patch(wire = ComputePool, from = PoolConfig::from)]
+    #[config(skip = "transferred to the compute runtime", builder(skip = PoolConfig::Disabled), patch(wire = ComputePool, from = PoolConfig::from))]
     pub(crate) pool: PoolConfig,
 }
 

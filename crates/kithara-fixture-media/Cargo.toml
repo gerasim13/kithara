@@ -15,7 +15,7 @@ ignored = ["kithara-workspace-hack"]
 # The store, the muxer and the packaged-variant shapes: everything that reads
 # or writes the host filesystem. Without it only the portable signals compile.
 native = [
-    "dep:kithara-config",
+    "dep:bon",
     "dep:delegate",
     "dep:fs4",
     "dep:hex",
@@ -35,11 +35,12 @@ kithara-encode = { workspace = true, features = ["client-reqwest", "tls-rustls"]
 kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-config = { workspace = true, optional = true }
 kithara-encode = { workspace = true, default-features = false, optional = true }
 kithara-platform = { workspace = true, optional = true }
 kithara-stream = { workspace = true, default-features = false, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+bon = { workspace = true, optional = true }
 
 delegate = { workspace = true, optional = true }
 fs4 = { workspace = true, optional = true }

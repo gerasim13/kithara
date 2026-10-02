@@ -65,20 +65,20 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Master playlist URL.
-    #[config(skip = "transferred to the HLS stream", builder(start_fn))]
-    #[patch(skip)]
+    #[config(skip = "transferred to the HLS stream", builder(start_fn), patch(skip))]
     pub url: Url,
     /// Initial ABR mode.
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub initial_abr_mode: AbrMode,
     /// Shared asset store.
-    #[config(skip = "transferred to the asset scope")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the asset scope", patch(skip))]
     pub store: AssetStore<S>,
     /// Encryption key handling configuration.
-    #[config(skip = "transferred to the key resolver", builder(default))]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to the key resolver",
+        builder(default),
+        patch(skip)
+    )]
     pub keys: KeyOptions,
     /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
     /// compression) for the HTTP client built when no [`downloader`] is
@@ -90,41 +90,34 @@ where
     ///
     /// A document cannot name this: an embedder that reaches a document also
     /// injects a downloader, so the value would configure nothing. It carries
-    /// `#[patch(skip)]` for that reason.
+    /// `patch(skip)` for that reason.
     ///
     /// [`downloader`]: HlsConfig::downloader
-    #[config(skip = "transferred to the HTTP client", builder(default))]
-    #[patch(skip)]
+    #[config(skip = "transferred to the HTTP client", builder(default), patch(skip))]
     #[debug(skip)]
     pub net_options: NetOptions,
     /// Base URL for resolving relative playlist/segment URLs.
-    #[config(skip = "transferred to the playlist cache")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the playlist cache", patch(skip))]
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).
-    #[config(skip = "transferred to the stream event bus", builder(name = events))]
-    #[patch(skip)]
+    #[config(skip = "transferred to the stream event bus", builder(name = events), patch(skip))]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown. The master `CancelToken` whose
     /// shared atomic mirror reaches [`HlsCoord`](crate::stream::HlsCoord)'s
     /// lock-free `is_cancelled()` read on the produce-core; the async-only
     /// downloader / net / asset paths derive children from its inner
     /// [`CancelToken`](kithara_platform::CancelToken).
-    #[config(skip = "composed into the HLS cancel scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the HLS cancel scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
-    #[config(skip = "transferred to the asset scope")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the asset scope", patch(skip))]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
-    #[config(skip = "transferred to the HLS stream")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the HLS stream", patch(skip))]
     #[debug(skip)]
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
-    #[config(skip = "transferred to network requests")]
-    #[patch(skip)]
+    #[config(skip = "transferred to network requests", patch(skip))]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     /// `None` falls back to a ~2 `MiB` cap at the consumer site —
@@ -133,8 +126,7 @@ where
     #[config(value)]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared across all components.
-    #[config(skip = "transferred to HLS runtime owners")]
-    #[patch(skip)]
+    #[config(skip = "transferred to HLS runtime owners", patch(skip))]
     pub pools: PoolRegion<S>,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs

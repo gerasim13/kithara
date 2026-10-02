@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_config::bon::bon;
+use bon::bon;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_warp::RenderReader;
@@ -61,7 +61,7 @@ pub struct PlayerTrack {
     pub(super) seek_epoch: u64,
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl PlayerTrack {
     /// Create a new track in the `Preloading` state.
     ///

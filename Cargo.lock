@@ -4421,6 +4421,7 @@ name = "kithara-analysis"
 version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
+ "bon",
  "bytes",
  "delegate",
  "derive-where",
@@ -4490,6 +4491,7 @@ name = "kithara-app"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
+ "bon",
  "bytes",
  "clap",
  "crabtime",
@@ -4573,6 +4575,7 @@ dependencies = [
  "aes",
  "arc-swap",
  "bitflags 2.13.0",
+ "bon",
  "bytes",
  "cbc",
  "dashmap",
@@ -4679,6 +4682,7 @@ dependencies = [
 name = "kithara-beat"
 version = "0.0.1-alpha5"
 dependencies = [
+ "bon",
  "criterion",
  "hex",
  "kithara-bufpool",
@@ -4929,6 +4933,7 @@ name = "kithara-download"
 version = "0.0.1-alpha5"
 dependencies = [
  "axum",
+ "bon",
  "bytes",
  "derive_more",
  "futures",
@@ -5005,6 +5010,7 @@ name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
  "biquad",
+ "bon",
  "delegate",
  "derive-where",
  "fieldwork",
@@ -5041,6 +5047,7 @@ dependencies = [
 name = "kithara-encode"
 version = "0.0.1-alpha5"
 dependencies = [
+ "bon",
  "derive_more",
  "fdk-aac-sys",
  "ffmpeg-next",
@@ -5255,10 +5262,10 @@ dependencies = [
 name = "kithara-fixture-media"
 version = "0.0.1-alpha5"
 dependencies = [
+ "bon",
  "delegate",
  "fs4",
  "hex",
- "kithara-config",
  "kithara-encode",
  "kithara-platform",
  "kithara-stream",
@@ -5310,6 +5317,7 @@ dependencies = [
  "arc-swap",
  "axum",
  "bitflags 2.13.0",
+ "bon",
  "bytes",
  "cbc",
  "dashmap",
@@ -5372,6 +5380,7 @@ dependencies = [
  "arc-swap",
  "audioadapter-buffers",
  "bevy_platform",
+ "bon",
  "delegate",
  "derive-where",
  "fieldwork",
@@ -5425,6 +5434,7 @@ dependencies = [
  "assert_no_alloc",
  "axum",
  "base64",
+ "bon",
  "bytes",
  "cbc",
  "cochlea-features",
@@ -5440,7 +5450,6 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-app",
- "kithara-config",
  "kithara-devtools",
  "kithara-dsp",
  "kithara-events",
@@ -5543,7 +5552,7 @@ dependencies = [
 name = "kithara-output"
 version = "0.0.1-alpha5"
 dependencies = [
- "kithara-config",
+ "bon",
  "kithara-platform",
  "kithara-signal",
  "kithara-test-utils",
@@ -5592,6 +5601,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "axum",
+ "bon",
  "bytes",
  "delegate",
  "derive-where",
@@ -5826,12 +5836,12 @@ name = "kithara-stream"
 version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
+ "bon",
  "delegate",
  "derive_more",
  "fieldwork",
  "hotpath",
  "kithara-abr",
- "kithara-config",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -5863,6 +5873,7 @@ name = "kithara-stretch"
 version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
+ "bon",
  "bungee-sys",
  "delegate",
  "derive_more",
@@ -5890,10 +5901,10 @@ dependencies = [
 name = "kithara-sync"
 version = "0.0.1-alpha5"
 dependencies = [
+ "bon",
  "delegate",
  "derive_more",
  "fieldwork",
- "kithara-config",
  "kithara-platform",
  "kithara-signal",
  "kithara-test-utils",
@@ -6110,9 +6121,9 @@ dependencies = [
 name = "kithara-ui-input"
 version = "0.0.1-alpha5"
 dependencies = [
+ "bon",
  "fieldwork",
  "iced",
- "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-utils",
@@ -6159,6 +6170,7 @@ name = "kithara-warp"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
+ "bon",
  "delegate",
  "derive_more",
  "fieldwork",

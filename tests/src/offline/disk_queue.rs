@@ -42,7 +42,7 @@ pub struct DiskQueue {
     pub ticker: QueueTicker,
 }
 
-#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
+#[bon::bon]
 impl DiskQueue {
     /// Opens the queue with its cache under `cache`.
     ///

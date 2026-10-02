@@ -57,8 +57,7 @@ pub enum SyncExecutionReject {
 }
 
 /// The fact that one preparation's activation became audible.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, kithara_config::bon::Builder, fieldwork::Fieldwork)]
-#[builder(crate = ::kithara_config::bon)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncApplied {

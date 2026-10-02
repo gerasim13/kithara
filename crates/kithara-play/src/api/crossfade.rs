@@ -45,7 +45,7 @@ impl Default for CrossfadeSettings {
     }
 }
 
-#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
+#[bon::bon]
 impl CrossfadeSettings {
     #[builder(
         builder_type(vis = "pub"),

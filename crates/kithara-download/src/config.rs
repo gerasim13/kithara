@@ -15,39 +15,38 @@ pub struct DownloaderConfig {
     /// Downloaders to share keep-alive sockets across them.
     #[config(
         skip = "HTTP transport resource retained by the downloader",
-        builder(start_fn)
+        builder(start_fn),
+        patch(skip)
     )]
-    #[patch(skip)]
     pub(crate) client: HttpClient,
     /// Settings for the shared ABR controller owned by the Downloader.
-    #[config(skip = "transferred to the ABR controller", builder(default))]
-    #[patch(nested)]
+    #[config(
+        skip = "transferred to the ABR controller",
+        builder(default),
+        patch(nested)
+    )]
     pub(crate) abr_settings: AbrSettings,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
-    #[config(value, builder(default = Duration::ZERO))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::ZERO), patch(humantime))]
     pub(crate) demand_throttle: Duration,
     /// Soft timeout. When a fetch has not produced a response within
     /// this duration, the Downloader publishes
     /// [`DownloaderEvent::LoadSlow`](crate::DownloaderEvent::LoadSlow)
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
-    #[config(value, builder(default = Duration::from_secs(2)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_secs(2)), patch(humantime))]
     pub(crate) soft_timeout: Duration,
     /// Optional parent cancel. `Some` → the download loop's scope is a child
     /// of it (composed); `None` → the Downloader owns a standalone scope. The
     /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
-    #[config(skip = "composed into the downloader cancel scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the downloader cancel scope", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Tokio runtime handle for the download loop.
     ///
     /// - `Some(handle)` — the loop runs as a task on this runtime.
     /// - `None` — spawns as a task on the current runtime via `task::spawn`.
-    #[config(skip = "runtime resource retained by the downloader")]
-    #[patch(skip)]
+    #[config(skip = "runtime resource retained by the downloader", patch(skip))]
     pub(crate) runtime: Option<Handle>,
     /// Maximum number of concurrent in-flight fetch commands.
     #[config(value, builder(default = 5))]

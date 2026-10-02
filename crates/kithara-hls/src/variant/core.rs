@@ -3,9 +3,10 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
+use bon::bon;
 use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
 use kithara_bufpool::HasPool;
-use kithara_config::{Config, bon::bon};
+use kithara_config::Config;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_net::Headers;
@@ -378,7 +379,7 @@ pub(super) fn segment_placeholder_size(duration: Duration, bandwidth_bps: Option
         .clamp(MIN_BYTES, MAX_PRECOMMIT_BYTES)
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl<S> HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,

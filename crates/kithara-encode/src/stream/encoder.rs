@@ -1,4 +1,4 @@
-use kithara_config::bon::bon;
+use bon::bon;
 
 #[cfg(feature = "fdk-aac")]
 use crate::fdk::aac_lc::FdkStream;
@@ -51,7 +51,7 @@ pub struct StreamEncoder {
     channels: u16,
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl StreamEncoder {
     /// Samples per channel in one AAC-LC access unit.
     pub const FRAME_SAMPLES: usize = 1024;

@@ -42,9 +42,9 @@ consume inputs and retain only their prepared effective value. A fallible
 as a programming error.
 `builder(none)` keeps serde-owned document schemas as retained configurations
 without adding an unused programmatic constructor.
-Ordinary builders may use `kithara_config::bon` with an absolute
-`#[builder(crate = ::kithara_config::bon)]` expansion path, without a direct
-bon dependency in the consuming crate.
+Standalone builders use `bon` directly. `Config` generates the builder for
+configuration structs; a separate domain constructor annotated with `#[bon]`
+remains independent of that derive.
 `#[config(debug)]` derives `Debug` without the fields marked `debug(skip)`. For
 a projected field stored in a wrapper, `wrap(default = value, with = Wrapper::new)`
 derives the builder default and setter conversion. `Patch` reads the type's and

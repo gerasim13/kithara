@@ -48,8 +48,7 @@ pub struct AudioDecoderConfig<B = NoResamplerBackend> {
     /// backend itself, an object the construction site hands over and no
     /// document can name. `None` means the decoder resamples through
     /// `B::default()` with this crate's own options and quality.
-    #[config(skip = "caller-selected resampler backend strategy")]
-    #[patch(skip)]
+    #[config(skip = "caller-selected resampler backend strategy", patch(skip))]
     pub(crate) resampler: Option<DecoderResamplerSettings<B>>,
 }
 

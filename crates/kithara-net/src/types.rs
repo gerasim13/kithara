@@ -153,11 +153,9 @@ impl fmt::Display for RangeSpec {
 #[config(default)]
 #[non_exhaustive]
 pub struct RetryPolicy {
-    #[config(value, builder(default = Duration::from_millis(100)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(100)), patch(humantime))]
     pub base_delay: Duration,
-    #[config(value, builder(default = Duration::from_secs(5)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_secs(5)), patch(humantime))]
     pub max_delay: Duration,
     #[config(value, builder(default = 3))]
     pub max_retries: u32,
@@ -192,8 +190,7 @@ impl RetryPolicy {
 pub struct NetOptions {
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
-    #[config(value, builder(default = Compression::all()))]
-    #[patch(attribute(serde(default)))]
+    #[config(value, builder(default = Compression::all()), patch(attribute(serde(default))))]
     pub compression: Compression,
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
@@ -211,8 +208,7 @@ pub struct NetOptions {
     /// spikes) without aborting valid slow streams — the player's
     /// contract is "wait for the segment, regardless of connection
     /// speed", and a 10s cap raced real fixtures.
-    #[config(value, builder(default = Duration::from_secs(30)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_secs(30)), patch(humantime))]
     pub inactivity_timeout: Duration,
     /// How long a pooled connection may sit idle before it is dropped.
     /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
@@ -221,19 +217,16 @@ pub struct NetOptions {
     /// segment burst reuses connections while a paused player does not hold
     /// sockets open. Ignored by the Apple backend, whose `URLSession`
     /// configuration exposes no idle-pool timeout.
-    #[config(value, builder(default = Duration::from_secs(5)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_secs(5)), patch(humantime))]
     pub pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
     #[config(value, builder(default))]
     pub impersonate: ImpersonatePreset,
-    #[config(skip = "injected request observer")]
-    #[patch(skip)]
+    #[config(skip = "injected request observer", patch(skip))]
     pub observer: Option<Observer>,
-    #[config(nested, builder(default))]
-    #[patch(nested)]
+    #[config(nested, builder(default), patch(nested))]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.

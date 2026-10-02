@@ -74,62 +74,55 @@ impl AppDrm {
 #[non_exhaustive]
 pub struct AppConfig {
     /// App-owned DRM policy and its opaque key-request registry.
-    #[config(skip = "owned by the app DRM registry")]
-    #[patch(skip)]
+    #[config(skip = "owned by the app DRM registry", patch(skip))]
     pub drm: AppDrm,
     /// App-wide shared asset store.
-    #[config(skip = "owned by the app asset store")]
-    #[patch(skip)]
+    #[config(skip = "owned by the app asset store", patch(skip))]
     pub store: AppStore,
     /// Source beat-analysis tunables.
-    #[config(skip = "transferred to the analysis service", builder(default))]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to the analysis service",
+        builder(default),
+        patch(skip)
+    )]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
     /// Fixed source duration covered by one progressive analysis chunk.
     #[config(value, builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN)))]
     pub analysis_chunk_seconds: NonZeroU32,
     /// One playback worker shared by every deck in this app session.
-    #[config(skip = "owned by the app playback worker")]
-    #[patch(skip)]
+    #[config(skip = "owned by the app playback worker", patch(skip))]
     pub worker: AppWorker,
     /// Optional base runtime shared by playback, analysis, and app-owned
     /// background dispatchers. Production supplies one; focused consumers may
     /// let each domain worker own its standalone base.
-    #[config(skip = "transferred to app domain workers")]
-    #[patch(skip)]
+    #[config(skip = "transferred to app domain workers", patch(skip))]
     pub base_worker: Option<Worker>,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the playback worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
     /// own [`CancelToken::child`] from this consumer-top master.
-    #[config(skip = "root of the app cancellation tree")]
-    #[patch(skip)]
+    #[config(skip = "root of the app cancellation tree", patch(skip))]
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
-    #[config(skip = "owned by the app downloader")]
-    #[patch(skip)]
+    #[config(skip = "owned by the app downloader", patch(skip))]
     pub downloader: Downloader,
     /// Color palette for the UI. A document names it under `app.palette`,
     /// one color at a time.
-    #[config(value, builder(default))]
-    #[patch(nested)]
+    #[config(value, builder(default), patch(nested))]
     pub palette: Palette,
     /// What the document's `audio:` section says about every track's audio
     /// pipeline, carried as a patch because no `AudioConfig` exists until a
     /// track does. Reached through `audio`, not through [`AppConfigPatch`].
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub audio: AudioConfigPatch,
     /// What the document's `hls:` section says about every HLS track. Carried
     /// as a patch for the same reason [`AppConfig::audio`] is.
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub hls: HlsConfigPatch,
     /// What the document's `file:` section says about every file track.
     /// Carried as a patch for the same reason [`AppConfig::audio`] is.
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub file: FileConfigPatch,
     /// UI-level knobs threaded into every compiled document, including the
     /// draw-pool limits [`UiConfig::draw_buffers`] is built from. A document
@@ -137,32 +130,31 @@ pub struct AppConfig {
     /// [`AppConfig::audio`] is reached through `audio` — not through
     /// [`AppConfigPatch`].
     #[cfg(feature = "gui")]
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub ui: UiConfig,
     /// Log filter directives.
     #[config(value, builder(default))]
     pub log_directives: Vec<String>,
     /// Audio file URLs or paths to play.
-    #[config(skip = "transferred to queue construction", builder(default))]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to queue construction",
+        builder(default),
+        patch(skip)
+    )]
     pub tracks: Vec<String>,
     /// Accept invalid TLS certificates. Test servers only.
-    #[config(value, builder(default = false))]
-    #[patch(skip)]
+    #[config(value, builder(default = false), patch(skip))]
     pub should_accept_invalid_certs: bool,
     /// What the document's `player:` section says about every deck's player,
     /// carried as a patch because no `PlayerConfig` exists until a deck does.
     /// Reached through `player`, not through [`AppConfigPatch`].
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub player: PlayerConfigPatch,
     /// Complete live-broadcast construction config for this app session. The
     /// document's `broadcast:` section is applied to it in `main`, where the
     /// worker and pools it is built from exist; nothing here carries a second
     /// spelling of those knobs.
-    #[config(skip = "transferred to the broadcast owner")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the broadcast owner", patch(skip))]
     pub broadcast: Option<AppBroadcastConfig>,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
@@ -194,8 +186,7 @@ pub struct AppConfig {
     pub ui_package: Option<PathBuf>,
     /// What the document's `queue:` section says about every deck's queue,
     /// carried as a patch for the same reason [`AppConfig::player`] is.
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub queue: QueueConfigPatch,
     /// Live heap a debug build tolerates before it prints the allocating
     /// stack and aborts. `0` lifts the ceiling. A release build installs no
@@ -206,8 +197,7 @@ pub struct AppConfig {
     /// dispatchers the app builds, carried as a patch for the same reason
     /// [`AppConfig::player`] is: each construction site keeps its own thread
     /// name and lays this over the rest.
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub dispatcher: DispatcherConfigPatch,
 }
 

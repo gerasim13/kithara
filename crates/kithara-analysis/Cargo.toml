@@ -49,6 +49,7 @@ kithara-waveform = { workspace = true }
 kithara-worker = { workspace = true }
 
 bitflags = { workspace = true }
+bon = { workspace = true }
 
 bytes = { workspace = true }
 delegate = { workspace = true }

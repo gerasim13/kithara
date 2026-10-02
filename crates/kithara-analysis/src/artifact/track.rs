@@ -1,7 +1,7 @@
 use std::{num::NonZeroU32, ops::Range, sync::OnceLock};
 
+use bon::Builder;
 use kithara_beat::BeatGridModel;
-use kithara_config::bon::Builder;
 use kithara_platform::sync::Arc;
 use kithara_signal::FrameCoverage;
 use rangemap::RangeSet;
@@ -69,7 +69,7 @@ impl AnalysisFingerprint {
 /// only this can render the waveform, place markers on the source timeline, and
 /// tell how much of the track it is based on.
 #[derive(Builder, Clone, Debug)]
-#[builder(crate = ::kithara_config::bon, state_mod(vis = "pub"))]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct TrackAnalysis {
     #[builder(default)]

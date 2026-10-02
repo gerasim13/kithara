@@ -3,7 +3,8 @@ use core::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use kithara_config::{Config, bon::bon};
+use bon::bon;
+use kithara_config::Config;
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
@@ -36,7 +37,7 @@ pub struct LimiterConfig {
     release_ms: f32,
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl LimiterConfig {
     #[builder(
         builder_type(vis = "pub"),

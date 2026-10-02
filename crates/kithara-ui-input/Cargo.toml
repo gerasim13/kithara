@@ -20,10 +20,11 @@ iced = ["dep:iced", "dep:kithara-derive", "iced/advanced", "kithara-ui-draw/iced
 masonry = ["dep:masonry", "dep:num-traits"]
 
 [dependencies]
-kithara-config = { workspace = true }
 kithara-derive = { workspace = true, optional = true, features = ["mirror"] }
 kithara-platform = { workspace = true }
 kithara-ui-draw = { workspace = true }
+
+bon = { workspace = true }
 
 fieldwork = { workspace = true }
 iced = { workspace = true, optional = true }

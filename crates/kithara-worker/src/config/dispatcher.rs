@@ -16,24 +16,19 @@ pub struct DispatcherConfig {
     #[config(skip = "transferred to the dispatcher loop", builder(
         default = Box::new(NoopObserver),
         with = |observer: impl Observer| Box::new(observer)
-    ))]
-    #[patch(skip)]
+    ), patch(skip))]
     pub(crate) observer: Box<dyn Observer>,
     /// Poll interval for deferred wakes while a task's sink is full.
-    #[config(value, builder(default = Duration::from_millis(10)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     pub(crate) backpressure_poll_interval: Duration,
     /// Park duration when no task expects progress.
-    #[config(value, builder(default = Duration::from_millis(100)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(100)), patch(humantime))]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow tick.
-    #[config(value, builder(default = Duration::from_millis(10)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while tasks are waiting.
-    #[config(value, builder(default = Duration::from_millis(10)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
     #[config(value, builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN)))]
@@ -46,14 +41,16 @@ pub struct DispatcherConfig {
     pub(crate) capacity: NonZeroUsize,
     /// Parent cancellation group for this dispatcher's lifetime. Not a
     /// document key: the caller owns the token tree.
-    #[config(skip = "composed into the dispatcher cancel group")]
-    #[patch(skip)]
+    #[config(skip = "composed into the dispatcher cancel group", patch(skip))]
     pub(crate) cancel: Option<CancelGroup>,
     /// Thread name for this dispatcher. Not a document key: each dispatcher
     /// names itself where it is built, and one document key would rename
     /// every one of them at once.
-    #[config(skip = "transferred to the dispatcher thread", builder(into))]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to the dispatcher thread",
+        builder(into),
+        patch(skip)
+    )]
     pub(crate) name: String,
 }
 

@@ -1,7 +1,8 @@
 use std::{num::NonZeroUsize, ops::RangeInclusive};
 
+use bon::bon;
 use kithara_bufpool::PoolRegion;
-use kithara_config::{Config, bon::bon};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
@@ -115,7 +116,7 @@ pub struct ElasticConfig<S> {
     backend: StretchKind,
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl<S> ElasticConfig<S> {
     /// Builds a validated preparation config with its shared pool region.
     ///

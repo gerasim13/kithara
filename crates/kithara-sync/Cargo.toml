@@ -15,10 +15,11 @@ usdt = ["kithara-warp/usdt"]
 perf = ["kithara-warp/perf"]
 
 [dependencies]
-kithara-config = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-warp = { workspace = true, default-features = false }
+
+bon = { workspace = true }
 
 delegate = { workspace = true }
 derive_more = { workspace = true }

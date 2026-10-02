@@ -18,13 +18,11 @@ use crate::consts;
 /// refusal is declared here rather than read off the fields, so the merge
 /// keeps one signature whichever detector the build selects.
 #[derive(Clone, Config, fieldwork::Fieldwork, Patch)]
-#[config(builder(state_mod(vis = "pub")))]
-#[patch(fallible)]
+#[config(builder(state_mod(vis = "pub")), patch(fallible))]
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct BeatAnalysisConfig<B> {
-    #[config(skip = "resampler backend strategy")]
-    #[patch(skip)]
+    #[config(skip = "resampler backend strategy", patch(skip))]
     resampler_backend: B,
     #[config(value, builder(default = consts::DEFAULT_BEAT_RESAMPLER_QUALITY))]
     #[field(get(copy))]
@@ -42,18 +40,16 @@ pub struct BeatAnalysisConfig<B> {
     /// Reaches the detector's peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.
     #[cfg(feature = "beat-nn")]
-    #[config(nested, builder(default))]
+    #[config(nested, builder(default), patch(nested))]
     #[field(get(copy))]
-    #[patch(nested)]
     pub beat: BeatConfig,
     /// The tempo the signal detector searches. A document patches it key by
     /// key under `tempo:`, and [`Tempo`] judges the merged policy as a whole
     /// before it is committed, so a band the comb never scores is refused by
     /// name instead of searched.
     #[cfg(feature = "beat-dsp")]
-    #[config(value, builder(default))]
+    #[config(value, builder(default), patch(nested, fallible))]
     #[field(get(copy))]
-    #[patch(nested, fallible)]
     tempo: Tempo,
 }
 

@@ -1,8 +1,8 @@
 use crate::{SessionFrame, WarpMapRevision};
 
 /// An exact source/output boundary consumed by the audio callback.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, kithara_config::bon::Builder, fieldwork::Fieldwork)]
-#[builder(crate = ::kithara_config::bon, state_mod(vis = "pub"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder, fieldwork::Fieldwork)]
+#[builder(state_mod(vis = "pub"))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PresentationFrontier {

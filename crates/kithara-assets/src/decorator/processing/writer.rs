@@ -1,7 +1,7 @@
 use std::fmt;
 
+use bon::bon;
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_config::bon::bon;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::{StorageError, StorageResult};
 
@@ -87,7 +87,7 @@ impl<W: fmt::Debug, S> fmt::Debug for ProcessedWriter<W, S> {
     }
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl<W, S> ProcessedWriter<W, S>
 where
     W: WriteSide,

@@ -106,8 +106,11 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Buffer-pool facade every layer of the store shares.
-    #[config(skip = "transferred to store runtime owners", builder(start_fn))]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to store runtime owners",
+        builder(start_fn),
+        patch(skip)
+    )]
     pub pools: PoolRegion<S>,
     /// Where resources live. Unset resolves to a disk root under a fresh
     /// temp directory, which is a different place on every launch.
@@ -118,20 +121,16 @@ where
     #[config(value)]
     pub cache_capacity: Option<NonZeroUsize>,
     /// Master cancel token for the store subtree.
-    #[config(skip = "composed into the store cancel scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the store cancel scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Event bus the eviction and lease layers publish on.
-    #[config(skip = "transferred to store observers")]
-    #[patch(skip)]
+    #[config(skip = "transferred to store observers", patch(skip))]
     pub event_bus: Option<EventBus>,
     /// Shared index-flush hub. Created per store when absent.
-    #[config(skip = "transferred to the flush owner")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the flush owner", patch(skip))]
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Resource-key layout registry. Empty when absent.
-    #[config(skip = "transferred to the layout owner")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the layout owner", patch(skip))]
     pub layouts: Option<AssetLayoutRegistry>,
     /// Assets the eviction policy keeps before it drops the coldest one.
     #[config(value)]
@@ -150,8 +149,7 @@ where
     pub processing_chunk_size: Option<usize>,
     /// Recheck cadence for a reader blocked on the processing readiness gate.
     /// Unset leaves the processing layer's own default.
-    #[config(value)]
-    #[patch(humantime)]
+    #[config(value, patch(humantime))]
     pub processing_gate_poll_interval: Option<Duration>,
     /// Bytes a fresh segment's temp file is reserved at. **Disk backend
     /// only** — the memory backend has no temp file to reserve. Unset leaves

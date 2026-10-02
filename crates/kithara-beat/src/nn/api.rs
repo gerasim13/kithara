@@ -1,5 +1,5 @@
+use bon::bon;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_config::bon::bon;
 use thiserror::Error;
 
 use crate::{
@@ -32,7 +32,7 @@ where
     pools: PoolRegion<S>,
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl<S> BeatThis<S>
 where
     S: HasPool<f32>,

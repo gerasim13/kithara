@@ -15,29 +15,28 @@ use crate::consts;
 #[non_exhaustive]
 pub struct PlayWorkerConfig<S> {
     /// Typed pool facade shared by every Player and resource registered with the worker.
-    #[config(skip = "transferred to the playback worker", builder(start_fn))]
+    #[config(
+        skip = "transferred to the playback worker",
+        builder(start_fn),
+        patch(skip)
+    )]
     #[field(get)]
-    #[patch(skip)]
     pub(crate) pools: PoolRegion<S>,
     /// Poll interval for RT-safe deferred wakes while the final ring is full.
-    #[config(value, builder(default = consts::BACKPRESSURE_POLL_INTERVAL))]
+    #[config(value, builder(default = consts::BACKPRESSURE_POLL_INTERVAL), patch(humantime))]
     #[field(get, copy)]
-    #[patch(humantime)]
     pub(crate) backpressure_poll_interval: Duration,
     /// Park duration when no playback task expects progress.
-    #[config(value, builder(default = Duration::from_millis(100)))]
+    #[config(value, builder(default = Duration::from_millis(100)), patch(humantime))]
     #[field(get, copy)]
-    #[patch(humantime)]
     pub(crate) idle_timeout: Duration,
     /// Threshold for reporting a slow playback tick.
-    #[config(value, builder(default = Duration::from_millis(10)))]
+    #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     #[field(get, copy)]
-    #[patch(humantime)]
     pub(crate) slow_tick_threshold: Duration,
     /// Park duration while live playback tasks are waiting.
-    #[config(value, builder(default = consts::ACTIVE_WAIT_TIMEOUT))]
+    #[config(value, builder(default = consts::ACTIVE_WAIT_TIMEOUT), patch(humantime))]
     #[field(get, copy)]
-    #[patch(humantime)]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes between cooperative thread yields.
     #[config(value, builder(default = consts::FAIRNESS_YIELD_INTERVAL))]
@@ -53,13 +52,11 @@ pub struct PlayWorkerConfig<S> {
     pub(crate) capacity: NonZeroUsize,
     /// Parent cancellation token for this playback dispatcher lifetime. Not a
     /// document key: the caller owns the token tree.
-    #[config(skip = "composed into the playback cancel scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the playback cancel scope", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional base worker shared with other domain workers. Not a document
     /// key: a live worker is an object only code can hand over.
-    #[config(skip = "transferred to the playback worker")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the playback worker", patch(skip))]
     pub(crate) worker: Option<Worker>,
 }
 

@@ -43,41 +43,33 @@ impl AbrPeerId {
 #[non_exhaustive]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
-    #[config(value, builder(default = consts::BANDWIDTH_EMIT_MIN_INTERVAL))]
-    #[patch(humantime)]
+    #[config(value, builder(default = consts::BANDWIDTH_EMIT_MIN_INTERVAL), patch(humantime))]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
-    #[config(value, builder(default = consts::BUFFER_EMIT_MIN_DELTA))]
-    #[patch(humantime)]
+    #[config(value, builder(default = consts::BUFFER_EMIT_MIN_DELTA), patch(humantime))]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
-    #[config(value, builder(default = consts::BUFFER_EMIT_MIN_INTERVAL))]
-    #[patch(humantime)]
+    #[config(value, builder(default = consts::BUFFER_EMIT_MIN_INTERVAL), patch(humantime))]
     pub buffer_emit_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
-    #[config(value, builder(default = consts::MIN_BUFFER_FOR_UP_SWITCH))]
-    #[patch(humantime)]
+    #[config(value, builder(default = consts::MIN_BUFFER_FOR_UP_SWITCH), patch(humantime))]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
-    #[config(value, builder(default = consts::MIN_SWITCH_INTERVAL))]
-    #[patch(humantime)]
+    #[config(value, builder(default = consts::MIN_SWITCH_INTERVAL), patch(humantime))]
     pub min_switch_interval: Duration,
     /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
     /// sample still reaches the estimator; this bounds only how often the
     /// raw per-fetch rate is published to the bus.
-    #[config(value, builder(default = consts::THROUGHPUT_SAMPLE_MIN_INTERVAL))]
-    #[patch(humantime)]
+    #[config(value, builder(default = consts::THROUGHPUT_SAMPLE_MIN_INTERVAL), patch(humantime))]
     pub throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
-    #[config(value, builder(default = consts::URGENT_DOWNSWITCH_BUFFER))]
-    #[patch(humantime)]
+    #[config(value, builder(default = consts::URGENT_DOWNSWITCH_BUFFER), patch(humantime))]
     pub urgent_downswitch_buffer: Duration,
     /// Optional parent cancellation token for the controller scope.
     ///
     /// `Some` derives a child scope from the supplied parent; `None` gives the
     /// controller a standalone scope.
-    #[config(skip = "composed into the controller scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the controller scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
     #[config(skip = "seeded into the estimator", builder(required, default = Some(consts::INITIAL_THROUGHPUT_BPS)))]

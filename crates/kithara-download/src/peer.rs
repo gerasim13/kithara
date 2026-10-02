@@ -123,8 +123,7 @@ impl InternalCmd {
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
-#[derive(kithara_config::bon::Builder)]
-#[builder(crate = ::kithara_config::bon)]
+#[derive(bon::Builder)]
 pub(super) struct PeerInner {
     /// ABR side of the double registration. Keeps the peer registered
     /// with the shared `AbrController` until the last `PeerHandle` drops

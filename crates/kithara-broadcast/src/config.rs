@@ -21,43 +21,34 @@ use crate::{BroadcastError, BroadcastResult, consts};
 #[derive_where::derive_where(Clone)]
 pub struct BroadcastConfig<S> {
     /// Shared worker used to schedule the packager task.
-    #[config(skip = "runtime worker handle", builder(start_fn))]
-    #[patch(skip)]
+    #[config(skip = "runtime worker handle", builder(start_fn), patch(skip))]
     pub worker: Worker,
     /// Typed pool facade used for bounded packager scratch.
-    #[config(skip = "runtime pool handle", builder(start_fn))]
-    #[patch(skip)]
+    #[config(skip = "runtime pool handle", builder(start_fn), patch(skip))]
     pub pools: PoolRegion<S>,
     /// Codec emitted into HLS media segments. Not a document key:
     /// [`BroadcastConfig::validate`] admits one profile, so every value a
     /// document could name but the default is refused at startup.
-    #[config(value, builder(default = AudioCodec::AacLc))]
-    #[patch(skip)]
+    #[config(value, builder(default = AudioCodec::AacLc), patch(skip))]
     pub codec: AudioCodec,
     /// Container carried by HLS media segments. Not a document key for the
     /// same reason [`Self::codec`] is not.
-    #[config(value, builder(default = ContainerFormat::Adts))]
-    #[patch(skip)]
+    #[config(value, builder(default = ContainerFormat::Adts), patch(skip))]
     pub container: ContainerFormat,
     /// Dispatcher park duration when the broadcast has no work.
-    #[config(value, builder(default = Duration::from_millis(100)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(100)), patch(humantime))]
     pub idle_timeout: Duration,
     /// Media duration a segment is cut at.
-    #[config(value, builder(default = Duration::from_secs(4)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_secs(4)), patch(humantime))]
     pub segment_target: Duration,
     /// Threshold for reporting a slow packager tick.
-    #[config(value, builder(default = Duration::from_millis(10)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     pub slow_tick_threshold: Duration,
     /// Maximum time a graceful stop waits for the bounded PCM tail.
-    #[config(value, builder(default = Duration::from_secs(10)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_secs(10)), patch(humantime))]
     pub stop_timeout: Duration,
     /// Dispatcher wait duration between deferred RT wakes.
-    #[config(value, builder(default = Duration::from_millis(2)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(2)), patch(humantime))]
     pub wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
     #[config(value, builder(default = consts::FAIRNESS_YIELD_INTERVAL))]
@@ -81,14 +72,12 @@ pub struct BroadcastConfig<S> {
     #[config(value, builder(default = consts::TICK_FRAMES))]
     pub tick_frames: NonZeroUsize,
     /// Optional cancellation parent for the broadcast lifetime.
-    #[config(skip = "composed into the broadcast cancel scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the broadcast cancel scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Packager task priority. Not a document key: `Priority` carries no
     /// `Deserialize`, and giving `kithara-worker` one for a knob nobody has
     /// asked to tune widens that crate's surface for nothing.
-    #[config(value, builder(default = Priority::new(0)))]
-    #[patch(skip)]
+    #[config(value, builder(default = Priority::new(0)), patch(skip))]
     pub priority: Priority,
     /// Loopback on an ephemeral port.
     #[config(value, builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)))]
@@ -99,8 +88,7 @@ pub struct BroadcastConfig<S> {
     /// Sample rate of the mix. Not a document key: the packager overwrites it
     /// with the master format it measured, so a named value would not survive
     /// the first format change.
-    #[config(value, builder(default = 48_000))]
-    #[patch(skip)]
+    #[config(value, builder(default = 48_000), patch(skip))]
     pub sample_rate: u32,
     /// AAC-LC bit rate the encoder targets.
     #[config(value, builder(default = 128_000))]

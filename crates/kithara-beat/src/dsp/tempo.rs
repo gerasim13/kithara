@@ -2,7 +2,8 @@
 
 use std::ops::RangeInclusive;
 
-use kithara_config::bon::bon;
+use bon::bon;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
@@ -64,17 +65,22 @@ pub enum TempoError {
 /// is optional and one a document does not name keeps the value already in
 /// place, but the merged policy is judged as a whole before it is committed:
 /// a band the comb never scores is refused, not clamped.
-#[derive(Clone, Copy, Debug, PartialEq, Patch)]
-#[patch(validate = Self::validated, error = TempoError)]
+#[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
+#[config(builder(existing), patch(validate = Self::validated, error = TempoError))]
 pub struct Tempo {
+    #[config(value)]
     drift: f32,
+    #[config(value)]
     high: f32,
+    #[config(value)]
     low: f32,
+    #[config(value)]
     prior: f32,
+    #[config(value)]
     tolerance: f32,
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl Tempo {
     /// A policy over the defaults: band and prior in BPM, tolerance in
     /// seconds, drift in BPM per second measured at the prior, so one rate

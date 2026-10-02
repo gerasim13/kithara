@@ -82,7 +82,7 @@ pub(crate) struct Boot {
     pub(super) commands: UnboundedSender<Envelope>,
 }
 
-#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
+#[bon::bon]
 impl Boot {
     #[builder]
     pub(crate) fn new(

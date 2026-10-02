@@ -94,6 +94,7 @@ kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
+bon = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }

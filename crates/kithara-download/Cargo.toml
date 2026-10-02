@@ -36,6 +36,8 @@ kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true }
 
+bon = { workspace = true }
+
 bytes = { workspace = true }
 derive_more = { workspace = true }
 futures = { workspace = true }

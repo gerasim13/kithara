@@ -1,4 +1,4 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 /// Container format type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +58,7 @@ pub enum AudioCodec {
 /// - HTTP Content-Type header
 /// - Container metadata
 #[derive(Debug, Clone, Default, PartialEq, Eq, Builder)]
-#[builder(const, crate = ::kithara_config::bon)]
+#[builder(const)]
 #[non_exhaustive]
 pub struct MediaInfo {
     /// Number of audio channels

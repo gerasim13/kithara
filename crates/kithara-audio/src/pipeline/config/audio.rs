@@ -41,9 +41,8 @@ pub enum ConsumerWakeMode {
 #[fieldwork(opt_in, get)]
 pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    #[config(skip = "transferred to the stream", builder(start_fn))]
+    #[config(skip = "transferred to the stream", builder(start_fn), patch(skip))]
     #[field(get)]
-    #[patch(skip)]
     pub(crate) stream: T::Config,
     /// Consumer wake capability for ring pops and reader-event delivery. Not
     /// a document key: a player-managed resource has this value overwritten
@@ -51,8 +50,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// would make a player-bound resource publish reads inline on the render
     /// callback.
     #[field(get, copy)]
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
     #[field(get, copy)]
@@ -63,17 +61,15 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// resource-preparation step that shares a player's engine always
     /// overwrites it with the engine's master or configured rate. A document
     /// value would be overwritten by the first host that disagrees with it.
-    #[config(skip = "transferred to the host sample-rate owner")]
+    #[config(skip = "transferred to the host sample-rate owner", patch(skip))]
     #[field(get, copy)]
-    #[patch(skip)]
     pub host_sample_rate: Option<NonZeroU32>,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling. Not a document key: the shipped binary is a real-time
     /// host whose audio callback can never block; only an offline harness or
     /// a player's own session policy sets this explicitly.
     #[field(get, copy)]
-    #[config(value, builder(default))]
-    #[patch(skip)]
+    #[config(value, builder(default), patch(skip))]
     pub block_on_underrun: bool,
     /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
     /// wasm32.
@@ -82,31 +78,29 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.
-    #[config(skip = "transferred to decoder dependencies", builder(default))]
+    #[config(
+        skip = "transferred to decoder dependencies",
+        builder(default),
+        patch(nested)
+    )]
     #[field(get)]
-    #[patch(nested)]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Unified event bus (optional — if not provided, one is created internally).
-    #[config(skip = "transferred to the event bus", builder(name = events))]
-    #[patch(skip)]
+    #[config(skip = "transferred to the event bus", builder(name = events), patch(skip))]
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for the audio pipeline.
-    #[config(skip = "composed into the audio cancel scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the audio cancel scope", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional format hint (file extension like "mp3", "wav")
-    #[config(skip = "transferred to decoder construction")]
-    #[patch(skip)]
+    #[config(skip = "transferred to decoder construction", patch(skip))]
     pub(crate) hint: Option<String>,
     /// Media info hint for format detection
-    #[config(skip = "transferred to decoder construction")]
-    #[patch(skip)]
+    #[config(skip = "transferred to decoder construction", patch(skip))]
     pub(crate) media_info: Option<MediaInfo>,
     /// Optional bounded, nonblocking observer of decoder-output PCM.
     /// [`kithara_signal::AudioChunk::meta`] describes its post-conversion format;
     /// it runs before playback effects and owns any asynchronous copy.
-    #[config(skip = "transferred to the decoded source")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the decoded source", patch(skip))]
     pub(crate) observer: Option<Box<dyn AudioObserver>>,
 }
 

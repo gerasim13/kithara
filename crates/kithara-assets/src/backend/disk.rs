@@ -118,7 +118,7 @@ impl AssetDeleter for DiskAssetDeleter {
     }
 }
 
-#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
+#[bon::bon]
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir` with its own unshared
     /// [`AvailabilityIndex`]. Convenient for tests; production

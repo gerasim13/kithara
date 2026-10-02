@@ -32,51 +32,46 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// File source (remote URL or local path).
-    #[config(skip = "transferred to the file stream", builder(start_fn))]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to the file stream",
+        builder(start_fn),
+        patch(skip)
+    )]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
-    #[config(skip = "transferred to the asset scope")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the asset scope", patch(skip))]
     pub store: AssetStore<S>,
     /// Poll interval while a sibling `AssetStore` instance holds the
     /// atomic-chunked tmp for this file's canonical path. The default is short
     /// enough that the observed ~67 ms race window in
     /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
     /// enough not to busy-spin a tokio worker.
-    #[config(value, builder(default = Duration::from_millis(10)))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     pub tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
-    #[config(skip = "transferred to the file event bus", builder(name = events))]
-    #[patch(skip)]
+    #[config(skip = "transferred to the file event bus", builder(name = events), patch(skip))]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
-    #[config(skip = "composed into the file cancel scope")]
-    #[patch(skip)]
+    #[config(skip = "composed into the file cancel scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
-    #[config(skip = "transferred to the asset scope")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the asset scope", patch(skip))]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
-    #[config(skip = "transferred to the file stream")]
-    #[patch(skip)]
+    #[config(skip = "transferred to the file stream", patch(skip))]
     #[debug(skip)]
     pub downloader: Option<Downloader>,
     /// Explicit source-extension hint used before the URL-path extension.
     #[config(skip = "consumed by the codec probe")]
     pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
-    #[config(skip = "transferred to network requests")]
-    #[patch(skip)]
+    #[config(skip = "transferred to network requests", patch(skip))]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     #[config(value)]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared with storage and fallback transport.
-    #[config(skip = "transferred to file runtime owners")]
-    #[patch(skip)]
+    #[config(skip = "transferred to file runtime owners", patch(skip))]
     pub pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[config(value, builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY))]

@@ -54,7 +54,7 @@ pub enum HostConfig<S> {
     },
 }
 
-#[kithara_config::bon::bon(crate = ::kithara_config::bon)]
+#[bon::bon]
 impl<S> HostConfig<S> {
     /// Configure a platform realtime session.
     #[builder(
