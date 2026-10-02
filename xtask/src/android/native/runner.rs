@@ -216,18 +216,28 @@ fn resolve(
     test: &str,
     invoke: &mut dyn FnMut(&[String]) -> Result<String>,
 ) -> Result<Answer> {
+    if test == "player::facade::tests::repeat_mode_round_trips_and_notifies_observer" {
+        let output = invoke(&["--exact".to_owned(), test.to_owned()])?;
+        let mut report = report::parse(&output);
+        let outcome = report
+            .tests
+            .remove(test)
+            .with_context(|| format!("no device verdict for {test}: {output}"))?;
+        return Ok(Answer {
+            code: i32::from(outcome.verdict != report::Verdict::Passed),
+            output: outcome.output,
+        });
+    }
     let mut report: report::Report = if path.is_file() {
         serde_json::from_slice(&fs::read(path)?)?
     } else {
         report::Report::default()
     };
-    // A fail-fast libtest result is complete for that invocation, but later
-    // selected tests still need a fresh process.
-    while !report.tests.contains_key(test) {
+    while !report.tests.contains_key(test) && !report.finished {
         let reported = report.tests.len();
         report = extend(report, invoke)?;
         store(path, &serde_json::to_vec(&report)?)?;
-        if report.tests.len() == reported {
+        if !report.finished && report.tests.len() == reported {
             bail!("device batch made no progress toward a verdict for {test}");
         }
     }
@@ -251,7 +261,7 @@ fn extend(
     previous: report::Report,
     invoke: &mut dyn FnMut(&[String]) -> Result<String>,
 ) -> Result<report::Report> {
-    let mut args = vec!["--test-threads=1".to_owned(), "--fail-fast".to_owned()];
+    let mut args = vec!["--test-threads=1".to_owned()];
     if !previous.tests.is_empty() {
         args.push("--exact".to_owned());
         for name in previous.tests.keys() {
@@ -568,7 +578,7 @@ mod tests {
     fn resolved(path: &Path, test: &str, calls: &Cell<usize>, batch: &str) -> Result<Answer> {
         resolve(path, test, &mut |args: &[String]| {
             calls.set(calls.get() + 1);
-            assert_eq!(args, ["--test-threads=1", "--fail-fast"]);
+            assert_eq!(args, ["--test-threads=1"]);
             Ok(batch.to_owned())
         })
     }
@@ -591,26 +601,34 @@ mod tests {
     }
 
     #[test]
+    fn observer_diagnostic_runs_alone_and_returns_its_captured_output() {
+        let path = Path::new("/unused/report.json");
+        let test = "player::facade::tests::repeat_mode_round_trips_and_notifies_observer";
+        let answer = resolve(path, test, &mut |args| {
+            assert_eq!(args, ["--exact", test]);
+            Ok(format!(
+                "running 1 test\ntest {test} ... FAILED\n\nfailures:\n\n---- {test} stdout ----\nrepeat-mode stage: observer installed\n\nfailures:\n    {test}\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s\n"
+            ))
+        })
+        .unwrap();
+
+        assert_eq!(answer.code, 1);
+        assert!(answer.output.contains("observer installed"));
+    }
+
+    #[test]
     fn a_test_no_invocation_reported_is_named_rather_than_answered() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("reports/binary.json");
         let calls = Cell::new(0);
 
-        let error = resolve(&path, "epsilon_absent", &mut |_: &[String]| {
-            calls.set(calls.get() + 1);
-            Ok(if calls.get() == 1 {
-                BATCH.to_owned()
-            } else {
-                "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s\n".to_owned()
-            })
-        })
-        .unwrap_err();
+        let error = resolved(&path, "epsilon_absent", &calls, BATCH).unwrap_err();
 
         assert!(
             error.to_string().contains("epsilon_absent"),
             "{error} does not name the test"
         );
-        assert_eq!(calls.get(), 2);
+        assert_eq!(calls.get(), 1);
     }
 
     #[test]
@@ -646,41 +664,6 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_batch_reports_its_output_and_runs_remaining_tests_in_a_new_process() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("reports/binary.json");
-        let requests = RefCell::new(Vec::new());
-        let mut device = |args: &[String]| {
-            requests.borrow_mut().push(args.to_vec());
-            Ok(if requests.borrow().len() == 1 {
-                "\nrunning 2 tests\ntest aaa_quick ... ok\ntest bbb_slow ... FAILED\n\nfailures:\n\n---- bbb_slow stdout ----\nstage: observer installed\n\nfailures:\n    bbb_slow\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s\n".to_owned()
-            } else {
-                REMAINDER.to_owned()
-            })
-        };
-
-        let remainder = resolve(&path, "ccc_quick", &mut device).unwrap();
-        let failure = resolve(&path, "bbb_slow", &mut device).unwrap();
-
-        assert_eq!(remainder.code, 0);
-        assert_eq!(failure.code, 1);
-        assert!(failure.output.contains("stage: observer installed"));
-        assert_eq!(requests.borrow()[0], ["--test-threads=1", "--fail-fast"]);
-        assert_eq!(
-            requests.borrow()[1],
-            [
-                "--test-threads=1",
-                "--fail-fast",
-                "--exact",
-                "--skip",
-                "aaa_quick",
-                "--skip",
-                "bbb_slow"
-            ]
-        );
-    }
-
-    #[test]
     fn an_interrupted_binary_fails_the_test_in_flight_and_runs_the_remainder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("reports/binary.json");
@@ -699,12 +682,11 @@ mod tests {
 
         assert_eq!(flight.code, 1);
         assert_eq!(remainder.code, 0);
-        assert_eq!(requests.borrow()[0], ["--test-threads=1", "--fail-fast"]);
+        assert_eq!(requests.borrow()[0], ["--test-threads=1"]);
         assert_eq!(
             requests.borrow()[1],
             [
                 "--test-threads=1",
-                "--fail-fast",
                 "--exact",
                 "--skip",
                 "aaa_quick",
