@@ -474,6 +474,11 @@ pub(crate) const MTIME_ON_USE_ENV: &str = "CARGO_UNSTABLE_MTIME_ON_USE";
 /// Hex digits in the hash Cargo names a build unit's files with.
 pub(crate) const UNIT_HASH_LEN: usize = 16;
 
+/// The gap between lane artifacts of neighbouring mtimes once a claim moves
+/// them past its instant: every filesystem a lane slot lives on keeps it, and
+/// the ladder of a whole slot ends before the claim that writes it does.
+pub(crate) const ALIGN_STEP: Duration = Duration::from_micros(1);
+
 /// The window lane slot tests prune by.
 #[cfg(test)]
 pub(crate) const DAY: Duration = Duration::from_secs(24 * 60 * 60);
