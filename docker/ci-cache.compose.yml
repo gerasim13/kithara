@@ -47,11 +47,9 @@ services:
   initialize:
     <<: *cache-image
     entrypoint: ["xtask", "ci", "cache", "initialize"]
-    environment:
-      CACHE_SCOPES: ${CACHE_SCOPES:?set trust scopes}
-      CACHE_BUCKET_QUOTA: ${CACHE_BUCKET_QUOTA:?set per-scope disk quota}
-      CACHE_CLIENT_ENDPOINT: ${CACHE_CLIENT_ENDPOINT:?set endpoint seen by jobs}
-      CACHE_CLIENT_UID: ${CACHE_CLIENT_UID:?set job user id}
+    # The host's environment whole: a scope sized apart names its quota as
+    # CACHE_BUCKET_QUOTA_<SCOPE>, a name this file cannot list.
+    env_file: ${CACHE_ENV_FILE:?use just ci cache compose}
     depends_on:
       cache:
         condition: service_healthy

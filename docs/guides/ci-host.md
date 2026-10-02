@@ -261,6 +261,15 @@ its own size now names it, `CACHE_BUCKET_QUOTA_<SCOPE>`, and
 environment on the host states what the buckets actually are, so applying it is
 no longer a way to lose them.
 
+That holds only if `initialize` sees the whole environment. Compose hands a
+container only the variables its file names, and `--env-file` only fills in
+the Compose file itself. Until 2026-10-02 the service named four variables, so
+a per-scope quota never reached it, and every initialize set each scope to
+`CACHE_BUCKET_QUOTA`. `just ci cache compose` now passes the file's absolute
+path as `CACHE_ENV_FILE`, and the service reads it as its `env_file`. A copy of
+the source older than that still flattens the quotas: refresh it before
+starting the stack.
+
 ## Storage policy
 
 Profile thresholds are bytes used against the quota; cleanup takes each as the
