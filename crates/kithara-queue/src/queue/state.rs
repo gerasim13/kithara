@@ -321,6 +321,8 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::sync::mpsc::{self, TryRecvError};
+
     use kithara_audio::ConsumerWakeMode;
     use kithara_config::Config;
     use kithara_events::{Envelope, EventReceiver};
@@ -328,10 +330,9 @@ pub(crate) mod tests {
         sync::{
             Arc, Mutex,
             atomic::{AtomicU64, Ordering},
-            mpsc::{self, TryRecvError},
         },
         thread,
-        time::{Duration, Instant, timeout},
+        time::{Duration, Instant, WallInstant, timeout},
     };
     use kithara_play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
@@ -488,7 +489,8 @@ pub(crate) mod tests {
     #[kithara::test]
     fn close_waits_for_an_admitted_queue_mutation() {
         let queue = make_queue();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = WallInstant::now() + Duration::from_secs(5);
+        let remaining = || deadline.saturating_duration_since(WallInstant::now());
         let mutation_control = queue.control.clone();
         let close_control = queue.control.clone();
         let (entered_tx, entered_rx) = mpsc::channel();
@@ -505,7 +507,7 @@ pub(crate) mod tests {
         });
 
         entered_rx
-            .recv_timeout(deadline)
+            .recv_timeout(remaining())
             .expect("mutation must enter the queue admission gate");
         let (close_started_tx, close_started_rx) = mpsc::channel();
         let (close_tx, close_rx) = mpsc::channel();
@@ -519,7 +521,7 @@ pub(crate) mod tests {
         });
 
         close_started_rx
-            .recv_timeout(deadline)
+            .recv_timeout(remaining())
             .expect("close thread must reach the admission attempt");
         kithara_test_utils::test::wall_sleep(Duration::from_millis(50));
         assert!(
@@ -528,11 +530,11 @@ pub(crate) mod tests {
         );
         release_tx.send(()).expect("mutation thread remains alive");
         mutation_rx
-            .recv_timeout(deadline)
+            .recv_timeout(remaining())
             .expect("mutation must complete after release")
             .expect("admitted mutation remains open");
         close_rx
-            .recv_timeout(deadline)
+            .recv_timeout(remaining())
             .expect("close must complete after the mutation")
             .expect("unstarted fixture must close");
         mutation.join().expect("mutation thread must not panic");
