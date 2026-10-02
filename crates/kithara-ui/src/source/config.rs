@@ -1,20 +1,21 @@
 use std::collections::BTreeSet;
 
-use kithara_config::Config;
+use bon::Builder;
 use kithara_derive::Patch;
 
 #[cfg(any(feature = "render", feature = "vello"))]
 use crate::draw::DrawBuffers;
 
-#[derive(Config, Clone, Debug, PartialEq, Patch)]
-#[config(default, builder(state_mod(vis = "pub")))]
+#[derive(Builder, Clone, Debug, PartialEq, Patch)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct Limits {
-    #[config(value, builder(default = 256 * 1024))]
+    #[builder(default = 256 * 1024)]
     pub max_bytes: usize,
-    #[config(value, builder(default = 8))]
+    #[builder(default = 8)]
     pub max_depth: usize,
-    #[config(value, builder(default = 10_000))]
+    #[builder(default = 10_000)]
     pub max_nodes: usize,
 }
 
@@ -29,9 +30,10 @@ pub struct Limits {
 pub const SCREEN_CACHE: usize = 8;
 
 /// Canonical compile configuration and its resource limits.
-#[derive(Config, Clone, Debug, PartialEq, Patch)]
-#[config(default, builder(state_mod(vis = "pub")))]
+#[derive(Builder, Clone, Debug, PartialEq, Patch)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
+#[derive(kithara_derive::BuiltDefault)]
 pub struct UiConfig {
     /// The extension kinds the application registers with its hosts.
     ///
@@ -43,13 +45,13 @@ pub struct UiConfig {
     /// a document naming one here would type but then be refused by every
     /// build that registers no matching kind -- a document-shaped failure for
     /// a code-owned fact.
-    #[config(skip = "registered by the UI host", builder(default))]
+    #[builder(default)]
     #[patch(skip)]
     pub custom_kinds: BTreeSet<String>,
-    #[config(nested, builder(default))]
+    #[builder(default)]
     #[patch(nested)]
     pub limits: Limits,
-    #[config(value, builder(default = 64 * 1024))]
+    #[builder(default = 64 * 1024)]
     pub max_arena_bytes: usize,
     /// Compiled screens a host keeps while a document turns between its pages.
     ///
@@ -61,7 +63,7 @@ pub struct UiConfig {
     /// `app::embed::Ui::new`. The immediate host compiles both deck layouts
     /// eagerly at startup and keeps no screen cache, so it never consults
     /// this field.
-    #[config(value, builder(default = SCREEN_CACHE))]
+    #[builder(default = SCREEN_CACHE)]
     pub screen_cache: usize,
     /// The pools every document compiled against this configuration draws
     /// from.
@@ -79,10 +81,7 @@ pub struct UiConfig {
     /// [`DrawPoolLimits`](crate::source::DrawPoolLimits), which the document
     /// names instead -- see `Config::ui` in `kithara-app`.
     #[cfg(any(feature = "render", feature = "vello"))]
-    #[config(
-        skip = "prepared drawing resource owned by the UI host",
-        builder(default)
-    )]
+    #[builder(default)]
     #[patch(skip)]
     pub draw_buffers: DrawBuffers,
 }

@@ -1,4 +1,4 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 use crate::{
     expand::Binding,
@@ -10,7 +10,6 @@ use crate::{
 
 /// A single icon, drawn as a text glyph.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::NodeControl)]
-#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct Glyph<'a> {
     pub(crate) style: GlyphStyle,
     pub(crate) icon: IconName,

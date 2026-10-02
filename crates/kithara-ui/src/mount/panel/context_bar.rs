@@ -1,4 +1,4 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 use crate::{
     expand::Binding,
@@ -8,7 +8,6 @@ use crate::{
 
 /// The strip under the tree that names the scope in view.
 #[derive(Builder, kithara_derive::Control)]
-#[builder(crate = ::kithara_config::bon)]
 #[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height)))]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct ContextBar<'a> {

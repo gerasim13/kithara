@@ -1,10 +1,9 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 use crate::ids::InternId;
 
 /// One box of a grid, optionally captioned and optionally picked out.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
-#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.cell.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Cell {

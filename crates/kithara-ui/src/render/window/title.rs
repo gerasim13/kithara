@@ -12,8 +12,7 @@ use crate::{
     solve::{Length, Size},
 };
 
-#[derive(kithara_config::bon::Builder)]
-#[builder(crate = ::kithara_config::bon)]
+#[derive(bon::Builder)]
 pub(crate) struct TitleBar<'label, 'skin> {
     skin: &'skin Skin,
     label: &'label str,

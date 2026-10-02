@@ -1,4 +1,4 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 use crate::{expand::Binding, ids::InternId};
 
@@ -9,7 +9,6 @@ use crate::{expand::Binding, ids::InternId};
 /// binds it to something else scrubs the artwork by hand from the same field.
 /// This is the sheet contract with a drawing in place of a picture.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
-#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.vis.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Lottie<'a> {

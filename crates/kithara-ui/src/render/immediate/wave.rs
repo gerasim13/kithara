@@ -27,8 +27,7 @@ use crate::{
 /// The waveform with the gesture only the immediate host recognises: shift to
 /// mark a loop, the wheel to zoom, a drag to scrub. The picture is the shared
 /// painter's; this adds nothing to it.
-#[derive(kithara_config::bon::Builder)]
-#[builder(crate = ::kithara_config::bon)]
+#[derive(bon::Builder)]
 pub(crate) struct MiniWave<'path, 'skin> {
     skin: &'skin Skin,
     path: &'path str,

@@ -23,8 +23,7 @@ use crate::{
     },
 };
 
-#[derive(kithara_config::bon::Builder)]
-#[builder(crate = ::kithara_config::bon)]
+#[derive(bon::Builder)]
 pub(crate) struct ModuleChrome<'a, Content> {
     skin: &'a Skin,
     header: String,

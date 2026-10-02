@@ -1,10 +1,9 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 use crate::{ids::InternId, skin::ColorRole};
 
 /// One palette colour, shown with its name.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
-#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.swatch.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Swatch {

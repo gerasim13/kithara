@@ -21,7 +21,7 @@ impl Check for BonDependency {
                 Violation::deny(
                     ID,
                     format!("{}::bon", package.name),
-                    "direct bon dependency; use kithara-config's Config or bon facade",
+                    "direct bon dependency outside kithara-config and kithara-ui; use kithara-config's Config or bon facade",
                 )
             })
             .collect())
@@ -29,7 +29,7 @@ impl Check for BonDependency {
 }
 
 fn forbidden(package: &str, dependencies: &[Dependency]) -> bool {
-    package != "kithara-config"
+    !matches!(package, "kithara-config" | "kithara-ui")
         && dependencies
             .iter()
             .any(|dependency| dependency.name == "bon")
@@ -60,6 +60,7 @@ mod tests {
             .clone();
 
         assert!(!forbidden("kithara-config", &[bon.clone()]));
+        assert!(!forbidden("kithara-ui", &[bon.clone()]));
         for kind in [
             DependencyKind::Normal,
             DependencyKind::Development,

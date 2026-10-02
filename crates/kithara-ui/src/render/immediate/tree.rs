@@ -10,8 +10,7 @@ use crate::{
     render::{IcedSkin, InputOwner, Published, ReadValue, Skin, Widget, search_input, tree_rows},
 };
 
-#[derive(kithara_config::bon::Builder)]
-#[builder(crate = ::kithara_config::bon)]
+#[derive(bon::Builder)]
 pub(crate) struct Tree<'path, 'query, 'value, 'data, 'skin> {
     skin: &'skin Skin,
     path: &'path str,

@@ -56,8 +56,7 @@ iced = ["render", "dep:iced", "iced/advanced", "kithara-ui-draw/iced", "kithara-
 vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:tracing", "dep:vello"]
 
 [dependencies]
-kithara-config = { workspace = true }
-kithara-derive = { workspace = true, features = ["control", "control-painter", "enum-str", "mirror", "node-control", "patch", "ranged", "retained", "skin-walk", "variants", "view-control"] }
+kithara-derive = { workspace = true, features = ["built-default", "control", "control-painter", "enum-str", "mirror", "node-control", "patch", "ranged", "retained", "skin-walk", "variants", "view-control"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
@@ -67,6 +66,7 @@ kithara-ui-input = { workspace = true }
 kithara-ui-lottie = { workspace = true, optional = true }
 kithara-ui-shaping = { workspace = true }
 
+bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }

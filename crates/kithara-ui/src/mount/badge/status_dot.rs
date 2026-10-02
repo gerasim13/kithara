@@ -1,10 +1,9 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 use crate::{expand::Binding, ids::InternId, module::Tone};
 
 /// A toned dot beside a word.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
-#[builder(crate = ::kithara_config::bon)]
 #[control(size = skin.status_dot.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct StatusDot<'a> {

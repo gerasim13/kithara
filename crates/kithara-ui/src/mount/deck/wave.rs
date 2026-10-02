@@ -1,4 +1,4 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 use crate::{
     expand::Binding, ids::InternId, module::WaveStyle, mount::Control, size::SizeSpec,
@@ -7,7 +7,6 @@ use crate::{
 
 /// The track's waveform, zoomed and scrubbed.
 #[derive(Builder, kithara_derive::NodeControl)]
-#[builder(crate = ::kithara_config::bon)]
 pub(crate) struct Wave<'a> {
     pub(crate) badge: Option<InternId>,
     pub(crate) zoom: Option<&'a Binding>,
