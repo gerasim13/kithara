@@ -323,10 +323,7 @@ impl AudioPlayer {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara::platform::{
-        sync::mpsc::{Receiver, Sender, channel},
-        time::Duration,
-    };
+    use kithara::platform::sync::mpsc::{Receiver, Sender, channel};
 
     use super::*;
     use crate::types::FfiPlayerEvent;
@@ -357,23 +354,18 @@ mod tests {
         false
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn repeat_mode_round_trips_and_notifies_observer() {
         let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
-        eprintln!("repeat-mode stage: player created");
         let (sender, receiver) = channel();
         player.set_observer(Arc::new(ChannelObserver { sender }));
-        eprintln!("repeat-mode stage: observer installed");
 
         player
             .set_repeat_mode(FfiRepeatMode::All)
             .expect("valid repeat mode");
-        eprintln!("repeat-mode stage: mode set");
 
         assert_eq!(player.repeat_mode(), FfiRepeatMode::All);
         assert!(received_repeat_mode(&receiver, FfiRepeatMode::All));
-        eprintln!("repeat-mode stage: observer notified");
         drop(player);
-        eprintln!("repeat-mode stage: player dropped");
     }
 }

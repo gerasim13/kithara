@@ -216,24 +216,6 @@ fn resolve(
     test: &str,
     invoke: &mut dyn FnMut(&[String]) -> Result<String>,
 ) -> Result<Answer> {
-    if test == "player::facade::tests::repeat_mode_round_trips_and_notifies_observer" {
-        let output = invoke(&[
-            "--test-threads=1".to_owned(),
-            "--skip".to_owned(),
-            "player::tests".to_owned(),
-            "--skip".to_owned(),
-            "pools::tests".to_owned(),
-        ])?;
-        let mut report = report::parse(&output);
-        let outcome = report
-            .tests
-            .remove(test)
-            .with_context(|| format!("no device verdict for {test}: {output}"))?;
-        return Ok(Answer {
-            code: i32::from(outcome.verdict != report::Verdict::Passed),
-            output: outcome.output,
-        });
-    }
     let mut report: report::Report = if path.is_file() {
         serde_json::from_slice(&fs::read(path)?)?
     } else {
@@ -604,31 +586,6 @@ mod tests {
         assert_eq!(second.code, 1);
         assert_eq!(third.code, 0);
         assert!(second.output.contains("beta went wrong"));
-    }
-
-    #[test]
-    fn observer_diagnostic_runs_before_later_tests_and_returns_its_captured_output() {
-        let path = Path::new("/unused/report.json");
-        let test = "player::facade::tests::repeat_mode_round_trips_and_notifies_observer";
-        let answer = resolve(path, test, &mut |args| {
-            assert_eq!(
-                args,
-                [
-                    "--test-threads=1",
-                    "--skip",
-                    "player::tests",
-                    "--skip",
-                    "pools::tests"
-                ]
-            );
-            Ok(format!(
-                "running 1 test\ntest {test} ... FAILED\n\nfailures:\n\n---- {test} stdout ----\nrepeat-mode stage: observer installed\n\nfailures:\n    {test}\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s\n"
-            ))
-        })
-        .unwrap();
-
-        assert_eq!(answer.code, 1);
-        assert!(answer.output.contains("observer installed"));
     }
 
     #[test]
