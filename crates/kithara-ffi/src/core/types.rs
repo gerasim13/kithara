@@ -115,34 +115,43 @@ pub struct FfiKeyRule {
 
 /// FFI-friendly per-item configuration. All fields immutable after
 /// [`crate::item::AudioPlayerItem::new`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kithara_config::Config)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[config(builder(none))]
 pub struct FfiItemConfig {
+    #[config(value)]
     pub abr_mode: Option<FfiAbrMode>,
     /// Optional caller-facing content id. When absent, the item exposes
     /// its internally allocated queue id as `audioId` for the standalone
     /// Kithara API.
+    #[config(skip = "caller identity transferred to AudioPlayerItem")]
     pub audio_id: Option<TrackId>,
+    #[config(value)]
     pub headers: Option<std::collections::HashMap<String, String>>,
     /// Optional caller-facing queue-item uuid. When absent, the item
     /// exposes the legacy UUIDv5-derived handle.
+    #[config(skip = "caller identity transferred to AudioPlayerItem")]
     pub uuid_i64: Option<i64>,
     /// Audio source. Accepts a network URL (`https://example.com/song.mp3`,
     /// `https://…/master.m3u8`) **or** an absolute local file path
     /// (`/Users/…/song.flac`). Parsed via
     /// [`kithara::play::ResourceSrc::parse`] at insert time, then passed
     /// to [`kithara::play::ResourceConfig::for_src`].
+    #[config(value)]
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a
     /// live HLS feed (radio / broadcast); the player skips end-of-stream
     /// gating and `is_playable` always returns `true` for the item.
     /// Defaults to `false`. Auto-detection from the manifest is a
     /// future improvement.
+    #[config(value)]
     pub is_live_stream: bool,
     /// Peak bitrate ceiling in bits/sec. `0.0` means no cap.
+    #[config(value)]
     pub preferred_peak_bitrate: f64,
     /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
     /// means no cap.
+    #[config(value)]
     pub preferred_peak_bitrate_expensive: f64,
 }
 
@@ -1012,6 +1021,17 @@ pub struct FfiPlayerSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[kithara::test]
+    fn item_config_snapshot_keeps_retained_preferences() {
+        let mut config = FfiItemConfig::for_test("https://example.com/a.flac");
+        config.preferred_peak_bitrate = 320_000.0;
+        let values = kithara_config::Config::values(&config);
+
+        config.url.clear();
+        assert_eq!(values.url, "https://example.com/a.flac");
+        assert_eq!(values.preferred_peak_bitrate, 320_000.0);
+    }
 
     #[kithara::test]
     fn duration_to_seconds_roundtrips() {

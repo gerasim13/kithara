@@ -8,23 +8,29 @@ use serde::Deserialize;
 /// A role absent from the table resolves to its own name, so an empty table
 /// reproduces a hard-coded literal exactly: nothing has to be configured for a
 /// fresh project to work, and no entry exists that can only equal its default.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(transparent)]
+#[config(builder(none))]
 pub struct ToolsConfig {
+    #[config(value)]
     roles: BTreeMap<String, ToolEntry>,
 }
 
 /// What one role is, where to get it, and what pins its version.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
 pub struct ToolEntry {
     /// What to tell an operator who does not have it.
+    #[config(value)]
     pub install_hint: String,
     /// Key in `.config/ci-pins.toml` `[cargo_tools]` pinning this role's
     /// version. Empty for a platform toolchain the machine owns rather than
     /// this repository.
+    #[config(value)]
     pub pin: String,
     /// Program to spawn. Empty means the role name itself.
+    #[config(value)]
     pub program: String,
 }
 

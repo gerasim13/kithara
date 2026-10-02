@@ -20,6 +20,7 @@ struct Options {
     /// bon's top-level options for the generated builder.
     builder: Option<TokenStream>,
     existing_builder: bool,
+    no_builder: bool,
     validate_builder: bool,
 }
 
@@ -53,6 +54,8 @@ impl Options {
                     let group = group(&meta)?;
                     if group.to_string() == "existing" {
                         options.existing_builder = true;
+                    } else if group.to_string() == "none" {
+                        options.no_builder = true;
                     } else {
                         options.builder = Some(group);
                     }
@@ -82,7 +85,7 @@ impl Options {
                 "construction inputs cannot declare retained defaults, updates, SDK records, or values visibility",
             ));
         }
-        if options.existing_builder && options.validate_builder {
+        if (options.existing_builder || options.no_builder) && options.validate_builder {
             return Err(syn::Error::new_spanned(
                 &item.ident,
                 "validate_builder requires a generated builder",
@@ -148,7 +151,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             "validate_builder requires patch(validate = ..., error = ...)",
         ));
     }
-    let builder = if options.existing_builder {
+    let builder = if options.existing_builder || options.no_builder {
         None
     } else {
         Some(builder(
@@ -478,6 +481,21 @@ mod tests {
             !expanded.contains("phase : Phase)"),
             "a skipped field is no argument"
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_config_can_keep_serde_construction_without_a_builder() {
+        let expanded = expansion(quote! {
+            #[config(builder(none))]
+            pub struct Settings {
+                #[config(value)]
+                threshold: u32,
+            }
+        });
+
+        assert!(!expanded.contains("bon :: bon"));
+        assert!(expanded.contains("impl :: kithara_config :: Config for Settings"));
+        assert!(expanded.contains("Clone :: clone (& self . threshold)"));
     }
 
     #[kithara::test(native, flash(false))]

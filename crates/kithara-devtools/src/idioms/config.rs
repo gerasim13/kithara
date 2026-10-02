@@ -3,8 +3,10 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, kithara_config::Config)]
+#[config(builder(none))]
 pub(crate) struct IdiomsConfig {
+    #[config(nested)]
     pub(crate) thresholds: ThresholdsConfig,
 }
 
@@ -16,103 +18,150 @@ impl IdiomsConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
+    #[config(nested)]
     pub(crate) accumulator_loops: AccumulatorLoopsConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) arc_mutex_collection: ArcMutexCollectionConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) await_under_guard: AwaitUnderGuardConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) box_concrete_type: BoxConcreteTypeConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) branch_chains: BranchChainsConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_deref: DerivableConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_from: DerivableConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_event: DerivableEventConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_getter: DerivableGetterConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_built_default: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_clone: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_control: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_control_painter: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_debug: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_default: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_display: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_enum_str: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_error: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_into_probe_arg: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_mirror: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_node_control: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_patch: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_phase: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_ranged: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_retained: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_serialize: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_skin_walk: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_variants: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) derivable_view_control: DerivableRangedConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) function_branch_density: FunctionBranchDensityConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) guard_cascade: GuardCascadeConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) loop_allocation: LoopAllocationConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) loop_flag_accumulator: LoopFlagAccumulatorConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) manual_question_mark: ManualQuestionMarkConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) multi_accumulator_loop: MultiAccumulatorLoopConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) nested_if_let_pyramid: NestedIfLetPyramidConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) no_passthrough_builder: NoPassthroughBuilderConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) parallel_loops: ParallelLoopsConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) pointwise_loop: PointwiseLoopConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) retry_fallback: RetryFallbackConfig,
     #[serde(default)]
+    #[config(nested)]
     pub(crate) thin_wrapper_economy: ThinWrapperEconomyConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct DerivableConfig {
     #[serde(default = "default_true")]
+    #[config(value)]
     pub(crate) enabled: bool,
 }
 
@@ -122,12 +171,15 @@ impl Default for DerivableConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct DerivableEventConfig {
     #[serde(default)]
+    #[config(value)]
     pub(crate) unforwarded: Vec<String>,
     #[serde(default = "default_true")]
+    #[config(value)]
     pub(crate) enabled: bool,
 }
 
@@ -148,10 +200,13 @@ pub(crate) enum DerivableSeverity {
     Deny,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct DerivableRangedConfig {
+    #[config(value)]
     pub(crate) severity: DerivableSeverity,
+    #[config(value)]
     pub(crate) enabled: bool,
 }
 
@@ -164,23 +219,31 @@ impl Default for DerivableRangedConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct DerivableGetterConfig {
     #[serde(default)]
+    #[config(value)]
     pub(crate) severity: DerivableSeverity,
     #[serde(default = "default_blocking_impl_attrs")]
+    #[config(value)]
     pub(crate) blocking_impl_attrs: Vec<String>,
     #[serde(default = "default_qualified_deref_remaps")]
+    #[config(value)]
     pub(crate) qualified_deref_remaps: Vec<QualifiedDerefRemap>,
     #[serde(default = "default_true")]
+    #[config(value)]
     pub(crate) enabled: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct QualifiedDerefRemap {
+    #[config(value)]
     pub(crate) field_type: String,
+    #[config(value)]
     pub(crate) scoped_name: String,
 }
 
@@ -202,20 +265,27 @@ impl Default for DerivableGetterConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct DerivableDelegationConfig {
     #[serde(default)]
+    #[config(value)]
     pub(crate) severity: DerivableSeverity,
     #[serde(default = "default_blocking_impl_attrs")]
+    #[config(value)]
     pub(crate) blocking_impl_attrs: Vec<String>,
     #[serde(default = "default_keep_manual_method_attrs")]
+    #[config(value)]
     pub(crate) keep_manual_method_attrs: Vec<String>,
     #[serde(default = "default_delegation_enabled")]
+    #[config(value)]
     pub(crate) enabled: bool,
     #[serde(default = "default_inherent_delegation_methods")]
+    #[config(value)]
     pub(crate) inherent_min_methods: usize,
     #[serde(default = "default_trait_delegation_methods")]
+    #[config(value)]
     pub(crate) trait_min_methods: usize,
 }
 
@@ -256,10 +326,12 @@ impl Default for DerivableDelegationConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct PointwiseLoopConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -271,18 +343,24 @@ impl Default for PointwiseLoopConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct FatLoopBodyConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     #[serde(default = "default_for_stmt_threshold")]
+    #[config(value)]
     pub(crate) for_stmt_threshold: usize,
     #[serde(default = "default_loop_stmt_threshold")]
+    #[config(value)]
     pub(crate) loop_stmt_threshold: usize,
     #[serde(default = "default_nested_ctrl_threshold")]
+    #[config(value)]
     pub(crate) nested_ctrl_threshold: usize,
     #[serde(default = "default_while_stmt_threshold")]
+    #[config(value)]
     pub(crate) while_stmt_threshold: usize,
 }
 
@@ -311,10 +389,12 @@ impl Default for FatLoopBodyConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct LoopFlagAccumulatorConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -326,14 +406,18 @@ impl Default for LoopFlagAccumulatorConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct ConstGroupEnumShapeConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     #[serde(default = "default_min_group_size")]
+    #[config(value)]
     pub(crate) min_group_size: usize,
     #[serde(default = "default_min_prefix_chars")]
+    #[config(value)]
     pub(crate) min_prefix_chars: usize,
 }
 
@@ -354,12 +438,15 @@ impl Default for ConstGroupEnumShapeConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct NestedIfLetPyramidConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     #[serde(default = "default_pyramid_min_depth")]
+    #[config(value)]
     pub(crate) min_depth: usize,
 }
 
@@ -376,27 +463,33 @@ impl Default for NestedIfLetPyramidConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct BranchChainsConfig {
     /// Glob patterns relative to the workspace root that exempt a file from
     /// the check.
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     /// If false, `if let` chains are excluded (they often have no `match` form).
     #[serde(default)]
+    #[config(value)]
     pub(crate) count_if_let: bool,
     /// Threshold for any chain regardless of structure — generic cognitive-load
     /// signal.
     #[serde(default = "default_general_arms")]
+    #[config(value)]
     pub(crate) general_arms: usize,
     /// Threshold for heterogeneous chains (arms test unrelated predicates).
     /// Hint: extract predicates or build a tag enum + match.
     #[serde(default = "default_heterogeneous_arms")]
+    #[config(value)]
     pub(crate) heterogeneous_arms: usize,
     /// Threshold for homogeneous chains (all arms test the same expression
     /// with the same operator) — strongest match-conversion hint.
     #[serde(default = "default_homogeneous_arms")]
+    #[config(value)]
     pub(crate) homogeneous_arms: usize,
 }
 
@@ -428,18 +521,22 @@ fn default_exempt_files() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct GuardCascadeConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     /// Macro idents that count as terminators in the guard body
     /// (`panic!()`, `bail!()`, …).
     #[serde(default = "default_terminator_macros")]
+    #[config(value)]
     pub(crate) terminator_macros: Vec<String>,
     /// Threshold for consecutive guard statements (early-return ifs and
     /// let-else) inside one block to flag the block as a guard cascade.
     #[serde(default = "default_cascade_warn_streak")]
+    #[config(value)]
     pub(crate) warn_streak: usize,
 }
 
@@ -471,10 +568,12 @@ fn default_terminator_macros() -> Vec<String> {
     .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct FunctionBranchDensityConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     /// Warn when a single function body owns more than this many branch
     /// decisions (if / match-dispatch / loop / `&&` / `||` / let-else).
@@ -484,6 +583,7 @@ pub(crate) struct FunctionBranchDensityConfig {
     /// is technical debt, not an accepted floor; the detector keeps firing
     /// on every audit run so the noise stays visible until restructured.
     #[serde(default = "default_density_warn_own")]
+    #[config(value)]
     pub(crate) warn_own: usize,
 }
 
@@ -500,18 +600,22 @@ const fn default_density_warn_own() -> usize {
     12
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct AccumulatorLoopsConfig {
     /// Patterns to detect: `push`, `extend`, `sum` (numeric `+=`/`-=`),
     /// `count` (conditional `+= 1` inside an `if`).
     #[serde(default = "default_accumulator_patterns")]
+    #[config(value)]
     pub(crate) detect: Vec<String>,
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     /// Skip loops with `break`/`continue`/`return` inside the body — converting
     /// to an iterator chain there changes control flow semantics.
     #[serde(default = "default_true")]
+    #[config(value)]
     pub(crate) ignore_with_break: bool,
 }
 
@@ -532,16 +636,19 @@ fn default_accumulator_patterns() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct NoPassthroughBuilderConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     /// Minimum number of input fields routed straight through to the
     /// target builder before the function is flagged. Below this
     /// threshold a 2-3 field carrier is considered too small to be
     /// worth removing.
     #[serde(default = "default_min_passthrough_fields")]
+    #[config(value)]
     pub(crate) min_passthrough_fields: usize,
 }
 
@@ -558,10 +665,12 @@ const fn default_min_passthrough_fields() -> usize {
     4
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct ThinWrapperEconomyConfig {
     #[serde(default = "default_min_net_saved_lines")]
+    #[config(value)]
     pub(crate) min_net_saved_lines: usize,
 }
 
@@ -581,13 +690,16 @@ const fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct MultiAccumulatorLoopConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     /// Skip loops with `break`/`continue`/`return` inside.
     #[serde(default = "default_true")]
+    #[config(value)]
     pub(crate) ignore_with_break: bool,
 }
 
@@ -600,10 +712,12 @@ impl Default for MultiAccumulatorLoopConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct ParallelLoopsConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -615,10 +729,12 @@ impl Default for ParallelLoopsConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct ManualQuestionMarkConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -630,10 +746,12 @@ impl Default for ManualQuestionMarkConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct LoopAllocationConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -645,10 +763,12 @@ impl Default for LoopAllocationConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct BoxConcreteTypeConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -660,10 +780,12 @@ impl Default for BoxConcreteTypeConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct ArcMutexCollectionConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -675,10 +797,12 @@ impl Default for ArcMutexCollectionConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct AwaitUnderGuardConfig {
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
 }
 
@@ -690,20 +814,25 @@ impl Default for AwaitUnderGuardConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct RetryFallbackConfig {
     #[serde(default)]
+    #[config(value)]
     pub(crate) allowed_idents: Vec<String>,
     #[serde(default = "default_exempt_files")]
+    #[config(value)]
     pub(crate) exempt_files: Vec<String>,
     /// Identifiers this check refuses outright. Matched case-insensitively
     /// against the whole name, so only an exact spelling trips them.
     #[serde(default = "default_retry_forbidden_idents")]
+    #[config(value)]
     pub(crate) forbidden_idents: Vec<String>,
     /// Name fragments this check refuses. Matched case-insensitively anywhere
     /// in the name, which is what catches `read_or_fallback` and friends.
     #[serde(default = "default_retry_forbidden_substrings")]
+    #[config(value)]
     pub(crate) forbidden_substrings: Vec<String>,
 }
 

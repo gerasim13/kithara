@@ -30,6 +30,8 @@ makes `build()` return `Result<Self, Error>` through that same domain check.
 consume inputs and retain only their prepared effective value. A fallible
 `#[config(default)]` checks its declared defaults and treats their rejection
 as a programming error.
+`builder(none)` keeps serde-owned document schemas as retained configurations
+without adding an unused programmatic constructor.
 Ordinary builders may use `kithara_config::bon` with an absolute
 `#[builder(crate = ::kithara_config::bon)]` expansion path, without a direct
 bon dependency in the consuming crate.

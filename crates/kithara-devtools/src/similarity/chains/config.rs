@@ -18,33 +18,46 @@ mod consts {
 }
 
 /// Thresholds of the chain stage; the `[chains]` table overrides them.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
 pub(crate) struct ChainConfig {
+    #[config(value)]
     pub(super) arm_containment: f64,
     /// A decision row needs this Jaccard of its sides, or `arm_containment`.
+    #[config(value)]
     pub(super) arm_jaccard: f64,
     /// Impls of one trait method form a row only when their regions reach
     /// this Jaccard, or their best function pair `dyn_pair`.
+    #[config(value)]
     pub(super) dyn_jaccard: f64,
+    #[config(value)]
     pub(super) dyn_pair: f64,
     /// Jaccard that pairs two roots, or the regions two roots own.
+    #[config(value)]
     pub(super) similarity: f64,
     /// Calls walked back to the common caller of two roots and forward from
     /// it to each root, and rounds of passing a cfg from callers to callees.
     /// A side region is not bounded: it holds every function only it calls.
+    #[config(value)]
     pub(super) depth: usize,
     /// A trait-object call with more impls is a hub and links nowhere.
+    #[config(value)]
     pub(super) max_dyn_targets: usize,
     /// A variant handled in more functions is a hub and links nowhere.
+    #[config(value)]
     pub(super) max_variant_handlers: usize,
     /// Lines on each side.
+    #[config(value)]
     pub(super) min_side_lines: usize,
     /// Tokens a function needs before it is compared at all.
+    #[config(value)]
     pub(super) min_tokens: usize,
     /// Functions, and arms with code of their own, on both sides together.
+    #[config(value)]
     pub(super) min_units: usize,
     /// Tokens per shingle.
+    #[config(value)]
     pub(super) shingle: usize,
 }
 
