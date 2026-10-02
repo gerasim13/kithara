@@ -4,28 +4,20 @@ use super::ComputeSubmitError;
 use crate::config::PoolConfig;
 
 /// Owned compute pool that runs each admitted job on its own spawned thread.
-pub(crate) enum ComputePool {
-    Disabled,
-    Owned { name: String },
-}
+pub(crate) struct ComputePool;
 
 impl ComputePool {
-    pub(super) fn new(config: PoolConfig) -> Self {
-        match config {
-            PoolConfig::Disabled => Self::Disabled,
-            PoolConfig::OwnedLazy(config) => Self::Owned { name: config.name },
-        }
+    pub(super) const fn new() -> Self {
+        Self
     }
 
-    pub(super) const fn is_disabled(&self) -> bool {
-        matches!(self, Self::Disabled)
-    }
-
-    pub(super) fn spawner(&self) -> Result<Spawner, ComputeSubmitError> {
-        let Self::Owned { name } = self else {
+    pub(super) fn spawner(&self, config: &PoolConfig) -> Result<Spawner, ComputeSubmitError> {
+        let PoolConfig::OwnedLazy(config) = config else {
             return Err(ComputeSubmitError::Unavailable);
         };
-        Ok(Spawner { name: name.clone() })
+        Ok(Spawner {
+            name: config.name.clone(),
+        })
     }
 }
 

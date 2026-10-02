@@ -4,49 +4,28 @@ use rayon::ThreadPoolBuilder;
 use super::ComputeSubmitError;
 use crate::{OwnedPoolConfig, config::PoolConfig};
 
-pub(crate) enum ComputePool {
-    Disabled,
-    OwnedLazy {
-        config: OwnedPoolConfig,
-        pool: OnceLock<Result<Arc<rayon::ThreadPool>, String>>,
-    },
-    Shared(Arc<rayon::ThreadPool>),
+pub(crate) struct ComputePool {
+    pub(crate) owned: OnceLock<Result<Arc<rayon::ThreadPool>, String>>,
 }
 
 impl ComputePool {
-    pub(super) fn new(config: PoolConfig) -> Self {
-        match config {
-            PoolConfig::Disabled => Self::Disabled,
-            PoolConfig::OwnedLazy(config) => Self::OwnedLazy {
-                config,
-                pool: OnceLock::new(),
-            },
-            PoolConfig::Shared(pool) => Self::Shared(pool),
+    pub(super) const fn new() -> Self {
+        Self {
+            owned: OnceLock::new(),
         }
-    }
-
-    pub(super) const fn is_disabled(&self) -> bool {
-        matches!(self, Self::Disabled)
     }
 
     #[cfg(test)]
     pub(crate) fn owned_is_initialized(&self) -> bool {
-        matches!(self, Self::OwnedLazy { pool, .. } if pool.get().is_some())
+        self.owned.get().is_some()
     }
 
-    #[cfg(test)]
-    pub(crate) fn shared(&self) -> Option<&Arc<rayon::ThreadPool>> {
-        let Self::Shared(pool) = self else {
-            return None;
-        };
-        Some(pool)
-    }
-
-    pub(super) fn spawner(&self) -> Result<Spawner, ComputeSubmitError> {
-        match self {
-            Self::Disabled => Err(ComputeSubmitError::Unavailable),
-            Self::Shared(pool) => Ok(Spawner(Arc::clone(pool))),
-            Self::OwnedLazy { config, pool } => pool
+    pub(super) fn spawner(&self, config: &PoolConfig) -> Result<Spawner, ComputeSubmitError> {
+        match config {
+            PoolConfig::Disabled => Err(ComputeSubmitError::Unavailable),
+            PoolConfig::Shared(pool) => Ok(Spawner(Arc::clone(pool))),
+            PoolConfig::OwnedLazy(config) => self
+                .owned
                 .get_or_init(|| build_pool(config))
                 .as_ref()
                 .map(|pool| Spawner(Arc::clone(pool)))
@@ -75,15 +54,18 @@ fn build_pool(config: &OwnedPoolConfig) -> Result<Arc<rayon::ThreadPool>, String
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara_platform::{
         CancelScope,
-        sync::{Arc, OnceLock},
+        sync::{Arc, OnceLock, mpsc},
+        time::{Duration, Instant},
     };
     use kithara_test_utils::kithara;
 
     use super::ComputePool;
     use crate::{
-        OwnedPoolConfig, Wake,
+        OwnedPoolConfig, Wake, WorkerConfig,
         compute::{Budget, ComputeRuntime, ComputeSubmitError},
     };
 
@@ -91,19 +73,18 @@ mod tests {
     fn owned_pool_failure_returns_payload_and_releases_both_permits() {
         let failed = OnceLock::new();
         assert!(failed.set(Err(String::from("pool build failed"))).is_ok());
-        let runtime = ComputeRuntime {
-            budget: Arc::new(Budget::new(std::num::NonZeroUsize::MIN)),
-            pool: ComputePool::OwnedLazy {
-                config: OwnedPoolConfig::new(std::num::NonZeroUsize::MIN, "failed-pool-test"),
-                pool: failed,
-            },
-        };
-        let task_budget = Arc::new(Budget::new(std::num::NonZeroUsize::MIN));
+        let mut runtime = ComputeRuntime::new(
+            WorkerConfig::new()
+                .with_owned_pool(OwnedPoolConfig::new(NonZeroUsize::MIN, "failed-pool-test")),
+        );
+        runtime.pool = ComputePool { owned: failed };
+        let task_budget = Arc::new(Budget::default());
         let scope = CancelScope::new(None);
         let token = scope.token().child();
         let rejected = runtime
             .submit(
                 &task_budget,
+                NonZeroUsize::MIN,
                 &token,
                 Wake::default(),
                 String::from("detector"),
@@ -115,5 +96,57 @@ mod tests {
         assert_eq!(rejected.recover_payload(), "detector");
         assert_eq!(task_budget.active(), 0);
         assert_eq!(runtime.budget.active(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn worker_budget_reads_the_retained_config_on_each_submission() {
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .expect("test pool"),
+        );
+        let mut runtime = ComputeRuntime::new(WorkerConfig::new().with_pool(pool));
+        let budget = Arc::new(Budget::default());
+        let scope = CancelScope::new(None);
+        let token = scope.token().child();
+        let (started, started_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        runtime
+            .submit(
+                &budget,
+                NonZeroUsize::MIN,
+                &token,
+                Wake::default(),
+                (),
+                move |_, ()| {
+                    started.send(()).ok();
+                    release_rx.recv().ok();
+                },
+            )
+            .expect("first job admitted");
+        started_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(2))
+            .expect("first job started");
+
+        runtime.config.max_compute_tasks = NonZeroUsize::new(2).expect("nonzero");
+        let second_budget = Arc::new(Budget::default());
+        let (done, done_rx) = mpsc::channel();
+        runtime
+            .submit(
+                &second_budget,
+                NonZeroUsize::MIN,
+                &token,
+                Wake::default(),
+                (),
+                move |_, ()| {
+                    done.send(()).ok();
+                },
+            )
+            .expect("new config limit admits another job");
+        done_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(2))
+            .expect("second job ran");
+        release.send(()).expect("release first job");
     }
 }

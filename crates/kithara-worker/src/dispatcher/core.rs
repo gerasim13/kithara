@@ -8,15 +8,15 @@ use kithara_platform::{
 };
 use kithara_test_macros as kithara;
 
-use super::state::{Command, SchedulerBudgets, Slot};
-use crate::{Event, Observer, PassOutcome, PassReport, TaskId, TickResult, Wake};
+use super::state::{Command, Slot};
+use crate::{DispatcherConfig, Event, Observer, PassOutcome, PassReport, TaskId, TickResult, Wake};
 
 #[kithara::flash(true)]
 pub(super) fn run_loop(
     cmd_rx: &mpsc::Receiver<Command>,
     wake: &Wake,
     cancel: &CancelToken,
-    budgets: SchedulerBudgets,
+    budgets: &DispatcherConfig,
     mut observer: Box<dyn Observer>,
 ) {
     let mut slots = Vec::new();
@@ -48,7 +48,7 @@ pub(super) fn run_loop(
 pub(super) fn run_pass(
     slots: &mut Vec<Slot>,
     needs_reorder: &mut bool,
-    budgets: SchedulerBudgets,
+    budgets: &DispatcherConfig,
     observer: &mut dyn Observer,
 ) -> PassReport {
     cancel_cancelled(slots);
@@ -205,7 +205,7 @@ pub(super) fn reorder_slots(slots: &mut [Slot]) {
 
 pub(super) fn produce_pass(
     slots: &mut [Slot],
-    budgets: SchedulerBudgets,
+    budgets: &DispatcherConfig,
     observer: &mut dyn Observer,
 ) -> PassReport {
     let mut report = PassReport::new(slots.len());
@@ -216,7 +216,7 @@ pub(super) fn produce_pass(
         let mut last = TickResult::Progress;
         let mut progressed = false;
 
-        for tick in 0..budgets.task_burst {
+        for tick in 0..budgets.task_burst.get() {
             if tick > 0 {
                 slot.task.recycle();
             }
@@ -306,14 +306,14 @@ fn report_outcome(observer: &mut dyn Observer, report: PassReport) {
 
 pub(super) fn park_after_outcome(
     wake: &Wake,
-    budgets: SchedulerBudgets,
+    budgets: &DispatcherConfig,
     report: PassReport,
     progress_streak: &mut u32,
 ) {
     match report.outcome {
         PassOutcome::Progress => {
             *progress_streak += 1;
-            if *progress_streak >= budgets.fairness_yield_interval {
+            if *progress_streak >= budgets.fairness_yield_interval.get() {
                 *progress_streak = 0;
                 yield_now();
             }
@@ -335,7 +335,7 @@ pub(super) fn park_after_outcome(
 
 #[kithara::measure(label = "worker.backpressure.wait")]
 #[kithara::hang_watchdog]
-fn wait_for_backpressure(wake: &Wake, budgets: SchedulerBudgets) {
+fn wait_for_backpressure(wake: &Wake, budgets: &DispatcherConfig) {
     let poll_interval = budgets.backpressure_poll_interval;
     let deadline = budgets.wait_timeout;
     if poll_interval.is_zero() || deadline.is_zero() {

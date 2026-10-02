@@ -6,7 +6,6 @@ use kithara_platform::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 use kithara_test_macros as kithara;
 #[cfg(test)]
@@ -21,22 +20,15 @@ pub(super) struct Reservation {
     capacity: Arc<Capacity>,
 }
 
+#[derive(Default)]
 pub(super) struct Capacity {
-    pub(super) limit: usize,
     active: AtomicUsize,
 }
 
 impl Capacity {
-    pub(super) fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            active: AtomicUsize::new(0),
-        }
-    }
-
-    pub(super) fn reserve(capacity: &Arc<Self>) -> Option<Reservation> {
+    pub(super) fn reserve(capacity: &Arc<Self>, limit: usize) -> Option<Reservation> {
         let mut active = capacity.active.load(Ordering::Acquire);
-        while active < capacity.limit {
+        while active < limit {
             match capacity.active.compare_exchange_weak(
                 active,
                 active + 1,
@@ -130,20 +122,4 @@ impl Drop for Slot {
     fn drop(&mut self) {
         self.cancel();
     }
-}
-
-#[derive(Clone, Copy, kithara_config::Config)]
-pub(super) struct SchedulerBudgets {
-    #[config(value)]
-    pub(super) backpressure_poll_interval: Duration,
-    #[config(value)]
-    pub(super) idle_timeout: Duration,
-    #[config(value)]
-    pub(super) slow_tick_threshold: Duration,
-    #[config(value)]
-    pub(super) wait_timeout: Duration,
-    #[config(value)]
-    pub(super) fairness_yield_interval: u32,
-    #[config(value)]
-    pub(super) task_burst: u32,
 }

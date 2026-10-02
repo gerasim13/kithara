@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_config::Config;
 use kithara_derive::Patch;
-use kithara_platform::{CancelGroup, time::Duration};
+use kithara_platform::{CancelGroup, sync::Mutex, time::Duration};
 
 use crate::{Observer, observer::Event};
 
@@ -14,10 +14,10 @@ pub struct DispatcherConfig {
     /// Where this dispatcher reports its passes. Not a document key: an
     /// observer is a live object only code can hand over.
     #[config(skip = "transferred to the dispatcher loop", builder(
-        default = Box::new(NoopObserver),
-        with = |observer: impl Observer| Box::new(observer)
+        default = Mutex::new(Some(Box::new(NoopObserver) as Box<dyn Observer>)),
+        with = |observer: impl Observer| Mutex::new(Some(Box::new(observer) as Box<dyn Observer>))
     ), patch(skip))]
-    pub(crate) observer: Box<dyn Observer>,
+    pub(crate) observer: Mutex<Option<Box<dyn Observer>>>,
     /// Poll interval for deferred wakes while a task's sink is full.
     #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     pub(crate) backpressure_poll_interval: Duration,

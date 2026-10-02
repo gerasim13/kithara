@@ -9,19 +9,21 @@ use kithara_platform::{
 };
 
 use super::ComputePool;
-use crate::{Wake, config::PoolConfig};
+use crate::{Wake, WorkerConfig, config::PoolConfig};
 
 /// Worker-owned compute seam pairing budget admission with a platform pool.
 pub(crate) struct ComputeRuntime {
     pub(super) budget: Arc<Budget>,
     pub(super) pool: ComputePool,
+    pub(crate) config: WorkerConfig,
 }
 
 impl ComputeRuntime {
-    pub(crate) fn new(pool: PoolConfig, max_in_flight: NonZeroUsize) -> Self {
+    pub(crate) fn new(config: WorkerConfig) -> Self {
         Self {
-            budget: Arc::new(Budget::new(max_in_flight)),
-            pool: ComputePool::new(pool),
+            budget: Arc::new(Budget::default()),
+            pool: ComputePool::new(),
+            config,
         }
     }
 
@@ -33,6 +35,7 @@ impl ComputeRuntime {
     pub(crate) fn submit<T, F>(
         &self,
         task_budget: &Arc<Budget>,
+        task_limit: NonZeroUsize,
         task_token: &CancelToken,
         wake: Wake,
         payload: T,
@@ -45,22 +48,23 @@ impl ComputeRuntime {
         if task_token.is_cancelled() {
             return Err(ComputeRejected::new(ComputeSubmitError::Cancelled, payload));
         }
-        if self.pool.is_disabled() {
+        if matches!(self.config.pool, PoolConfig::Disabled) {
             return Err(ComputeRejected::new(
                 ComputeSubmitError::Unavailable,
                 payload,
             ));
         }
-        let Some(task_permit) = Budget::try_acquire(task_budget) else {
+        let Some(task_permit) = Budget::try_acquire(task_budget, task_limit) else {
             return Err(ComputeRejected::new(ComputeSubmitError::Saturated, payload));
         };
-        let Some(worker_permit) = Budget::try_acquire(&self.budget) else {
+        let Some(worker_permit) = Budget::try_acquire(&self.budget, self.config.max_compute_tasks)
+        else {
             return Err(ComputeRejected::new(ComputeSubmitError::Saturated, payload));
         };
         if task_token.is_cancelled() {
             return Err(ComputeRejected::new(ComputeSubmitError::Cancelled, payload));
         }
-        let spawner = match self.pool.spawner() {
+        let spawner = match self.pool.spawner(&self.config.pool) {
             Ok(spawner) => spawner,
             Err(reason) => return Err(ComputeRejected::new(reason, payload)),
         };
@@ -87,27 +91,20 @@ impl ComputeRuntime {
 }
 
 /// In-flight admission counter.
+#[derive(Default)]
 pub(crate) struct Budget {
     active: AtomicUsize,
-    limit: NonZeroUsize,
 }
 
 impl Budget {
-    pub(crate) fn new(limit: NonZeroUsize) -> Self {
-        Self {
-            limit,
-            active: AtomicUsize::new(0),
-        }
-    }
-
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) fn active(&self) -> usize {
         self.active.load(Ordering::Acquire)
     }
 
-    fn try_acquire(budget: &Arc<Self>) -> Option<BudgetPermit> {
+    fn try_acquire(budget: &Arc<Self>, limit: NonZeroUsize) -> Option<BudgetPermit> {
         let mut active = budget.active.load(Ordering::Acquire);
-        while active < budget.limit.get() {
+        while active < limit.get() {
             match budget.active.compare_exchange_weak(
                 active,
                 active + 1,
