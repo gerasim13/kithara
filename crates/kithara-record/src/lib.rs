@@ -2,6 +2,8 @@
 
 //! Storage-neutral recording over Kithara's continuous encoder sessions.
 
+#[cfg(feature = "assets")]
+pub mod assets;
 mod config;
 mod core;
 mod error;

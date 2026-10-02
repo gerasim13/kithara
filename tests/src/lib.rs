@@ -32,11 +32,7 @@ pub mod architecture_trace;
 pub mod artifact_timeline;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod assets_ext;
-#[cfg(all(
-    feature = "all",
-    not(target_arch = "wasm32"),
-    not(target_os = "android")
-))]
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod audio_artifact;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use kithara_test_utils::bufpool as bufpool_ext;

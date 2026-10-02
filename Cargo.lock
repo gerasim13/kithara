@@ -5444,7 +5444,9 @@ dependencies = [
  "kithara-app",
  "kithara-devtools",
  "kithara-dsp",
+ "kithara-encode",
  "kithara-events",
+ "kithara-record",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5726,6 +5728,7 @@ name = "kithara-record"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "kithara-assets",
  "kithara-bufpool",
  "kithara-encode",
  "kithara-output",
@@ -5737,6 +5740,7 @@ dependencies = [
  "kithara-worker",
  "ringbuf",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

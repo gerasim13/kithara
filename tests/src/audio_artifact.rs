@@ -12,11 +12,10 @@ use kithara::{
         AcquisitionResult, AssetResource, AssetScope, AssetSource, AssetStore, StorageBackend,
         WriteSide,
     },
-    encode::EncodeConfig,
-    record::{RecordingConfig, RecordingCore},
     warp::BeatGridSnapshot,
 };
-use kithara_app::recording::AssetPartSink;
+use kithara_encode::EncodeConfig;
+use kithara_record::{RecordingConfig, RecordingCore, assets::AssetPartSink};
 use serde::Serialize;
 use serde_json::Value;
 

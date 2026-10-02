@@ -9,9 +9,8 @@ use kithara::{
     signal::AudioSpec,
     warp::BeatGridSnapshot,
 };
-#[cfg(not(target_os = "android"))]
-use kithara_integration_tests::audio_artifact::{AudioArtifactTap, artifact_label};
 use kithara_integration_tests::{
+    audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     offline::{OfflineHostHarness, OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
 };
@@ -345,7 +344,6 @@ async fn the_metronome_clicks_on_the_frame_nearest_every_computed_beat() {
     let ride = host_ride().await;
     let beats = computed_beats(&ride.stretches(), ride.end);
 
-    #[cfg(not(target_os = "android"))]
     if let Some(mut artifact) =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
             .expect("listening artifact")
@@ -564,7 +562,6 @@ async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
         master.len() >= placed.len() && output.len() >= placed.len(),
         "the taps hold the whole recording"
     );
-    #[cfg(not(target_os = "android"))]
     if let Some(mut artifact) =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
             .expect("listening artifact")

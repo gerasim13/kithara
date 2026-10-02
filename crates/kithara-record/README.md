@@ -19,7 +19,7 @@ sessions.
 
 `RecordingCore` converts interleaved `f32` PCM into one independently playable
 configured part. `RecordingSink` is the transactional byte boundary: write at an
-offset, commit the final length, or abort. Application adapters decide where
-those bytes live.
+offset, commit the final length, or abort. The optional `assets` feature
+provides `AssetPartSink` for transactional recording into `AssetStore`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-record) for transaction and failure invariants.

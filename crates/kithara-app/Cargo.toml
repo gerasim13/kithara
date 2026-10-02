@@ -89,7 +89,7 @@ kithara-app-document = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-events = { workspace = true }
-kithara-record = { workspace = true }
+kithara-record = { workspace = true, features = ["assets"] }
 kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
