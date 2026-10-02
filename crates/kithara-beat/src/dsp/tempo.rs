@@ -66,17 +66,12 @@ pub enum TempoError {
 /// place, but the merged policy is judged as a whole before it is committed:
 /// a band the comb never scores is refused, not clamped.
 #[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
-#[config(builder(existing), patch(validate = Self::validated, error = TempoError))]
+#[config(builder(existing), fields(value), patch(validate = Self::validated, error = TempoError))]
 pub struct Tempo {
-    #[config(value)]
     drift: f32,
-    #[config(value)]
     high: f32,
-    #[config(value)]
     low: f32,
-    #[config(value)]
     prior: f32,
-    #[config(value)]
     tolerance: f32,
 }
 

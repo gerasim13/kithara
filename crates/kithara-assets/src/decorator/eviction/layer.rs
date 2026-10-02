@@ -78,6 +78,7 @@ pub(crate) trait ByteRecorder: Send + Sync {
 /// - When `enabled` is `false`, all operations delegate directly to the inner layer.
 #[derive_where::derive_where(Clone; A: Assets)]
 #[derive(derive_more::Debug, kithara_config::ConfigOwner)]
+#[debug("EvictAssets {{ .. }}")]
 #[config_owner(AssetStoreConfig<S>, config)]
 pub struct EvictAssets<A, S>
 where
@@ -85,26 +86,18 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Single canonical removal channel — see [`crate::backend::AssetDeleter`].
-    #[debug(skip)]
     deleter: Arc<dyn AssetDeleter>,
-    #[debug(skip)]
     inner: Arc<A>,
-    #[debug(skip)]
     seen: Arc<DashSet<String>>,
-    #[debug(skip)]
     cancel: CancelToken,
-    #[debug(skip)]
     config: Arc<AssetStoreConfig<S>>,
-    #[debug(skip)]
     events: EvictionEvents,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
     /// LRU bookkeeping and disk-side deletion stay in sync.
-    #[debug(skip)]
     lru: LruIndex,
     /// Shared pins index — same instance used by `LeaseAssets` for
     /// pin/unpin lifecycle and by `DiskAssetDeleter` for full-asset
     /// removal cleanup.
-    #[debug(skip)]
     pins: PinsIndex,
 }
 
