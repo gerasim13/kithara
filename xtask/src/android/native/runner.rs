@@ -217,7 +217,13 @@ fn resolve(
     invoke: &mut dyn FnMut(&[String]) -> Result<String>,
 ) -> Result<Answer> {
     if test == "player::facade::tests::repeat_mode_round_trips_and_notifies_observer" {
-        let output = invoke(&["--exact".to_owned(), test.to_owned()])?;
+        let output = invoke(&[
+            "--test-threads=1".to_owned(),
+            "--skip".to_owned(),
+            "player::tests".to_owned(),
+            "--skip".to_owned(),
+            "pools::tests".to_owned(),
+        ])?;
         let mut report = report::parse(&output);
         let outcome = report
             .tests
@@ -601,11 +607,20 @@ mod tests {
     }
 
     #[test]
-    fn observer_diagnostic_runs_alone_and_returns_its_captured_output() {
+    fn observer_diagnostic_runs_before_later_tests_and_returns_its_captured_output() {
         let path = Path::new("/unused/report.json");
         let test = "player::facade::tests::repeat_mode_round_trips_and_notifies_observer";
         let answer = resolve(path, test, &mut |args| {
-            assert_eq!(args, ["--exact", test]);
+            assert_eq!(
+                args,
+                [
+                    "--test-threads=1",
+                    "--skip",
+                    "player::tests",
+                    "--skip",
+                    "pools::tests"
+                ]
+            );
             Ok(format!(
                 "running 1 test\ntest {test} ... FAILED\n\nfailures:\n\n---- {test} stdout ----\nrepeat-mode stage: observer installed\n\nfailures:\n    {test}\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s\n"
             ))
