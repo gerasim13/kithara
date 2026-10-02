@@ -11,17 +11,17 @@ use ringbuf::{
 use super::{Control, Counters, FormatChange};
 use crate::{
     BroadcastResult,
-    config::{BroadcastConfig, BroadcastRuntimeConfig},
+    config::BroadcastConfig,
     segment::{Segment, Segmenter},
     server::{self, Origin},
     window::LiveWindow,
 };
 
-pub(super) struct BroadcastTask {
+pub(super) struct BroadcastTask<S> {
     control: Arc<Control>,
     counters: Arc<Counters>,
     origin: Arc<Origin>,
-    config: BroadcastRuntimeConfig,
+    config: BroadcastConfig<S>,
     formats: HeapCons<FormatChange>,
     pcm: RingCons<SampleBuffer>,
     window: LiveWindow,
@@ -32,22 +32,26 @@ pub(super) struct BroadcastTask {
     segmenter: Segmenter,
     counted_drops: u64,
     frames: u64,
+    generation_capacity: usize,
 }
 
-impl BroadcastTask {
-    pub(super) fn new<S>(
-        config: &BroadcastConfig<S>,
+impl<S> BroadcastTask<S>
+where
+    S: Send + Sync + 'static,
+{
+    pub(super) fn new(
+        config: BroadcastConfig<S>,
         pcm: RingCons<SampleBuffer>,
         formats: HeapCons<FormatChange>,
         control: Arc<Control>,
         scratch: SampleBuffer,
         completed: Sender<()>,
     ) -> BroadcastResult<Self> {
-        let window = LiveWindow::new(config)?;
-        let segmenter = Segmenter::new(config)?;
-        let config = BroadcastRuntimeConfig::from(config);
+        let window = LiveWindow::new(&config)?;
         let encoder = Self::open_encoder(&config)?;
+        let segmenter = Segmenter::new(&config)?;
         let bit_rate = config.bit_rate;
+        let generation_capacity = config.generation_capacity.get();
         Ok(Self {
             completed: Some(completed),
             config,
@@ -57,6 +61,7 @@ impl BroadcastTask {
             encoder: Some(encoder),
             formats,
             frames: 0,
+            generation_capacity,
             next_format: None,
             origin: Arc::new(Origin {
                 snapshot: ArcSwap::from_pointee(window.snapshot()),
@@ -133,7 +138,7 @@ impl BroadcastTask {
         self.next_format
     }
 
-    fn open_encoder(config: &BroadcastRuntimeConfig) -> BroadcastResult<StreamEncoder> {
+    fn open_encoder(config: &BroadcastConfig<S>) -> BroadcastResult<StreamEncoder> {
         Ok(StreamEncoder::builder()
             .backend(StreamBackend::Fdk)
             .sample_rate(config.sample_rate)
@@ -208,8 +213,7 @@ impl BroadcastTask {
             });
         }
         self.finish_encoder()?;
-        let mut config = self.config;
-        config.sample_rate = change.spec.sample_rate.get();
+        let config = self.config.with_sample_rate(change.spec.sample_rate.get());
         if let Some(segment) = self.segmenter.reconfigure(&config)? {
             self.publish(segment);
         }
@@ -220,7 +224,10 @@ impl BroadcastTask {
     }
 }
 
-impl Task for BroadcastTask {
+impl<S> Task for BroadcastTask<S>
+where
+    S: Send + Sync + 'static,
+{
     fn on_cancel(&mut self) {
         self.encoder.take();
         self.complete();
@@ -229,7 +236,7 @@ impl Task for BroadcastTask {
     fn tick(&mut self) -> TickResult {
         if self.control.generation_overflowed.load(Ordering::Acquire) {
             return self.fail(&crate::BroadcastError::GenerationQueueOverflow {
-                capacity: self.config.generation_capacity,
+                capacity: self.generation_capacity,
             });
         }
         let Some(mut scratch) = self.scratch.take() else {

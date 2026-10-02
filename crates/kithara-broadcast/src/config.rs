@@ -21,11 +21,11 @@ use crate::{BroadcastError, BroadcastResult, consts};
 #[derive_where::derive_where(Clone)]
 pub struct BroadcastConfig<S> {
     /// Shared worker used to schedule the packager task.
-    #[config(skip = "transferred to the broadcast dispatcher", builder(start_fn))]
+    #[config(skip = "runtime worker handle", builder(start_fn))]
     #[patch(skip)]
     pub worker: Worker,
     /// Typed pool facade used for bounded packager scratch.
-    #[config(skip = "transferred to the packager buffers", builder(start_fn))]
+    #[config(skip = "runtime pool handle", builder(start_fn))]
     #[patch(skip)]
     pub pools: PoolRegion<S>,
     /// Codec emitted into HLS media segments. Not a document key:
@@ -144,12 +144,22 @@ impl<S> fmt::Debug for BroadcastConfig<S> {
 }
 
 impl<S> BroadcastConfig<S> {
+    const MILLIS_PER_SECOND: u64 = 1_000;
+    const MIN_TARGETS: u64 = 3;
+
     pub(crate) fn target_seconds(&self) -> BroadcastResult<u64> {
         Ok(self.target_ticks()?.div_ceil(u64::from(self.sample_rate)))
     }
 
     pub(crate) fn target_ticks(&self) -> BroadcastResult<u64> {
-        BroadcastRuntimeConfig::from(self).target_ticks()
+        u64::try_from(self.segment_target.as_millis())
+            .ok()
+            .and_then(|millis| millis.checked_mul(u64::from(self.sample_rate)))
+            .map(|ticks| ticks / Self::MILLIS_PER_SECOND)
+            .filter(|ticks| *ticks > 0)
+            .ok_or(BroadcastError::InvalidConfig {
+                field: "segment_target",
+            })
     }
 
     pub(crate) fn validate(&self) -> BroadcastResult<()> {
@@ -179,7 +189,20 @@ impl<S> BroadcastConfig<S> {
             });
         }
 
-        BroadcastRuntimeConfig::from(self).validate_span()
+        let window = u64::try_from(self.window)
+            .map_err(|_| BroadcastError::InvalidConfig { field: "window" })?;
+        let span_ts = window
+            .checked_mul(self.target_ticks()?)
+            .ok_or(BroadcastError::InvalidConfig { field: "window" })?;
+        let minimum_ts = Self::MIN_TARGETS * self.target_seconds()? * u64::from(self.sample_rate);
+        if span_ts < minimum_ts {
+            return Err(BroadcastError::PlaylistTooShort {
+                span_ts,
+                minimum_ts,
+                window: self.window,
+            });
+        }
+        Ok(())
     }
 
     /// Copy this configuration with the measured master sample rate.
@@ -189,70 +212,6 @@ impl<S> BroadcastConfig<S> {
             sample_rate,
             ..self.clone()
         }
-    }
-}
-
-/// Settings the packager still needs after startup resources are transferred.
-#[derive(Clone, Copy, Config)]
-pub(crate) struct BroadcastRuntimeConfig {
-    #[config(value)]
-    pub(crate) bit_rate: u64,
-    #[config(value)]
-    pub(crate) channels: u16,
-    #[config(value)]
-    pub(crate) generation_capacity: usize,
-    #[config(value)]
-    pub(crate) sample_rate: u32,
-    #[config(value)]
-    pub(crate) segment_target: Duration,
-    #[config(value)]
-    pub(crate) window: usize,
-}
-
-impl<S> From<&BroadcastConfig<S>> for BroadcastRuntimeConfig {
-    fn from(config: &BroadcastConfig<S>) -> Self {
-        Self::builder()
-            .bit_rate(config.bit_rate)
-            .channels(config.channels)
-            .generation_capacity(config.generation_capacity.get())
-            .sample_rate(config.sample_rate)
-            .segment_target(config.segment_target)
-            .window(config.window)
-            .build()
-    }
-}
-
-impl BroadcastRuntimeConfig {
-    const MILLIS_PER_SECOND: u64 = 1_000;
-    const MIN_TARGETS: u64 = 3;
-
-    pub(crate) fn target_ticks(self) -> BroadcastResult<u64> {
-        u64::try_from(self.segment_target.as_millis())
-            .ok()
-            .and_then(|millis| millis.checked_mul(u64::from(self.sample_rate)))
-            .map(|ticks| ticks / Self::MILLIS_PER_SECOND)
-            .filter(|ticks| *ticks > 0)
-            .ok_or(BroadcastError::InvalidConfig {
-                field: "segment_target",
-            })
-    }
-
-    pub(crate) fn validate_span(self) -> BroadcastResult<()> {
-        let window = u64::try_from(self.window)
-            .map_err(|_| BroadcastError::InvalidConfig { field: "window" })?;
-        let span_ts = window
-            .checked_mul(self.target_ticks()?)
-            .ok_or(BroadcastError::InvalidConfig { field: "window" })?;
-        let target_seconds = self.target_ticks()?.div_ceil(u64::from(self.sample_rate));
-        let minimum_ts = Self::MIN_TARGETS * target_seconds * u64::from(self.sample_rate);
-        if span_ts < minimum_ts {
-            return Err(BroadcastError::PlaylistTooShort {
-                span_ts,
-                minimum_ts,
-                window: self.window,
-            });
-        }
-        Ok(())
     }
 }
 

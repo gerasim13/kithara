@@ -2,10 +2,7 @@ use bytes::{Bytes, BytesMut};
 use kithara_encode::EncodedAccessUnit;
 
 use crate::{
-    BroadcastError, BroadcastResult,
-    adts::AdtsPacker,
-    config::{BroadcastConfig, BroadcastRuntimeConfig},
-    id3::TimestampTag,
+    BroadcastError, BroadcastResult, adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag,
 };
 
 /// A closed ADTS media segment and its playlist metadata.
@@ -42,13 +39,11 @@ impl Segmenter {
     /// Returns an error for invalid configuration or unsupported ADTS audio.
     pub fn new<S>(config: &BroadcastConfig<S>) -> BroadcastResult<Self> {
         config.validate()?;
-        let runtime = BroadcastRuntimeConfig::from(config);
-        let (packer, target_ts) = Self::prepare(&runtime)?;
 
         Ok(Self {
-            packer,
-            timescale: runtime.sample_rate,
-            target_ts,
+            packer: AdtsPacker::new(config.sample_rate, config.channels)?,
+            timescale: config.sample_rate,
+            target_ts: config.target_ticks()?,
             next_seq: 0,
             stream_ts: 0,
             frames: Vec::new(),
@@ -116,19 +111,13 @@ impl Segmenter {
         Ok(None)
     }
 
-    fn prepare(config: &BroadcastRuntimeConfig) -> BroadcastResult<(AdtsPacker, u64)> {
-        config.validate_span()?;
-        Ok((
-            AdtsPacker::new(config.sample_rate, config.channels)?,
-            config.target_ticks()?,
-        ))
-    }
-
-    pub(crate) fn reconfigure(
+    pub(crate) fn reconfigure<S>(
         &mut self,
-        config: &BroadcastRuntimeConfig,
+        config: &BroadcastConfig<S>,
     ) -> BroadcastResult<Option<Segment>> {
-        let (packer, target_ts) = Self::prepare(config)?;
+        config.validate()?;
+        let packer = AdtsPacker::new(config.sample_rate, config.channels)?;
+        let target_ts = config.target_ticks()?;
         let closed = self.close();
         self.packer = packer;
         self.timescale = config.sample_rate;

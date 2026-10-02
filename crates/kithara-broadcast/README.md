@@ -58,7 +58,7 @@ let snapshot = window.snapshot();
 
 ## Key Types
 
-- `BroadcastConfig` - startup audio, segment, worker, cancellation, and origin settings; each runtime owner keeps only what it needs.
+- `BroadcastConfig` - the shared runtime, audio, segments, limits, cancellation, and bind address.
 - `Broadcast` / `BroadcastHandle` - the live service: URL, status, and the graceful end of the broadcast.
 - `BroadcastOutput` - the bounded non-blocking stereo `LiveOutput` installed in the master output group.
 - `Segmenter` - ADTS framing plus segment rotation on the media clock.
