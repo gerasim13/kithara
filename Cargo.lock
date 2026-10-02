@@ -5363,6 +5363,7 @@ dependencies = [
  "bytes",
  "gloo-timers",
  "kithara",
+ "kithara-config",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
