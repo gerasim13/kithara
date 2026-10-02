@@ -21,7 +21,10 @@ use super::{
     segments::FileSegmentIndex,
 };
 use crate::{
-    TotalBytesSource, config::FileConfig, coord::FileCoord, error::SourceError as FileSourceError,
+    TotalBytesSource,
+    config::{FileConfig, FileConfigOwnerAccess},
+    coord::FileCoord,
+    error::SourceError as FileSourceError,
 };
 
 /// Inputs for constructing a local/cached file source.
@@ -344,7 +347,7 @@ where
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.seek_epoch_handle(),
-            self.inner.config.reader_event_capacity,
+            self.reader_event_capacity(),
         );
         Some(Box::new(hooks))
     }

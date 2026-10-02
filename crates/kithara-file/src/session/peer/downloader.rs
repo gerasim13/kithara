@@ -17,7 +17,7 @@ use kithara_platform::{
 use kithara_storage::ResourceStatus;
 
 use super::response::{FetchCompletion, FetchWriter, response_contract};
-use crate::{coord::FileCoord, session::inner::FileInner};
+use crate::{config::FileConfigOwnerAccess, coord::FileCoord, session::inner::FileInner};
 
 /// Gap-driven downloader for one remote file session.
 /// It emits at most one fetch and waits when finite demand is already present.
@@ -114,7 +114,7 @@ where
             start,
         } = plan;
         let url = inner.remote_url().clone();
-        let headers = inner.config.headers.clone();
+        let headers = inner.headers().clone();
         let source_cancel = inner.source.cancel.clone();
         let fetch_cancel = writer_cancel.child();
         let cancel_from_source = fetch_cancel.clone();

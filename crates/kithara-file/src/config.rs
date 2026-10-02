@@ -23,7 +23,7 @@ pub enum FileSrc {
 ///
 /// Used with `Stream::<File<S>>::new(config)`.
 #[derive(Config, Patch)]
-#[config(builder(on(String, into), start_fn = for_src))]
+#[config(owner_access, builder(on(String, into), start_fn = for_src))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 #[derive(derive_more::Debug)]
@@ -35,7 +35,8 @@ where
     #[config(
         skip = "retained source identity has no patch representation",
         builder(start_fn),
-        patch(skip)
+        patch(skip),
+        field(get)
     )]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
@@ -73,7 +74,8 @@ where
     /// Additional HTTP headers to include in all requests.
     #[config(
         skip = "retained request headers have no patch representation",
-        patch(skip)
+        patch(skip),
+        field(get)
     )]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
@@ -92,7 +94,7 @@ where
     /// pass emits at most one progress event per decoded chunk, so the default
     /// bounds the worst-case post-seek skip burst without blocking the decode
     /// core.
-    #[config(value, builder(default = 256))]
+    #[config(value, builder(default = 256), field(get, copy))]
     pub reader_event_capacity: usize,
 }
 

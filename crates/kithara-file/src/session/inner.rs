@@ -23,7 +23,7 @@ use url::Url;
 use super::segments::FileSegmentIndex;
 use crate::{
     FileError, FileEvent, TotalBytesSource,
-    config::{FileConfig, FileSrc},
+    config::{FileConfig, FileConfigOwnerAccess, FileSrc},
     consts,
     coord::FileCoord,
 };
@@ -73,6 +73,8 @@ where
 
 /// Shared inner state for a `FileSource`. All fields are either immutable
 /// (set at construction) or self-synchronizing - there is no `Mutex`.
+#[derive(kithara_config::ConfigOwner)]
+#[config_owner(FileConfig<S>, config)]
 pub(crate) struct FileInner<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -145,7 +147,7 @@ where
     }
 
     pub(crate) fn remote_url(&self) -> &Url {
-        let FileSrc::Remote(url) = &self.config.src else {
+        let FileSrc::Remote(url) = self.src() else {
             panic!("file peer is registered only for remote sources");
         };
         url
