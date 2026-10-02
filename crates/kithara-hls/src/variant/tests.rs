@@ -25,9 +25,11 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{PlanConfig, SizeDemand, VariantParts, segment_placeholder_size};
+use super::{SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
-    HlsEvent, consts,
+    HlsEvent,
+    config::HlsConfig,
+    consts,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         Downloading, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -81,12 +83,25 @@ fn ctx_over(
             })
             .expect("test asset scope"),
         seek_epoch: 0,
-        headers: None,
+        look_ahead_segments: None,
         signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
-        config: PlanConfig::builder()
-            .prefetch_budget(prefetch_budget)
-            .build(),
+        config: Arc::new(
+            HlsConfig::for_url(Url::parse("https://example.com/master.m3u8").expect("master url"))
+                .store(store.clone())
+                .pools(crate::test_pools::pools())
+                .download_batch_size(prefetch_budget)
+                .build(),
+        ),
     }
+}
+
+#[kithara::test]
+fn variant_keeps_the_stream_config_instance() {
+    let ctx = test_ctx(7);
+    let variant = make_var(0, 0, &[100], &ctx);
+
+    assert!(Arc::ptr_eq(&variant.config, &ctx.config));
+    assert_eq!(variant.config.download_batch_size, 7);
 }
 
 fn make_init(size: u64, scope: &TestAssetScope) -> Option<Segment> {
@@ -1297,7 +1312,7 @@ fn dispatch_respects_budget() {
 #[kithara::test]
 fn dispatch_respects_segment_lookahead_cap() {
     let mut ctx = test_ctx(10);
-    ctx.config.look_ahead_segments = Some(2);
+    ctx.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100; 6], &ctx);
     v.rebuild(&ctx, 0);
     let session = active_session(&v, &ctx, 0);
@@ -2522,7 +2537,7 @@ fn dispatch_owed_stops_after_the_next_segment() {
 #[kithara::test]
 fn dispatch_owed_overrides_the_segment_lookahead_cap() {
     let mut ctx = test_ctx(10);
-    ctx.config.look_ahead_segments = Some(2);
+    ctx.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
     let session = active_session(&v, &ctx, 0);
@@ -2547,7 +2562,9 @@ fn dispatch_owed_overrides_the_segment_lookahead_cap() {
 #[kithara::test]
 fn dispatch_owed_overrides_the_byte_lookahead_cap() {
     let mut ctx = test_ctx(10);
-    ctx.config.look_ahead_bytes = Some(150);
+    Arc::get_mut(&mut ctx.config)
+        .expect("unshared test config")
+        .look_ahead_bytes = Some(150);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
     let session = active_session(&v, &ctx, 0);

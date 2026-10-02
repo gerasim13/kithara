@@ -193,12 +193,13 @@ mod tests {
 
     use super::*;
     use crate::{
+        config::HlsConfig,
         peer::HlsPeer,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         signal::SizeSignal,
         stream::HlsCoordEnv,
-        variant::{DispatchTokens, HlsVariant, PlanConfig, PlanCtx, VariantParts},
+        variant::{DispatchTokens, HlsVariant, PlanCtx, VariantParts},
     };
 
     type TestHlsCoord = HlsCoord<crate::test_pools::TestPools>;
@@ -261,7 +262,8 @@ mod tests {
                 HlsCoordEnv {
                     cancel,
                     scope: ctx.scope.clone(),
-                    headers: None,
+                    config: Arc::clone(&ctx.config),
+                    look_ahead_segments: ctx.look_ahead_segments,
                     emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                     signal: ctx.signal.clone(),
                 },
@@ -291,12 +293,16 @@ mod tests {
                     })
                     .expect("source asset scope"),
                 seek_epoch: 0,
-                headers: None,
+                look_ahead_segments: None,
                 signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
-                config: PlanConfig::builder()
-                    .prefetch_budget(8)
-                    .look_ahead_bytes(look_ahead_bytes)
-                    .build(),
+                config: Arc::new(
+                    HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
+                        .store((*store).clone())
+                        .pools(crate::test_pools::pools())
+                        .download_batch_size(8)
+                        .look_ahead_bytes(look_ahead_bytes)
+                        .build(),
+                ),
             }
         }
 

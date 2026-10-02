@@ -56,7 +56,7 @@ pub enum SizeProbeMethod {
 ///
 /// Used with `Stream::<Hls<S>>::new(config)`.
 #[derive(Config, Patch)]
-#[config(construction, builder(start_fn = for_url))]
+#[config(builder(start_fn = for_url))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 #[derive(derive_more::Debug)]

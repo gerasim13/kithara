@@ -6,10 +6,8 @@ use std::{
 use bon::bon;
 use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
 use kithara_bufpool::HasPool;
-use kithara_config::Config;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
-use kithara_net::Headers;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -29,50 +27,12 @@ use super::{
 };
 use crate::{
     HlsError, HlsEvent, HlsResult,
-    config::SizeProbeMethod,
+    config::HlsConfig,
     consts,
     playlist::PlaylistState,
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
 };
-
-/// The `HlsConfig`-derived slice of a plan: everything the dispatch policy
-/// reads, resolved once when the stream is built and carried unchanged into
-/// every [`PlanCtx`] the peer constructs afterwards. Kept apart from the
-/// per-activation runtime handles so a new parameter lands in the config and
-/// not in another positional argument.
-#[derive(Clone, Copy, Debug, Config)]
-pub(crate) struct PlanConfig {
-    /// Max bytes the downloader may be ahead of the reader before
-    /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
-    /// `HlsConfig::look_ahead_bytes`:
-    /// - `Some(n)` — when a segment's start offset exceeds
-    ///   `session.position() + n`, leave it (and everything after)
-    ///   in the queue; further prefetch waits for the reader to
-    ///   advance.
-    /// - `None` — no cap (download as fast as possible).
-    ///
-    /// `Init` is always emitted regardless — the fMP4 demuxer needs
-    /// it before any segment can decode.
-    #[config(value)]
-    pub(crate) look_ahead_bytes: Option<u64>,
-    /// Max media segments the downloader may keep ahead of the reader.
-    /// This is derived from small ephemeral cache capacity, where byte-only
-    /// lookahead can otherwise prefetch more resources than the cache can retain
-    /// and trigger eviction/rebuild thrash.
-    #[config(value)]
-    pub(crate) look_ahead_segments: Option<usize>,
-    #[config(value, builder(default))]
-    pub(crate) size_probe_method: SizeProbeMethod,
-    /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
-    /// gets before an acquire failure settles it terminally.
-    #[config(value, builder(default = consts::DEFAULT_ACQUIRE_ATTEMPT_BUDGET))]
-    pub(crate) acquire_attempt_budget: u8,
-    /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
-    /// may emit.
-    #[config(value, builder(default = consts::DEFAULT_DOWNLOAD_BATCH_SIZE))]
-    pub(crate) prefetch_budget: usize,
-}
 
 pub(crate) struct PlanCtx<S>
 where
@@ -80,11 +40,9 @@ where
 {
     pub(crate) scope: kithara_assets::AssetScope<S>,
     pub(crate) bus: EventBus,
-    /// Per-resource HTTP headers applied to every init/segment fetch.
-    /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
-    /// tokens carried by the playlist load also reach segment GETs.
-    pub(crate) headers: Option<Headers>,
-    pub(crate) config: PlanConfig,
+    pub(crate) config: Arc<HlsConfig<S>>,
+    /// Prepared window derived from the store's ephemeral cache capacity.
+    pub(crate) look_ahead_segments: Option<usize>,
     pub(crate) signal: SizeSignal,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can
@@ -97,6 +55,7 @@ pub(crate) struct HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    pub(super) config: Arc<HlsConfig<S>>,
     pub(super) cache_complete_emitted: AtomicBool,
     /// Coherent owner of the cross-variant byte-address-space coordinates
     /// (`byte_shift`, `served_from`, `served_until`, `init_seed`, the media
@@ -118,11 +77,6 @@ pub(super) struct VariantProfile {
     pub(super) codec: Option<AudioCodec>,
     /// Cached container format — see [`Self::codec`].
     pub(super) container: Option<ContainerFormat>,
-    /// HTTP headers applied to every `FetchCmd` this variant emits.
-    /// Snapshotted from `PlanCtx::headers` at construction; carries
-    /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
-    /// reach the same authenticated endpoint as the playlist load.
-    pub(super) headers: Option<Headers>,
 }
 
 pub(super) struct VariantFlow {
@@ -431,13 +385,13 @@ impl VariantParts {
         let init_size = init_size_of(&init);
         let layout = Layout::new(init_size, &segments);
         Arc::new(HlsVariant {
+            config: Arc::clone(&ctx.config),
             variant,
             layout,
             flow: VariantFlow::new(seek_obs, segments.len()),
             profile: VariantProfile {
                 codec,
                 container,
-                headers: ctx.headers.clone(),
                 bus: ctx.bus.clone(),
             },
             seek: VariantSeek::new(HlsVariant::<S>::NO_SEEK_TAIL),
