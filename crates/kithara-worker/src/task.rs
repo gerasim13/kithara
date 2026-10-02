@@ -68,10 +68,14 @@ pub trait Task: 'static {
 }
 
 /// Cloneable priority and wake control for an admitted task.
-#[derive(Clone)]
+#[derive(Clone, kithara_config::Config)]
+#[config(builder(existing))]
 pub struct TaskControl {
+    #[config(value(Priority, self.priority()))]
     priority: Arc<RelaxedAtomicU32>,
+    #[config(skip = "task cancellation resource")]
     token: CancelToken,
+    #[config(skip = "dispatcher wake resource")]
     wake: Wake,
 }
 

@@ -3,6 +3,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use kithara_config::Config;
 use kithara_platform::{
     CancelGroup, CancelScope,
     sync::{
@@ -202,6 +203,7 @@ fn priority_control_refreshes_the_single_mutable_priority_source() {
         slot(2, Priority::new(2), FixedTask(TickResult::Done)),
     ];
     slots[0].control.set_priority(Priority::new(3));
+    assert_eq!(slots[0].control.values().priority, Priority::new(3));
     let mut needs_reorder = false;
 
     refresh_priorities(&mut slots, &mut needs_reorder);
