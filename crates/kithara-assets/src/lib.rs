@@ -18,9 +18,9 @@ mod store;
 pub use backend::DiskAssetStore;
 pub use backend::MemAssetStore;
 pub use decorator::{
-    Assets, CachedAssets, CachedReader, CachedWriter, ChunkSink, EvictAssets, EvictionSubscription,
-    LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter, ProcessCtx, ProcessedReader,
-    ProcessedWriter, ProcessingAssets, ResourceProcessor,
+    Assets, CachePolicy, CachedAssets, CachedReader, CachedWriter, ChunkSink, EvictAssets,
+    EvictionSubscription, LeaseAssets, LeaseGuard, LeaseReader, LeaseWriter, ProcessCtx,
+    ProcessedReader, ProcessedWriter, ProcessingAssets, ResourceProcessor,
 };
 pub use error::{AssetsError, AssetsResult};
 pub use event::{AssetEvent, EvictReason};

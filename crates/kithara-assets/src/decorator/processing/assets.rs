@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_bufpool::HasPool;
+use kithara_platform::sync::Arc;
 
 use super::{contract::ProcessCtx, reader::ProcessedReader, writer::ProcessedWriter};
 use crate::{
@@ -9,41 +9,29 @@ use crate::{
     error::AssetsResult,
     layout::ResourceKey,
     resource::{AcquisitionResult, AssetResourceState, RequestIdentity},
+    store::{AssetStoreConfig, AssetStoreConfigOwnerAccess},
 };
 
 /// Applies optional resource processing to another asset store.
 #[derive_where::derive_where(Clone; A: Assets)]
+#[derive(kithara_config::ConfigOwner)]
+#[config_owner(AssetStoreConfig<S>, config)]
 pub struct ProcessingAssets<A, S>
 where
     A: Assets,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     inner: Arc<A>,
-    /// `AssetStore::builder(pools).processing_chunk_size(..)`, unset when the
-    /// caller left the processing layer's own default in place.
-    chunk_size: Option<usize>,
-    /// `AssetStore::builder(pools).processing_gate_poll_interval(..)`, unset when
-    /// the caller left the processing layer's own default in place.
-    gate_poll_interval: Option<Duration>,
-    pools: PoolRegion<S>,
+    config: Arc<AssetStoreConfig<S>>,
 }
 
 impl<A, S> ProcessingAssets<A, S>
 where
     A: Assets,
-    S: HasPool<u8>,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub fn new(
-        inner: Arc<A>,
-        pools: PoolRegion<S>,
-        chunk_size: Option<usize>,
-        gate_poll_interval: Option<Duration>,
-    ) -> Self {
-        Self {
-            inner,
-            chunk_size,
-            gate_poll_interval,
-            pools,
-        }
+    pub fn new(inner: Arc<A>, config: Arc<AssetStoreConfig<S>>) -> Self {
+        Self { inner, config }
     }
 
     fn wrap_ready(
@@ -54,9 +42,9 @@ where
         ProcessedReader::wrap_ready()
             .inner(inner)
             .maybe_processor(processor)
-            .pools(self.pools.clone())
-            .maybe_chunk_size(self.chunk_size)
-            .maybe_gate_poll_interval(self.gate_poll_interval)
+            .pools(self.config.pools.clone())
+            .maybe_chunk_size(self.processing_chunk_size())
+            .maybe_gate_poll_interval(self.processing_gate_poll_interval())
             .call()
     }
 }
@@ -82,9 +70,9 @@ where
                 ProcessedWriter::builder()
                     .inner(writer)
                     .maybe_processor(ctx)
-                    .pools(self.pools.clone())
-                    .maybe_chunk_size(self.chunk_size)
-                    .maybe_gate_poll_interval(self.gate_poll_interval)
+                    .pools(self.config.pools.clone())
+                    .maybe_chunk_size(self.processing_chunk_size())
+                    .maybe_gate_poll_interval(self.processing_gate_poll_interval())
                     .build(),
             )),
             AcquisitionResult::Ready(reader) => {

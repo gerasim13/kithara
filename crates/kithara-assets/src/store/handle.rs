@@ -23,6 +23,7 @@ use crate::{
     },
     layout::{AssetLayoutRegistry, AssetScope, AssetSource, ResourceKey},
     resource::{AcquisitionResult, AssetResourceState, RequestIdentity},
+    store::AssetStoreConfig,
 };
 
 /// Forward a method call to the active store variant. Keeps the
@@ -40,7 +41,8 @@ macro_rules! delegate_to_store {
 
 /// Cheap shared handle for one asset-store identity.
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
-#[derive(derive_more::Debug)]
+#[derive(derive_more::Debug, kithara_config::ConfigOwner)]
+#[config_owner(AssetStoreConfig<S>, inner.config)]
 pub struct AssetStore<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -53,6 +55,7 @@ pub(super) struct AssetStoreInner<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    pub(super) config: Arc<AssetStoreConfig<S>>,
     pub(super) layouts: AssetLayoutRegistry,
     pub(super) availability: AvailabilityIndex,
     pub(super) eviction: EvictionRouter,

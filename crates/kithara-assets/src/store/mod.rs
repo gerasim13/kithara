@@ -2,6 +2,7 @@ mod builder;
 mod chain;
 mod handle;
 
+pub(crate) use builder::AssetStoreConfigOwnerAccess;
 pub use builder::{AssetStoreBuilder, AssetStoreConfig, AssetStoreConfigPatch, StorageBackend};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use chain::DiskStore;

@@ -4,7 +4,7 @@ mod eviction;
 mod lease;
 mod processing;
 
-pub use cache::{CachedAssets, CachedReader, CachedWriter};
+pub use cache::{CachePolicy, CachedAssets, CachedReader, CachedWriter};
 pub use contract::Assets;
 pub(crate) use contract::Capabilities;
 pub(crate) use eviction::{ByteRecorder, EvictDeps, EvictionEvents, EvictionRouter};
