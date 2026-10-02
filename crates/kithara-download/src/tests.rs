@@ -13,8 +13,8 @@ use axum::{
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_abr::{
-    Abr, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration, VariantIndex,
-    VariantInfo,
+    Abr, AbrDecision, AbrEvent, AbrMode, AbrReason, AbrSettings, AbrState, VariantDuration,
+    VariantIndex, VariantInfo,
 };
 #[cfg(target_os = "android")]
 use kithara_android as _;
@@ -111,15 +111,8 @@ fn test_config() -> DownloaderConfig {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
 async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
-    /// Anti-oscillation window the scenario needs still open when the loop
-    /// takes its first tick: the gate is what arms the deadline this test is
-    /// about, and a session that ages past it switches on the spot instead,
-    /// leaving nothing for the deadline to drive. `reevaluate` only marks the
-    /// peer and wakes the loop, so the window has to outlast a task wakeup on
-    /// a loaded runner — at 20 ms it closed twice in 300 attempts of run
-    /// 33910610734, both on hosts at load1 45 to 80. The deadline wait then
-    /// costs the same window in real time, so a quarter of the harness
-    /// timeout is what the pair can spend.
+    /// The interval begins at an applied switch after registration, so slow
+    /// device setup cannot consume the gate before the first tick.
     const MIN_SWITCH_INTERVAL: Duration = Duration::from_millis(250);
 
     let settings = AbrSettings::builder()
@@ -130,7 +123,7 @@ async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
         abr_settings: settings,
         ..test_config()
     });
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
     let wake = Arc::new(Notify::default());
     let peer = Arc::new(ScheduledAbrPeer {
         cancel: CancelToken::never(),
@@ -141,6 +134,14 @@ async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
     let mut events = bus.subscribe();
     let handle = downloader.register(peer).with_bus(bus);
 
+    state.apply_decision(
+        &AbrDecision::DownSwitch {
+            from: VariantIndex::new(1),
+            to: VariantIndex::new(0),
+            reason: AbrReason::DownSwitch,
+        },
+        Instant::now(),
+    );
     handle.abr().reevaluate();
     wake.notified().await;
 
