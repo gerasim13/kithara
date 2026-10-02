@@ -96,11 +96,9 @@ pub struct AbrSettings {
 /// Holds the bandwidth estimator (one per controller) and a map of
 /// registered peers. Constructed via [`AbrController::new`]; peers are
 /// attached with [`AbrController::register`].
-#[derive(fieldwork::Fieldwork, kithara_config::ConfigOwner)]
+#[derive(kithara_config::ConfigOwner)]
 #[config_owner(settings)]
-#[fieldwork(opt_in, get)]
 pub struct AbrController {
-    #[field(get)]
     pub(super) settings: AbrSettings,
     pub(super) estimator: Arc<dyn Estimator>,
     pub(super) peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
