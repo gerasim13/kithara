@@ -221,11 +221,13 @@ fn resolve(
     } else {
         report::Report::default()
     };
-    while !report.tests.contains_key(test) && !report.finished {
+    // A fail-fast libtest result is complete for that invocation, but later
+    // selected tests still need a fresh process.
+    while !report.tests.contains_key(test) {
         let reported = report.tests.len();
         report = extend(report, invoke)?;
         store(path, &serde_json::to_vec(&report)?)?;
-        if !report.finished && report.tests.len() == reported {
+        if report.tests.len() == reported {
             bail!("device batch made no progress toward a verdict for {test}");
         }
     }
@@ -249,7 +251,7 @@ fn extend(
     previous: report::Report,
     invoke: &mut dyn FnMut(&[String]) -> Result<String>,
 ) -> Result<report::Report> {
-    let mut args = vec!["--test-threads=1".to_owned()];
+    let mut args = vec!["--test-threads=1".to_owned(), "--fail-fast".to_owned()];
     if !previous.tests.is_empty() {
         args.push("--exact".to_owned());
         for name in previous.tests.keys() {
@@ -566,7 +568,7 @@ mod tests {
     fn resolved(path: &Path, test: &str, calls: &Cell<usize>, batch: &str) -> Result<Answer> {
         resolve(path, test, &mut |args: &[String]| {
             calls.set(calls.get() + 1);
-            assert_eq!(args, ["--test-threads=1"]);
+            assert_eq!(args, ["--test-threads=1", "--fail-fast"]);
             Ok(batch.to_owned())
         })
     }
@@ -594,13 +596,21 @@ mod tests {
         let path = dir.path().join("reports/binary.json");
         let calls = Cell::new(0);
 
-        let error = resolved(&path, "epsilon_absent", &calls, BATCH).unwrap_err();
+        let error = resolve(&path, "epsilon_absent", &mut |_: &[String]| {
+            calls.set(calls.get() + 1);
+            Ok(if calls.get() == 1 {
+                BATCH.to_owned()
+            } else {
+                "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s\n".to_owned()
+            })
+        })
+        .unwrap_err();
 
         assert!(
             error.to_string().contains("epsilon_absent"),
             "{error} does not name the test"
         );
-        assert_eq!(calls.get(), 1);
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
@@ -636,6 +646,41 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_batch_reports_its_output_and_runs_remaining_tests_in_a_new_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reports/binary.json");
+        let requests = RefCell::new(Vec::new());
+        let mut device = |args: &[String]| {
+            requests.borrow_mut().push(args.to_vec());
+            Ok(if requests.borrow().len() == 1 {
+                "\nrunning 2 tests\ntest aaa_quick ... ok\ntest bbb_slow ... FAILED\n\nfailures:\n\n---- bbb_slow stdout ----\nstage: observer installed\n\nfailures:\n    bbb_slow\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s\n".to_owned()
+            } else {
+                REMAINDER.to_owned()
+            })
+        };
+
+        let remainder = resolve(&path, "ccc_quick", &mut device).unwrap();
+        let failure = resolve(&path, "bbb_slow", &mut device).unwrap();
+
+        assert_eq!(remainder.code, 0);
+        assert_eq!(failure.code, 1);
+        assert!(failure.output.contains("stage: observer installed"));
+        assert_eq!(requests.borrow()[0], ["--test-threads=1", "--fail-fast"]);
+        assert_eq!(
+            requests.borrow()[1],
+            [
+                "--test-threads=1",
+                "--fail-fast",
+                "--exact",
+                "--skip",
+                "aaa_quick",
+                "--skip",
+                "bbb_slow"
+            ]
+        );
+    }
+
+    #[test]
     fn an_interrupted_binary_fails_the_test_in_flight_and_runs_the_remainder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("reports/binary.json");
@@ -654,11 +699,12 @@ mod tests {
 
         assert_eq!(flight.code, 1);
         assert_eq!(remainder.code, 0);
-        assert_eq!(requests.borrow()[0], ["--test-threads=1"]);
+        assert_eq!(requests.borrow()[0], ["--test-threads=1", "--fail-fast"]);
         assert_eq!(
             requests.borrow()[1],
             [
                 "--test-threads=1",
+                "--fail-fast",
                 "--exact",
                 "--skip",
                 "aaa_quick",
