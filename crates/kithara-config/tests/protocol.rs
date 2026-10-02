@@ -123,6 +123,24 @@ struct ValueFields {
     resource: String,
 }
 
+#[derive(Config)]
+#[config(construction)]
+struct ConstructionInputs {
+    resource: String,
+    #[config(field(get))]
+    label: String,
+}
+
+#[kithara::test]
+fn construction_inputs_need_no_field_exclusions() {
+    let inputs = ConstructionInputs::builder()
+        .resource(String::from("owned"))
+        .label(String::from("label"))
+        .build();
+    assert_eq!(inputs.resource, "owned");
+    assert_eq!(inputs.label(), "label");
+}
+
 #[kithara::test]
 fn type_level_value_role_allows_explicit_resource_exclusion() {
     let config = ValueFields {

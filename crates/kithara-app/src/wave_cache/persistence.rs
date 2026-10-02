@@ -34,17 +34,11 @@ use crate::pools::{AppPools, AppStore, Pools};
 #[derive(Config)]
 #[config(construction)]
 pub(crate) struct AnalysisPersistenceConfig {
-    #[config(skip = "transferred to the persistence dispatcher")]
     dispatcher: DispatcherConfig,
-    #[config(skip = "transferred to the persistence task")]
     chunk_duration: Duration,
-    #[config(skip = "applied to the request channel")]
     queue_capacity: NonZeroUsize,
-    #[config(skip = "transferred to the persistence task")]
     pools: Pools,
-    #[config(skip = "transferred to the persistence task")]
     task: TaskConfig,
-    #[config(skip = "transferred to the persistence owner")]
     worker: Worker,
 }
 

@@ -197,6 +197,7 @@ pub(super) fn expand<'a>(
     } = Declaration::parse(field)?;
     let role = role
         .or_else(|| value_default.then_some(Role::Value))
+        .or_else(|| (!snapshot).then_some(Role::Skip))
         .ok_or_else(|| syn::Error::new_spanned(field, "missing config field role"))?;
     validate_role(field, &role, update, sdk, snapshot)?;
     let name = field

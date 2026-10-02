@@ -35,7 +35,11 @@ remain operational state. `Config::values` returns an owned observation snapshot
 it does not become another mutable store or promise realtime safety.
 
 `#[derive(Config)]` builds the whole configuration type from one `#[config(...)]`
-attribute. Fields explicitly select `value`, `nested`, or `skip = "reason"`;
+attribute. Retained fields explicitly select `value`, `nested`, or `skip = "reason"`;
+`construction` classifies unmarked fields as consumed inputs. For homogeneous
+retained fields, `fields(value)` sets their default role while explicit field
+roles still override it.
+
 `value(Type, expression)` projects a borrowed or internal field into an owned
 public value. The derive generates a bon builder (`X::builder()`), whose
 per-field options live in the field's `builder(...)` group and whose top-level
