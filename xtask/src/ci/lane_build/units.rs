@@ -474,7 +474,7 @@ mod tests {
 
     /// Claims the first slot under the fleet root `lanes` as a checksum lane.
     fn claim_slot(checkout: &Path, lanes: &Path) -> LaneBuild {
-        LaneBuild::claim(checkout, &pool(lanes), DAY, LaneFreshness::Checksum).unwrap()
+        LaneBuild::claim(checkout, &pool(lanes, LaneFreshness::Checksum), DAY).unwrap()
     }
 
     /// Claims the slot, lets `build` stand for the job's build, and settles it.
@@ -528,7 +528,7 @@ mod tests {
     fn a_directory_no_checksum_claim_recorded_reruns_every_script_once() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let workspace = write_unit(&lane, PROBE_BUILD_RUN, PROBE_DIRECTIVE);
         let dependency = write_unit(
             &lane,
@@ -550,7 +550,7 @@ mod tests {
     fn a_file_added_or_removed_under_a_watched_directory_reruns_the_unit() {
         let checkout = cargo_checkout(&[("assets/a.bin", "a")]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let directive = "cargo::rerun-if-changed=assets\n";
         let output = lane.join(PROBE_BUILD_RUN).join("output");
 
@@ -578,7 +578,7 @@ mod tests {
     fn a_dependency_build_script_that_declares_nothing_keeps_its_output() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let key = "debug/build/serde-0123456789abcdef";
 
         run_lane(checkout.path(), lanes.path(), || {
@@ -596,7 +596,7 @@ mod tests {
     fn a_workspace_build_script_that_declares_nothing_reruns_every_claim() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
 
         run_lane(checkout.path(), lanes.path(), || {
             write_unit(&lane, PROBE_BUILD_RUN, "cargo::rustc-cfg=probe\n");
@@ -612,7 +612,7 @@ mod tests {
     fn a_path_outside_the_checkout_is_judged_by_its_mtime() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let elsewhere = tempfile::tempdir().unwrap();
         let model = elsewhere.path().join("model.onnx");
         fs::write(&model, "weights").unwrap();
@@ -638,7 +638,7 @@ mod tests {
     fn an_unstaged_edit_to_a_watched_file_reruns_the_script() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let output = lane.join(PROBE_BUILD_RUN).join("output");
         run_lane(checkout.path(), lanes.path(), || {
             write_unit(&lane, PROBE_BUILD_RUN, PROBE_DIRECTIVE);
@@ -661,7 +661,7 @@ mod tests {
     fn a_dependency_run_is_judged_by_what_it_names_outside_its_sources() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let elsewhere = tempfile::tempdir().unwrap();
         let library = elsewhere.path().join("libsystem.so");
         fs::write(&library, "v1").unwrap();
@@ -690,7 +690,7 @@ mod tests {
     fn an_output_an_unsettled_job_rewrote_is_dropped() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let output = lane.join(PROBE_BUILD_RUN).join("output");
         run_lane(checkout.path(), lanes.path(), || {
             write_unit(&lane, PROBE_BUILD_RUN, PROBE_DIRECTIVE);
@@ -712,7 +712,7 @@ mod tests {
     fn a_replay_decides_every_run_as_the_next_claim_would() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let claim = claim_slot(checkout.path(), lanes.path());
         let kept = write_unit(&lane, PROBE_BUILD_RUN, PROBE_DIRECTIVE);
         let dropped = write_unit(
@@ -752,7 +752,7 @@ mod tests {
     fn a_kept_unit_is_aligned_to_the_claim() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let rlib = lane.join("debug/deps/libprobe-0123456789abcdef.rlib");
         let fingerprint = lane.join("debug/.fingerprint/probe-0123456789abcdef/lib-probe");
         let generated = lane.join(PROBE_BUILD_RUN).join("out/generated.rs");
@@ -784,7 +784,7 @@ mod tests {
     fn a_dependency_rebuilt_after_its_dependent_stays_newer_than_it() {
         let checkout = cargo_checkout(&[]);
         let lanes = tempfile::tempdir().unwrap();
-        let lane = slot(lanes.path());
+        let lane = slot(lanes.path(), LaneFreshness::Checksum);
         let deps = lane.join("debug/deps");
         let dependent = deps.join("libuser-0123456789abcdef.rlib");
         let rebuilt = [

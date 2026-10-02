@@ -210,7 +210,12 @@ mod tests {
     fn a_claim_stamps_what_another_branch_built_until_the_lane_succeeds() {
         let (checkout, file) = lib_checkout();
         let lanes = tempfile::tempdir().unwrap();
-        let pool = SlotPool::fleet(lanes.path(), CacheTrust::Review, "test");
+        let pool = SlotPool::fleet(
+            lanes.path(),
+            CacheTrust::Review,
+            "test",
+            LaneFreshness::Mtime,
+        );
         let slot = lanes.path().join("review-lane-test-0");
         fs::create_dir_all(&slot).unwrap();
         write_sources(
@@ -220,16 +225,14 @@ mod tests {
         )
         .unwrap();
 
-        let claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
 
         assert_eq!(claim.dir(), slot.as_path());
         assert!(mtime(&file) > SystemTime::UNIX_EPOCH, "stamped");
         claim.settle(true).unwrap();
         drop(claim);
         set_mtime(&file, SystemTime::UNIX_EPOCH);
-        let _claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let _claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
         assert_eq!(
             mtime(&file),
             SystemTime::UNIX_EPOCH,
@@ -241,7 +244,12 @@ mod tests {
     fn a_build_the_record_did_not_see_stamps_everything_until_the_lane_succeeds() {
         let (checkout, file) = lib_checkout();
         let lanes = tempfile::tempdir().unwrap();
-        let pool = SlotPool::fleet(lanes.path(), CacheTrust::Review, "test");
+        let pool = SlotPool::fleet(
+            lanes.path(),
+            CacheTrust::Review,
+            "test",
+            LaneFreshness::Mtime,
+        );
         let slot = lanes.path().join("review-lane-test-0");
         fs::create_dir_all(&slot).unwrap();
         let record = slot.join(consts::SOURCES_FILE);
@@ -249,15 +257,13 @@ mod tests {
         set_mtime(&record, SystemTime::UNIX_EPOCH);
         build_in(&slot);
 
-        let claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
         assert!(mtime(&file) > SystemTime::UNIX_EPOCH, "stamped");
         claim.settle(false).unwrap();
         drop(claim);
 
         set_mtime(&file, SystemTime::UNIX_EPOCH);
-        let claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
         assert!(
             mtime(&file) > SystemTime::UNIX_EPOCH,
             "a failed lane leaves the unseen content recorded"
@@ -274,9 +280,8 @@ mod tests {
         let lanes = tempfile::tempdir().unwrap();
         let claim = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
         claim.settle(false).unwrap();
@@ -285,9 +290,8 @@ mod tests {
 
         let _claim = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
 
@@ -303,18 +307,17 @@ mod tests {
     fn a_failed_lane_keeps_stamping_what_another_branch_built() {
         let (checkout, file) = lib_checkout();
         let lanes = tempfile::tempdir().unwrap();
-        fs::create_dir_all(slot(lanes.path())).unwrap();
+        fs::create_dir_all(slot(lanes.path(), LaneFreshness::Mtime)).unwrap();
         write_sources(
-            &slot(lanes.path()).join(consts::SOURCES_FILE),
+            &slot(lanes.path(), LaneFreshness::Mtime).join(consts::SOURCES_FILE),
             &sources(&[("lib.rs", "other")]),
             false,
         )
         .unwrap();
         let claim = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
         claim.settle(false).unwrap();
@@ -323,9 +326,8 @@ mod tests {
 
         let _claim = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
 
@@ -340,24 +342,22 @@ mod tests {
         let lanes = tempfile::tempdir().unwrap();
         let dead = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
         set_mtime(
-            &slot(lanes.path()).join(consts::SOURCES_FILE),
+            &slot(lanes.path(), LaneFreshness::Mtime).join(consts::SOURCES_FILE),
             SystemTime::UNIX_EPOCH,
         );
-        build_in(&slot(lanes.path()));
+        build_in(&slot(lanes.path(), LaneFreshness::Mtime));
         drop(dead);
         set_mtime(&file, SystemTime::UNIX_EPOCH);
 
         let _claim = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
 
@@ -375,25 +375,23 @@ mod tests {
         let lanes = tempfile::tempdir().unwrap();
         let claim = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
         claim.settle(true).unwrap();
         drop(claim);
         set_mtime(
-            &slot(lanes.path()).join(consts::SOURCES_FILE),
+            &slot(lanes.path(), LaneFreshness::Mtime).join(consts::SOURCES_FILE),
             SystemTime::UNIX_EPOCH,
         );
-        build_in(&slot(lanes.path()));
+        build_in(&slot(lanes.path(), LaneFreshness::Mtime));
         set_mtime(&file, SystemTime::UNIX_EPOCH);
 
         let _claim = LaneBuild::claim(
             checkout.path(),
-            &pool(lanes.path()),
+            &pool(lanes.path(), LaneFreshness::Mtime),
             consts::DAY,
-            LaneFreshness::Mtime,
         )
         .unwrap();
 

@@ -34,18 +34,13 @@ impl LaneBuild {
     /// stopped using, then makes the slot honest for the checkout: an mtime
     /// lane stamps the files the slot may hold artifacts of other content
     /// for, a checksum lane decides every build-script run.
-    pub(crate) fn claim(
-        project_root: &Path,
-        pool: &SlotPool,
-        window: Duration,
-        freshness: LaneFreshness,
-    ) -> Result<Self> {
+    pub(crate) fn claim(project_root: &Path, pool: &SlotPool, window: Duration) -> Result<Self> {
         let (dir, lock) = pool.take()?;
         fs::create_dir_all(&dir)
             .with_context(|| format!("creating lane build directory {}", dir.display()))?;
         prune::prune(&dir, window)?;
         let tracked = tracked::list(project_root)?;
-        let claim = match freshness {
+        let claim = match pool.freshness() {
             LaneFreshness::Mtime => Claim::Mtime(sources::claim(project_root, &dir, tracked)?),
             LaneFreshness::Checksum => Claim::Checksum(units::claim(
                 project_root,
@@ -97,7 +92,12 @@ mod tests {
     fn a_claim_prunes_what_the_lane_stopped_using() {
         let checkout = git_checkout(&[("lib.rs", "one")]);
         let lanes = tempfile::tempdir().unwrap();
-        let pool = SlotPool::fleet(lanes.path(), CacheTrust::Review, "test");
+        let pool = SlotPool::fleet(
+            lanes.path(),
+            CacheTrust::Review,
+            "test",
+            LaneFreshness::Mtime,
+        );
         let fingerprints = lanes.path().join("review-lane-test-0/debug/.fingerprint");
         let old = fingerprints.join("old-0123456789abcdef");
         let fresh = fingerprints.join("fresh-fedcba9876543210");
@@ -107,8 +107,7 @@ mod tests {
         }
         set_mtime(&old.join("lib"), SystemTime::now() - 2 * consts::DAY);
 
-        let _claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let _claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
 
         assert!(
             !old.exists(),
@@ -126,9 +125,13 @@ mod tests {
     fn an_mtime_claim_cannot_be_replayed() {
         let checkout = git_checkout(&[("lib.rs", "one")]);
         let lanes = tempfile::tempdir().unwrap();
-        let pool = SlotPool::fleet(lanes.path(), CacheTrust::Review, "test");
-        let claim =
-            LaneBuild::claim(checkout.path(), &pool, consts::DAY, LaneFreshness::Mtime).unwrap();
+        let pool = SlotPool::fleet(
+            lanes.path(),
+            CacheTrust::Review,
+            "test",
+            LaneFreshness::Mtime,
+        );
+        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
 
         let error = claim.replay().unwrap_err();
 
