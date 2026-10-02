@@ -23,7 +23,7 @@ pub enum FileSrc {
 ///
 /// Used with `Stream::<File<S>>::new(config)`.
 #[derive(Config, Patch)]
-#[config(construction, builder(on(String, into), start_fn = for_src))]
+#[config(builder(on(String, into), start_fn = for_src))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 #[derive(derive_more::Debug)]
@@ -33,13 +33,16 @@ where
 {
     /// File source (remote URL or local path).
     #[config(
-        skip = "transferred to the file stream",
+        skip = "retained source identity has no patch representation",
         builder(start_fn),
         patch(skip)
     )]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
-    #[config(skip = "transferred to the asset scope", patch(skip))]
+    #[config(
+        skip = "retained asset store handle has no patch representation",
+        patch(skip)
+    )]
     pub store: AssetStore<S>,
     /// Poll interval while a sibling `AssetStore` instance holds the
     /// atomic-chunked tmp for this file's canonical path. The default is short
@@ -58,20 +61,29 @@ where
     #[config(skip = "transferred to the asset scope", patch(skip))]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
-    #[config(skip = "transferred to the file stream", patch(skip))]
+    #[config(
+        skip = "retained downloader handle has no patch representation",
+        patch(skip)
+    )]
     #[debug(skip)]
     pub downloader: Option<Downloader>,
     /// Explicit source-extension hint used before the URL-path extension.
     #[config(skip = "consumed by the codec probe")]
     pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
-    #[config(skip = "transferred to network requests", patch(skip))]
+    #[config(
+        skip = "retained request headers have no patch representation",
+        patch(skip)
+    )]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     #[config(value)]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared with storage and fallback transport.
-    #[config(skip = "transferred to file runtime owners", patch(skip))]
+    #[config(
+        skip = "retained buffer pools have no patch representation",
+        patch(skip)
+    )]
     pub pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[config(value, builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY))]

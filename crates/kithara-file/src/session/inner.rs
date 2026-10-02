@@ -12,7 +12,6 @@ use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_mp4::ReadAt;
-use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Weak},
@@ -22,7 +21,12 @@ use kithara_stream::{AudioCodec, MediaInfo, WorkerWake};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
-use crate::{FileError, FileEvent, TotalBytesSource, consts, coord::FileCoord};
+use crate::{
+    FileError, FileEvent, TotalBytesSource,
+    config::{FileConfig, FileSrc},
+    consts,
+    coord::FileCoord,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileTerminalState {
@@ -48,10 +52,6 @@ pub(crate) struct FileSourceCtx {
     pub(crate) coord: Arc<FileCoord>,
     pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
-    /// Mirrors `FileConfig::reader_event_capacity`: ring depth the reader
-    /// sink wraps `bus` with. Sits next to the bus because that is the only
-    /// pair it is ever used as.
-    pub(crate) reader_event_capacity: usize,
 }
 
 /// Data-plane handles describing where the file lives and how to fetch it.
@@ -60,8 +60,6 @@ pub(crate) struct FileSourceCtx {
 /// synchronous reader and protocol metadata needed to drive HTTP callbacks.
 pub(crate) struct FileAssetCtx<S> {
     pub(crate) reader: AssetReader<S>,
-    pub(crate) headers: Option<Headers>,
-    pub(crate) url: Url,
 }
 
 impl<S> ReadAt for FileAssetCtx<S>
@@ -79,6 +77,7 @@ pub(crate) struct FileInner<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    pub(crate) config: Arc<FileConfig<S>>,
     pub(crate) asset: FileAssetCtx<S>,
     pub(crate) source: FileSourceCtx,
     /// `MediaInfo` discovered from the HTTP `Content-Type` header on
@@ -117,6 +116,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(crate) fn new(
+        config: Arc<FileConfig<S>>,
         source: FileSourceCtx,
         asset: FileAssetCtx<S>,
         complete: bool,
@@ -125,6 +125,7 @@ where
         let terminal_state = FileTerminalState::from(&asset.reader.status());
         let complete = complete && terminal_state == FileTerminalState::Committed;
         let inner = Self {
+            config,
             source,
             asset,
             resource_lease,
@@ -141,6 +142,13 @@ where
             inner.try_build_segment_index();
         }
         inner
+    }
+
+    pub(crate) fn remote_url(&self) -> &Url {
+        let FileSrc::Remote(url) = &self.config.src else {
+            panic!("file peer is registered only for remote sources");
+        };
+        url
     }
 
     pub(crate) fn arm_reader_waker(self: &Arc<Self>) {

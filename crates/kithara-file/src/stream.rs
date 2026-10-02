@@ -7,7 +7,7 @@ use kithara_assets::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_download::{Downloader, DownloaderConfig};
 use kithara_events::EventBus;
-use kithara_net::{Headers, HttpClient, NetOptions};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
 use kithara_stream::{PlayheadState, SeekState, SourceError as StreamSourceError, StreamType};
@@ -29,14 +29,15 @@ use crate::{
 /// Marker type for file streaming.
 pub struct File<S>(PhantomData<fn() -> S>);
 
-struct RemoteFileOpen {
+struct RemoteFileOpen<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    config: Arc<FileConfig<S>>,
     coord: Arc<FileCoord>,
     cancel: CancelToken,
     downloader: Downloader,
     bus: EventBus,
-    headers: Option<Headers>,
-    url: Url,
-    reader_event_capacity: usize,
 }
 
 fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
@@ -74,7 +75,7 @@ fn cached_source<S>(
     reader: AssetReader<S>,
     bus: EventBus,
     cancel: CancelToken,
-    reader_event_capacity: usize,
+    config: Arc<FileConfig<S>>,
 ) -> FileSource<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -87,9 +88,9 @@ where
             .coord(coord)
             .bus(bus)
             .cancel(cancel)
-            .reader_event_capacity(reader_event_capacity)
             .maybe_cached_codec(cached_codec)
             .build(),
+        config,
     )
 }
 
@@ -154,19 +155,17 @@ where
     )
 }
 
-impl RemoteFileOpen {
-    fn into_source<S>(self, attachment: ResourceAttachment<S>) -> FileSource<S>
-    where
-        S: HasPool<u8> + Send + Sync + 'static,
-    {
+impl<S> RemoteFileOpen<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn into_source(self, attachment: ResourceAttachment<S>) -> FileSource<S> {
         let Self {
+            config,
             bus,
             cancel,
             coord,
             downloader,
-            headers,
-            reader_event_capacity,
-            url,
         } = self;
 
         let (reader, resource_lease, writer) = attachment.into();
@@ -175,17 +174,13 @@ impl RemoteFileOpen {
         }
 
         let inner = Arc::new(FileInner::new(
+            config,
             FileSourceCtx {
                 cancel,
-                reader_event_capacity,
                 coord: Arc::clone(&coord),
                 bus: bus.clone(),
             },
-            FileAssetCtx {
-                reader,
-                headers,
-                url,
-            },
+            FileAssetCtx { reader },
             false,
             Some(resource_lease),
         ));
@@ -210,6 +205,7 @@ where
     type Source = FileSource<S>;
 
     async fn create(config: Self::Config) -> Result<Self::Source, StreamSourceError> {
+        let config = Arc::new(config);
         let cancel = CancelScope::new(config.cancel.clone()).token();
         let src = config.src.clone();
 
@@ -233,14 +229,14 @@ where
     /// Create a source for a local file.
     fn create_local(
         path: PathBuf,
-        config: FileConfig<S>,
+        config: Arc<FileConfig<S>>,
         cancel: &CancelToken,
     ) -> Result<FileSource<S>, SourceError> {
         let key = local_key(path)?;
         let store = config.store.clone();
-        let reader_event_capacity = config.reader_event_capacity;
         let bus = config
             .bus
+            .clone()
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
         let reader = store.open_resource(&key, None).map_err(|error| {
             let source_error = SourceError::Assets(error);
@@ -248,12 +244,7 @@ where
             source_error
         })?;
 
-        Ok(cached_source(
-            reader,
-            bus,
-            cancel.child(),
-            reader_event_capacity,
-        ))
+        Ok(cached_source(reader, bus, cancel.child(), config))
     }
 
     /// Create a source for a remote file.
@@ -263,52 +254,43 @@ where
     /// `on_connect` callback when the HTTP response arrives. Until then,
     /// `len()` returns `None`.
     fn create_remote(
-        url: Url,
-        config: FileConfig<S>,
+        url: &Url,
+        config: Arc<FileConfig<S>>,
         cancel: CancelToken,
     ) -> Result<FileSource<S>, SourceError> {
-        let FileConfig {
-            bus,
-            discriminator,
-            downloader,
-            headers,
-            pools,
-            store,
-            event_channel_capacity,
-            extension,
-            look_ahead_bytes,
-            reader_event_capacity,
-            ..
-        } = config;
-        let downloader = downloader.unwrap_or_else(|| default_downloader(&cancel, pools));
-        let backend = store;
-        let key = remote_key(&backend, &url, discriminator, extension.as_deref())?;
-        let publish_bus = bus.clone();
-        let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
+        let downloader = config
+            .downloader
+            .clone()
+            .unwrap_or_else(|| default_downloader(&cancel, config.pools.clone()));
+        let backend = &config.store;
+        let key = remote_key(
+            backend,
+            url,
+            config.discriminator.clone(),
+            config.extension.as_deref(),
+        )?;
+        let publish_bus = config.bus.clone();
+        let bus = config
+            .bus
+            .clone()
+            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
         let coord = coord_with_total(None);
         let acq = backend
-            .attach_pending_resource(&key, coord.read_pos_handle(), look_ahead_bytes)
+            .attach_pending_resource(&key, coord.read_pos_handle(), config.look_ahead_bytes)
             .map_err(SourceError::Assets)
             .inspect_err(|error| publish_open_error(publish_bus.as_ref(), error))?;
 
         match acq {
             AcquisitionResult::Ready(reader) => {
                 tracing::debug!("file already cached, skipping download");
-                Ok(cached_source(
-                    reader,
-                    bus,
-                    cancel.child(),
-                    reader_event_capacity,
-                ))
+                Ok(cached_source(reader, bus, cancel.child(), config))
             }
             AcquisitionResult::Pending(attachment) => Ok(RemoteFileOpen {
+                config,
                 coord,
                 cancel,
                 downloader,
                 bus,
-                headers,
-                url,
-                reader_event_capacity,
             }
             .into_source(attachment)),
             _ => Err(SourceError::UnexpectedAcquisitionState),
@@ -333,7 +315,7 @@ where
     /// bounds this wait.
     async fn create_remote_wait_for_claim(
         url: Url,
-        config: FileConfig<S>,
+        config: Arc<FileConfig<S>>,
         cancel: CancelToken,
     ) -> Result<FileSource<S>, StreamSourceError> {
         let poll_interval = config.tmp_claim_poll_interval;
@@ -341,7 +323,7 @@ where
             if cancel.is_cancelled() {
                 return Err(StreamSourceError::Cancelled);
             }
-            match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
+            match Self::create_remote(&url, Arc::clone(&config), cancel.clone()) {
                 Ok(src) => return Ok(src),
                 Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
                     tokio::select! {
