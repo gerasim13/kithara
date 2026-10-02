@@ -64,6 +64,7 @@ struct ScheduledAbrPeer {
     state: Arc<AbrState>,
     wake: Arc<Notify>,
     cancel: CancelToken,
+    arm_interval_on_tick: AtomicBool,
 }
 
 impl Abr for ScheduledAbrPeer {
@@ -76,6 +77,16 @@ impl Abr for ScheduledAbrPeer {
     }
 
     fn variants(&self) -> Vec<VariantInfo> {
+        if self.arm_interval_on_tick.swap(false, Ordering::AcqRel) {
+            self.state.apply_decision(
+                &AbrDecision::DownSwitch {
+                    from: VariantIndex::new(1),
+                    to: VariantIndex::new(0),
+                    reason: AbrReason::DownSwitch,
+                },
+                Instant::now(),
+            );
+        }
         [66_000_u64, 134_000, 270_000, 900_000]
             .into_iter()
             .enumerate()
@@ -111,8 +122,8 @@ fn test_config() -> DownloaderConfig {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
 async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
-    /// The interval begins at an applied switch after registration, so slow
-    /// device setup cannot consume the gate before the first tick.
+    /// Arm the interval as the first tick reads the variants, so scheduling
+    /// delay cannot consume the gate before the loop evaluates it.
     const MIN_SWITCH_INTERVAL: Duration = Duration::from_millis(250);
 
     let settings = AbrSettings::builder()
@@ -129,19 +140,13 @@ async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
         cancel: CancelToken::never(),
         state: Arc::clone(&state),
         wake: Arc::clone(&wake),
+        arm_interval_on_tick: AtomicBool::new(false),
     });
     let bus = EventBus::default();
     let mut events = bus.subscribe();
-    let handle = downloader.register(peer).with_bus(bus);
+    let handle = downloader.register(peer.clone()).with_bus(bus);
 
-    state.apply_decision(
-        &AbrDecision::DownSwitch {
-            from: VariantIndex::new(1),
-            to: VariantIndex::new(0),
-            reason: AbrReason::DownSwitch,
-        },
-        Instant::now(),
-    );
+    peer.arm_interval_on_tick.store(true, Ordering::Release);
     handle.abr().reevaluate();
     wake.notified().await;
 
@@ -180,6 +185,7 @@ async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
             cancel: CancelToken::never(),
             state: first_state,
             wake: Arc::new(Notify::default()),
+            arm_interval_on_tick: AtomicBool::new(false),
         }))
         .with_bus(first_bus);
     let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
@@ -207,6 +213,7 @@ async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
         cancel: CancelToken::never(),
         state: Arc::clone(&second_state),
         wake: Arc::clone(&second_wake),
+        arm_interval_on_tick: AtomicBool::new(false),
     }));
 
     second_handle.abr().reevaluate();
@@ -236,6 +243,7 @@ async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
             cancel: CancelToken::never(),
             state: Arc::clone(&first_state),
             wake: Arc::new(Notify::default()),
+            arm_interval_on_tick: AtomicBool::new(false),
         }))
         .with_bus(first_bus);
 
@@ -265,6 +273,7 @@ async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
             cancel: CancelToken::never(),
             state: Arc::clone(&second_state),
             wake: Arc::clone(&second_wake),
+            arm_interval_on_tick: AtomicBool::new(false),
         }))
         .with_bus(second_bus);
     second_handle.abr().reevaluate();
