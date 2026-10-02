@@ -14,7 +14,7 @@ pub use kithara_derive::Config;
 pub use kithara_derive::Patch;
 
 mod config;
-pub use config::Config;
+pub use config::{Config, ConfigOwner, UpdatableConfig};
 
 #[doc(hidden)]
 pub mod __private;

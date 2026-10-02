@@ -5,7 +5,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_config::Config;
+use kithara_config::{Config, ConfigOwner};
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -114,6 +114,14 @@ pub struct AbrController {
     pub(super) tick_waker: Mutex<Option<Waker>>,
     next_peer_id: AtomicU64,
     scope: CancelScope,
+}
+
+impl ConfigOwner for AbrController {
+    type Config = AbrSettings;
+
+    fn config(&self) -> &Self::Config {
+        &self.settings
+    }
 }
 
 impl AbrController {

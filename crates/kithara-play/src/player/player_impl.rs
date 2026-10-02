@@ -44,6 +44,14 @@ impl<S> Deref for PlayerImpl<S> {
     }
 }
 
+impl<S> kithara_config::ConfigOwner for PlayerImpl<S> {
+    type Config = PlayerConfig<S>;
+
+    fn config(&self) -> &Self::Config {
+        &self.runtime.core.config
+    }
+}
+
 impl<S: Send + Sync + 'static> PlayerImpl<S> {
     /// Submit a crossfade duration while this player is open.
     ///

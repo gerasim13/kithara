@@ -1,6 +1,6 @@
 use std::io::Error;
 
-use kithara_config::{Config, Patch};
+use kithara_config::{Config, Patch, UpdatableConfig};
 use kithara_test_utils::kithara;
 
 #[derive(Clone, Patch, Config)]
@@ -33,13 +33,18 @@ impl Bounded {
 #[kithara::test]
 fn a_judged_update_commits_whole_or_not_at_all() {
     let mut bounded = Bounded::default();
+    fn commit<C: UpdatableConfig>(config: &mut C, update: C::Update) -> Result<(), C::Error> {
+        UpdatableConfig::apply_update(config, update)
+    }
     assert!(
-        bounded
-            .apply_update(BoundedUpdate {
+        commit(
+            &mut bounded,
+            BoundedUpdate {
                 level: BoundedLevelUpdate::Set { value: 7 },
                 ..BoundedUpdate::default()
-            })
-            .is_err()
+            },
+        )
+        .is_err()
     );
     assert_eq!(bounded.level(), 2);
     assert_eq!(bounded.values().limit, Some(4));

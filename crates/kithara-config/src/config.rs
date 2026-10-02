@@ -19,3 +19,35 @@ pub trait Config {
     /// ```
     fn values(&self) -> Self::Values;
 }
+
+/// An owner that retains the configuration governing its behavior.
+///
+/// Consumers should read settings through this reference. A snapshot from
+/// [`Config::values`] is for observation, not a second mutable source.
+pub trait ConfigOwner {
+    /// The retained configuration type.
+    type Config: Config;
+
+    /// The configuration used by this owner.
+    fn config(&self) -> &Self::Config;
+}
+
+/// A configuration with typed, validated live changes.
+///
+/// Domain preparation and publication still happen at the owner's boundary.
+pub trait UpdatableConfig: Config {
+    /// A requested change.
+    type Update;
+    /// Domain validation error, or [`core::convert::Infallible`].
+    type Error;
+
+    /// Commits an accepted change to this configuration.
+    ///
+    /// On error, the configuration keeps its previous accepted values.
+    ///
+    /// # Errors
+    ///
+    /// Returns the configuration's domain validation error when the requested
+    /// values are invalid.
+    fn apply_update(&mut self, update: Self::Update) -> Result<(), Self::Error>;
+}

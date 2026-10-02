@@ -336,6 +336,18 @@ fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Re
     let runtime = if options.runtime_update {
         let update = format_ident!("{name}Update");
         let apply = apply_update(item, visibility, &update, &update_lowers)?;
+        let (error, apply_trait) =
+            if let Some(Check { error, .. }) = validation(&item.attrs, item.ident.span())? {
+                (quote!(#error), quote!(Self::apply_update(self, update)))
+            } else {
+                (
+                    quote!(::core::convert::Infallible),
+                    quote! {
+                        Self::apply_update(self, update);
+                        ::core::result::Result::Ok(())
+                    },
+                )
+            };
         quote! {
             #(#update_declarations)*
             #[derive(::core::default::Default)]
@@ -346,6 +358,18 @@ fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Re
             #[automatically_derived]
             impl #impl_generics #name #ty_generics #where_clause {
                 #apply
+            }
+            #[automatically_derived]
+            impl #impl_generics ::kithara_config::UpdatableConfig for #name #ty_generics #where_clause {
+                type Update = #update;
+                type Error = #error;
+
+                fn apply_update(
+                    &mut self,
+                    update: Self::Update,
+                ) -> ::core::result::Result<(), Self::Error> {
+                    #apply_trait
+                }
             }
         }
     } else {

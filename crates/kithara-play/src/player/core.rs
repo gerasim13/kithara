@@ -89,6 +89,14 @@ pub struct PlayerRuntime<S> {
     pub(super) lifecycle: PlayerLifecycle,
 }
 
+impl<S> kithara_config::ConfigOwner for PlayerRuntime<S> {
+    type Config = PlayerConfig<S>;
+
+    fn config(&self) -> &Self::Config {
+        &self.core.config
+    }
+}
+
 impl<S> PlayerRuntime<S> {
     pub(super) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))

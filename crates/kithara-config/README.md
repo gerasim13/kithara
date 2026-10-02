@@ -14,8 +14,15 @@
 
 # kithara-config
 
-`Config::values` returns an owned snapshot of a retained configuration. It does
-not mutate an owner, apply prepared state, or promise realtime safety.
+`Config` is the retained settings contract. A subsystem keeps the configuration
+that governs its behavior and reads settings from it; `ConfigOwner::config`
+exposes that canonical object. A mutable setting is changed in the retained
+configuration, not in a second owner field. `UpdatableConfig` gives typed live
+changes a common API. Rejected changes leave the accepted configuration intact.
+Owners still decide when to prepare and publish derived state, especially across
+realtime and thread boundaries. Buffers, counters, handles and observed results
+remain operational state. `Config::values` returns an owned observation snapshot;
+it does not become another mutable store or promise realtime safety.
 
 `#[derive(Config)]` builds the whole configuration type from one `#[config(...)]`
 attribute. Fields explicitly select `value`, `nested`, or `skip = "reason"`;
@@ -47,8 +54,9 @@ distinguish `Set`, `Clear`, and `Unchanged`; `Reset` is emitted only when the
 same field declares a builder default. A configuration that declares
 `patch(validate = ..., error = ...)` stages each update and commits it only
 through that check, the same gate a document merge holds; any other takes the
-update in place. Prepared engines and delegated live owners keep their own
-explicit operations.
+update in place. The derive also implements `UpdatableConfig` so owners can
+apply updates through one protocol. Prepared engines and delegated live owners
+keep their own explicit operations.
 
 The derive emits `<Name>Values` with public snapshot fields, preserving field
 documentation. Resource generics stay on the original owner; snapshot types

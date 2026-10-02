@@ -6,14 +6,17 @@ use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Config, Patch)]
-#[config(construction, builder(start_fn = for_client))]
+#[config(builder(start_fn = for_client))]
 #[non_exhaustive]
 pub struct DownloaderConfig {
     /// HTTP client used for all fetches. Cloned by the Downloader to
     /// share the underlying `reqwest::Client` (and its connection pool)
     /// with the caller. Pass a single shared `HttpClient` to multiple
     /// Downloaders to share keep-alive sockets across them.
-    #[config(skip = "transferred to the downloader", builder(start_fn))]
+    #[config(
+        skip = "HTTP transport resource retained by the downloader",
+        builder(start_fn)
+    )]
     #[patch(skip)]
     pub(crate) client: HttpClient,
     /// Settings for the shared ABR controller owned by the Downloader.
@@ -43,7 +46,7 @@ pub struct DownloaderConfig {
     ///
     /// - `Some(handle)` — the loop runs as a task on this runtime.
     /// - `None` — spawns as a task on the current runtime via `task::spawn`.
-    #[config(skip = "transferred to the downloader")]
+    #[config(skip = "runtime resource retained by the downloader")]
     #[patch(skip)]
     pub(crate) runtime: Option<Handle>,
     /// Maximum number of concurrent in-flight fetch commands.
@@ -57,18 +60,6 @@ pub struct DownloaderConfig {
     /// producer rather than growing an unbounded backlog.
     #[config(value, builder(default = 32))]
     pub(crate) peer_cmd_channel_capacity: usize,
-}
-
-#[derive(Config)]
-pub(super) struct DownloaderPolicy {
-    #[config(value)]
-    pub(super) demand_throttle: Duration,
-    #[config(value)]
-    pub(super) soft_timeout: Duration,
-    #[config(value)]
-    pub(super) max_concurrent: usize,
-    #[config(value)]
-    pub(super) peer_cmd_channel_capacity: usize,
 }
 
 /// Builds a real `HttpClient`, so Miri cannot reach it for the same reason it

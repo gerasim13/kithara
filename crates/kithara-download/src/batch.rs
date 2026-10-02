@@ -159,7 +159,7 @@ impl BatchGroup {
 
 /// Spawn an HTTP fetch task for one command.
 fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: CancelToken) {
-    let client = inner.client.clone();
+    let client = inner.config.client.clone();
     let soft_timeout = inner.config.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
