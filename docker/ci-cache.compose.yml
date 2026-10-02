@@ -49,7 +49,7 @@ services:
     entrypoint: ["xtask", "ci", "cache", "initialize"]
     # The host's environment whole: a scope sized apart names its quota as
     # CACHE_BUCKET_QUOTA_<SCOPE>, a name this file cannot list.
-    env_file: ${CACHE_ENV_FILE:?use just ci cache compose}
+    env_file: ${CACHE_ENV_FILE:?use just ci cache}
     depends_on:
       cache:
         condition: service_healthy
