@@ -4520,7 +4520,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.11.0",
  "tempfile",
- "thiserror 2.0.18",
  "tracing",
  "tracing-log",
  "tracing-subscriber",
