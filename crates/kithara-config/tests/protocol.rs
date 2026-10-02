@@ -114,6 +114,26 @@ where
     config: GenericResource<T>,
 }
 
+#[derive(Config)]
+#[config(builder(none), fields(value))]
+struct ValueFields {
+    #[config(field(get, copy))]
+    level: u32,
+    #[config(skip = "runtime resource")]
+    resource: String,
+}
+
+#[kithara::test]
+fn type_level_value_role_allows_explicit_resource_exclusion() {
+    let config = ValueFields {
+        level: 3,
+        resource: String::from("owned"),
+    };
+    assert_eq!(config.level(), 3);
+    assert_eq!(config.values().level, 3);
+    assert_eq!(config.resource, "owned");
+}
+
 #[kithara::test]
 fn derived_owners_borrow_the_same_updated_config_through_nested_fields() {
     let mut owner = Owner {

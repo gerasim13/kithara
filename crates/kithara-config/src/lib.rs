@@ -4,7 +4,9 @@ pub use bon;
 /// `#[derive(Config)]` generates the builder, accessors, `Default`, `Debug`,
 /// the owned snapshot and explicitly selected runtime updates of a struct,
 /// every facet declared through `#[config(...)]`. `construction` classifies a
-/// consumed builder input without generating a retained snapshot.
+/// consumed builder input without generating a retained snapshot. On a struct
+/// whose fields are values by default, `#[config(fields(value))]` supplies the
+/// role for unannotated fields; an explicit field role overrides it.
 ///
 /// ```compile_fail
 /// #[derive(kithara_config::Config)]

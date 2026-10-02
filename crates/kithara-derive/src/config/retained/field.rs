@@ -184,6 +184,7 @@ pub(super) fn expand<'a>(
     field: &'a Field,
     owner: &DeriveInput,
     snapshot: bool,
+    value_default: bool,
 ) -> Result<Member<'a>> {
     let Declaration {
         role,
@@ -194,7 +195,9 @@ pub(super) fn expand<'a>(
         debug_skipped,
         wrap,
     } = Declaration::parse(field)?;
-    let role = role.ok_or_else(|| syn::Error::new_spanned(field, "missing config field role"))?;
+    let role = role
+        .or_else(|| value_default.then_some(Role::Value))
+        .ok_or_else(|| syn::Error::new_spanned(field, "missing config field role"))?;
     validate_role(field, &role, update, sdk, snapshot)?;
     let name = field
         .ident

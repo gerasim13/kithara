@@ -35,55 +35,57 @@ pub enum ConsumerWakeMode {
 /// and the optional PCM observer.
 ///
 /// [`AudioConfigPatch`] is what a configuration document may say about it.
-#[derive(Config, fieldwork::Fieldwork, Patch)]
+#[derive(Config, Patch)]
 #[config(construction, builder(start_fn = for_stream))]
 #[non_exhaustive]
-#[fieldwork(opt_in, get)]
 pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    #[config(skip = "transferred to the stream", builder(start_fn), patch(skip))]
-    #[field(get)]
+    #[config(
+        skip = "transferred to the stream",
+        builder(start_fn),
+        patch(skip),
+        field(get)
+    )]
     pub(crate) stream: T::Config,
     /// Consumer wake capability for ring pops and reader-event delivery. Not
     /// a document key: a player-managed resource has this value overwritten
     /// with its session's wake policy, and declaring `ImmediateOffRt` here
     /// would make a player-bound resource publish reads inline on the render
     /// callback.
-    #[field(get, copy)]
-    #[config(value, builder(default), patch(skip))]
+    #[config(value, builder(default), patch(skip), field(get, copy))]
     pub consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
-    #[field(get, copy)]
-    #[config(value, builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")))]
+    #[config(value, builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")), field(get, copy))]
     pub preload_chunks: NonZeroUsize,
     /// Target sample rate of the audio host (for resampling). Not a document
     /// key: this is the rate the audio host actually opened, and the
     /// resource-preparation step that shares a player's engine always
     /// overwrites it with the engine's master or configured rate. A document
     /// value would be overwritten by the first host that disagrees with it.
-    #[config(skip = "transferred to the host sample-rate owner", patch(skip))]
-    #[field(get, copy)]
+    #[config(
+        skip = "transferred to the host sample-rate owner",
+        patch(skip),
+        field(get, copy)
+    )]
     pub host_sample_rate: Option<NonZeroU32>,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling. Not a document key: the shipped binary is a real-time
     /// host whose audio callback can never block; only an offline harness or
     /// a player's own session policy sets this explicitly.
-    #[field(get, copy)]
-    #[config(value, builder(default), patch(skip))]
+    #[config(value, builder(default), patch(skip), field(get, copy))]
     pub block_on_underrun: bool,
     /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
     /// wasm32.
-    #[field(get, copy)]
-    #[config(value, builder(default = consts::AUDIO_BUFFER_CHUNKS))]
+    #[config(value, builder(default = consts::AUDIO_BUFFER_CHUNKS), field(get, copy))]
     pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.
     #[config(
         skip = "transferred to decoder dependencies",
         builder(default),
-        patch(nested)
+        patch(nested),
+        field(get)
     )]
-    #[field(get)]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[config(skip = "transferred to the event bus", builder(name = events), patch(skip))]

@@ -13,6 +13,7 @@ use crate::config::patch::{Check, validation};
 struct Options {
     built_default: bool,
     construction: bool,
+    value_fields: bool,
     runtime_update: bool,
     owner_access: bool,
     sdk: bool,
@@ -39,40 +40,48 @@ impl Options {
                     return Err(meta.error("duplicate config option"));
                 }
                 seen.push(meta.path.clone());
-                if meta.path.is_ident("default") {
-                    options.built_default = true;
-                } else if meta.path.is_ident("construction") {
-                    options.construction = true;
-                } else if meta.path.is_ident("update") {
-                    options.runtime_update = true;
-                } else if meta.path.is_ident("owner_access") {
-                    options.owner_access = true;
-                } else if meta.path.is_ident("validate_builder") {
-                    options.validate_builder = true;
-                } else if meta.path.is_ident("sdk") {
-                    options.sdk = true;
-                } else if meta.path.is_ident("debug") {
-                    options.debug = true;
-                } else if meta.path.is_ident("builder") {
-                    let group = group(&meta)?;
-                    if group.to_string() == "existing" {
-                        options.existing_builder = true;
-                    } else if group.to_string() == "none" {
-                        options.no_builder = true;
-                    } else {
-                        options.builder = Some(group);
+                let name = meta
+                    .path
+                    .get_ident()
+                    .ok_or_else(|| meta.error("expected a config option name"))?
+                    .to_string();
+                match name.as_str() {
+                    "default" => options.built_default = true,
+                    "construction" => options.construction = true,
+                    "update" => options.runtime_update = true,
+                    "owner_access" => options.owner_access = true,
+                    "validate_builder" => options.validate_builder = true,
+                    "sdk" => options.sdk = true,
+                    "debug" => options.debug = true,
+                    "fields" => {
+                        let role: syn::Path = syn::parse2(group(&meta)?)?;
+                        if !role.is_ident("value") {
+                            return Err(meta.error("expected fields(value)"));
+                        }
+                        options.value_fields = true;
                     }
-                } else if meta.path.is_ident("patch") {
-                    // `Patch` reads this group; the update gate below reads its check.
-                    group(&meta)?;
-                } else if meta.path.is_ident("values_vis") {
-                    let visibility: syn::LitStr = meta.value()?.parse()?;
-                    options.values_vis = Some(syn::parse_str(&visibility.value())?);
-                } else {
-                    return Err(meta.error(
-                        "expected construction, default, update, validate_builder, sdk, debug, builder(...), \
-                         owner_access, patch(...), or values_vis",
-                    ));
+                    "builder" => {
+                        let group = group(&meta)?;
+                        match group.to_string().as_str() {
+                            "existing" => options.existing_builder = true,
+                            "none" => options.no_builder = true,
+                            _ => options.builder = Some(group),
+                        }
+                    }
+                    "patch" => {
+                        // `Patch` reads this group; the update gate below reads its check.
+                        group(&meta)?;
+                    }
+                    "values_vis" => {
+                        let visibility: syn::LitStr = meta.value()?.parse()?;
+                        options.values_vis = Some(syn::parse_str(&visibility.value())?);
+                    }
+                    _ => {
+                        return Err(meta.error(
+                            "expected construction, default, fields(value), update, validate_builder, sdk, debug, builder(...), \
+                             owner_access, patch(...), or values_vis",
+                        ));
+                    }
                 }
                 Ok(())
             })?;
@@ -137,7 +146,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let members = fields
         .named
         .iter()
-        .map(|field| field::expand(field, &item, !options.construction))
+        .map(|field| field::expand(field, &item, !options.construction, options.value_fields))
         .collect::<Result<Vec<_>>>()?;
     if options.owner_access && members.iter().all(|member| member.owner_accessor.is_none()) {
         return Err(syn::Error::new_spanned(
