@@ -6,6 +6,11 @@ FROM ${CACHE_SERVER_IMAGE} AS server
 FROM ${CACHE_CLIENT_IMAGE} AS client
 FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST}
 
+# xtask's proc-macros pull the workspace's audio stack into the host build,
+# and its ALSA bindings compile against the system headers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    -o Acquire::Retries=5 libasound2-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 # The workspace's crates.io patches live here; without them the lock names
