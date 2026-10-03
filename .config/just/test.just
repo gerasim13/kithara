@@ -495,7 +495,11 @@ _rtsan TARGETS FEATURES FILTER SUPPRESSIONS="":
     if [ -n "${KITHARA_STRESS_REPEATS:-}" ]; then
         repeats="--stress-count ${KITHARA_STRESS_REPEATS}"
     fi
+    # The panic hook may run before the checked poll unwinds. Its symbolizer
+    # opens the binary under RTSan, masking the original no_block panic.
+    # RTSan prints its own symbolized violation stacks through the options above.
     RTSAN_OPTIONS="$options" \
+    RUST_BACKTRACE=0 \
     RUSTFLAGS="$flags" \
     RUSTDOCFLAGS="$flags" \
         cargo ${toolchain:+"$toolchain"} nextest run --profile rtsan \
