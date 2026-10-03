@@ -3,14 +3,17 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice};
+use kithara_apple::audio_toolbox::{
+    AUDIO_FORMAT_MPEG4_AAC_HE, AUDIO_FORMAT_MPEG4_AAC_HE_V2, AudioStreamPacketDescription,
+    pod_to_vec, pod_write_to_slice,
+};
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{AudioCodec, ByteMap, ContainerFormat, PendingReason, PrerollHint};
 use num_traits::ToPrimitive;
 
-use super::{consts, file::AppleAudioFile, flac::StreamInfo};
+use super::{consts, converter::derive_aac_asbd_from_esds, file::AppleAudioFile, flac::StreamInfo};
 use crate::{
     GaplessInfo,
     codec::CodecPriming,
@@ -27,7 +30,7 @@ fn sample_rate_from_asbd(rate: f64) -> Option<u32> {
     rate.to_u32()
 }
 
-/// [`Demuxer`] over [`AppleAudioFile`] for standalone (non-fMP4)
+/// [`Demuxer`] over [`AppleAudioFile`] for standalone
 /// container formats. Currently wires WAV/PCM, FLAC, AAC (M4A/ADTS) and
 /// ALAC (M4A/CAF); extends via additional file-type hints.
 ///
@@ -147,17 +150,39 @@ impl AppleAudioFileDemuxer {
             }
             _ => AppleAudioFile::open(source, hint)?,
         };
-        let asbd = file.data_format;
+        let mut asbd = file.data_format;
+        let matches_codec = match codec {
+            AudioCodec::Pcm => asbd.format_id == consts::FORMAT_LINEAR_PCM,
+            AudioCodec::Flac => asbd.format_id == consts::FORMAT_FLAC,
+            AudioCodec::Alac => asbd.format_id == consts::FORMAT_APPLE_LOSSLESS,
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => matches!(
+                asbd.format_id,
+                consts::FORMAT_MPEG4_AAC | AUDIO_FORMAT_MPEG4_AAC_HE | AUDIO_FORMAT_MPEG4_AAC_HE_V2
+            ),
+            _ => false,
+        };
+        if !matches_codec {
+            return Err(DecodeError::InvalidData {
+                detail: "apple.audio_file: codec does not match supplied metadata",
+            });
+        }
         let total_packets = file.packet_count;
+        let extra_data = match codec {
+            AudioCodec::Pcm => pod_to_vec(&asbd),
+            _ => file.magic_cookie().unwrap_or_default(),
+        };
+
+        if matches!(
+            codec,
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2
+        ) && !extra_data.is_empty()
+        {
+            asbd = derive_aac_asbd_from_esds(&extra_data)?;
+        }
         let frames_per_packet = if asbd.frames_per_packet > 0 {
             asbd.frames_per_packet
         } else {
             4096
-        };
-
-        let extra_data = match codec {
-            AudioCodec::Pcm => pod_to_vec(&asbd),
-            _ => file.magic_cookie().unwrap_or_default(),
         };
 
         let flac_info = (codec == AudioCodec::Flac)

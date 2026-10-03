@@ -1,10 +1,9 @@
-use std::{ffi::c_void, mem::size_of};
+use std::mem::size_of;
 
 use kithara_apple::audio_toolbox::{
     AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE, AudioConverter, AudioConverterPrimeInfo,
-    AudioFormatInfo, AudioFormatListItem, AudioStreamBasicDescription,
-    AudioStreamPacketDescription, AudioToolboxError, SingleAudioBufferList,
-    audio_format_get_property, audio_format_get_property_info, pod_from_prefix,
+    AudioStreamBasicDescription, AudioStreamPacketDescription, AudioToolboxError,
+    SingleAudioBufferList, pod_from_prefix,
 };
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
@@ -14,8 +13,8 @@ use kithara_stream::AudioCodec;
 use super::{
     consts,
     converter::{
-        ConverterInputState, gapless_info_from_prime_info, log_gapless_prime_info,
-        prime_info_from_converter,
+        ConverterInputState, derive_aac_asbd_from_esds, gapless_info_from_prime_info,
+        log_gapless_prime_info, prime_info_from_converter,
     },
     flac,
 };
@@ -550,7 +549,7 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     } else {
         esds_wrap_asc(&track.extra_data)?
     };
-    let asbd = derive_aac_asbd_from_esds(&esds, track)?;
+    let asbd = derive_aac_asbd_from_esds(&esds)?;
     let frames_per_packet = if asbd.frames_per_packet > 0 {
         asbd.frames_per_packet
     } else {
@@ -561,75 +560,6 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         frames_per_packet,
         cookie: Some(esds.into_boxed_slice()),
     })
-}
-
-fn derive_aac_asbd_from_esds(
-    esds: &[u8],
-    track: &TrackInfo,
-) -> DecodeResult<AudioStreamBasicDescription> {
-    let cookie_size = u32::try_from(esds.len())?;
-    let format_info = AudioFormatInfo {
-        asbd: AudioStreamBasicDescription {
-            format_id: consts::FORMAT_MPEG4_AAC,
-            ..Default::default()
-        },
-        magic_cookie: esds.as_ptr().cast::<c_void>(),
-        magic_cookie_size: cookie_size,
-    };
-
-    let list_bytes =
-        audio_format_get_property_info(consts::FORMAT_PROPERTY_FORMAT_LIST, &format_info).map_err(
-            |status| DecodeError::BackendStatus {
-                code: status,
-                op: "AudioFormatGetPropertyInfo(FormatList)",
-            },
-        )?;
-    if list_bytes == 0 {
-        return Err(DecodeError::BackendStatus {
-            code: consts::NO_ERR,
-            op: "AudioFormatGetPropertyInfo(FormatList)",
-        });
-    }
-
-    let item_size = size_of::<AudioFormatListItem>();
-    let item_count = usize::try_from(list_bytes)? / item_size;
-    if item_count == 0 {
-        return Err(DecodeError::InvalidData {
-            detail: "FormatList returned fewer than one item",
-        });
-    }
-    let mut items: Vec<AudioFormatListItem> = vec![AudioFormatListItem::default(); item_count];
-    let io_size = audio_format_get_property(
-        consts::FORMAT_PROPERTY_FORMAT_LIST,
-        &format_info,
-        &mut items,
-        list_bytes,
-    )
-    .map_err(|status| DecodeError::BackendStatus {
-        code: status,
-        op: "AudioFormatGetProperty(FormatList)",
-    })?;
-
-    let returned = usize::try_from(io_size)? / item_size;
-    let chosen = items.first().copied().ok_or(DecodeError::InvalidData {
-        detail: "FormatList returned zero items",
-    })?;
-
-    tracing::debug!(
-        format_id = format!("{:#010x}", chosen.asbd.format_id),
-        sample_rate = chosen.asbd.sample_rate,
-        channels = chosen.asbd.channels_per_frame,
-        frames_per_packet = chosen.asbd.frames_per_packet,
-        channel_layout = format!("{:#010x}", chosen.channel_layout_tag),
-        item_count = returned,
-        esds_len = esds.len(),
-        track_codec = ?track.codec,
-        track_sample_rate = track.sample_rate,
-        track_channels = track.channels,
-        "AppleCodec: AAC ASBD derived from FormatList"
-    );
-
-    Ok(chosen.asbd)
 }
 
 /// Wrap a raw `AudioSpecificConfig` in the minimum ISO/IEC 14496-1 ESDS descriptor
