@@ -29,6 +29,7 @@ use crate::{
 
 /// Frame-level codec wrapping Apple's `AudioConverter`.
 pub(crate) struct AppleCodec {
+    codec: AudioCodec,
     converter: AudioConverter,
     spec: AudioSpec,
     input_state: Box<ConverterInputState>,
@@ -72,7 +73,7 @@ impl AppleCodec {
     const SRC_OUTPUT_MARGIN_FRAMES: u32 = 1;
 
     fn drain_eof(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
-        if self.eof_drained {
+        if !self.needs_eof_drain(self.source_sample_rate) || self.eof_drained {
             out.clear();
             return Ok(0);
         }
@@ -177,6 +178,7 @@ impl AppleCodec {
         }
 
         Ok(Self {
+            codec: track.codec,
             converter,
             spec,
             frames_per_packet,
@@ -283,7 +285,12 @@ impl AppleCodec {
 
 impl FrameCodec for AppleCodec {
     fn needs_eof_drain(&self, _source_rate: u32) -> bool {
-        true
+        // Equal-rate AAC already emits full packets; only conversion has a tail to drain.
+        self.spec.sample_rate.get() != self.source_sample_rate
+            || !matches!(
+                self.codec,
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2
+            )
     }
 
     fn decode_frame(

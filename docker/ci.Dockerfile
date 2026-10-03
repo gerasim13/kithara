@@ -285,3 +285,5 @@ RUN curl -fsSL -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
  && cmake --install /tmp/monkeys-audio/build \
  && ldconfig \
  && rm -rf /tmp/monkeys-audio /tmp/monkeys-audio.zip
+
+ENV MONKEYS_AUDIO_DIR=/usr/local

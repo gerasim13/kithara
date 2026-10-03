@@ -16,6 +16,7 @@ impl ApplePod for AudioFormatListItem {}
 impl ApplePod for super::sys::AudioFormatInfo {}
 impl ApplePod for u32 {}
 impl ApplePod for u64 {}
+impl ApplePod for i64 {}
 
 #[must_use]
 pub fn pod_from_prefix<T>(bytes: &[u8]) -> Option<T>

@@ -3,7 +3,9 @@
 use std::io::Cursor;
 
 use kithara_broadcast::{BroadcastConfig, LiveWindow, PlaylistSnapshot, Segmenter};
-use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory};
+use kithara_decode::{
+    DecoderChunkOutcome, DecoderConfig, DecoderFactory, GaplessInfo, GaplessTrimmer,
+};
 use kithara_encode::{StreamBackend, StreamEncoder};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
@@ -77,8 +79,17 @@ fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
     )
     .expect("create the ADTS AAC-LC decoder");
 
+    let mut trimmer = GaplessTrimmer::from(decoder.track_info().gapless.unwrap_or(
+        GaplessInfo::new(decoder.default_priming_frames(AudioCodec::AacLc), 0),
+    ));
     let mut left = Vec::new();
     while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
+        for chunk in trimmer.push(chunk) {
+            let channels = usize::from(chunk.spec().channels);
+            left.extend(chunk.samples.iter().step_by(channels));
+        }
+    }
+    for chunk in trimmer.flush() {
         let channels = usize::from(chunk.spec().channels);
         left.extend(chunk.samples.iter().step_by(channels));
     }

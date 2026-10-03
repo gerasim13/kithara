@@ -7,7 +7,7 @@ use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, FrameCount};
-use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, PrerollHint};
+use kithara_stream::{AudioCodec, ByteMap, ContainerFormat, PendingReason, PrerollHint};
 use num_traits::ToPrimitive;
 
 use super::{consts, file::AppleAudioFile, flac::StreamInfo};
@@ -47,6 +47,7 @@ pub(crate) struct AppleAudioFileDemuxer {
     /// size-less seek leaves the stream position stale and the reopen read
     /// mis-classifies as EOF. `None` / `0` when the total is unknown.
     byte_len: Option<Arc<AtomicU64>>,
+    byte_map: Option<Arc<dyn ByteMap>>,
     /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
     /// issues one batched `audio_file_read_packet_data` for that many
     /// packets. `None` for VBR: one packet per call so
@@ -113,10 +114,13 @@ impl AppleAudioFileDemuxer {
             (AudioCodec::Pcm, ContainerFormat::Aiff) => consts::FILE_AIFF_TYPE,
             (AudioCodec::Pcm | AudioCodec::Alac, ContainerFormat::Caf) => consts::FILE_CAF_TYPE,
             (AudioCodec::Flac, ContainerFormat::Flac) => consts::FILE_FLAC_TYPE,
-            (AudioCodec::Alac, ContainerFormat::Mp4) => consts::FILE_M4A_TYPE,
-            (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
+            (AudioCodec::Alac, ContainerFormat::Mp4 | ContainerFormat::Fmp4) => {
                 consts::FILE_M4A_TYPE
             }
+            (
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
+                ContainerFormat::Mp4 | ContainerFormat::Fmp4,
+            ) => consts::FILE_M4A_TYPE,
             (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
                 ContainerFormat::Adts,
@@ -125,8 +129,8 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    /// A streaming FLAC open skips the packet-count scan, taking duration and buffer size from
-    /// STREAMINFO instead, and keeps the real file size for correct EOF and seek behavior.
+    /// Streaming FLAC and segmented PCM skip the eager packet-count query so an unavailable
+    /// tail cannot freeze a partial packet table. FLAC retains STREAMINFO duration and bounds.
     fn open<S>(
         source: BoxedSource,
         hint: Option<u32>,
@@ -138,7 +142,7 @@ impl AppleAudioFileDemuxer {
         S: HasPool<u8>,
     {
         let file = match (open_mode, codec) {
-            (SourceOpenMode::Streaming, AudioCodec::Flac) => {
+            (SourceOpenMode::Streaming, AudioCodec::Flac | AudioCodec::Pcm) => {
                 AppleAudioFile::open_sized_streaming(source, hint)?
             }
             _ => AppleAudioFile::open(source, hint)?,
@@ -231,6 +235,7 @@ impl AppleAudioFileDemuxer {
             last_packet_desc_blob: [0u8; size_of::<AudioStreamPacketDescription>()],
             next_packet: 0,
             byte_len: None,
+            byte_map: None,
         })
     }
 
@@ -273,6 +278,10 @@ impl AppleAudioFileDemuxer {
         self.byte_len = handle;
     }
 
+    pub(crate) fn set_byte_map(&mut self, byte_map: Option<Arc<dyn ByteMap>>) {
+        self.byte_map = byte_map;
+    }
+
     /// Inject encoder priming/padding metadata probed by the factory
     /// layer (e.g. `iTunSMPB`/`elst` for AAC).
     /// `AudioFileServices` does not expose MP4 edit lists,
@@ -292,6 +301,26 @@ impl AppleAudioFileDemuxer {
 }
 
 impl Demuxer for AppleAudioFileDemuxer {
+    fn current_segment_index(&self) -> Option<u32> {
+        let byte = self
+            .file
+            .packet_to_byte(self.next_packet.saturating_sub(1))?;
+        self.byte_map
+            .as_ref()?
+            .segment_at_byte(byte)
+            .map(|segment| segment.segment_index)
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        let byte = self
+            .file
+            .packet_to_byte(self.next_packet.saturating_sub(1))?;
+        self.byte_map
+            .as_ref()?
+            .segment_at_byte(byte)
+            .map(|segment| segment.variant_index)
+    }
+
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
     }

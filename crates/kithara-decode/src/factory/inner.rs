@@ -536,7 +536,9 @@ where
     } else {
         None
     };
-    let open_mode = if config.byte_len_handle.is_some() {
+    let open_mode = if config.byte_len_handle.is_some()
+        && (codec != AudioCodec::Pcm || config.byte_map.is_some())
+    {
         SourceOpenMode::Streaming
     } else {
         SourceOpenMode::Complete
@@ -549,6 +551,7 @@ where
         &config.pools,
     )?;
     demuxer.set_byte_len_handle(config.byte_len_handle.clone());
+    demuxer.set_byte_map(config.byte_map.clone());
     demuxer.set_gapless(probed_gapless);
     let target_output_rate = decoder_embedded_target_output_rate(&config);
     let output_track = track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
