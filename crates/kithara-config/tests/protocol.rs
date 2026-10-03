@@ -75,6 +75,99 @@ fn a_judged_builder_uses_the_same_check_as_updates() {
     assert_eq!(bounded.level(), 2);
 }
 
+#[derive(Clone, Config)]
+#[config(update, patch(validate = Self::validated, error = Error))]
+struct Mix {
+    #[config(nested, update)]
+    bounded: Bounded,
+    #[config(value, update, get(copy))]
+    gain: u32,
+}
+
+impl Mix {
+    fn validated(self) -> Result<Self, Error> {
+        if self.gain > self.bounded.level() {
+            return Err(Error::other("gain exceeds the level"));
+        }
+        Ok(self)
+    }
+}
+
+#[kithara::test]
+fn a_nested_update_commits_through_both_checks_or_not_at_all() {
+    let mut mix = Mix::builder().bounded(Bounded::default()).gain(2).build();
+    let level = |value| BoundedUpdate {
+        level: BoundedLevelUpdate::Set { value },
+        ..BoundedUpdate::default()
+    };
+
+    let inner = mix.apply_update(MixUpdate {
+        bounded: level(7),
+        gain: MixGainUpdate::Set { value: 1 },
+    });
+    assert!(
+        inner.is_err(),
+        "the nested check refuses a level over its limit"
+    );
+    assert_eq!(
+        (mix.bounded.level(), mix.gain()),
+        (2, 2),
+        "a nested refusal keeps the outer gain too"
+    );
+
+    let outer = mix.apply_update(MixUpdate {
+        bounded: level(1),
+        ..MixUpdate::default()
+    });
+    assert!(
+        outer.is_err(),
+        "the outer check refuses a level under the gain"
+    );
+    assert_eq!(
+        mix.bounded.level(),
+        2,
+        "an outer refusal discards the change the nested check accepted"
+    );
+
+    mix.apply_update(MixUpdate {
+        bounded: level(4),
+        gain: MixGainUpdate::Set { value: 3 },
+    })
+    .expect("both checks accept");
+    assert_eq!((mix.bounded.level(), mix.gain()), (4, 3));
+    assert_eq!(
+        mix.values().bounded.level,
+        4,
+        "the snapshot reads the nested change"
+    );
+}
+
+#[derive(Config)]
+#[config(update, builder(none))]
+struct Stack {
+    #[config(nested, update)]
+    levels: Levels,
+}
+
+#[kithara::test]
+fn an_unchecked_owner_takes_a_nested_update_in_place() {
+    let mut stack = Stack {
+        levels: Levels::default(),
+    };
+    stack.apply_update(StackUpdate {
+        levels: LevelsUpdate {
+            level: LevelsLevelUpdate::Set { value: 5 },
+            ..LevelsUpdate::default()
+        },
+    });
+    assert_eq!(stack.levels.level(), 5);
+    assert_eq!(
+        stack.values().levels.limit,
+        Some(4),
+        "an unchanged nested field keeps its value"
+    );
+}
+
 #[derive(ConfigOwner)]
 #[config_owner(config)]
 #[config_owner_mut]

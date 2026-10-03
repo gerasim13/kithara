@@ -38,7 +38,42 @@ pub(super) struct Retained {
 pub(super) struct Update {
     pub(super) declaration: TokenStream,
     pub(super) field: TokenStream,
-    pub(super) lower: TokenStream,
+    pub(super) lower: Lower,
+}
+
+/// How one field's update lands on `target`, the owner itself or its staged
+/// copy.
+pub(super) enum Lower {
+    /// A retained value, matched from its own update enum.
+    Value(TokenStream),
+    /// A nested configuration, applied through its own check.
+    Nested(Ident),
+}
+
+impl Lower {
+    /// Inside an owner that judges itself: a nested refusal propagates and
+    /// leaves the staged copy unused.
+    pub(super) fn checked(&self) -> TokenStream {
+        match self {
+            Self::Value(lower) => lower.clone(),
+            Self::Nested(name) => quote! {
+                ::kithara_config::UpdatableConfig::apply_update(&mut target.#name, update.#name)?;
+            },
+        }
+    }
+
+    /// Inside an owner that takes changes in place: the pattern is
+    /// irrefutable only for a nested configuration that cannot refuse, so
+    /// any other nests as a compile error instead of a dropped refusal.
+    pub(super) fn in_place(&self) -> TokenStream {
+        match self {
+            Self::Value(lower) => lower.clone(),
+            Self::Nested(name) => quote! {
+                let ::core::result::Result::Ok(()) =
+                    ::kithara_config::UpdatableConfig::apply_update(&mut target.#name, update.#name);
+            },
+        }
+    }
 }
 
 pub(super) fn expand<'a>(
@@ -172,6 +207,7 @@ fn retained(
     builder: Option<&TokenStream>,
 ) -> Result<Option<Retained>> {
     let original_type = &field.ty;
+    let nested = matches!(role, Role::Nested);
     let (ty, expression): (Type, Expr) = match role {
         Role::Skip => return Ok(None),
         Role::Value => (
@@ -192,7 +228,13 @@ fn retained(
     }
     let surface = docs(&field.attrs);
     let update = update
-        .then(|| update_tokens(builder, &owner.ident, name, original_type, &surface))
+        .then(|| {
+            if nested {
+                Ok(nested_update(name, original_type, &surface))
+            } else {
+                update_tokens(builder, &owner.ident, name, original_type, &surface)
+            }
+        })
         .transpose()?;
     Ok(Some(Retained {
         declaration: quote! { #(#surface)* pub #name: #ty },
@@ -214,10 +256,10 @@ fn validate_role(
             "SDK exposure requires a value or projected value field",
         ));
     }
-    if update && !matches!(role, Role::Value) {
+    if update && !matches!(role, Role::Value | Role::Nested) {
         return Err(syn::Error::new_spanned(
             field,
-            "runtime update currently requires a retained value field",
+            "runtime update requires a retained value or nested field",
         ));
     }
     if update && !snapshot {
@@ -273,15 +315,25 @@ fn update_tokens(
             }
         },
         field: quote! { #(#surface)* pub #name: #enum_name },
-        lower: quote! {
+        lower: Lower::Value(quote! {
             match update.#name {
                 #enum_name::Unchanged => {}
                 #enum_name::Set { value } => { #set }
                 #clear_lower
                 #reset_lower
             }
-        },
+        }),
     })
+}
+
+/// A nested configuration contributes its own update record; its owner
+/// lowers it through [`Lower::checked`] or [`Lower::in_place`].
+fn nested_update(name: &Ident, ty: &Type, surface: &[&Attribute]) -> Update {
+    Update {
+        declaration: TokenStream::new(),
+        field: quote! { #(#surface)* pub #name: <#ty as ::kithara_config::UpdatableConfig>::Update },
+        lower: Lower::Nested(name.clone()),
+    }
 }
 
 /// The value `builder(default)` or `builder(default = expr)` fills in, which

@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Attribute, Data, DeriveInput, Fields, Ident, Result, Visibility};
 
-use super::field::{self, Construction, Member};
+use super::field::{self, Construction, Lower, Member};
 use crate::config::{
     field::{Declaration, group},
     patch::{Check, validation},
@@ -349,7 +349,7 @@ fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Re
     let mut reads: Vec<&TokenStream> = Vec::new();
     let mut update_declarations: Vec<&TokenStream> = Vec::new();
     let mut update_fields: Vec<&TokenStream> = Vec::new();
-    let mut update_lowers: Vec<&TokenStream> = Vec::new();
+    let mut update_lowers: Vec<&Lower> = Vec::new();
     for retained in members.iter().filter_map(|member| member.retained.as_ref()) {
         value_fields.push(&retained.declaration);
         reads.push(&retained.read);
@@ -368,7 +368,7 @@ fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Re
     if options.runtime_update && update_fields.is_empty() {
         return Err(syn::Error::new_spanned(
             name,
-            "`#[config(update)]` requires at least one `#[config(value, update)]` field",
+            "`#[config(update)]` requires at least one `#[config(value, update)]` or `#[config(nested, update)]` field",
         ));
     }
     let values = format_ident!("{name}Values");
@@ -440,9 +440,10 @@ fn apply_update(
     item: &DeriveInput,
     visibility: &Visibility,
     update: &Ident,
-    lowers: &[&TokenStream],
+    lowers: &[&Lower],
 ) -> Result<TokenStream> {
     let Some(Check { with, error }) = validation(&item.attrs, item.ident.span())? else {
+        let lowers = lowers.iter().map(|lower| lower.in_place());
         return Ok(quote! {
             #visibility fn apply_update(&mut self, update: #update) {
                 let target = self;
@@ -450,6 +451,7 @@ fn apply_update(
             }
         });
     };
+    let lowers = lowers.iter().map(|lower| lower.checked());
     Ok(quote! {
         #visibility fn apply_update(
             &mut self,
@@ -469,7 +471,7 @@ fn apply_update(
     item: &DeriveInput,
     _: &Visibility,
     _: &Ident,
-    _: &[&TokenStream],
+    _: &[&Lower],
 ) -> Result<TokenStream> {
     Err(syn::Error::new_spanned(
         &item.ident,
@@ -824,16 +826,16 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     #[cfg(feature = "patch")]
-    fn update_rejects_non_value_roles_and_missing_struct_opt_in() {
+    fn update_refuses_projections_and_a_missing_struct_opt_in() {
         assert_eq!(
             refusal(quote! {
                 #[config(update)]
                 struct Settings {
-                    #[config(nested, update)]
-                    nested: Nested,
+                    #[config(value(u32, self.level.0), update)]
+                    level: Wrapped,
                 }
             }),
-            "runtime update currently requires a retained value field"
+            "runtime update requires a retained value or nested field"
         );
         assert_eq!(
             refusal(quote! {

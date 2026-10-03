@@ -95,6 +95,16 @@ update in place. The derive also implements `UpdatableConfig` so owners can
 apply updates through one protocol. Prepared engines and delegated live owners
 keep their own explicit operations.
 
+A nested configuration marked `#[config(nested, update)]` contributes its own
+update record to its owner's. An owner that judges itself applies it to the
+staged copy through the nested check and then through its own; either refusal
+leaves the owner unchanged, and the nested error converts with `From`, so
+nesting a configuration without a check needs `From<Infallible>` for the
+owner's error. An owner without a check takes the nested update in place and
+nests only configurations whose `Error` is `Infallible`; any other fails to
+compile rather than drop a refusal. A record of `Unchanged` fields still runs
+the owner's check.
+
 The derive emits `<Name>Values` with public snapshot fields, preserving field
 documentation. Resource generics stay on the original owner; snapshot types
 must not depend on them. Domain constructors and methods remain responsible for

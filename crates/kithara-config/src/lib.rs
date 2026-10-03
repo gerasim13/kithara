@@ -14,6 +14,31 @@ pub use bon;
 /// #[derive(kithara_config::Config)]
 /// struct Unclassified { value: u32 }
 /// ```
+///
+/// An owner without a check takes updates in place, so it nests only
+/// configurations that cannot refuse:
+///
+/// ```compile_fail
+/// #[derive(Clone, kithara_config::Config)]
+/// #[config(update, patch(validate = Self::checked, error = std::io::Error))]
+/// struct Inner {
+///     #[config(value, update)]
+///     level: u32,
+/// }
+///
+/// impl Inner {
+///     fn checked(self) -> Result<Self, std::io::Error> {
+///         Ok(self)
+///     }
+/// }
+///
+/// #[derive(kithara_config::Config)]
+/// #[config(update)]
+/// struct Outer {
+///     #[config(nested, update)]
+///     inner: Inner,
+/// }
+/// ```
 pub use kithara_derive::Config;
 pub use kithara_derive::{ConfigOwner, Patch};
 
