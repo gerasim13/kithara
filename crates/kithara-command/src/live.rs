@@ -77,7 +77,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::Live;
-    use crate::{ChannelConfig, Clock, Inbox, Protocol, Sender, Target, channel, consts};
+    use crate::{ChannelConfig, Clock, Inbox, Protocol, Sender, Target, channel};
 
     #[derive(Clone, Copy, Debug, PartialEq, Config)]
     #[config(update, patch(validate = Self::audible, error = Silence))]
@@ -147,7 +147,7 @@ mod tests {
     fn render(inbox: &mut Inbox<Test>) -> Vec<(usize, usize, Vec<f32>)> {
         inbox.drain();
         let mut batches = Vec::new();
-        while let Some(due) = inbox.next_due(Frame(0), consts::BLOCK) {
+        while let Some(due) = inbox.next_due(Frame(0), 64) {
             let levels = due
                 .commands()
                 .iter()
