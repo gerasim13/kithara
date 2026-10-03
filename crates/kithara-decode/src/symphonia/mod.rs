@@ -13,6 +13,8 @@ pub(crate) mod echain;
 pub(crate) mod fdk;
 #[cfg(all(test, feature = "symphonia"))]
 mod mp4_tests;
+#[cfg(feature = "opus")]
+mod opus;
 #[cfg(feature = "symphonia")]
 pub(crate) mod probe;
 #[cfg(feature = "symphonia")]

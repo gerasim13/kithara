@@ -13,6 +13,8 @@ pub mod deck;
 pub mod document;
 #[cfg(feature = "gui")]
 mod engine;
+#[cfg(all(test, target_os = "macos", feature = "gui"))]
+mod library_tests;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod logging;
 pub mod memory;

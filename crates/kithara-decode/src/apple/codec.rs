@@ -12,7 +12,7 @@ use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
 use super::{
-    consts::{self, os_status_to_string},
+    consts,
     converter::{
         ConverterInputState, gapless_info_from_prime_info, log_gapless_prime_info,
         prime_info_from_converter,
@@ -40,8 +40,7 @@ pub(crate) struct AppleCodec {
     /// the post-first-chunk refresh changes from the init query (AAC
     /// reports priming only after consuming one input packet).
     last_prime_info: Option<AudioConverterPrimeInfo>,
-    /// True once a source-rate-changing converter has reported no more
-    /// SRC tail frames after true EOF.
+    /// True once the converter has emitted the remaining PCM after source EOF.
     eof_drained: bool,
     /// Whether gapless capture was requested in
     /// [`AppleCodec::open_with_config`].
@@ -66,13 +65,14 @@ pub(crate) struct AppleCodec {
     /// is the actual output/device-domain rate.
     source_sample_rate: u32,
     source_frames_seen: u64,
+    output_frames_seen: u64,
 }
 
 impl AppleCodec {
     const SRC_OUTPUT_MARGIN_FRAMES: u32 = 1;
 
     fn drain_eof(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
-        if !self.needs_src_eof_drain() || self.eof_drained {
+        if self.eof_drained {
             out.clear();
             return Ok(0);
         }
@@ -87,11 +87,15 @@ impl AppleCodec {
     }
 
     fn eof_flush_frame_capacity(&self) -> DecodeResult<u32> {
-        output_frame_capacity(
+        let total = u128::from(self.source_frames_seen) * u128::from(self.spec.sample_rate.get());
+        let total = total.div_ceil(u128::from(self.source_sample_rate));
+        let remaining = total.saturating_sub(u128::from(self.output_frames_seen));
+        let capacity = output_frame_capacity(
             self.frames_per_packet.max(consts::AAC_FRAMES_PER_PACKET),
             self.source_sample_rate,
             self.spec.sample_rate.get(),
-        )
+        )?;
+        Ok(u32::try_from(remaining.min(u128::from(capacity)))?)
     }
 
     fn fill_converter(&mut self, out: &mut SampleBuffer, target_frames: u32) -> DecodeResult<u32> {
@@ -126,13 +130,10 @@ impl AppleCodec {
         }
 
         let frames = output_packets;
+        self.output_frames_seen = self.output_frames_seen.saturating_add(u64::from(frames));
         let samples_len = output_sample_capacity(frames, channels)?;
         out.truncate(samples_len);
         Ok(frames)
-    }
-
-    const fn needs_src_eof_drain(&self) -> bool {
-        self.spec.sample_rate.get() != self.source_sample_rate
     }
 
     /// Inherent constructor used by [`Self::open_with_config`] (and only
@@ -168,12 +169,10 @@ impl AppleCodec {
             let status =
                 converter.set_property_bytes(AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE, cookie);
             if status != consts::NO_ERR {
-                tracing::warn!(
-                    status,
-                    err = %os_status_to_string(status),
-                    cookie_size = cookie.len(),
-                    "AppleCodec: audio_converter_set_property(MagicCookie) returned non-zero (continuing)",
-                );
+                return Err(DecodeError::BackendStatus {
+                    code: status,
+                    op: "AudioConverterSetProperty(MagicCookie)",
+                });
             }
         }
 
@@ -191,6 +190,7 @@ impl AppleCodec {
             eof_drained: false,
             tail_compensation_enabled: output_sample_rate != track.sample_rate,
             source_frames_seen: 0,
+            output_frames_seen: 0,
         })
     }
 
@@ -282,6 +282,10 @@ impl AppleCodec {
 }
 
 impl FrameCodec for AppleCodec {
+    fn needs_eof_drain(&self, _source_rate: u32) -> bool {
+        true
+    }
+
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -319,8 +323,10 @@ impl FrameCodec for AppleCodec {
             let frames =
                 u64::try_from(packets)?.saturating_mul(u64::from(self.frames_per_packet.max(1)));
             u32::try_from(frames)?
+        } else if desc.variable_frames_in_packet > 0 {
+            desc.variable_frames_in_packet
         } else {
-            self.frames_per_packet.max(consts::AAC_FRAMES_PER_PACKET)
+            self.frames_per_packet.max(1)
         };
         self.source_frames_seen = self
             .source_frames_seen
@@ -351,6 +357,7 @@ impl FrameCodec for AppleCodec {
         self.input_state.clear();
         self.eof_drained = false;
         self.source_frames_seen = 0;
+        self.output_frames_seen = 0;
         self.tail_compensation_enabled = false;
         self.track_info.gapless_tail = None;
         Ok(())
@@ -416,8 +423,10 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
                 .max(consts::AAC_FRAMES_PER_PACKET);
 
             let mut cookie = [0; consts::FLAC_COOKIE_PREFIX_LEN + consts::FLAC_STREAMINFO_LEN];
-            cookie[..4].copy_from_slice(b"fLaC");
-            cookie[4..8].copy_from_slice(&[0x80, 0x00, 0x00, consts::FLAC_STREAMINFO_LEN_U8]);
+            let cookie_size = u32::try_from(cookie.len())?;
+            cookie[..4].copy_from_slice(&cookie_size.to_be_bytes());
+            cookie[4..8].copy_from_slice(b"dfLa");
+            cookie[12..16].copy_from_slice(&[0x80, 0x00, 0x00, consts::FLAC_STREAMINFO_LEN_U8]);
             cookie[consts::FLAC_COOKIE_PREFIX_LEN..].copy_from_slice(streaminfo);
 
             let asbd = AudioStreamBasicDescription {
@@ -452,7 +461,11 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             Ok(AppleInputFormat {
                 asbd,
                 cookie: None,
-                frames_per_packet: 1152,
+                frames_per_packet: if track.sample_rate < 32_000 {
+                    576
+                } else {
+                    1152
+                },
             })
         }
         AudioCodec::Alac => {
@@ -1216,5 +1229,88 @@ mod aac_lc_decode_tests {
 
         assert!(before_drain > 0, "passthrough decode produced no frames");
         assert_eq!(drained, 0, "passthrough EOF drain produced extra frames");
+    }
+}
+
+#[cfg(test)]
+mod flac_decode_tests {
+    use std::io::Cursor;
+
+    use kithara_apple::audio_toolbox::{
+        AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE, AudioConverter,
+    };
+    use kithara_stream::{AudioCodec, ContainerFormat};
+    use kithara_test_fixtures::unit_fixtures::flac_saw;
+    use kithara_test_utils::kithara;
+
+    use super::{AppleCodec, build_input_format, build_pcm_output_format, consts, flac};
+    use crate::{
+        apple::demuxer::{AppleAudioFileDemuxer, SourceOpenMode},
+        codec::FrameCodec,
+        demuxer::{DemuxOutcome, Demuxer},
+        test_pools::pools,
+    };
+
+    #[kithara::test]
+    #[case::native_cookie(false, false)]
+    #[case::raw_streaminfo(true, false)]
+    #[case::id3_prefix(false, true)]
+    fn apple_flac_cookie_is_accepted_and_decodes_pcm(
+        flac_saw: &'static [u8],
+        #[case] raw_streaminfo: bool,
+        #[case] id3_prefix: bool,
+    ) {
+        let mut bytes = Vec::new();
+        if id3_prefix {
+            bytes.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x00\x10");
+            bytes.extend_from_slice(&[0; 16]);
+        }
+        bytes.extend_from_slice(flac_saw);
+        let mut demuxer = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(bytes)),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Complete,
+        )
+        .expect("open standalone FLAC");
+        let mut track = demuxer.track_info().clone();
+        if raw_streaminfo {
+            track.extra_data = flac::streaminfo_body(&track.extra_data)
+                .expect("STREAMINFO body")
+                .to_vec();
+        }
+        let input = build_input_format(&track).expect("FLAC input format");
+        let output = build_pcm_output_format(track.sample_rate, track.channels, None);
+        let mut converter = AudioConverter::new(&input.asbd, &output).expect("FLAC converter");
+        assert_eq!(
+            converter.set_property_bytes(
+                AUDIO_CONVERTER_DECOMPRESSION_MAGIC_COOKIE,
+                input.cookie.as_deref().expect("FLAC cookie"),
+            ),
+            consts::NO_ERR,
+            "Apple must accept the cookie before any frame is decoded",
+        );
+        let mut codec = AppleCodec::open_with_config(&track, false, None).expect("FLAC codec");
+        let pools = pools();
+        let mut pcm = pools.get::<f32>();
+        let mut frames = 0_u64;
+        let mut peak = 0.0_f32;
+        loop {
+            match demuxer.next_frame().expect("FLAC packet") {
+                DemuxOutcome::Frame(frame) => {
+                    frames += u64::from(
+                        codec
+                            .decode_frame(frame.data, frame.duration, frame.packet_desc, &mut pcm)
+                            .expect("decode FLAC packet"),
+                    );
+                    assert!(pcm.iter().all(|sample| sample.is_finite()));
+                    peak = pcm.iter().fold(peak, |peak, sample| peak.max(sample.abs()));
+                }
+                DemuxOutcome::Eof => break,
+                DemuxOutcome::Pending(reason) => panic!("complete FLAC is pending: {reason:?}"),
+            }
+        }
+        assert_eq!(frames, u64::from(track.sample_rate) * 6);
+        assert!(peak > 0.1, "FLAC must contain the fixture signal");
     }
 }

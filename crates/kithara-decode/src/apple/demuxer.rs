@@ -110,9 +110,10 @@ impl AppleAudioFileDemuxer {
     const fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
         Some(match (codec, container) {
             (AudioCodec::Pcm, ContainerFormat::Wav) => consts::FILE_WAVE_TYPE,
+            (AudioCodec::Pcm, ContainerFormat::Aiff) => consts::FILE_AIFF_TYPE,
+            (AudioCodec::Pcm | AudioCodec::Alac, ContainerFormat::Caf) => consts::FILE_CAF_TYPE,
             (AudioCodec::Flac, ContainerFormat::Flac) => consts::FILE_FLAC_TYPE,
             (AudioCodec::Alac, ContainerFormat::Mp4) => consts::FILE_M4A_TYPE,
-            (AudioCodec::Alac, ContainerFormat::Caf) => consts::FILE_CAF_TYPE,
             (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
                 consts::FILE_M4A_TYPE
             }
@@ -178,14 +179,21 @@ impl AppleAudioFileDemuxer {
             spec.duration_for(info.total_samples)
                 .unwrap_or(Duration::from_nanos(u64::MAX))
         });
-        let duration = total_packets
-            .filter(|count| *count > 0)
-            .map(|total_packets| {
-                let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
-                spec.duration_for(frames)
-                    .unwrap_or(Duration::from_nanos(u64::MAX))
-            })
-            .or(flac_duration);
+        let duration = if codec == AudioCodec::Alac {
+            Some(
+                spec.duration_for(file.valid_frames()?)
+                    .map_err(DecodeError::backend)?,
+            )
+        } else {
+            total_packets
+                .filter(|count| *count > 0)
+                .map(|total_packets| {
+                    let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
+                    spec.duration_for(frames)
+                        .unwrap_or(Duration::from_nanos(u64::MAX))
+                })
+                .or(flac_duration)
+        };
 
         let track_info = TrackInfo {
             codec,

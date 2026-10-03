@@ -38,14 +38,14 @@ rhythm = [
     "dep:kithara-signal",
     "dep:kithara-test-utils",
 ]
-signal = []
+signal = ["dep:tempfile"]
 wav = []
 
 [dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"], optional = true }
 kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
 kithara-bufpool = { workspace = true, optional = true }
-kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "tls-rustls"], optional = true }
+kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "opus", "ape", "tls-rustls"], optional = true }
 kithara-drm = { workspace = true, optional = true }
 kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
 kithara-events = { workspace = true, optional = true }
@@ -72,6 +72,7 @@ num-traits = { workspace = true }
 rayon = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["blocking", "rustls"], optional = true }
 sha2 = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true, optional = true }

@@ -147,7 +147,7 @@ tracing-log = { workspace = true }
 tracing-wasm = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["download", "apple", "client-wreq"] }
+kithara = { workspace = true, default-features = false, features = ["download", "apple", "opus", "ape", "client-wreq"] }
 
 [build-dependencies]
 kithara-app-document = { workspace = true }
@@ -168,7 +168,7 @@ tempfile = { workspace = true }
 kithara = { workspace = true, default-features = false, features = ["download", "client-reqwest", "net", "tls-rustls"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "wav"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "wav", "signal"] }
 
 # Dev-only kithara-net mirrors the per-target production backend so test
 # builds stay single-stack: macOS tests run wreq (matching the `apple`

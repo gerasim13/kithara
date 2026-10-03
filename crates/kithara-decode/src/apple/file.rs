@@ -10,8 +10,9 @@ use std::{
 use kithara_apple::audio_toolbox::{
     AUDIO_FILE_PROPERTY_AUDIO_DATA_PACKET_COUNT, AUDIO_FILE_PROPERTY_DATA_FORMAT,
     AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA, AUDIO_FILE_PROPERTY_MAXIMUM_PACKET_SIZE,
-    AUDIO_FILE_PROPERTY_PACKET_TO_BYTE, AudioBytePacketTranslation, AudioFile, AudioFileCallbacks,
-    AudioFilePacketRead, AudioStreamBasicDescription, AudioStreamPacketDescription, OSStatus,
+    AUDIO_FILE_PROPERTY_PACKET_TABLE_INFO, AUDIO_FILE_PROPERTY_PACKET_TO_BYTE,
+    AudioBytePacketTranslation, AudioFile, AudioFileCallbacks, AudioFilePacketRead,
+    AudioFilePacketTableInfo, AudioStreamBasicDescription, AudioStreamPacketDescription, OSStatus,
     PARAM_ERR, SInt64, UInt32,
 };
 use kithara_platform::sync::Arc;
@@ -70,6 +71,19 @@ pub(crate) struct AppleAudioFile {
 }
 
 impl AppleAudioFile {
+    pub(crate) fn valid_frames(&self) -> DecodeResult<u64> {
+        let table: AudioFilePacketTableInfo = self
+            .handle
+            .get_property(AUDIO_FILE_PROPERTY_PACKET_TABLE_INFO)
+            .map_err(|status| DecodeError::BackendStatus {
+                code: status,
+                op: "AudioFileGetProperty(PacketTableInfo)",
+            })?;
+        u64::try_from(table.number_valid_frames).map_err(|_| DecodeError::InvalidData {
+            detail: "negative valid frame count",
+        })
+    }
+
     pub(crate) fn magic_cookie(&self) -> Option<Vec<u8>> {
         read_magic_cookie(&self.handle)
     }

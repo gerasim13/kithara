@@ -17,6 +17,8 @@
 //! let decoder = DecoderFactory::create_from_media_info(source, &media_info, config)?;
 //! ```
 
+#[cfg(feature = "ape")]
+mod ape;
 mod codec;
 mod composed;
 mod demuxer;

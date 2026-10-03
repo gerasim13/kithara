@@ -9,5 +9,5 @@
 mod apple_mp3_tests;
 mod inner;
 mod probe;
-
 pub use inner::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
+pub(crate) use probe::skip_id3_tags;

@@ -51,6 +51,7 @@ mod tests {
         },
         ui::render::ControlAction,
     };
+    use kithara_test_fixtures::SignalAsset;
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
     use crate::{
@@ -111,7 +112,98 @@ mod tests {
     }
 
     #[kithara::test(native, tokio, flash(false))]
-    async fn playback_advances_on_the_engine_tick_alone(tone_mp3: String, short_wav: String) {
+    #[case::original(None)]
+    #[case::profile_flac_flac_192000_2ch_16bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT
+    ))]
+    #[case::profile_flac_flac_192000_2ch_24bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT
+    ))]
+    #[case::profile_flac_flac_22050_1ch_16bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT
+    ))]
+    #[case::profile_flac_flac_22050_2ch_16bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT
+    ))]
+    #[case::profile_flac_flac_44100_2ch_16bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT
+    ))]
+    #[case::profile_flac_flac_44100_2ch_24bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT
+    ))]
+    #[case::profile_flac_flac_48000_2ch_16bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT
+    ))]
+    #[case::profile_flac_flac_48000_2ch_24bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT
+    ))]
+    #[case::profile_flac_flac_88200_2ch_24bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT
+    ))]
+    #[case::profile_flac_flac_96000_2ch_16bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT
+    ))]
+    #[case::profile_flac_flac_96000_2ch_24bit(Some(
+        SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT
+    ))]
+    #[case::profile_mp3_libmp3lame_11025_1ch(Some(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH))]
+    #[case::profile_mp3_libmp3lame_22050_1ch(Some(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH))]
+    #[case::profile_mp3_libmp3lame_32000_2ch(Some(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH))]
+    #[case::profile_mp3_libmp3lame_44100_1ch(Some(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH))]
+    #[case::profile_mp3_libmp3lame_44100_2ch(Some(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH))]
+    #[case::profile_mp3_libmp3lame_48000_1ch(Some(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH))]
+    #[case::profile_mp3_libmp3lame_48000_2ch(Some(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH))]
+    #[case::profile_m4a_aac_44100_2ch(Some(SignalAsset::PROFILE_M4A_AAC_44100_2CH))]
+    #[case::profile_m4a_alac_44100_2ch_16bit(Some(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT))]
+    #[case::profile_ogg_vorbis_44100_2ch(Some(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH))]
+    #[cfg_attr(
+        target_os = "macos",
+        case::profile_opus_libopus_48000_2ch(Some(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH))
+    )]
+    #[case::profile_aiff_pcm_s16be_44100_2ch_16bit(Some(
+        SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT
+    ))]
+    #[case::profile_wav_pcm_f32le_192000_2ch_32bit(Some(
+        SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT
+    ))]
+    #[case::profile_wav_pcm_s16le_192000_2ch_16bit(Some(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT
+    ))]
+    #[case::profile_wav_pcm_s16le_44100_2ch_16bit(Some(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT
+    ))]
+    #[case::profile_wav_pcm_s24le_44100_2ch_24bit(Some(
+        SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT
+    ))]
+    #[case::profile_wav_pcm_s32le_192000_2ch_32bit(Some(
+        SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT
+    ))]
+    #[cfg_attr(
+        target_os = "macos",
+        case::profile_ape_multiframe_44100_2ch_16bit(Some(
+            SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT
+        ))
+    )]
+    #[case::profile_tagged_flac_id3(Some(SignalAsset::PROFILE_TAGGED_FLAC_ID3))]
+    #[case::profile_tagged_mp3_id3(Some(SignalAsset::PROFILE_TAGGED_MP3_ID3))]
+    #[case::profile_tagged_wave_mp3_id3(Some(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3))]
+    #[case::profile_alac_silence_tail(Some(SignalAsset::PROFILE_ALAC_SILENCE_TAIL))]
+    async fn playback_advances_on_the_engine_tick_alone(
+        #[case] asset: Option<SignalAsset>,
+        tone_mp3: String,
+        short_wav: String,
+    ) {
+        let tone_mp3 = asset.map_or(tone_mp3, |asset| {
+            let entry = kithara_test_fixtures::assets::MANIFEST
+                .iter()
+                .find(|entry| entry.name == asset.name())
+                .expect("registered fixture");
+            let path = kithara_test_fixtures::store::file(std::path::Path::new(entry.path))
+                .expect("stored fixture");
+            url::Url::from_file_path(path)
+                .expect("absolute fixture path")
+                .into()
+        });
         let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::realtime()))
             .await
             .expect("rig fixture is infallible");

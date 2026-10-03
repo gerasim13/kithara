@@ -1,12 +1,13 @@
 use std::{mem::size_of, ptr};
 
 use super::sys::{
-    AudioBytePacketTranslation, AudioConverterPrimeInfo, AudioFormatListItem,
-    AudioStreamBasicDescription, AudioStreamPacketDescription,
+    AudioBytePacketTranslation, AudioConverterPrimeInfo, AudioFilePacketTableInfo,
+    AudioFormatListItem, AudioStreamBasicDescription, AudioStreamPacketDescription,
 };
 
 pub trait ApplePod: Copy + Default {}
 
+impl ApplePod for AudioFilePacketTableInfo {}
 impl ApplePod for AudioStreamPacketDescription {}
 impl ApplePod for AudioStreamBasicDescription {}
 impl ApplePod for AudioBytePacketTranslation {}
