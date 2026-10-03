@@ -225,10 +225,9 @@ virtual machine on the Mac, so a reset of that daemon would take the store and
 the admin password with it, and every client key the runners hold would stop
 working.
 
-The server is pinned to a preview build. RustFS 1.0.0 answers a bucket quota
-request with 503 for about ten seconds after it reports ready
-(rustfs/rustfs#8014), so an `initialize` started on a fresh stack fails at its
-first quota.
+The server needs RustFS 1.0.1 or later. 1.0.0 answers a bucket quota request
+with 503 for about ten seconds after it reports ready (rustfs/rustfs#8014), so
+an `initialize` started on a fresh stack fails at its first quota.
 
 The image carries `xtask`, and `ci cache initialize` builds every bucket
 policy from `ci::cache::provision`. So the copy of this repository the image
