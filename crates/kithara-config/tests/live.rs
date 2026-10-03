@@ -66,6 +66,40 @@ struct Label {
     text: &'static str,
 }
 
+fn value(level: u8) -> Result<u8, Error> {
+    if level <= 1 {
+        Ok(level)
+    } else {
+        Err(Error::other("value"))
+    }
+}
+
+fn change(level: u8) -> Result<u8, Error> {
+    if level <= 1 {
+        Ok(level)
+    } else {
+        Err(Error::other("change"))
+    }
+}
+
+/// Field checks named like the locals the derive generates around them.
+#[derive(Clone, Copy, Config)]
+#[config(builder(none), check(error = Error))]
+struct Shadowed {
+    #[config(value, live, check = value)]
+    first: u8,
+    #[config(value, live, check = change)]
+    second: u8,
+}
+
+/// A live field whose name is a keyword.
+#[derive(Clone, Copy, Config)]
+#[config(builder(none))]
+struct Kind {
+    #[config(value, live)]
+    r#type: u8,
+}
+
 #[derive(ConfigOwner)]
 #[config_owner(config)]
 #[config_owner_mut]
@@ -117,10 +151,24 @@ fn a_change_assigns_exactly_its_field() {
     let mut gauge = Gauge { level: 2, limit: 7 };
     gauge.apply_change(GaugeChange::Level(3));
     assert_eq!(gauge, Gauge { level: 3, limit: 7 });
+    gauge.apply_change(GaugeChange::Level(9));
+    assert_eq!(gauge.level, 9, "applying never checks; the sender did");
 
     let mut label = Label { text: "intro" };
     label.apply_change(LabelChange::Text("drop"));
     assert_eq!(label.text, "drop");
+}
+
+#[kithara::test]
+fn a_field_check_named_like_a_generated_local_still_runs() {
+    assert_eq!(refusal(Shadowed::check(ShadowedChange::First(2))), "value");
+    assert_eq!(
+        refusal(Shadowed::check(ShadowedChange::Second(2))),
+        "change"
+    );
+    let mut kind = Kind { r#type: 0 };
+    kind.apply_change(KindChange::Type(3));
+    assert_eq!(kind.r#type, 3);
 }
 
 #[kithara::test]

@@ -3,9 +3,9 @@ use quote::{format_ident, quote};
 use syn::{Attribute, DeriveInput, Ident};
 
 use super::{
-    field::Member,
+    field::{LiveField, Member},
     implementation::docs,
-    live::{cfgs, change_name, variant},
+    live::{cfgs, change_name},
 };
 use crate::config::field::Live;
 
@@ -44,9 +44,9 @@ pub(super) fn control(item: &DeriveInput, members: &[Member<'_>]) -> TokenStream
                 }
             })
         };
-        let set = (member.live.is_some() && !member.nested).then(|| {
+        let set = member.live.as_ref().filter(|_| !member.nested).map(|live| {
             let setter = format_ident!("set_{}", field, span = Span::call_site());
-            let variant = variant(field);
+            let variant = &live.variant;
             let doc = format!(" Hands the owner a change of `{field}` for the nearest moment.");
             quote! {
                 #(#cfgs)*
@@ -87,7 +87,7 @@ pub(super) fn control(item: &DeriveInput, members: &[Member<'_>]) -> TokenStream
 
 /// `<Name>Exec`: how an owner executes a change, each `live(owner)` field
 /// through its own method and every other live field through `exec_live`.
-pub(super) fn exec(item: &DeriveInput, fields: &[&Member<'_>]) -> TokenStream {
+pub(super) fn exec(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream {
     let name = &item.ident;
     let visibility = &item.vis;
     let change = change_name(item);
@@ -96,12 +96,12 @@ pub(super) fn exec(item: &DeriveInput, fields: &[&Member<'_>]) -> TokenStream {
     let mut methods: Vec<TokenStream> = Vec::new();
     let mut arms: Vec<TokenStream> = Vec::new();
     let mut shared = false;
-    for member in fields {
+    for (member, live) in fields {
+        let variant = &live.variant;
         let field = member.name;
         let ty = member.ty;
-        let variant = variant(field);
         let cfgs: Vec<&Attribute> = cfgs(member.attributes).collect();
-        if matches!(member.live, Some(Live::Owner)) {
+        if matches!(live.mode, Live::Owner) {
             let method = format_ident!("exec_{}", field, span = Span::call_site());
             let doc = format!(" Executes a change of `{field}` at `at`.");
             methods.push(quote! {

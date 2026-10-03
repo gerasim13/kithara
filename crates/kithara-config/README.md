@@ -95,7 +95,8 @@ the configuration runs. Each live field becomes one variant of the generated
 `<Name>Change` enum, and the derive implements `LiveConfig`: `check` passes a
 change through its field's check alone, and `apply_change` assigns that field
 alone without allocating. A nested live field carries the nested
-configuration's change. `live(owner)` marks a value field whose change the
+configuration's change, and the parent's change converts from it, so two
+nested live fields cannot share a type. `live(owner)` marks a value field whose change the
 owner executes with its own operation; a nested live configuration cannot have
 one.
 

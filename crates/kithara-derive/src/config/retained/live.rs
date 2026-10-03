@@ -4,7 +4,7 @@ use syn::{Attribute, DeriveInput, Ident, Type};
 
 use super::{
     control::{control, exec},
-    field::{Member, upper_camel},
+    field::{LiveField, Member},
     implementation::docs,
 };
 use crate::config::field::Live;
@@ -17,9 +17,9 @@ pub(super) fn expand(
     members: &[Member<'_>],
     error: Option<&Type>,
 ) -> Option<TokenStream> {
-    let fields: Vec<&Member<'_>> = members
+    let fields: Vec<(&Member<'_>, &LiveField)> = members
         .iter()
-        .filter(|member| member.live.is_some())
+        .filter_map(|member| member.live.as_ref().map(|live| (member, live)))
         .collect();
     if error.is_none() && fields.is_empty() {
         return None;
@@ -46,11 +46,6 @@ pub(super) fn cfgs(attributes: &[Attribute]) -> impl Iterator<Item = &Attribute>
 /// the macro's own.
 pub(super) fn change_name(item: &DeriveInput) -> Ident {
     format_ident!("{}Change", item.ident, span = Span::call_site())
-}
-
-/// The variant of the change enum that carries a change of `field`.
-pub(super) fn variant(field: &Ident) -> Ident {
-    Ident::new(&upper_camel(field), Span::call_site())
 }
 
 fn checked(item: &DeriveInput, members: &[Member<'_>], error: Option<&Type>) -> TokenStream {
@@ -98,18 +93,22 @@ fn checked(item: &DeriveInput, members: &[Member<'_>], error: Option<&Type>) -> 
     }
 }
 
-fn live(item: &DeriveInput, fields: &[&Member<'_>]) -> TokenStream {
+/// The change enum and `LiveConfig`. Their locals are mixed-site, so a field
+/// check path such as `value` resolves past them.
+fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream {
     let name = &item.ident;
     let visibility = &item.vis;
     let change = change_name(item);
+    let received = Ident::new("change", Span::mixed_site());
+    let value = Ident::new("value", Span::mixed_site());
     let mut variants: Vec<TokenStream> = Vec::new();
     let mut checks: Vec<TokenStream> = Vec::new();
     let mut applies: Vec<TokenStream> = Vec::new();
     let mut nested: Vec<TokenStream> = Vec::new();
-    for member in fields {
+    for (member, live) in fields {
+        let variant = &live.variant;
         let field = member.name;
         let ty = member.ty;
-        let variant = variant(field);
         let payload = if member.nested {
             quote!(<#ty as ::kithara_config::LiveConfig>::Change)
         } else {
@@ -121,20 +120,20 @@ fn live(item: &DeriveInput, fields: &[&Member<'_>]) -> TokenStream {
         if member.nested {
             checks.push(quote! {
                 #(#cfgs)*
-                #change::#variant(change) => ::core::result::Result::Ok(#change::#variant(
-                    <#ty as ::kithara_config::LiveConfig>::check(change)?
+                #change::#variant(#value) => ::core::result::Result::Ok(#change::#variant(
+                    <#ty as ::kithara_config::LiveConfig>::check(#value)?
                 ))
             });
             applies.push(quote! {
                 #(#cfgs)*
-                #change::#variant(change) => ::kithara_config::LiveConfig::apply_change(&mut self.#field, change)
+                #change::#variant(#value) => ::kithara_config::LiveConfig::apply_change(&mut self.#field, #value)
             });
             nested.push(quote! {
                 #(#cfgs)*
                 #[automatically_derived]
                 impl ::core::convert::From<#payload> for #change {
-                    fn from(change: #payload) -> Self {
-                        Self::#variant(change)
+                    fn from(#value: #payload) -> Self {
+                        Self::#variant(#value)
                     }
                 }
                 #(#cfgs)*
@@ -144,23 +143,23 @@ fn live(item: &DeriveInput, fields: &[&Member<'_>]) -> TokenStream {
                 );
             });
         } else {
-            let value = member
+            let checked = member
                 .check
                 .as_ref()
-                .map_or_else(|| quote!(value), |check| quote!(#check(value)?));
+                .map_or_else(|| quote!(#value), |check| quote!(#check(#value)?));
             checks.push(quote! {
                 #(#cfgs)*
-                #change::#variant(value) => ::core::result::Result::Ok(#change::#variant(#value))
+                #change::#variant(#value) => ::core::result::Result::Ok(#change::#variant(#checked))
             });
             applies.push(quote! {
                 #(#cfgs)*
-                #change::#variant(value) => self.#field = value
+                #change::#variant(#value) => self.#field = #value
             });
         }
     }
     let owner_fields = fields
         .iter()
-        .any(|member| matches!(member.live, Some(Live::Owner)));
+        .any(|(_, live)| matches!(live.mode, Live::Owner));
     let subject = format!(" One change of one live field of [`{name}`].");
     quote! {
         #[doc = #subject]
@@ -177,16 +176,16 @@ fn live(item: &DeriveInput, fields: &[&Member<'_>]) -> TokenStream {
 
             const OWNER_FIELDS: bool = #owner_fields;
 
-            fn apply_change(&mut self, change: Self::Change) {
-                match change {
+            fn apply_change(&mut self, #received: Self::Change) {
+                match #received {
                     #(#applies,)*
                 }
             }
 
             fn check(
-                change: Self::Change,
+                #received: Self::Change,
             ) -> ::core::result::Result<Self::Change, <Self as ::kithara_config::CheckedConfig>::Error> {
-                match change {
+                match #received {
                     #(#checks,)*
                 }
             }

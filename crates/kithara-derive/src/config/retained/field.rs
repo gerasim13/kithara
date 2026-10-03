@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
     Attribute, DeriveInput, Expr, Field, GenericParam, Generics, Ident, Meta, Path, Result, Token,
-    Type, parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
+    Type, ext::IdentExt as _, parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
 use super::implementation::docs;
@@ -18,7 +18,7 @@ pub(super) struct Member<'a> {
     /// Whether the generated `Debug` prints the field.
     pub(super) debugged: bool,
     pub(super) retained: Option<Retained>,
-    pub(super) live: Option<Live>,
+    pub(super) live: Option<LiveField>,
     pub(super) check: Option<Path>,
     /// Whether the field holds a nested configuration.
     pub(super) nested: bool,
@@ -32,6 +32,13 @@ pub(super) enum Construction {
     /// `builder(skip)`: no setter; `new` initialises the field itself, because
     /// bon has no `skip` for a function argument.
     Initialised(Expr),
+}
+
+/// How a live field changes.
+pub(super) struct LiveField {
+    pub(super) mode: Live,
+    /// The field's variant in the change enum.
+    pub(super) variant: Ident,
 }
 
 pub(super) struct Retained {
@@ -67,6 +74,9 @@ pub(super) fn expand<'a>(
         ));
     }
     validate_live(field, &role, live, check.is_some())?;
+    let live = live
+        .map(|mode| change_variant(field).map(|variant| LiveField { mode, variant }))
+        .transpose()?;
     let nested = matches!(role, Role::Nested);
     let name = field
         .ident
@@ -231,7 +241,20 @@ fn validate_live(field: &Field, role: &Role, live: Option<Live>, checked: bool) 
     Ok(())
 }
 
-pub(super) fn upper_camel(ident: &Ident) -> String {
+/// The change enum's variant for `field`: its name in upper camel case, without
+/// a raw identifier's prefix.
+fn change_variant(field: &Field) -> Result<Ident> {
+    let refusal = || {
+        syn::Error::new_spanned(
+            field,
+            "a live field needs a name that forms a change variant",
+        )
+    };
+    let name = field.ident.as_ref().ok_or_else(refusal)?;
+    syn::parse_str(&upper_camel(&name.unraw())).map_err(|_| refusal())
+}
+
+fn upper_camel(ident: &Ident) -> String {
     ident
         .to_string()
         .split('_')

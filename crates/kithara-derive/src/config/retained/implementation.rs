@@ -226,6 +226,37 @@ fn validate_live(
             "live fields require a configuration without generics",
         ));
     }
+    distinct_changes(members)
+}
+
+/// Each live field names its own change variant, and nested live fields have
+/// distinct types, because the parent's change converts from the nested one.
+fn distinct_changes(members: &[Member<'_>]) -> Result<()> {
+    let live: Vec<(&Member<'_>, &Ident)> = members
+        .iter()
+        .filter_map(|member| member.live.as_ref().map(|live| (member, &live.variant)))
+        .collect();
+    for (index, (member, variant)) in live.iter().enumerate() {
+        let earlier = &live[..index];
+        if let Some((first, _)) = earlier.iter().find(|(_, other)| other == variant) {
+            let message = format!(
+                "live fields `{}` and `{}` name the same change variant `{variant}`",
+                first.name, member.name,
+            );
+            return Err(syn::Error::new_spanned(member.name, message));
+        }
+        if member.nested
+            && let Some((first, _)) = earlier
+                .iter()
+                .find(|(other, _)| other.nested && other.ty == member.ty)
+        {
+            let message = format!(
+                "nested live fields `{}` and `{}` share a type, so its change cannot name the field",
+                first.name, member.name,
+            );
+            return Err(syn::Error::new_spanned(member.name, message));
+        }
+    }
     Ok(())
 }
 
@@ -866,6 +897,37 @@ mod tests {
             ),
             (
                 quote!(
+                    struct S {
+                        #[config(value, live)]
+                        _1: u32,
+                    }
+                ),
+                "a live field needs a name that forms a change variant",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        foo_bar: u32,
+                        #[config(value, live)]
+                        foo__bar: u32,
+                    }
+                ),
+                "live fields `foo_bar` and `foo__bar` name the same change variant `FooBar`",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(nested, live)]
+                        left: Pan,
+                        #[config(nested, live)]
+                        right: Pan,
+                    }
+                ),
+                "nested live fields `left` and `right` share a type, so its change cannot name the field",
+            ),
+            (
+                quote!(
                     #[config(construction)]
                     struct S {
                         #[config(value, live)]
@@ -941,13 +1003,13 @@ mod tests {
             "RigChange :: Level (value) => :: core :: result :: Result :: Ok (RigChange :: Level (Self :: level_bounds (value) ?))"
         ));
         assert!(expanded.contains(
-            "RigChange :: Gauge (change) => :: core :: result :: Result :: Ok (RigChange :: Gauge (\
-             < Gauge as :: kithara_config :: LiveConfig > :: check (change) ?))"
+            "RigChange :: Gauge (value) => :: core :: result :: Result :: Ok (RigChange :: Gauge (\
+             < Gauge as :: kithara_config :: LiveConfig > :: check (value) ?))"
         ));
         assert!(expanded.contains("RigChange :: Rate (value) => :: core :: result :: Result :: Ok (RigChange :: Rate (value))"));
         assert!(expanded.contains("RigChange :: Level (value) => self . level = value"));
         assert!(expanded.contains(
-            "RigChange :: Gauge (change) => :: kithara_config :: LiveConfig :: apply_change (& mut self . gauge , change)"
+            "RigChange :: Gauge (value) => :: kithara_config :: LiveConfig :: apply_change (& mut self . gauge , value)"
         ));
         assert!(
             !expanded.contains("Limit ("),
