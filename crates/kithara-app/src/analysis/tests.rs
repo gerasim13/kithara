@@ -14,7 +14,7 @@ use ::kithara::{
         tokio::sync::watch,
     },
 };
-use kithara_test_utils::{kithara, off_thread::OffThread};
+use kithara_test_utils::{TestTempDir, kithara, off_thread::OffThread, temp_dir};
 
 use super::{
     AnalysisService, TrackArtifacts,
@@ -528,18 +528,21 @@ async fn a_failed_pass_is_not_reopened_by_queue_warm(tone_mp3: String) {
 #[kithara::test(native, tokio, flash(false))]
 #[case::one_track(1)]
 #[case::beyond_cache_capacity(128)]
-async fn obsolete_unheld_entries_are_reclaimed(#[case] cycles: u64, tone_mp3: String) {
+async fn obsolete_unheld_entries_are_reclaimed(
+    #[case] cycles: u64,
+    tone_mp3: String,
+    temp_dir: TestTempDir,
+) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let directory = tempfile::tempdir().expect("temporary track identities");
     let original = url::Url::parse(&tone_mp3)
         .expect("fixture URL")
         .to_file_path()
         .expect("local fixture");
     for cycle in 0..cycles {
-        let path = directory.path().join(format!("track-{cycle}.mp3"));
-        std::fs::hard_link(&original, &path).expect("distinct local track identity");
+        let path = temp_dir.path().join(format!("track-{cycle}.mp3"));
+        std::fs::copy(&original, &path).expect("distinct local track identity");
         let url: String = url::Url::from_file_path(path)
             .expect("absolute track path")
             .into();

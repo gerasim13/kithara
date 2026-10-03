@@ -1,12 +1,16 @@
 #![cfg(feature = "signal")]
 
-use std::{fs, io, process::Command};
+use std::io;
 
+use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_test_macros as kithara;
 
-use crate::signal::{Wave, wav, wav_from_fn};
+use crate::{
+    defs::signal::backfill_flac_frame_count,
+    signal::{Pcm, Wave},
+};
 
-/// Encode synthetic PCM at build time with the workspace-pinned `FFmpeg` tool.
+/// Encode synthetic PCM at build time with the workspace encoder.
 fn encode_profile(
     ext: &str,
     codec: &str,
@@ -14,41 +18,34 @@ fn encode_profile(
     channels: u16,
     depth: u16,
 ) -> io::Result<Vec<u8>> {
-    let pcm = wav(rate, channels, rate as usize * 6, Wave::Sawtooth);
-    encode_wav(ext, codec, depth, &pcm)
-}
-
-fn encode_wav(ext: &str, codec: &str, depth: u16, pcm: &[u8]) -> io::Result<Vec<u8>> {
-    let dir = tempfile::tempdir()?;
-    let input = dir.path().join("input.wav");
-    let output = dir.path().join(format!("output.{ext}"));
-    fs::write(&input, pcm)?;
-    let mut command = Command::new("ffmpeg");
-    command
-        .args(["-v", "error", "-nostdin", "-y", "-i"])
-        .arg(&input);
-    command.args(["-map_metadata", "-1", "-c:a", codec]);
-    if codec == "vorbis" {
-        command.args(["-strict", "experimental", "-q:a", "6"]);
+    let frames = rate as usize * 6;
+    let target = match (ext, codec, depth) {
+        ("mp3", "libmp3lame", _) => BytesEncodeTarget::Mp3,
+        ("flac", "flac", 16) => BytesEncodeTarget::Flac,
+        ("flac", "flac", 24) => BytesEncodeTarget::Flac24,
+        ("m4a", "aac", _) => BytesEncodeTarget::M4a,
+        ("m4a", "alac", 16) => BytesEncodeTarget::Alac,
+        ("ogg", "vorbis", _) => BytesEncodeTarget::Vorbis,
+        ("opus", "libopus", _) => BytesEncodeTarget::Opus,
+        ("aiff", "pcm_s16be", 16) => BytesEncodeTarget::Aiff16,
+        ("wav", "pcm_s16le", 16) => BytesEncodeTarget::Wav16,
+        ("wav", "pcm_s24le", 24) => BytesEncodeTarget::Wav24,
+        ("wav", "pcm_s32le", 32) => BytesEncodeTarget::Wav32,
+        ("wav", "pcm_f32le", 32) => BytesEncodeTarget::WavFloat32,
+        _ => return Err(io::Error::other("unsupported signal profile")),
+    };
+    let pcm = Pcm::new(rate, channels, frames, Wave::Sawtooth);
+    let mut encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
+        target,
+        bit_rate: (ext == "mp3" && rate <= 24_000).then_some(64_000),
+    })
+    .map_err(io::Error::other)?
+    .bytes;
+    if matches!(target, BytesEncodeTarget::Flac | BytesEncodeTarget::Flac24) {
+        backfill_flac_frame_count(&mut encoded, frames);
     }
-    if codec == "alac" {
-        command.args(["-sample_fmt", "s16p"]);
-    }
-    if codec == "flac" {
-        command.args(["-sample_fmt", if depth > 16 { "s32" } else { "s16" }]);
-        command.args(["-bits_per_raw_sample", &depth.to_string()]);
-    }
-    if ext == "m4a" {
-        command.args(["-movflags", "+faststart"]);
-    }
-    let result = command.arg(&output).output()?;
-    if !result.status.success() {
-        return Err(io::Error::other(format!(
-            "fixture encoding failed: {}",
-            String::from_utf8_lossy(&result.stderr)
-        )));
-    }
-    fs::read(output)
+    Ok(encoded)
 }
 
 #[kithara::asset(ext = "flac", content_type = "audio/flac")]
@@ -124,7 +121,14 @@ fn signal_profile_wav(codec: &str, rate: u32, channels: u16, depth: u16) -> Vec<
 #[kithara::asset(ext = "ape", content_type = "audio/ape")]
 #[case::multiframe_44100_2ch_16bit()]
 fn signal_profile_ape() -> Vec<u8> {
-    include_bytes!("../../assets/ape/multiframe_16s_c2000.ape").to_vec()
+    let pcm = Pcm::new(44_100, 2, 132_300, Wave::Sawtooth);
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
+        target: BytesEncodeTarget::Ape,
+        bit_rate: None,
+    })
+    .expect("APE profile fixture")
+    .bytes
 }
 
 /// A valid `ID3v2` envelope containing audio-looking bytes in its metadata body.
@@ -175,12 +179,18 @@ fn tagged_mp3(wave_container: bool) -> io::Result<Vec<u8>> {
 #[kithara::asset(ext = "m4a", content_type = "audio/mp4")]
 #[case::silence_tail_44100_2ch_16bit()]
 fn signal_profile_alac() -> Vec<u8> {
-    let pcm = wav_from_fn(44_100, 2, 264_600, |frame| {
+    let pcm = Pcm::from_fn(44_100, 2, 264_600, |frame| {
         if frame >= 264_600 - 8_192 {
             0
         } else {
             Wave::Sawtooth.sample(frame, 44_100)
         }
     });
-    encode_wav("m4a", "alac", 16, &pcm).unwrap_or_else(|error| panic!("ALAC tail fixture: {error}"))
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
+        target: BytesEncodeTarget::Alac,
+        bit_rate: None,
+    })
+    .expect("ALAC tail fixture")
+    .bytes
 }

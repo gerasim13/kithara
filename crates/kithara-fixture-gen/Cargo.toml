@@ -38,7 +38,7 @@ rhythm = [
     "dep:kithara-signal",
     "dep:kithara-test-utils",
 ]
-signal = ["dep:tempfile"]
+signal = ["kithara-encode/monkeys-audio"]
 wav = []
 
 [dependencies]
@@ -72,7 +72,6 @@ num-traits = { workspace = true }
 rayon = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["blocking", "rustls"], optional = true }
 sha2 = { workspace = true, optional = true }
-tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true, optional = true }

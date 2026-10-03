@@ -32,6 +32,8 @@ ARG JUST_VERSION
 ARG LOCKBUD_REV
 ARG LOCKBUD_TOOLCHAIN
 ARG MD_FORMATTER_VERSION
+ARG MONKEYS_AUDIO_SOURCE_URL
+ARG MONKEYS_AUDIO_SOURCE_SHA256
 ARG MSRV_TOOLCHAIN
 ARG NIGHTLY_TOOLCHAIN
 ARG RTSAN_AMD64_SHA256
@@ -63,7 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
     ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
     clang libclang-dev lld llvm mold ninja-build pkg-config \
-    bubblewrap socat ripgrep nodejs npm tar zstd \
+    bubblewrap socat ripgrep nodejs npm tar zstd unzip \
     mesa-vulkan-drivers \
     pulseaudio libasound2-plugins \
     libasound2-dev libdbus-1-dev libssl-dev \
@@ -89,6 +91,16 @@ RUN case "$(dpkg --print-architecture)" in \
  && tar -xzf /tmp/cmake.tar.gz -C /usr/local --strip-components=1 \
  && rm /tmp/cmake.tar.gz \
  && cmake --version
+
+RUN curl -fsSL -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
+ && echo "${MONKEYS_AUDIO_SOURCE_SHA256}  /tmp/monkeys-audio.zip" | sha256sum -c - \
+ && unzip -q /tmp/monkeys-audio.zip -d /tmp/monkeys-audio \
+ && cmake -S /tmp/monkeys-audio -B /tmp/monkeys-audio/build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+ && cmake --build /tmp/monkeys-audio/build --parallel 2 \
+ && cmake --install /tmp/monkeys-audio/build \
+ && ldconfig \
+ && rm -rf /tmp/monkeys-audio /tmp/monkeys-audio.zip
 
 RUN case "$(dpkg --print-architecture)" in \
       amd64) slice=linux64; sum="${GECKODRIVER_AMD64_SHA256}" ;; \
