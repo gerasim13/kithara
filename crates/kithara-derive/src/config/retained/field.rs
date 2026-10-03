@@ -1,12 +1,12 @@
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{
-    Attribute, DeriveInput, Expr, Field, GenericParam, Generics, Ident, Meta, Result, Token, Type,
-    parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
+    Attribute, DeriveInput, Expr, Field, GenericParam, Generics, Ident, Meta, Path, Result, Token,
+    Type, parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
 use super::implementation::docs;
-use crate::config::field::{Accessor, Declaration, Role, Wrap};
+use crate::config::field::{Accessor, Declaration, Live, Role, Wrap};
 
 /// What one field contributes to its configuration type.
 pub(super) struct Member<'a> {
@@ -18,6 +18,11 @@ pub(super) struct Member<'a> {
     /// Whether the generated `Debug` prints the field.
     pub(super) debugged: bool,
     pub(super) retained: Option<Retained>,
+    pub(super) live: Option<Live>,
+    pub(super) check: Option<Path>,
+    /// Whether the field holds a nested configuration.
+    pub(super) nested: bool,
+    pub(super) attributes: &'a [Attribute],
 }
 
 /// How the builder fills the field.
@@ -32,13 +37,6 @@ pub(super) enum Construction {
 pub(super) struct Retained {
     pub(super) declaration: TokenStream,
     pub(super) read: TokenStream,
-    pub(super) update: Option<Update>,
-}
-
-pub(super) struct Update {
-    pub(super) declaration: TokenStream,
-    pub(super) field: TokenStream,
-    pub(super) lower: TokenStream,
 }
 
 pub(super) fn expand<'a>(
@@ -49,7 +47,8 @@ pub(super) fn expand<'a>(
 ) -> Result<Member<'a>> {
     let Declaration {
         role,
-        update,
+        live,
+        check,
         sdk,
         mut builder,
         accessor,
@@ -57,11 +56,18 @@ pub(super) fn expand<'a>(
         wrap,
         patch: _,
     } = Declaration::parse(&field.attrs)?.inherit(defaults);
-    let update = update.unwrap_or(false);
     let role = role
         .or_else(|| (!snapshot).then_some(Role::Skip))
         .ok_or_else(|| syn::Error::new_spanned(field, "missing config field role"))?;
-    validate_role(field, &role, update, sdk, snapshot)?;
+    validate_role(field, &role, sdk, snapshot)?;
+    if !snapshot && (live.is_some() || check.is_some()) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "construction inputs cannot declare live fields or checks",
+        ));
+    }
+    validate_live(field, &role, live, check.is_some())?;
+    let nested = matches!(role, Role::Nested);
     let name = field
         .ident
         .as_ref()
@@ -113,7 +119,7 @@ pub(super) fn expand<'a>(
         }
     });
     let retained = if snapshot {
-        retained(field, owner, name, role, update, builder.as_ref())?
+        retained(field, owner, name, role)?
     } else {
         None
     };
@@ -125,6 +131,10 @@ pub(super) fn expand<'a>(
         owner_accessor,
         debugged: !debug_skipped,
         retained,
+        live,
+        check,
+        nested,
+        attributes: &field.attrs,
     })
 }
 
@@ -168,8 +178,6 @@ fn retained(
     owner: &DeriveInput,
     name: &Ident,
     role: Role,
-    update: bool,
-    builder: Option<&TokenStream>,
 ) -> Result<Option<Retained>> {
     let original_type = &field.ty;
     let (ty, expression): (Type, Expr) = match role {
@@ -191,134 +199,39 @@ fn retained(
         ));
     }
     let surface = docs(&field.attrs);
-    let update = update
-        .then(|| update_tokens(builder, &owner.ident, name, original_type, &surface))
-        .transpose()?;
     Ok(Some(Retained {
         declaration: quote! { #(#surface)* pub #name: #ty },
         read: quote! { #name: #expression },
-        update,
     }))
 }
 
-fn validate_role(
-    field: &Field,
-    role: &Role,
-    update: bool,
-    sdk: bool,
-    snapshot: bool,
-) -> Result<()> {
+fn validate_role(field: &Field, role: &Role, sdk: bool, snapshot: bool) -> Result<()> {
+    let refuse = |message: &str| Err(syn::Error::new_spanned(field, message));
     if sdk && !matches!(role, Role::Value | Role::Projection(_)) {
-        return Err(syn::Error::new_spanned(
-            field,
-            "SDK exposure requires a value or projected value field",
-        ));
-    }
-    if update && !matches!(role, Role::Value) {
-        return Err(syn::Error::new_spanned(
-            field,
-            "runtime update currently requires a retained value field",
-        ));
-    }
-    if update && !snapshot {
-        return Err(syn::Error::new_spanned(
-            field,
-            "construction inputs cannot declare retained runtime updates",
-        ));
+        return refuse("SDK exposure requires a value or projected value field");
     }
     if !snapshot && matches!(role, Role::Projection(_)) {
-        return Err(syn::Error::new_spanned(
-            field,
-            "construction inputs do not produce projected values",
-        ));
+        return refuse("construction inputs do not produce projected values");
     }
     Ok(())
 }
 
-fn update_tokens(
-    builder: Option<&TokenStream>,
-    owner: &Ident,
-    name: &Ident,
-    ty: &Type,
-    surface: &[&Attribute],
-) -> Result<Update> {
-    let enum_name = format_ident!("{}{}Update", owner, upper_camel(name));
-    let optional = option_inner(ty);
-    let payload = optional.unwrap_or(ty);
-    let default = builder.map(builder_default).transpose()?.flatten();
-    let clear = optional.map(|_| quote! { Clear, });
-    let reset = default.as_ref().map(|_| quote! { Reset, });
-    let set = if optional.is_some() {
-        quote! { target.#name = ::core::option::Option::Some(value); }
-    } else {
-        quote! { target.#name = value; }
-    };
-    let clear_lower = optional.map(|_| {
-        quote! { #enum_name::Clear => { target.#name = ::core::option::Option::None; } }
-    });
-    let reset_lower = default.map(|default| {
-        quote! { #enum_name::Reset => { target.#name = #default; } }
-    });
-    Ok(Update {
-        declaration: quote! {
-            #(#surface)*
-            #[derive(::core::default::Default)]
-            #[non_exhaustive]
-            pub enum #enum_name {
-                #[default]
-                Unchanged,
-                Set { value: #payload },
-                #clear
-                #reset
-            }
-        },
-        field: quote! { #(#surface)* pub #name: #enum_name },
-        lower: quote! {
-            match update.#name {
-                #enum_name::Unchanged => {}
-                #enum_name::Set { value } => { #set }
-                #clear_lower
-                #reset_lower
-            }
-        },
-    })
-}
-
-/// The value `builder(default)` or `builder(default = expr)` fills in, which
-/// is what a runtime `Reset` restores.
-fn builder_default(builder: &TokenStream) -> Result<Option<Expr>> {
-    let mut default = None;
-    for option in Punctuated::<Meta, Token![,]>::parse_terminated.parse2(builder.clone())? {
-        if !option.path().is_ident("default") {
-            continue;
+fn validate_live(field: &Field, role: &Role, live: Option<Live>, checked: bool) -> Result<()> {
+    let refuse = |message: &str| Err(syn::Error::new_spanned(field, message));
+    if checked && !matches!(role, Role::Value) {
+        return refuse("check requires a value field");
+    }
+    match (live, role) {
+        (Some(_), Role::Skip | Role::Projection(_)) => {
+            return refuse("live requires a value or nested field");
         }
-        if default.is_some() {
-            return Err(syn::Error::new_spanned(option, "duplicate builder default"));
-        }
-        default = Some(match option {
-            Meta::NameValue(option) => option.value,
-            _ => syn::parse_quote!(::core::default::Default::default()),
-        });
+        (Some(Live::Owner), Role::Nested) => return refuse("live(owner) requires a value field"),
+        _ => {}
     }
-    Ok(default)
+    Ok(())
 }
 
-fn option_inner(ty: &Type) -> Option<&Type> {
-    let Type::Path(path) = ty else { return None };
-    let segment = path.path.segments.last()?;
-    if segment.ident != "Option" {
-        return None;
-    }
-    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return None;
-    };
-    match arguments.args.first()? {
-        syn::GenericArgument::Type(inner) => Some(inner),
-        _ => None,
-    }
-}
-
-fn upper_camel(ident: &Ident) -> String {
+pub(super) fn upper_camel(ident: &Ident) -> String {
     ident
         .to_string()
         .split('_')
