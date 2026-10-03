@@ -173,7 +173,10 @@ impl Rig {
         )
         .cancel(config.shutdown.child())
         .build();
-        Self::realtime_with(&config, Broadcaster::new(broadcast))
+        // The broadcast/window contract needs a measured stream, not a device.
+        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+            .expect("test host");
+        Self::with_host(&config, host, Broadcaster::new(broadcast))
     }
 
     pub(crate) fn pump(&mut self) -> Vec<u64> {
@@ -188,14 +191,16 @@ impl Rig {
 
     #[cfg(not(feature = "broadcast"))]
     pub(crate) fn realtime() -> Self {
-        Self::realtime_with(
-            &test_fixture::config(),
+        let config = test_fixture::config();
+        let host = AppHost::new(HostConfig::builder().build()).expect("test host");
+        Self::with_host(
+            &config,
+            host,
             Broadcaster::new(AppBroadcastConfig::default()),
         )
     }
 
-    fn realtime_with(config: &AppConfig, broadcast: Broadcaster) -> Self {
-        let host = AppHost::new(HostConfig::builder().build()).expect("test host");
+    fn with_host(config: &AppConfig, host: AppHost, broadcast: Broadcaster) -> Self {
         let (analysis, _) = AnalysisHandle::channel(watch::channel(Default::default()).1);
         Self::build(config, host, broadcast, analysis.clone(), |deck| {
             StateController::new(
