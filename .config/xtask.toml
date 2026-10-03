@@ -2349,7 +2349,7 @@ steps = [
 ]
 role = "gate"
 kinds_github = ["main"]
-timeout_minutes = 180
+timeout_minutes = 60
 
 [ext.ci.lanes.linux-integration-regressions]
 cache_group = "linux"
