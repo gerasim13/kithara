@@ -92,6 +92,8 @@ assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 
 <tr><td><code>Receipt</code></td><td>What became of a batch, carrying the batch back to the sender</td></tr>
 
+<tr><td><code>Live</code></td><td>An owner's configuration kept for an executor: committed through its check, read back at once, sent whole once per pass</td></tr>
+
 </table>
 
 ## Integration
@@ -100,5 +102,19 @@ The real-time Host, the lane dispatcher, and each lane own one `Inbox` each
 and speak their own `Protocol`; the owner that computes commands holds the
 matching `Sender`. The crate carries no audio domain: frames, targets, and
 commands are the executor's types.
+
+### Live configuration
+
+A configuration derived with `#[config(update)]` reaches an executor through
+`Live`. `update` commits a change through the configuration's own check;
+`config()` (`kithara_config::ConfigOwner`) reads the committed value at once,
+before the executor applies it. `Live` lends no mutable borrow, so no change
+skips the check or the send. `flush` sends the latest value whole, wrapped in
+the protocol's command, as one batch for the next block with an empty basis,
+so a later change replaces an earlier one; on a full channel the change stays
+pending for the next flush. `seed` hands the value to a new executor. The
+value is `Copy`, so the executor takes it by assignment and drops nothing. A
+change that must land on a frame is a domain command with a time basis, not a
+live configuration.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-command) for detailed contracts, invariants, and internals.
