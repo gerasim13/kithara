@@ -161,9 +161,9 @@ impl PipelineKind {
         }
     }
 
-    /// Whether this pipeline is a full run, which proves everything it
-    /// schedules whole. A branch, merge-request or quarantine pipeline is
-    /// there for what one change can affect.
+    /// Whether this kind is a full run rather than one narrowed to a change:
+    /// a branch, merge-request or quarantine pipeline is there for what one
+    /// change can affect.
     pub(crate) const fn is_full(self) -> bool {
         matches!(
             self,

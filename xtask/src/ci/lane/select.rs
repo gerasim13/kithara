@@ -27,9 +27,9 @@ pub(crate) struct LanesArgs {
     pub(crate) role: String,
     #[arg(long, value_enum)]
     pub(crate) kind: PipelineKind,
-    /// Render only these lanes, whatever their kinds say. This is how a single
-    /// subtask is run on its own. `all` renders a full run: every lane some
-    /// full kind schedules. A lane with no kinds belongs to a dedicated
+    /// Render only these named lanes, whatever their kinds say. This is how a
+    /// single subtask is run on its own. `all` renders a full run: every lane
+    /// some full kind schedules. A lane with no kinds belongs to a dedicated
     /// workflow and leaves this fan-out empty.
     #[arg(long, value_delimiter = ' ')]
     pub(crate) only: Vec<String>,
@@ -408,13 +408,13 @@ mod tests {
     }
 
     #[test]
-    fn all_selects_every_reachable_lane_the_role_owns() {
+    fn all_selects_every_reachable_lane_a_full_kind_schedules() {
         let mut lanes = catalog();
         lanes.insert("linux-extra".to_owned(), lane("gate", &["weekly"], &[]));
         lanes.insert("deep-extra".to_owned(), lane("deep", &["weekly"], &[]));
 
         let selection = render(&lanes, &args("gate", PipelineKind::Branch, &["all"]))
-            .expect("all gate lanes render regardless of kind");
+            .expect("every gate lane a full kind schedules renders");
         let names: Vec<&str> = selection
             .matrix
             .iter()
@@ -617,12 +617,12 @@ mod tests {
         assert_eq!(names, ["linux-branch"]);
     }
 
-    /// A `main` push renders these four roles with `--only all` and proves
-    /// each test configuration once: a `--lane` two of its lanes run is built
-    /// twice for nothing, and one no lane runs is never judged before a
-    /// release.
+    /// A `main` push renders these four roles with `--only all` and runs each
+    /// `--lane` a GitHub lane names exactly once: a test lane two of its lanes
+    /// run is built twice for nothing, and one only a narrowing pipeline runs
+    /// is never judged whole before a release.
     #[test]
-    fn a_main_push_runs_every_test_configuration_once() {
+    fn a_main_push_runs_every_test_lane_a_github_lane_names_once() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask has a workspace root");
@@ -660,6 +660,22 @@ mod tests {
             repeated.is_empty(),
             "main runs a test lane twice: {repeated:?}"
         );
+        let named: BTreeSet<&str> = ext
+            .ci
+            .lanes
+            .values()
+            .filter(|lane| {
+                reachable(lane, Fleet::Github) && !membership(lane, Fleet::Github).is_empty()
+            })
+            .flat_map(|lane| &lane.steps)
+            .flat_map(|step| step.args.iter().chain(step.args_by_kind.values().flatten()))
+            .filter_map(|arg| arg.strip_prefix("--lane="))
+            .collect();
+        let unrun: Vec<&str> = named
+            .into_iter()
+            .filter(|test_lane| !carriers.contains_key(test_lane))
+            .collect();
+        assert!(unrun.is_empty(), "main runs no lane that carries {unrun:?}");
         for test_lane in ["tooling", "harness", "fixtures", "broadcast", "net-host"] {
             assert!(
                 carriers.contains_key(test_lane),

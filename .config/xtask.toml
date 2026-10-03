@@ -2328,8 +2328,11 @@ kinds = ["weekly"]
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
-# `kithara-net`'s own tests under its `client-host` backend run in no other
-# lane.
+# A full run carries `kithara-net`'s own tests on the Linux host under its
+# `client-host` backend only here. A branch push that touches that backend
+# runs them through the `--touched` step of `linux-test-simulated-clock`, so
+# this lane has no `branch` kind; Android runs the backend with a real
+# transport.
 [ext.ci.lanes.linux-net-host]
 cache_group = "linux"
 label = "Linux"
@@ -2511,9 +2514,9 @@ kinds_github = ["main", "branch"]
 timeout_minutes = 120
 
 # `just test` no longer carries the build tooling or the harness it is written
-# with. A full run gets them whole from `linux-tooling`, `linux-harness` and
-# `linux-fixtures`; a branch push runs here the ones it touched, so a change to
-# their own sources does not wait for `main`.
+# with. A `main` push and the nightly run get them whole from `linux-tooling`,
+# `linux-harness` and `linux-fixtures`; a branch push runs here the ones it
+# touched, so a change to their own sources does not wait for `main`.
 [ext.ci.lanes.linux-support]
 cache_group = "linux"
 label = "Linux"
