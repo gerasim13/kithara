@@ -3057,14 +3057,7 @@ label = "Safari WASM"
 os = "macos"
 tools = ["cargo", "just"]
 program = "just"
-steps = [
-  { args = [
-    "platform",
-    "wasm",
-    "test",
-    "safari",
-  ], label = "Safari WASM tests" },
-]
+steps = [{ args = ["test", "wasm", "safari"], label = "Safari WASM tests" }]
 role = "platforms"
 kinds = ["nightly"]
 timeout_minutes = 60

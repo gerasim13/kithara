@@ -38,7 +38,7 @@ wasm MODE="check" *ARGS:
         just _xtask wasm doc
         ;;
       *)
-        echo "unknown wasm mode: $mode (use check|build|size-check|doc); tests are `just test wasm`"
+        echo "unknown wasm mode: $mode (use check|build|size-check|doc); tests are in just test wasm"
         exit 2
         ;;
     esac

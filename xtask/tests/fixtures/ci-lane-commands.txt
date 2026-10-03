@@ -305,35 +305,35 @@
 # apple-safari / branch
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-safari / platforms
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-safari / merge-request
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-safari / quarantine
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-safari / main
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-safari / nightly
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-safari / weekly
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-safari / release
   <require os> macos
   <require tools> cargo just
-  just platform wasm test safari
+  just test wasm safari
 # apple-swift-test / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
