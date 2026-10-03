@@ -7,22 +7,22 @@
 [
   {
     "label": "run: kithara · immediate (iced + wgpu)",
-    "command": "cargo run -p kithara-app --release --bin kithara -- --host immediate",
+    "command": "just run -- --host immediate",
     "use_new_terminal": true,
   },
   {
     "label": "run: kithara · retained (masonry + vello)",
-    "command": "cargo run -p kithara-app --release --features masonry --bin kithara -- --host retained",
+    "command": "just run --features masonry -- --host retained",
     "use_new_terminal": true,
   },
   {
     "label": "gallery: immediate (iced + wgpu)",
-    "command": "cargo run -p kithara-ui-gallery --release --bin gallery -- --host immediate",
+    "command": "just gallery -- --host immediate",
     "use_new_terminal": true,
   },
   {
     "label": "gallery: retained (masonry + vello)",
-    "command": "cargo run -p kithara-ui-gallery --release --features masonry --bin gallery -- --host retained",
+    "command": "just gallery --features masonry -- --host retained",
     "use_new_terminal": true,
   },
   {

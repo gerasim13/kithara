@@ -79,6 +79,21 @@ mod tooling ".config/just/tooling.just"
 help:
     @just --list
 
+# Desktop launches share the build environment above with checks and CI.
+[positional-arguments]
+run *ARGS: _desktop-ready
+    @exec cargo run --locked -p kithara-app --release --bin kithara "$@"
+
+[positional-arguments]
+gallery *ARGS: _desktop-ready
+    @exec cargo run --locked -p kithara-ui-gallery --release --bin gallery "$@"
+
+# Cargo reads the shared config even when Git honors config.worktree. Repair
+# only a primary checkout that Git itself recognizes as a non-bare worktree.
+[private]
+_desktop-ready:
+    @if [[ -d "$PWD/.git" ]] && [[ "$(git rev-parse --absolute-git-dir)" = "$PWD/.git" ]] && [[ "$(git config --local --bool core.bare || true)" = true ]] && [[ "$(git rev-parse --is-bare-repository)" = false ]] && [[ "$(git rev-parse --show-toplevel)" = "$PWD" ]]; then git config --local core.bare false; printf 'Repaired contradictory core.bare setting for this checkout.\n' >&2; fi
+
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
