@@ -214,6 +214,9 @@ pub(crate) const MAC_CONFIG_PATH: &str = "/etc/kithara-ci/mac-host.toml";
 /// Repository-relative location of the reviewed build pins.
 pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
 
+/// Repository-relative location of the cache stack's Compose file.
+pub(crate) const CACHE_COMPOSE_FILE: &str = "docker/ci-cache.compose.yml";
+
 /// Keys nextest reads on a profile. Inside a `junit` table it drops them
 /// with a warning, which is how `[profile.ci.junit]` swallowed two of them.
 #[cfg(test)]

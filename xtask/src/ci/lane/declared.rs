@@ -102,9 +102,9 @@ pub(crate) fn run(
         publish_source_layer(process, tools, &kind)?;
     }
     if let Some(fingerprint) = target_snapshot_to_publish.flatten() {
-        let mc = process.resolve_program(tools.program("mc"))?;
+        let rc = process.resolve_program(tools.program("rc"))?;
         let started = Instant::now();
-        let published = snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &mc);
+        let published = snapshot::publish_for_lane(&process.target_dir(), &fingerprint, &rc);
         let took = format!("{:.1} s", started.elapsed().as_secs_f64());
         match published {
             Ok(()) => process.note_cache(
@@ -173,13 +173,13 @@ fn restore_target_layer(
     tools: &ToolsConfig,
     key: &str,
 ) -> Result<Option<String>> {
-    let mc = process.resolve_program(tools.program("mc"))?;
+    let rc = process.resolve_program(tools.program("rc"))?;
     let cargo_home = process
         .cargo_home()
         .context("prepared CI environment has no CARGO_HOME")?;
     let started = Instant::now();
     let outcome =
-        snapshot::restore_for_lane(key, &process.target_dir(), process.root(), &cargo_home, &mc);
+        snapshot::restore_for_lane(key, &process.target_dir(), process.root(), &cargo_home, &rc);
     let took = format!("{:.1} s", started.elapsed().as_secs_f64());
     match &outcome {
         Ok(None) => {
@@ -217,11 +217,11 @@ fn kind_name(kind: PipelineKind) -> String {
 /// `Cargo.lock` has no object yet is the ordinary case and says so; only a
 /// lane that could not ask warns.
 fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
-    let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
+    let Some((cargo_home, rc)) = source_layer_access(process, tools) else {
         return;
     };
     let started = Instant::now();
-    let outcome = snapshot::restore_sources(process.root(), &cargo_home, &mc);
+    let outcome = snapshot::restore_sources(process.root(), &cargo_home, &rc);
     let took = format!("{:.1} s", started.elapsed().as_secs_f64());
     match outcome {
         Ok(snapshot::Restored::AlreadyPresent) => {
@@ -264,11 +264,11 @@ fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> R
     if !is_source_publisher(kind, CacheTrust::from_environment()?) {
         return Ok(());
     }
-    let Some((cargo_home, mc)) = source_layer_access(process, tools) else {
+    let Some((cargo_home, rc)) = source_layer_access(process, tools) else {
         return Ok(());
     };
     let started = Instant::now();
-    let published = snapshot::publish_sources(process.root(), &cargo_home, &mc)
+    let published = snapshot::publish_sources(process.root(), &cargo_home, &rc)
         .context("publish the dependency sources");
     let took = format!("{:.1} s", started.elapsed().as_secs_f64());
     match &published {
@@ -290,8 +290,8 @@ fn is_source_publisher(kind: &str, trust: CacheTrust) -> bool {
 
 fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBuf, PathBuf)> {
     let cargo_home = process.cargo_home()?;
-    match process.resolve_program(tools.program("mc")) {
-        Ok(mc) => Some((cargo_home, mc)),
+    match process.resolve_program(tools.program("rc")) {
+        Ok(rc) => Some((cargo_home, rc)),
         Err(error) => {
             warn!(%error, "no cache client; the lane carries its own sources");
             None

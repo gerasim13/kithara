@@ -10,6 +10,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
 use kithara_devtools::lease;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use tracing::info;
@@ -109,11 +110,11 @@ pub(super) fn run(args: &SnapshotArgs) -> Result<()> {
         SnapshotCommand::Restore {
             target,
             fingerprint,
-        } => restore(target, fingerprint, Path::new("mc")).map(|_| ()),
+        } => restore(target, fingerprint, Path::new("rc")).map(|_| ()),
         SnapshotCommand::Publish {
             target,
             fingerprint,
-        } => publish(target, fingerprint, Path::new("mc")),
+        } => publish(target, fingerprint, Path::new("rc")),
     }
 }
 
@@ -122,10 +123,10 @@ pub(crate) fn restore_for_lane(
     target: &Path,
     root: &Path,
     cargo_home: &Path,
-    mc: &Path,
+    rc: &Path,
 ) -> Result<Option<String>> {
     let fingerprint = fingerprint(key, "cargo", "host", root, cargo_home)?;
-    let restored = restore(target, &fingerprint, mc)?;
+    let restored = restore(target, &fingerprint, rc)?;
     Ok(snapshot_to_publish(fingerprint, restored))
 }
 
@@ -133,8 +134,8 @@ fn snapshot_to_publish(fingerprint: String, restored: bool) -> Option<String> {
     (!restored).then_some(fingerprint)
 }
 
-pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
-    publish(target, fingerprint, mc)
+pub(crate) fn publish_for_lane(target: &Path, fingerprint: &str, rc: &Path) -> Result<()> {
+    publish(target, fingerprint, rc)
 }
 
 /// What a restore found. Three outcomes used to arrive as one warning, so a
@@ -153,12 +154,12 @@ pub(crate) enum Restored {
 
 /// Fill `cargo_home` with the dependency sources this `Cargo.lock` names, so
 /// the job compiles instead of fetching.
-pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Result<Restored> {
+pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<Restored> {
     let fingerprint = sources_fingerprint(root)?;
     if read_marker(cargo_home)?.as_deref() == Some(fingerprint.as_str()) {
         return Ok(Restored::AlreadyPresent);
     }
-    let client = Client::load(mc)?;
+    let client = Client::load(rc)?;
     let Some(object) = client.latest(Sources::BUCKET, Sources::PREFIX, &fingerprint)? else {
         return Ok(Restored::Absent);
     };
@@ -188,8 +189,8 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Resu
 /// Publish the sources this job ended up with. Only the trusted scope may
 /// write the bucket, so a branch that fetched something new leaves it for the
 /// default branch to record rather than publishing its own.
-pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, mc: &Path) -> Result<()> {
-    let client = Client::load(mc)?;
+pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<()> {
+    let client = Client::load(rc)?;
     // The bucket is named here, but the credentials come from whatever the
     // host handed this job, and on a Mac host that is one identity for every
     // lane whatever `KITHARA_CACHE_TRUST` says. Publishing anyway is how this
@@ -351,7 +352,7 @@ fn fingerprint(
     Ok(hex::encode(hash.finalize()))
 }
 
-fn publish(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
+fn publish(target: &Path, fingerprint: &str, rc: &Path) -> Result<()> {
     validate_fingerprint(fingerprint)?;
     require_target(target, false)?;
     let archive = NamedTempFile::new().context("create target snapshot archive")?;
@@ -371,7 +372,7 @@ fn publish(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
     )?;
     let checksum = sha256(archive.path())?;
     let object = Snapshot::object(fingerprint, &checksum);
-    let client = Client::load(mc)?;
+    let client = Client::load(rc)?;
     if client.exists(&client.bucket, &object)? {
         info!(%fingerprint, %checksum, "target snapshot already exists");
         return Ok(());
@@ -381,10 +382,10 @@ fn publish(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
     Ok(())
 }
 
-fn restore(target: &Path, fingerprint: &str, mc: &Path) -> Result<bool> {
+fn restore(target: &Path, fingerprint: &str, rc: &Path) -> Result<bool> {
     validate_fingerprint(fingerprint)?;
     require_target(target, true)?;
-    let client = Client::load(mc)?;
+    let client = Client::load(rc)?;
     let Some(object) = client.latest(&client.bucket, Snapshot::PREFIX, fingerprint)? else {
         info!(%fingerprint, "no target snapshot exists");
         return Ok(false);
@@ -503,22 +504,27 @@ fn run_command(command: &mut Command, what: &str) -> Result<()> {
     require_success(&output, what)
 }
 
-/// `mc --json` writes its refusals to stdout, not stderr, so reading only
-/// stderr produced `list snapshots failed:` with nothing after the colon - a
-/// permission denial that arrived as an empty sentence. Take whichever stream
-/// actually said something.
 fn require_success(output: &Output, what: &str) -> Result<()> {
     if output.status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let said = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
-    bail!("{what} failed: {said}");
+    bail!(
+        "{what} failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+}
+
+/// What `rc --json object list` prints: one entry per object or common
+/// prefix, each key relative to the bucket. A prefix ends in `/`, so the
+/// `.tar` filter already leaves it out.
+#[derive(Deserialize)]
+struct Listing {
+    items: Vec<ListedObject>,
+}
+
+#[derive(Deserialize)]
+struct ListedObject {
+    key: String,
 }
 
 struct Client {
@@ -532,6 +538,9 @@ struct Client {
 }
 
 impl Client {
+    /// The exit status `rc` gives an object that does not exist.
+    const NOT_FOUND: i32 = 5;
+
     fn load(program: &Path) -> Result<Self> {
         let environment = current_client_environment()?;
         let endpoint = environment
@@ -560,16 +569,7 @@ impl Client {
             .get("AWS_SECRET_ACCESS_KEY")
             .context("cache secret missing")?;
         let output = Command::new(&self.program)
-            .args([
-                "alias",
-                "set",
-                "snapshot",
-                &self.endpoint,
-                key,
-                secret,
-                "--api",
-                "S3v4",
-            ])
+            .args(["alias", "set", "snapshot", &self.endpoint, key, secret])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .output()
@@ -578,42 +578,37 @@ impl Client {
         Ok(Command::new(&self.program))
     }
 
+    /// Only an object that is not there reads as absent. A lookup the store
+    /// refused or never answered is a failure, not a reason to upload.
     fn exists(&self, bucket: &str, object: &str) -> Result<bool> {
         let mut command = self.command()?;
-        let status = command
-            .arg("stat")
+        let output = command
+            .args(["object", "stat"])
             .arg(Self::remote(bucket, object))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        Ok(status.success())
+            .output()
+            .context("start snapshot lookup")?;
+        if output.status.code() == Some(Self::NOT_FOUND) {
+            return Ok(false);
+        }
+        require_success(&output, "look up snapshot")?;
+        Ok(true)
     }
 
     fn latest(&self, bucket: &str, prefix: &str, fingerprint: &str) -> Result<Option<String>> {
         let mut command = self.command()?;
         let output = command
-            .args(["ls", "--json"])
+            .args(["--json", "object", "list"])
             .arg(Self::remote(bucket, &format!("{prefix}/{fingerprint}/")))
-            .output()?;
+            .output()
+            .context("start snapshot listing")?;
         require_success(&output, "list snapshots")?;
-        let mut objects = String::from_utf8(output.stdout)
-            .context("snapshot storage listing is not UTF-8")?
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .filter_map(|value| {
-                value
-                    .get("key")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .filter_map(|key| {
-                let key = if key.starts_with(prefix) {
-                    key
-                } else {
-                    format!("{prefix}/{fingerprint}/{key}")
-                };
-                key.ends_with(".tar").then_some(key)
-            })
+        let listing: Listing =
+            serde_json::from_slice(&output.stdout).context("read snapshot storage listing")?;
+        let mut objects = listing
+            .items
+            .into_iter()
+            .map(|item| item.key)
+            .filter(|key| key.ends_with(".tar"))
             .collect::<Vec<_>>();
         objects.sort();
         Ok(objects.pop())
@@ -623,7 +618,7 @@ impl Client {
         let mut command = self.command()?;
         run_command(
             command
-                .arg("cp")
+                .arg("put")
                 .arg(source)
                 .arg(Self::remote(bucket, object)),
             "upload snapshot",
@@ -634,7 +629,7 @@ impl Client {
         let mut command = self.command()?;
         run_command(
             command
-                .arg("cp")
+                .arg("get")
                 .arg(Self::remote(bucket, object))
                 .arg(destination),
             "download snapshot",
@@ -680,7 +675,7 @@ mod tests {
             bucket: "kithara-review".to_owned(),
             endpoint: String::new(),
             environment: BTreeMap::new(),
-            program: PathBuf::from("mc"),
+            program: PathBuf::from("rc"),
         };
 
         assert_eq!(
@@ -779,7 +774,7 @@ mod tests {
             bucket: "kithara-review".to_owned(),
             endpoint: String::new(),
             environment: BTreeMap::new(),
-            program: PathBuf::from("mc"),
+            program: PathBuf::from("rc"),
         };
 
         assert_eq!(
@@ -887,8 +882,6 @@ mod tests {
 
 #[cfg(test)]
 mod repair_tests {
-    use std::os::unix::process::ExitStatusExt as _;
-
     use super::*;
 
     #[test]
@@ -901,32 +894,106 @@ mod repair_tests {
         assert!(said.contains(Sources::BUCKET), "{said}");
         assert!(said.contains(Sources::PREFIX), "{said}");
     }
+}
 
-    /// The defect this pins: `mc --json` refused the upload on stdout, the
-    /// reader looked only at stderr, and the lane logged `list snapshots
-    /// failed:` with nothing after the colon.
-    #[test]
-    fn a_refusal_reported_on_stdout_still_reaches_the_message() {
-        let output = Output {
-            status: std::process::ExitStatus::from_raw(256),
-            stdout: b"mc: Insufficient permissions\n".to_vec(),
-            stderr: Vec::new(),
-        };
-        let error = require_success(&output, "upload snapshot").expect_err("non-zero status");
-        assert!(
-            error.to_string().contains("Insufficient permissions"),
-            "{error}"
+#[cfg(all(test, unix))]
+mod client_tests {
+    use super::*;
+    use crate::testing::install_script;
+
+    /// Speaks `rc` the way the snapshot client relies on: an alias takes a
+    /// name, an endpoint and two credentials and nothing more, an object that
+    /// is not there exits 5, a refusal exits 4 with its reason on stderr, and
+    /// anything `rc` would not recognise is a usage error.
+    fn rc(directory: &Path) -> PathBuf {
+        let store = directory.join("store");
+        let program = directory.join("rc");
+        install_script(
+            &program,
+            &format!(
+                r#"#!/bin/sh
+store='{store}'
+case "$1" in
+alias) [ "$#" -eq 6 ] || {{ echo "alias set takes a name, an endpoint and two credentials: $*" >&2; exit 2; }} ;;
+object)
+  case "$3" in
+  *denied.tar) echo "Access denied: $3" >&2; exit 4 ;;
+  *) [ -f "$store/$3" ] || {{ echo "Not found: $3" >&2; exit 5; }} ;;
+  esac ;;
+--json)
+  case "$4" in
+  */listed/) printf '%s' '{{"items":[{{"key":"target-snapshots/listed/sub/","is_dir":true}},{{"key":"target-snapshots/listed/b.tar","size_bytes":1,"is_dir":false}},{{"key":"target-snapshots/listed/a.tar","size_bytes":1,"is_dir":false}},{{"key":"target-snapshots/listed/notes.txt","size_bytes":1,"is_dir":false}}],"truncated":false}}' ;;
+  *) printf '%s' '{{"items":[],"truncated":false}}' ;;
+  esac ;;
+put) mkdir -p "$store/$(dirname "$3")" && cp "$2" "$store/$3" ;;
+get) cp "$store/$2" "$3" ;;
+*) echo "unexpected: $*" >&2; exit 2 ;;
+esac
+"#,
+                store = store.display()
+            ),
         );
+        program
+    }
+
+    fn client(program: PathBuf) -> Client {
+        Client {
+            bucket: "kithara-review".to_owned(),
+            endpoint: "http://cache:9000".to_owned(),
+            environment: BTreeMap::from([
+                ("AWS_ACCESS_KEY_ID".to_owned(), "key".to_owned()),
+                ("AWS_SECRET_ACCESS_KEY".to_owned(), "secret".to_owned()),
+            ]),
+            program,
+        }
     }
 
     #[test]
-    fn stderr_still_wins_when_it_carries_the_reason() {
-        let output = Output {
-            status: std::process::ExitStatus::from_raw(256),
-            stdout: b"noise\n".to_vec(),
-            stderr: b"the real reason\n".to_vec(),
-        };
-        let error = require_success(&output, "upload snapshot").expect_err("non-zero status");
-        assert!(error.to_string().contains("the real reason"), "{error}");
+    fn a_snapshot_travels_through_the_store_and_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(rc(directory.path()));
+        let source = directory.path().join("upload.tar");
+        fs::write(&source, b"snapshot bytes").unwrap();
+        let object = "target-snapshots/fingerprint/checksum.tar";
+
+        assert!(!client.exists(&client.bucket, object).unwrap());
+        client.copy(&source, &client.bucket, object).unwrap();
+        assert!(client.exists(&client.bucket, object).unwrap());
+        let download = directory.path().join("download.tar");
+        client.copy_from(&client.bucket, object, &download).unwrap();
+        assert_eq!(fs::read(download).unwrap(), b"snapshot bytes");
+    }
+
+    /// Reading a refusal as "absent" sends the job on to an upload the store
+    /// refuses too, and the reason it gives then names the wrong step.
+    #[test]
+    fn a_refused_lookup_is_a_failure_not_an_absent_object() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(rc(directory.path()));
+
+        let error = client
+            .exists(&client.bucket, "target-snapshots/fingerprint/denied.tar")
+            .expect_err("a refused lookup must not read as absent");
+        assert!(error.to_string().contains("Access denied"), "{error}");
+    }
+
+    #[test]
+    fn the_latest_snapshot_is_the_highest_archive_listed() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(rc(directory.path()));
+
+        assert_eq!(
+            client
+                .latest(&client.bucket, Snapshot::PREFIX, "listed")
+                .unwrap()
+                .as_deref(),
+            Some("target-snapshots/listed/b.tar")
+        );
+        assert_eq!(
+            client
+                .latest(&client.bucket, Snapshot::PREFIX, "unlisted")
+                .unwrap(),
+            None
+        );
     }
 }

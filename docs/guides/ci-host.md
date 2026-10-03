@@ -209,18 +209,31 @@ a regression.
 
 ## Object cache service
 
-One MinIO stack serves both fleets. It runs on the Linux host as the compose
-project `kithara-ci-cache`, published on `127.0.0.1:19000`; the mac host reads
-the same endpoint. `docker/ci-cache.compose.yml` declares it and
-`docker/ci-cache/linux.env.example` gives the shape of the environment it is
-started with. The environment itself lives on the host, outside the
-repository, because it names volumes and quotas of that machine.
+Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
+published on `127.0.0.1:19000`; the two hosts share no cache. Jobs and
+`initialize` reach it through the `rc` client.
+`docker/ci-cache.compose.yml` declares it, and
+`docker/ci-cache/linux.env.example` and `docker/ci-cache/macos.env.example`
+give the shape of the environment each is started with. The environment itself
+lives on the host, outside the repository, because it names directories and
+quotas of that machine.
+
+Everything the stack keeps - the admin credentials, the objects, the client
+keys - sits in a directory on the host's disk that the environment names. A
+named volume lives wherever the Docker daemon keeps it, inside colima's
+virtual machine on the Mac, so a reset of that daemon would take the store and
+the admin password with it, and every client key the runners hold would stop
+working.
+
+The server needs RustFS 1.0.1 or later. 1.0.0 answers a bucket quota request
+with 503 for about ten seconds after it reports ready (rustfs/rustfs#8014), so
+an `initialize` started on a fresh stack fails at its first quota.
 
 The image carries `xtask`, and `ci cache initialize` builds every bucket
 policy from `ci::cache::provision`. So the copy of this repository the image
 was built from, not the repository itself, decides what the live policy says.
-The deployment copy is `/etc/kithara-ci/cache-compose/source`; refreshing it is
-copying a tree over that path, keeping the one it replaces as
+The Linux host's deployment copy is `/etc/kithara-ci/cache-compose/source`;
+refreshing it is copying a tree over that path, keeping the one it replaces as
 `source.before-<stamp>` beside it, and rebuilding the image from it.
 
 Which copy a running stack was actually started from is a question to ask the
@@ -248,8 +261,8 @@ what a `ListBucket` denial always looks like - so it read as a broken client
 rather than a policy that had never been updated.
 
 Quotas are per scope and applied at initialize. Changing one afterwards is
-`mc quota set` against the live bucket; editing the environment file changes
-only what the next initialize would apply.
+`rc bucket quota set` against the live bucket; editing the environment file
+changes only what the next initialize would apply.
 
 The two drift, and the drift is the danger: the live buckets had been raised by
 hand to 200 GiB trusted and 800 GiB review while the environment the stack was
@@ -260,6 +273,15 @@ its own size now names it, `CACHE_BUCKET_QUOTA_<SCOPE>`, and
 `CACHE_BUCKET_QUOTA` is what the scopes that say nothing are given. The
 environment on the host states what the buckets actually are, so applying it is
 no longer a way to lose them.
+
+That holds only if `initialize` sees the whole environment. Compose hands a
+container only the variables its file names, and `--env-file` only fills in
+the Compose file itself. Until 2026-10-02 the service named four variables, so
+a per-scope quota never reached it, and every initialize set each scope to
+`CACHE_BUCKET_QUOTA`. `just ci cache` now passes the file's absolute path as
+`CACHE_ENV_FILE`, and the service reads it as its `env_file`. A copy of the
+source older than that still flattens the quotas: refresh it before starting
+the stack.
 
 ## Storage policy
 

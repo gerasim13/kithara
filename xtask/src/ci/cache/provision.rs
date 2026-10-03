@@ -47,8 +47,8 @@ pub(super) fn credentials() -> Result<()> {
     Ok(())
 }
 
-fn mc(arguments: &[&str]) -> Result<()> {
-    let status = Command::new("mc")
+fn rc(arguments: &[&str]) -> Result<()> {
+    let status = Command::new("rc")
         .args(arguments)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -107,7 +107,7 @@ pub(super) fn initialize() -> Result<()> {
         scope_bucket(scope)?;
     }
     let root = Path::new("/config");
-    mc(&[
+    rc(&[
         "alias",
         "set",
         "--",
@@ -129,20 +129,25 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
     fs::create_dir_all(&directory)?;
     let key = secret(&directory.join("access-key"))?;
     let password = secret(&directory.join("secret-key"))?;
-    mc(&["mb", "--ignore-existing", &destination])?;
-    mc(&["quota", "set", &destination, "--size", quota])?;
+    rc(&["bucket", "create", "--ignore-existing", &destination])?;
+    rc(&["bucket", "quota", "set", &destination, quota])?;
     let mut lifecycle = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut lifecycle, &retention())?;
-    let status = Command::new("mc")
-        .args(["ilm", "rule", "import", &destination])
-        .stdin(File::open(lifecycle.path())?)
-        .stdout(Stdio::null())
-        .status()?;
-    ensure!(status.success(), "cache lifecycle import failed: {status}");
-    mc(&["admin", "user", "add", "ci", &key, &password])?;
+    rc(&[
+        "bucket",
+        "lifecycle",
+        "rule",
+        "import",
+        &destination,
+        lifecycle
+            .path()
+            .to_str()
+            .context("cache lifecycle path must be UTF-8")?,
+    ])?;
+    rc(&["admin", "user", "add", "ci", &key, &password])?;
     let mut policy_file = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut policy_file, &policy(scope, &bucket))?;
-    mc(&[
+    rc(&[
         "admin",
         "policy",
         "create",
@@ -153,7 +158,7 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
             .to_str()
             .context("cache policy path must be UTF-8")?,
     ])?;
-    mc(&["admin", "policy", "attach", "ci", &bucket, "--user", &key])?;
+    rc(&["admin", "policy", "attach", "ci", &bucket, "--user", &key])?;
     write_environment(&directory, &bucket, endpoint, &key, &password)?;
     let status = Command::new("chown")
         .args(["-R", &uid.to_string()])
@@ -178,8 +183,8 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
 /// (a target fingerprint, a `Cargo.lock`), so an object still named by a lock
 /// file is still the right answer weeks later, and expiring it daily would
 /// mean paying the full fetch every morning to rebuild the same bytes.
-/// `MinIO` applies the earliest matching expiry, so these prefixes must not
-/// overlap.
+/// S3 lifecycle applies the earliest matching expiry, so these prefixes must
+/// not overlap.
 fn retention() -> serde_json::Value {
     json!({
         "Rules": [
@@ -350,7 +355,7 @@ b",
 mod retention_tests {
     use super::*;
 
-    /// `MinIO` applies the earliest matching expiry, so an unfiltered rule would
+    /// S3 lifecycle applies the earliest matching expiry, so an unfiltered rule would
     /// silently govern the snapshot prefixes too - which is what expired a
     /// content-keyed source layer after a day and would have made a
     /// multi-gigabyte object a daily republish.
