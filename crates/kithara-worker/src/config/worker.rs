@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 
+use kithara_config::Config;
 use kithara_derive::Patch;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::sync::Arc;
@@ -8,22 +9,24 @@ use serde::Deserialize;
 
 /// Shared resources and cancellation parent for a [`Worker`](crate::Worker).
 #[non_exhaustive]
-#[derive(Clone, fieldwork::Fieldwork, Patch)]
+#[derive(Clone, Config, fieldwork::Fieldwork, Patch)]
+#[config(construction)]
 #[fieldwork(opt_in, with)]
 pub struct WorkerConfig {
+    #[config(value)]
     #[field(with)]
     pub(crate) max_compute_tasks: NonZeroUsize,
+    #[config(skip = "composed into the worker cancel scope", patch(skip))]
     #[field(with, option_set_some)]
-    #[patch(skip)]
     pub(crate) cancel: Option<CancelToken>,
+    #[config(skip = "transferred to the worker", patch(skip))]
     #[field(with, option_set_some)]
-    #[patch(skip)]
     pub(crate) runtime: Option<Handle>,
     /// The compute pool this worker admits jobs to. A document names it as a
     /// [`ComputePool`], which is the same choice minus [`PoolConfig::Shared`]:
     /// that variant carries a live `rayon::ThreadPool` only code can hand
     /// over, so it is not a thing a document can spell.
-    #[patch(wire = ComputePool, from = PoolConfig::from)]
+    #[config(skip = "transferred to the compute runtime", builder(skip = PoolConfig::Disabled), patch(wire = ComputePool, from = PoolConfig::from))]
     pub(crate) pool: PoolConfig,
 }
 
@@ -97,9 +100,12 @@ pub enum ComputePool {
 
 /// Thread count and thread-name prefix for a lazily built compute pool.
 #[non_exhaustive]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Config, Debug, Eq, PartialEq)]
+#[config(construction)]
 pub struct OwnedPoolConfig {
+    #[config(value)]
     pub(crate) threads: NonZeroUsize,
+    #[config(value)]
     pub(crate) name: String,
 }
 

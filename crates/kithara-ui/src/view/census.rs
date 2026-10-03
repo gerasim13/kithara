@@ -276,6 +276,7 @@ impl Census {
             site.read,
             site.active,
             site.columns_state,
+            site.status,
             site.query,
             site.scope,
             site.zoom,

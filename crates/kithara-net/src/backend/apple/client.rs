@@ -174,20 +174,18 @@ impl RawAppleNet {
     }
 }
 
-#[derive(Clone, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-#[derive(derive_more::Debug)]
+#[derive(Clone)]
 pub struct AppleNet {
-    #[debug(skip)]
-    session: AppleSession,
-    #[debug(skip)]
     net: Arc<RetryNet<RawAppleNet>>,
-    #[debug(skip)]
-    cancel: CancelToken,
-    #[debug(skip)]
     connection_metrics: ConnectionMetrics,
-    #[field(get)]
-    options: NetOptions,
+}
+
+impl std::fmt::Debug for AppleNet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppleNet")
+            .field("options", self.options())
+            .finish()
+    }
 }
 
 impl AppleNet {
@@ -199,22 +197,16 @@ impl AppleNet {
         let connection_metrics = ConnectionMetrics::default();
         let session = AppleSession::new(&options, pools, connection_metrics.clone());
         let raw = RawAppleNet {
-            session: session.clone(),
-            cancel: cancel.clone(),
-            options: options.clone(),
-        };
-        let net = Arc::new(RetryNet::new(
-            raw,
-            options.retry_policy,
-            cancel.clone(),
-            options.observer.clone(),
-        ));
-        Self {
             session,
-            net,
-            cancel,
-            connection_metrics,
+            cancel: cancel.clone(),
             options,
+        };
+        let retry_policy = raw.options.retry_policy;
+        let observer = raw.options.observer.clone();
+        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel, observer));
+        Self {
+            net,
+            connection_metrics,
         }
     }
 
@@ -225,28 +217,33 @@ impl AppleNet {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let options = self.options.with_observer(observer);
+        let current = self.net.inner();
+        let options = current.options.with_observer(observer);
         let raw = RawAppleNet {
-            session: self.session.clone(),
-            cancel: self.cancel.clone(),
-            options: options.clone(),
+            session: current.session.clone(),
+            cancel: current.cancel.clone(),
+            options,
         };
+        let retry_policy = raw.options.retry_policy;
+        let observer = raw.options.observer.clone();
         let net = Arc::new(RetryNet::new(
             raw,
-            options.retry_policy,
-            self.cancel.clone(),
-            options.observer.clone(),
+            retry_policy,
+            current.cancel.clone(),
+            observer,
         ));
         Self {
             net,
-            options,
-            cancel: self.cancel.clone(),
-            session: self.session.clone(),
             connection_metrics: self.connection_metrics.clone(),
         }
     }
 
     delegate::delegate! {
+        to self.net.inner() {
+            #[must_use]
+            #[field(&options)]
+            pub fn options(&self) -> &NetOptions;
+        }
         to self.net {
             /// # Errors
             ///

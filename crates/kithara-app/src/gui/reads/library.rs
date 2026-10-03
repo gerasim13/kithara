@@ -1,113 +1,134 @@
-use kithara::ui::{
-    module::IconName,
-    render::{Node, ReadValue, Scope, TableCell, TableRow, TreeRow},
-};
-use num_traits::cast::AsPrimitive;
+use std::{cell::OnceCell, collections::BTreeMap};
 
-use super::value::Value;
-use crate::{
-    catalog::Catalog,
-    gui::ui::cache::{CatalogRowMarks, LibraryScope, LibraryView},
-};
+use kithara::ui::render::{Node, ReadValue, Scope, TableCell, TableRow, TreeRow};
 
+use super::value::{Value, impl_child_node};
+use crate::gui::library::Library;
+
+/// Answers the tree, the hidden pages and whether Add folder is hidden.
 pub(super) struct LibraryNode<'a> {
-    query: &'a str,
-    scope: LibraryScope,
-    breadcrumb: String,
-    rows: Vec<TableRow<'a>>,
-    tree: Vec<TreeRow<'a>>,
+    library: &'a Library,
+    tree: OnceCell<Vec<TreeRow<'a>>>,
+    /// No folder picker answers Add folder.
+    add_folder_hidden: bool,
 }
 
 impl<'a> LibraryNode<'a> {
-    pub(super) fn new(
-        catalog: &'a Catalog,
-        marks: &'a CatalogRowMarks,
-        selected: Option<usize>,
-        library: &'a LibraryView,
-    ) -> Self {
-        let scope = library.scope;
-        let rows = catalog
-            .entries()
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| scope.holds(entry))
-            .map(|(index, entry)| {
-                let deck = marks
-                    .get(index)
-                    .map(String::as_str)
-                    .filter(|marks| !marks.is_empty())
-                    .map_or_else(
-                        || TableCell::empty("deck"),
-                        |marks| TableCell::text("deck", marks),
-                    );
-                TableRow::new(
-                    vec![
-                        TableCell::empty("index"),
-                        deck,
-                        TableCell::text("title", &entry.name),
-                        TableCell::text("artist", entry.url.as_str()),
-                        TableCell::empty("bpm"),
-                        TableCell::empty("key"),
-                        TableCell::empty("time"),
-                        TableCell::empty("energy"),
-                        TableCell::empty("transition"),
-                    ],
-                    selected == Some(index),
-                )
-                .with_drag(entry.url.as_str())
-            })
-            .collect();
-
+    pub(super) fn new(library: &'a Library, add_folder_hidden: bool) -> Self {
         Self {
-            rows,
-            tree: tree(catalog, library),
-            breadcrumb: format!("{} \u{b7} {}", scope.label(), catalog.entries().len()),
-            query: &library.query,
-            scope,
+            library,
+            add_folder_hidden,
+            tree: OnceCell::new(),
         }
     }
 }
 
-/// One row per source group the browser is listing, each carrying how many
-/// entries it holds. `LibraryView::groups` decides which groups those are.
-fn tree<'a>(catalog: &Catalog, library: &LibraryView) -> Vec<TreeRow<'a>> {
-    library
-        .groups()
-        .map(|group| TreeRow {
-            label: group.label(),
-            count: Some(
-                catalog
-                    .entries()
-                    .iter()
-                    .filter(|entry| group.holds(entry))
-                    .count()
-                    .as_(),
-            ),
-            expanded: None,
-            icon: match group {
-                LibraryScope::All => IconName::Collection,
-                LibraryScope::Local => IconName::Folder,
-                LibraryScope::Stream => IconName::Playlist,
-            },
-            muted: false,
-            selected: group == library.scope,
-            depth: 0,
-        })
-        .collect()
-}
-
 impl<'a, 'b: 'a> Node<'a> for &'a LibraryNode<'b> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let rows: &'a [TableRow<'a>] = &self.rows;
-        let tree: &'a [TreeRow<'a>] = &self.tree;
+        let node: Box<dyn Node<'a> + 'a> = match segment {
+            "tree" => Box::new(Value(ReadValue::Tree(
+                self.tree.get_or_init(|| self.library.tree()),
+            ))),
+            "page" => Box::new(PageNode(self.library)),
+            "add_folder" => Box::new(AddFolderNode(self.add_folder_hidden)),
+            _ => return None,
+        };
+        Some(node)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PageNode<'a>(&'a Library);
+
+impl_child_node!(PageNode<'a>, |this, segment, scope| {
+    match segment {
+        "hidden" => Some(Box::new(Value(ReadValue::Bool(
+            this.0.page_hidden(scope.get("source")?)?,
+        )))),
+        _ => None,
+    }
+});
+
+#[derive(Clone, Copy)]
+struct AddFolderNode(bool);
+
+impl_child_node!(AddFolderNode, |this, segment, _scope| {
+    match segment {
+        "hidden" => Some(Box::new(Value(ReadValue::Bool(this.0)))),
+        _ => None,
+    }
+});
+
+/// Answers each source under its own key, building its rows on first read.
+pub(super) struct SourcesNode<'a> {
+    library: &'a Library,
+    rows: Vec<OnceCell<Vec<TableRow<'a>>>>,
+    bpms: &'a BTreeMap<String, f64>,
+}
+
+impl<'a> SourcesNode<'a> {
+    pub(super) fn new(library: &'a Library, bpms: &'a BTreeMap<String, f64>) -> Self {
+        Self {
+            library,
+            bpms,
+            rows: library.sources().map(|_| OnceCell::new()).collect(),
+        }
+    }
+}
+
+impl<'a, 'b: 'a> Node<'a> for &'a SourcesNode<'b> {
+    fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+        let id = scope.get("source")?;
+        let at = self.library.index_of(id)?;
+        let source = self.library.source(at)?;
+        if segment == "column" {
+            return Some(Box::new(ColumnsNode {
+                library: self.library,
+                at,
+            }));
+        }
         let value = match segment {
-            "tracks" => ReadValue::Table(rows),
-            "tree" => ReadValue::Tree(tree),
-            "breadcrumb" => ReadValue::Text(&self.breadcrumb),
-            "query" => ReadValue::Text(self.query),
-            "scope" => ReadValue::Scalar(self.scope.index().as_()),
+            "rows" => {
+                let rows: &'a [TableRow<'b>] = self.rows.get(at)?.get_or_init(|| {
+                    let rows = source.rows(self.library.selected_row(at));
+                    if self.bpms.is_empty() {
+                        return rows;
+                    }
+                    rows.into_iter()
+                        .enumerate()
+                        .map(|(index, row)| {
+                            match source
+                                .analysis_key(index)
+                                .and_then(|key| self.bpms.get(key))
+                            {
+                                Some(bpm) => {
+                                    row.with_cell(TableCell::text("bpm", format!("{bpm:.2}")))
+                                }
+                                None => row,
+                            }
+                        })
+                        .collect()
+                });
+                ReadValue::Table(rows)
+            }
+            "status" => ReadValue::Text(self.library.status_words(source.status())),
             _ => return None,
         };
         Some(Box::new(Value(value)))
     }
 }
+
+#[derive(Clone, Copy)]
+struct ColumnsNode<'a> {
+    library: &'a Library,
+    at: usize,
+}
+
+impl_child_node!(ColumnsNode<'a>, |this, segment, scope| {
+    if segment != "width" {
+        return None;
+    }
+    Some(Box::new(Value(ReadValue::Scalar(
+        this.library.column_width(this.at, scope.get("column")?)?,
+    ))))
+});

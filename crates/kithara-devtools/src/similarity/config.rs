@@ -27,32 +27,38 @@ use crate::{
 /// Crate exclusions for similarity scans, loaded from
 /// `.config/similarity.toml`. Project-agnostic: when the file is absent
 /// no crates are excluded - every project supplies its own list.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct SimilarityConfig {
     #[serde(skip)]
     pub(super) active_dependencies: BTreeSet<String>,
+    #[config(nested)]
     pub(super) types: TypeConfig,
+    #[config(nested)]
     chains: ChainConfig,
     excluded_crates: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct TypeConfig {
     pub(super) families: BTreeMap<String, TypeFamilyConfig>,
     pub(super) relations: Vec<TypeRelationConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct TypeFamilyConfig {
     pub(super) members: Vec<String>,
     pub(super) default_similarity: f64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct TypeRelationConfig {
     pub(super) direction: Direction,
     pub(super) left: String,

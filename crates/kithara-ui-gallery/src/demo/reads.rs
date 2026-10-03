@@ -518,7 +518,14 @@ impl Reads for DemoReads {
         {
             return Some(value);
         }
-        let endpoint = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
+        let (endpoint, scope) = Scope::split(endpoint);
+        if endpoint == "gallery.table.width" {
+            return self
+                .table_widths
+                .get(scope.get("column")?)
+                .copied()
+                .map(ReadValue::Scalar);
+        }
         if let Some(value) = self.mixer.get(endpoint) {
             return Some(value);
         }
@@ -539,9 +546,6 @@ impl Reads for DemoReads {
             .and_then(|index| index.parse::<u8>().ok())
         {
             return Some(ReadValue::Scalar(f64::from(index)));
-        }
-        if let Some(name) = endpoint.strip_prefix("gallery.table.columns.width.") {
-            return self.table_widths.get(name).copied().map(ReadValue::Scalar);
         }
         if let Some(name) = endpoint.strip_prefix("gallery.table.columns.") {
             let index = consts::table_columns()

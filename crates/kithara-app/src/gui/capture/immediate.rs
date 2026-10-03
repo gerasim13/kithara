@@ -12,7 +12,7 @@ use kithara::ui::{
 };
 
 use super::{
-    fixture::Fixture,
+    fixture::{self, Fixture},
     page::{Page, PoolSample, pooled},
 };
 use crate::{
@@ -39,7 +39,7 @@ impl Immediate {
         Ok(Self {
             geometry,
             open: None,
-            package: Package::load(None).map_err(|error| format!("package: {error}"))?,
+            package: fixture::package()?,
             photographer: Photographer::new()?,
             pixels: Vec::new(),
             pools: String::new(),
@@ -93,7 +93,7 @@ impl Stage for Immediate {
     fn turn(&mut self, page: &Page) -> Result<(), String> {
         let compiled = ui::compile_ui(page.0)
             .map_err(|error| format!("compile {}: {error}", self.package.document(page.0)))?;
-        let reads = Fixture::new(page.0, Rc::clone(&self.package));
+        let reads = Fixture::new(page.0, Rc::clone(&self.package))?;
         self.open = Some((*page, compiled, reads));
         Ok(())
     }

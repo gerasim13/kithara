@@ -43,7 +43,7 @@ fn default_event_bus_capacity() -> NonZeroUsize {
 ///
 /// [`EngineConfig`]: crate::EngineConfig
 #[derive(Patch, Config)]
-#[config(debug, builder(state_mod(vis = "pub")), patch(fallible))]
+#[config(debug, builder(state_mod(vis = "pub")), patch(fallible), fields(value))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
 pub struct PlayerConfig<S> {
@@ -54,14 +54,14 @@ pub struct PlayerConfig<S> {
     #[config(value(f32, self.volume.load()), builder(field = RelaxedAtomicF32::new(1.0)), patch(skip))]
     pub(super) volume: RelaxedAtomicF32,
     /// How resources created for this player trim leading/trailing audio.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub gapless_mode: GaplessMode,
     /// Initial output sample rate supplied by the owning session, handed on
     /// to the engine this player builds and to the player's own sync
     /// identity. Not a document key: `HostConfig` owns the rate, a Host
     /// rejects a player whose rate disagrees with its own, and the document
     /// names it once under `host`.
-    #[config(value, patch(skip))]
+    #[config(patch(skip))]
     pub sample_rate: NonZeroU32,
     /// EQ band layout handed to the engine this player builds. Not a document
     /// key: every construction site derives it from a generator, and a custom
@@ -113,7 +113,7 @@ pub struct PlayerConfig<S> {
     pub default_rate: RelaxedAtomicF32,
     /// Capacity of each event topic when this player creates its root bus.
     /// An injected [`EventBus`] keeps its own capacity and identity.
-    #[config(value, builder(default = default_event_bus_capacity()))]
+    #[config(builder(default = default_event_bus_capacity()))]
     pub event_bus_capacity: NonZeroUsize,
     /// Secondary lead time before EOF at which the next queued item is loaded. The
     /// queue overwrites this for every queue-driven player at construction, so it is
@@ -127,7 +127,7 @@ pub struct PlayerConfig<S> {
     pub prefetch_duration: RelaxedAtomicF32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
-    #[config(value, builder(default = consts::DEFAULT_MAX_SLOTS))]
+    #[config(builder(default = consts::DEFAULT_MAX_SLOTS))]
     pub max_slots: usize,
     /// Stable synchronization-group identity owned by this player.
     #[config(
@@ -152,7 +152,7 @@ pub struct PlayerConfig<S> {
     pub(crate) abr: Option<Arc<AbrController>>,
     /// Optional application deadline for control-to-presented-audio response, in output frames.
     /// When Warp has no explicit quantum, a deadline selects the player's bounded default.
-    #[config(value, field(get, copy))]
+    #[config(get(copy))]
     pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Root event bus for this player.
     #[config(skip = "injected event bus", patch(skip), debug(skip))]

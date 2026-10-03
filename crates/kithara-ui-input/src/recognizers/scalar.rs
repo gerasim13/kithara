@@ -9,7 +9,7 @@ use super::{
 /// How a pointer position becomes a value. A relative track counts travel from
 /// the press, so the press only arms it; an absolute track reads the position
 /// itself, so the press seeks straight there.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Track {
     /// Vertical travel divided by `range` and added to `value`; up is positive.
     RelativeVertical { range: f32, value: f32 },
@@ -17,10 +17,13 @@ pub enum Track {
     /// `value`: the content moves with the pointer under a fixed playhead, so
     /// dragging right walks the position back.
     RelativeHorizontal { scale: f32, value: f32 },
-    /// Horizontal travel added to `value` in pixels, floored at `minimum`. The
-    /// only track whose value is a width rather than a fraction, which is why
-    /// it has a floor and no ceiling.
-    HorizontalPixels { minimum: f32, value: f32 },
+    /// Pixel travel scaled by `direction`, with width bounds.
+    HorizontalPixels {
+        minimum: f32,
+        maximum: Option<f32>,
+        direction: f32,
+        value: f32,
+    },
     /// The position normalized against the area's height, bottom at zero.
     AbsoluteVertical,
     /// The position normalized against the area's width.
@@ -78,6 +81,8 @@ pub struct ScalarState {
     active: bool,
     start_position: f32,
     start_value: f32,
+    start_direction: f32,
+    maximum: Option<f32>,
     wheel_accum: f32,
 }
 
@@ -119,10 +124,21 @@ impl Scalar {
                         state.start_value = value;
                         Outcome::captured()
                     }
-                    Track::RelativeHorizontal { value, .. }
-                    | Track::HorizontalPixels { value, .. } => {
+                    Track::RelativeHorizontal { value, .. } => {
                         state.start_position = travel_position.x;
                         state.start_value = value;
+                        Outcome::captured()
+                    }
+                    Track::HorizontalPixels {
+                        value,
+                        direction,
+                        maximum,
+                        ..
+                    } => {
+                        state.start_position = travel_position.x;
+                        state.start_value = value;
+                        state.start_direction = direction;
+                        state.maximum = maximum;
                         Outcome::captured()
                     }
                     Track::AbsoluteVertical => seek_down(position, hit.area()),
@@ -151,7 +167,10 @@ impl Scalar {
                     }
                 }
                 Track::HorizontalPixels { minimum, .. } => {
-                    Outcome::set((state.start_value + at.x - state.start_position).max(minimum))
+                    let value = (state.start_value
+                        + (at.x - state.start_position) * state.start_direction)
+                        .max(minimum);
+                    Outcome::set(state.maximum.map_or(value, |maximum| value.min(maximum)))
                 }
                 Track::AbsoluteVertical => hit
                     .at()

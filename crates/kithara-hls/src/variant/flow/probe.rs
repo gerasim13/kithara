@@ -118,7 +118,7 @@ where
             }
             signal.fire();
         });
-        let segment_peer = SegmentPeer::new(self.profile.headers.clone());
+        let segment_peer = SegmentPeer::new(self.config.headers.clone());
         Some(segment_peer.size_probe(
             url,
             ctx.config.size_probe_method,

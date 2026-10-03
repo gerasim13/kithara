@@ -7,7 +7,8 @@ use crate::{
     module::{
         BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode, DeckSummaryStyle, FaderStyle,
         GlyphStyle, IconName, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, ScalarFormat,
-        TableColumn, TextAlign, TextStyle, Tone, ViewSet, WaveStyle, WindowControlsStyle,
+        TableColumn, TableFrame, TextAlign, TextStyle, Tone, ViewSet, WaveStyle,
+        WindowControlsStyle,
     },
     shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
@@ -238,10 +239,16 @@ pub enum ControlSpec {
     Table {
         columns: Vec<TableColumn>,
         columns_state: Option<Binding>,
-        resizable: bool,
+        status: Option<Binding>,
+        frame: TableFrame,
+        width: Option<Binding>,
     },
     Tree {
         query: Option<Binding>,
+        /// Whether the tree draws a search field: it reads or writes a query.
+        search: bool,
+        /// Whether a pressed chevron writes apart from its row.
+        toggle: bool,
     },
     ContextBar {
         scope_items: Vec<InternId>,
@@ -584,6 +591,7 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) path: &'a str,
     pub(crate) active: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,
+    pub(crate) status: Option<&'a BindingRef>,
     pub(crate) query: Option<&'a BindingRef>,
     pub(crate) read: Option<&'a BindingRef>,
     pub(crate) scope: Option<&'a BindingRef>,
@@ -603,6 +611,7 @@ impl<'a> ControlSite<'a> {
             columns: &[],
             active: None,
             columns_state: None,
+            status: None,
             query: None,
             read: None,
             scope: None,
@@ -623,6 +632,7 @@ pub(crate) struct SlotWrites<'a> {
     pub(crate) loop_end: Option<&'a BindingRef>,
     pub(crate) query: Option<&'a BindingRef>,
     pub(crate) width: Option<&'a BindingRef>,
+    pub(crate) toggle: Option<&'a BindingRef>,
 }
 
 pub(crate) type ControlVisitor<'v> =

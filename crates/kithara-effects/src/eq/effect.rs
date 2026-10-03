@@ -38,34 +38,32 @@ impl EqEffect {
         })
     }
 
-    /// Get the band layout. Gains reflect target values.
-    #[must_use]
-    pub fn bands(&self) -> Vec<EqBandConfig> {
-        self.bands
-            .iter()
-            .enumerate()
-            .map(|(index, band)| {
-                let mut band = *band;
-                band.set_gain_db(self.eq_l.target_gain(index).unwrap_or_default());
-                band
-            })
-            .collect()
-    }
-
     /// Set the gain for a specific band.
     pub fn set_gain(&mut self, band_index: usize, gain_db: GainDb) {
+        let Some(band) = self.bands.get_mut(band_index) else {
+            return;
+        };
+        band.set_gain_db(gain_db);
         self.eq_l.set_gain(band_index, gain_db);
         self.eq_r.set_gain(band_index, gain_db);
     }
 
     delegate::delegate! {
+        to self.bands {
+            /// Get the band layout. Gains reflect target values.
+            #[must_use]
+            #[call(clone)]
+            pub fn bands(&self) -> Vec<EqBandConfig>;
+            /// Get the accepted gain for a specific band.
+            #[must_use]
+            #[expr($.map(EqBandConfig::gain_db))]
+            #[call(get)]
+            pub fn target_gain(&self, band_index: usize) -> Option<GainDb>;
+        }
         to self.eq_l {
             /// Check if any band is currently smoothing.
             #[cfg(test)]
             fn is_smoothing(&self) -> bool;
-            /// Get the target gain for a specific band.
-            #[must_use]
-            pub fn target_gain(&self, band_index: usize) -> Option<GainDb>;
         }
     }
 }
@@ -98,6 +96,9 @@ impl AudioEffect for EqEffect {
     }
 
     fn reset(&mut self) {
+        for band in &mut self.bands {
+            band.set_gain_db(GainDb::DEFAULT);
+        }
         self.eq_l.reset();
         self.eq_r.reset();
     }
@@ -186,12 +187,14 @@ mod tests {
 
         eq.set_gain(0, GainDb::from(100.0));
         assert_eq!(eq.target_gain(0).unwrap(), GainDb::MAX);
+        assert_eq!(eq.bands()[0].gain_db(), GainDb::MAX);
 
         eq.set_gain(0, GainDb::from(-100.0));
         assert_eq!(eq.target_gain(0).unwrap(), GainDb::MIN);
 
         eq.set_gain(0, GainDb::from(3.0));
         assert_eq!(eq.target_gain(0).unwrap(), GainDb::from(3.0));
+        assert_eq!(eq.bands()[0].gain_db(), GainDb::from(3.0));
     }
 
     #[kithara::test]
@@ -218,6 +221,12 @@ mod tests {
         let _ = eq.process(chunk);
 
         eq.reset();
+
+        assert!(
+            eq.bands()
+                .iter()
+                .all(|band| band.gain_db() == GainDb::DEFAULT)
+        );
 
         for i in 0..3 {
             assert_eq!(

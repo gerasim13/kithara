@@ -66,7 +66,6 @@ schema_version = 1
 "crates/kithara-net/src/retry.rs::RetryNet::retry_loop" = 1
 
 [god_module]
-"crates/kithara-decode/src/factory/probe.rs" = 1
 "crates/kithara-abr/src/event.rs" = 1
 "crates/kithara-play/src/api/event.rs" = 1
 "crates/kithara-queue/src/queue/types.rs" = 1

@@ -8,8 +8,8 @@ pub struct EncoderSession {
     #[debug("{:?}", self.pending_samples.len())]
     pending_samples: Vec<f32>,
     packet_frames: u32,
+    config: EncodeConfig,
     next_frame: u64,
-    channels: usize,
     packet_samples: usize,
 }
 
@@ -35,7 +35,7 @@ impl EncoderSession {
             .ok_or_else(|| EncodeError::InvalidInput("PCM packet size overflow".to_owned()))?;
 
         Ok(Self {
-            channels,
+            config: config.clone(),
             next_frame: 0,
             packet_frames,
             packet_samples,
@@ -53,7 +53,7 @@ impl EncoderSession {
         if self.pending_samples.is_empty() {
             return Ok(Vec::new());
         }
-        let frames = self.pending_samples.len() / self.channels;
+        let frames = self.pending_samples.len() / usize::from(self.config.channels);
         let duration = u32::try_from(frames).map_err(|_| {
             EncodeError::InvalidInput("final PCM packet duration does not fit into u32".to_owned())
         })?;
@@ -70,11 +70,12 @@ impl EncoderSession {
     ///
     /// Returns invalid input when `samples` ends in a partial frame.
     pub fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        if !samples.len().is_multiple_of(self.channels) {
+        let channels = usize::from(self.config.channels);
+        if !samples.len().is_multiple_of(channels) {
             return Err(EncodeError::InvalidInput(format!(
                 "interleaved sample count {} is not a multiple of {} channels",
                 samples.len(),
-                self.channels
+                channels
             )));
         }
         let total_samples = self

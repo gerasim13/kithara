@@ -18,8 +18,9 @@ mod consts {
 }
 
 /// Thresholds of the chain stage; the `[chains]` table overrides them.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ChainConfig {
     pub(super) arm_containment: f64,
     /// A decision row needs this Jaccard of its sides, or `arm_containment`.

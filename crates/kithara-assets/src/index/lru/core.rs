@@ -19,7 +19,8 @@ use crate::{
 };
 
 /// Eviction configuration for an assets store decorator.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kithara_config::Config)]
+#[config(fields(value))]
 pub(crate) struct EvictConfig {
     pub(crate) max_assets: Option<usize>,
     pub(crate) max_bytes: Option<u64>,

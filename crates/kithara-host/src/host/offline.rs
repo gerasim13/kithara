@@ -126,14 +126,14 @@ where
             task,
             root,
             root_view,
-            OfflineTaskConfig {
-                declared_latency,
-                output,
-                declick_frames,
-                max_block_frames,
-                sample_rate,
-                pools,
-            },
+            OfflineTaskConfig::builder()
+                .declared_latency(declared_latency)
+                .output(output)
+                .declick_frames(declick_frames)
+                .max_block_frames(max_block_frames)
+                .sample_rate(sample_rate)
+                .pools(pools)
+                .build(),
         )?;
         let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();
         Ok((

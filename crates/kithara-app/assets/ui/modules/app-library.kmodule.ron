@@ -2,18 +2,17 @@
     schema: "kithara.module",
     version: 1,
     id: "app-library",
-    root: Column(
+    root: Row(
+        gap: 1.0,
         children: [
-            Table(
-                id: "tracks",
-                read: Model(id: "library.tracks"),
-                write: Command(id: "library.select_track"),
-                columns: [
-                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 64.0),
-                    (id: "title", label: "@track_list.column.title", style: Primary, width: 180.0, flexible: true),
-                    (id: "artist", label: "@track_list.column.artist", style: Secondary, width: 200.0),
-                ],
+            Tree(
+                id: "tree",
+                size: (w: Fixed(210.0), h: Fill),
+                read: Model(id: "library.tree"),
+                write: Command(id: "library.select"),
+                toggle: Command(id: "library.toggle"),
             ),
+            Include(id: "pages", source: "../library-pages.kmodule.ron"),
         ],
     ),
 )

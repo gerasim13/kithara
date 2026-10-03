@@ -24,12 +24,15 @@ use kithara::{
         TickResult, Worker,
     },
 };
+use kithara_config::Config;
 use kithara_test_utils::kithara as probe;
 
 use super::AnalysisTarget;
 use crate::pools::{AppPools, AppStore, Pools};
 
 /// Complete configuration for the app-owned analysis persistence actor.
+#[derive(Config)]
+#[config(construction)]
 pub(crate) struct AnalysisPersistenceConfig {
     dispatcher: DispatcherConfig,
     chunk_duration: Duration,
@@ -37,26 +40,6 @@ pub(crate) struct AnalysisPersistenceConfig {
     pools: Pools,
     task: TaskConfig,
     worker: Worker,
-}
-
-impl AnalysisPersistenceConfig {
-    pub(crate) fn new(
-        worker: Worker,
-        pools: Pools,
-        queue_capacity: NonZeroUsize,
-        chunk_duration: Duration,
-        dispatcher: DispatcherConfig,
-        task: TaskConfig,
-    ) -> Self {
-        Self {
-            dispatcher,
-            chunk_duration,
-            queue_capacity,
-            pools,
-            task,
-            worker,
-        }
-    }
 }
 
 /// Cloneable handle to one ordered, bounded analysis persistence actor.
@@ -549,16 +532,20 @@ mod tests {
         .build();
         let target = AnalysisTarget::for_config(&resource).expect("fixture target is valid");
         let worker = Worker::new(WorkerConfig::new().with_runtime(Handle::current()));
-        let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
-            worker,
-            pools.clone(),
-            NonZeroUsize::MIN,
-            Duration::from_secs(consts::CHUNK_FRAMES),
-            DispatcherConfig::builder()
-                .name("analysis-persistence-test")
+        let persistence = AnalysisPersistence::new(
+            AnalysisPersistenceConfig::builder()
+                .worker(worker)
+                .pools(pools.clone())
+                .queue_capacity(NonZeroUsize::MIN)
+                .chunk_duration(Duration::from_secs(consts::CHUNK_FRAMES))
+                .dispatcher(
+                    DispatcherConfig::builder()
+                        .name("analysis-persistence-test")
+                        .build(),
+                )
+                .task(TaskConfig::new())
                 .build(),
-            TaskConfig::new(),
-        ))
+        )
         .expect("persistence actor starts");
         let first = AnalysisProgress::try_from(analysis(
             1,
@@ -640,16 +627,20 @@ mod tests {
 
         runtime.block_on(async {
             let worker = Worker::new(WorkerConfig::new().with_runtime(runtime_handle.clone()));
-            let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
-                worker,
-                pools.clone(),
-                NonZeroUsize::MIN,
-                Duration::from_secs(consts::CHUNK_FRAMES),
-                DispatcherConfig::builder()
-                    .name("analysis-persistence-reuse-test")
+            let persistence = AnalysisPersistence::new(
+                AnalysisPersistenceConfig::builder()
+                    .worker(worker)
+                    .pools(pools.clone())
+                    .queue_capacity(NonZeroUsize::MIN)
+                    .chunk_duration(Duration::from_secs(consts::CHUNK_FRAMES))
+                    .dispatcher(
+                        DispatcherConfig::builder()
+                            .name("analysis-persistence-reuse-test")
+                            .build(),
+                    )
+                    .task(TaskConfig::new())
                     .build(),
-                TaskConfig::new(),
-            ))
+            )
             .expect("persistence actor starts");
             let progress = |revision| {
                 AnalysisProgress::try_from(analysis(revision, &[(0, 3 * consts::CHUNK_FRAMES)]))

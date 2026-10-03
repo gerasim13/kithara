@@ -58,11 +58,15 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_studio_draws_before_the_engine_publishes() {
+        let runtime = test_fixture::runtime();
         let config = test_fixture::config();
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
         let (commands, _receiver) = mpsc::unbounded_channel();
         let window = Id::unique();
-        let mut state = Kithara::mounted(test_fixture::boot(&config, snapshots, commands), window);
+        let mut state = Kithara::mounted(
+            test_fixture::boot(runtime.handle(), &config, snapshots, commands),
+            window,
+        );
 
         assert_eq!(update(&mut state, Message::Tick).units(), 0);
         drop(view(&state, window));

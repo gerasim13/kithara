@@ -172,6 +172,13 @@ pub(crate) fn write_slots(site: ControlSite<'_>) -> Vec<WriteSlot<'_>> {
             Some("search"),
             BindingSide::ModelWrite,
         ),
+        (
+            writes.toggle,
+            Gesture::Index,
+            ValueKind::Index,
+            Some("toggle"),
+            BindingSide::Write,
+        ),
     ] {
         if let Some(binding) = binding {
             slots.push(WriteSlot {

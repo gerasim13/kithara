@@ -14,9 +14,9 @@ impl Worker {
     pub fn new(config: WorkerConfig) -> Self {
         Self {
             inner: Arc::new(WorkerInner {
-                compute: Arc::new(ComputeRuntime::new(config.pool, config.max_compute_tasks)),
-                runtime: config.runtime,
-                scope: CancelScope::new(config.cancel),
+                runtime: config.runtime.clone(),
+                scope: CancelScope::new(config.cancel.clone()),
+                compute: Arc::new(ComputeRuntime::new(config)),
             }),
         }
     }
@@ -68,14 +68,15 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        ComputeSubmitError, DispatcherConfig, OwnedPoolConfig, TaskConfig, compute::ComputePool,
-    };
+    use crate::{ComputeSubmitError, DispatcherConfig, OwnedPoolConfig, TaskConfig};
 
     #[kithara::test(native, flash(false))]
     fn worker_keeps_supplied_pool_and_never_creates_one_when_absent() {
         let absent = Worker::new(WorkerConfig::new());
-        assert!(matches!(absent.inner.compute.pool(), ComputePool::Disabled));
+        assert!(matches!(
+            absent.inner.compute.config.pool,
+            crate::config::PoolConfig::Disabled
+        ));
 
         let pool = Arc::new(
             rayon::ThreadPoolBuilder::new()
@@ -84,13 +85,10 @@ mod tests {
                 .expect("test Rayon pool must build"),
         );
         let shared = Worker::new(WorkerConfig::new().with_pool(Arc::clone(&pool)));
-        let configured = shared
-            .inner
-            .compute
-            .pool()
-            .shared()
-            .expect("configured pool must be retained");
-
+        let crate::config::PoolConfig::Shared(configured) = &shared.inner.compute.config.pool
+        else {
+            panic!("configured pool must be retained");
+        };
         assert!(Arc::ptr_eq(configured, &pool));
     }
 
@@ -127,10 +125,11 @@ mod tests {
             )
         );
         assert!(received.try_recv().is_err());
-        let ComputePool::OwnedLazy { pool, .. } = worker.inner.compute.pool() else {
-            panic!("expected owned lazy pool");
-        };
-        let built = pool
+        let built = worker
+            .inner
+            .compute
+            .pool()
+            .owned
             .get()
             .expect("pool must be initialized")
             .as_ref()

@@ -29,9 +29,11 @@ no-block = ["kithara-stream/no-block"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-stream = { workspace = true }
 
 bon = { workspace = true }
+
 derive_more = { workspace = true }
 num-traits = { workspace = true }
 thiserror = { workspace = true }

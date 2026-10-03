@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use bon::Builder;
 use kithara_assets::AssetStore;
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_download::Downloader;
 use kithara_events::EventBus;
@@ -22,8 +22,8 @@ pub enum FileSrc {
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File<S>>::new(config)`.
-#[derive(Builder, Patch)]
-#[builder(on(String, into), start_fn = for_src)]
+#[derive(Config, Patch)]
+#[config(owner_access, builder(on(String, into), start_fn = for_src))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 #[derive(derive_more::Debug)]
@@ -32,52 +32,69 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// File source (remote URL or local path).
-    #[builder(start_fn)]
-    #[patch(skip)]
+    #[config(
+        skip = "retained source identity has no patch representation",
+        builder(start_fn),
+        patch(skip),
+        get(ref)
+    )]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
-    #[patch(skip)]
+    #[config(
+        skip = "retained asset store handle has no patch representation",
+        patch(skip)
+    )]
     pub store: AssetStore<S>,
     /// Poll interval while a sibling `AssetStore` instance holds the
     /// atomic-chunked tmp for this file's canonical path. The default is short
     /// enough that the observed ~67 ms race window in
     /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
     /// enough not to busy-spin a tokio worker.
-    #[builder(default = Duration::from_millis(10))]
-    #[patch(humantime)]
+    #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
     pub tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
-    #[builder(name = events)]
-    #[patch(skip)]
+    #[config(skip = "transferred to the file event bus", builder(name = events), patch(skip))]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
-    #[patch(skip)]
+    #[config(skip = "composed into the file cancel scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Optional cache discriminator.
-    #[patch(skip)]
+    #[config(skip = "transferred to the asset scope", patch(skip))]
     pub discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
-    #[patch(skip)]
+    #[config(
+        skip = "retained downloader handle has no patch representation",
+        patch(skip)
+    )]
     #[debug(skip)]
     pub downloader: Option<Downloader>,
     /// Explicit source-extension hint used before the URL-path extension.
+    #[config(skip = "consumed by the codec probe")]
     pub extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
-    #[patch(skip)]
+    #[config(
+        skip = "retained request headers have no patch representation",
+        patch(skip),
+        get(ref)
+    )]
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
+    #[config(value)]
     pub look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared with storage and fallback transport.
-    #[patch(skip)]
+    #[config(
+        skip = "retained buffer pools have no patch representation",
+        patch(skip)
+    )]
     pub pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
-    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
+    #[config(value, builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY))]
     pub event_channel_capacity: usize,
     /// Ring depth for the decode-core to shell reader-event hand-off. A decode
     /// pass emits at most one progress event per decoded chunk, so the default
     /// bounds the worst-case post-seek skip burst without blocking the decode
     /// core.
-    #[builder(default = 256)]
+    #[config(value, builder(default = 256), get(copy))]
     pub reader_event_capacity: usize,
 }
 

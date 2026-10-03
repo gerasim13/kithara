@@ -3,7 +3,8 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, kithara_config::Config)]
+#[config(builder(none), fields(nested))]
 pub(crate) struct IdiomsConfig {
     pub(crate) thresholds: ThresholdsConfig,
 }
@@ -16,8 +17,9 @@ impl IdiomsConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) accumulator_loops: AccumulatorLoopsConfig,
@@ -109,8 +111,9 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) thin_wrapper_economy: ThinWrapperEconomyConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DerivableConfig {
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,
@@ -122,8 +125,9 @@ impl Default for DerivableConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DerivableEventConfig {
     #[serde(default)]
     pub(crate) unforwarded: Vec<String>,
@@ -148,8 +152,9 @@ pub(crate) enum DerivableSeverity {
     Deny,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DerivableRangedConfig {
     pub(crate) severity: DerivableSeverity,
     pub(crate) enabled: bool,
@@ -164,8 +169,9 @@ impl Default for DerivableRangedConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DerivableGetterConfig {
     #[serde(default)]
     pub(crate) severity: DerivableSeverity,
@@ -177,8 +183,9 @@ pub(crate) struct DerivableGetterConfig {
     pub(crate) enabled: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct QualifiedDerefRemap {
     pub(crate) field_type: String,
     pub(crate) scoped_name: String,
@@ -202,8 +209,9 @@ impl Default for DerivableGetterConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DerivableDelegationConfig {
     #[serde(default)]
     pub(crate) severity: DerivableSeverity,
@@ -256,8 +264,9 @@ impl Default for DerivableDelegationConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct PointwiseLoopConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -271,8 +280,9 @@ impl Default for PointwiseLoopConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FatLoopBodyConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -311,8 +321,9 @@ impl Default for FatLoopBodyConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct LoopFlagAccumulatorConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -326,8 +337,9 @@ impl Default for LoopFlagAccumulatorConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ConstGroupEnumShapeConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -354,8 +366,9 @@ impl Default for ConstGroupEnumShapeConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct NestedIfLetPyramidConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -376,8 +389,9 @@ impl Default for NestedIfLetPyramidConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct BranchChainsConfig {
     /// Glob patterns relative to the workspace root that exempt a file from
     /// the check.
@@ -428,8 +442,9 @@ fn default_exempt_files() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct GuardCascadeConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -471,8 +486,9 @@ fn default_terminator_macros() -> Vec<String> {
     .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FunctionBranchDensityConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -500,8 +516,9 @@ const fn default_density_warn_own() -> usize {
     12
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct AccumulatorLoopsConfig {
     /// Patterns to detect: `push`, `extend`, `sum` (numeric `+=`/`-=`),
     /// `count` (conditional `+= 1` inside an `if`).
@@ -532,8 +549,9 @@ fn default_accumulator_patterns() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct NoPassthroughBuilderConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -558,8 +576,9 @@ const fn default_min_passthrough_fields() -> usize {
     4
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ThinWrapperEconomyConfig {
     #[serde(default = "default_min_net_saved_lines")]
     pub(crate) min_net_saved_lines: usize,
@@ -581,8 +600,9 @@ const fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct MultiAccumulatorLoopConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -600,8 +620,9 @@ impl Default for MultiAccumulatorLoopConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ParallelLoopsConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -615,8 +636,9 @@ impl Default for ParallelLoopsConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ManualQuestionMarkConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -630,8 +652,9 @@ impl Default for ManualQuestionMarkConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct LoopAllocationConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -645,8 +668,9 @@ impl Default for LoopAllocationConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct BoxConcreteTypeConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -660,8 +684,9 @@ impl Default for BoxConcreteTypeConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ArcMutexCollectionConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -675,8 +700,9 @@ impl Default for ArcMutexCollectionConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct AwaitUnderGuardConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
@@ -690,8 +716,9 @@ impl Default for AwaitUnderGuardConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct RetryFallbackConfig {
     #[serde(default)]
     pub(crate) allowed_idents: Vec<String>,

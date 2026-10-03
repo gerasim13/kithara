@@ -42,8 +42,9 @@ enum Woke {
 }
 
 impl Owner {
-    pub(super) async fn drive(&mut self) {
+    pub(super) async fn drive(&mut self) -> bool {
         let woke = self.wake().await;
+        let changed = !matches!(&woke, Woke::Progress);
         match woke {
             Woke::Load(reply) => self.take_load(reply),
             Woke::Progress => self.publish(),
@@ -61,6 +62,7 @@ impl Owner {
                 self.pump();
             }
         }
+        changed
     }
 
     pub(super) fn finish_run(&mut self) {

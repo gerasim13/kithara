@@ -1,4 +1,4 @@
-use iced::{Element, widget::Space};
+use iced::Element;
 
 use super::mount::Cx;
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     draw::Rect,
     expand::Binding,
     ids::InternId,
-    module::TableColumn,
+    mount,
     render::{
         InputOwner, Published, ReadValue, Skin, Tree, Widget, controls::Paint, document::Ctx,
         scope_picker, vis,
@@ -62,41 +62,47 @@ pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Elemen
     vis::view(value, ctx)
 }
 
-pub(super) fn table<'a>(
-    cx: &Cx<'a, '_, '_>,
-    columns: (&[TableColumn], Option<&Binding>),
-    resizable: bool,
-) -> Element<'a, Published> {
-    let Some(ReadValue::Table(rows)) = cx.value else {
-        return Space::new().into();
+pub(super) fn table<'a>(cx: &Cx<'a, '_, '_>, table: &mount::Table<'_>) -> Element<'a, Published> {
+    let rows = match cx.value {
+        Some(ReadValue::Table(rows)) => *rows,
+        _ => &[],
     };
-    let (columns, columns_state) = columns;
-    let columns_scope = cx.ctx.scope(columns_state);
-    let columns_state = columns_state.map(|binding| cx.ctx.ui.resolve(binding.id));
-    let state = columns_state.map(|prefix| (prefix, columns_scope));
-    let columns = column_layouts((columns, resizable), &cx.ctx, state, cx.skin);
+    let state = table
+        .columns_state
+        .map(|binding| (cx.ctx.ui.resolve(binding.id), cx.ctx.scope(Some(binding))));
+    let columns = column_layouts(
+        (table.columns, cx.ctx.endpoint(table.width)),
+        &cx.ctx,
+        state,
+        cx.skin,
+    );
     let rows = rows.iter().map(TableRowData::from).collect();
-    crate::render::table(cx.path, rows, columns, cx.skin, cx.owner)
+    let face = crate::atoms::table::face::TableFace::new(rows, columns, cx.skin, table.frame)
+        .with_status(table.status.and_then(|binding| cx.ctx.read(binding)));
+    crate::render::table(cx.path, face, cx.owner)
 }
 
 pub(super) fn tree<'a>(
     path: &'a str,
-    query: Option<&Binding>,
+    tree: &mount::Tree<'_>,
     value: Option<&ReadValue<'_>>,
     ctx: Ctx<'_, '_>,
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, Published> {
-    let query = query
-        .and_then(|binding| ctx.read(binding))
-        .and_then(|value| match value {
-            ReadValue::Text(query) => Some(query),
-            _ => None,
-        })
-        .unwrap_or_default();
+    let query = tree.search.then(|| {
+        tree.query
+            .and_then(|binding| ctx.read(binding))
+            .and_then(|value| match value {
+                ReadValue::Text(query) => Some(query),
+                _ => None,
+            })
+            .unwrap_or_default()
+    });
     Tree::builder()
         .path(path)
-        .query(query)
+        .maybe_query(query)
+        .toggle(tree.toggle)
         .maybe_value(value)
         .owner(owner)
         .skin(skin)

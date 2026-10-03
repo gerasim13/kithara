@@ -1,24 +1,25 @@
-use bon::Builder;
+use kithara_config::Config;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::{EncodeError, EncodeResult};
 
 /// Audio format and packetization for one continuous encoding session.
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Debug, Config)]
+#[config(fields(value))]
 #[non_exhaustive]
 pub struct EncodeConfig {
     /// Codec written by the encoder session.
-    #[builder(default = AudioCodec::Pcm)]
+    #[config(builder(default = AudioCodec::Pcm))]
     pub codec: AudioCodec,
     /// Container written by the container session.
-    #[builder(default = ContainerFormat::Wav)]
+    #[config(builder(default = ContainerFormat::Wav))]
     pub container: ContainerFormat,
     /// Number of interleaved source channels.
     pub channels: u16,
     /// Source sample rate in Hz.
     pub sample_rate: u32,
     /// PCM frames carried by each portable access unit.
-    #[builder(default = 1_024)]
+    #[config(builder(default = 1_024))]
     pub packet_frames: usize,
 }
 

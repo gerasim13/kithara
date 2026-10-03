@@ -14,11 +14,12 @@ use ::kithara::ui::{
 use kithara_test_utils::kithara;
 
 use super::{
+    fixture,
     immediate::Immediate,
     page::{Page, studio},
     retained::Retained,
 };
-use crate::gui::ui::{cache::DeckLayout, endpoints::Registry, package::Package};
+use crate::gui::ui::{cache::DeckLayout, endpoints::Registry};
 
 #[kithara::test]
 fn studio_capture_writes_both_hosts() {
@@ -38,7 +39,7 @@ fn capture(dir: &Path) -> Result<(), String> {
     write(iced_dir.join("draw-pools.txt"), &immediate.pools)
         .map_err(|error| format!("write iced draw-pools.txt: {error}"))?;
 
-    let package = Package::load(None).map_err(|error| format!("package: {error}"))?;
+    let package = fixture::package()?;
     let endpoints = Registry::default();
     let config = Config::builder()
         .endpoints(&endpoints)

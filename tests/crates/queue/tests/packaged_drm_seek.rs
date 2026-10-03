@@ -208,7 +208,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         );
     }
 
-    queue.remove(id).expect("remove");
+    queue.run(move |q| q.remove(id)).await.expect("remove");
     tick_handle.stop().await;
     queue.close().await;
 }

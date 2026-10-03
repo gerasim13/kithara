@@ -555,11 +555,6 @@ fn insert_table_endpoints(registry: &mut DemoRegistry) {
             &format!("gallery.table.columns.{}", column.id()),
             EndpointDesc::new(ValueKind::Bool),
         );
-        registry.insert(
-            EndpointCategory::Model,
-            &format!("gallery.table.columns.width.{}", column.id()),
-            EndpointDesc::new(ValueKind::Scalar),
-        );
     }
 }
 

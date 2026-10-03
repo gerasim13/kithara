@@ -81,8 +81,16 @@ const fn screen<'a>(
 
 #[cfg(test)]
 pub(in crate::gui) fn compile_ui(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
+    compile_package(crate::gui::test_fixture::package(None)?.as_ref(), layout)
+}
+
+#[cfg(test)]
+pub(in crate::gui) fn compile_package(
+    package: &Package,
+    layout: DeckLayout,
+) -> Result<CompiledUi, UiDocError> {
     compile_screen(
-        Package::load(None)?.as_ref(),
+        package,
         layout,
         &UiConfig::default(),
         &kithara::ui::view::EMPTY,

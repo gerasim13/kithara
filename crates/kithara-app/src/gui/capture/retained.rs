@@ -80,7 +80,7 @@ impl Stage for Retained<'_> {
 
     fn turn(&mut self, page: &Page) -> Result<(), String> {
         let ui = Ui::new(
-            Fixture::new(page.0, Rc::clone(&self.package)),
+            Fixture::new(page.0, Rc::clone(&self.package))?,
             self.config,
             (self.geometry.width, self.geometry.height),
             self.geometry.scale,

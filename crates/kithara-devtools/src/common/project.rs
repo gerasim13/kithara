@@ -14,8 +14,9 @@ use crate::consts;
 /// project-agnostic xtask. Loaded from `.config/xtask.toml`; every field
 /// defaults to empty so a fresh project starts with no baked-in names and
 /// fills in only what it uses.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub struct ProjectConfig {
     pub architecture: ArchitectureConfig,
     pub audit_clippy: AuditClippyConfig,
@@ -28,6 +29,7 @@ pub struct ProjectConfig {
     pub quality: QualityConfig,
     pub stress: StressConfig,
     #[serde(default)]
+    #[config(value)]
     pub ext: Table,
     pub test: TestCommandConfig,
     pub tools: crate::common::tools::ToolsConfig,
@@ -35,27 +37,30 @@ pub struct ProjectConfig {
     pub workspace_scan: WorkspaceScan,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub struct ArchitectureConfig {
     pub filters: ArchitectureFilterConfig,
     pub render: ArchitectureRenderBudgets,
     pub runtime: ArchitectureRuntimeConfig,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct ArchitectureFilterConfig {
     pub exclude_crates: Vec<String>,
     pub exclude_modules: Vec<String>,
 }
 
 /// How much of a diagram's finding set the architecture report renders.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct ArchitectureRenderBudgets {
     pub findings: usize,
     pub relations: usize,
@@ -70,9 +75,10 @@ impl Default for ArchitectureRenderBudgets {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct ArchitectureRuntimeConfig {
     pub scenarios: Vec<RuntimeScenarioConfig>,
     /// Wall-clock budget for the rust-analyzer session the semantic overlay
@@ -199,17 +205,20 @@ impl RuntimeScenarioConfig {
 }
 
 /// Extended advisory clippy lints for the opt-in `just lint audit-clippy` sweep.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
 pub struct AuditClippyConfig {
+    #[config(value)]
     pub lints: Vec<String>,
 }
 
 /// How much of each measurement the consolidated CI report inlines before it
 /// sends the reader to the artifact it was rendered from.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct CiReportConfig {
     /// Rows of the CRAP table carried into the report. The whole table runs to
     /// five figures of lines and a step summary is capped at a megabyte.
@@ -233,8 +242,9 @@ impl Default for CiReportConfig {
 }
 
 /// Workspace-wide Rust file scan exclusions.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct WorkspaceScan {
     pub exclude: Vec<String>,
     /// Directories a scope token may name outside `crates/`. A token whose
@@ -257,8 +267,9 @@ fn default_top_level_dirs() -> Vec<String> {
     ["tests", "xtask", "benches"].map(String::from).to_vec()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct OrphansConfig {
     /// Packages excluded from the default `cargo modules orphans` sweep
     /// (generated/helper/macro crates and per-target-gated crates that the
@@ -284,20 +295,23 @@ const fn default_orphans_max_parallelism() -> usize {
     4
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub struct QualityConfig {
     /// Repository-specific heavyweight stages used by `quality assess --depth deep`.
     pub assessment: QualityAssessmentConfig,
     pub render: QualityRenderBudgets,
     /// Trait directory whose every `pub trait` must carry workspace mock coverage.
+    #[config(value)]
     pub unimock_traits_dir: String,
 }
 
 /// How much of a quality assessment the artifact and the summary render.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct QualityRenderBudgets {
     pub architecture_hotspots: usize,
     pub findings: usize,
@@ -314,15 +328,17 @@ impl Default for QualityRenderBudgets {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct QualityAssessmentConfig {
     pub deep_stages: Vec<QualityAssessmentStageConfig>,
     pub not_applicable_tools: Vec<QualityAssessmentToolPolicyConfig>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct QualityAssessmentStageConfig {
     pub name: String,
     pub command: Vec<String>,
@@ -333,15 +349,17 @@ pub struct QualityAssessmentStageConfig {
     pub hard_invariant: bool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct QualityAssessmentToolPolicyConfig {
     pub reason: String,
     pub tool: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct LintExcludeConfig {
     /// Inline-module names / `::`-paths whose violations are dropped from every
     /// lint namespace, regardless of file.
@@ -376,15 +394,18 @@ impl LintExcludeConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
 pub struct ProjectIdentity {
     /// Used in human-facing labels: health report title, temp-log prefix.
+    #[config(value)]
     pub name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct HealthConfig {
     /// Package whose dependency closure the unsafe-code census is rooted at.
     pub geiger_package: String,
@@ -447,8 +468,9 @@ const fn default_health_stdout_tail_lines() -> usize {
 /// The crate it applies to is not named here. It is found by the feature that
 /// names the group, so the rule follows the workspace rather than being
 /// repeated beside it.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct FeatureInvariant {
     /// Feature whose presence marks a crate as carrying this rule.
     pub when_feature: String,
@@ -489,9 +511,10 @@ impl FeatureInvariant {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct PerfConfig {
     pub frame_prefix: Option<String>,
     #[serde(default = "default_perf_nextest_profile")]
@@ -511,9 +534,10 @@ impl Default for PerfConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct PerfLane {
     pub backend: String,
     pub flash: bool,
@@ -523,8 +547,9 @@ fn default_perf_nextest_profile() -> String {
     "perf".to_owned()
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct TestCommandConfig {
     pub lanes: BTreeMap<String, TestLaneConfig>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
@@ -536,7 +561,9 @@ pub struct TestCommandConfig {
     /// retry count and the report location where they are declared rather than
     /// keeping a second copy of them here.
     pub nextest_config: String,
+    #[config(nested)]
     pub flash: TestFlashConfig,
+    #[config(nested)]
     pub no_block: TestNoBlockConfig,
     pub features: Vec<String>,
     /// Tests whose retried pass a lane tolerates, each naming the issue that
@@ -553,9 +580,10 @@ pub struct TestCommandConfig {
 }
 
 /// One test allowed to reach a pass through a retry, and the issue it waits on.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct KnownFlake {
     /// The issue that owns the defect, so the entry names who removes it.
     pub issue: String,
@@ -563,8 +591,9 @@ pub struct KnownFlake {
     pub test: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct TestFlashConfig {
     pub features: Vec<String>,
     pub default: bool,
@@ -579,21 +608,25 @@ impl Default for TestFlashConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct TestNoBlockConfig {
     pub features: Vec<String>,
     pub default: bool,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
 pub struct TestNetBackendConfig {
+    #[config(value)]
     pub features: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct TestLaneConfig {
     /// Environment the lane runs with, so what the lane exercises is named by
     /// the lane rather than by whatever the caller happened to export.
@@ -624,14 +657,19 @@ pub struct TestLaneConfig {
     pub undeclared_toggles: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct StressConfig {
     pub modes: BTreeMap<String, StressModeConfig>,
+    #[config(nested)]
     pub artifacts: StressArtifactConfig,
+    #[config(nested)]
     pub environment: StressEnvironmentConfig,
+    #[config(nested)]
     pub evidence: StressEvidenceConfig,
+    #[config(nested)]
     pub render: StressRenderBudgets,
     pub backend: String,
     /// The directory a lane builds into, relative to the checkout it builds.
@@ -661,9 +699,10 @@ pub struct StressConfig {
     pub max_test_threads: usize,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct StressArtifactConfig {
     pub envelope_dir: Option<String>,
     pub line_log: Option<String>,
@@ -686,16 +725,19 @@ pub struct StressArtifactConfig {
     pub subject_junit: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
 pub struct StressEnvironmentConfig {
+    #[config(value)]
     pub remove: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct StressModeConfig {
     pub raw_path_env: BTreeMap<String, String>,
     pub set_env: BTreeMap<String, String>,
@@ -729,9 +771,10 @@ pub struct StressModeConfig {
     pub owns_repeats: bool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct StressEvidenceConfig {
     pub envelope_marker: Option<String>,
     pub envelope_schema: Option<String>,
@@ -755,9 +798,10 @@ pub struct StressEvidenceConfig {
 /// the frames `backtrace_signature` folds into a failure's key, so lowering it
 /// makes two failures that diverge deep in the stack cluster as one. It shapes
 /// what the evidence says, not how wide a column is.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, kithara_config::Config)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub struct StressRenderBudgets {
     pub cell_chars: usize,
     pub divergence_rows: usize,

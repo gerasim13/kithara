@@ -16,6 +16,8 @@ impl Endpoint {
     const GLOBAL: &[&str] = &[];
     const LAYOUT: &[&str] = &["layout"];
     const MODULE: &[&str] = &["module"];
+    const SOURCE: &[&str] = &["source"];
+    const COLUMN: &[&str] = &["source", "column"];
     const VARIANT: &[&str] = &["deck", "variant"];
     const WINDOW: &[&str] = &["window"];
 
@@ -32,6 +34,12 @@ impl Endpoint {
 /// binding direction: `Command` for triggers, `Parameter` for read/write
 /// scalars, `Telemetry` for engine state, `Model` for host-owned UI state.
 static ENDPOINTS: &[Endpoint] = &[
+    Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "source.column.width",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::COLUMN,
+    },
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.playback.waveform",
@@ -244,39 +252,51 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "library.tracks",
-        value: ValueKind::Table,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Command,
-        id: "library.select_track",
-        value: ValueKind::Index,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
         id: "library.tree",
         value: ValueKind::Tree,
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
-        category: EndpointCategory::Model,
-        id: "library.query",
-        value: ValueKind::Text,
+        category: EndpointCategory::Command,
+        id: "library.select",
+        value: ValueKind::Index,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "library.toggle",
+        value: ValueKind::Index,
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "library.breadcrumb",
-        value: ValueKind::Text,
-        scopes: Endpoint::GLOBAL,
+        id: "library.page.hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::SOURCE,
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "library.scope",
-        value: ValueKind::Scalar,
+        id: "library.add_folder.hidden",
+        value: ValueKind::Bool,
         scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "source.select",
+        value: ValueKind::Index,
+        scopes: Endpoint::SOURCE,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "source.rows",
+        value: ValueKind::Table,
+        scopes: Endpoint::SOURCE,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "source.status",
+        value: ValueKind::Text,
+        scopes: Endpoint::SOURCE,
     },
     Endpoint {
         category: EndpointCategory::Model,
@@ -341,6 +361,12 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Command,
         id: "ui.window.toggle_full_screen",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "ui.library.add_folder",
         value: ValueKind::Trigger,
         scopes: Endpoint::GLOBAL,
     },

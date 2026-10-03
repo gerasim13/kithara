@@ -1,7 +1,7 @@
 use crate::{
     error::UiDocError,
     ids::SourceUri,
-    source::uri::{LoadedBytes, LoadedSource, SourceResolver},
+    source::uri::{LoadedBytes, LoadedModule, LoadedSource, SourceResolver},
 };
 
 /// Two source layers read as one: the package a user installed over the one the
@@ -26,6 +26,13 @@ impl<Over, Under> OverlayResolver<Over, Under> {
 }
 
 impl<Over: SourceResolver, Under: SourceResolver> SourceResolver for OverlayResolver<Over, Under> {
+    fn module(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedModule, UiDocError> {
+        match self.over.module(base, rel) {
+            Err(UiDocError::NotFound { .. }) => self.under.module(base, rel),
+            answer => answer,
+        }
+    }
+
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         match self.over.bytes(base, rel) {
             Err(UiDocError::NotFound { .. }) => self.under.bytes(base, rel),

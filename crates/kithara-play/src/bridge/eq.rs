@@ -6,8 +6,10 @@ use kithara_platform::{atomic::RelaxedAtomicF32, sync::Arc};
 
 use crate::error::PlayError;
 
-#[derive(Clone)]
+#[derive(Clone, kithara_config::Config)]
+#[config(builder(existing))]
 pub struct SharedEq {
+    #[config(value(Vec<f32>, self.snapshot()))]
     gains: Arc<ArcSwap<Vec<RelaxedAtomicF32>>>,
 }
 
@@ -85,6 +87,7 @@ fn load_gain(gain: &RelaxedAtomicF32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use kithara_config::Config;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -95,11 +98,13 @@ mod tests {
         let handle = eq.clone();
         eq.set_gain(1, GainDb::from(4.0)).unwrap();
         assert_eq!(handle.snapshot(), vec![0.0, 4.0, 0.0]);
+        assert_eq!(handle.values().gains, vec![0.0, 4.0, 0.0]);
 
         eq.replace(&[-6.0f32, -2.0, 2.0, 5.0].map(GainDb::from));
         assert_eq!(handle.len(), 4);
         assert_eq!(handle.gain(2), Some(2.0));
         handle.set_gain(3, GainDb::from(1.0)).unwrap();
         assert_eq!(eq.snapshot(), vec![-6.0, -2.0, 2.0, 1.0]);
+        assert_eq!(eq.values().gains, vec![-6.0, -2.0, 2.0, 1.0]);
     }
 }

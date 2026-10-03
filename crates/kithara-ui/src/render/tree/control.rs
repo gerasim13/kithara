@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
 use iced::advanced::{layout::Layout, mouse};
 
 use super::{
-    geometry::{Rendered, tree_input_layout, tree_search_input_layout},
+    geometry::{Rendered, tree_input_layouts},
     mount::{Cx, ViewControl},
     table::TableHost,
 };
@@ -71,8 +73,7 @@ impl HostedControl {
         scope: &str,
         cx: Resolving<'_>,
     ) -> Option<Self> {
-        HostedControlPlan::resolved(path, spec, value, read, scope, cx)
-            .map(|plan| Self::mounted(plan, cx.skin))
+        HostedControlPlan::resolved(path, spec, value, read, scope, cx).map(Self::mounted)
     }
 
     /// Narrows a control's rectangle to the part a pointer actually drives. A
@@ -90,14 +91,14 @@ impl HostedControl {
         }
     }
 
-    pub(super) fn mounted(plan: HostedControlPlan, skin: &Skin) -> Self {
-        let skin = skin.at(plan.path());
+    pub(super) fn mounted(plan: HostedControlPlan) -> Self {
         let table = match &plan {
             HostedControlPlan::Table(plan) => Some(Box::new(TableHost::new(
                 &plan.path,
                 plan.columns(),
                 plan.row_count(),
-                skin,
+                plan.picture.borrow().metrics(),
+                Rc::clone(&plan.viewport_width),
             ))),
             _ => None,
         };
@@ -131,17 +132,26 @@ pub(super) fn append_control_targets<'a>(
     targets: &mut Vec<Target<'a>>,
 ) {
     if let HostedControlPlan::Tree(plan) = &control.plan {
-        if let Some(layout) = tree_search_input_layout(layout) {
+        let (search, rows) = tree_input_layouts(layout, plan.search_path.is_some());
+        if let Some((path, layout)) = plan.search_path.as_ref().zip(search) {
             targets.push(Target::new(
-                &plan.search_path,
+                path,
                 iced_interact::hit(layout.bounds(), cursor),
             ));
         }
-        if let Some(layout) = tree_input_layout(layout) {
+        if let Some(layout) = rows {
             targets.push(Target::new(
                 &plan.path,
                 iced_interact::hit(layout.bounds(), cursor),
             ));
+            if let Some(offset) = engine.and_then(|engine| engine.scroll_offset(&plan.path)) {
+                plan.append_toggle_targets(
+                    layout.bounds().into(),
+                    cursor.position().map(Into::into),
+                    offset,
+                    targets,
+                );
+            }
         }
         return;
     }

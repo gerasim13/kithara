@@ -3,6 +3,7 @@
 use std::ops::RangeInclusive;
 
 use bon::bon;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
@@ -64,8 +65,8 @@ pub enum TempoError {
 /// is optional and one a document does not name keeps the value already in
 /// place, but the merged policy is judged as a whole before it is committed:
 /// a band the comb never scores is refused, not clamped.
-#[derive(Clone, Copy, Debug, PartialEq, Patch)]
-#[patch(validate = Self::validated, error = TempoError)]
+#[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
+#[config(builder(existing), fields(value), patch(validate = Self::validated, error = TempoError))]
 pub struct Tempo {
     drift: f32,
     high: f32,

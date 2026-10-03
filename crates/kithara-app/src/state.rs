@@ -667,7 +667,11 @@ mod tests {
             CancelToken,
             sync::{Arc, Mutex},
             time::{self, Duration},
-            tokio::{self, sync::mpsc, task},
+            tokio::{
+                self,
+                sync::{mpsc, watch},
+                task,
+            },
         },
         play::{DjEvent, PlayerEvent},
         queue::QueueEvent,
@@ -709,7 +713,7 @@ mod tests {
         queue: &AppQueueControl,
     ) -> (Arc<Mutex<UiState>>, mpsc::Receiver<Request>, CancelToken) {
         let state = Arc::new(Mutex::new(UiState::new(queue)));
-        let (analysis, requests) = AnalysisHandle::channel();
+        let (analysis, requests) = AnalysisHandle::channel(watch::channel(Default::default()).1);
         let cancel = CancelToken::root();
         task::spawn(listen(
             queue.clone(),

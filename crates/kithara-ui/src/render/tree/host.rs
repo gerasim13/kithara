@@ -15,9 +15,9 @@ use kithara_platform::time::Instant;
 
 use super::geometry::HostedLayout;
 use crate::{
-    engine::{Descriptor, Engine, Target},
+    engine::{Engine, Target},
     expand::ExpandedNode,
-    interact::{Input, PointerPhase, ScrollAxis, iced as iced_interact},
+    interact::{Input, PointerPhase, iced as iced_interact},
     module::ChromeStyle,
     render::{
         Published, Skin, controls::sync_tree_scroll, document::Ctx, engine as engine_event,
@@ -162,9 +162,7 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
         let targets =
             self.layout
                 .targets_with_engine(child_layout, Cursor::Unavailable, Some(&state.engine));
-        state
-            .engine
-            .reconcile(active_descriptors(&self.layout, &targets));
+        state.engine.reconcile(self.layout.descriptors());
         for target in &targets {
             state
                 .engine
@@ -553,19 +551,6 @@ fn interaction(
         .into()
 }
 
-fn active_descriptors(layout: &HostedLayout, targets: &[Target<'_>]) -> Vec<Descriptor> {
-    layout
-        .descriptors()
-        .into_iter()
-        .filter(|descriptor| match descriptor {
-            Descriptor::Scroll { path, config } if config.axis() == ScrollAxis::Horizontal => {
-                targets.iter().any(|target| target.path == path)
-            }
-            _ => true,
-        })
-        .collect()
-}
-
 fn hovered_control<'a>(targets: &[Target<'a>]) -> Option<&'a str> {
     targets
         .iter()
@@ -634,14 +619,14 @@ mod tests {
         builtin,
         compile::{Address, CompiledNode, CompiledUi, compile},
         draw::{DrawList, Pt, Rect},
-        engine::{PickerSnapshot, ScrollConfig},
+        engine::{Descriptor, PickerSnapshot, ScrollConfig},
         expand::{ControlSpec, header_path},
         ids::EndpointId,
-        interact::{CursorShape, Key, Modifiers, mouse as mouse_input},
+        interact::{CursorShape, Key, Modifiers, ScrollAxis, mouse as mouse_input},
         module::{IconName, WaveStyle},
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            Carry, CarryStep, ControlAction, HostLayer, InputOwner, LayerHit, ModuleChrome,
+            Badge, Carry, CarryStep, ControlAction, HostLayer, InputOwner, LayerHit, ModuleChrome,
             ReadValue, Reads, StereoLevels, TableCell, TableRow, TreeRow, WaveBucket, WaveformView,
             WheelSurface, Widget, WindowCommand, WindowLayerProgram, control_event,
             document::{Clock, Ctx},
@@ -674,7 +659,7 @@ mod tests {
                 InputOwner, Published, Skin,
                 document::{
                     Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover,
-                    SplitMount, render,
+                    SplitMount, StageMount, render,
                 },
                 tree::node::IcedHost,
             },
@@ -787,7 +772,7 @@ mod tests {
                         measure: Option<MeasureAxis>,
                         children: Vec<SplitMount<Self::Output>>,
                     ) -> Self::Output;
-                    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
+                    fn stage(&mut self, children: Vec<StageMount<Self::Output>>, size: Option<SizeSpec>) -> Self::Output;
                     fn window(&mut self, content: Self::Output, resize_edges: bool) -> Self::Output;
                 }
             }
@@ -919,7 +904,13 @@ mod tests {
                     TableCell::text("title", "Row"),
                     TableCell::text("artist", "Detail"),
                     TableCell::text("time", "04:12"),
-                    TableCell::text("deck", "A"),
+                    TableCell::badges(
+                        "deck",
+                        &[Badge {
+                            label: "A",
+                            active: true,
+                        }],
+                    ),
                     TableCell::text("bpm", "124.0"),
                     TableCell::text("key", "8A"),
                     TableCell::number("energy", 7),
@@ -2200,18 +2191,11 @@ mod tests {
         assert!(matches!(
             descriptors.as_slice(),
             [
-                Descriptor::TextInput {
-                    path: search_path,
-                    query,
-                    ..
-                },
                 Descriptor::Scroll {
                     path,
                     config,
                 },
-            ] if search_path == "tree/browser/search"
-                && query.is_empty()
-                && path == "tree/browser"
+            ] if path == "tree/browser"
                 && *config == ScrollConfig::items(
                     ScrollAxis::Vertical,
                     192.0,
@@ -2222,10 +2206,9 @@ mod tests {
                 )
         ));
         let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
-        let [search, target] = targets.as_slice() else {
-            panic!("the tree document must expose its search input and scroll viewport");
+        let [target] = targets.as_slice() else {
+            panic!("a tree without a query must expose only its scroll viewport");
         };
-        assert_eq!(search.path, "tree/browser/search");
         assert_eq!(target.path, "tree/browser");
         let area = target.hit.area();
         let cursor = Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
@@ -2386,7 +2369,6 @@ mod tests {
                     crate::render::HostedControlPlan::Activation {
                         path: "hosted/button".to_owned(),
                     },
-                    builtin::skin(),
                 ))),
                 mouse::Interaction::Pointer,
             ),
@@ -3114,7 +3096,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn gallery_table_hosts_its_exact_conditional_inventory() {
+    fn library_followup_gallery_table_retains_its_descriptor_inventory() {
         let ui = compiled_gallery_table();
         let reads = FixtureReads::default();
         let CompiledNode::Module { module, root, .. } = &ui.root else {
@@ -3173,13 +3155,14 @@ mod tests {
                 "table/table/rows",
                 "table/table/width/index",
                 "table/table/width/deck",
+                "table/table/width/title",
                 "table/table/width/artist",
                 "table/table/width/bpm",
                 "table/table/width/key",
                 "table/table/width/time",
             ]
         );
-        let descriptors = active_descriptors(&hosted, &targets);
+        let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
             [
@@ -3189,11 +3172,13 @@ mod tests {
                 "table/table/rows",
                 "table/table/width/index",
                 "table/table/width/deck",
+                "table/table/width/title",
                 "table/table/width/artist",
                 "table/table/width/bpm",
                 "table/table/width/key",
                 "table/table/width/time",
                 "table/table/width/energy",
+                "table/table/width/transition",
                 "table/column-index",
                 "table/column-deck",
                 "table/column-title",
@@ -3220,6 +3205,8 @@ mod tests {
                 Descriptor::ColumnDivider { .. },
                 Descriptor::ColumnDivider { .. },
                 Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
+                Descriptor::ColumnDivider { .. },
                 Descriptor::Activation { .. },
                 Descriptor::Activation { .. },
                 Descriptor::Activation { .. },
@@ -3237,7 +3224,7 @@ mod tests {
             .iter()
             .filter(|target| target.path.contains("/width/"))
             .collect();
-        assert_eq!(divider_targets.len(), 6);
+        assert_eq!(divider_targets.len(), 7);
         assert!(
             divider_targets
                 .iter()
@@ -3281,6 +3268,7 @@ mod tests {
                 "table/table/width/key",
                 "table/table/width/time",
                 "table/table/width/energy",
+                "table/table/width/transition",
             ]
         );
         assert!(
@@ -3289,9 +3277,10 @@ mod tests {
                 .all(|target| target.path != "table/table/scroll-x")
         );
         assert!(
-            active_descriptors(&hosted, &wide_targets)
+            hosted
+                .descriptors()
                 .iter()
-                .all(|descriptor| descriptor_path(descriptor) != "table/table/scroll-x")
+                .any(|descriptor| descriptor_path(descriptor) == "table/table/scroll-x")
         );
     }
 
@@ -3365,9 +3354,9 @@ mod tests {
             .expect("the ContextBar picker target must exist");
         assert_eq!(picker.hit.area().h, builtin::skin().tree.scope_item_height);
         assert_eq!(
-            active_descriptors(&hosted, &targets).len(),
-            5,
-            "the non-overflowing table omits only its horizontal scroll descriptor"
+            hosted.descriptors().len(),
+            6,
+            "the table retains both scroll descriptors"
         );
 
         let area = picker.hit.area();
@@ -5379,6 +5368,39 @@ mod tests {
     }
 
     drop_fixture::drop_suite!(dropping::Window);
+
+    mod leaf_tree {
+        use kithara_test_utils::kithara;
+
+        use super::dropping;
+
+        crate::render::drop_fixture::tree_suite!(dropping::Window, false);
+    }
+
+    mod engine_tree {
+        use kithara_test_utils::kithara;
+
+        use super::dropping;
+
+        crate::render::drop_fixture::tree_suite!(dropping::Window, true);
+    }
+
+    #[kithara::test]
+    fn a_badge_cell_paints_an_active_letter_apart_from_an_inactive_one() {
+        let ui = drop_fixture::compiled_with_badges();
+        let reads = drop_fixture::DropReads::new(drop_fixture::Rows::Badged);
+        let mut window = dropping::Window::open();
+
+        window.to(&ui, &reads, drop_fixture::OVER_THE_DECK);
+        let photo = window.photo(&ui, &reads, drop_fixture::OVER_THE_DECK);
+        let [playing, loaded, empty] = [0, 1, 2].map(|row| drop_fixture::lead_cell(&photo, row));
+
+        assert!(
+            playing != loaded,
+            "the letter of the deck playing the row must look apart from a deck that only holds it"
+        );
+        assert!(loaded != empty, "a held row must show its deck's letter");
+    }
 
     #[kithara::test]
     fn a_table_without_write_width_offers_no_column_resize() {

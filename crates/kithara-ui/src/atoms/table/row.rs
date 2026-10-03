@@ -1,13 +1,13 @@
 use num_traits::ToPrimitive;
 
 use super::{
-    ColumnLayout, layout::intersect, table_body, table_content_width, table_row_pitch,
-    table_vertical_scrollbar_rect,
+    ColumnLayout, TableMetrics, layout::intersect, table_body, table_content_width,
+    table_row_pitch, table_vertical_scrollbar_rect,
 };
 use crate::{
-    atoms::table::TableCell,
+    atoms::table::{BadgeLetter, TableCell},
     draw::{Pt, Rect},
-    render::{Skin, TableRow as ReadRow, TableValue},
+    render::{TableRow as ReadRow, TableValue},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,8 +26,17 @@ impl From<&ReadRow<'_>> for TableRowData {
                 .map(|cell| {
                     let value = match cell.value() {
                         TableValue::Empty => TableCell::Empty,
-                        TableValue::Number(value) => TableCell::Number(value),
-                        TableValue::Text(value) => TableCell::Text(value.to_owned()),
+                        TableValue::Badges(badges) => TableCell::Badges(
+                            badges
+                                .iter()
+                                .map(|badge| BadgeLetter {
+                                    label: badge.label.to_owned(),
+                                    active: badge.active,
+                                })
+                                .collect(),
+                        ),
+                        TableValue::Number(value) => TableCell::Number(*value),
+                        TableValue::Text(value) => TableCell::Text(value.to_string()),
                     };
                     (cell.id().to_owned(), value)
                 })
@@ -53,16 +62,16 @@ pub(crate) fn table_row_rect(
     index: usize,
     horizontal_offset: f32,
     vertical_offset: f32,
-    skin: &Skin,
+    table: TableMetrics<'_>,
 ) -> Rect {
-    let body = table_body(bounds, skin);
+    let body = table_body(bounds, table);
     let y = index.to_f32().map_or(f32::MAX, |index| {
-        index.mul_add(table_row_pitch(skin), body.y) - vertical_offset
+        index.mul_add(table_row_pitch(table.skin), body.y) - vertical_offset
     });
     Rect {
         y,
-        h: skin.table.row_height,
-        w: table_content_width(columns, bounds.w),
+        h: table.skin.table.row_height,
+        w: table_content_width(columns, bounds.w, table),
         x: bounds.x - horizontal_offset,
     }
 }
@@ -74,7 +83,7 @@ pub(crate) fn table_visible_row_rect(
     index: usize,
     horizontal_offset: f32,
     vertical_offset: f32,
-    skin: &Skin,
+    table: TableMetrics<'_>,
 ) -> Option<Rect> {
     let row = table_row_rect(
         bounds,
@@ -82,11 +91,11 @@ pub(crate) fn table_visible_row_rect(
         index,
         horizontal_offset,
         vertical_offset,
-        skin,
+        table,
     );
-    let mut visible = intersect(row, table_body(bounds, skin))?;
+    let mut visible = intersect(row, table_body(bounds, table))?;
     if let Some(scrollbar) =
-        table_vertical_scrollbar_rect(bounds, columns, row_count, horizontal_offset, skin)
+        table_vertical_scrollbar_rect(bounds, columns, row_count, horizontal_offset, table)
     {
         visible.w = (scrollbar.x - visible.x).max(0.0);
     }
@@ -100,11 +109,11 @@ pub(crate) fn table_row_at(
     row_count: usize,
     horizontal_offset: f32,
     vertical_offset: f32,
-    skin: &Skin,
+    table: TableMetrics<'_>,
 ) -> Option<usize> {
     let point = point?;
-    let body = table_body(bounds, skin);
-    let pitch = table_row_pitch(skin);
+    let body = table_body(bounds, table);
+    let pitch = table_row_pitch(table.skin);
     if !body.contains(point) || pitch <= 0.0 {
         return None;
     }
@@ -120,7 +129,7 @@ pub(crate) fn table_row_at(
         index,
         horizontal_offset,
         vertical_offset,
-        skin,
+        table,
     )?;
     row.contains(point).then_some(index)
 }
@@ -132,7 +141,7 @@ mod tests {
     use super::*;
     use crate::{
         atoms::table::{column_layouts, minimum_table_width},
-        module::{TableColumn, TableColumnStyle},
+        module::{TableColumn, TableColumnStyle, TableFrame},
         render::{ReadValue, Reads},
     };
 
@@ -160,8 +169,12 @@ mod tests {
     #[kithara::test]
     fn row_geometry_keeps_grid_gaps_outside_row_hits() {
         let skin = crate::builtin::skin();
+        let table = TableMetrics {
+            skin,
+            frame: TableFrame::new(0.0, 0.0, true),
+        };
         let columns = column_layouts(
-            (&[column("title", 180.0, true)], true),
+            (&[column("title", 180.0, true)], Some("width")),
             &ColumnReads(None),
             None,
             skin,
@@ -172,8 +185,8 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let first = table_row_rect(bounds, &columns, 0, 0.0, 0.0, skin);
-        let second = table_row_rect(bounds, &columns, 1, 0.0, 0.0, skin);
+        let first = table_row_rect(bounds, &columns, 0, 0.0, 0.0, table);
+        let second = table_row_rect(bounds, &columns, 1, 0.0, 0.0, table);
 
         assert_eq!(second.y - first.y, table_row_pitch(skin));
         assert_eq!(second.y - (first.y + first.h), skin.table.grid_gap);
@@ -182,8 +195,12 @@ mod tests {
     #[kithara::test]
     fn visible_row_hits_are_clipped_to_the_body() {
         let skin = crate::builtin::skin();
+        let table = TableMetrics {
+            skin,
+            frame: TableFrame::new(0.0, 0.0, true),
+        };
         let columns = column_layouts(
-            (&[column("title", 180.0, true)], true),
+            (&[column("title", 180.0, true)], Some("width")),
             &ColumnReads(None),
             None,
             skin,
@@ -201,17 +218,21 @@ mod tests {
             0,
             0.0,
             skin.table.row_height / 2.0,
-            skin,
+            table,
         )
         .expect("the partially visible first row must retain a hit rect");
 
-        assert_eq!(clipped.y, table_body(bounds, skin).y);
+        assert_eq!(clipped.y, table_body(bounds, table).y);
         assert_eq!(clipped.h, skin.table.row_height / 2.0);
     }
 
     #[kithara::test]
     fn row_hits_yield_to_the_visible_scrollbar_lane_at_each_horizontal_edge() {
         let skin = crate::builtin::skin();
+        let table = TableMetrics {
+            skin,
+            frame: TableFrame::new(0.0, 0.0, true),
+        };
         let columns = column_layouts(
             (
                 &[
@@ -219,7 +240,7 @@ mod tests {
                     column("artist", 200.0, false),
                     column("transition", 130.0, false),
                 ],
-                true,
+                Some("width"),
             ),
             &ColumnReads(None),
             None,
@@ -234,25 +255,25 @@ mod tests {
         let row_count = 10;
         let maximum = minimum_table_width(&columns) - bounds.w;
         let row = |offset| {
-            table_visible_row_rect(bounds, &columns, row_count, 0, offset, 0.0, skin)
+            table_visible_row_rect(bounds, &columns, row_count, 0, offset, 0.0, table)
                 .expect("the first row must be visible")
         };
 
         assert_eq!(
-            table_vertical_scrollbar_rect(bounds, &columns, row_count, 0.0, skin),
+            table_vertical_scrollbar_rect(bounds, &columns, row_count, 0.0, table),
             None
         );
         assert_eq!(row(0.0).w, bounds.w);
 
         let partial = maximum - skin.table.scrollbar_margin;
         let partial_scrollbar =
-            table_vertical_scrollbar_rect(bounds, &columns, row_count, partial, skin)
+            table_vertical_scrollbar_rect(bounds, &columns, row_count, partial, table)
                 .unwrap_or_else(|| {
                     panic!("the rail must enter the viewport before maximum scroll")
                 });
         assert_eq!(row(partial).x + row(partial).w, partial_scrollbar.x);
 
-        let scrollbar = table_vertical_scrollbar_rect(bounds, &columns, row_count, maximum, skin)
+        let scrollbar = table_vertical_scrollbar_rect(bounds, &columns, row_count, maximum, table)
             .expect("the rail must be visible at maximum horizontal scroll");
         let visible = row(maximum);
         assert_eq!(visible.x + visible.w, scrollbar.x);
@@ -268,7 +289,7 @@ mod tests {
                 row_count,
                 maximum,
                 0.0,
-                skin,
+                table,
             ),
             Some(0)
         );
@@ -280,7 +301,7 @@ mod tests {
                 row_count,
                 maximum,
                 0.0,
-                skin,
+                table,
             ),
             None
         );

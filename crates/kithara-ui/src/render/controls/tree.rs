@@ -6,6 +6,7 @@ use iced::{
     mouse::{Cursor, Interaction},
     widget::canvas::{self, Action, Frame, Geometry},
 };
+use kithara_platform::time::Instant;
 use num_traits::ToPrimitive;
 
 use super::{RetainedCanvas, RetainedCanvasState, snapped};
@@ -13,14 +14,15 @@ use crate::{
     atoms::tree::face::Tree,
     backends::replay_ordered,
     draw::Rect,
-    engine::{ScrollConfig, ScrollState},
-    interact::{ScrollAxis, iced as iced_interact},
+    engine::{Component, ItemComponent, ScrollConfig, ScrollState},
+    interact::{Hit, ScrollAxis, iced as iced_interact},
     render::{InputOwner, Published, index},
     shaping::TextContext,
 };
 
 pub(crate) fn tree_rows<'a>(
     path: &str,
+    toggle: Option<String>,
     picture: Tree,
     owner: InputOwner,
 ) -> Element<'a, Published> {
@@ -38,6 +40,7 @@ pub(crate) fn tree_rows<'a>(
             TreeProgram {
                 picture,
                 path: path.to_owned(),
+                toggle,
             },
             path,
             config,
@@ -70,6 +73,7 @@ pub(crate) fn sync_tree_scroll(path: &str, offset: f32) -> impl Operation + '_ {
 
 struct TreeProgram {
     path: String,
+    toggle: Option<String>,
     picture: Tree,
 }
 
@@ -122,6 +126,38 @@ impl canvas::Program<Published> for TreeProgram {
             self.picture.skin().tree.scrollbar_margin + self.picture.skin().tree.scrollbar_width,
         );
         let input = iced_interact::input(event)?;
+        if let Some(toggle) = &self.toggle {
+            let next =
+                ItemComponent::new(toggle.clone(), self.path.clone(), self.picture.row_count());
+            let item = match state.toggle.take() {
+                Some(item) => item.reconcile(next),
+                None => next,
+            };
+            state.toggle = Some(item);
+            let point = cursor.position_in(bounds).map(Into::into);
+            let viewport = Rect {
+                h: bounds.height,
+                w: bounds.width,
+                x: 0.0,
+                y: 0.0,
+            };
+            let under = self
+                .picture
+                .toggle_regions(viewport, state.scroll.offset())
+                .into_iter()
+                .find(|(_, rect)| Hit::new(point, *rect).over());
+            let (row, hit) = under.map_or_else(
+                || (None, crate::atoms::table::empty_bounds(viewport)),
+                |(row, hit)| (Some(row), hit),
+            );
+            if let Some(item) = &mut state.toggle {
+                let (outcome, child) =
+                    item.handle(input, &Hit::new(point, hit), row, Instant::now());
+                if let Some(action) = crate::render::engine(toggle, child, outcome) {
+                    return Some(action);
+                }
+            }
+        }
         let before = state.scroll.offset();
         let outcome = state
             .scroll
@@ -187,6 +223,7 @@ fn geometry(
 struct TreeState {
     text: RefCell<Option<TextContext>>,
     scroll: ScrollState,
+    toggle: Option<ItemComponent>,
     path: String,
 }
 
@@ -278,12 +315,13 @@ fn hovered_row(
 
 #[cfg(test)]
 mod tests {
+    use iced::mouse;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         builtin,
-        interact::{Input, PointerPhase, mouse as mouse_input},
+        interact::{Input, Outcome, PointerPhase, mouse as mouse_input},
         module::IconName,
         render::TreeRow,
     };
@@ -324,7 +362,7 @@ mod tests {
     fn paint_only_program_has_no_input_update() {
         let skin = builtin::skin();
         let paint = TreePaint {
-            picture: Tree::new(&rows(), "", skin),
+            picture: Tree::new(&rows(), None, skin),
         };
         let mut state = TreeState::default();
         state.reconcile_scroll(
@@ -333,7 +371,7 @@ mod tests {
             skin.tree.row_height,
             skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
         );
-        let event = Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left));
+        let event = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
 
         assert!(
             canvas::Program::update(
@@ -356,8 +394,9 @@ mod tests {
     fn leaf_wheel_moves_offset_without_notifying_the_document() {
         let skin = builtin::skin();
         let program = TreeProgram {
-            picture: Tree::new(&rows(), "", skin),
+            picture: Tree::new(&rows(), None, skin),
             path: "tree/browser".to_owned(),
+            toggle: None,
         };
         let mut state = TreeState::default();
         let bounds = Rectangle {
@@ -366,8 +405,8 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let event = Event::Mouse(iced::mouse::Event::WheelScrolled {
-            delta: iced::mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
+        let event = Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 },
         });
 
         let action = canvas::Program::update(
@@ -411,7 +450,7 @@ mod tests {
             state
                 .scroll
                 .handle(Input::Pointer(mouse_input(PointerPhase::Up, None)), &hit,),
-            crate::interact::Outcome::IGNORED
+            Outcome::IGNORED
         );
         assert_eq!(state.scroll.offset(), 0.0);
     }

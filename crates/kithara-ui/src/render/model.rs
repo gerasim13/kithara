@@ -73,17 +73,25 @@ pub struct TreeRow<'a> {
     pub depth: u8,
 }
 
-/// Borrowed value in one renderer-facing table cell.
+/// One letter of a badge cell, marked while what it names is active.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Badge<'a> {
+    pub label: &'a str,
+    pub active: bool,
+}
+
+/// Borrowed value in one renderer-facing table cell.
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TableValue<'a> {
     Empty,
     Number(u8),
-    Text(&'a str),
+    Text(Cow<'a, str>),
+    Badges(&'a [Badge<'a>]),
 }
 
 /// A table cell addressed by the document column id.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableCell<'a> {
     id: &'a str,
     value: TableValue<'a>,
@@ -112,16 +120,24 @@ impl<'a> TableCell<'a> {
     }
 
     #[must_use]
-    pub const fn text(id: &'a str, value: &'a str) -> Self {
+    pub const fn badges(id: &'a str, value: &'a [Badge<'a>]) -> Self {
         Self {
             id,
-            value: TableValue::Text(value),
+            value: TableValue::Badges(value),
         }
     }
 
     #[must_use]
-    pub const fn value(&self) -> TableValue<'a> {
-        self.value
+    pub fn text<T: Into<Cow<'a, str>>>(id: &'a str, value: T) -> Self {
+        Self {
+            id,
+            value: TableValue::Text(value.into()),
+        }
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> &TableValue<'a> {
+        &self.value
     }
 }
 
@@ -135,6 +151,12 @@ pub struct TableRow<'a> {
 }
 
 impl<'a> TableRow<'a> {
+    #[must_use]
+    pub fn with_cell(mut self, cell: TableCell<'a>) -> Self {
+        self.cells.push(cell);
+        self
+    }
+
     #[must_use]
     pub fn new(cells: Vec<TableCell<'a>>, selected: bool) -> Self {
         Self {

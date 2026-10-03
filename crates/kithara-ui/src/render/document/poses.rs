@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount, render,
+    Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount, StageMount,
+    render,
 };
 use crate::{
     compile::CompiledNode,
@@ -94,7 +95,7 @@ impl Host for &mut Poses {
     ) {
     }
 
-    fn stage(&mut self, _children: Vec<Self::Output>, _size: Option<SizeSpec>) {}
+    fn stage(&mut self, _children: Vec<StageMount<Self::Output>>, _size: Option<SizeSpec>) {}
 
     fn window(&mut self, _content: Self::Output, _resize_edges: bool) {}
 }

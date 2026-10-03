@@ -6,11 +6,16 @@ use masonry::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{built::BlockState, node::Node};
+use super::{
+    built::{BlockState, Natural},
+    mount::main_length,
+    node::Node,
+};
 use crate::{
     layout::Axis,
     module::MeasureAxis,
     render::document::Band,
+    size::SizeSpec,
     solve::{self, Alignment, Distribution, Input, Item, Limits, Measure, Padding, Size},
 };
 
@@ -46,7 +51,7 @@ pub(crate) struct ChildLayout {
     declared: Option<Size<solve::Length>>,
     main_minimum: Option<f32>,
     main_weight: Option<f32>,
-    natural: Size<solve::Length>,
+    natural: Natural,
 }
 
 impl ChildLayout {
@@ -56,9 +61,9 @@ impl ChildLayout {
         self
     }
 
-    pub(crate) const fn natural(natural: Size<solve::Length>, main_minimum: Option<f32>) -> Self {
+    pub(crate) fn natural(natural: &Natural, main_minimum: Option<f32>) -> Self {
         Self {
-            natural,
+            natural: natural.clone(),
             main_minimum,
             band: Band::ALWAYS,
             block: None,
@@ -67,13 +72,13 @@ impl ChildLayout {
         }
     }
 
-    pub(crate) const fn weighted(
-        natural: Size<solve::Length>,
-        declared: Size<solve::Length>,
-        main_weight: f32,
-    ) -> Self {
+    pub(crate) const fn cell(axis: Axis, size: SizeSpec, main_weight: f32) -> Self {
+        let declared = match axis {
+            Axis::Horizontal => Size::new(main_length(size.w), solve::Length::Fill),
+            Axis::Vertical => Size::new(solve::Length::Fill, main_length(size.h)),
+        };
         Self {
-            natural,
+            natural: Natural::Fixed(declared),
             band: Band::ALWAYS,
             block: None,
             declared: Some(declared),
@@ -90,6 +95,18 @@ impl ChildLayout {
 }
 
 impl Flex {
+    pub(crate) fn split(axis: Axis, children: Vec<ChildLayout>) -> Self {
+        Self::new(
+            axis,
+            solve::Length::Fill,
+            solve::Length::Fill,
+            Padding::default(),
+            0.0,
+            Alignment::Start,
+            children,
+        )
+    }
+
     pub(crate) const fn new(
         axis: Axis,
         width: solve::Length,
@@ -144,7 +161,7 @@ impl Flex {
             .iter()
             .map(|slot| {
                 let layout = &self.children[*slot];
-                let declared = layout.declared.unwrap_or(layout.natural);
+                let declared = layout.natural.now();
                 layout.main_weight.map_or_else(
                     || Item::new(declared, layout.main_minimum),
                     |weight| Item::weighted(declared, weight),

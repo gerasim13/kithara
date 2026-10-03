@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use futures::task::AtomicWaker;
 use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::EventBus;
-use kithara_net::HttpClient;
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{keep_worker_alive, spawn};
 use kithara_platform::{
@@ -24,11 +23,12 @@ use crate::RequestId;
 /// Unified downloader — sole HTTP client owner and fetch orchestrator.
 ///
 /// Created once at the application level, then shared (via [`Clone`]) across
-/// protocol configs. Owns the [`HttpClient`] and the runtime handle.
+/// protocol configs. Owns the [`kithara_net::HttpClient`] and the runtime handle.
 /// Protocols obtain a [`PeerHandle`] via [`register`](Self::register) and
 /// issue fetches through [`PeerHandle::execute`]. The download loop runs while
 /// any clone or [`PeerHandle`] is alive, and stops when the last one drops.
-#[derive(Clone, derive_more::Debug)]
+#[derive(Clone, derive_more::Debug, kithara_config::ConfigOwner)]
+#[config_owner(super::DownloaderConfig, inner.config)]
 pub struct Downloader {
     #[debug(skip)]
     inner: Arc<DownloaderInner>,
@@ -88,17 +88,11 @@ pub(super) struct DownloaderInner {
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
     pub(super) cancel: CancelToken,
-    pub(super) demand_throttle: Duration,
-    pub(super) soft_timeout: Duration,
-    pub(super) client: HttpClient,
+    pub(super) config: super::config::DownloaderConfig,
     /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
     pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) runtime: Option<tokio::runtime::Handle>,
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
-    pub(super) max_concurrent: usize,
-    pub(super) peer_cmd_channel_capacity: usize,
     /// Monotonic source of [`crate::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
@@ -123,19 +117,16 @@ impl Downloader {
 
     /// Create a new downloader from configuration.
     ///
-    /// Adopts `config.client` (a clone of the caller's [`HttpClient`])
+    /// Retains `config.client` (a clone of the caller's [`kithara_net::HttpClient`])
     /// and the shared [`AbrController`] from `config.abr_settings`.
     ///
     /// Composed/standalone seam: a `Some` parent makes this token its child; `None` makes it its
     /// own root. The loop, peer scopes, and the shared ABR controller all derive from this token.
     #[must_use]
-    pub fn new(config: super::DownloaderConfig) -> Self {
+    pub fn new(mut config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let soft_timeout = config.soft_timeout;
-        #[cfg(not(target_arch = "wasm32"))]
-        let runtime = config.runtime;
-        let cancel = CancelScope::new(config.cancel).token();
-        let mut abr_settings = config.abr_settings;
+        let cancel = CancelScope::new(config.cancel.clone()).token();
+        let mut abr_settings = std::mem::take(&mut config.abr_settings);
         abr_settings.cancel = Some(cancel.clone());
         let abr = AbrController::new(abr_settings);
         Self {
@@ -143,15 +134,9 @@ impl Downloader {
                 cancel: cancel.clone(),
             }),
             inner: Arc::new(DownloaderInner {
-                soft_timeout,
-                #[cfg(not(target_arch = "wasm32"))]
-                runtime,
+                config,
                 abr,
                 cancel,
-                client: config.client,
-                max_concurrent: config.max_concurrent,
-                peer_cmd_channel_capacity: config.peer_cmd_channel_capacity,
-                demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
                 capacity_notify: Arc::new(Notify::default()),
@@ -184,7 +169,7 @@ impl Downloader {
         self.ensure_spawned();
         let cancel = CancelScope::new(Some(self.inner.cancel.clone()));
         let cancel_token = cancel.token();
-        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.peer_cmd_channel_capacity);
+        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.config.peer_cmd_channel_capacity);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
@@ -261,6 +246,7 @@ impl Downloader {
     #[cfg(not(target_arch = "wasm32"))]
     fn spawn_run(inner: Arc<DownloaderInner>, rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let Some(handle) = inner
+            .config
             .runtime
             .clone()
             .or_else(|| tokio::runtime::Handle::try_current().ok())

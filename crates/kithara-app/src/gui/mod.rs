@@ -5,6 +5,7 @@ mod deck;
 #[cfg(not(target_arch = "wasm32"))]
 mod desktop;
 mod frontend;
+mod library;
 mod message;
 mod overlay;
 mod reads;

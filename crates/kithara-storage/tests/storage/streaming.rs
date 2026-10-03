@@ -70,18 +70,6 @@ fn assert_wait_times_out<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn assert_wait_finishes<T>(handle: &thread::JoinHandle<T>, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if handle.is_finished() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(1));
-    }
-    panic!("wait_range did not wake within expected timeout");
-}
-
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: CancelToken) {
     #[cfg(not(target_arch = "wasm32"))]
@@ -440,7 +428,6 @@ fn streaming_resource_fail_wakes_waiters() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
-        assert_wait_finishes(&wait_handle, Duration::from_secs(1));
         let wait_result = wait_handle.join().unwrap();
         assert!(matches!(wait_result, Err(StorageError::Failed(_))));
     }

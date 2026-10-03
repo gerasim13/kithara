@@ -1,25 +1,28 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{
-    Attribute, Data, DeriveInput, Fields, Ident, Result, Visibility, meta::ParseNestedMeta,
-    parenthesized,
-};
+use syn::{Attribute, Data, DeriveInput, Fields, Ident, Result, Visibility};
 
 use super::field::{self, Construction, Member};
-use crate::config::patch::{Check, validation};
+use crate::config::{
+    field::{Declaration, group},
+    patch::{Check, validation},
+};
 
 /// What `#[config(...)]` on the type itself declares.
 #[derive(Default)]
 struct Options {
     built_default: bool,
     construction: bool,
+    fields: Declaration,
     runtime_update: bool,
+    owner_access: bool,
     sdk: bool,
     debug: bool,
     values_vis: Option<Visibility>,
     /// bon's top-level options for the generated builder.
     builder: Option<TokenStream>,
     existing_builder: bool,
+    no_builder: bool,
     validate_builder: bool,
 }
 
@@ -37,36 +40,42 @@ impl Options {
                     return Err(meta.error("duplicate config option"));
                 }
                 seen.push(meta.path.clone());
-                if meta.path.is_ident("default") {
-                    options.built_default = true;
-                } else if meta.path.is_ident("construction") {
-                    options.construction = true;
-                } else if meta.path.is_ident("update") {
-                    options.runtime_update = true;
-                } else if meta.path.is_ident("validate_builder") {
-                    options.validate_builder = true;
-                } else if meta.path.is_ident("sdk") {
-                    options.sdk = true;
-                } else if meta.path.is_ident("debug") {
-                    options.debug = true;
-                } else if meta.path.is_ident("builder") {
-                    let group = group(&meta)?;
-                    if group.to_string() == "existing" {
-                        options.existing_builder = true;
-                    } else {
-                        options.builder = Some(group);
+                let name = meta
+                    .path
+                    .get_ident()
+                    .ok_or_else(|| meta.error("expected a config option name"))?
+                    .to_string();
+                match name.as_str() {
+                    "default" => options.built_default = true,
+                    "construction" => options.construction = true,
+                    "update" => options.runtime_update = true,
+                    "owner_access" => options.owner_access = true,
+                    "validate_builder" => options.validate_builder = true,
+                    "sdk" => options.sdk = true,
+                    "debug" => options.debug = true,
+                    "fields" => options.fields = Declaration::group(group(&meta)?)?,
+                    "builder" => {
+                        let group = group(&meta)?;
+                        match group.to_string().as_str() {
+                            "existing" => options.existing_builder = true,
+                            "none" => options.no_builder = true,
+                            _ => options.builder = Some(group),
+                        }
                     }
-                } else if meta.path.is_ident("patch") {
-                    // `Patch` reads this group; the update gate below reads its check.
-                    group(&meta)?;
-                } else if meta.path.is_ident("values_vis") {
-                    let visibility: syn::LitStr = meta.value()?.parse()?;
-                    options.values_vis = Some(syn::parse_str(&visibility.value())?);
-                } else {
-                    return Err(meta.error(
-                        "expected construction, default, update, validate_builder, sdk, debug, builder(...), \
-                         patch(...), or values_vis",
-                    ));
+                    "patch" => {
+                        // `Patch` reads this group; the update gate below reads its check.
+                        group(&meta)?;
+                    }
+                    "values_vis" => {
+                        let visibility: syn::LitStr = meta.value()?.parse()?;
+                        options.values_vis = Some(syn::parse_str(&visibility.value())?);
+                    }
+                    _ => {
+                        return Err(meta.error(
+                            "expected construction, default, fields(...), update, validate_builder, sdk, debug, builder(...), \
+                             owner_access, patch(...), or values_vis",
+                        ));
+                    }
                 }
                 Ok(())
             })?;
@@ -74,15 +83,16 @@ impl Options {
         if options.construction
             && (options.built_default
                 || options.runtime_update
+                || options.owner_access
                 || options.sdk
                 || options.values_vis.is_some())
         {
             return Err(syn::Error::new_spanned(
                 &item.ident,
-                "construction inputs cannot declare retained defaults, updates, SDK records, or values visibility",
+                "construction inputs cannot declare retained defaults, updates, owner access, SDK records, or values visibility",
             ));
         }
-        if options.existing_builder && options.validate_builder {
+        if (options.existing_builder || options.no_builder) && options.validate_builder {
             return Err(syn::Error::new_spanned(
                 &item.ident,
                 "validate_builder requires a generated builder",
@@ -90,17 +100,6 @@ impl Options {
         }
         Ok(options)
     }
-}
-
-/// The tokens inside one `name(...)` group of `#[config(...)]`.
-pub(super) fn group(meta: &ParseNestedMeta<'_>) -> Result<TokenStream> {
-    let content;
-    parenthesized!(content in meta.input);
-    let tokens: TokenStream = content.parse()?;
-    if tokens.is_empty() {
-        return Err(meta.error("empty config group"));
-    }
-    Ok(tokens)
 }
 
 /// The `doc` and `cfg` attributes of a field, which every item generated from
@@ -130,8 +129,14 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let members = fields
         .named
         .iter()
-        .map(|field| field::expand(field, &item, !options.construction))
+        .map(|field| field::expand(field, &item, !options.construction, &options.fields))
         .collect::<Result<Vec<_>>>()?;
+    if options.owner_access && members.iter().all(|member| member.owner_accessor.is_none()) {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "owner_access requires a get(ref) or get(copy) accessor",
+        ));
+    }
     if !options.debug
         && let Some(member) = members.iter().find(|member| !member.debugged)
     {
@@ -148,7 +153,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             "validate_builder requires patch(validate = ..., error = ...)",
         ));
     }
-    let builder = if options.existing_builder {
+    let builder = if options.existing_builder || options.no_builder {
         None
     } else {
         Some(builder(
@@ -159,6 +164,10 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         ))
     };
     let accessors = accessors(&item, &members);
+    let owner_accessors = options
+        .owner_access
+        .then(|| owner_accessors(&item, &members))
+        .flatten();
     let default = options
         .built_default
         .then(|| built_default(&item, fallible));
@@ -166,7 +175,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let snapshot = (!options.construction)
         .then(|| snapshot(&item, &options, &members))
         .transpose()?;
-    Ok(quote! { #builder #accessors #default #debug #snapshot })
+    Ok(quote! { #builder #accessors #owner_accessors #default #debug #snapshot })
 }
 
 /// A bon function builder over `new`, which bon keeps private and hidden:
@@ -238,6 +247,41 @@ fn accessors(item: &DeriveInput, members: &[Member<'_>]) -> Option<TokenStream> 
         impl #impl_generics #name #ty_generics #where_clause {
             #(#accessors)*
         }
+    })
+}
+
+fn owner_accessors(item: &DeriveInput, members: &[Member<'_>]) -> Option<TokenStream> {
+    let methods: Vec<&TokenStream> = members
+        .iter()
+        .filter_map(|member| member.owner_accessor.as_ref())
+        .collect();
+    if methods.is_empty() {
+        return None;
+    }
+    let name = &item.ident;
+    let visibility = &item.vis;
+    let trait_name = format_ident!("{name}OwnerAccess");
+    let (trait_generics, ty_generics, trait_where) = item.generics.split_for_impl();
+    let mut blanket = item.generics.clone();
+    blanket
+        .params
+        .insert(0, syn::parse_quote!(__KitharaConfigOwner));
+    blanket
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(
+            __KitharaConfigOwner: ::kithara_config::ConfigOwner<Config = #name #ty_generics>
+        ));
+    let (impl_generics, _, impl_where) = blanket.split_for_impl();
+    Some(quote! {
+        #visibility trait #trait_name #trait_generics:
+            ::kithara_config::ConfigOwner<Config = #name #ty_generics> #trait_where
+        {
+            #(#methods)*
+        }
+
+        #[automatically_derived]
+        impl #impl_generics #trait_name #ty_generics for __KitharaConfigOwner #impl_where {}
     })
 }
 
@@ -333,6 +377,18 @@ fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Re
     let runtime = if options.runtime_update {
         let update = format_ident!("{name}Update");
         let apply = apply_update(item, visibility, &update, &update_lowers)?;
+        let (error, apply_trait) =
+            if let Some(Check { error, .. }) = validation(&item.attrs, item.ident.span())? {
+                (quote!(#error), quote!(Self::apply_update(self, update)))
+            } else {
+                (
+                    quote!(::core::convert::Infallible),
+                    quote! {
+                        Self::apply_update(self, update);
+                        ::core::result::Result::Ok(())
+                    },
+                )
+            };
         quote! {
             #(#update_declarations)*
             #[derive(::core::default::Default)]
@@ -343,6 +399,18 @@ fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Re
             #[automatically_derived]
             impl #impl_generics #name #ty_generics #where_clause {
                 #apply
+            }
+            #[automatically_derived]
+            impl #impl_generics ::kithara_config::UpdatableConfig for #name #ty_generics #where_clause {
+                type Update = #update;
+                type Error = #error;
+
+                fn apply_update(
+                    &mut self,
+                    update: Self::Update,
+                ) -> ::core::result::Result<(), Self::Error> {
+                    #apply_trait
+                }
             }
         }
     } else {
@@ -434,6 +502,8 @@ mod tests {
         for options in [
             quote!(default, default),
             quote!(debug, debug),
+            quote!(fields(value), fields(nested)),
+            quote!(fields(get(ref)), fields(get(copy))),
             quote!(builder(on(String, into)), builder(on(u32, into))),
             quote!(values_vis = "pub", values_vis = "pub(crate)"),
         ] {
@@ -481,18 +551,91 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    fn a_document_config_can_keep_serde_construction_without_a_builder() {
+        let expanded = expansion(quote! {
+            #[config(builder(none))]
+            pub struct Settings {
+                #[config(value)]
+                threshold: u32,
+            }
+        });
+
+        assert!(!expanded.contains("bon :: bon"));
+        assert!(expanded.contains("impl :: kithara_config :: Config for Settings"));
+        assert!(expanded.contains("Clone :: clone (& self . threshold)"));
+    }
+
+    #[kithara::test(native, flash(false))]
     fn accessors_return_a_reference_or_a_copy() {
         let expanded = expansion(quote! {
             pub(crate) struct Settings {
-                #[config(value, field(get))]
+                #[config(value, get(ref))]
                 name: String,
-                #[config(value, field(get, copy))]
+                #[config(value, get(copy))]
                 ratio: f64,
             }
         });
 
         assert!(expanded.contains("pub (crate) fn name (& self) -> & String { & self . name }"));
         assert!(expanded.contains("pub (crate) fn ratio (& self) -> f64 { self . ratio }"));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn field_overrides_disable_inherited_getters_and_updates() {
+        let expanded = expansion(quote! {
+            #[config(update, owner_access, fields(value, get(copy), update))]
+            struct Settings {
+                threshold: u32,
+                #[config(skip = "owned resource", get(skip), update(false))]
+                resource: String,
+            }
+        });
+        assert!(expanded.contains("fn threshold (& self) -> u32"));
+        assert!(expanded.contains("SettingsThresholdUpdate"));
+        assert!(!expanded.contains("fn resource"));
+        assert!(!expanded.contains("SettingsResourceUpdate"));
+        assert_eq!(
+            refusal(quote! {
+                #[config(owner_access, fields(value, get(skip)))]
+                struct Settings { threshold: u32 }
+            }),
+            "owner_access requires a get(ref) or get(copy) accessor"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn shared_field_grammar_rejects_conflicts_at_both_scopes() {
+        for options in [
+            quote!(value, nested),
+            quote!(value, get(ref), get(copy)),
+            quote!(value, get(clone)),
+            quote!(value, update, update(false)),
+            quote!(value, builder(default), builder(required)),
+            quote!(value, patch(skip), patch(nested)),
+            quote!(value, debug(skip), debug(skip)),
+            quote!(value, skip = ""),
+        ] {
+            for input in [
+                quote!(
+                    #[config(debug, fields(#options))]
+                    struct Settings {
+                        field: u32,
+                    }
+                ),
+                quote!(
+                    #[config(debug)]
+                    struct Settings {
+                        #[config(#options)]
+                        field: u32,
+                    }
+                ),
+            ] {
+                assert!(
+                    expand(input).is_err(),
+                    "conflicting options accepted: {options}"
+                );
+            }
+        }
     }
 
     #[kithara::test(native, flash(false))]
@@ -537,7 +680,7 @@ mod tests {
             struct Input<T> {
                 #[config(skip = "injected resource", builder(start_fn))]
                 resource: T,
-                #[config(value, builder(default), field(get, copy))]
+                #[config(value, builder(default), get(copy))]
                 capacity: usize,
             }
         });
@@ -601,6 +744,7 @@ mod tests {
             quote!(#[config(value, builder())] field: u32),
             quote!(#[config(value, builder(skip, default))] field: u32),
             quote!(#[config(value, field)] field: u32),
+            quote!(#[config(value, field(get))] field: u32),
             quote!(#[config(value, field(set))] field: u32),
             quote!(#[config(value, field(copy))] field: u32),
             quote!(#[config(value, debug(show))] field: u32),

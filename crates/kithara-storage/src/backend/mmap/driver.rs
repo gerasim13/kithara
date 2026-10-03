@@ -3,8 +3,8 @@
 use std::{fs, ops::Range, path::PathBuf};
 
 use arc_swap::ArcSwapOption;
-use bon::Builder;
 use crossbeam_queue::SegQueue;
+use kithara_config::Config;
 use kithara_platform::sync::{Arc, Mutex, Retired};
 use mmap_io::MemoryMappedFile;
 use rangemap::RangeSet;
@@ -19,28 +19,28 @@ use crate::{
 };
 
 /// Options for opening a [`MmapResource`].
-#[derive(Debug, Clone, Builder)]
-#[builder(start_fn = for_path)]
+#[derive(Debug, Clone, Config)]
+#[config(builder(start_fn = for_path), fields(value))]
 #[non_exhaustive]
 pub struct MmapOptions {
     /// Path to the backing file.
-    #[builder(start_fn)]
+    #[config(builder(start_fn))]
     pub path: PathBuf,
     /// Open mode controlling read/write behavior for existing files.
-    #[builder(default)]
+    #[config(builder(default))]
     pub mode: OpenMode,
     /// Multiplier applied to the current mapping length when a write runs
     /// past its end. The mapping grows to the larger of the write's end and
     /// `len * growth_factor`, so a factor of 1 grows to exactly what each
     /// write needs and re-maps on every one. The default doubles, which keeps
     /// the number of re-maps logarithmic in the final size.
-    #[builder(default = 2)]
+    #[config(builder(default = 2))]
     pub growth_factor: u64,
     /// Size a new file is created at. Ignored for existing files. The default
     /// is one page-aligned block: enough that a small resource is written
     /// without a single re-map, small enough that a resource that turns out to
     /// be empty costs one sparse block.
-    #[builder(default = 64 * 1024)]
+    #[config(builder(default = 64 * 1024))]
     pub initial_len: u64,
 }
 
@@ -85,21 +85,10 @@ pub struct MmapDriver {
     pub(super) retired: Mutex<Retired<MemoryMappedFile>>,
     #[debug(skip)]
     pub(super) mmap: Mutex<MmapState>,
-    pub(super) mode: OpenMode,
-    pub(super) path: PathBuf,
+    pub(super) config: MmapOptions,
     /// Lock-free queue for fast-path range notifications.
     #[debug(skip)]
     pub(super) ready_ranges: SegQueue<Range<u64>>,
-    /// Multiplier a write past the mapping's end grows it by, from
-    /// `MmapOptions::growth_factor`.
-    #[debug(skip)]
-    pub(super) growth_factor: u64,
-    /// Size a fresh mapping starts at, from `MmapOptions::initial_len`. A
-    /// re-download reuses it so the rewrite generation is reserved exactly
-    /// like the first one instead of restarting from the default and
-    /// re-mapping its way back up.
-    #[debug(skip)]
-    pub(super) initial_len: u64,
 }
 
 impl Driver for MmapDriver {
@@ -153,13 +142,10 @@ impl Driver for MmapDriver {
             };
 
         let driver = Self {
-            mode,
+            config: opts,
             committed,
             retired: Mutex::default(),
             mmap: Mutex::new(mmap_state),
-            path: opts.path,
-            initial_len: opts.initial_len,
-            growth_factor: opts.growth_factor,
             ready_ranges: SegQueue::new(),
         };
 
@@ -384,7 +370,7 @@ mod tests {
         driver.write_at(0, b"data", false).unwrap();
         driver.commit(Some(4)).unwrap();
 
-        driver.path = dir.path().join("missing").join("resource.dat");
+        driver.config.path = dir.path().join("missing").join("resource.dat");
         assert!(driver.write_at(0, b"lost", true).is_err());
 
         let mut buf = [0; 4];

@@ -121,6 +121,7 @@ fn target(
         &root,
         CacheTrust::read(var)?,
         name,
+        lane.freshness,
     )))
 }
 
@@ -142,8 +143,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let (dir, cargo_dir, build) = match target(&args.lane, lane, var)? {
         Target::Slot(pool) => {
-            let build =
-                LaneBuild::claim(&ctx.root, &pool, ext.ci.lane_unit_window(), lane.freshness)?;
+            let build = LaneBuild::claim(&ctx.root, &pool, ext.ci.lane_unit_window())?;
             let dir = build.dir().to_path_buf();
             let cargo_dir = hand_over(&ctx.root, &dir, var)?;
             (Some(dir), Some(cargo_dir), Some(build))
@@ -482,7 +482,7 @@ label = "run"
         )
         .expect("lane runs");
 
-        let slot = lanes.path().join("review-lane-trivial-0");
+        let slot = lanes.path().join("review-ordered-lane-trivial-0");
         assert!(slot.join(consts::UNITS_FILE).exists());
         assert!(!slot.join(consts::SOURCES_FILE).exists());
     }

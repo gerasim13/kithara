@@ -473,6 +473,7 @@ re_mp4 = "0.5.0"
 realfft = "3.5"
 regex = "1"
 reqwest = { version = "0.13.4", default-features = false }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 ringbuf = "0.5.0"
 rkyv = "0.8.18"
 ron = "0.12"

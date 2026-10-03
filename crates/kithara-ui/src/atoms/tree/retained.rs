@@ -18,15 +18,18 @@ pub(crate) struct Drawn {
 
 impl Tree {
     pub(crate) fn commands(&self, text: &mut TextContext, bounds: Rect, drawn: &Drawn) -> DrawList {
+        let search = self.search_height();
         let panel = Rect {
-            h: (bounds.h - self.skin().tree.search_height).max(0.0),
+            h: (bounds.h - search).max(0.0),
             w: bounds.w,
             x: bounds.x,
-            y: bounds.y + self.skin().tree.search_height,
+            y: bounds.y + search,
         };
         let mut list = DrawListBuilder::default();
         list.fill_rect(panel, self.skin().rgba(self.skin().tree.panel_background));
-        self.paint_search(&mut list, text, bounds, &drawn.search);
+        if let Some(query) = self.query() {
+            self.paint_search(&mut list, text, bounds, query, &drawn.search);
+        }
         self.paint_rows(
             &mut list,
             text,
@@ -68,6 +71,7 @@ impl Tree {
         list: &mut DrawListBuilder,
         text: &mut TextContext,
         bounds: Rect,
+        query: &str,
         snapshot: &TextInputSnapshot,
     ) {
         let search = Rect {
@@ -85,19 +89,28 @@ impl Tree {
         list.fill_rect(icon, self.skin().rgba(self.skin().tree.search_background));
         list.fill_rect(input, self.skin().rgba(self.skin().tree.search_background));
         paint_search_icon(list, text, icon, self.skin());
-        paint_query(list, text, input, self.query(), snapshot, self.skin());
+        paint_query(list, text, input, query, snapshot, self.skin());
     }
 
     pub(crate) fn rows_bounds(&self, bounds: Rect) -> Rect {
+        let search = self.search_height();
         Rect {
             h: (bounds.h
-                - self.skin().tree.search_height
+                - search
                 - self.skin().tree.panel_padding_top
                 - self.skin().tree.panel_padding_bottom)
                 .max(0.0),
             w: bounds.w,
             x: bounds.x,
-            y: bounds.y + self.skin().tree.search_height + self.skin().tree.panel_padding_top,
+            y: bounds.y + search + self.skin().tree.panel_padding_top,
+        }
+    }
+
+    fn search_height(&self) -> f32 {
+        if self.query().is_some() {
+            self.skin().tree.search_height
+        } else {
+            0.0
         }
     }
 

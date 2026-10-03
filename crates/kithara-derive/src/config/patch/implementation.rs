@@ -194,9 +194,10 @@ impl DocumentField<'_> {
 
 fn derive(input: &DeriveInput) -> Result<TokenStream2> {
     let refusal = refusal(input)?;
+    let defaults = patch_attributes(&input.attrs, true)?;
     let mut document: Vec<DocumentField<'_>> = Vec::new();
     for field in named_fields(input)? {
-        if let Classified::Key(key) = classify(field)? {
+        if let Classified::Key(key) = classify(field, &defaults)? {
             document.push(*key);
         }
     }
@@ -481,13 +482,14 @@ pub(crate) fn validation(
 /// `#[patch(...)]` or as the `patch(...)` group of its `#[config(...)]`, which
 /// is where a configuration type keeps every facet. Only one spelling per item:
 /// two would be two lists of the same options that could disagree.
-fn patch_attributes(attributes: &[Attribute]) -> Result<Vec<Attribute>> {
+fn patch_attributes(attributes: &[Attribute], defaults: bool) -> Result<Vec<Attribute>> {
     let mut native: Vec<Attribute> = attributes
         .iter()
-        .filter(|attribute| attribute.path().is_ident("patch"))
+        .filter(|attribute| !defaults && attribute.path().is_ident("patch"))
         .cloned()
         .collect();
     let mut grouped: Vec<Attribute> = Vec::new();
+    let mut fields_seen = false;
     for attribute in attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("config"))
@@ -495,7 +497,25 @@ fn patch_attributes(attributes: &[Attribute]) -> Result<Vec<Attribute>> {
         let Meta::List(list) = &attribute.meta else {
             continue;
         };
-        for option in list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
+        let mut options = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+        if defaults {
+            let mut fields = Punctuated::new();
+            for option in options {
+                if !option.path().is_ident("fields") {
+                    continue;
+                }
+                if fields_seen {
+                    return Err(Error::new_spanned(option, "duplicate config option"));
+                }
+                fields_seen = true;
+                let Meta::List(group) = option else {
+                    return Err(Error::new_spanned(option, "expected fields(...)"));
+                };
+                fields = group.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+            }
+            options = fields;
+        }
+        for option in options {
             if !option.path().is_ident("patch") {
                 continue;
             }
@@ -529,7 +549,7 @@ fn refusal_from_attributes(
     let mut with: Option<Path> = None;
     let mut error: Option<Type> = None;
 
-    for attribute in &patch_attributes(attributes)? {
+    for attribute in &patch_attributes(attributes, false)? {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("fallible") {
                 fallible = true;
@@ -563,7 +583,7 @@ fn refusal_from_attributes(
     }
 }
 
-fn classify(field: &Field) -> Result<Classified<'_>> {
+fn classify<'a>(field: &'a Field, defaults: &[Attribute]) -> Result<Classified<'a>> {
     let mut skip = false;
     let mut deserialize = None;
     let mut nested = false;
@@ -572,7 +592,11 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
     let mut from: Option<Path> = None;
     let mut added: Vec<TokenStream2> = Vec::new();
 
-    for attribute in &patch_attributes(&field.attrs)? {
+    let mut attributes = patch_attributes(&field.attrs, false)?;
+    if attributes.is_empty() {
+        attributes.extend_from_slice(defaults);
+    }
+    for attribute in &attributes {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("skip") {
                 skip = true;

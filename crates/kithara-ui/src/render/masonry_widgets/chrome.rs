@@ -121,7 +121,7 @@ where
         children.push(self.module_chevron(module.collapsed()));
         let layouts = children
             .iter()
-            .map(|child| ChildLayout::natural(child.declared(), None))
+            .map(|child| ChildLayout::natural(child.natural(), None))
             .collect();
         let mut header = MasonryNode::chrome(
             NodeLayout::Flex(Flex::new(

@@ -128,9 +128,8 @@ aes = { workspace = true }
 # Async traits
 anyhow = { workspace = true }
 base64 = { workspace = true }
-
-# Misc
 bon = { workspace = true }
+# Misc
 
 # Channels/buffers
 bytes = { workspace = true }

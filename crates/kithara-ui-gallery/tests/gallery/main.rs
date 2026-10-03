@@ -1745,6 +1745,7 @@ mod tests {
                                 id,
                                 ..
                             }),
+                        ..
                     },
                 ..
             } => queries.push(ui.resolve(*id)),

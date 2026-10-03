@@ -341,20 +341,18 @@ impl RawHttp {
 /// `options.retry_policy` — retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
-#[derive(Clone, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-#[derive(derive_more::Debug)]
+#[derive(Clone)]
 pub struct HttpClient {
-    #[debug(skip)]
     net: Arc<RetryNet<RawHttp>>,
-    #[debug(skip)]
-    cancel: CancelToken,
-    #[debug(skip)]
-    inner: Client,
-    #[debug(skip)]
     connection_metrics: ConnectionMetrics,
-    #[field(get)]
-    options: NetOptions,
+}
+
+impl std::fmt::Debug for HttpClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpClient")
+            .field("options", self.options())
+            .finish()
+    }
 }
 
 impl HttpClient {
@@ -378,22 +376,16 @@ impl HttpClient {
         let inner = build_client(&options, &connection_metrics)
             .expect("BUG: HTTP client builder with our defaults cannot fail");
         let raw = RawHttp {
-            inner: inner.clone(),
-            options: options.clone(),
+            inner,
+            options,
             cancel: cancel.clone(),
         };
-        let net = Arc::new(RetryNet::new(
-            raw,
-            options.retry_policy,
-            cancel.clone(),
-            options.observer.clone(),
-        ));
+        let retry_policy = raw.options.retry_policy;
+        let observer = raw.options.observer.clone();
+        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel, observer));
         Self {
             net,
-            cancel,
-            inner,
             connection_metrics,
-            options,
         }
     }
 
@@ -404,28 +396,33 @@ impl HttpClient {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let options = self.options.with_observer(observer);
+        let current = self.net.inner();
+        let options = current.options.with_observer(observer);
         let raw = RawHttp {
-            inner: self.inner.clone(),
-            options: options.clone(),
-            cancel: self.cancel.clone(),
+            inner: current.inner.clone(),
+            options,
+            cancel: current.cancel.clone(),
         };
+        let retry_policy = raw.options.retry_policy;
+        let observer = raw.options.observer.clone();
         let net = Arc::new(RetryNet::new(
             raw,
-            options.retry_policy,
-            self.cancel.clone(),
-            options.observer.clone(),
+            retry_policy,
+            current.cancel.clone(),
+            observer,
         ));
         Self {
             net,
-            options,
-            cancel: self.cancel.clone(),
-            inner: self.inner.clone(),
             connection_metrics: self.connection_metrics.clone(),
         }
     }
 
     delegate::delegate! {
+        to self.net.inner() {
+            #[must_use]
+            #[field(&options)]
+            pub fn options(&self) -> &NetOptions;
+        }
         to self.net {
             /// # Errors
             ///

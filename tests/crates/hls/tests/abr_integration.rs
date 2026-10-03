@@ -5,6 +5,7 @@ use kithara::{
     hls::{ParsedMaster, parse_master_playlist},
     platform::time::Duration,
 };
+use kithara_config::ConfigOwner;
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
 fn variants_from_master(master: &ParsedMaster) -> Vec<VariantInfo> {
@@ -80,7 +81,7 @@ fn test_abr_controller_no_selector(
     // ABR can pick a sensible variant on the first tick instead of starting
     // at LQ. `is_some()` keeps the assertion future-proof against the exact
     // seed value.
-    assert!(controller.settings().initial_throughput_bps.is_some());
+    assert!(controller.config().initial_throughput_bps.is_some());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 

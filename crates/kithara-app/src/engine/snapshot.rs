@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use kithara::{
     abr::AbrMode, effects::GainDb, platform::sync::Arc, prelude::EngineLoadSnapshot,
     queue::TrackEntry,
@@ -19,6 +21,7 @@ pub(crate) struct EngineSnapshot {
     pub(crate) eq_mode: EqMode,
     pub(crate) mix: MixState,
     pub(crate) decks: Vec<DeckSnapshot>,
+    pub(crate) track_bpms: Arc<BTreeMap<String, f64>>,
     pub(crate) applied_seq: u64,
 }
 
@@ -29,6 +32,7 @@ impl EngineSnapshot {
             eq_mode: EqMode::default(),
             mix: MixState::new(0),
             decks: Vec::new(),
+            track_bpms: Arc::new(BTreeMap::new()),
             applied_seq: 0,
         }
     }

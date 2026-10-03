@@ -1,7 +1,7 @@
 use iced::{
     Background, Element, Length, Padding,
     alignment::{Horizontal, Vertical},
-    widget::{Space, column, container, container::Style as ContainerStyle, row},
+    widget::{Column, Space, container, container::Style as ContainerStyle, row},
 };
 
 use crate::{
@@ -14,7 +14,8 @@ use crate::{
 pub(crate) struct Tree<'path, 'query, 'value, 'data, 'skin> {
     skin: &'skin Skin,
     path: &'path str,
-    query: &'query str,
+    query: Option<&'query str>,
+    toggle: bool,
     owner: InputOwner,
     value: Option<&'value ReadValue<'data>>,
 }
@@ -25,8 +26,8 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
             return Space::new().into();
         };
         let picture = TreeFace::new(rows, self.query, self.skin);
-        let query = picture.query().to_owned();
-        let tree = tree_rows(self.path, picture, self.owner);
+        let toggle = self.toggle.then(|| format!("{}/toggle", self.path));
+        let tree = tree_rows(self.path, toggle, picture, self.owner);
         let panel = container(tree)
             .padding(Padding {
                 top: self.skin.tree.panel_padding_top,
@@ -41,7 +42,12 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
                 move |_| ContainerStyle::default().background(Background::Color(background))
             });
 
-        column![search_bar(self.path, &query, self.skin, self.owner), panel]
+        let search = self
+            .query
+            .map(|query| search_bar(self.path, query, self.skin, self.owner));
+        Column::new()
+            .push(search)
+            .push(panel)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()

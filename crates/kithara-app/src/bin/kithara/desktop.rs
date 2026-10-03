@@ -126,7 +126,7 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
             .maybe_output_block_frames(config.output_block_frames)
             .build(),
     )?;
-    gui::run(config, args.host, host)?;
+    gui::run(config, args.host, host, runtime.handle())?;
 
     Ok(())
 }

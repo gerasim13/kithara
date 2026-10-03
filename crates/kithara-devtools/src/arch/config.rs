@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, fs, path::Path};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, kithara_config::Config)]
+#[config(builder(none), fields(nested))]
 pub(crate) struct ArchConfig {
     pub(crate) canonical_types: CanonicalTypesConfig,
     pub(crate) direction: DirectionConfig,
@@ -22,8 +23,9 @@ impl ArchConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DirectionConfig {
     #[serde(default)]
     pub(crate) exemptions: BTreeMap<String, String>,
@@ -31,31 +33,35 @@ pub(crate) struct DirectionConfig {
     pub(crate) layers: Vec<Layer>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct Layer {
     pub(crate) name: String,
     pub(crate) crates: Vec<String>,
     pub(crate) index: u32,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct CanonicalTypesConfig {
     #[serde(default, rename = "canonical")]
     pub(crate) entries: Vec<CanonicalType>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct CanonicalType {
     pub(crate) kind: String,
     pub(crate) name: String,
     pub(crate) owner: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) arc_clone_hotspots: ArcCloneHotspotsThreshold,
@@ -125,8 +131,9 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) trait_impl_count: TraitImplCountThreshold,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct MultiConstructorThreshold {
     /// Names that are always considered the canonical constructor.
     #[serde(default = "default_canonical_ctor_names")]
@@ -151,8 +158,9 @@ impl Default for MultiConstructorThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FieldPassthroughThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
@@ -185,8 +193,9 @@ impl Default for FieldPassthroughThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ArgsWrapperStructThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
@@ -214,8 +223,9 @@ const fn default_args_wrapper_min_call_sites() -> usize {
     2
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FieldAlwaysConstantThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
@@ -232,8 +242,9 @@ impl Default for FieldAlwaysConstantThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FieldAlwaysEqualsOtherFieldThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
@@ -254,8 +265,9 @@ const fn default_field_always_min_call_sites() -> usize {
     3
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct RedundantReexportThreshold {
     /// Sub-checks to run: `explicit_duplicate` (R1) and `associated_type_leak` (R2).
     #[serde(default = "default_redundant_reexport_detect")]
@@ -281,8 +293,9 @@ fn default_redundant_reexport_detect() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct CfgDensityThreshold {
     #[serde(default)]
     pub(crate) exclude_globs: Vec<String>,
@@ -303,8 +316,9 @@ impl Default for CfgDensityThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FileSizeThreshold {
     #[serde(default)]
     pub(crate) exclude_globs: Vec<String>,
@@ -322,8 +336,9 @@ impl Default for FileSizeThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FileDensityThreshold {
     pub(crate) deny_fns_per_type: f64,
     pub(crate) warn_fns_per_type: f64,
@@ -340,8 +355,9 @@ impl Default for FileDensityThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct SharedStateThreshold {
     #[serde(default = "default_shared_state_patterns")]
     pub(crate) patterns: Vec<String>,
@@ -359,8 +375,9 @@ impl Default for SharedStateThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ArcCloneHotspotsThreshold {
     pub(crate) warn: usize,
 }
@@ -371,8 +388,9 @@ impl Default for ArcCloneHotspotsThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct GodModuleThreshold {
     /// Per-crate override map: crate-name → custom warn threshold. Lets
     /// app/test/macro crates relax the default without baselining each file.
@@ -392,8 +410,9 @@ impl Default for GodModuleThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct GodStructThreshold {
     /// Trait names whose impl methods are standard conformance (idiomatic
     /// plumbing), not accreted responsibility — `Drop`, `Default`, `From`,
@@ -490,8 +509,9 @@ fn default_std_traits() -> Vec<String> {
     .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct GodTraitThreshold {
     /// Number of method (`fn`) items in a single trait definition.
     pub(crate) warn: usize,
@@ -503,8 +523,9 @@ impl Default for GodTraitThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct PubStructOpenFieldsThreshold {
     /// `pub` structs with at least this many `pub` fields are flagged. Signals
     /// missing invariants / direct mutation. Candidate for a builder or
@@ -518,8 +539,9 @@ impl Default for PubStructOpenFieldsThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FnArgCountThreshold {
     /// Functions with this many arguments (excluding `self`) trigger a warn.
     /// Tighter than clippy's `too_many_arguments` default (7) — used as a
@@ -533,8 +555,9 @@ impl Default for FnArgCountThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ModuleFanOutThreshold {
     /// Per-crate override map: crate-name → custom warn threshold.
     #[serde(default)]
@@ -554,8 +577,9 @@ impl Default for ModuleFanOutThreshold {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct NoLibStaticsThreshold {
     /// Crate names exempt from the rule. App / FFI / wasm / xtask / test
     /// support crates legitimately own singletons; lib crates do not.
@@ -564,8 +588,9 @@ pub(crate) struct NoLibStaticsThreshold {
     pub(crate) exempt_crates: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct PlatformLayerHygieneThreshold {
     /// Source root whose files this check governs, workspace-relative and
     /// trailing-slashed.
@@ -628,8 +653,9 @@ impl Default for PlatformLayerHygieneThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct CancelRootSitesThreshold {
     /// Relative file paths where minting a fresh cancel root
     /// (`CancelToken::root` / `CancelToken::never`) is sanctioned: consumer-crate
@@ -667,8 +693,9 @@ impl Default for CancelRootSitesThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct SmoothingPrimitiveSitesThreshold {
     #[serde(default)]
     pub(crate) allowed_files: Vec<String>,
@@ -696,8 +723,9 @@ impl Default for SmoothingPrimitiveSitesThreshold {
 
 /// Files allowed to name firewheel's DSP helpers directly, and the helper
 /// modules the facade owns.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FirewheelDspFacadeThreshold {
     #[serde(default)]
     pub(crate) allowed_files: Vec<String>,
@@ -725,8 +753,9 @@ impl Default for FirewheelDspFacadeThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct TokioDepQuarantineThreshold {
     /// Crates whose *production* tokio coupling is not yet migrated to the
     /// platform re-exports (W6 quarantine debt). Entries here are tracked work
@@ -762,8 +791,9 @@ impl Default for TokioDepQuarantineThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DeadExportsThreshold {
     /// Symbol names that are never flagged (e.g. FFI entry points the scanner
     /// cannot see called from non-Rust callers).
@@ -819,8 +849,9 @@ fn default_dead_exports_kinds() -> Vec<String> {
     .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct GenericParamCountThreshold {
     /// Items with this many generic params (type+lifetime+const) trigger a warn.
     pub(crate) warn_params: usize,
@@ -837,8 +868,9 @@ impl Default for GenericParamCountThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct TraitImplCountThreshold {
     /// Number of `impl Trait for X` blocks targeting one local type
     /// (per file, since the AST view is per-file). High count → god-type
@@ -863,8 +895,9 @@ fn default_shared_state_patterns() -> Vec<String> {
     ]
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct FlatDirectoryThreshold {
     #[serde(default)]
     pub(crate) ignore_globs: Vec<String>,
@@ -882,8 +915,9 @@ impl Default for FlatDirectoryThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct MaxNestingThreshold {
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
@@ -899,8 +933,9 @@ impl Default for MaxNestingThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ReadmePresenceThreshold {
     #[serde(default)]
     pub(crate) exempt: Vec<String>,
@@ -924,8 +959,9 @@ pub(crate) enum AccessorSeverity {
     Deny,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct SingleImplSizeThreshold {
     /// Hard threshold: deny at this many lines.
     pub(crate) deny_lines: usize,
@@ -943,8 +979,9 @@ impl Default for SingleImplSizeThreshold {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct SingleWordFilenamesThreshold {
     /// `warn` (track via baseline) or `deny` (fail on new offenders) or `off`.
     pub(crate) severity: AccessorSeverity,
@@ -978,8 +1015,9 @@ fn default_single_word_exempt_filenames() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct RedundantAccessorsThreshold {
     pub(crate) p1_severity: AccessorSeverity,
     pub(crate) p2_severity: AccessorSeverity,
@@ -1098,8 +1136,9 @@ fn default_writer_methods() -> Vec<String> {
     .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct MixedEntitiesThreshold {
     /// Files with this many sizable types → deny.
     pub(crate) deny: usize,
@@ -1125,23 +1164,26 @@ impl Default for MixedEntitiesThreshold {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ModuleLayersConfig {
     #[serde(default, rename = "crate")]
     pub(crate) crates: Vec<CrateLayers>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct CrateLayers {
     pub(crate) name: String,
     #[serde(default, rename = "layer")]
     pub(crate) layers: Vec<ModuleLayer>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ModuleLayer {
     pub(crate) name: String,
     pub(crate) paths: Vec<String>,

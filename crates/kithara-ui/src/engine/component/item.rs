@@ -6,7 +6,7 @@ use crate::{
     interact::{CursorShape, Hit, Input, Outcome, PointerPhase, recognizers::ItemDrag},
 };
 
-pub(in crate::engine) struct ItemComponent {
+pub(crate) struct ItemComponent {
     drag: ItemDrag,
     index: Option<usize>,
     control_path: String,
@@ -15,7 +15,7 @@ pub(in crate::engine) struct ItemComponent {
 }
 
 impl ItemComponent {
-    pub(super) fn new(target: String, path: String, count: usize) -> Self {
+    pub(crate) fn new(target: String, path: String, count: usize) -> Self {
         Self {
             count,
             control_path: path,
@@ -33,7 +33,7 @@ impl ItemComponent {
         }
     }
 
-    pub(super) fn reconcile(mut self, next: Self) -> Self {
+    pub(crate) fn reconcile(mut self, next: Self) -> Self {
         if self.index.is_some_and(|index| index >= next.count) {
             self.drag = ItemDrag::default();
             self.index = None;

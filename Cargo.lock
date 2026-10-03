@@ -1334,7 +1334,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b7f4aaa047ba3c3630b080bb9860894732ff23e2aee290a418909aa6d5df38f"
 dependencies = [
  "objc2 0.5.2",
- "objc2-app-kit",
+ "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
 ]
 
@@ -2279,6 +2279,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.0",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.4",
 ]
 
@@ -4392,13 +4394,13 @@ name = "kithara-abr"
 version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
- "bon",
  "dashmap",
  "delegate",
  "derive_more",
  "fieldwork",
  "humantime-serde",
  "kithara-abr",
+ "kithara-config",
  "kithara-derive",
  "kithara-events",
  "kithara-platform",
@@ -4431,6 +4433,7 @@ dependencies = [
  "kithara-beat",
  "kithara-blob",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-dsp",
@@ -4504,6 +4507,7 @@ dependencies = [
  "kithara-app",
  "kithara-app-document",
  "kithara-assets",
+ "kithara-config",
  "kithara-derive",
  "kithara-encode",
  "kithara-events",
@@ -4515,6 +4519,7 @@ dependencies = [
  "num-traits",
  "obfstr",
  "rand 0.10.2",
+ "rfd",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -4584,6 +4589,7 @@ dependencies = [
  "humantime-serde",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-drm",
  "kithara-events",
@@ -4615,7 +4621,6 @@ dependencies = [
  "arc-swap",
  "assert_no_alloc",
  "axum",
- "bon",
  "bytes",
  "cbc",
  "crossbeam-queue",
@@ -4628,6 +4633,7 @@ dependencies = [
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-events",
@@ -4682,6 +4688,7 @@ dependencies = [
  "criterion",
  "hex",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-dsp",
  "kithara-test-dylib",
@@ -4718,12 +4725,12 @@ version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
  "axum",
- "bon",
  "bytes",
  "derive-where",
  "hls_m3u8",
  "humantime-serde",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-encode",
@@ -4763,7 +4770,6 @@ dependencies = [
 name = "kithara-bufpool"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "crossbeam-queue",
  "delegate",
  "derive-where",
@@ -4820,7 +4826,6 @@ version = "0.0.1-alpha5"
 name = "kithara-decode"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "delegate",
@@ -4832,8 +4837,8 @@ dependencies = [
  "kithara-android",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
- "kithara-derive",
  "kithara-dsp",
  "kithara-mp4",
  "kithara-mpa",
@@ -4909,6 +4914,7 @@ dependencies = [
  "fieldwork",
  "fs4",
  "glob",
+ "kithara-config",
  "proc-macro2",
  "quote",
  "rayon",
@@ -4936,6 +4942,7 @@ dependencies = [
  "humantime-serde",
  "kithara-abr",
  "kithara-android",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -5011,6 +5018,7 @@ dependencies = [
  "fieldwork",
  "firewheel",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-dsp",
  "kithara-effects",
@@ -5046,6 +5054,7 @@ dependencies = [
  "fdk-aac-sys",
  "ffmpeg-next",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-decode",
  "kithara-resampler",
  "kithara-stream",
@@ -5094,6 +5103,7 @@ dependencies = [
  "kithara-android",
  "kithara-apple",
  "kithara-audio",
+ "kithara-config",
  "kithara-derive",
  "kithara-events",
  "kithara-file",
@@ -5160,7 +5170,6 @@ dependencies = [
 name = "kithara-file"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "delegate",
  "derive-where",
  "derive_more",
@@ -5170,6 +5179,7 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -5324,6 +5334,7 @@ dependencies = [
  "kithara-android",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-download",
  "kithara-drm",
@@ -5354,6 +5365,7 @@ dependencies = [
  "bytes",
  "gloo-timers",
  "kithara",
+ "kithara-config",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
@@ -5507,7 +5519,6 @@ dependencies = [
  "async-trait",
  "axum",
  "bitflags 2.13.0",
- "bon",
  "bytes",
  "dashmap",
  "delegate",
@@ -5519,6 +5530,7 @@ dependencies = [
  "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-net",
  "kithara-platform",
@@ -5726,9 +5738,9 @@ dependencies = [
 name = "kithara-record"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-encode",
  "kithara-output",
  "kithara-platform",
@@ -5747,7 +5759,6 @@ name = "kithara-resampler"
 version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
- "bon",
  "criterion",
  "delegate",
  "derive-where",
@@ -5755,7 +5766,7 @@ dependencies = [
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
- "kithara-derive",
+ "kithara-config",
  "kithara-dsp",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5802,7 +5813,6 @@ name = "kithara-storage"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
- "bon",
  "crossbeam-queue",
  "delegate",
  "derive-where",
@@ -5811,6 +5821,7 @@ dependencies = [
  "fs4",
  "hotpath",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-storage",
@@ -5832,12 +5843,12 @@ name = "kithara-stream"
 version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
+ "bon",
  "delegate",
  "derive_more",
  "fieldwork",
  "hotpath",
  "kithara-abr",
- "kithara-config",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -5869,6 +5880,7 @@ name = "kithara-stretch"
 version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.0",
+ "bon",
  "bungee-sys",
  "delegate",
  "derive_more",
@@ -6065,12 +6077,12 @@ dependencies = [
 name = "kithara-ui-draw"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "derive-where",
  "derive_more",
  "fieldwork",
  "iced",
  "kithara-bufpool",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-utils",
@@ -6209,13 +6221,12 @@ dependencies = [
 name = "kithara-waveform"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "criterion",
  "delegate",
  "fieldwork",
  "kithara-blob",
  "kithara-bufpool",
- "kithara-derive",
+ "kithara-config",
  "kithara-dsp",
  "kithara-platform",
  "kithara-signal",
@@ -6234,12 +6245,12 @@ dependencies = [
 name = "kithara-worker"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "criterion",
  "delegate",
  "fieldwork",
  "hotpath",
  "humantime-serde",
+ "kithara-config",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",
@@ -6275,6 +6286,7 @@ dependencies = [
  "crossbeam-utils",
  "dasp_frame",
  "dasp_sample",
+ "dispatch2",
  "either",
  "errno",
  "fastrand",
@@ -6314,6 +6326,7 @@ dependencies = [
  "nu-ansi-term",
  "num-complex",
  "num-traits",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "once_cell",
  "parking_lot",
@@ -7232,6 +7245,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-app-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
+dependencies = [
+ "bitflags 2.13.0",
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-audio-toolbox"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7427,7 +7452,7 @@ checksum = "a1a1ae721c5e35be65f01a03b6d2ac13a54cb4fa70d8a5da293d7b0020261398"
 dependencies = [
  "block2 0.5.1",
  "objc2 0.5.2",
- "objc2-app-kit",
+ "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
 ]
 
@@ -8618,6 +8643,30 @@ dependencies = [
  "tiny-skia",
  "usvg",
  "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "rfd"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20dafead71c16a34e1ff357ddefc8afc11e7d51d6d2b9fbd07eaa48e3e540220"
+dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
+ "js-sys",
+ "libc",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "percent-encoding",
+ "pollster",
+ "raw-window-handle",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12406,7 +12455,7 @@ dependencies = [
  "memmap2 0.9.10",
  "ndk",
  "objc2 0.5.2",
- "objc2-app-kit",
+ "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "objc2-ui-kit",
  "orbclient",

@@ -10,17 +10,21 @@ use serde::Deserialize;
 use super::manifest::{Profile, Tool};
 use crate::consts;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub(super) struct QualityLabConfig {
     pub(super) profiles: Profiles,
+    #[config(value)]
     pub(super) output_dir: String,
     pub(super) tools: Tools,
+    #[config(skip = "checked when loading the schema")]
     pub(super) schema_version: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub(super) struct Profiles {
     pub(super) coverage: ProfileConfig,
     pub(super) manual: ProfileConfig,
@@ -37,15 +41,17 @@ impl Profiles {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(super) struct ProfileConfig {
     pub(super) tools: Vec<Tool>,
     pub(super) timeout_secs: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub(super) struct Tools {
     #[serde(rename = "cargo-crap")]
     cargo_crap: ToolConfig,
@@ -68,8 +74,9 @@ impl Tools {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(super) struct ToolConfig {
     pub(super) version: String,
     pub(super) timeout_secs: u64,

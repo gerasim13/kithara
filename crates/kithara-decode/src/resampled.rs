@@ -43,9 +43,8 @@ where
 {
     source_spec: AudioSpec,
     target_spec: AudioSpec,
-    backend: B,
+    config: DecoderResamplerConfig<B>,
     decoder: Box<dyn Decoder>,
-    target_sample_rate: NonZeroU32,
     last_input_meta: Option<AudioChunkInfo>,
     pending_meta: Option<AudioChunkInfo>,
     input: PlanarBuffer,
@@ -53,8 +52,6 @@ where
     scratch: PlanarBuffer,
     pools: PoolRegion<S>,
     resampler: B::Resampler,
-    options: kithara_resampler::ResamplerOptions,
-    quality: kithara_resampler::ResamplerQuality,
     eof_flushed: bool,
     reanchor_output_on_next_chunk: bool,
     emitted_frames: u64,
@@ -73,11 +70,10 @@ where
         config: DecoderResamplerConfig<B>,
         pools: &PoolRegion<S>,
     ) -> DecodeResult<Self> {
-        let backend = config.backend;
         let source_spec = decoder.spec();
         let target_spec = AudioSpec::new(source_spec.channels, config.target_sample_rate);
         let resampler = build_resampler(
-            backend.clone(),
+            config.backend.clone(),
             source_spec,
             config.target_sample_rate,
             config.quality,
@@ -86,25 +82,22 @@ where
         )?;
         let empty = FrameCount::new(0);
         Ok(Self {
-            backend,
+            config,
             decoder,
             emitted_frames: 0,
             eof_flushed: false,
             input: PlanarBuffer::new(pools, source_spec, empty)?,
             last_input_meta: None,
-            options: config.options,
             output: PlanarBuffer::new(pools, target_spec, empty)?,
             output_frame_offset: 0,
             output_skip_frames: resampler.output_delay(),
             pending_meta: None,
             pools: pools.clone(),
-            quality: config.quality,
             reanchor_output_on_next_chunk: false,
             resampler,
             scratch: PlanarBuffer::new(pools, target_spec, empty)?,
             source_frames_seen: 0,
             source_spec,
-            target_sample_rate: config.target_sample_rate,
             target_spec,
         })
     }
@@ -184,7 +177,7 @@ where
     fn expected_output_frames(&self) -> u64 {
         let source_rate = self.source_spec.sample_rate.get();
         let expected = u128::from(self.source_frames_seen)
-            .saturating_mul(u128::from(self.target_sample_rate.get()))
+            .saturating_mul(u128::from(self.config.target_sample_rate.get()))
             .saturating_add(u128::from(source_rate / 2))
             / u128::from(source_rate);
         u64::try_from(expected).unwrap_or(u64::MAX)
@@ -305,13 +298,13 @@ where
     }
 
     fn rebuild_for_source_spec(&mut self, source_spec: AudioSpec) -> DecodeResult<()> {
-        let target_spec = AudioSpec::new(source_spec.channels, self.target_sample_rate);
+        let target_spec = AudioSpec::new(source_spec.channels, self.config.target_sample_rate);
         let resampler = build_resampler(
-            self.backend.clone(),
+            self.config.backend.clone(),
             source_spec,
-            self.target_sample_rate,
-            self.quality,
-            self.options,
+            self.config.target_sample_rate,
+            self.config.quality,
+            self.config.options,
             &self.pools,
         )?;
         let empty = FrameCount::new(0);
@@ -345,7 +338,7 @@ where
 
     fn scaled_gapless(&self, info: GaplessInfo) -> DecodeResult<GaplessInfo> {
         let source_rate = self.source_spec.sample_rate.get();
-        let target_rate = self.target_sample_rate.get();
+        let target_rate = self.config.target_sample_rate.get();
         Ok(GaplessInfo {
             leading_frames: round_scaled_frames(info.leading_frames, source_rate, target_rate)?,
             trailing_frames: round_scaled_frames(info.trailing_frames, source_rate, target_rate)?,
@@ -367,7 +360,7 @@ where
         round_scaled_frames_lossy(
             source,
             self.source_spec.sample_rate.get(),
-            self.target_sample_rate.get(),
+            self.config.target_sample_rate.get(),
         )
     }
 
@@ -430,7 +423,7 @@ where
         round_scaled_frames_lossy(
             self.decoder.timeline_gap_frames(),
             self.source_spec.sample_rate.get(),
-            self.target_sample_rate.get(),
+            self.config.target_sample_rate.get(),
         )
     }
 
@@ -446,7 +439,7 @@ where
                 GaplessTailCompensation::for_source_frames(
                     tail.ideal_pre_trim_frames(),
                     self.source_spec.sample_rate.get(),
-                    self.target_sample_rate.get(),
+                    self.config.target_sample_rate.get(),
                 )
             }),
         }

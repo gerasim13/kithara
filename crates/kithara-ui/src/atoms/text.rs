@@ -33,6 +33,9 @@ impl<'data, 'skin> Text<'data, 'skin> {
     /// [`Self::paint`] shapes against what it was given instead, so a squeezed
     /// box breaks lines rather than overflowing.
     pub(crate) fn measure(&self, text: &mut TextContext) -> (f32, f32) {
+        if self.content.is_empty() {
+            return (0.0, 0.0);
+        }
         let run = text.shape(self.content, self.role, None);
         (run.width() + self.padding_x * 2.0, run.height())
     }

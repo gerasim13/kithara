@@ -41,8 +41,9 @@ resample-rubato = ["kithara-resampler/resample-rubato"]
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
-kithara-derive = { workspace = true, features = ["built-default", "patch", "phase"] }
+kithara-derive = { workspace = true, features = ["patch", "phase"] }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
@@ -52,7 +53,6 @@ kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
-bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }

@@ -1,6 +1,11 @@
+use std::collections::BTreeMap;
+
 use num_traits::ToPrimitive;
 
+use super::TableMetrics;
 use crate::{
+    expand::scoped_key,
+    interact::recognizers::Track,
     module::TableColumn,
     render::{ReadValue, Reads, Skin},
 };
@@ -14,8 +19,44 @@ pub(crate) struct ColumnLayout {
 
 pub(crate) fn column_resizable(columns: &[ColumnLayout], index: usize) -> bool {
     columns.get(index).is_some_and(|column| {
-        column.resizable && !column.column.flexible() && index + 1 < columns.len()
+        column.resizable
+            && (index + 1 < columns.len()
+                || columns[..index]
+                    .iter()
+                    .any(|column| column.column.flexible()))
     })
+}
+
+pub(crate) fn column_resize_reverses(
+    columns: &[ColumnLayout],
+    index: usize,
+    available_width: f32,
+    table: TableMetrics<'_>,
+) -> bool {
+    available_width >= table.width(columns)
+        && columns[..index]
+            .iter()
+            .any(|column| column.column.flexible())
+}
+
+pub(crate) fn column_resize_track(
+    columns: &[ColumnLayout],
+    index: usize,
+    available_width: f32,
+    table: TableMetrics<'_>,
+) -> Track {
+    let column = &columns[index];
+    let reverse = column_resize_reverses(columns, index, available_width, table);
+    Track::HorizontalPixels {
+        minimum: if column.column.flexible() {
+            column.column.width()
+        } else {
+            table.skin.table.min_column_width
+        },
+        maximum: reverse.then_some(column.width + available_width - table.width(columns)),
+        direction: if reverse { -1.0 } else { 1.0 },
+        value: column.width,
+    }
 }
 
 fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: &TableColumn) -> bool {
@@ -27,7 +68,7 @@ fn column_visible(reads: &dyn Reads, state: Option<(&str, &str)>, column: &Table
 }
 
 pub(crate) fn column_layouts(
-    (columns, resizable): (&[TableColumn], bool),
+    (columns, width): (&[TableColumn], Option<&str>),
     reads: &dyn Reads,
     state: Option<(&str, &str)>,
     skin: &Skin,
@@ -36,24 +77,31 @@ pub(crate) fn column_layouts(
         .iter()
         .filter(|column| column_visible(reads, state, column))
         .map(|column| ColumnLayout {
-            resizable,
+            resizable: width.is_some(),
             column: column.clone(),
-            width: effective_column_width(reads, state, column, skin),
+            width: effective_column_width(reads, width, column, skin),
         })
         .collect()
 }
 
 fn effective_column_width(
     reads: &dyn Reads,
-    state: Option<(&str, &str)>,
+    width: Option<&str>,
     column: &TableColumn,
     skin: &Skin,
 ) -> f32 {
     let default = column.width();
-    let Some((prefix, scope)) = state else {
+    let Some(width) = width else {
         return default;
     };
-    let endpoint = format!("{prefix}.width.{}{scope}", column.id());
+    let (id, scope) = width.split_once('@').unwrap_or((width, ""));
+    let mut with: BTreeMap<String, String> = scope
+        .split(',')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    with.insert("column".to_owned(), column.id().to_owned());
+    let endpoint = scoped_key(id, &with);
     let Some(ReadValue::Scalar(width)) = reads.get(&endpoint) else {
         return default;
     };
@@ -95,7 +143,7 @@ mod tests {
         fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
             match endpoint {
                 "columns.index" => Some(ReadValue::Bool(false)),
-                "columns.width.artist" => Some(ReadValue::Scalar(240.0)),
+                "width@column=artist" => Some(ReadValue::Scalar(240.0)),
                 _ => None,
             }
         }
@@ -159,7 +207,7 @@ mod tests {
                         false,
                     ),
                 ],
-                true,
+                Some("width"),
             ),
             &WidthReads,
             Some(("columns", "")),

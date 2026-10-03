@@ -611,11 +611,7 @@ fn target_owner<'a>(
 /// takes one of.
 enum Target {
     Dir(PathBuf),
-    Pool {
-        pool: SlotPool,
-        window: Duration,
-        freshness: LaneFreshness,
-    },
+    Pool { pool: SlotPool, window: Duration },
 }
 
 fn build_target_dir(
@@ -630,16 +626,14 @@ fn build_target_dir(
         TargetOwner::Checkout => return Ok(Target::Dir(project_root.join("target"))),
         TargetOwner::Lane(root, lane) => {
             return Ok(Target::Pool {
-                pool: SlotPool::fleet(&root, trust, lane.name),
+                pool: SlotPool::fleet(&root, trust, lane.name, lane.freshness),
                 window: lane.window,
-                freshness: lane.freshness,
             });
         }
         TargetOwner::ScopedLane(lane) => {
             return Ok(Target::Pool {
-                pool: SlotPool::executor(&slots, target_scope, lane.name),
+                pool: SlotPool::executor(&slots, target_scope, lane.name, lane.freshness),
                 window: lane.window,
-                freshness: lane.freshness,
             });
         }
         TargetOwner::Job(job_id) => {
@@ -671,12 +665,8 @@ fn prepare_build_target(
                     .with_context(|| format!("creating CI build cache {}", dir.display()))?;
                 (dir, None)
             }
-            Target::Pool {
-                pool,
-                window,
-                freshness,
-            } => {
-                let build = LaneBuild::claim(project_root, &pool, window, freshness)?;
+            Target::Pool { pool, window } => {
+                let build = LaneBuild::claim(project_root, &pool, window)?;
                 (build.dir().to_path_buf(), Some(build))
             }
         };
@@ -1523,11 +1513,9 @@ mod tests {
         )
         .unwrap()
         {
-            Target::Pool {
-                pool,
-                window,
-                freshness,
-            } => LaneBuild::claim(checkout.path(), &pool, window, freshness).unwrap(),
+            Target::Pool { pool, window } => {
+                LaneBuild::claim(checkout.path(), &pool, window).unwrap()
+            }
             Target::Dir(dir) => panic!(
                 "a lane on the fleet's root builds in {}, not in a slot",
                 dir.display()

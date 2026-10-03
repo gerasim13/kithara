@@ -2,7 +2,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     Band, Ctx, Group, GroupMount, Host, Lit, Measured, Module, PlacedMount, Popover, Snap,
-    SplitMount,
+    SplitMount, StageMount,
 };
 use crate::{
     compile::{Address, CompiledNode, CompiledUi, SplitCell},
@@ -528,8 +528,10 @@ where
             let mounted = children
                 .iter()
                 .enumerate()
-                .map(|(index, child)| {
-                    mount_staged(child, &address.child(index), branch, &scene, ctx, host)
+                .filter(|(_, child)| H::MOUNTS_HIDDEN || !is_hidden(*child, snapshot))
+                .map(|(index, child)| StageMount {
+                    block: block_of(child),
+                    output: mount_staged(child, &address.child(index), branch, &scene, ctx, host),
                 })
                 .collect();
             host.stage(mounted, effective_size(node, ctx.skin, snapshot))

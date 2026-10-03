@@ -12,18 +12,19 @@ use crate::{
     atoms::{
         bar::context::Context,
         table::{
-            ColumnLayout, TableRowData, column_layouts, column_resizable, face::TableFace,
-            minimum_table_width, table_content_height,
+            ColumnLayout, TableRowData, column_layouts, column_resizable, column_resize_track,
+            empty_bounds, face::TableFace, table_content_height,
         },
         tree::face::Tree,
         wave::zoom_math::{Zoom, window_bounds, zoom_for_wheel},
     },
-    draw::Rect,
-    engine::{Descriptor, ScrollConfig},
+    draw::{Pt, Rect},
+    engine::{Descriptor, ScrollConfig, Target},
     expand::{Binding, ControlSpec, drop_path},
     ids::InternId,
-    interact::{CursorShape, Hover, ScrollAxis, recognizers::WheelStep},
+    interact::{CursorShape, Hit, Hover, ScrollAxis, recognizers::WheelStep},
     module::{FaderStyle, TableColumn, WaveStyle},
+    mount,
     render::{
         ReadValue, Skin, TableRow, TreeRow, document::Ctx, model::derived, picker_selected_index,
         text_input_layout,
@@ -151,7 +152,8 @@ impl HeroWindow {
 pub(crate) struct TreePlan {
     pub(crate) path: String,
     pub(super) picture: Rc<RefCell<Tree>>,
-    pub(crate) search_path: String,
+    pub(crate) search_path: Option<String>,
+    pub(crate) toggle_path: Option<String>,
     #[cfg(feature = "masonry")]
     pub(super) state: TreeState,
 }
@@ -162,8 +164,8 @@ pub(crate) struct TablePlan {
     pub(crate) horizontal_path: String,
     pub(crate) path: String,
     pub(crate) row_target: String,
-    min_column_width: f32,
-    pub(super) picture: Rc<RefCell<TableFace>>,
+    pub(in crate::render) viewport_width: Rc<Cell<f32>>,
+    pub(in crate::render) picture: Rc<RefCell<TableFace>>,
     #[cfg(feature = "masonry")]
     pub(super) state: TableState,
 }
@@ -284,8 +286,8 @@ impl HostedControlPlan {
     }
 
     fn descriptor_count(&self) -> usize {
-        if matches!(self, Self::Tree(_)) {
-            return TreePlan::DESCRIPTORS;
+        if let Self::Tree(plan) = self {
+            return plan.descriptor_count();
         }
         if let Self::Table(plan) = self {
             return plan.descriptor_count();
@@ -373,46 +375,50 @@ impl HostedControlPlan {
                     skin,
                 ))
             }
-            (ControlSpec::Tree { query }, Some(ReadValue::Tree(rows))) => Some(Self::Tree(
-                Box::new(tree_plan(path, query.as_ref(), read, rows, cx)),
-            )),
-            (ControlSpec::Tree { query }, _) => Some(Self::Tree(Box::new(tree_plan(
-                path,
-                query.as_ref(),
-                read,
-                &[],
-                cx,
-            )))),
+            (
+                ControlSpec::Tree {
+                    query,
+                    search,
+                    toggle,
+                },
+                value,
+            ) => {
+                let rows = match value {
+                    Some(ReadValue::Tree(rows)) => rows,
+                    _ => &[],
+                };
+                let tree = mount::Tree {
+                    query: query.as_ref(),
+                    search: *search,
+                    toggle: *toggle,
+                };
+                Some(Self::Tree(Box::new(tree_plan(path, &tree, read, rows, cx))))
+            }
             (
                 ControlSpec::Table {
                     columns,
                     columns_state,
-                    resizable,
+                    status,
+                    frame,
+                    width,
                 },
-                Some(ReadValue::Table(rows)),
-            ) => Some(Self::Table(Box::new(TablePlan::resolved(
-                path,
-                (columns, *resizable),
-                columns_state.as_ref(),
-                read,
-                rows,
-                cx,
-            )))),
-            (
-                ControlSpec::Table {
+                value,
+            ) => {
+                let table = mount::Table {
                     columns,
-                    columns_state,
-                    resizable,
-                },
-                _,
-            ) => Some(Self::Table(Box::new(TablePlan::resolved(
-                path,
-                (columns, *resizable),
-                columns_state.as_ref(),
-                read,
-                &[],
-                cx,
-            )))),
+                    columns_state: columns_state.as_ref(),
+                    status: status.as_ref(),
+                    frame: *frame,
+                    width: width.as_ref(),
+                };
+                let rows = match value {
+                    Some(ReadValue::Table(rows)) => rows,
+                    _ => &[],
+                };
+                Some(Self::Table(Box::new(TablePlan::resolved(
+                    path, &table, read, rows, cx,
+                ))))
+            }
             (ControlSpec::Fader { style, label }, Some(ReadValue::Scalar(value))) => {
                 let (drag_step, wheel) = match style {
                     FaderStyle::Default => (Some(skin.fader.step), None),
@@ -462,30 +468,35 @@ impl HostedControlPlan {
 
 fn tree_plan(
     path: &str,
-    query: Option<&Binding>,
+    tree: &mount::Tree<'_>,
     _read: Option<&Binding>,
     rows: &[TreeRow<'_>],
     cx: Resolving<'_>,
 ) -> TreePlan {
     let Resolving { ctx, skin } = cx;
-    let query_text = query
-        .and_then(|binding| ctx.read(binding))
-        .and_then(|value| match value {
-            ReadValue::Text(query) => Some(query),
-            _ => None,
-        })
-        .unwrap_or_default();
+    let query_text = tree.search.then(|| {
+        tree.query
+            .and_then(|binding| ctx.read(binding))
+            .and_then(|value| match value {
+                ReadValue::Text(query) => Some(query),
+                _ => None,
+            })
+            .unwrap_or_default()
+    });
     let plan = TreePlan {
         path: path.to_owned(),
         picture: Rc::new(RefCell::new(Tree::new(rows, query_text, skin))),
-        search_path: format!("{path}/search"),
+        search_path: tree.search.then(|| format!("{path}/search")),
+        toggle_path: tree.toggle.then(|| format!("{path}/toggle")),
         #[cfg(feature = "masonry")]
         state: TreeState::default(),
     };
     #[cfg(feature = "masonry")]
     plan.bind_source(TreeSource::new(
         _read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
-        query.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
+        tree.search,
+        tree.query
+            .map(|binding| ctx.ui.resolve(binding.key).to_owned()),
     ));
     plan
 }
@@ -537,17 +548,45 @@ fn wave_plan(
 }
 
 impl TreePlan {
-    /// A tree registers exactly two: its search field and its scroll.
-    const DESCRIPTORS: usize = 2;
+    fn descriptor_count(&self) -> usize {
+        1 + usize::from(self.search_path.is_some()) + usize::from(self.toggle_path.is_some())
+    }
+
+    pub(crate) fn append_toggle_targets<'a>(
+        &'a self,
+        rows: Rect,
+        point: Option<Pt>,
+        offset: f32,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        let Some(path) = &self.toggle_path else {
+            return;
+        };
+        let under = self
+            .picture
+            .borrow()
+            .toggle_regions(rows, offset)
+            .into_iter()
+            .find(|(_, chevron)| Hit::new(point, *chevron).over());
+        targets.push(match under {
+            Some((index, chevron)) => Target::item(path, Hit::new(point, chevron), index),
+            None => Target::new(path, Hit::new(point, empty_bounds(rows))),
+        });
+    }
 
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
         let picture = self.picture.borrow();
-        descriptors.push(Descriptor::text_input(
-            self.search_path.clone(),
-            picture.query().to_owned(),
-            text_input_layout(picture.query(), picture.skin()),
-        ));
+        if let (Some(path), Some(query)) = (&self.search_path, picture.query()) {
+            descriptors.push(Descriptor::text_input(
+                path.clone(),
+                query.to_owned(),
+                text_input_layout(query, picture.skin()),
+            ));
+        }
         let row_count = picture.row_count();
+        if let Some(path) = &self.toggle_path {
+            descriptors.push(Descriptor::item(path.clone(), path.clone(), row_count));
+        }
         descriptors.push(Descriptor::scroll(
             self.path.clone(),
             ScrollConfig::items(
@@ -563,19 +602,14 @@ impl TreePlan {
 }
 
 impl TablePlan {
-    pub(super) fn new(
-        path: &str,
-        rows: Vec<TableRowData>,
-        columns: Vec<ColumnLayout>,
-        skin: &Skin,
-    ) -> Self {
+    pub(super) fn new(path: &str, picture: TableFace) -> Self {
         Self {
-            divider_paths: DividerPaths::new(path, &columns),
+            divider_paths: DividerPaths::new(path, picture.columns()),
             horizontal_path: format!("{path}/scroll-x"),
             path: path.to_owned(),
             row_target: format!("{path}/rows"),
-            min_column_width: skin.table.min_column_width,
-            picture: Rc::new(RefCell::new(TableFace::new(rows, columns, skin))),
+            viewport_width: Rc::new(Cell::new(0.0)),
+            picture: Rc::new(RefCell::new(picture)),
             #[cfg(feature = "masonry")]
             state: TableState::default(),
         }
@@ -587,7 +621,7 @@ impl TablePlan {
         let row_count = picture.rows().len();
         descriptors.push(Descriptor::scroll(
             self.horizontal_path.clone(),
-            ScrollConfig::plain(ScrollAxis::Horizontal, minimum_table_width(columns)),
+            ScrollConfig::plain(ScrollAxis::Horizontal, picture.metrics().width(columns)),
         ));
         descriptors.push(Descriptor::scroll(
             self.path.clone(),
@@ -605,12 +639,12 @@ impl TablePlan {
             .iter()
             .enumerate()
             .filter(|(index, _)| column_resizable(columns, *index));
-        for (_, column) in resizable {
+        for (index, column) in resizable {
             let divider_path = self.divider_path(&column.column);
             descriptors.push(Descriptor::column_divider(
                 divider_path.to_owned(),
                 column.width,
-                self.min_column_width,
+                column_resize_track(columns, index, self.viewport_width.get(), picture.metrics()),
             ));
         }
     }
@@ -636,29 +670,28 @@ impl TablePlan {
 
     fn resolved(
         path: &str,
-        (declared_columns, resizable): (&[TableColumn], bool),
-        columns_state: Option<&Binding>,
+        table: &mount::Table<'_>,
         _read: Option<&Binding>,
         rows: &[TableRow<'_>],
         cx: Resolving<'_>,
     ) -> Self {
         let Resolving { ctx, skin } = cx;
-        let state =
-            columns_state.map(|binding| (ctx.ui.resolve(binding.id), ctx.scope(Some(binding))));
-        let columns = column_layouts((declared_columns, resizable), &ctx, state, skin);
+        let state = table
+            .columns_state
+            .map(|binding| (ctx.ui.resolve(binding.id), ctx.scope(Some(binding))));
+        let columns = column_layouts(
+            (table.columns, ctx.endpoint(table.width)),
+            &ctx,
+            state,
+            skin,
+        );
         let rows = rows.iter().map(TableRowData::from).collect();
-        let plan = Self::new(path, rows, columns, skin);
+        let picture = TableFace::new(rows, columns, skin, table.frame)
+            .with_status(table.status.and_then(|binding| ctx.read(binding)));
+        let plan = Self::new(path, picture);
         #[cfg(feature = "masonry")]
-        plan.bind_source(TableSource::new(
-            (declared_columns.to_vec(), resizable),
-            columns_state.map(|binding| {
-                (
-                    ctx.ui.resolve(binding.id).to_owned(),
-                    ctx.scope(Some(binding)).to_owned(),
-                )
-            }),
-            _read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
-        ));
+        plan.bind_source(TableSource::new(table, ctx, _read));
+
         plan
     }
 

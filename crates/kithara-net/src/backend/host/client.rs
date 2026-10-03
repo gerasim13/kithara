@@ -188,7 +188,6 @@ impl RawHostNet {
 #[derive(Clone)]
 pub struct HostNet {
     net: Arc<RetryNet<RawHostNet>>,
-    raw: RawHostNet,
 }
 
 impl HostNet {
@@ -207,19 +206,20 @@ impl HostNet {
     }
 
     #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.raw.options
-    }
-
-    #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
+        let raw = self.net.inner();
         Self::from(RawHostNet {
-            options: self.raw.options.with_observer(observer),
-            exchange: self.raw.exchange.clone(),
+            options: raw.options.with_observer(observer),
+            exchange: raw.exchange.clone(),
         })
     }
 
     delegate::delegate! {
+        to self.net.inner() {
+            #[must_use]
+            #[field(&options)]
+            pub fn options(&self) -> &NetOptions;
+        }
         to self.net {
             /// # Errors
             ///
@@ -257,20 +257,18 @@ impl HostNet {
 
 impl From<RawHostNet> for HostNet {
     fn from(raw: RawHostNet) -> Self {
-        let net = Arc::new(RetryNet::new(
-            raw.clone(),
-            raw.options.retry_policy,
-            raw.exchange.cancel.clone(),
-            raw.options.observer.clone(),
-        ));
-        Self { net, raw }
+        let retry_policy = raw.options.retry_policy;
+        let cancel = raw.exchange.cancel.clone();
+        let observer = raw.options.observer.clone();
+        let net = Arc::new(RetryNet::new(raw, retry_policy, cancel, observer));
+        Self { net }
     }
 }
 
 impl std::fmt::Debug for HostNet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HostNet")
-            .field("options", &self.raw.options)
+            .field("options", self.options())
             .finish_non_exhaustive()
     }
 }

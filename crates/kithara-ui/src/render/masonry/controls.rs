@@ -133,7 +133,9 @@ mod table_projection {
                 TableColumn::new("name", "NAME", TableColumnStyle::Primary, 192.0, true),
             ],
             columns_state: None,
-            resizable: true,
+            status: None,
+            frame: crate::module::TableFrame::new(0.0, 0.0, true),
+            width: None,
         };
         let cx = Resolving {
             skin,

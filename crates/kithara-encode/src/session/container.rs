@@ -28,9 +28,8 @@ pub struct ContainerFinish {
 #[derive(Debug)]
 pub struct ContainerSession {
     block_align: u16,
-    channels: u16,
     byte_rate: u32,
-    sample_rate: u32,
+    config: EncodeConfig,
     data_bytes: u64,
     next_frame: u64,
 }
@@ -66,10 +65,9 @@ impl ContainerSession {
         Ok(Self {
             block_align,
             byte_rate,
-            channels: config.channels,
+            config: config.clone(),
             data_bytes: 0,
             next_frame: 0,
-            sample_rate: config.sample_rate,
         })
     }
 
@@ -99,8 +97,16 @@ impl ContainerSession {
             &mut offset,
             &Self::PCM_FLOAT_FORMAT.to_le_bytes(),
         );
-        Self::write_header(&mut header, &mut offset, &self.channels.to_le_bytes());
-        Self::write_header(&mut header, &mut offset, &self.sample_rate.to_le_bytes());
+        Self::write_header(
+            &mut header,
+            &mut offset,
+            &self.config.channels.to_le_bytes(),
+        );
+        Self::write_header(
+            &mut header,
+            &mut offset,
+            &self.config.sample_rate.to_le_bytes(),
+        );
         Self::write_header(&mut header, &mut offset, &self.byte_rate.to_le_bytes());
         Self::write_header(&mut header, &mut offset, &self.block_align.to_le_bytes());
         Self::write_header(

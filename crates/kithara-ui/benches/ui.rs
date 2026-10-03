@@ -520,6 +520,10 @@ fn table(id: &str, endpoint: &str) -> ControlNode {
             true,
         )])),
         columns_state: None,
+        status: None,
+        footer: true,
+        padding_left: 0.0,
+        padding_right: 0.0,
         write_width: None,
     }
 }

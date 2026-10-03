@@ -7,7 +7,10 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::ResourceStatus;
 use lru::LruCache;
 
-use super::handle::{CachedReader, CachedWriter, EnforceCapacity};
+use super::{
+    handle::{CachedReader, CachedWriter, EnforceCapacity},
+    policy::CachePolicy,
+};
 use crate::{
     decorator::{Assets, Capabilities},
     error::AssetsResult,
@@ -68,16 +71,15 @@ type CacheItem<A> = (
 /// Cache key is `(ResourceKey, Option<RequestIdentity>, Option<Ctx>)`; the
 /// `ResourceKey` carries its own asset namespace. Absolute keys bypass caching
 /// (capability gate or absolute-key bypass).
-#[derive(Clone, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-pub struct CachedAssets<A>
+#[derive_where::derive_where(Clone; A: Assets, C: Clone)]
+pub struct CachedAssets<A, C = (NonZeroUsize, Option<u64>)>
 where
     A: Assets,
+    C: CachePolicy,
 {
     inner: Arc<A>,
     pinned: Arc<DashSet<ResourceKey>>,
-    #[field(get = cache_capacity, vis = "pub(crate)", copy)]
-    capacity: NonZeroUsize,
+    policy: C,
     enforce_capacity: Option<EnforceCapacity>,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
     cache: SharedCache<A>,
@@ -88,9 +90,10 @@ where
     volatile: bool,
 }
 
-impl<A> fmt::Debug for CachedAssets<A>
+impl<A, C> fmt::Debug for CachedAssets<A, C>
 where
     A: Assets,
+    C: CachePolicy,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let size = self.cache.try_lock().ok().map(|c| c.len());
@@ -100,17 +103,13 @@ where
     }
 }
 
-impl<A> CachedAssets<A>
+impl<A, C> CachedAssets<A, C>
 where
     A: Assets,
+    C: CachePolicy,
 {
-    pub fn new(
-        inner: Arc<A>,
-        capacity: NonZeroUsize,
-        on_invalidated: Option<crate::store::OnInvalidatedFn>,
-        volatile: bool,
-    ) -> Self {
-        Self::with_max_bytes(inner, capacity, on_invalidated, volatile, None)
+    pub(crate) fn cache_capacity(&self) -> NonZeroUsize {
+        self.policy.capacity()
     }
 
     fn cache_entry(
@@ -121,7 +120,7 @@ where
     ) -> Vec<ResourceKey> {
         let mut invalidated: Vec<ResourceKey> = Vec::new();
 
-        let effective = self.capacity.get() + self.pinned_cache_count(cache);
+        let effective = self.policy.capacity().get() + self.pinned_cache_count(cache);
 
         while cache.len() >= effective {
             let Some((displaced_key, displaced_entry)) = self.pop_evictable(cache) else {
@@ -353,23 +352,25 @@ where
         invalidated
     }
 
-    pub(crate) fn with_max_bytes(
+    pub(crate) fn with_policy(
         inner: Arc<A>,
-        capacity: NonZeroUsize,
+        policy: C,
         on_invalidated: Option<crate::store::OnInvalidatedFn>,
         volatile: bool,
-        max_bytes: Option<u64>,
     ) -> Self {
-        let cache = Arc::new(Mutex::new(LruCache::new(capacity)));
+        let cache = Arc::new(Mutex::new(LruCache::new(policy.capacity())));
         let pinned = Arc::new(DashSet::new());
-        let enforce_capacity = max_bytes.map(|max_bytes| {
+        let enforce_capacity = (volatile && policy.max_bytes().is_some()).then(|| {
             let cache = Arc::clone(&cache);
             let pinned = Arc::clone(&pinned);
             let on_invalidated = on_invalidated.clone();
+            let policy = policy.clone();
             Arc::new(move || {
                 let invalidated = {
                     let mut cache = cache.lock();
-                    Self::trim_to_max_bytes(&mut cache, &pinned, max_bytes)
+                    policy.max_bytes().map_or_else(Vec::new, |max_bytes| {
+                        Self::trim_to_max_bytes(&mut cache, &pinned, max_bytes)
+                    })
                 };
                 if let Some(cb) = &on_invalidated {
                     for key in invalidated {
@@ -381,7 +382,7 @@ where
         Self {
             inner,
             pinned,
-            capacity,
+            policy,
             enforce_capacity,
             on_invalidated,
             cache,
@@ -421,10 +422,35 @@ where
     }
 }
 
-impl<A> Assets for CachedAssets<A>
+impl<A> CachedAssets<A>
+where
+    A: Assets,
+{
+    pub fn new(
+        inner: Arc<A>,
+        capacity: NonZeroUsize,
+        on_invalidated: Option<crate::store::OnInvalidatedFn>,
+        volatile: bool,
+    ) -> Self {
+        Self::with_max_bytes(inner, capacity, on_invalidated, volatile, None)
+    }
+
+    pub(crate) fn with_max_bytes(
+        inner: Arc<A>,
+        capacity: NonZeroUsize,
+        on_invalidated: Option<crate::store::OnInvalidatedFn>,
+        volatile: bool,
+        max_bytes: Option<u64>,
+    ) -> Self {
+        Self::with_policy(inner, (capacity, max_bytes), on_invalidated, volatile)
+    }
+}
+
+impl<A, C> Assets for CachedAssets<A, C>
 where
     A: Assets,
     A::Context: CacheIdentity,
+    C: CachePolicy,
 {
     type ActiveRes = CachedWriter<A::ActiveRes>;
     type Context = A::Context;
@@ -778,6 +804,36 @@ mod tests {
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(dir, CancelToken::never()));
         CachedAssets::new(disk, capacity, None, false)
+    }
+
+    #[derive(Clone)]
+    struct MockCachePolicy(Arc<Mutex<NonZeroUsize>>);
+
+    impl CachePolicy for MockCachePolicy {
+        fn capacity(&self) -> NonZeroUsize {
+            *self.0.lock()
+        }
+
+        fn max_bytes(&self) -> Option<u64> {
+            None
+        }
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn cache_reads_capacity_from_its_policy_on_each_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let capacity = Arc::new(Mutex::new(NonZeroUsize::new(3).unwrap()));
+        let disk = Arc::new(DiskAssetStore::new(dir.path(), CancelToken::never()));
+        let cached =
+            CachedAssets::with_policy(disk, MockCachePolicy(Arc::clone(&capacity)), None, false);
+        for i in 0..3 {
+            let key = ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s"));
+            commit_writer(cached.acquire_resource(&key, None).unwrap(), b"data");
+        }
+        *capacity.lock() = NonZeroUsize::new(1).unwrap();
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "seg_3.m4s");
+        commit_writer(cached.acquire_resource(&key, None).unwrap(), b"data");
+        assert_eq!(cached.cache.lock().len(), 1);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

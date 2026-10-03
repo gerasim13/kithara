@@ -10,7 +10,7 @@ use std::{
 use tempfile::TempDir;
 
 use super::{pool::SlotPool, tracked::Sources};
-use crate::{ci::environment::CacheTrust, consts};
+use crate::{ci::environment::CacheTrust, config::LaneFreshness, consts};
 
 /// Sources from `(path, blob)` pairs.
 pub(super) fn sources(entries: &[(&str, &str)]) -> Sources {
@@ -72,13 +72,16 @@ pub(super) fn cargo_checkout(files: &[(&str, &str)]) -> TempDir {
 }
 
 /// The pool of lane `test` under the fleet root `lanes`.
-pub(super) fn pool(lanes: &Path) -> SlotPool {
-    SlotPool::fleet(lanes, CacheTrust::Review, "test")
+pub(super) fn pool(lanes: &Path, freshness: LaneFreshness) -> SlotPool {
+    SlotPool::fleet(lanes, CacheTrust::Review, "test", freshness)
 }
 
 /// The slot a claim of [`pool`] takes when no other job holds one.
-pub(super) fn slot(lanes: &Path) -> PathBuf {
-    lanes.join("review-lane-test-0")
+pub(super) fn slot(lanes: &Path, freshness: LaneFreshness) -> PathBuf {
+    lanes.join(match freshness {
+        LaneFreshness::Mtime => "review-lane-test-0",
+        LaneFreshness::Checksum => "review-ordered-lane-test-0",
+    })
 }
 
 /// Leaves a build-script run at `key` (`<profile>/build/<run>`) whose

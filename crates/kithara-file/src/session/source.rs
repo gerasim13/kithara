@@ -1,8 +1,8 @@
 use std::{num::NonZeroUsize, ops::Range};
 
-use bon::Builder;
 use kithara_assets::{AssetReader, ReadSide};
 use kithara_bufpool::HasPool;
+use kithara_config::Config;
 use kithara_download::PeerHandle;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -15,26 +15,35 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 use tracing::trace;
-use url::Url;
 
 use super::{
     inner::{FileAssetCtx, FileInner, FileSourceCtx, FileTerminalState},
     segments::FileSegmentIndex,
 };
-use crate::{TotalBytesSource, coord::FileCoord, error::SourceError as FileSourceError};
+use crate::{
+    TotalBytesSource,
+    config::{FileConfig, FileConfigOwnerAccess},
+    coord::FileCoord,
+    error::SourceError as FileSourceError,
+};
 
 /// Inputs for constructing a local/cached file source.
-#[derive(Clone, Builder)]
+#[derive(Config)]
+#[config(construction)]
 pub(crate) struct FileLocalConfig<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    #[config(skip = "transferred to the file source")]
     coord: Arc<FileCoord>,
+    #[config(skip = "transferred to the file source")]
     reader: AssetReader<S>,
+    #[config(skip = "transferred to the file source")]
     cancel: CancelToken,
+    #[config(skip = "transferred to the file source")]
     bus: EventBus,
+    #[config(skip = "consumed by the codec probe")]
     cached_codec: Option<AudioCodec>,
-    reader_event_capacity: usize,
 }
 
 /// Sync `Source` impl over a shared [`FileInner`].
@@ -42,7 +51,8 @@ where
 /// All async work - HTTP fetch, body streaming, finalization - is owned
 /// by the Downloader through [`FilePeer`](super::FilePeer); `FileSource`
 /// just exposes the cached bytes synchronously to the audio worker.
-#[derive(Clone)]
+#[derive(Clone, kithara_config::ConfigOwner)]
+#[config_owner(FileConfig<S>, inner.config)]
 pub struct FileSource<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -99,28 +109,22 @@ where
     ///
     /// `cancel` is a child of the file config master so a track drop pulse interrupts
     /// any in-flight reads.
-    pub(crate) fn local(config: FileLocalConfig<S>) -> Self {
+    pub(crate) fn local(config: FileLocalConfig<S>, stream_config: Arc<FileConfig<S>>) -> Self {
         let FileLocalConfig {
             reader,
             coord,
             bus,
             cancel,
-            reader_event_capacity,
             cached_codec,
         } = config;
         let inner = Arc::new(FileInner::new(
+            stream_config,
             FileSourceCtx {
                 cancel,
                 bus,
-                reader_event_capacity,
                 coord: Arc::clone(&coord),
             },
-            FileAssetCtx {
-                reader,
-                headers: None,
-                url: Url::parse("file:///local")
-                    .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
-            },
+            FileAssetCtx { reader },
             true,
             None,
         ));
@@ -343,7 +347,7 @@ where
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.seek_epoch_handle(),
-            self.inner.source.reader_event_capacity,
+            self.reader_event_capacity(),
         );
         Some(Box::new(hooks))
     }

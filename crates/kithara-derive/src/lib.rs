@@ -13,15 +13,8 @@ mod ranged;
 mod ui;
 mod vocabulary;
 
-/// `#[derive(Config)]` — the builder, accessors, retained snapshot and runtime
-/// updates of a configuration struct, all declared through `#[config(...)]`.
 #[cfg(feature = "config")]
-#[proc_macro_derive(Config, attributes(config))]
-pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    config::retained::expand(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
+config::retained::config_derives!();
 
 /// Implements `Default` by calling the type's existing no-input builder.
 #[cfg(feature = "built-default")]

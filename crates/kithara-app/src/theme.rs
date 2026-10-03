@@ -1,3 +1,4 @@
+use kithara_config::Config;
 use kithara_derive::Patch;
 use serde::Deserialize;
 
@@ -11,7 +12,8 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 /// [`PalettePatch`] is what a configuration document may say about it: every
 /// color is a key of its own, so a document that renames one accent keeps the
 /// other fifteen the theme already chose.
-#[derive(Debug, Clone, Copy, Patch)]
+#[derive(Debug, Clone, Copy, Config, Patch)]
+#[config(builder(none), fields(value))]
 pub struct Palette {
     pub accent: Rgb,
     pub accent_strong: Rgb,

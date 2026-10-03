@@ -1,21 +1,19 @@
 use std::num::NonZeroU32;
 
-use bon::Builder;
+use kithara_config::Config;
 use kithara_decode::{DecoderBackend, DecoderResamplerConfig, GaplessMode};
 use kithara_derive::Patch;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
 
-#[derive(Clone, Debug, Builder, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Debug, Config)]
+#[config(builder(state_mod(vis = "pub")), fields(value, get(copy)))]
 #[non_exhaustive]
-#[fieldwork(get)]
 pub struct DecoderResamplerSettings<B = NoResamplerBackend> {
+    #[config(skip = "backend strategy selected by the caller", get(ref))]
     pub(crate) backend: B,
-    #[builder(default)]
-    #[field(get(copy))]
+    #[config(builder(default))]
     pub(crate) options: ResamplerOptions,
-    #[builder(default)]
-    #[field(get(copy))]
+    #[config(builder(default))]
     pub(crate) quality: ResamplerQuality,
 }
 
@@ -32,23 +30,19 @@ where
 ///
 /// [`AudioDecoderConfigPatch`] is what a configuration document may say about
 /// it, reached through `audio.decoder`.
-#[derive(Clone, Debug, Builder, fieldwork::Fieldwork, Patch)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Debug, Config, Patch)]
+#[config(default, builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
-#[fieldwork(opt_in, get)]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct AudioDecoderConfig<B = NoResamplerBackend> {
-    #[builder(default)]
-    #[field(get, copy)]
+    #[config(builder(default), get(copy))]
     pub(crate) backend: DecoderBackend,
-    #[builder(default)]
-    #[field(get, copy)]
+    #[config(builder(default), get(copy))]
     pub(crate) gapless_mode: GaplessMode,
     /// Not a document key: `DecoderResamplerSettings` carries the resampler
     /// backend itself, an object the construction site hands over and no
     /// document can name. `None` means the decoder resamples through
     /// `B::default()` with this crate's own options and quality.
-    #[patch(skip)]
+    #[config(skip = "caller-selected resampler backend strategy", patch(skip))]
     pub(crate) resampler: Option<DecoderResamplerSettings<B>>,
 }
 

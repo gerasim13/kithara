@@ -324,16 +324,20 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
             .with_cancel(cancel.child())
             .with_runtime(Handle::current()),
     );
-    AnalysisPersistence::new(AnalysisPersistenceConfig::new(
-        worker,
-        pools,
-        NonZeroUsize::MIN,
-        Duration::from_secs(u64::from(chunk_seconds().get())),
-        DispatcherConfig::builder()
-            .name("analysis-service-test")
+    AnalysisPersistence::new(
+        AnalysisPersistenceConfig::builder()
+            .worker(worker)
+            .pools(pools)
+            .queue_capacity(NonZeroUsize::MIN)
+            .chunk_duration(Duration::from_secs(u64::from(chunk_seconds().get())))
+            .dispatcher(
+                DispatcherConfig::builder()
+                    .name("analysis-service-test")
+                    .build(),
+            )
+            .task(TaskConfig::new())
             .build(),
-        TaskConfig::new(),
-    ))
+    )
     .expect("persistence fixture starts")
 }
 

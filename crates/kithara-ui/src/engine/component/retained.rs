@@ -21,7 +21,7 @@ use crate::{
     },
 };
 
-pub(super) trait Component {
+pub(crate) trait Component {
     fn blur(&mut self) {}
     fn cancel_pointer(&mut self) {}
     fn captures_pointer(&self) -> bool;

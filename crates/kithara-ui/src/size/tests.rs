@@ -301,7 +301,7 @@ fn a_menu_glyph_takes_its_width_from_the_skin_and_its_height_from_the_row() {
 }
 
 #[kithara::test]
-fn a_shrinking_text_role_takes_its_height_from_the_row_that_holds_it() {
+fn a_shrinking_text_role_is_one_line_tall() {
     let skin = builtin::skin_doc();
     let text = |style| {
         control_size(
@@ -322,7 +322,7 @@ fn a_shrinking_text_role_takes_its_height_from_the_row_that_holds_it() {
     for style in [TextStyle::Mono, TextStyle::Caption, TextStyle::BrandSmall] {
         assert_eq!(
             text(style),
-            SizeSpec::new(Dim::Shrink, Dim::Fill),
+            SizeSpec::new(Dim::Shrink, Dim::Shrink),
             "{style:?}"
         );
     }

@@ -20,6 +20,7 @@ use crate::{
     index::{AvailabilityIndex, PinDurability, ScopedAvailabilityObserver},
     layout::ResourceKey,
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
+    store::{AssetStoreConfig, AssetStoreConfigOwnerAccess, StorageBackend},
 };
 
 /// Composite cache key for mem-backed active resources.
@@ -48,8 +49,12 @@ impl MemCacheKey {
 /// (`asset_root`, `ResourceKey`, `RequestIdentity`) via an internal weak
 /// cache. Distinct `asset_roots` stay isolated by construction.
 #[derive_where::derive_where(Clone)]
-#[derive(derive_more::Debug)]
-pub struct MemAssetStore<S> {
+#[derive(derive_more::Debug, kithara_config::ConfigOwner)]
+#[config_owner(AssetStoreConfig<S>, config)]
+pub struct MemAssetStore<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Weak cache of active resources to ensure sharing.
     #[debug("{:?}", self.active_resources.len())]
     active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
@@ -61,8 +66,8 @@ pub struct MemAssetStore<S> {
     availability: AvailabilityIndex,
     #[debug(skip)]
     cancel: CancelToken,
-    mem_resource_capacity: Option<usize>,
-    pools: PoolRegion<S>,
+    #[debug(skip)]
+    config: Arc<AssetStoreConfig<S>>,
 }
 
 #[derive(Debug)]
@@ -115,18 +120,20 @@ impl AssetDeleter for MemAssetDeleter {
 /// Setup for [`MemAssetStore::with_availability_and_deleter`]: the `cancel`
 /// token, optional `mem_resource_capacity`, the shared `availability` index,
 /// the `active_resources` map, and the canonical `deleter`.
-pub(crate) struct MemStoreSetup<S> {
+pub(crate) struct MemStoreSetup<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     pub(crate) deleter: Arc<dyn AssetDeleter>,
     pub(crate) availability: AvailabilityIndex,
     pub(crate) cancel: CancelToken,
-    pub(crate) mem_resource_capacity: Option<usize>,
-    pub(crate) pools: PoolRegion<S>,
+    pub(crate) config: Arc<AssetStoreConfig<S>>,
 }
 
 impl<S> MemAssetStore<S>
 where
-    S: HasPool<u8>,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Create a new in-memory asset store with its own unshared
     /// [`AvailabilityIndex`].
@@ -173,13 +180,19 @@ where
             lru,
             Arc::clone(&active_resources),
         ));
+        let config = Arc::new(
+            AssetStoreConfig::for_pools(pools)
+                .backend(StorageBackend::Memory)
+                .cancel(cancel.clone())
+                .maybe_mem_resource_capacity(mem_resource_capacity)
+                .into_config(),
+        );
         Self::with_availability_and_deleter(MemStoreSetup {
             active_resources,
             deleter,
             availability,
             cancel,
-            mem_resource_capacity,
-            pools,
+            config,
         })
     }
 
@@ -191,17 +204,15 @@ where
             active_resources,
             deleter,
             availability,
-            pools,
+            config,
             cancel,
-            mem_resource_capacity,
         } = setup;
         Self {
             active_resources,
             deleter,
             availability,
             cancel,
-            mem_resource_capacity,
-            pools,
+            config,
         }
     }
 }
@@ -246,8 +257,11 @@ where
         }
 
         let options = MemOptions::builder()
-            .buffer(self.pools.get::<u8>())
-            .maybe_capacity(self.mem_resource_capacity.filter(|capacity| *capacity > 0))
+            .buffer(self.config.pools.get::<u8>())
+            .maybe_capacity(
+                self.mem_resource_capacity()
+                    .filter(|capacity| *capacity > 0),
+            )
             .build();
         let mem: MemResource = Resource::open_with_observer(
             self.cancel.clone(),
@@ -272,14 +286,14 @@ where
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         Ok(StorageResource::from(MemResource::new(
             self.cancel.clone(),
-            self.pools.get::<u8>(),
+            self.config.pools.get::<u8>(),
         )))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         Ok(StorageResource::from(MemResource::new(
             self.cancel.clone(),
-            self.pools.get::<u8>(),
+            self.config.pools.get::<u8>(),
         )))
     }
 

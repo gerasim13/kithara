@@ -3,6 +3,7 @@
 use std::{collections::HashSet, path::Path};
 
 use dashmap::DashSet;
+use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 
@@ -14,6 +15,7 @@ use crate::{
     index::{EvictConfig, LruIndex, PinsIndex},
     layout::ResourceKey,
     resource::{AcquisitionResult, AssetResourceState, RequestIdentity},
+    store::{AssetStoreConfig, AssetStoreConfigOwnerAccess},
 };
 
 mod kithara {
@@ -74,56 +76,57 @@ pub(crate) trait ByteRecorder: Send + Sync {
 /// - Byte accounting is best-effort and must be explicitly updated via
 ///   `touch_asset_bytes`; the evictor does NOT walk the filesystem.
 /// - When `enabled` is `false`, all operations delegate directly to the inner layer.
-#[derive(Clone, derive_more::Debug)]
-pub struct EvictAssets<A>
+#[derive_where::derive_where(Clone; A: Assets)]
+#[derive(derive_more::Debug, kithara_config::ConfigOwner)]
+#[debug("EvictAssets {{ .. }}")]
+#[config_owner(AssetStoreConfig<S>, config)]
+pub struct EvictAssets<A, S>
 where
     A: Assets,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Single canonical removal channel — see [`crate::backend::AssetDeleter`].
-    #[debug(skip)]
     deleter: Arc<dyn AssetDeleter>,
-    #[debug(skip)]
     inner: Arc<A>,
-    #[debug(skip)]
     seen: Arc<DashSet<String>>,
-    #[debug(skip)]
     cancel: CancelToken,
-    cfg: EvictConfig,
-    #[debug(skip)]
+    config: Arc<AssetStoreConfig<S>>,
     events: EvictionEvents,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
     /// LRU bookkeeping and disk-side deletion stay in sync.
-    #[debug(skip)]
     lru: LruIndex,
     /// Shared pins index — same instance used by `LeaseAssets` for
     /// pin/unpin lifecycle and by `DiskAssetDeleter` for full-asset
     /// removal cleanup.
-    #[debug(skip)]
     pins: PinsIndex,
 }
 
 /// Eviction wiring for [`EvictAssets::new`], separate from the wrapped
-/// `inner` store: the `cfg`, the `cancel` token, the shared `lru` / `pins`
+/// `inner` store: the retained config, the `cancel` token, the shared `lru` / `pins`
 /// indices, and the canonical `deleter`.
-pub(crate) struct EvictDeps {
+pub(crate) struct EvictDeps<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) deleter: Arc<dyn AssetDeleter>,
     pub(crate) cancel: CancelToken,
-    pub(crate) cfg: EvictConfig,
+    pub(crate) config: Arc<AssetStoreConfig<S>>,
     pub(crate) events: EvictionEvents,
     pub(crate) lru: LruIndex,
     pub(crate) pins: PinsIndex,
 }
 
-impl<A> EvictAssets<A>
+impl<A, S> EvictAssets<A, S>
 where
     A: Assets,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Create a new eviction decorator.
     ///
     /// Activation is driven by [`Capabilities::EVICT`] on the inner store.
-    pub(crate) fn new(inner: Arc<A>, deps: EvictDeps) -> Self {
+    pub(crate) fn new(inner: Arc<A>, deps: EvictDeps<S>) -> Self {
         let EvictDeps {
-            cfg,
+            config,
             cancel,
             events,
             lru,
@@ -132,7 +135,7 @@ where
         } = deps;
         Self {
             inner,
-            cfg,
+            config,
             cancel,
             events,
             lru,
@@ -142,10 +145,17 @@ where
         }
     }
 
+    fn evict_config(&self) -> EvictConfig {
+        EvictConfig {
+            max_assets: self.max_assets(),
+            max_bytes: self.max_bytes(),
+        }
+    }
+
     /// Check if byte limit is exceeded and run eviction if needed.
     #[kithara::probe(pinned = self.pins.snapshot().len())]
     pub fn check_and_evict_if_over_limit(&self) {
-        if !self.is_active() || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
+        if !self.is_active() || self.cancel.is_cancelled() || self.max_bytes().is_none() {
             return;
         }
 
@@ -153,12 +163,12 @@ where
         let total_bytes = self.lru.total_bytes_best_effort();
         tracing::debug!(
             total_bytes,
-            max_bytes = ?self.cfg.max_bytes,
+            max_bytes = ?self.max_bytes(),
             pinned = ?pinned,
             "check_and_evict_if_over_limit"
         );
 
-        let candidates = self.lru.eviction_candidates(&self.cfg, &pinned);
+        let candidates = self.lru.eviction_candidates(&self.evict_config(), &pinned);
 
         tracing::debug!(candidates = ?candidates, "Eviction candidates selected");
         for cand in candidates {
@@ -197,7 +207,9 @@ where
         let mut pinned_with_new = pinned.clone();
         pinned_with_new.insert(asset_root.to_string());
 
-        let candidates = self.lru.eviction_candidates(&self.cfg, &pinned_with_new);
+        let candidates = self
+            .lru
+            .eviction_candidates(&self.evict_config(), &pinned_with_new);
 
         for cand in candidates {
             if self.cancel.is_cancelled() {
@@ -256,9 +268,10 @@ where
     }
 }
 
-impl<A> Assets for EvictAssets<A>
+impl<A, S> Assets for EvictAssets<A, S>
 where
     A: Assets,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     type ActiveRes = A::ActiveRes;
     type Context = A::Context;
@@ -304,9 +317,10 @@ where
     }
 }
 
-impl<A> ByteRecorder for EvictAssets<A>
+impl<A, S> ByteRecorder for EvictAssets<A, S>
 where
     A: Assets,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     fn record_bytes(&self, asset_root: &str, bytes: u64) {
         let _ = self.record_asset_bytes(asset_root, bytes);

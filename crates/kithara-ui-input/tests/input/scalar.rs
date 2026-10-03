@@ -484,6 +484,8 @@ fn a_pixel_drag_counts_from_the_start_width_and_floors_at_the_minimum() {
     let drag = Scalar::builder()
         .track(Track::HorizontalPixels {
             minimum: 28.0,
+            maximum: None,
+            direction: 1.0,
             value: 180.0,
         })
         .hover(Hover::new(CursorShape::ResizeH))
@@ -526,6 +528,32 @@ fn a_pixel_drag_counts_from_the_start_width_and_floors_at_the_minimum() {
         Outcome::set(28.0),
         "the floor is a width, so it clamps below and not above"
     );
+    let reverse = Scalar::builder()
+        .track(Track::HorizontalPixels {
+            minimum: 28.0,
+            maximum: Some(220.0),
+            direction: -1.0,
+            value: 180.0,
+        })
+        .hover(Hover::new(CursorShape::ResizeH))
+        .build();
+    reverse.on_input(
+        &mut state,
+        pointer(PointerPhase::Down),
+        &on_divider(3.0),
+        now,
+    );
+    for (x, width) in [(43.0, 140.0), (-300.0, 220.0), (300.0, 28.0)] {
+        assert_eq!(
+            reverse.on_input(
+                &mut state,
+                Input::Pointer(mouse_input(PointerPhase::Move, Some(Pt { x, y: 11.0 }))),
+                &on_divider(x),
+                now
+            ),
+            Outcome::set(width)
+        );
+    }
 }
 
 #[kithara::test]

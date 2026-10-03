@@ -278,6 +278,7 @@ fn finish_control(
             read: read.as_ref(),
             write: write.as_ref(),
             columns_state: extra.columns_state,
+            status: extra.status,
             query: extra.query,
             scope: extra.scope,
             zoom: extra.zoom,

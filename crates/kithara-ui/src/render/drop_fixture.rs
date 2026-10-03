@@ -1,14 +1,22 @@
-//! A track list beside a deck that takes drops, shared by the drag tests of
+//! A library beside a deck that takes drops, shared by the gesture tests of
 //! both hosts so each proves the same session.
 
 use std::{cell::Cell, sync::LazyLock};
 
+use num_traits::AsPrimitive;
+
 use crate::{
+    atoms::table::{TableMetrics, table_body, table_row_pitch},
     builtin,
     compile::{CompiledUi, compile},
+    draw::Rect,
     mock::TestRegistry,
+    module::{IconName, TableFrame},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
-    render::{Published, ReadValue, Reads, Scope, TableCell, TableRow, UiEvent},
+    render::{
+        Badge, Published, ReadValue, Reads, Scope, TableCell, TableRow, TreeRow, UiEvent,
+        WriteValue,
+    },
     source::{MemResolver, UiConfig},
     view,
 };
@@ -52,6 +60,80 @@ static FILTERED: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
 static BARE: LazyLock<Vec<TableRow<'static>>> =
     LazyLock::new(|| vec![row("One", None), row("Two", None), row("Three", None)]);
 
+static PLAYING: [Badge<'static>; 1] = [Badge {
+    label: "A",
+    active: true,
+}];
+
+static LOADED: [Badge<'static>; 1] = [Badge {
+    label: "A",
+    active: false,
+}];
+
+static BADGED: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
+    [&PLAYING[..], &LOADED[..], &[]]
+        .into_iter()
+        .map(|badges| {
+            TableRow::new(
+                vec![
+                    TableCell::badges("lead", badges),
+                    TableCell::text("title", "Track"),
+                ],
+                false,
+            )
+        })
+        .collect()
+});
+
+static TREE: [TreeRow<'static>; 3] = [
+    TreeRow {
+        label: "Explorer",
+        icon: IconName::Folder,
+        count: None,
+        expanded: Some(true),
+        muted: false,
+        selected: false,
+        depth: 0,
+    },
+    TreeRow {
+        label: "Music",
+        icon: IconName::Folder,
+        count: Some(6),
+        expanded: Some(false),
+        muted: false,
+        selected: false,
+        depth: 1,
+    },
+    TreeRow {
+        label: "notes",
+        icon: IconName::Folder,
+        count: None,
+        expanded: None,
+        muted: false,
+        selected: false,
+        depth: 1,
+    },
+];
+
+/// [`TREE`] once its folder row is open: one more chevron stands below it.
+static OPENED_TREE: [TreeRow<'static>; 4] = [
+    TREE[0],
+    TreeRow {
+        expanded: Some(true),
+        ..TREE[1]
+    },
+    TreeRow {
+        label: "Live",
+        icon: IconName::Folder,
+        count: None,
+        expanded: Some(false),
+        muted: false,
+        selected: false,
+        depth: 2,
+    },
+    TREE[2],
+];
+
 pub(crate) const DRAGGED: &str = "file:///two.mp3";
 pub(crate) const DRAGGED_TITLE: &str = "Two";
 pub(crate) const FILTERED_IN_ITS_PLACE: &str = "file:///three.mp3";
@@ -63,16 +145,20 @@ pub(crate) enum Rows {
     Filtered,
     Reordered,
     Bare,
+    Badged,
 }
 
 pub(crate) struct DropReads {
     pub(crate) rows: Cell<Rows>,
+    /// The tree reads as [`OPENED_TREE`].
+    pub(crate) opened: Cell<bool>,
 }
 
 impl DropReads {
     pub(crate) const fn new(rows: Rows) -> Self {
         Self {
             rows: Cell::new(rows),
+            opened: Cell::new(false),
         }
     }
 }
@@ -86,8 +172,15 @@ impl Reads for DropReads {
                 Rows::Filtered => &FILTERED[..],
                 Rows::Reordered => &REORDERED[..],
                 Rows::Bare => &BARE[..],
+                Rows::Badged => &BADGED[..],
             })),
             "library.browser_open" => Some(ReadValue::Bool(true)),
+            "library.tree" => Some(ReadValue::Tree(if self.opened.get() {
+                &OPENED_TREE
+            } else {
+                &TREE
+            })),
+            "library.query" => Some(ReadValue::Text("")),
             _ => None,
         }
     }
@@ -137,8 +230,100 @@ fn two_columns(write_width: &str) -> String {
     )
 }
 
+const LIBRARY_WIDTH: f32 = 200.0;
+const LEAD_WIDTH: f32 = 30.0;
+
+fn badge_columns() -> String {
+    format!(
+        r#"(schema: "kithara.module", version: 1, id: "library",
+    root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+        Table(
+            id: "tracks",
+            size: (w: Fill, h: Fill),
+            read: Model(id: "library.visible_tracks"),
+            columns: [
+                (id: "lead", label: "", style: Badge, width: {LEAD_WIDTH:.1}),
+                (id: "title", label: "TITLE", style: Primary, width: 170.0),
+            ],
+        ),
+    ]))"#
+    )
+}
+
+pub(crate) fn lead_cell(photo: &[u8], row: u8) -> Vec<u8> {
+    let skin = builtin::skin();
+    let body = table_body(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: LIBRARY_WIDTH,
+            h: HEIGHT,
+        },
+        TableMetrics {
+            skin,
+            frame: TableFrame::new(0.0, 0.0, true),
+        },
+    );
+    let top = f32::from(row).mul_add(table_row_pitch(skin), body.y);
+    let stride: usize = WIDTH.as_();
+    let lead: usize = LEAD_WIDTH.as_();
+    let rows: std::ops::Range<usize> = top.as_()..(top + skin.table.row_height).as_();
+    rows.flat_map(|y| {
+        photo[y * stride * 4..(y * stride + lead) * 4]
+            .iter()
+            .copied()
+    })
+    .collect()
+}
+
+/// How the tree fixture declares its `Tree`, and which host owns its input.
+#[derive(Clone, Copy)]
+pub(crate) struct TreeDoc {
+    pub(crate) engine: bool,
+    pub(crate) query: bool,
+    pub(crate) toggle: bool,
+}
+
+pub(crate) const SELECT: &str = "demo.select";
+pub(crate) const TOGGLE: &str = "demo.toggle";
+
+fn tree_module(doc: TreeDoc) -> String {
+    let id = if doc.engine { "app-library" } else { "library" };
+    let query = if doc.query {
+        r#"
+            query: Model(id: "library.query"),"#
+    } else {
+        ""
+    };
+    let toggle = if doc.toggle {
+        r#"
+            toggle: Command(id: "demo.toggle"),"#
+    } else {
+        ""
+    };
+    format!(
+        r#"(schema: "kithara.module", version: 1, id: "{id}",
+    root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+        Tree(
+            id: "browser",
+            size: (w: Fill, h: Fill),
+            read: Model(id: "library.tree"),
+            write: Command(id: "demo.select"),{query}{toggle}
+        ),
+    ]))"#
+    )
+}
+
 pub(crate) fn compiled() -> CompiledUi {
     compiled_with(LISTED_IN_PLACE)
+}
+
+pub(crate) fn compiled_with_badges() -> CompiledUi {
+    compiled_with(&badge_columns())
+}
+
+pub(crate) fn compiled_tree(doc: TreeDoc) -> CompiledUi {
+    compiled_with(&tree_module(doc))
 }
 
 pub(crate) fn compiled_engine_hosted() -> CompiledUi {
@@ -182,16 +367,35 @@ fn compiled_with(library: &str) -> CompiledUi {
         "demo.load",
         EndpointDesc::new(ValueKind::Text).with_scope("deck"),
     );
+    registry.insert(
+        EndpointCategory::Model,
+        "library.tree",
+        EndpointDesc::new(ValueKind::Tree),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "library.query",
+        EndpointDesc::new(ValueKind::Text),
+    );
+    for id in [SELECT, TOGGLE] {
+        registry.insert(
+            EndpointCategory::Command,
+            id,
+            EndpointDesc::new(ValueKind::Index),
+        );
+    }
     let mut resolver = MemResolver::default();
     resolver.insert(
         "fixture.klayout.ron",
-        r#"(schema: "kithara.layout", version: 1, id: "fixture",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "fixture",
             root: Split(axis: Horizontal, children: [
                 (node: Module(instance: "library", source: "library.kmodule.ron",
-                    size: (w: Fixed(200.0), h: Fill))),
-                (node: Module(instance: "deck-b", source: "deck.kmodule.ron", with: { "deck": "b" },
+                    size: (w: Fixed({LIBRARY_WIDTH:.1}), h: Fill))),
+                (node: Module(instance: "deck-b", source: "deck.kmodule.ron", with: {{ "deck": "b" }},
                     size: (w: Fill, h: Fill))),
-            ]))"#,
+            ]))"#
+        ),
     );
     resolver.insert("library.kmodule.ron", library);
     resolver.insert(
@@ -233,7 +437,14 @@ pub(crate) fn writes(ui: &CompiledUi, published: &[Published], reads: &dyn Reads
 pub(crate) fn load(url: &str) -> UiEvent {
     UiEvent::Write {
         key: LOAD.to_owned(),
-        value: crate::render::WriteValue::Text(url.to_owned()),
+        value: WriteValue::Text(url.to_owned()),
+    }
+}
+
+fn index(key: &str, row: usize) -> UiEvent {
+    UiEvent::Write {
+        key: key.to_owned(),
+        value: WriteValue::Index(row),
     }
 }
 
@@ -341,6 +552,186 @@ pub(crate) fn a_row_dropped_from_a_list_on_a_popover_delivers_the_decks_write<H:
 
     assert_eq!(writes, [load(DRAGGED)]);
 }
+
+/// The tree row that has a chevron below the top level.
+const FOLDER: u8 = 1;
+
+fn tree_row_y(row: u8, searched: bool) -> f32 {
+    let skin = builtin::skin();
+    let search = if searched {
+        skin.tree.search_height
+    } else {
+        0.0
+    };
+    search + skin.tree.panel_padding_top + skin.tree.row_height * (f32::from(row) + 0.5)
+}
+
+fn chevron(row: u8, searched: bool) -> (f32, f32) {
+    let skin = builtin::skin();
+    let depth = TREE[usize::from(row)].depth;
+    let x = skin.tree.indent_step.mul_add(
+        f32::from(depth),
+        skin.tree.marker_width + skin.tree.indent_base,
+    ) + skin.tree.chevron_width / 2.0;
+    (x, tree_row_y(row, searched))
+}
+
+fn label(row: u8, searched: bool) -> (f32, f32) {
+    (WIDTH / 4.0, tree_row_y(row, searched))
+}
+
+fn pressed<H: DropHost>(doc: TreeDoc, at: (f32, f32)) -> Vec<UiEvent> {
+    let ui = compiled_tree(doc);
+    let reads = DropReads::new(Rows::Listed);
+    let mut host = H::open(&ui, &reads);
+    host.pick_up(&ui, &reads, at);
+    let published = host.let_go(&ui, &reads, at);
+    writes(&ui, &published, &reads)
+}
+
+pub(crate) fn pressing_each_chevron_delivers_the_toggle_write_with_its_own_row<H: DropHost>(
+    engine: bool,
+) {
+    let doc = TreeDoc {
+        engine,
+        query: true,
+        toggle: true,
+    };
+
+    for row in [0, FOLDER] {
+        assert_eq!(
+            pressed::<H>(doc, chevron(row, true)),
+            [index(TOGGLE, usize::from(row))],
+            "the chevron of row {row}"
+        );
+    }
+}
+
+pub(crate) fn pressing_a_chevron_again_once_its_folder_opened_delivers_the_toggle_again<
+    H: DropHost,
+>(
+    engine: bool,
+) {
+    let ui = compiled_tree(TreeDoc {
+        engine,
+        query: true,
+        toggle: true,
+    });
+    let reads = DropReads::new(Rows::Listed);
+    let mut host = H::open(&ui, &reads);
+    let at = chevron(FOLDER, true);
+    host.pick_up(&ui, &reads, at);
+    let first = writes(&ui, &host.let_go(&ui, &reads, at), &reads);
+    reads.opened.set(true);
+    host.refresh(&ui, &reads);
+    host.pick_up(&ui, &reads, at);
+    let second = writes(&ui, &host.let_go(&ui, &reads, at), &reads);
+
+    let toggle = index(TOGGLE, usize::from(FOLDER));
+    assert_eq!(first, [toggle.clone()]);
+    assert_eq!(second, [toggle]);
+}
+
+pub(crate) fn pressing_a_label_delivers_the_select_write_with_its_row<H: DropHost>(engine: bool) {
+    let doc = TreeDoc {
+        engine,
+        query: true,
+        toggle: true,
+    };
+
+    assert_eq!(
+        pressed::<H>(doc, label(FOLDER, true)),
+        [index(SELECT, usize::from(FOLDER))]
+    );
+}
+
+pub(crate) fn a_tree_without_toggle_selects_from_its_chevron<H: DropHost>(engine: bool) {
+    let doc = TreeDoc {
+        engine,
+        query: true,
+        toggle: false,
+    };
+
+    assert_eq!(
+        pressed::<H>(doc, chevron(FOLDER, true)),
+        [index(SELECT, usize::from(FOLDER))]
+    );
+}
+
+pub(crate) fn a_tree_without_query_draws_no_search_row<H: DropHost>(engine: bool) {
+    let doc = TreeDoc {
+        engine,
+        query: false,
+        toggle: true,
+    };
+
+    assert_eq!(
+        pressed::<H>(doc, label(0, false)),
+        [index(TOGGLE, 0)],
+        "the first row must stand where the search row would"
+    );
+    assert_eq!(
+        pressed::<H>(doc, chevron(FOLDER, false)),
+        [index(TOGGLE, usize::from(FOLDER))]
+    );
+}
+
+pub(crate) fn a_chevron_released_outside_its_row_does_not_toggle<H: DropHost>(engine: bool) {
+    let ui = compiled_tree(TreeDoc {
+        engine,
+        query: true,
+        toggle: true,
+    });
+    let reads = DropReads::new(Rows::Listed);
+    let mut host = H::open(&ui, &reads);
+    host.pick_up(&ui, &reads, chevron(FOLDER, true));
+    assert!(writes(&ui, &host.let_go(&ui, &reads, (390.0, 190.0)), &reads).is_empty());
+}
+
+macro_rules! tree_suite {
+    ($host:ty, $engine:expr) => {
+        #[kithara::test]
+        fn a_chevron_released_outside_its_row_does_not_toggle() {
+            $crate::render::drop_fixture::a_chevron_released_outside_its_row_does_not_toggle::<$host>($engine);
+        }
+        #[kithara::test]
+        fn pressing_each_chevron_delivers_the_toggle_write_with_its_own_row() {
+            $crate::render::drop_fixture::pressing_each_chevron_delivers_the_toggle_write_with_its_own_row::<
+                $host,
+            >($engine);
+        }
+
+        #[kithara::test]
+        fn pressing_a_chevron_again_once_its_folder_opened_delivers_the_toggle_again() {
+            $crate::render::drop_fixture::pressing_a_chevron_again_once_its_folder_opened_delivers_the_toggle_again::<
+                $host,
+            >($engine);
+        }
+
+        #[kithara::test]
+        fn pressing_a_label_delivers_the_select_write_with_its_row() {
+            $crate::render::drop_fixture::pressing_a_label_delivers_the_select_write_with_its_row::<
+                $host,
+            >($engine);
+        }
+
+        #[kithara::test]
+        fn a_tree_without_toggle_selects_from_its_chevron() {
+            $crate::render::drop_fixture::a_tree_without_toggle_selects_from_its_chevron::<$host>(
+                $engine,
+            );
+        }
+
+        #[kithara::test]
+        fn a_tree_without_query_draws_no_search_row() {
+            $crate::render::drop_fixture::a_tree_without_query_draws_no_search_row::<$host>(
+                $engine,
+            );
+        }
+    };
+}
+
+pub(crate) use tree_suite;
 
 macro_rules! drop_suite {
     ($host:ty) => {

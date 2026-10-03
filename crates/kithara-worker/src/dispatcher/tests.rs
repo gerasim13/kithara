@@ -3,6 +3,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use kithara_config::{Config, ConfigOwner};
 use kithara_platform::{
     CancelGroup, CancelScope,
     sync::{
@@ -20,7 +21,7 @@ use super::{
         cancel_all, is_slow_tick, park_after_outcome, produce_pass, recycle_all,
         refresh_priorities, remove_terminal, reorder_slots, run_pass, unregister_slot,
     },
-    state::{SchedulerBudgets, Slot},
+    state::Slot,
 };
 use crate::{
     DispatcherConfig, Event, Observer, PassOutcome, PassReport, Priority, Task, TaskConfig,
@@ -146,15 +147,11 @@ impl Observer for Events {
     }
 }
 
-fn budgets() -> SchedulerBudgets {
-    SchedulerBudgets {
-        backpressure_poll_interval: Duration::from_millis(10),
-        fairness_yield_interval: 16,
-        idle_timeout: Duration::from_millis(100),
-        slow_tick_threshold: Duration::from_secs(1),
-        task_burst: 32,
-        wait_timeout: Duration::from_millis(10),
-    }
+fn budgets() -> DispatcherConfig {
+    DispatcherConfig::builder()
+        .name("test")
+        .slow_tick_threshold(Duration::from_secs(1))
+        .build()
 }
 
 fn pass_report(outcome: PassOutcome) -> PassReport {
@@ -170,7 +167,11 @@ fn slot(id: u64, priority: Priority, task: impl Task) -> Slot {
     Slot {
         _cancel_guards: Vec::new(),
         cancel: CancelGroup::from(token.clone()),
-        control: TaskControl::new(priority, token.clone(), Wake::default()),
+        control: TaskControl::new(
+            Arc::new(TaskConfig::new().with_priority(priority)),
+            token.clone(),
+            Wake::default(),
+        ),
         id: TaskId::new(id),
         is_terminal: false,
         priority,
@@ -202,6 +203,10 @@ fn priority_control_refreshes_the_single_mutable_priority_source() {
         slot(2, Priority::new(2), FixedTask(TickResult::Done)),
     ];
     slots[0].control.set_priority(Priority::new(3));
+    assert_eq!(
+        slots[0].control.config().values().priority,
+        Priority::new(3)
+    );
     let mut needs_reorder = false;
 
     refresh_priorities(&mut slots, &mut needs_reorder);
@@ -223,9 +228,9 @@ fn configured_task_burst_limits_one_visit() {
     )];
     let mut observer = Events::default();
     let mut configured = budgets();
-    configured.task_burst = 2;
+    configured.task_burst = NonZeroU32::new(2).expect("nonzero");
 
-    let report = produce_pass(&mut slots, configured, &mut observer);
+    let report = produce_pass(&mut slots, &configured, &mut observer);
 
     assert_eq!(report.outcome, PassOutcome::Progress);
     assert_eq!(ticks.load(Ordering::Relaxed), 2);
@@ -240,7 +245,7 @@ fn produce_pass_keeps_live_upstream_demand_out_of_waiting_outcome() {
         FixedTask(TickResult::UpstreamPending),
     )];
     assert_eq!(
-        produce_pass(&mut pending, budgets(), &mut observer).outcome,
+        produce_pass(&mut pending, &budgets(), &mut observer).outcome,
         PassOutcome::UpstreamPending
     );
 
@@ -253,7 +258,7 @@ fn produce_pass_keeps_live_upstream_demand_out_of_waiting_outcome() {
         slot(2, Priority::default(), FixedTask(TickResult::Waiting)),
     ];
     assert_eq!(
-        produce_pass(&mut mixed, budgets(), &mut observer).outcome,
+        produce_pass(&mut mixed, &budgets(), &mut observer).outcome,
         PassOutcome::Waiting,
         "a real upstream wait must still outrank live pending demand"
     );
@@ -266,7 +271,7 @@ fn terminal_visit_recycles_before_and_after_tick() {
     let mut observer = Events::default();
 
     recycle_all(&mut slots);
-    let report = produce_pass(&mut slots, budgets(), &mut observer);
+    let report = produce_pass(&mut slots, &budgets(), &mut observer);
 
     assert_eq!(report.outcome, PassOutcome::Idle);
     assert!(slots[0].is_terminal);
@@ -292,7 +297,7 @@ fn live_visit_flushes_deferred_work_before_reporting_wait() {
     )];
     let mut observer = Events::default();
 
-    let report = produce_pass(&mut slots, budgets(), &mut observer);
+    let report = produce_pass(&mut slots, &budgets(), &mut observer);
 
     assert_eq!(report.outcome, PassOutcome::Waiting);
     assert_eq!(received.try_recv(), Ok("recycle"));
@@ -338,7 +343,7 @@ fn produce_pass_recycles_before_producing_and_between_burst_ticks() {
     let mut observer = Events::default();
 
     recycle_all(&mut slots);
-    let report = produce_pass(&mut slots, budgets(), &mut observer);
+    let report = produce_pass(&mut slots, &budgets(), &mut observer);
 
     assert_eq!(report.outcome, PassOutcome::Idle);
     let sequence = std::iter::from_fn(|| received.try_recv().ok()).collect::<Vec<_>>();
@@ -364,7 +369,7 @@ fn terminal_tick_flushes_deferred_work_before_slot_removal() {
     )];
     let mut observer = Events::default();
 
-    let report = produce_pass(&mut slots, budgets(), &mut observer);
+    let report = produce_pass(&mut slots, &budgets(), &mut observer);
 
     assert_eq!(report.outcome, PassOutcome::Idle);
     assert!(slots[0].is_terminal);
@@ -375,7 +380,7 @@ fn terminal_tick_flushes_deferred_work_before_slot_removal() {
 fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
     let wake = Wake::default();
     let mut configured = budgets();
-    configured.fairness_yield_interval = 3;
+    configured.fairness_yield_interval = NonZeroU32::new(3).expect("nonzero");
     configured.backpressure_poll_interval = Duration::ZERO;
     configured.idle_timeout = Duration::ZERO;
     configured.wait_timeout = Duration::ZERO;
@@ -383,20 +388,20 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
 
     park_after_outcome(
         &wake,
-        configured,
+        &configured,
         pass_report(PassOutcome::Progress),
         &mut streak,
     );
     park_after_outcome(
         &wake,
-        configured,
+        &configured,
         pass_report(PassOutcome::Progress),
         &mut streak,
     );
     assert_eq!(streak, 2);
     park_after_outcome(
         &wake,
-        configured,
+        &configured,
         pass_report(PassOutcome::Progress),
         &mut streak,
     );
@@ -409,7 +414,7 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         PassOutcome::Idle,
     ] {
         streak = 2;
-        park_after_outcome(&wake, configured, pass_report(outcome), &mut streak);
+        park_after_outcome(&wake, &configured, pass_report(outcome), &mut streak);
         assert_eq!(streak, 0, "{outcome:?} must reset the progress streak");
     }
 }
@@ -489,7 +494,7 @@ fn a_visit_that_progressed_before_waiting_reports_progress() {
     )];
     let mut observer = Events::default();
 
-    let report = produce_pass(&mut slots, budgets(), &mut observer);
+    let report = produce_pass(&mut slots, &budgets(), &mut observer);
 
     assert_eq!(
         report.outcome,
@@ -507,7 +512,7 @@ fn a_pass_reorders_a_roster_the_commands_left_unsorted() {
     let mut needs_reorder = true;
     let mut observer = Events::default();
 
-    let report = run_pass(&mut slots, &mut needs_reorder, budgets(), &mut observer);
+    let report = run_pass(&mut slots, &mut needs_reorder, &budgets(), &mut observer);
 
     assert_eq!(
         report.first_progress_task,
@@ -534,7 +539,7 @@ fn a_pass_drops_an_externally_cancelled_slot_before_producing() {
     let mut needs_reorder = false;
     let mut observer = Events::default();
 
-    let report = run_pass(&mut slots, &mut needs_reorder, budgets(), &mut observer);
+    let report = run_pass(&mut slots, &mut needs_reorder, &budgets(), &mut observer);
 
     assert!(slots.is_empty(), "the cancelled slot left the roster");
     assert_eq!(
@@ -553,7 +558,7 @@ fn a_pass_reports_its_outcome_to_the_observer() {
     let mut needs_reorder = false;
     let mut observer = Events::default();
 
-    let _ = run_pass(&mut slots, &mut needs_reorder, budgets(), &mut observer);
+    let _ = run_pass(&mut slots, &mut needs_reorder, &budgets(), &mut observer);
 
     assert!(
         observer
@@ -779,7 +784,7 @@ mod native {
 
         park_after_outcome(
             &wake,
-            configured,
+            &configured,
             pass_report(PassOutcome::Waiting),
             &mut streak,
         );
@@ -799,7 +804,7 @@ mod native {
         let mut streak = 0;
         let started = Instant::now();
 
-        park_after_outcome(&wake, configured, backpressured_report(1), &mut streak);
+        park_after_outcome(&wake, &configured, backpressured_report(1), &mut streak);
 
         assert!(
             started.elapsed() < consts::PARK_BUDGET,
@@ -817,7 +822,7 @@ mod native {
         let mut streak = 0;
         let started = Instant::now();
 
-        park_after_outcome(&wake, configured, backpressured_report(1), &mut streak);
+        park_after_outcome(&wake, &configured, backpressured_report(1), &mut streak);
 
         assert!(
             started.elapsed() >= consts::PARK_BUDGET,
@@ -841,7 +846,7 @@ mod native {
         let mut configured = budgets();
         configured.slow_tick_threshold = Duration::ZERO;
 
-        let _ = produce_pass(&mut slots, configured, &mut observer);
+        let _ = produce_pass(&mut slots, &configured, &mut observer);
         assert!(
             observer
                 .0
@@ -849,11 +854,11 @@ mod native {
                 .any(|event| matches!(event, Event::SlowTick { .. }))
         );
 
-        configured.fairness_yield_interval = 1;
+        configured.fairness_yield_interval = NonZeroU32::MIN;
         let mut streak = 0;
         park_after_outcome(
             &Wake::default(),
-            configured,
+            &configured,
             pass_report(PassOutcome::Progress),
             &mut streak,
         );

@@ -22,6 +22,11 @@ use crate::{
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
+        #[cfg(not(target_arch = "wasm32"))]
+        Message::AddMusicFolder => {
+            state.picker.open();
+            Task::none()
+        }
         Message::BroadcastToggle => {
             state.send(Command::App(AppCmd::BroadcastToggle));
             Task::none()
@@ -48,10 +53,6 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::DeleteFocusedTrack => {
             delete_focused_track(state);
-            Task::none()
-        }
-        Message::SelectCatalogTrack(index) => {
-            handle_select_catalog(state, index);
             Task::none()
         }
         Message::PauseHiddenDecks => {
@@ -161,13 +162,8 @@ fn handle_deck(state: &mut Kithara, id: DeckId, msg: &DeckMsg) {
     state.send(Command::Deck { cmd, deck: id });
 }
 
-/// Clicking a row highlights it; a deck gets the row by dragging it there, so
-/// the target deck is always the one the pointer chose.
-const fn handle_select_catalog(state: &mut Kithara, index: usize) {
-    state.selected_track = Some(index);
-}
-
 fn handle_tick(state: &mut Kithara) {
+    state.library.tick();
     let playing = state.snapshot.decks.iter().any(|deck| deck.playing);
     state.ui.advance(Duration::from_millis(
         subscription_config(playing).tick_interval_ms,
@@ -249,9 +245,6 @@ mod tests {
             );
             assert_eq!(rig.snapshots.load().mix.position, 1.0);
             assert_eq!(rig.ui.snapshot.mix.position, 1.0);
-
-            apply(rig, Message::SelectCatalogTrack(1));
-            assert_eq!(rig.ui.selected_track, Some(1));
 
             apply(
                 rig,

@@ -3,6 +3,8 @@ use core::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use bon::bon;
+use kithara_config::Config;
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
@@ -23,8 +25,8 @@ pub enum LimiterError {
 }
 
 /// Output ceiling and gain recovery of one [`PeakLimiter`].
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(get, copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[config(builder(existing), owner_access, fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct LimiterConfig {
     /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
@@ -33,7 +35,7 @@ pub struct LimiterConfig {
     release_ms: f32,
 }
 
-#[bon::bon]
+#[bon]
 impl LimiterConfig {
     #[builder(
         builder_type(vis = "pub"),
@@ -68,7 +70,8 @@ impl Default for LimiterConfig {
 
 /// Stereo-linked, zero-lookahead peak limiter: immediate attack, exponential release toward unity,
 /// and a unity bypass below the ceiling that is exact for normal finite samples.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, kithara_config::ConfigOwner)]
+#[config_owner(config)]
 #[non_exhaustive]
 pub struct PeakLimiter {
     /// The last `DETECTOR_HALF_WIDTH` input samples of every channel, oldest first, so a
@@ -85,7 +88,7 @@ pub struct PeakLimiter {
     /// not at the start of a block, where that interval was last judged against a held
     /// tail rather than the samples that actually followed.
     shared_valid: bool,
-    ceiling: f32,
+    config: LimiterConfig,
     envelope: f32,
     release_coeff: f32,
     channels: usize,
@@ -119,7 +122,6 @@ impl PeakLimiter {
         channels: NonZeroUsize,
         config: LimiterConfig,
     ) -> Result<Self, LimiterError> {
-        let ceiling = config.ceiling();
         let release_ms = config.release_ms();
         if channels.get() > Self::DETECTOR_CHANNELS {
             return Err(LimiterError::Channels {
@@ -143,7 +145,7 @@ impl PeakLimiter {
         }
 
         Ok(Self {
-            ceiling,
+            config,
             release_coeff,
             taps,
             envelope: 1.0,
@@ -270,8 +272,8 @@ impl PeakLimiter {
     /// for one frame.
     #[inline]
     fn step(&mut self, peak: f32) -> f32 {
-        let required = if peak > self.ceiling {
-            self.ceiling / peak
+        let required = if peak > self.ceiling() {
+            self.ceiling() / peak
         } else {
             1.0
         };

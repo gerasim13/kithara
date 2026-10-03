@@ -41,7 +41,7 @@ impl Control for Text<'_> {
             | TextStyle::PivotTitle
             | TextStyle::PivotTrackArtist
             | TextStyle::PivotTrackTitle
-            | TextStyle::PivotValue => SizeSpec::new(Dim::Shrink, Dim::Fill),
+            | TextStyle::PivotValue => SizeSpec::new(Dim::Shrink, Dim::Shrink),
             TextStyle::Body
             | TextStyle::Brand
             | TextStyle::DeckLetter

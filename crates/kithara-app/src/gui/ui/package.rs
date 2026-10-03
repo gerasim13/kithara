@@ -7,7 +7,7 @@ use kithara::ui::{
     package::{PackageDoc, load_package},
     render::Skin,
     skin::load_skin,
-    source::{Limits, MemResolver, SourceResolver},
+    source::{Limits, MemResolver, OverlayResolver, SourceResolver},
     text::{TextDoc, parse_text},
 };
 
@@ -60,17 +60,21 @@ impl Package {
         self.screens.document(layout)
     }
 
-    /// Reads the package laid out at `root` over the documents this build
-    /// carries, or only those documents when `root` names nothing.
-    ///
-    /// A path that does not exist means no package was laid out. Anything else
-    /// that stops the package being read - a permission, a broken manifest -
-    /// is an error rather than a quiet return to the built-in documents.
-    pub(crate) fn load(root: Option<&Path>) -> Result<Rc<Self>, UiDocError> {
-        root.map_or_else(|| Self::read(Box::new(embedded())), Self::read_folder)
+    pub(in crate::gui) fn load(
+        root: Option<&Path>,
+        modules: MemResolver,
+    ) -> Result<Rc<Self>, UiDocError> {
+        match root {
+            Some(root) => Self::read_folder(root, modules),
+            None => Self::read(embedded(), modules),
+        }
     }
 
-    fn read(resolver: Box<dyn SourceResolver>) -> Result<Rc<Self>, UiDocError> {
+    fn read<R: SourceResolver + 'static>(
+        documents: R,
+        modules: MemResolver,
+    ) -> Result<Rc<Self>, UiDocError> {
+        let resolver: Box<dyn SourceResolver> = Box::new(OverlayResolver::new(modules, documents));
         let manifest = load_package(resolver.as_ref(), Self::MANIFEST)?;
         let screens = Screens::resolve(&manifest, resolver.as_ref())?;
         let text = catalog(resolver.as_ref(), &manifest)?;
@@ -84,22 +88,22 @@ impl Package {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn read_folder(root: &Path) -> Result<Rc<Self>, UiDocError> {
-        use kithara::ui::source::{FileResolver, OverlayResolver};
+    fn read_folder(root: &Path, modules: MemResolver) -> Result<Rc<Self>, UiDocError> {
+        use kithara::ui::source::FileResolver;
 
         if !root.exists() {
-            return Self::read(Box::new(embedded()));
+            return Self::read(embedded(), modules);
         }
         let files = FileResolver::new(root).map_err(|error| UiDocError::Unreadable {
             origin: SourceUri(root.display().to_string()),
             rel: String::new(),
             source: error,
         })?;
-        Self::read(Box::new(OverlayResolver::new(files, embedded())))
+        Self::read(OverlayResolver::new(files, embedded()), modules)
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn read_folder(root: &Path) -> Result<Rc<Self>, UiDocError> {
+    fn read_folder(root: &Path, _modules: MemResolver) -> Result<Rc<Self>, UiDocError> {
         use std::io::ErrorKind;
 
         Err(UiDocError::Unreadable {
@@ -184,6 +188,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::gui::test_fixture;
 
     mod consts {
         /// The toolkit documents this build ships its own version of.
@@ -192,11 +197,11 @@ mod tests {
         /// standing at a path the toolkit also ships replaces it. These two do so
         /// deliberately: the toolkit's menu commands `ui.window.focus`,
         /// `ui.window.open`, `ui.window.close`, `ui.window.cycle_display`,
-        /// `ui.window.hidden`, `ui.window.can_open`, `ui.settings.open`,
-        /// `ui.library.add_folder` and `ui.modules.title`, which this application
-        /// answers on nowhere, so drawing it here would be refused. Everything
-        /// else the menu is built from - its module cell, layout row, toggle row
-        /// and hint row - is taken from the toolkit rather than copied.
+        /// `ui.window.hidden`, `ui.window.can_open`, `ui.settings.open` and
+        /// `ui.modules.title`, which this application answers on nowhere, so
+        /// drawing it here would be refused. Everything else the menu is built
+        /// from - its module cell, layout row, toggle row and hint row - is
+        /// taken from the toolkit rather than copied.
         pub(super) const REPLACED: [&str; 2] = [
             "modules/app-menu.kmodule.ron",
             "modules/app-menu/window-row.kmodule.ron",
@@ -221,7 +226,7 @@ mod tests {
 
     #[kithara::test]
     fn no_folder_reads_the_documents_this_build_carries() {
-        let package = Package::load(None).expect("the embedded package must load");
+        let package = test_fixture::package(None).expect("the embedded package must load");
 
         for (path, text) in DOCS {
             let loaded = package

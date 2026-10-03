@@ -1,17 +1,19 @@
 use std::sync::atomic::AtomicU64;
 
-use bon::Builder;
+use kithara_config::Config;
 use kithara_platform::sync::Arc;
 
 /// Minimal configuration carried into the probe / direct-reader path.
-#[derive(Default, Builder)]
+#[derive(Default, Config)]
+#[config(construction)]
 pub(crate) struct SymphoniaConfig {
     /// Handle for dynamic byte length updates (HLS).
+    #[config(skip = "transferred to the Symphonia reader")]
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     /// File extension hint for Symphonia probe (e.g., `"mp3"`, `"aac"`).
     ///
     /// Used by the probe path when no container is known up-front.
-    #[builder(into)]
+    #[config(skip = "consumed by the probe", builder(into))]
     pub(crate) hint: Option<String>,
     /// Enable gapless trim wiring through the Symphonia decoder.
     ///
@@ -20,7 +22,7 @@ pub(crate) struct SymphoniaConfig {
     /// internally trim (FLAC/Opus/Vorbis) honour it. MP3 priming is
     /// applied separately via
     /// [`crate::codec::FrameCodec::decoder_algo_delay`].
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) gapless: bool,
 }
 

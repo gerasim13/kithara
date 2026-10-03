@@ -9,8 +9,11 @@ use iced::{
 use kithara::platform::{sync::Arc, time::Duration, tokio::sync::mpsc::UnboundedSender};
 use tracing::warn;
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::library::FolderPicker;
 use super::{
     frontend::{Boot, window_settings},
+    library::Library,
     message::Message,
     overlay::Overlay,
     subscription,
@@ -19,7 +22,6 @@ use super::{
     ui::AppUi,
 };
 use crate::{
-    catalog::Catalog,
     engine::{Command, EngineSnapshot, Envelope},
     theme::gui,
 };
@@ -29,13 +31,14 @@ pub(crate) struct Kithara {
     /// The compiled UI and its host-owned view state.
     pub(crate) ui: AppUi,
     pub(crate) snapshot: Arc<EngineSnapshot>,
-    /// The app's track list; decks load from it.
-    pub(crate) catalog: Catalog,
+    /// The library shell and the sources it mounts.
+    pub(in crate::gui) library: Library,
+    /// Asks the user for a folder to add to the library's Music Folders.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::gui) picker: FolderPicker,
     pub(crate) palette: gui::GuiPalette,
     /// The app window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
-    /// Highlighted catalog row, shared by every deck's load buttons.
-    pub(crate) selected_track: Option<usize>,
     published: Arc<EngineSnapshot>,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,
     overlay: Overlay,
@@ -44,6 +47,9 @@ pub(crate) struct Kithara {
 }
 
 impl Kithara {
+    /// Whether the app holds a folder picker to answer Add folder.
+    pub(in crate::gui) const PICKS_FOLDERS: bool = cfg!(not(target_arch = "wasm32"));
+
     /// Boot function for `iced::daemon()`. Opens the app window.
     pub(crate) fn new(boot: Boot) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings(boot.ui.window_min()));
@@ -59,12 +65,13 @@ impl Kithara {
             published,
             snapshots: boot.snapshots,
             commands: boot.commands,
-            catalog: boot.catalog,
+            library: boot.library,
+            #[cfg(not(target_arch = "wasm32"))]
+            picker: boot.picker,
             ui: boot.ui,
             palette: boot.palette.into(),
             window_id,
             overlay: Overlay::default(),
-            selected_track: None,
             seq: 0,
         };
         state.refresh();
@@ -75,7 +82,7 @@ impl Kithara {
         self.published = self.snapshots.load_full();
         self.overlay.retire(self.published.applied_seq);
         self.snapshot = self.overlay.over(&self.published);
-        self.ui.cache.refresh(&self.snapshot, &self.catalog);
+        self.ui.cache.refresh(&self.snapshot);
     }
 
     pub(crate) fn send(&mut self, command: Command) {

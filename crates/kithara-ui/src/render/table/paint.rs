@@ -7,12 +7,12 @@ use iced::{
 };
 use kithara_test_macros as kithara;
 
-use super::super::{Carried, Marked, Marks, Probe, Published, Skin, controls::RetainedCanvasState};
+use super::super::{Carried, Marked, Marks, Probe, Published, controls::RetainedCanvasState};
 use crate::{
     atoms::table::{
-        ColumnLayout, TableRowData, column_resizable,
+        column_resizable,
         face::{Drawn, TableFace},
-        minimum_table_width, table_content_height, table_row_at,
+        table_content_height, table_row_at,
     },
     backends::replay_ordered,
     draw::{DrawList, Pt, Rect},
@@ -35,14 +35,9 @@ pub(super) struct TablePaint {
 }
 
 impl TablePaint {
-    pub(super) fn new(
-        path: &str,
-        rows: Vec<TableRowData>,
-        columns: Vec<ColumnLayout>,
-        skin: &Skin,
-    ) -> Self {
+    pub(super) fn new(path: &str, face: TableFace) -> Self {
         Self {
-            face: Rc::new(TableFace::new(rows, columns, skin)),
+            face: Rc::new(face),
             path: path.to_owned(),
         }
     }
@@ -58,10 +53,10 @@ impl TablePaint {
         TableConfig {
             face: Rc::clone(&self.face),
             body_inset: skin.table.header_height
-                + skin.table.footer_height
+                + self.face.metrics().footer_height()
                 + skin.table.grid_gap * 2.0,
             content_height: table_content_height(self.face.rows().len(), skin),
-            content_width: minimum_table_width(self.face.columns()),
+            content_width: self.face.metrics().width(self.face.columns()),
             divider_columns: self
                 .face
                 .columns()
@@ -366,6 +361,6 @@ pub(super) fn hovered_row(
         row_count,
         horizontal,
         vertical,
-        face.skin(),
+        face.metrics(),
     )
 }

@@ -234,7 +234,7 @@ fn table_reset_restores_current_preset_defaults() {
 #[kithara::test]
 fn table_width_write_is_host_owned_and_clamped() {
     let mut hand = Hand::at("table");
-    let endpoint = "gallery.table.columns.width.artist";
+    let endpoint = "gallery.table.width@column=artist";
 
     assert_eq!(hand.reads.get(endpoint), None);
     hand.gesture("table/table/width/artist", ControlAction::SetScalar(240.0));

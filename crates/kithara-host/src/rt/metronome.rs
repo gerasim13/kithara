@@ -68,31 +68,26 @@ mod consts {
 /// The builder takes any values; the Host checks them when it starts and
 /// refuses a config out of the bounds each field names.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(
-    default,
-    update,
-    builder(state_mod(vis = "pub")),
-    patch(validate = Self::validated, error = PlayError)
-)]
+#[config(default, update, builder(state_mod(vis = "pub")), patch(validate = Self::validated, error = PlayError), fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct MetronomeConfig {
     /// Peak of a downbeat click as a share of the limiter ceiling, above
     /// zero and at most one; a beat click peaks at five eighths of it.
-    #[config(value, update, builder(default = consts::DEFAULT_LEVEL), field(get, copy))]
+    #[config(update, builder(default = consts::DEFAULT_LEVEL))]
     level: f32,
     /// Share of the mix the duck takes away while the click sounds, from
     /// zero to one: one mutes the mix, zero leaves it whole.
-    #[config(value, builder(default = consts::DEFAULT_DUCK), field(get, copy))]
+    #[config(builder(default = consts::DEFAULT_DUCK))]
     duck: f32,
     /// Fall of a click from its peak back to silence, 8 to 50 ms.
-    #[config(value, builder(default = consts::DEFAULT_DECAY), field(get, copy))]
+    #[config(builder(default = consts::DEFAULT_DECAY))]
     decay: Duration,
     /// How long the duck keeps the mix down after the click has fallen, at
     /// most 1 s.
-    #[config(value, builder(default = consts::DEFAULT_HOLD), field(get, copy))]
+    #[config(builder(default = consts::DEFAULT_HOLD))]
     hold: Duration,
     /// How long the duck takes to return the mix after its hold, 8 ms to 1 s.
-    #[config(value, builder(default = consts::DEFAULT_RELEASE), field(get, copy))]
+    #[config(builder(default = consts::DEFAULT_RELEASE))]
     release: Duration,
 }
 

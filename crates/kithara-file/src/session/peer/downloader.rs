@@ -17,7 +17,7 @@ use kithara_platform::{
 use kithara_storage::ResourceStatus;
 
 use super::response::{FetchCompletion, FetchWriter, response_contract};
-use crate::{coord::FileCoord, session::inner::FileInner};
+use crate::{config::FileConfigOwnerAccess, coord::FileCoord, session::inner::FileInner};
 
 /// Gap-driven downloader for one remote file session.
 /// It emits at most one fetch and waits when finite demand is already present.
@@ -113,8 +113,8 @@ where
             epoch,
             start,
         } = plan;
-        let url = inner.asset.url.clone();
-        let headers = inner.asset.headers.clone();
+        let url = inner.remote_url().clone();
+        let headers = inner.headers().clone();
         let source_cancel = inner.source.cancel.clone();
         let fetch_cancel = writer_cancel.child();
         let cancel_from_source = fetch_cancel.clone();
@@ -436,7 +436,7 @@ mod tests {
 
         use super::super::*;
         use crate::{
-            File,
+            File, FileConfig, FileSrc,
             coord::FileCoord,
             session::inner::FileSourceCtx,
             test_pools::{TestPools, pools},
@@ -501,18 +501,23 @@ mod tests {
             bus: EventBus,
             cancel: CancelToken,
         ) -> Arc<TestInner> {
+            let config = Arc::new(
+                FileConfig::for_src(FileSrc::Remote(
+                    Url::parse("http://127.0.0.1/test.mp3").expect("test url"),
+                ))
+                .store(
+                    AssetStore::builder(pools())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .pools(pools())
+                .reader_event_capacity(16)
+                .build(),
+            );
             Arc::new(FileInner::new(
-                FileSourceCtx {
-                    coord,
-                    cancel,
-                    bus,
-                    reader_event_capacity: 16,
-                },
-                crate::session::inner::FileAssetCtx {
-                    reader,
-                    headers: None,
-                    url: Url::parse("http://127.0.0.1/test.mp3").expect("test url"),
-                },
+                config,
+                FileSourceCtx { coord, cancel, bus },
+                crate::session::inner::FileAssetCtx { reader },
                 false,
                 Some(lease),
             ))

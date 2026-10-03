@@ -293,6 +293,28 @@ impl TableColumn {
     }
 }
 
+/// The space a table keeps beside its columns and whether it draws its
+/// row-count footer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TableFrame {
+    pub(crate) padding_left: f32,
+    pub(crate) padding_right: f32,
+    pub(crate) footer: bool,
+}
+
+impl TableFrame {
+    #[must_use]
+    /// Creates table framing with nonnegative side padding.
+    pub fn new(padding_left: f32, padding_right: f32, footer: bool) -> Self {
+        Self {
+            footer,
+            padding_left: padding_left.max(0.0),
+            padding_right: padding_right.max(0.0),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum TableColumnStyle {

@@ -1,4 +1,4 @@
-use kithara_config::bon::Builder;
+use bon::Builder;
 
 /// Container format type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +50,29 @@ pub enum AudioCodec {
     Adpcm,
 }
 
+impl ContainerFormat {
+    /// The container a file extension names, matched case-insensitively.
+    #[must_use]
+    pub fn parse_extension(ext: &str) -> Option<Self> {
+        const NAMED: &[(&str, ContainerFormat)] = &[
+            ("mp3", ContainerFormat::MpegAudio),
+            ("aac", ContainerFormat::Adts),
+            ("m4a", ContainerFormat::Mp4),
+            ("mp4", ContainerFormat::Mp4),
+            ("flac", ContainerFormat::Flac),
+            ("ogg", ContainerFormat::Ogg),
+            ("oga", ContainerFormat::Ogg),
+            ("wav", ContainerFormat::Wav),
+            ("wave", ContainerFormat::Wav),
+            ("caf", ContainerFormat::Caf),
+        ];
+        NAMED
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(ext))
+            .map(|&(_, format)| format)
+    }
+}
+
 /// Media format information.
 ///
 /// This information can be derived from:
@@ -58,7 +81,7 @@ pub enum AudioCodec {
 /// - HTTP Content-Type header
 /// - Container metadata
 #[derive(Debug, Clone, Default, PartialEq, Eq, Builder)]
-#[builder(const, crate = ::kithara_config::bon)]
+#[builder(const)]
 #[non_exhaustive]
 pub struct MediaInfo {
     /// Number of audio channels
@@ -182,6 +205,30 @@ impl AudioCodec {
             Self::Opus => 312,
             Self::Flac | Self::Vorbis | Self::Alac | Self::Pcm | Self::Adpcm => 0,
         }
+    }
+
+    /// The codec a file extension names, matched case-insensitively.
+    #[must_use]
+    pub fn parse_extension(ext: &str) -> Option<Self> {
+        const NAMED: &[(&str, AudioCodec)] = &[
+            ("mp3", AudioCodec::Mp3),
+            ("aac", AudioCodec::AacLc),
+            ("m4a", AudioCodec::AacLc),
+            ("mp4", AudioCodec::AacLc),
+            ("flac", AudioCodec::Flac),
+            ("ogg", AudioCodec::Vorbis),
+            ("oga", AudioCodec::Vorbis),
+            ("opus", AudioCodec::Opus),
+            ("wav", AudioCodec::Pcm),
+            ("wave", AudioCodec::Pcm),
+            ("aiff", AudioCodec::Pcm),
+            ("aif", AudioCodec::Pcm),
+            ("caf", AudioCodec::Alac),
+        ];
+        NAMED
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(ext))
+            .map(|&(_, codec)| codec)
     }
 
     /// Parse from HLS CODECS attribute value.
@@ -657,6 +704,36 @@ mod tests {
         let info = MediaInfo::from(codec);
         assert_eq!(info.codec, Some(codec), "the codec is carried through");
         assert_eq!(info.container, expected, "{label}");
+    }
+
+    #[kithara::test]
+    #[case("mp3", Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio))]
+    #[case("aac", Some(AudioCodec::AacLc), Some(ContainerFormat::Adts))]
+    #[case("m4a", Some(AudioCodec::AacLc), Some(ContainerFormat::Mp4))]
+    #[case("mp4", Some(AudioCodec::AacLc), Some(ContainerFormat::Mp4))]
+    #[case("flac", Some(AudioCodec::Flac), Some(ContainerFormat::Flac))]
+    #[case("ogg", Some(AudioCodec::Vorbis), Some(ContainerFormat::Ogg))]
+    #[case("oga", Some(AudioCodec::Vorbis), Some(ContainerFormat::Ogg))]
+    #[case("opus", Some(AudioCodec::Opus), None)]
+    #[case("wav", Some(AudioCodec::Pcm), Some(ContainerFormat::Wav))]
+    #[case("wave", Some(AudioCodec::Pcm), Some(ContainerFormat::Wav))]
+    #[case("aiff", Some(AudioCodec::Pcm), None)]
+    #[case("aif", Some(AudioCodec::Pcm), None)]
+    #[case("caf", Some(AudioCodec::Alac), Some(ContainerFormat::Caf))]
+    #[case("MP3", Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio))]
+    #[case("Flac", Some(AudioCodec::Flac), Some(ContainerFormat::Flac))]
+    #[case("M4A", Some(AudioCodec::AacLc), Some(ContainerFormat::Mp4))]
+    #[case("txt", None, None)]
+    #[case("doc", None, None)]
+    #[case("unknown", None, None)]
+    #[case("", None, None)]
+    fn an_extension_names_its_codec_and_container(
+        #[case] extension: &str,
+        #[case] codec: Option<AudioCodec>,
+        #[case] container: Option<ContainerFormat>,
+    ) {
+        assert_eq!(AudioCodec::parse_extension(extension), codec);
+        assert_eq!(ContainerFormat::parse_extension(extension), container);
     }
 
     #[kithara::test]

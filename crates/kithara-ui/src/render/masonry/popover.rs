@@ -37,8 +37,6 @@ impl PopoverState {
         self.press.set(Some(point));
     }
 
-    /// Whether the document holds this surface open, which is the latch alone
-    /// and says nothing about whether the surface has anywhere to stand.
     pub(crate) fn is_open(&self) -> bool {
         self.open.get()
     }

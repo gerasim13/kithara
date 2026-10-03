@@ -10,6 +10,7 @@ use crate::{
     },
     layout::ResourceKey,
     resource::{AcquisitionResult, BaseReader, BaseWriter},
+    store::AssetStoreConfig,
 };
 
 /// Hook fired when the cache volatile-displaces a resource.
@@ -18,8 +19,9 @@ pub(crate) type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 /// Fully decorated disk store chain. Processing travels per-acquire as a
 /// [`crate::ProcessCtx`], so the chain is not generic over context.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type DiskStore<S> =
-    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, S>>>;
+pub(crate) type DiskStore<S> = LeaseAssets<
+    CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore, S>, S>, Arc<AssetStoreConfig<S>>>,
+>;
 
 /// Pending (writer) handle returned by the `Pending` arm of
 /// [`super::AssetStore::acquire_resource`]. Owns the streaming write + decrypt-on-commit
@@ -35,5 +37,6 @@ pub type AssetReader<S> = LeaseReader<CachedReader<ProcessedReader<BaseReader, S
 /// commit, or a `Ready` [`AssetReader`] when the resource is already committed.
 pub type ResourceAcquisition<S> = AcquisitionResult<AssetWriter<S>, AssetReader<S>>;
 
-pub(crate) type MemStore<S> =
-    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore<S>>, S>>>;
+pub(crate) type MemStore<S> = LeaseAssets<
+    CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore<S>, S>, S>, Arc<AssetStoreConfig<S>>>,
+>;

@@ -1,7 +1,7 @@
 use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
-use bon::Builder;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::time::Duration;
 use serde::{Deserialize, Deserializer};
@@ -149,17 +149,15 @@ impl fmt::Display for RangeSpec {
     }
 }
 
-#[derive(Clone, Copy, Debug, Builder, Eq, PartialEq, Patch)]
+#[derive(Clone, Copy, Debug, Config, Eq, PartialEq, Patch)]
+#[config(default, fields(value))]
 #[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct RetryPolicy {
-    #[builder(default = Duration::from_millis(100))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_millis(100)), patch(humantime))]
     pub base_delay: Duration,
-    #[builder(default = Duration::from_secs(5))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_secs(5)), patch(humantime))]
     pub max_delay: Duration,
-    #[builder(default = 3)]
+    #[config(builder(default = 3))]
     pub max_retries: u32,
 }
 
@@ -186,14 +184,13 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug, Builder, Patch)]
+#[derive(Clone, Debug, Config, Patch)]
+#[config(default, fields(value))]
 #[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct NetOptions {
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
-    #[builder(default = Compression::all())]
-    #[patch(attribute(serde(default)))]
+    #[config(builder(default = Compression::all()), patch(attribute(serde(default))))]
     pub compression: Compression,
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
@@ -211,8 +208,7 @@ pub struct NetOptions {
     /// spikes) without aborting valid slow streams — the player's
     /// contract is "wait for the segment, regardless of connection
     /// speed", and a 10s cap raced real fixtures.
-    #[builder(default = Duration::from_secs(30))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_secs(30)), patch(humantime))]
     pub inactivity_timeout: Duration,
     /// How long a pooled connection may sit idle before it is dropped.
     /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
@@ -221,37 +217,35 @@ pub struct NetOptions {
     /// segment burst reuses connections while a paused player does not hold
     /// sockets open. Ignored by the Apple backend, whose `URLSession`
     /// configuration exposes no idle-pool timeout.
-    #[builder(default = Duration::from_secs(5))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_secs(5)), patch(humantime))]
     pub pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
-    #[builder(default)]
+    #[config(builder(default))]
     pub impersonate: ImpersonatePreset,
-    #[patch(skip)]
+    #[config(skip = "injected request observer", patch(skip))]
     pub observer: Option<Observer>,
-    #[builder(default)]
-    #[patch(nested)]
+    #[config(nested, builder(default), patch(nested))]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
-    #[builder(default)]
+    #[config(builder(default))]
     pub is_insecure: bool,
     /// Apple `NSURLSession` streaming body queue capacity, measured in
     /// delivered data chunks waiting for Rust consumption. Set to 0 to disable
     /// `URLSession` task suspension for queued body chunks.
-    #[builder(default = 32)]
+    #[config(builder(default = 32))]
     pub body_queue_capacity: usize,
     /// Queue length at or below which a suspended Apple streaming task resumes.
     /// Values greater than or equal to [`Self::body_queue_capacity`] are valid:
     /// they resume as soon as the consumer drains one chunk.
-    #[builder(default = 16)]
+    #[config(builder(default = 16))]
     pub body_queue_resume_at: usize,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
     /// Set to 0 to disable pooling.
-    #[builder(default = 8)]
+    #[config(builder(default = 8))]
     pub pool_max_idle_per_host: usize,
 }
 

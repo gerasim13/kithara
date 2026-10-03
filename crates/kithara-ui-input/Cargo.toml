@@ -25,6 +25,7 @@ kithara-platform = { workspace = true }
 kithara-ui-draw = { workspace = true }
 
 bon = { workspace = true }
+
 fieldwork = { workspace = true }
 iced = { workspace = true, optional = true }
 masonry = { workspace = true, optional = true }

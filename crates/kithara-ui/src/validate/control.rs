@@ -29,6 +29,16 @@ pub(crate) fn check_controls(
             endpoints,
         )?;
     }
+    if let Some(status) = site.status {
+        check_binding(
+            status,
+            BindingSide::Read,
+            Some(ValueKind::Text),
+            site.path,
+            origin,
+            endpoints,
+        )?;
+    }
     if let Some(query) = site.query {
         check_binding(
             query,

@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, path::PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{sync::Barrier, thread};
 
@@ -6,6 +6,7 @@ use kithara_assets::{
     AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, ReadSide, ResourceKey,
     StorageBackend, WriteSide,
 };
+use kithara_config::ConfigOwner;
 use kithara_events::{Envelope, EventBus};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::CancelScope;
@@ -19,7 +20,7 @@ use kithara_test_utils::kithara;
 
 use super::source::{FileLocalConfig, FileSource};
 use crate::{
-    File, FileEvent, TotalBytesSource,
+    File, FileConfig, FileEvent, FileSrc, TotalBytesSource,
     coord::FileCoord,
     test_pools::{TestPools, pools},
 };
@@ -55,6 +56,20 @@ fn make_coord() -> Arc<FileCoord> {
     ))
 }
 
+fn local_config() -> Arc<FileConfig<TestPools>> {
+    Arc::new(
+        FileConfig::for_src(FileSrc::Local(PathBuf::from("/session-test")))
+            .store(
+                AssetStore::builder(pools())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .pools(pools())
+            .reader_event_capacity(16)
+            .build(),
+    )
+}
+
 fn make_source(reader: TestReader, coord: Arc<FileCoord>, bus: EventBus) -> TestSource {
     make_source_with_cancel(reader, coord, bus, CancelToken::never())
 }
@@ -71,10 +86,27 @@ fn make_source_with_cancel(
             .coord(coord)
             .bus(bus)
             .cancel(cancel)
-            .reader_event_capacity(16)
             .cached_codec(AudioCodec::Mp3)
             .build(),
+        local_config(),
     )
+}
+
+#[kithara::test]
+fn source_keeps_the_supplied_config_instance() {
+    let config = local_config();
+    let source = FileSource::local(
+        FileLocalConfig::builder()
+            .reader(create_committed_resource(b"ID3metadata"))
+            .coord(make_coord())
+            .bus(EventBus::new(16))
+            .cancel(CancelToken::never())
+            .build(),
+        Arc::clone(&config),
+    );
+
+    assert!(std::ptr::eq(source.config(), config.as_ref()));
+    assert_eq!(source.config().reader_event_capacity, 16);
 }
 
 #[kithara::test]
@@ -419,9 +451,9 @@ fn source_cancel_interrupts_blocked_wait_without_poisoning_asset() {
             .coord(coord)
             .bus(EventBus::new(16))
             .cancel(scope.token())
-            .reader_event_capacity(16)
             .cached_codec(AudioCodec::Mp3)
             .build(),
+        local_config(),
     );
     let entering_wait = Arc::new(Barrier::new(2));
 

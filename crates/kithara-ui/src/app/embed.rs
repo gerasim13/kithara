@@ -265,16 +265,26 @@ where
     ///
     /// A harness names a control by its path and acts at the rect this
     /// returns instead of computing a pixel by hand: a scenario clicks it,
-    /// and a capture photographs it.
+    /// and a capture photographs it. A control a hidden block stashed takes
+    /// an empty box.
     #[cfg(feature = "capture")]
     pub fn rect_of(&self, path: &str) -> Option<Rect> {
         let id = self.state.widget_id(path)?;
-        let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
-        Some(Rect {
+        let widget = self.root.root().get_widget(id)?;
+        let bounds = widget.ctx().bounding_rect();
+        let corner = Rect {
             x: bounds.x0.as_(),
             y: bounds.y0.as_(),
+            w: 0.0,
+            h: 0.0,
+        };
+        if widget.ctx().is_stashed() {
+            return Some(corner);
+        }
+        Some(Rect {
             w: (bounds.x1 - bounds.x0).as_(),
             h: (bounds.y1 - bounds.y0).as_(),
+            ..corner
         })
     }
 

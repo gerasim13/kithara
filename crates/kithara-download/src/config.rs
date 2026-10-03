@@ -1,51 +1,55 @@
-use bon::Builder;
 use kithara_abr::{AbrSettings, AbrSettingsPatch};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_net::HttpClient;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 
 /// Configuration for [`Downloader`](super::Downloader).
-#[derive(Clone, Builder, Patch)]
-#[builder(start_fn = for_client)]
+#[derive(Clone, Config, Patch)]
+#[config(builder(start_fn = for_client), fields(value))]
 #[non_exhaustive]
 pub struct DownloaderConfig {
     /// HTTP client used for all fetches. Cloned by the Downloader to
     /// share the underlying `reqwest::Client` (and its connection pool)
     /// with the caller. Pass a single shared `HttpClient` to multiple
     /// Downloaders to share keep-alive sockets across them.
-    #[builder(start_fn)]
-    #[patch(skip)]
+    #[config(
+        skip = "HTTP transport resource retained by the downloader",
+        builder(start_fn),
+        patch(skip)
+    )]
     pub(crate) client: HttpClient,
     /// Settings for the shared ABR controller owned by the Downloader.
-    #[builder(default)]
-    #[patch(nested)]
+    #[config(
+        skip = "transferred to the ABR controller",
+        builder(default),
+        patch(nested)
+    )]
     pub(crate) abr_settings: AbrSettings,
     /// Throttle delay for demand (low-priority) processing.
     /// Gives urgent work a chance to preempt before demand batch runs.
-    #[builder(default = Duration::ZERO)]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::ZERO), patch(humantime))]
     pub(crate) demand_throttle: Duration,
     /// Soft timeout. When a fetch has not produced a response within
     /// this duration, the Downloader publishes
     /// [`DownloaderEvent::LoadSlow`](crate::DownloaderEvent::LoadSlow)
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
-    #[builder(default = Duration::from_secs(2))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_secs(2)), patch(humantime))]
     pub(crate) soft_timeout: Duration,
     /// Optional parent cancel. `Some` → the download loop's scope is a child
     /// of it (composed); `None` → the Downloader owns a standalone scope. The
     /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
-    #[patch(skip)]
+    #[config(skip = "composed into the downloader cancel scope", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Tokio runtime handle for the download loop.
     ///
     /// - `Some(handle)` — the loop runs as a task on this runtime.
     /// - `None` — spawns as a task on the current runtime via `task::spawn`.
-    #[patch(skip)]
+    #[config(skip = "runtime resource retained by the downloader", patch(skip))]
     pub(crate) runtime: Option<Handle>,
     /// Maximum number of concurrent in-flight fetch commands.
-    #[builder(default = 5)]
+    #[config(builder(default = 5))]
     pub(crate) max_concurrent: usize,
     /// Capacity of the per-peer bounded command channel. A peer that fills
     /// it backpressures its own producer instead of the download loop, so
@@ -53,7 +57,7 @@ pub struct DownloaderConfig {
     /// default is deep enough that a peer's planning burst does not block on
     /// the download loop, shallow enough that a stalled fetcher stops the
     /// producer rather than growing an unbounded backlog.
-    #[builder(default = 32)]
+    #[config(builder(default = 32))]
     pub(crate) peer_cmd_channel_capacity: usize,
 }
 

@@ -16,17 +16,15 @@ pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
 
 /// Configuration for the audio engine.
 #[derive(Config)]
-#[config(debug, builder(state_mod(vis = "pub")))]
+#[config(debug, builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
 pub struct EngineConfig<S> {
     /// Stable synchronization identity of the owning player.
     #[config(skip = "player-owned synchronization identity", debug(skip))]
     pub(crate) grid_id: BeatGridId,
     /// Initial output sample rate supplied by the owning player session.
-    #[config(value)]
     pub(crate) sample_rate: NonZeroU32,
     /// Player-owned response contract used to validate session geometry.
-    #[config(value)]
     pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
@@ -34,7 +32,6 @@ pub struct EngineConfig<S> {
     #[config(skip = "injected cancellation resource", debug(skip))]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional resident Warp render quantum supplied by the owning player.
-    #[config(value)]
     pub(crate) render_quantum_frames: Option<NonZeroUsize>,
     /// Optional pre-bound session for isolated harnesses. Production engines
     /// receive theirs when the owning Player enters a Host.
@@ -54,15 +51,15 @@ pub struct EngineConfig<S> {
     )]
     pub(crate) eq_layout: Mutex<Vec<EqBandConfig>>,
     /// Render-pass slot gate smoothing. Default: 5 ms.
-    #[config(value, builder(default = DEFAULT_GATE_SMOOTHING))]
+    #[config(builder(default = DEFAULT_GATE_SMOOTHING))]
     pub(crate) gate_smoothing: SmootherConfig,
     /// Number of output channels. Default: 2 (stereo). Not a document key:
     /// the only reader is a startup log line, so a document value would
     /// change nothing the engine actually does.
-    #[config(value, builder(default = 2))]
+    #[config(builder(default = 2))]
     pub(crate) channels: u16,
     /// Maximum number of concurrent player slots. Default: 4.
-    #[config(value, builder(default = 4))]
+    #[config(builder(default = 4))]
     pub(crate) max_slots: usize,
 }
 

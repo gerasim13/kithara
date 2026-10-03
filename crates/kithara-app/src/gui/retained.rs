@@ -150,7 +150,8 @@ mod tests {
     /// application actually ships, mounted the way the window mounts it.
     #[kithara::test]
     fn the_studio_draws_under_the_retained_host() {
-        let package = Package::load(None).expect("the app package must answer for both decks");
+        let package = crate::gui::test_fixture::package(None)
+            .expect("the app package must answer for both decks");
         let endpoints = endpoints::Registry::default();
         let mut ui = Ui::new(
             Empty {
@@ -181,5 +182,137 @@ mod tests {
             "the studio is a page of labelled controls; a scene with no glyphs in it is a \
              background and nothing else"
         );
+    }
+}
+
+#[cfg(test)]
+mod library {
+    use std::rc::Rc;
+
+    use ::kithara::{
+        platform::{sync::Arc, tokio::sync::mpsc},
+        ui::{
+            app::{Config, Ui},
+            draw::{Pt, Rect},
+            interact::{Input, MOUSE, PointerInput, PointerPhase},
+        },
+    };
+    use arc_swap::ArcSwap;
+    use kithara_test_utils::kithara;
+
+    use super::{Studio, window_size};
+    use crate::{
+        engine::EngineSnapshot,
+        gui::{test_fixture, ui::endpoints::Registry},
+    };
+
+    fn studio() -> Studio {
+        let runtime = test_fixture::runtime();
+        let config = test_fixture::config();
+        let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
+        let (commands, _receiver) = mpsc::unbounded_channel();
+        Studio::new(test_fixture::boot(
+            runtime.handle(),
+            &config,
+            snapshots,
+            commands,
+        ))
+    }
+
+    fn mounted(check: impl FnOnce(&mut Ui<'_, Studio>)) {
+        let studio = studio();
+        let package = Rc::clone(&studio.state.ui.package);
+        let endpoints = Registry::default();
+        let mut ui = Ui::new(
+            studio,
+            Config::builder()
+                .endpoints(&endpoints)
+                .resolver(package.resolver())
+                .text(package.text())
+                .build(),
+            window_size(),
+            1.0,
+        )
+        .unwrap_or_else(|error| panic!("the studio must mount: {error}"));
+        check(&mut ui);
+    }
+
+    fn laid_out(ui: &mut Ui<'_, Studio>, path: &str) -> Option<Rect> {
+        ui.scene()
+            .unwrap_or_else(|error| panic!("the studio must draw: {error}"));
+        ui.rect_of(path).filter(|rect| rect.w > 0.0 && rect.h > 0.0)
+    }
+
+    fn shown(ui: &mut Ui<'_, Studio>) -> Vec<&'static str> {
+        ["startup", "explorer"]
+            .into_iter()
+            .filter(|source| laid_out(ui, &format!("library/pages/{source}-page/rows")).is_some())
+            .collect()
+    }
+
+    fn row(ui: &mut Ui<'_, Studio>, row: u8, chevron: bool) -> Pt {
+        let tree = laid_out(ui, "library/tree").expect("the library draws its tree");
+        let skin = &ui.app().state.ui.package.skin().tree;
+        let x = if chevron {
+            tree.x + skin.marker_width + skin.indent_base + skin.chevron_width / 2.0
+        } else {
+            tree.x + tree.w / 2.0
+        };
+        Pt {
+            x,
+            y: tree.y + skin.panel_padding_top + skin.row_height * (f32::from(row) + 0.5),
+        }
+    }
+
+    fn press(ui: &mut Ui<'_, Studio>, at: Pt) {
+        for phase in [PointerPhase::Move, PointerPhase::Down, PointerPhase::Up] {
+            ui.input(Input::Pointer(PointerInput::new(
+                MOUSE,
+                None,
+                phase,
+                Some(at),
+                1,
+            )));
+        }
+    }
+
+    fn labels(ui: &Ui<'_, Studio>) -> Vec<String> {
+        ui.app()
+            .state
+            .library
+            .tree()
+            .iter()
+            .map(|row| row.label.to_owned())
+            .collect()
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_page_on_screen_is_the_selected_sources() {
+        mounted(|ui| {
+            assert_eq!(shown(ui), ["startup"], "Startup starts selected");
+
+            let explorer = row(ui, 3, false);
+            press(ui, explorer);
+            assert_eq!(shown(ui), ["explorer"]);
+
+            let startup = row(ui, 1, false);
+            press(ui, startup);
+            assert_eq!(shown(ui), ["startup"]);
+        });
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn library_followup_section_label_toggles_without_selecting() {
+        mounted(|ui| {
+            let closed = labels(ui);
+            let chevron = row(ui, 0, false);
+
+            press(ui, chevron);
+            assert_eq!(labels(ui).len(), closed.len() - 1);
+            assert_eq!(shown(ui), ["startup"]);
+
+            press(ui, chevron);
+            assert_eq!(labels(ui), closed);
+        });
     }
 }

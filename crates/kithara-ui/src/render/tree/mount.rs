@@ -122,19 +122,13 @@ impl ViewControl for mount::Custom {
 
 impl ViewControl for mount::Table<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(table(
-            cx,
-            (self.columns, self.columns_state),
-            self.resizable,
-        ))
+        Rendered::leading(table(cx, self))
     }
 }
 
 impl ViewControl for mount::Tree<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(tree(
-            cx.path, self.query, cx.value, cx.ctx, cx.skin, cx.owner,
-        ))
+        Rendered::leading(tree(cx.path, self, cx.value, cx.ctx, cx.skin, cx.owner))
     }
 }
 

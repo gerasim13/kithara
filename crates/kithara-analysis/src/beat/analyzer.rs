@@ -4,9 +4,9 @@ use std::{
     ops::Range,
 };
 
-use bon::Builder;
 use kithara_beat::{BeatDetector, BeatMark, RawBeats};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_config::Config;
 use kithara_dsp::downmix;
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::ToPrimitive;
@@ -52,15 +52,19 @@ impl DetectRequest {
     }
 }
 
-#[derive(Builder)]
+#[derive(Config)]
+#[config(construction)]
 pub(crate) struct BeatPassConfig<B, S>
 where
     B: ResamplerBackend,
 {
+    #[config(skip = "transferred to the beat analyzer")]
     resampler: BeatAnalysisConfig<B>,
-    #[builder(default)]
+    #[config(skip = "transferred to the beat analyzer", builder(default))]
     params: GridParams,
+    #[config(skip = "transferred to the beat analyzer")]
     pools: PoolRegion<S>,
+    #[config(value)]
     source_rate: u32,
 }
 

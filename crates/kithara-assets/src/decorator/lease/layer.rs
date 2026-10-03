@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     AssetEvent,
-    decorator::{Assets, ByteRecorder, CachedAssets, Capabilities, ProcessCtx},
+    decorator::{Assets, ByteRecorder, CachePolicy, CachedAssets, Capabilities, ProcessCtx},
     error::AssetsResult,
     index::{PinDurability, PinsIndex},
     layout::ResourceKey,
@@ -88,9 +88,10 @@ pub struct LeaseAssets<A> {
     pins: PinsIndex,
 }
 
-impl<A> LeaseAssets<CachedAssets<A>>
+impl<A, C> LeaseAssets<CachedAssets<A, C>>
 where
     A: Assets<Context = ProcessCtx>,
+    C: CachePolicy,
 {
     pub(crate) fn cache_capacity(&self) -> NonZeroUsize {
         self.inner.cache_capacity()

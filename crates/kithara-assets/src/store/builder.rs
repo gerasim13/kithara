@@ -4,9 +4,9 @@
 use std::env;
 use std::{num::NonZeroUsize, path::PathBuf};
 
-use bon::Builder;
 use dashmap::DashMap;
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
@@ -22,14 +22,12 @@ use crate::backend::{DiskAssetDeleter, DiskAssetStore, indexed_path};
 use crate::decorator::ByteRecorder;
 use crate::{
     backend::{AssetDeleter, MemAssetDeleter, MemAssetStore, MemStoreSetup},
-    consts,
     decorator::{
         CachedAssets, EvictAssets, EvictDeps, EvictionEvents, EvictionRouter, LeaseAssets,
         LeaseEvents, ProcessingAssets,
     },
     index::{
-        AvailabilityIndex, EvictConfig, FlushHub, FlushPolicy, PendingResourceIndex,
-        ResourceTransactionIndex,
+        AvailabilityIndex, FlushHub, FlushPolicy, PendingResourceIndex, ResourceTransactionIndex,
     },
     layout::{AssetLayoutRegistry, ResourceKey},
 };
@@ -93,58 +91,68 @@ impl<'de> Deserialize<'de> for StorageBackend {
 /// document may name and the wiring a caller hands over.
 ///
 /// [`AssetStoreConfigPatch`] is what a document may say about it.
-#[derive(Builder, Patch)]
-#[builder(
+#[derive(Config, Patch)]
+#[config(owner_access, builder(
     start_fn = for_pools,
     finish_fn = into_config,
     builder_type(name = AssetStoreBuilder, vis = "pub"),
     state_mod(vis = "pub")
-)]
+), fields(value))]
 #[non_exhaustive]
 pub struct AssetStoreConfig<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Buffer-pool facade every layer of the store shares.
-    #[builder(start_fn)]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to store runtime owners",
+        builder(start_fn),
+        patch(skip)
+    )]
     pub pools: PoolRegion<S>,
     /// Where resources live. Unset resolves to a disk root under a fresh
     /// temp directory, which is a different place on every launch.
+    #[config(skip = "transferred to the selected storage backend")]
     pub backend: Option<StorageBackend>,
     /// Resources the in-memory cache retains before it evicts the
     /// least-recently-used one. Applies to both backends.
+    #[config(get(copy))]
     pub cache_capacity: Option<NonZeroUsize>,
     /// Master cancel token for the store subtree.
-    #[patch(skip)]
+    #[config(skip = "composed into the store cancel scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Event bus the eviction and lease layers publish on.
-    #[patch(skip)]
+    #[config(skip = "transferred to store observers", patch(skip))]
     pub event_bus: Option<EventBus>,
     /// Shared index-flush hub. Created per store when absent.
-    #[patch(skip)]
+    #[config(skip = "transferred to the flush owner", patch(skip))]
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Resource-key layout registry. Empty when absent.
-    #[patch(skip)]
+    #[config(skip = "transferred to the layout owner", patch(skip))]
     pub layouts: Option<AssetLayoutRegistry>,
     /// Assets the eviction policy keeps before it drops the coldest one.
+    #[config(get(copy))]
     pub max_assets: Option<usize>,
     /// Bytes the eviction policy keeps before it drops the coldest asset.
+    #[config(get(copy))]
     pub max_bytes: Option<u64>,
     /// Resources one in-memory asset holds. **Memory backend only** — the disk
     /// backend never reads it, so naming it beside `backend: disk` (or beside
     /// no backend at all, which resolves to disk) configures nothing.
+    #[config(get(copy))]
     pub mem_resource_capacity: Option<usize>,
     /// Bytes read, transformed, and written per pass when a resource is
     /// processed on commit. Unset leaves the processing layer's own default.
+    #[config(get(copy))]
     pub processing_chunk_size: Option<usize>,
     /// Recheck cadence for a reader blocked on the processing readiness gate.
     /// Unset leaves the processing layer's own default.
-    #[patch(humantime)]
+    #[config(patch(humantime), get(copy))]
     pub processing_gate_poll_interval: Option<Duration>,
     /// Bytes a fresh segment's temp file is reserved at. **Disk backend
     /// only** — the memory backend has no temp file to reserve. Unset leaves
     /// the disk backend's own default.
+    #[config(get(copy))]
     pub segment_reservation: Option<u64>,
 }
 
@@ -176,21 +184,13 @@ where
     /// decorator threading.
     #[must_use]
     pub fn open(config: AssetStoreConfig<S>) -> Self {
-        let AssetStoreConfig {
-            pools,
-            backend,
-            cache_capacity,
-            cancel,
-            event_bus,
-            flush_hub,
-            layouts,
-            max_assets,
-            max_bytes,
-            mem_resource_capacity,
-            processing_chunk_size,
-            processing_gate_poll_interval,
-            segment_reservation,
-        } = config;
+        let config = Arc::new(config);
+        let pools = config.pools.clone();
+        let backend = config.backend.clone();
+        let cancel = config.cancel.clone();
+        let event_bus = config.event_bus.clone();
+        let flush_hub = config.flush_hub.clone();
+        let layouts = config.layouts.clone();
 
         let availability = AvailabilityIndex::new();
         let pending_resources = PendingResourceIndex::new(CancelScope::new(cancel.clone()).token());
@@ -207,40 +207,30 @@ where
         };
 
         #[cfg(target_arch = "wasm32")]
-        let _ = (backend, segment_reservation);
+        let _ = backend;
 
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(root_dir) = disk_root {
             return Self::new_handle(AssetStoreInner {
+                config: Arc::clone(&config),
                 pending_resources,
                 transactions,
                 eviction,
                 layouts,
                 backend: open_disk_backend(DiskStoreSetup {
+                    config: Arc::clone(&config),
                     root_dir,
                     cancel,
                     flush_hub,
                     pools,
                     event_bus,
-                    cache_capacity,
-                    processing_chunk_size,
-                    processing_gate_poll_interval,
-                    segment_reservation,
                     availability: availability.clone(),
-                    evict_cfg: EvictConfig {
-                        max_assets,
-                        max_bytes,
-                    },
                 }),
                 availability,
             });
         }
 
         let cancel = CancelScope::new(cancel).token();
-        let evict_cfg = EvictConfig {
-            max_assets,
-            max_bytes,
-        };
         // The disk branch returns above; these indices belong to the memory store.
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
@@ -254,11 +244,10 @@ where
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
             MemStoreSetup {
                 active_resources,
-                mem_resource_capacity,
+                config: Arc::clone(&config),
                 cancel: cancel.clone(),
                 availability: availability.clone(),
                 deleter: Arc::clone(&deleter),
-                pools: pools.clone(),
             },
         ));
         let evict = Arc::new(EvictAssets::new(
@@ -266,18 +255,15 @@ where
             EvictDeps {
                 lru,
                 deleter,
-                cfg: evict_cfg,
+                config: Arc::clone(&config),
                 cancel: cancel.clone(),
                 events: EvictionEvents::new(event_bus.clone()),
                 pins: pins.clone(),
             },
         ));
-        let capacity = cache_capacity.unwrap_or(consts::DEFAULT_CACHE_CAPACITY);
         let processing_assets = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
-            pools,
-            processing_chunk_size,
-            processing_gate_poll_interval,
+            Arc::clone(&config),
         ));
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
@@ -285,12 +271,11 @@ where
             availability_for_hook.remove(key);
             eviction_for_hook.route(key);
         });
-        let cached = Arc::new(CachedAssets::with_max_bytes(
+        let cached = Arc::new(CachedAssets::with_policy(
             processing_assets,
-            capacity,
+            Arc::clone(&config),
             Some(on_invalidated),
             true,
-            max_bytes,
         ));
         let store = LeaseAssets::with_byte_recorder(
             cached,
@@ -301,6 +286,7 @@ where
         );
 
         Self::new_handle(AssetStoreInner {
+            config,
             availability,
             pending_resources,
             transactions,
@@ -315,16 +301,15 @@ where
 /// branch. Mirrors [`MemStoreSetup`] on the memory side: one bundle so the
 /// branch is a function instead of another sixty lines in the builder.
 #[cfg(not(target_arch = "wasm32"))]
-struct DiskStoreSetup<S> {
+struct DiskStoreSetup<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    config: Arc<AssetStoreConfig<S>>,
     availability: AvailabilityIndex,
-    evict_cfg: EvictConfig,
-    cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancelToken>,
     event_bus: Option<EventBus>,
     flush_hub: Option<Arc<FlushHub>>,
-    processing_chunk_size: Option<usize>,
-    processing_gate_poll_interval: Option<Duration>,
-    segment_reservation: Option<u64>,
     root_dir: PathBuf,
     pools: PoolRegion<S>,
 }
@@ -340,17 +325,13 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     let DiskStoreSetup {
+        config,
         root_dir,
         cancel,
         flush_hub,
         pools,
         event_bus,
-        cache_capacity,
         availability,
-        evict_cfg,
-        processing_chunk_size,
-        processing_gate_poll_interval,
-        segment_reservation,
     } = setup;
     let cancel = CancelScope::new(cancel).token();
     let hub = flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
@@ -374,22 +355,20 @@ where
     }
     availability.attach_to(&hub);
 
-    let disk = Arc::new(
-        DiskAssetStore::with_availability_and_deleter()
-            .root_dir(root_dir)
-            .cancel(cancel.clone())
-            .availability(availability)
-            .deleter(Arc::clone(&deleter))
-            .maybe_segment_reservation(segment_reservation)
-            .call(),
-    );
+    let disk = Arc::new(DiskAssetStore::with_config(
+        root_dir,
+        cancel.clone(),
+        availability,
+        Arc::clone(&deleter),
+        Arc::clone(&config),
+    ));
     let base = Arc::clone(&disk);
     let evict = Arc::new(EvictAssets::new(
         disk,
         EvictDeps {
             lru,
             deleter,
-            cfg: evict_cfg,
+            config: Arc::clone(&config),
             cancel: cancel.clone(),
             events: EvictionEvents::new(event_bus.clone()),
             pins: pins.clone(),
@@ -397,12 +376,14 @@ where
     ));
     let processing_assets = Arc::new(ProcessingAssets::new(
         Arc::clone(&evict),
-        pools,
-        processing_chunk_size,
-        processing_gate_poll_interval,
+        Arc::clone(&config),
     ));
-    let capacity = cache_capacity.unwrap_or(consts::DEFAULT_CACHE_CAPACITY);
-    let cached = Arc::new(CachedAssets::new(processing_assets, capacity, None, false));
+    let cached = Arc::new(CachedAssets::with_policy(
+        processing_assets,
+        config,
+        None,
+        false,
+    ));
     let byte_recorder: Option<Arc<dyn ByteRecorder>> =
         Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
     let store = LeaseAssets::with_byte_recorder(
@@ -474,13 +455,29 @@ mod tests {
     use super::*;
     use crate::{
         AssetEvent, AssetResourceState, AssetWriter, AssetsError, EvictReason, ResourceAcquisition,
-        ResourceKey,
+        ResourceKey, consts,
         decorator::Capabilities,
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };
 
     type TestAssetWriter = AssetWriter<crate::test_pools::TestPools>;
     type TestResourceAcquisition = ResourceAcquisition<crate::test_pools::TestPools>;
+
+    #[kithara::test]
+    fn store_retains_config_for_effective_cache_capacity() {
+        use kithara_config::ConfigOwner;
+
+        let capacity = NonZeroUsize::new(7).unwrap();
+        let store = AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Memory)
+            .cache_capacity(capacity)
+            .build();
+        let clone = store.clone();
+
+        assert!(std::ptr::eq(store.config(), clone.config()));
+        assert_eq!(store.config().cache_capacity, Some(capacity));
+        assert_eq!(store.ephemeral_cache_capacity(), Some(capacity));
+    }
 
     /// Stream `data` through the Pending writer and commit it.
     fn write_commit(acq: TestResourceAcquisition, data: &[u8]) {

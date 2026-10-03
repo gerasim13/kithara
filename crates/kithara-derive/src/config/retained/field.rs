@@ -1,19 +1,12 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, DeriveInput, Expr, Field, GenericParam, Generics, Ident, Lit, LitStr, Meta, Path,
-    Result, Token, Type, meta::ParseNestedMeta, parenthesized, parse::Parser as _,
-    punctuated::Punctuated, visit::Visit as _,
+    Attribute, DeriveInput, Expr, Field, GenericParam, Generics, Ident, Meta, Result, Token, Type,
+    parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
-use super::implementation::{docs, group};
-
-enum Role {
-    Value,
-    Projection(Box<(Type, Expr)>),
-    Nested,
-    Skip,
-}
+use super::implementation::docs;
+use crate::config::field::{Accessor, Declaration, Role, Wrap};
 
 /// What one field contributes to its configuration type.
 pub(super) struct Member<'a> {
@@ -21,6 +14,7 @@ pub(super) struct Member<'a> {
     pub(super) ty: &'a Type,
     pub(super) construction: Construction,
     pub(super) accessor: Option<TokenStream>,
+    pub(super) owner_accessor: Option<TokenStream>,
     /// Whether the generated `Debug` prints the field.
     pub(super) debugged: bool,
     pub(super) retained: Option<Retained>,
@@ -47,142 +41,11 @@ pub(super) struct Update {
     pub(super) lower: TokenStream,
 }
 
-/// `wrap(default = expr, with = path)`: the builder takes the projected wire
-/// value and wraps it, defaulting to the wrapped `default`.
-struct Wrap {
-    default: Expr,
-    with: Path,
-}
-
-/// What a field's `#[config(...)]` attributes declare.
-#[derive(Default)]
-struct Declaration {
-    role: Option<Role>,
-    update: bool,
-    sdk: bool,
-    builder: Option<TokenStream>,
-    /// `field(get)` is `Some(false)`, `field(get, copy)` is `Some(true)`.
-    accessor: Option<bool>,
-    debug_skipped: bool,
-    wrap: Option<Wrap>,
-}
-
-impl Declaration {
-    fn parse(field: &Field) -> Result<Self> {
-        let mut declaration = Self::default();
-        let mut grouped: Vec<Path> = Vec::new();
-        for attr in field
-            .attrs
-            .iter()
-            .filter(|attr| attr.path().is_ident("config"))
-        {
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("wrap") {
-                    if declaration.wrap.is_some() {
-                        return Err(meta.error("duplicate config field wrap"));
-                    }
-                    declaration.wrap = Some(parse_wrap(&meta.path, group(&meta)?)?);
-                } else if meta.path.is_ident("builder")
-                    || meta.path.is_ident("field")
-                    || meta.path.is_ident("patch")
-                    || meta.path.is_ident("debug")
-                {
-                    if grouped.contains(&meta.path) {
-                        return Err(meta.error("duplicate config field attribute group"));
-                    }
-                    grouped.push(meta.path.clone());
-                    declaration.group(&meta.path, group(&meta)?)?;
-                } else if meta.path.is_ident("update") {
-                    if declaration.update {
-                        return Err(meta.error("duplicate config field option"));
-                    }
-                    declaration.update = true;
-                } else if meta.path.is_ident("sdk") {
-                    if declaration.sdk {
-                        return Err(meta.error("duplicate config field option"));
-                    }
-                    declaration.sdk = true;
-                    parse_sdk(&meta)?;
-                } else {
-                    if declaration.role.is_some() {
-                        return Err(meta.error("select exactly one config field role"));
-                    }
-                    declaration.role = Some(parse_role(&meta)?);
-                }
-                Ok(())
-            })?;
-        }
-        Ok(declaration)
-    }
-
-    /// Records one `builder(...)`, `field(...)`, `patch(...)` or `debug(...)`
-    /// group; `patch(...)` belongs to `Patch`.
-    fn group(&mut self, path: &Path, arguments: TokenStream) -> Result<()> {
-        if path.is_ident("builder") {
-            self.builder = Some(arguments);
-        } else if path.is_ident("field") {
-            self.accessor = Some(copied(path, arguments)?);
-        } else if path.is_ident("debug") {
-            let skip: Path = syn::parse2(arguments)?;
-            if !skip.is_ident("skip") {
-                return Err(syn::Error::new_spanned(skip, "expected debug(skip)"));
-            }
-            self.debug_skipped = true;
-        }
-        Ok(())
-    }
-}
-
-fn parse_sdk(meta: &ParseNestedMeta<'_>) -> Result<()> {
-    if !meta.input.peek(syn::token::Paren) {
-        return Ok(());
-    }
-    let content;
-    parenthesized!(content in meta.input);
-    let maximum: Meta = content.parse()?;
-    let Meta::NameValue(maximum) = maximum else {
-        return Err(content.error("expected sdk(max = positive integer)"));
-    };
-    if !maximum.path.is_ident("max")
-        || !content.is_empty()
-        || !matches!(&maximum.value, Expr::Lit(expr) if matches!(&expr.lit, Lit::Int(value) if value.base10_parse::<u32>().is_ok_and(|value| value > 0)))
-    {
-        return Err(content.error("expected sdk(max = positive integer)"));
-    }
-    Ok(())
-}
-
-fn parse_role(meta: &ParseNestedMeta<'_>) -> Result<Role> {
-    if meta.path.is_ident("value") {
-        if !meta.input.peek(syn::token::Paren) {
-            return Ok(Role::Value);
-        }
-        let content;
-        parenthesized!(content in meta.input);
-        let ty = content.parse()?;
-        content.parse::<syn::Token![,]>()?;
-        let expression = content.parse()?;
-        if !content.is_empty() {
-            return Err(content.error("unexpected projection tokens"));
-        }
-        Ok(Role::Projection(Box::new((ty, expression))))
-    } else if meta.path.is_ident("nested") {
-        Ok(Role::Nested)
-    } else if meta.path.is_ident("skip") {
-        let reason: LitStr = meta.value()?.parse()?;
-        if reason.value().trim().is_empty() {
-            return Err(meta.error("config exclusion requires a reason"));
-        }
-        Ok(Role::Skip)
-    } else {
-        Err(meta.error("expected value, value(Type, expression), nested, skip = reason, or update"))
-    }
-}
-
 pub(super) fn expand<'a>(
     field: &'a Field,
     owner: &DeriveInput,
     snapshot: bool,
+    defaults: &Declaration,
 ) -> Result<Member<'a>> {
     let Declaration {
         role,
@@ -192,8 +55,12 @@ pub(super) fn expand<'a>(
         accessor,
         debug_skipped,
         wrap,
-    } = Declaration::parse(field)?;
-    let role = role.ok_or_else(|| syn::Error::new_spanned(field, "missing config field role"))?;
+        patch: _,
+    } = Declaration::parse(&field.attrs)?.inherit(defaults);
+    let update = update.unwrap_or(false);
+    let role = role
+        .or_else(|| (!snapshot).then_some(Role::Skip))
+        .ok_or_else(|| syn::Error::new_spanned(field, "missing config field role"))?;
     validate_role(field, &role, update, sdk, snapshot)?;
     let name = field
         .ident
@@ -219,7 +86,19 @@ pub(super) fn expand<'a>(
         builder = Some(quote!(default = #with(#default), with = |value: #wire| #with(value)));
     }
     let construction = construction(name, ty, &surface, builder.as_ref())?;
-    let accessor = accessor.map(|copy| {
+    let accessor = accessor.filter(|mode| !matches!(mode, Accessor::Skip));
+    let owner_accessor = accessor.map(|mode| {
+        let copy = matches!(mode, Accessor::Copy);
+        let output = if copy { quote!(#ty) } else { quote!(&#ty) };
+        quote! {
+            #(#surface)*
+            fn #name(&self) -> #output {
+                self.config().#name()
+            }
+        }
+    });
+    let accessor = accessor.map(|mode| {
+        let copy = matches!(mode, Accessor::Copy);
         let (output, body) = if copy {
             (quote!(#ty), quote!(self.#name))
         } else {
@@ -243,36 +122,10 @@ pub(super) fn expand<'a>(
         ty,
         construction,
         accessor,
+        owner_accessor,
         debugged: !debug_skipped,
         retained,
     })
-}
-
-fn parse_wrap(group: &Path, arguments: TokenStream) -> Result<Wrap> {
-    let mut default = None;
-    let mut with = None;
-    syn::meta::parser(|meta| {
-        if meta.path.is_ident("default") {
-            if default.replace(meta.value()?.parse()?).is_some() {
-                return Err(meta.error("duplicate wrap default"));
-            }
-        } else if meta.path.is_ident("with") {
-            if with.replace(meta.value()?.parse()?).is_some() {
-                return Err(meta.error("duplicate wrap constructor"));
-            }
-        } else {
-            return Err(meta.error("expected default = expression or with = path"));
-        }
-        Ok(())
-    })
-    .parse2(arguments)?;
-    let (Some(default), Some(with)) = (default, with) else {
-        return Err(syn::Error::new_spanned(
-            group,
-            "wrap requires default = expression and with = constructor",
-        ));
-    };
-    Ok(Wrap { default, with })
 }
 
 /// Reads a `builder(...)` group: `skip` or `skip = expr` keeps the field out
@@ -308,35 +161,6 @@ fn construction(
             ));
         }
     }))
-}
-
-/// Reads a `field(...)` group: `get` returns a reference, `get, copy` a copy.
-fn copied(group: &Path, arguments: TokenStream) -> Result<bool> {
-    let mut get = false;
-    let mut copy = false;
-    for option in Punctuated::<Meta, Token![,]>::parse_terminated.parse2(arguments)? {
-        let flag = match &option {
-            Meta::Path(path) if path.is_ident("get") => &mut get,
-            Meta::Path(path) if path.is_ident("copy") => &mut copy,
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    option,
-                    "a config accessor is field(get) or field(get, copy)",
-                ));
-            }
-        };
-        if *flag {
-            return Err(syn::Error::new_spanned(option, "duplicate accessor option"));
-        }
-        *flag = true;
-    }
-    if !get {
-        return Err(syn::Error::new_spanned(
-            group,
-            "a config accessor is field(get) or field(get, copy)",
-        ));
-    }
-    Ok(copy)
 }
 
 fn retained(

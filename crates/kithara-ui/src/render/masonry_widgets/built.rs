@@ -6,7 +6,10 @@ use masonry::{
     kurbo::Rect as MasonryRect,
 };
 
-use super::{mount::NodeLayout, spot::Spot};
+use super::{
+    mount::{NodeLayout, declared},
+    spot::Spot,
+};
 use crate::{
     draw::{Pt, Rgba, Transform},
     expand::Binding,
@@ -22,6 +25,7 @@ use crate::{
             popover::PopoverState,
         },
     },
+    size::SizeSpec,
     solve,
 };
 
@@ -49,6 +53,139 @@ impl BlockState {
             #[call(get)]
             pub(crate) fn is_hidden(&self) -> bool;
         }
+    }
+}
+
+/// A node's box: fixed at mount, or its stage's box at layout.
+#[derive(Clone)]
+pub(crate) enum Natural {
+    Fixed(solve::Size<solve::Length>),
+    Stage(Rc<StageSize>),
+}
+
+impl Natural {
+    pub(crate) fn now(&self) -> solve::Size<solve::Length> {
+        match self {
+            Self::Fixed(size) => *size,
+            Self::Stage(stage) => stage.now(),
+        }
+    }
+}
+
+impl From<solve::Size<solve::Length>> for Natural {
+    fn from(size: solve::Size<solve::Length>) -> Self {
+        Self::Fixed(size)
+    }
+}
+
+pub(crate) struct StageSize {
+    size: Option<SizeSpec>,
+    children: Vec<(Option<Rc<BlockState>>, Natural)>,
+}
+
+impl StageSize {
+    pub(crate) const fn new(
+        size: Option<SizeSpec>,
+        children: Vec<(Option<Rc<BlockState>>, Natural)>,
+    ) -> Self {
+        Self { size, children }
+    }
+
+    pub(crate) fn shown(&self) -> impl Iterator<Item = bool> + '_ {
+        self.children
+            .iter()
+            .map(|(block, _)| !block.as_ref().is_some_and(|block| block.is_hidden()))
+    }
+
+    pub(crate) fn now(&self) -> solve::Size<solve::Length> {
+        let first = self
+            .children
+            .iter()
+            .zip(self.shown())
+            .find_map(|((_, natural), shown)| shown.then(|| natural.now()));
+        self.size
+            .map(declared)
+            .or(first)
+            .unwrap_or(declared(SizeSpec::FILL))
+    }
+}
+
+/// The blocks a mounted thing stands inside; any hidden one leaves it unread.
+#[derive(Default)]
+pub(crate) struct Enclosing(Vec<Rc<BlockState>>);
+
+impl Enclosing {
+    pub(crate) fn shown(&self) -> bool {
+        self.0.iter().all(|block| !block.is_hidden())
+    }
+}
+
+/// One registration and the blocks it stands inside.
+pub(crate) struct Within<T> {
+    pub(crate) item: T,
+    pub(crate) within: Enclosing,
+}
+
+impl<T> From<T> for Within<T> {
+    fn from(item: T) -> Self {
+        Self {
+            item,
+            within: Enclosing::default(),
+        }
+    }
+}
+
+/// What the root reads again on every refresh, registered as the tree is built.
+#[derive(Default)]
+pub(crate) struct Registrations {
+    pub(crate) watched: Vec<Within<Watched>>,
+    pub(crate) blocks: Vec<Within<BlockRegistration>>,
+    pub(crate) popovers: Vec<Within<PopoverRegistration>>,
+    pub(crate) engines: Vec<Within<Rc<HostedEngine>>>,
+    pub(crate) engine_targets: Vec<Within<EngineTarget>>,
+}
+
+impl Registrations {
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.watched.extend(other.watched);
+        self.blocks.extend(other.blocks);
+        self.popovers.extend(other.popovers);
+        self.engines.extend(other.engines);
+        self.engine_targets.extend(other.engine_targets);
+    }
+
+    fn stands_in(&mut self, block: &Rc<BlockState>) {
+        let within = self
+            .watched
+            .iter_mut()
+            .map(|watched| &mut watched.within)
+            .chain(self.blocks.iter_mut().map(|inner| &mut inner.within))
+            .chain(self.popovers.iter_mut().map(|popover| &mut popover.within))
+            .chain(self.engines.iter_mut().map(|engine| &mut engine.within))
+            .chain(
+                self.engine_targets
+                    .iter_mut()
+                    .map(|target| &mut target.within),
+            );
+        for enclosing in within {
+            enclosing.0.push(Rc::clone(block));
+        }
+    }
+
+    fn hides(&mut self, flow: WidgetId, blocks: Vec<(Binding, Rc<BlockState>)>) {
+        self.blocks
+            .extend(blocks.into_iter().map(|(hidden, state)| {
+                BlockRegistration {
+                    hidden,
+                    state,
+                    flow,
+                }
+                .into()
+            }));
+    }
+
+    fn watch(&mut self, watched: Watched) {
+        self.watched.push(watched.into());
     }
 }
 
@@ -150,25 +287,18 @@ pub(in crate::render) type LayerParts = (
     NewWidget<Node>,
     solve::Size<solve::Length>,
     Vec<NewWidget<dyn Widget>>,
-    Vec<PopoverRegistration>,
-    Vec<BlockRegistration>,
-    Vec<EngineTarget>,
-    Vec<Rc<HostedEngine>>,
+    Registrations,
     Vec<NodeBox>,
     Vec<WidgetId>,
     Option<WindowTracker>,
-    Vec<Watched>,
 );
 pub(in crate::render) type RootParts = (
     NewWidget<dyn Widget>,
     Vec<NewWidget<dyn Widget>>,
-    Vec<PopoverRegistration>,
-    Vec<BlockRegistration>,
-    Vec<Rc<HostedEngine>>,
+    Registrations,
     Vec<NodeBox>,
     Vec<WidgetId>,
     Option<WindowTracker>,
-    Vec<Watched>,
 );
 
 /// A retained Masonry tree produced by the document facade.
@@ -176,21 +306,19 @@ pub(in crate::render) type RootParts = (
 #[fieldwork(opt_in, get)]
 pub struct MasonryNode<Action> {
     widget: NewWidget<Node>,
-    #[field(get(copy), vis = "pub(crate)")]
-    declared: solve::Size<solve::Length>,
+    #[field(get(deref = false), vis = "pub(crate)")]
+    natural: Natural,
     action: PhantomData<fn() -> Action>,
     layers: Vec<NewWidget<dyn Widget>>,
-    popovers: Vec<PopoverRegistration>,
-    blocks: Vec<BlockRegistration>,
-    engine_targets: Vec<EngineTarget>,
-    engines: Vec<Rc<HostedEngine>>,
+    registrations: Registrations,
+    /// The block this node is, registered with the flow that takes it in.
+    block: Option<(Binding, Rc<BlockState>)>,
     /// The cell this node's own box is read into, made on first ask. Only a
     /// node that answers a hand is worth a cell, and one node stands in one
     /// box however many surfaces it carries, so the cell appears when the
     /// first of them asks and is shared by the rest.
     geometry: Option<Rc<Cell<MasonryRect>>>,
     boxes: Vec<NodeBox>,
-    watched: Vec<Watched>,
     native: Vec<WidgetId>,
     window: Option<WindowTracker>,
 }
@@ -201,12 +329,9 @@ impl<Action> MasonryNode<Action> {
         let Some(target) = EngineTarget::new(node, self.geometry(), plan) else {
             return;
         };
-        let index = if prepend {
-            0
-        } else {
-            self.engine_targets.len()
-        };
-        self.engine_targets.insert(index, target);
+        let targets = &mut self.registrations.engine_targets;
+        let index = if prepend { 0 } else { targets.len() };
+        targets.insert(index, target.into());
     }
 
     pub(crate) fn add_popover(
@@ -217,51 +342,52 @@ impl<Action> MasonryNode<Action> {
         dismiss: Rc<dyn Fn() -> HostAction>,
         held: Vec<WidgetId>,
     ) {
-        let mut controls: Vec<WidgetId> =
-            self.engines.iter().map(|engine| engine.owner()).collect();
+        let mut controls: Vec<WidgetId> = self
+            .registrations
+            .engines
+            .iter()
+            .map(|engine| engine.item.owner())
+            .collect();
         controls.extend(held);
-        self.popovers.push(PopoverRegistration {
-            layer,
-            state,
-            dismiss,
-            controls,
-            anchor: self.widget.id(),
-            flag: flag.clone(),
-        });
+        self.registrations.popovers.push(
+            PopoverRegistration {
+                layer,
+                state,
+                dismiss,
+                controls,
+                anchor: self.widget.id(),
+                flag: flag.clone(),
+            }
+            .into(),
+        );
     }
 
     fn assemble(
         layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
+        natural: Natural,
         children: Vec<Self>,
         background: Option<Rgba>,
         frame: Option<(FrameSides, Rgba, f32)>,
     ) -> Self {
         let mut child_widgets: Vec<WidgetPod<Node>> = Vec::with_capacity(children.len());
         let mut layers: Vec<NewWidget<dyn Widget>> = Vec::new();
-        let mut popovers: Vec<PopoverRegistration> = Vec::new();
-        let mut blocks: Vec<BlockRegistration> = Vec::new();
-        let mut engine_targets: Vec<EngineTarget> = Vec::new();
-        let mut engines: Vec<Rc<HostedEngine>> = Vec::new();
+        let mut registrations = Registrations::default();
         let mut boxes: Vec<NodeBox> = Vec::new();
-        let mut watched: Vec<Watched> = Vec::new();
         let mut native: Vec<WidgetId> = Vec::new();
         let mut window = None;
+        let mut blocks: Vec<(Binding, Rc<BlockState>)> = Vec::new();
         for child in children {
             layers.extend(child.layers);
-            popovers.extend(child.popovers);
-            blocks.extend(child.blocks);
-            engine_targets.extend(child.engine_targets);
-            engines.extend(child.engines);
+            registrations.extend(child.registrations);
+            blocks.extend(child.block);
             boxes.extend(child.boxes);
-            watched.extend(child.watched);
             native.extend(child.native);
             window = merge_window(window, child.window);
             child_widgets.push(child.widget.to_pod());
         }
         let widget = NewWidget::new(Node::new(
             layout,
-            declared,
+            natural.now(),
             child_widgets,
             background,
             frame,
@@ -269,19 +395,17 @@ impl<Action> MasonryNode<Action> {
         if widget.widget.is_native() {
             native.push(widget.id());
         }
+        registrations.hides(widget.id(), blocks);
         Self {
             widget,
-            declared,
+            natural,
             layers,
-            popovers,
-            blocks,
-            engine_targets,
-            engines,
+            registrations,
             boxes,
-            watched,
             native,
             window,
             action: PhantomData,
+            block: None,
             geometry: None,
         }
     }
@@ -297,7 +421,7 @@ impl<Action> MasonryNode<Action> {
         background: Option<Rgba>,
         frame: Option<(FrameSides, Rgba, f32)>,
     ) -> Self {
-        Self::assemble(layout, declared, children, background, frame)
+        Self::assemble(layout, declared.into(), children, background, frame)
     }
 
     /// A node standing for one node of the document.
@@ -307,13 +431,13 @@ impl<Action> MasonryNode<Action> {
     /// scrolls its child speaks for the whole subtree it holds.
     pub(in crate::render) fn document(
         layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
+        natural: impl Into<Natural>,
         children: Vec<Self>,
         exposes_children: bool,
         background: Option<Rgba>,
         frame: Option<(FrameSides, Rgba, f32)>,
     ) -> Self {
-        let node = Self::assemble(layout, declared, children, background, frame);
+        let node = Self::assemble(layout, natural.into(), children, background, frame);
         kithara::probe_event!(
             masonry_document_node,
             exposes_children,
@@ -330,16 +454,13 @@ impl<Action> MasonryNode<Action> {
         let widget = NewWidget::new(Node::new(layout, declared, Vec::new(), background, None));
         Self {
             widget,
-            declared,
+            natural: Natural::Fixed(declared),
             action: PhantomData,
             layers: Vec::new(),
-            popovers: Vec::new(),
-            blocks: Vec::new(),
-            engine_targets: Vec::new(),
-            engines: Vec::new(),
+            registrations: Registrations::default(),
+            block: None,
             geometry: None,
             boxes: Vec::new(),
-            watched: Vec::new(),
             native: Vec::new(),
             window: None,
         }
@@ -359,16 +480,27 @@ impl<Action> MasonryNode<Action> {
         area
     }
 
-    /// Remembers that this node hides the blocks among its own children, so
-    /// the root can read them again and lay this node out when one changes.
-    pub(crate) fn hides(&mut self, blocks: Vec<(Binding, Rc<BlockState>)>) {
-        let flow = self.widget.id();
-        self.blocks
-            .extend(blocks.into_iter().map(|(hidden, state)| BlockRegistration {
-                hidden,
-                state,
-                flow,
-            }));
+    pub(in crate::render) fn stage(
+        size: Option<SizeSpec>,
+        children: Vec<(Option<Rc<BlockState>>, Self)>,
+    ) -> Self {
+        let (sized, nodes) = children
+            .into_iter()
+            .map(|(block, node)| ((block, node.natural.clone()), node))
+            .unzip();
+        let size = Rc::new(StageSize::new(size, sized));
+        Self::document(
+            NodeLayout::Stage(Rc::clone(&size)),
+            Natural::Stage(size),
+            nodes,
+            true,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn declared(&self) -> solve::Size<solve::Length> {
+        self.natural.now()
     }
 
     pub(crate) fn host_engine(
@@ -376,34 +508,21 @@ impl<Action> MasonryNode<Action> {
         map_event: Rc<dyn Fn(Published) -> HostAction>,
         skin: &Skin,
     ) {
-        if self.engine_targets.is_empty() {
+        if self.registrations.engine_targets.is_empty() {
             return;
         }
-        let targets = std::mem::take(&mut self.engine_targets);
+        let targets = std::mem::take(&mut self.registrations.engine_targets);
         let raises_menu = targets
             .iter()
-            .any(|target| matches!(target.plan, HostedControlPlan::Picker { .. }));
+            .any(|target| matches!(target.item.plan, HostedControlPlan::Picker { .. }));
         let engine = HostedEngine::new(self.widget.id(), targets, map_event);
         if raises_menu {
             let layer = NewWidget::new(PickerLayer::new(Rc::clone(&engine), skin));
             engine.set_menu_layer(layer.id());
             self.layers.push(layer.erased());
         }
-        self.engines.push(Rc::clone(&engine));
+        self.registrations.engines.push(Rc::clone(&engine).into());
         self.widget.widget.set_engine(engine);
-    }
-
-    /// Remembers the flag this node is dressed by, and the two faces it chooses
-    /// between where the faces are the node's own rather than its leaf's, so the
-    /// root can read the flag again without building the tree afresh.
-    pub(crate) fn lights(&mut self, flag: Binding, faces: Option<Faces>) {
-        if let Some(faces) = faces {
-            self.widget.widget.set_faces(faces);
-        }
-        self.watched.push(Watched::Lit {
-            flag,
-            id: self.widget.id(),
-        });
     }
 
     pub(crate) fn takes_drops(
@@ -421,10 +540,8 @@ impl<Action> MasonryNode<Action> {
                 ..idle
             },
         });
-        self.watched.push(Watched::Zone {
-            path,
-            id: self.widget.id(),
-        });
+        let id = self.widget.id();
+        self.registrations.watch(Watched::Zone { path, id });
         self.window = merge_window(
             self.window.take(),
             Some(WindowTracker {
@@ -483,39 +600,6 @@ impl<Action> MasonryNode<Action> {
         self.window = Some(tracker);
     }
 
-    /// Remembers that this node's leaf shows one endpoint, so its value can be
-    /// re-read into the mounted tree instead of rebuilding the tree to show it.
-    pub(crate) fn watch(&mut self, binding: &Binding) {
-        self.watched.push(Watched::Read {
-            id: self.widget.id(),
-            binding: binding.clone(),
-        });
-    }
-
-    /// Remembers that an object places this node, so the document walk can put
-    /// it somewhere else without the tree being rebuilt around it.
-    pub(crate) fn watch_placement(&mut self, path: InternId) {
-        self.watched.push(Watched::Placed {
-            path,
-            id: self.widget.id(),
-        });
-    }
-
-    pub(crate) fn watch_snapshot(&mut self) {
-        self.watched.push(Watched::Snapshot {
-            id: self.widget.id(),
-        });
-    }
-
-    /// Remembers that this placement reads its point from an endpoint, so the
-    /// stage lays it out again where the point moves.
-    pub(crate) fn watch_spot(&mut self, binding: &Binding) {
-        self.watched.push(Watched::Spot {
-            id: self.widget.id(),
-            binding: binding.clone(),
-        });
-    }
-
     #[cfg(feature = "capture")]
     pub(crate) fn widget_id(&self) -> WidgetId {
         self.widget.id()
@@ -544,34 +628,53 @@ impl<Action> MasonryNode<Action> {
             #[call(extend)]
             pub(crate) fn append_layers(&mut self, layers: Vec<NewWidget<dyn Widget>>);
         }
-        to self.popovers {
+        to self.registrations {
             #[call(extend)]
-            pub(crate) fn append_popovers(&mut self, popovers: Vec<PopoverRegistration>);
-        }
-        to self.blocks {
-            #[call(extend)]
-            pub(crate) fn append_blocks(&mut self, blocks: Vec<BlockRegistration>);
-        }
-        to self.engine_targets {
-            #[call(extend)]
-            pub(crate) fn append_engine_targets(&mut self, targets: Vec<EngineTarget>);
-        }
-        to self.engines {
-            #[call(extend)]
-            pub(crate) fn append_engines(&mut self, engines: Vec<Rc<HostedEngine>>);
+            pub(crate) fn append_registrations(&mut self, registrations: Registrations);
         }
         to self.boxes {
             #[call(extend)]
             pub(crate) fn append_boxes(&mut self, boxes: Vec<NodeBox>);
         }
-        to self.watched {
-            #[call(extend)]
-            pub(crate) fn append_watched(&mut self, watched: Vec<Watched>);
-        }
         to self.native {
             #[call(extend)]
             pub(crate) fn append_native(&mut self, native: Vec<WidgetId>);
         }
+    }
+
+    pub(crate) fn hidden_by(&mut self, hidden: Binding, state: &Rc<BlockState>) {
+        self.registrations.stands_in(state);
+        self.block = Some((hidden, Rc::clone(state)));
+    }
+
+    pub(crate) fn lights(&mut self, flag: Binding, faces: Option<Faces>) {
+        if let Some(faces) = faces {
+            self.widget.widget.set_faces(faces);
+        }
+        let id = self.widget.id();
+        self.registrations.watch(Watched::Lit { flag, id });
+    }
+
+    pub(crate) fn watch(&mut self, binding: &Binding) {
+        let id = self.widget.id();
+        let binding = binding.clone();
+        self.registrations.watch(Watched::Read { id, binding });
+    }
+
+    pub(crate) fn watch_placement(&mut self, path: InternId) {
+        let id = self.widget.id();
+        self.registrations.watch(Watched::Placed { path, id });
+    }
+
+    pub(crate) fn watch_snapshot(&mut self) {
+        let id = self.widget.id();
+        self.registrations.watch(Watched::Snapshot { id });
+    }
+
+    pub(crate) fn watch_spot(&mut self, binding: &Binding) {
+        let id = self.widget.id();
+        let binding = binding.clone();
+        self.registrations.watch(Watched::Spot { id, binding });
     }
 }
 
@@ -579,16 +682,12 @@ impl<Action> From<MasonryNode<Action>> for LayerParts {
     fn from(node: MasonryNode<Action>) -> Self {
         (
             node.widget,
-            node.declared,
+            node.natural.now(),
             node.layers,
-            node.popovers,
-            node.blocks,
-            node.engine_targets,
-            node.engines,
+            node.registrations,
             node.boxes,
             node.native,
             node.window,
-            node.watched,
         )
     }
 }
@@ -598,13 +697,10 @@ impl<Action> From<MasonryNode<Action>> for RootParts {
         (
             node.widget.erased(),
             node.layers,
-            node.popovers,
-            node.blocks,
-            node.engines,
+            node.registrations,
             node.boxes,
             node.native,
             node.window,
-            node.watched,
         )
     }
 }

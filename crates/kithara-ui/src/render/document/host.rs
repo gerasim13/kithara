@@ -1,4 +1,4 @@
-use super::{Group, GroupMount, Measured, Module, PlacedMount, Popover, SplitMount};
+use super::{Group, GroupMount, Measured, Module, PlacedMount, Popover, SplitMount, StageMount};
 use crate::{
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
@@ -130,8 +130,12 @@ pub trait Host {
     ///
     /// The host decides nothing about where they land: that is the business of
     /// whatever object wraps each of them, and a stage with no objects in it
-    /// simply draws its children on top of one another.
-    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
+    /// simply draws its children on top of one another. Hidden blocks are skipped.
+    fn stage(
+        &mut self,
+        children: Vec<StageMount<Self::Output>>,
+        size: Option<SizeSpec>,
+    ) -> Self::Output;
 
     /// Finishes the whole document with host-owned window layers.
     fn window(&mut self, content: Self::Output, resize_edges: bool) -> Self::Output;

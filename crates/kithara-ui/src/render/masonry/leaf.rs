@@ -200,6 +200,9 @@ impl Leaf {
                 text,
                 ..
             } => {
+                if content.is_empty() {
+                    return Size::ZERO;
+                }
                 let run = text.shape(content, *role, None);
                 Size::new(run.width() + *padding_x * 2.0, run.height())
             }
@@ -305,6 +308,16 @@ impl Leaf {
             },
             Self::Custom { .. } | Self::Empty | Self::Shader(_) | Self::Vis(_) => false,
         }
+    }
+
+    pub(crate) fn text_size(&mut self) -> Option<Size> {
+        if !matches!(self, Self::Text { .. }) {
+            return None;
+        }
+        Some(self.measure(crate::solve::Limits::new(
+            Size::ZERO,
+            Size::new(f32::INFINITY, f32::INFINITY),
+        )))
     }
 
     pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {

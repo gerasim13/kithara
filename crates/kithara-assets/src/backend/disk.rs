@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{
     AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, MmapResource, OpenIntent,
@@ -21,13 +22,34 @@ use crate::{
     index::{AvailabilityIndex, PinDurability},
     layout::{ResourceKey, ResourceKeyKind},
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
+    store::AssetStoreConfig,
 };
+
+trait DiskPolicy: Send + Sync {
+    fn segment_reservation(&self) -> u64;
+}
+
+impl DiskPolicy for u64 {
+    fn segment_reservation(&self) -> u64 {
+        *self
+    }
+}
+
+impl<S> DiskPolicy for AssetStoreConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn segment_reservation(&self) -> u64 {
+        self.segment_reservation
+            .unwrap_or(consts::DEFAULT_SEGMENT_RESERVATION)
+    }
+}
 
 /// Concrete on-disk [`Assets`] implementation.
 ///
 /// One `DiskAssetStore` services every asset under its `root_dir`;
 /// `asset_root` is a per-call parameter.
-#[derive(Clone, Debug)]
+#[derive(Clone, derive_more::Debug)]
 pub struct DiskAssetStore {
     /// Single canonical removal channel. Synchronises FS deletion with
     /// the [`AvailabilityIndex`]. See [`AssetDeleter`] for the contract.
@@ -42,7 +64,8 @@ pub struct DiskAssetStore {
     /// those re-maps; anything larger still grows, and the surplus is trimmed
     /// back to `final_len` on commit, so this costs a sparse extent and
     /// nothing else.
-    segment_reservation: u64,
+    #[debug(skip)]
+    policy: Arc<dyn DiskPolicy>,
 }
 
 /// Disk-backed [`AssetDeleter`].
@@ -120,6 +143,35 @@ impl AssetDeleter for DiskAssetDeleter {
 
 #[bon::bon]
 impl DiskAssetStore {
+    fn from_policy<P: Into<PathBuf>>(
+        root_dir: P,
+        cancel: CancelToken,
+        availability: AvailabilityIndex,
+        deleter: Arc<dyn AssetDeleter>,
+        policy: Arc<dyn DiskPolicy>,
+    ) -> Self {
+        Self {
+            cancel,
+            availability,
+            deleter,
+            policy,
+            root_dir: root_dir.into(),
+        }
+    }
+
+    pub(crate) fn with_config<S>(
+        root_dir: PathBuf,
+        cancel: CancelToken,
+        availability: AvailabilityIndex,
+        deleter: Arc<dyn AssetDeleter>,
+        config: Arc<AssetStoreConfig<S>>,
+    ) -> Self
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
+        Self::from_policy(root_dir, cancel, availability, deleter, config)
+    }
+
     /// Create a store rooted at `root_dir` with its own unshared
     /// [`AvailabilityIndex`]. Convenient for tests; production
     /// construction (via `AssetStore::builder(pools).build()`) uses
@@ -193,7 +245,7 @@ impl DiskAssetStore {
     ) -> AssetsResult<AtomicChunked<MmapDriver>> {
         let observer = self.segment_observer(key, path.clone());
         let cancel = self.cancel.clone();
-        let reservation = self.segment_reservation;
+        let reservation = self.policy.segment_reservation();
         let chunked = AtomicChunked::open_deferred(path, move |target, intent| {
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
@@ -305,15 +357,15 @@ impl DiskAssetStore {
         cancel: CancelToken,
         availability: AvailabilityIndex,
         deleter: Arc<dyn AssetDeleter>,
-        #[builder(default = 1024 * 1024)] segment_reservation: u64,
+        #[builder(default = consts::DEFAULT_SEGMENT_RESERVATION)] segment_reservation: u64,
     ) -> Self {
-        Self {
+        Self::from_policy(
+            root_dir,
             cancel,
             availability,
             deleter,
-            segment_reservation,
-            root_dir: root_dir.into(),
-        }
+            Arc::new(segment_reservation),
+        )
     }
 }
 

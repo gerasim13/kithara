@@ -1,13 +1,12 @@
-use bon::Builder;
+use kithara_config::Config;
 use kithara_dsp::interp::Interpolation;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Builder)]
-#[builder(const, state_mod(vis = "pub"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Config)]
+#[config(default, builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
-#[derive(kithara_derive::BuiltDefault)]
 pub struct GlideConfig {
-    #[builder(default = Interpolation::Quadratic)]
+    #[config(builder(default = Interpolation::Quadratic))]
     pub interpolation: Interpolation,
-    #[builder(default = true)]
+    #[config(builder(default = true))]
     pub anti_alias: bool,
 }

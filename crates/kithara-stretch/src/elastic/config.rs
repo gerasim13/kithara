@@ -1,7 +1,8 @@
 use std::{num::NonZeroUsize, ops::RangeInclusive};
 
+use bon::bon;
 use kithara_bufpool::PoolRegion;
-use kithara_config::{Config, bon::bon};
+use kithara_config::Config;
 use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
@@ -12,14 +13,12 @@ use crate::{StretchKind, consts};
 ///
 /// [`SignalsmithConfigPatch`] is what a configuration document may say about it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch, Config)]
-#[config(validate_builder, builder(state_mod(vis = "pub")), patch(validate = Self::validate, error = ElasticError))]
+#[config(validate_builder, builder(state_mod(vis = "pub")), patch(validate = Self::validate, error = ElasticError), fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct SignalsmithConfig {
     /// Custom analysis block size in source frames; absent selects the native preset.
-    #[config(value, field(get, copy))]
     block_frames: Option<NonZeroUsize>,
     /// Custom analysis interval in source frames; absent selects the native preset.
-    #[config(value, field(get, copy))]
     interval_frames: Option<NonZeroUsize>,
 }
 
@@ -45,7 +44,7 @@ impl SignalsmithConfig {
 #[non_exhaustive]
 pub struct BungeeConfig {
     /// Base-two synthesis-hop adjustment passed to the native stretcher.
-    #[config(value, builder(default), field(get, copy))]
+    #[config(value, builder(default), get(copy))]
     log2_synthesis_hop_adjust: i32,
 }
 
@@ -54,28 +53,32 @@ pub struct BungeeConfig {
 /// [`ElasticBackendConfigPatch`] is what a configuration document may say
 /// about it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Patch, Config)]
-#[config(builder(state_mod(vis = "pub")), patch(fallible))]
+#[config(
+    builder(state_mod(vis = "pub")),
+    patch(fallible),
+    fields(nested, get(ref), builder(default))
+)]
 #[non_exhaustive]
 pub struct ElasticBackendConfig {
-    #[config(nested, builder(default), field(get), patch(nested))]
+    #[config(patch(nested))]
     bungee: BungeeConfig,
-    #[config(nested, builder(default), field(get), patch(nested, fallible))]
+    #[config(patch(nested, fallible))]
     signalsmith: SignalsmithConfig,
 }
 
 /// Numeric continuity policy for exact-span planning.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(validate_builder, patch(validate = Self::validate, error = ElasticError))]
+#[config(validate_builder, patch(validate = Self::validate, error = ElasticError), fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct ElasticSpanConfig {
     /// Source-frame tolerance for adjacent spans; defaults to `1e-6`.
-    #[config(value, builder(default = consts::CONTINUITY_TOLERANCE), field(get, copy))]
+    #[config(builder(default = consts::CONTINUITY_TOLERANCE))]
     continuity_tolerance: f64,
     /// Per-block source-frame correction limit; defaults to one frame.
-    #[config(value, builder(default = consts::MAX_CORRECTION_PER_BLOCK), field(get, copy))]
+    #[config(builder(default = consts::MAX_CORRECTION_PER_BLOCK))]
     max_correction_per_block: f64,
     /// Accepted boundary phase error; defaults to one source frame.
-    #[config(value, builder(default = consts::MAX_PHASE_ERROR), field(get, copy))]
+    #[config(builder(default = consts::MAX_PHASE_ERROR))]
     max_phase_error: f64,
 }
 
@@ -108,14 +111,14 @@ pub struct ElasticConfig<S> {
     #[field(get(copy), vis = "pub(crate)")]
     shape: ElasticShape,
     /// Shared pool region used by engines that need planar scratch.
-    #[config(skip = "injected shared pool region", field(get))]
+    #[config(skip = "injected shared pool region", get(ref))]
     pools: PoolRegion<S>,
     /// Selected compiled implementation.
-    #[config(value, field(get, copy))]
+    #[config(value, get(copy))]
     backend: StretchKind,
 }
 
-#[bon(crate = ::kithara_config::bon)]
+#[bon]
 impl<S> ElasticConfig<S> {
     /// Builds a validated preparation config with its shared pool region.
     ///

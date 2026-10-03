@@ -14,8 +14,8 @@ use thiserror::Error;
 
 use super::{
     built::{
-        BlockRegistration, MasonryNode, NodeBox, PopoverRegistration, RootParts, Watched,
-        WindowTracker,
+        BlockRegistration, MasonryNode, NodeBox, PopoverRegistration, Registrations, RootParts,
+        Watched, WindowTracker, Within,
     },
     custom::HostAction,
     node::Node,
@@ -44,13 +44,13 @@ pub struct MasonryRoot<Action> {
     #[field(get, vis = "pub")]
     root: RenderRoot,
     actions: Vec<Action>,
-    blocks: Vec<BlockRegistration>,
+    blocks: Vec<Within<BlockRegistration>>,
     boxes: Vec<NodeBox>,
-    engines: Vec<Rc<HostedEngine>>,
+    engines: Vec<Within<Rc<HostedEngine>>>,
     native: Vec<WidgetId>,
     platform: Vec<RenderRootSignal>,
-    popovers: Vec<PopoverRegistration>,
-    watched: Vec<Watched>,
+    popovers: Vec<Within<PopoverRegistration>>,
+    watched: Vec<Within<Watched>>,
     /// The document this root holds draws a different picture at a later
     /// moment, so a frame it finished has to be followed by another.
     ///
@@ -106,8 +106,14 @@ where
         node: MasonryNode<Action>,
         options: RenderRootOptions,
     ) -> Result<Self, MasonryRootError> {
-        let (base, layers, popovers, blocks, engines, boxes, native, window, watched) =
-            RootParts::from(node);
+        let (base, layers, registrations, boxes, native, window) = RootParts::from(node);
+        let Registrations {
+            watched,
+            blocks,
+            popovers,
+            engines,
+            ..
+        } = registrations;
         let scale = options.scale_factor;
         let signals = Rc::new(RefCell::new(VecDeque::new()));
         let sink = Rc::clone(&signals);
@@ -182,8 +188,8 @@ where
                 .popovers
                 .iter()
                 .rev()
-                .find(|popover| popover.state.standing().is_some())
-                .map(|popover| (popover.dismiss)())
+                .find(|popover| popover.item.state.standing().is_some())
+                .map(|popover| (popover.item.dismiss)())
         {
             self.push_action(Box::new(action))?;
             return Ok(Handled::Yes);
@@ -318,7 +324,7 @@ where
         let changed: Vec<WidgetId> = self
             .engines
             .iter()
-            .filter_map(|engine| engine.take_changed_menu())
+            .filter_map(|engine| engine.item.take_changed_menu())
             .collect();
         for layer in changed {
             self.root.edit_widget(layer, |mut layer| {
@@ -329,7 +335,10 @@ where
 
     fn sync_popovers(&self) {
         for popover in &self.popovers {
-            popover.state.set_anchor(self.anchor_box(popover.anchor));
+            popover
+                .item
+                .state
+                .set_anchor(self.anchor_box(popover.item.anchor));
         }
     }
 
@@ -399,7 +408,7 @@ where
         if self
             .popovers
             .iter()
-            .any(|popover| popover.state.standing().is_some())
+            .any(|popover| popover.item.state.standing().is_some())
         {
             return;
         }
@@ -409,7 +418,7 @@ where
             return;
         }
         for popover in &self.popovers {
-            popover.state.bank(point);
+            popover.item.state.bank(point);
         }
     }
 
@@ -422,7 +431,7 @@ where
         let at = at?;
         let point = Point::new(at.x.into(), at.y.into());
         self.popovers.iter().rposition(|popover| {
-            popover.state.standing().is_some() && popover.state.surface().contains(point)
+            popover.item.state.standing().is_some() && popover.item.state.surface().contains(point)
         })
     }
 
@@ -434,16 +443,16 @@ where
             .popovers
             .iter()
             .rev()
-            .find(|popover| popover.state.standing().is_some())
+            .find(|popover| popover.item.state.standing().is_some())
         else {
             return Ok(false);
         };
         let position = button.state.logical_position();
         let point = Point::new(position.x, position.y);
-        if self.window_owns(point) || popover.state.surface().contains(point) {
+        if self.window_owns(point) || popover.item.state.surface().contains(point) {
             return Ok(false);
         }
-        let action = (popover.dismiss)();
+        let action = (popover.item.dismiss)();
         self.push_action(Box::new(action))?;
         Ok(true)
     }
@@ -461,7 +470,10 @@ where
         if self.root.pointer_capture_target().is_some() || self.window_answers_first(&event) {
             return self.route_root_pointer(event);
         }
-        let menu = self.engines.iter().any(|engine| engine.has_open_picker());
+        let menu = self
+            .engines
+            .iter()
+            .any(|engine| engine.item.has_open_picker());
         if !menu && self.dismisses_popover(&event)? {
             return Ok(Handled::Yes);
         }
@@ -529,7 +541,8 @@ where
         for engine in self.routers() {
             let owner = engine.owner();
             let held = engine.captures_pointer();
-            if !held && covered.is_some_and(|index| !self.popovers[index].controls.contains(&owner))
+            if !held
+                && covered.is_some_and(|index| !self.popovers[index].item.controls.contains(&owner))
             {
                 continue;
             }
@@ -570,7 +583,7 @@ where
         let dropped = self.drag.follow(event, |table, index| {
             engines
                 .iter()
-                .find_map(|engine| engine.carried(table, index))
+                .find_map(|engine| engine.item.carried(table, index))
         });
         if self.drag.hovered() != hovered.as_deref() {
             let hovered = self.drag.hovered().map(str::to_owned);
@@ -588,7 +601,7 @@ where
 
     fn light_zones(&mut self, hovered: Option<&str>) {
         for watched in &self.watched {
-            let Watched::Zone { id, path } = watched else {
+            let Watched::Zone { id, path } = &watched.item else {
                 continue;
             };
             let on = hovered == Some(path.as_str());
@@ -625,10 +638,13 @@ where
         Ok(handled)
     }
 
-    /// The routers in the order they are asked: from the top of the document
-    /// down, which is the order they were stacked in, reversed.
     fn routers(&self) -> Vec<Rc<HostedEngine>> {
-        self.engines.iter().rev().map(Rc::clone).collect()
+        self.engines
+            .iter()
+            .rev()
+            .filter(|engine| engine.within.shown())
+            .map(|engine| Rc::clone(&engine.item))
+            .collect()
     }
 
     /// Says what the hand is doing, from the router that owns it.
@@ -703,21 +719,17 @@ where
         })
     }
 
-    /// Opens the surfaces the document now holds open, and shuts the rest.
-    ///
-    /// This is the one thing a mounted surface cannot answer for itself. Every
-    /// other read reaches a leaf that is already standing, and re-reading it
-    /// changes what that leaf shows; a popover opening changes nothing inside
-    /// its content, only whether the content stands in the picture. So the flag
-    /// is read here, against the layer the content was mounted into.
     fn open_surfaces(&mut self, ctx: Ctx<'_, '_>) {
         let changed: Vec<WidgetId> = self
             .popovers
             .iter()
-            .filter(|popover| ctx.flag(Some(&popover.flag)) != popover.state.is_open())
+            .filter(|popover| {
+                let open = popover.within.shown() && ctx.flag(Some(&popover.item.flag));
+                open != popover.item.state.is_open()
+            })
             .map(|popover| {
-                popover.state.latch(!popover.state.is_open());
-                popover.layer
+                popover.item.state.latch(!popover.item.state.is_open());
+                popover.item.layer
             })
             .collect();
         for layer in changed {
@@ -739,7 +751,7 @@ where
         let placed = placements(&ctx.ui.root, ctx);
         let mut moved = false;
         for watched in &self.watched {
-            let Watched::Placed { id, path } = watched else {
+            let Watched::Placed { id, path } = &watched.item else {
                 continue;
             };
             let Some(transform) = placed.get(path).copied() else {
@@ -774,12 +786,16 @@ where
     /// re-read one control at a time. A control's *pose* comes from the objects
     /// around it, and is worked out by the document walk rather than named
     /// anywhere, so it takes a walk to re-read — one for the whole document.
+    ///
+    /// Blocks are stood first, so a hidden block's content stays unread.
     pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
+        if self.stand_blocks(ctx) {
+            self.stand_engines();
+        }
         let shown = self.show_values(ctx);
         self.reread_plans(ctx);
         let placed = self.place_objects(ctx);
         self.open_surfaces(ctx);
-        self.stand_blocks(ctx);
         let carried = self.carry_ghost();
         self.moved = shown || placed || carried;
     }
@@ -791,23 +807,26 @@ where
     /// resolves that afresh every frame because it rebuilds; this one re-reads
     /// it in place.
     fn reread_plans(&mut self, ctx: Ctx<'_, '_>) {
-        for engine in &self.engines {
-            engine.reread(ctx);
+        for engine in self.engines.iter().filter(|engine| engine.within.shown()) {
+            engine.item.reread(ctx);
         }
     }
 
     fn show_values(&mut self, ctx: Ctx<'_, '_>) -> bool {
         let mut moved = false;
-        for watched in &self.watched {
-            match watched {
+        for watched in self.watched.iter().filter(|watched| watched.within.shown()) {
+            match &watched.item {
                 Watched::Read { id, binding } => {
                     let Some(value) = ctx.read(binding) else {
                         continue;
                     };
                     moved |= self.root.edit_widget(*id, |mut widget| {
                         let mut node = widget.downcast::<Node>();
+                        let before = node.widget.text_size();
                         let shown = node.widget.show_live(&value);
-                        if shown {
+                        if shown && node.widget.text_size() != before {
+                            node.ctx.request_layout();
+                        } else if shown {
                             node.ctx.request_paint_only();
                         }
                         shown
@@ -853,25 +872,27 @@ where
         moved
     }
 
-    /// Shows the blocks the document now shows, and hides the rest.
-    ///
-    /// A block is the same kind of thing as a surface opening: re-reading a
-    /// leaf changes what that leaf shows, while a block changes whether a
-    /// whole subtree stands in the picture at all. The flow above it hides it
-    /// the way it hides a child the room did not reach, so all this does is
-    /// tell the flow to lay itself out again once the answer has changed.
-    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) {
-        let changed: Vec<WidgetId> = self
-            .blocks
-            .iter()
-            .filter(|block| block.state.latch(ctx.flag(Some(&block.hidden))))
-            .map(|block| block.flow)
-            .collect();
+    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        let mut changed: Vec<WidgetId> = Vec::new();
+        for block in self.blocks.iter().rev() {
+            if block.within.shown() && block.item.state.latch(ctx.flag(Some(&block.item.hidden))) {
+                changed.push(block.item.flow);
+            }
+        }
+        let stood = !changed.is_empty();
         for flow in changed {
             self.root.edit_widget(flow, |mut flow| {
                 flow.ctx.request_layout();
             });
         }
+        stood
+    }
+
+    fn stand_engines(&mut self) {
+        for engine in &self.engines {
+            engine.item.stand(engine.within.shown());
+        }
+        self.sync_menus();
     }
 }
 

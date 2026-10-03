@@ -14,7 +14,7 @@ use kithara_ui::{
         InputOwner, Reads,
         document::{
             Clock, Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover,
-            SplitMount, render,
+            SplitMount, StageMount, render,
         },
     },
     size::SizeSpec,
@@ -171,8 +171,12 @@ impl Host for WaveHost<'_> {
         Self::flatten(children.into_iter().map(|cell| cell.output))
     }
 
-    fn stage(&mut self, children: Vec<Self::Output>, _size: Option<SizeSpec>) -> Self::Output {
-        Self::flatten(children)
+    fn stage(
+        &mut self,
+        children: Vec<StageMount<Self::Output>>,
+        _size: Option<SizeSpec>,
+    ) -> Self::Output {
+        Self::flatten(children.into_iter().map(|child| child.output))
     }
 
     fn window(&mut self, content: Self::Output, _resize_edges: bool) -> Self::Output {

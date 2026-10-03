@@ -71,6 +71,17 @@ impl TrackAnalysisCache {
         }
     }
 
+    pub(crate) fn analysis(
+        &self,
+        target: &AnalysisTarget,
+    ) -> Option<&kithara::analysis::TrackAnalysis> {
+        self.mem
+            .get(target.key())?
+            .iter()
+            .find(|entry| entry.target.is_same(target))
+            .map(|entry| entry.progress.analysis())
+    }
+
     pub(crate) fn get(
         &mut self,
         target: &AnalysisTarget,

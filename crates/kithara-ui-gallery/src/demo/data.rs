@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use kithara_ui::{
     module::IconName,
-    render::{TableCell, TableRow, TreeRow},
+    render::{Badge, TableCell, TableRow, TreeRow},
 };
 use serde::Deserialize;
 
@@ -87,11 +87,19 @@ fn load_catalog() -> Catalog {
     let data: DemoData = ron::from_str(include_str!("../../assets/demo-data.ron"))
         .expect("embedded gallery demo data must parse");
     let data: &'static DemoData = Box::leak(Box::new(data));
+    let decks: &'static [Vec<Badge<'static>>] = Box::leak(
+        data.tracks
+            .iter()
+            .map(|track| deck_badges(&track.deck))
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
     let rows: Vec<TableRow<'static>> = data
         .tracks
         .iter()
+        .zip(decks)
         .enumerate()
-        .map(|(index, track)| track_row(track, &track.title, index == 0))
+        .map(|(index, (track, deck))| track_row(track, deck, &track.title, index == 0))
         .collect();
     let takes = data.tracks.len();
     let titles: &'static [String] = Box::leak(
@@ -109,7 +117,10 @@ fn load_catalog() -> Catalog {
     let long_rows: Vec<TableRow<'static>> = titles
         .iter()
         .enumerate()
-        .map(|(index, title)| track_row(&data.tracks[index % takes], title, index == 0))
+        .map(|(index, title)| {
+            let at = index % takes;
+            track_row(&data.tracks[at], &decks[at], title, index == 0)
+        })
         .collect();
     let tree: Vec<TreeRow<'static>> = data
         .tree
@@ -146,16 +157,29 @@ fn load_catalog() -> Catalog {
     }
 }
 
-/// One table row for `track`, shown under `title` so a repeated catalogue does
-/// not read as the same track over and over.
-fn track_row(track: &'static DemoTrack, title: &'static str, selected: bool) -> TableRow<'static> {
+fn deck_badges(deck: &'static str) -> Vec<Badge<'static>> {
+    if deck.is_empty() {
+        return Vec::new();
+    }
+    vec![Badge {
+        label: deck,
+        active: true,
+    }]
+}
+
+fn track_row(
+    track: &'static DemoTrack,
+    deck: &'static [Badge<'static>],
+    title: &'static str,
+    selected: bool,
+) -> TableRow<'static> {
     TableRow::new(
         vec![
             TableCell::text("title", title),
             TableCell::text("artist", &track.artist),
             TableCell::text("time", &track.time),
             TableCell::text("search", &track.search),
-            TableCell::text("deck", &track.deck),
+            TableCell::badges("deck", deck),
             TableCell::text("bpm", &track.bpm),
             TableCell::text("key", &track.key),
             TableCell::number("energy", track.energy),

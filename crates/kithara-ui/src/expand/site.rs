@@ -18,6 +18,7 @@ pub(super) struct ControlFields<'a> {
 pub(super) struct ExtraBindings {
     pub(super) active: Option<BindingRef>,
     pub(super) columns_state: Option<BindingRef>,
+    pub(super) status: Option<BindingRef>,
     pub(super) query: Option<BindingRef>,
     pub(super) scope: Option<BindingRef>,
     pub(super) zoom: Option<BindingRef>,
@@ -33,12 +34,14 @@ pub(super) struct ExtraWrites {
     pub(super) loop_end: Option<BindingRef>,
     pub(super) query: Option<BindingRef>,
     pub(super) width: Option<BindingRef>,
+    pub(super) toggle: Option<BindingRef>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct ExtraBindingRefs<'a> {
     pub(super) active: Option<&'a BindingRef>,
     pub(super) columns_state: Option<&'a BindingRef>,
+    pub(super) status: Option<&'a BindingRef>,
     pub(super) query: Option<&'a BindingRef>,
     pub(super) scope: Option<&'a BindingRef>,
     pub(super) zoom: Option<&'a BindingRef>,
@@ -50,6 +53,7 @@ impl ExtraBindings {
         let writes = &self.writes;
         ExtraBindingRefs {
             columns_state: self.columns_state.as_ref(),
+            status: self.status.as_ref(),
             query: self.query.as_ref(),
             scope: self.scope.as_ref(),
             zoom: self.zoom.as_ref(),
@@ -59,6 +63,7 @@ impl ExtraBindings {
                 loop_end: writes.loop_end.as_ref(),
                 query: writes.query.as_ref(),
                 width: writes.width.as_ref(),
+                toggle: writes.toggle.as_ref(),
                 ..SlotWrites::default()
             },
             active: self.active.as_ref(),
@@ -76,17 +81,23 @@ impl ExtraBindings {
         match control {
             ControlNode::Table {
                 columns_state,
+                status,
                 write_width,
                 ..
             } => {
                 extra.columns_state = substitute(columns_state)?;
+                extra.status = substitute(status)?;
                 extra.writes.width = substitute(write_width)?;
             }
             ControlNode::Tree {
-                query, write_query, ..
+                query,
+                write_query,
+                toggle,
+                ..
             } => {
                 extra.query = substitute(query)?;
                 extra.writes.query = substitute(write_query)?;
+                extra.writes.toggle = substitute(toggle)?;
             }
             ControlNode::ContextBar { scope, .. } => extra.scope = substitute(scope)?,
             ControlNode::Wave {

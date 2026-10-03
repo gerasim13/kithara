@@ -609,6 +609,14 @@ pub enum ControlNode {
         columns: Option<Param<Vec<TableColumn>>>,
         #[serde(default)]
         columns_state: Option<BindingRef>,
+        #[serde(default)]
+        status: Option<BindingRef>,
+        #[serde(default = "default_framed")]
+        footer: bool,
+        #[serde(default)]
+        padding_left: f32,
+        #[serde(default)]
+        padding_right: f32,
         /// Written with a column's width when its divider is dragged, scoped
         /// by that column's id under `column`.
         #[serde(default)]
@@ -627,6 +635,9 @@ pub enum ControlNode {
         /// Written with the text typed into the search field.
         #[serde(default)]
         write_query: Option<BindingRef>,
+        /// Written with the row whose chevron is pressed.
+        #[serde(default)]
+        toggle: Option<BindingRef>,
     },
     ContextBar {
         id: NodeId,

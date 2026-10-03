@@ -47,8 +47,8 @@ pub(crate) use icons::Mark;
 pub use immediate::LayoutPreview;
 pub(crate) use layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover};
 pub use model::{
-    PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell, TableRow,
-    TableValue, TreeRow, WaveBucket, WaveformView,
+    Badge, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell,
+    TableRow, TableValue, TreeRow, WaveBucket, WaveformView,
 };
 pub use owner::InputOwner;
 pub(crate) use picker::{picker_hits, picker_selected_index};

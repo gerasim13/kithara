@@ -22,11 +22,11 @@ impl Driver {
 }
 
 pub(crate) fn spawn(
+    runtime: &Handle,
     build: impl FnOnce() -> Result<Engine, EngineError> + Send + 'static,
     commands: UnboundedReceiver<Envelope>,
     cancel: CancelToken,
 ) -> Result<Driver, EngineError> {
-    let runtime = Handle::current();
     let driven = runtime.clone();
     let (built_tx, built) = oneshot::channel();
     let thread = thread::spawn_named("kithara-app-engine", move || {

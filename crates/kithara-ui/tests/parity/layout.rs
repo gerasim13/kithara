@@ -20,7 +20,8 @@ use kithara_ui::{
     module::ChromeStyle,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
-        Clock, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, WaveBucket, WaveformView,
+        Badge, Clock, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, WaveBucket,
+        WaveformView,
         fonts::{FONT_BYTES, SANS},
         tree,
     },
@@ -84,7 +85,10 @@ impl Default for FixtureReads {
                     "Midnight Circuit",
                     "Neon Lines",
                     "04:12",
-                    Some("A"),
+                    &[Badge {
+                        label: "A",
+                        active: true,
+                    }],
                     "128.0",
                     "8A",
                     82,
@@ -95,7 +99,7 @@ impl Default for FixtureReads {
                     "Signal Path",
                     "Static Motion",
                     "03:47",
-                    None,
+                    &[],
                     "124.5",
                     "10B",
                     68,
@@ -106,7 +110,10 @@ impl Default for FixtureReads {
                     "Afterimage",
                     "Glass Avenue",
                     "05:03",
-                    Some("B"),
+                    &[Badge {
+                        label: "B",
+                        active: true,
+                    }],
                     "126.0",
                     "7A",
                     74,
@@ -122,7 +129,7 @@ type RowFixture = (
     &'static str,
     &'static str,
     &'static str,
-    Option<&'static str>,
+    &'static [Badge<'static>],
     &'static str,
     &'static str,
     u8,
@@ -133,7 +140,7 @@ type RowFixture = (
 fn table_row(
     (title, artist, time, deck, bpm, key, energy, transition, selected): RowFixture,
 ) -> TableRow<'static> {
-    let mut cells = vec![
+    let cells = vec![
         TableCell::text("title", title),
         TableCell::text("artist", artist),
         TableCell::text("time", time),
@@ -141,10 +148,8 @@ fn table_row(
         TableCell::text("key", key),
         TableCell::number("energy", energy),
         TableCell::text("transition", transition),
+        TableCell::badges("deck", deck),
     ];
-    if let Some(deck) = deck {
-        cells.push(TableCell::text("deck", deck));
-    }
     TableRow::new(cells, selected)
 }
 

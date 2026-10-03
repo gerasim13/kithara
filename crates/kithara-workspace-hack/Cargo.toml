@@ -72,6 +72,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_frame = { version = "0.11" }
 dasp_sample = { version = "0.11" }
+dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 flate2 = { version = "1", features = ["zlib-rs"] }
 fs4 = { version = "1", features = ["tokio"] }
@@ -86,7 +87,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSFileManager", "NSGeometry", "NSKeyValueObserving", "NSNull", "NSObject", "NSOperation", "NSPathUtilities", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
 ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
 rand = { version = "0.9" }
 rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
@@ -215,6 +217,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_frame = { version = "0.11" }
 dasp_sample = { version = "0.11" }
+dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 flate2 = { version = "1", features = ["zlib-rs"] }
 fs4 = { version = "1", features = ["tokio"] }
@@ -229,7 +232,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSFileManager", "NSGeometry", "NSKeyValueObserving", "NSNull", "NSObject", "NSOperation", "NSPathUtilities", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
 ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
 rand = { version = "0.9" }
 rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
@@ -401,6 +405,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_frame = { version = "0.11" }
 dasp_sample = { version = "0.11" }
+dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 flate2 = { version = "1", features = ["zlib-rs"] }
 fs4 = { version = "1", features = ["tokio"] }
@@ -416,7 +421,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSFileManager", "NSGeometry", "NSKeyValueObserving", "NSNull", "NSObject", "NSOperation", "NSPathUtilities", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
 ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
@@ -555,6 +561,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 dasp_frame = { version = "0.11" }
 dasp_sample = { version = "0.11" }
+dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 flate2 = { version = "1", features = ["zlib-rs"] }
 fs4 = { version = "1", features = ["tokio"] }
@@ -570,7 +577,8 @@ itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSFileManager", "NSGeometry", "NSKeyValueObserving", "NSNull", "NSObject", "NSOperation", "NSPathUtilities", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
 ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }

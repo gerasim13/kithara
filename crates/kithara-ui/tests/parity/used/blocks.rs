@@ -106,6 +106,26 @@ fn documents() -> MemResolver {
             ]))"#,
     );
     resolver.insert(
+        "stage.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "stage",
+            root: Module(instance: "scene", source: "scene.kmodule.ron",
+                size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "scene.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "scene", chrome: Plain,
+            root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Pressable(id: "open", press: Command(id: "fixture.toggle"),
+                    child: Spacer(id: "head", size: Some((w: Fill, h: Fixed(26.0))))),
+                Stage(id: "pages", children: [
+                    Optional(id: "first", hidden: Model(id: "fixture.hidden"),
+                        child: Spacer(id: "one", size: Some((w: Fill, h: Fixed(30.0))))),
+                    Optional(id: "second", hidden: Model(id: "fixture.menu"),
+                        child: Spacer(id: "two", size: Some((w: Fill, h: Fixed(50.0))))),
+                ]),
+            ]))"#,
+    );
+    resolver.insert(
         "aside.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "aside", chrome: Plain,
             root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
@@ -115,8 +135,7 @@ fn documents() -> MemResolver {
     resolver
 }
 
-/// An application that hides every block until something presses the row that
-/// shows them.
+/// Hides the `fixture.hidden` blocks until a press, then the `fixture.menu` one.
 struct Blocks {
     document: &'static str,
     shown: bool,
@@ -134,8 +153,11 @@ impl Blocks {
 
 impl Reads for Blocks {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        let id = Scope::split(endpoint).0;
-        (id == "fixture.hidden").then_some(ReadValue::Bool(!self.shown))
+        match Scope::split(endpoint).0 {
+            "fixture.hidden" => Some(ReadValue::Bool(!self.shown)),
+            "fixture.menu" => Some(ReadValue::Bool(self.shown)),
+            _ => None,
+        }
     }
 }
 
@@ -281,5 +303,119 @@ fn both_hosts_lay_a_block_a_slot_holds_out_the_same_way() {
         retained(Case::SLOT),
         neutral(Case::SLOT),
         "the two hosts disagree on where the block a slot holds stands after a press showed it"
+    );
+}
+
+fn staged_retained() -> [(Vec<&'static str>, Vec<Rect>); 2] {
+    let endpoints = Endpoints::default();
+    let resolver = documents();
+    let (width, height) = consts::CASE;
+    let mut ui = Ui::new(
+        Blocks {
+            document: "stage.klayout.ron",
+            shown: false,
+        },
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (width, height),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the stage fixture must mount: {error}"));
+    let laid_out = |ui: &mut Ui<'_, Blocks>| {
+        ui.scene()
+            .unwrap_or_else(|error| panic!("the retained host must draw the stage: {error}"));
+        ["scene/head", "scene/one", "scene/two"]
+            .into_iter()
+            .filter_map(|leaf| {
+                ui.rect_of(leaf)
+                    .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
+                    .map(|rect| (leaf, rect))
+            })
+            .unzip()
+    };
+    let before = laid_out(&mut ui);
+    let head = ui
+        .rect_of("scene/head")
+        .expect("the row that swaps the blocks must be laid out");
+    let at = Pt {
+        x: head.x + head.w / 2.0,
+        y: head.y + head.h / 2.0,
+    };
+    for phase in [PointerPhase::Move, PointerPhase::Down, PointerPhase::Up] {
+        ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            None,
+            phase,
+            Some(at),
+            1,
+        )));
+    }
+    assert!(ui.app().shown, "the press must swap the blocks");
+    [before, laid_out(&mut ui)]
+}
+
+fn staged_neutral(shown: bool) -> Vec<Rect> {
+    let ui = compile(
+        "stage.klayout.ron",
+        &documents(),
+        &Endpoints::default(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_or_else(|error| panic!("the stage fixture must compile: {error}"));
+    let (width, height) = consts::CASE;
+    let renderer = renderer();
+    let mut element = tree::render(
+        &ui.root,
+        &ui,
+        &Blocks {
+            document: "stage.klayout.ron",
+            shown,
+        },
+        &view::EMPTY,
+        builtin::skin(),
+        Clock::default(),
+        None,
+    );
+    let mut state = Tree::new(element.as_widget());
+    let node = element.as_widget_mut().layout(
+        &mut state,
+        &renderer,
+        &Limits::new(Size::ZERO, Size::new(width.as_(), height.as_())),
+    );
+    let mut rows = Vec::new();
+    collect_rows(Layout::new(&node), &mut rows);
+    rows
+}
+
+#[kithara::test]
+fn a_stage_lays_out_only_the_blocks_the_document_shows() {
+    let [(before, retained_before), (after, retained_after)] = staged_retained();
+    let neutral = [staged_neutral(false), staged_neutral(true)];
+    assert_eq!(
+        [before, after],
+        [
+            vec!["scene/head", "scene/two"],
+            vec!["scene/head", "scene/one"]
+        ],
+        "the retained host lays out a block the document hides"
+    );
+    assert_eq!(
+        neutral
+            .iter()
+            .map(|rows| rows.iter().map(|rect| rect.h).collect())
+            .collect::<Vec<Vec<f32>>>(),
+        [vec![26.0, 50.0], vec![26.0, 30.0]],
+        "the immediate host lays out a block the document hides"
+    );
+    assert_eq!(
+        [retained_before, retained_after],
+        neutral,
+        "the two hosts disagree on the box the shown stage block stands in"
     );
 }

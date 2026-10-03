@@ -11,6 +11,9 @@ use crate::{
 /// [`super::deck::DeckMsg`] and know nothing about deck identity.
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
+    /// Ask the user for a folder to add to the library's Music Folders.
+    #[cfg(not(target_arch = "wasm32"))]
+    AddMusicFolder,
     BroadcastToggle,
     /// What the compiled UI published; settled against the document's
     /// writes, then translated by [`super::ui::translate`].
@@ -24,8 +27,6 @@ pub(crate) enum Message {
     /// Delete the current track of the focused deck (keyboard shortcut;
     /// the subscription has no access to the focus).
     DeleteFocusedTrack,
-    /// Highlight a catalog row.
-    SelectCatalogTrack(usize),
     /// Pause every deck the current layout does not lay out.
     PauseHiddenDecks,
     /// Periodic tick from the subscription.

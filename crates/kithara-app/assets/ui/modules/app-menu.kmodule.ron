@@ -233,6 +233,28 @@
                     ),
                 ),
                 Optional(
+                    id: "add-folder-block",
+                    hidden: Model(id: "library.add_folder.hidden"),
+                    child: Pressable(
+                        id: "add-folder",
+                        press: Command(id: "ui.library.add_folder"),
+                        child: Row(
+                            size: (w: Fill, h: Fixed(26.0)),
+                            pad_x: 10.0,
+                            gap: 8.0,
+                            children: [
+                                Glyph(id: "add-folder-icon", icon: FolderPlus, style: Menu, color: Muted),
+                                Text(
+                                    id: "add-folder-label",
+                                    size: (w: Fill, h: Fill),
+                                    style: Mono,
+                                    label: "@menu.add_folder",
+                                ),
+                            ],
+                        ),
+                    ),
+                ),
+                Optional(
                     id: "set-block",
                     hidden: Telemetry(id: "broadcast.hidden"),
                     child: Column(

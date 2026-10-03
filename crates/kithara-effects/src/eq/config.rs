@@ -1,23 +1,24 @@
-use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use kithara_config::Config;
 use kithara_dsp::param::SmootherConfig;
 
 use crate::consts;
 
 /// Resources shared by one equalizer instance.
-#[derive(Builder, fieldwork::Fieldwork)]
-#[builder(state_mod(vis = "pub"))]
-#[fieldwork(opt_in, get)]
+#[derive(Config)]
+#[config(construction, builder(state_mod(vis = "pub")))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
 pub struct EqConfig<S> {
     /// Typed pool facade shared with the owning playback region.
-    #[builder(start_fn)]
-    #[field(get)]
+    #[config(skip = "injected pool region", builder(start_fn), get(ref))]
     pools: PoolRegion<S>,
     /// Runtime gain and layout transition smoothing.
-    #[builder(default = consts::DEFAULT_EQ_SMOOTHING)]
-    #[field(get, copy)]
+    #[config(
+        skip = "consumed by prepared DSP smoothers",
+        builder(default = consts::DEFAULT_EQ_SMOOTHING),
+        get(copy)
+    )]
     smoothing: SmootherConfig,
 }
 

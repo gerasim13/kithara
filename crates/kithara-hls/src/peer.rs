@@ -24,11 +24,7 @@ use kithara_platform::{
 use kithara_stream::{Activity, DeferredWake, SeekObserve, WorkerWake};
 use kithara_test_utils::kithara;
 
-use crate::{
-    ids::duration_prefix,
-    stream::HlsCoord,
-    variant::{PlanConfig, PlanCtx},
-};
+use crate::{ids::duration_prefix, stream::HlsCoord, variant::PlanCtx};
 
 struct HlsTrackState<S>
 where
@@ -57,9 +53,6 @@ where
     /// Cleared once the reader physically resolves at/after the floor.
     seek_settle_floor: Option<u32>,
     waker: Option<Waker>,
-    /// The `HlsConfig`-derived plan config threaded into every `PlanCtx`
-    /// this state constructs for `dispatch`.
-    config: PlanConfig,
     eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
     last_seek_epoch: u64,
     /// Variant the stored `reader_segment` was resolved against. A
@@ -212,7 +205,6 @@ where
         self: &Arc<Self>,
         coord: Arc<HlsCoord<S>>,
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
-        config: PlanConfig,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
         coord.set_peer_wake(
@@ -226,10 +218,10 @@ where
             .map_or(0, |(idx, _, _)| idx);
         let active = coord.active();
         let plan_ctx = PlanCtx {
-            config,
+            config: Arc::clone(&coord.config),
+            look_ahead_segments: coord.look_ahead_segments,
             bus: active.event_bus(),
             scope: coord.scope.clone(),
-            headers: coord.headers.clone(),
             seek_epoch: self.seek_obs.epoch(),
             signal: coord.signal(),
         };
@@ -243,7 +235,6 @@ where
                 reader_variant: coord.variant_index(),
                 coord,
                 seek_obs: Arc::clone(&self.seek_obs),
-                config,
                 eviction_rx,
                 last_seek_epoch: 0,
                 seek_settle_floor: None,
@@ -405,52 +396,43 @@ where
         }
 
         let mut cmds: Vec<FetchCmd> = Vec::new();
-        if outcome.ctx.config.prefetch_budget > 0 {
-            let has_incoming = outcome.coord.has_incoming();
-            if has_incoming && outcome.ctx.config.prefetch_budget == 1 {
-                let first = self.session_turns.next(true);
-                cmds.extend(dispatch_session(&outcome.coord, &outcome.ctx, first, 1));
-                if cmds.len() < outcome.ctx.config.prefetch_budget {
-                    cmds.extend(dispatch_session(
-                        &outcome.coord,
-                        &outcome.ctx,
-                        first.other(),
-                        1,
-                    ));
-                }
-                if cmds.is_empty() {
-                    return Poll::Pending;
-                }
-                return Poll::Ready(Some(cmds));
+        let prefetch_budget = outcome.ctx.config.download_batch_size.max(1);
+        let has_incoming = outcome.coord.has_incoming();
+        if has_incoming && prefetch_budget == 1 {
+            let first = self.session_turns.next(true);
+            cmds.extend(dispatch_session(&outcome.coord, &outcome.ctx, first, 1));
+            if cmds.len() < prefetch_budget {
+                cmds.extend(dispatch_session(
+                    &outcome.coord,
+                    &outcome.ctx,
+                    first.other(),
+                    1,
+                ));
             }
-            self.session_turns.reset();
-            let active_budget = if has_incoming && outcome.ctx.config.prefetch_budget > 1 {
-                outcome.ctx.config.prefetch_budget - 1
-            } else {
-                outcome.ctx.config.prefetch_budget
-            };
-            cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, active_budget));
-            let mut remaining = outcome
-                .ctx
-                .config
-                .prefetch_budget
-                .saturating_sub(cmds.len());
-            if has_incoming && remaining > 0 {
-                cmds.extend(outcome.coord.dispatch_incoming(&outcome.ctx, remaining));
-                remaining = outcome
-                    .ctx
-                    .config
-                    .prefetch_budget
-                    .saturating_sub(cmds.len());
+            if cmds.is_empty() {
+                return Poll::Pending;
             }
-            if remaining > 0 {
-                cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, remaining));
-            }
+            return Poll::Ready(Some(cmds));
+        }
+        self.session_turns.reset();
+        let active_budget = if has_incoming && prefetch_budget > 1 {
+            prefetch_budget - 1
+        } else {
+            prefetch_budget
+        };
+        cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, active_budget));
+        let mut remaining = prefetch_budget.saturating_sub(cmds.len());
+        if has_incoming && remaining > 0 {
+            cmds.extend(outcome.coord.dispatch_incoming(&outcome.ctx, remaining));
+            remaining = prefetch_budget.saturating_sub(cmds.len());
+        }
+        if remaining > 0 {
+            cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, remaining));
         }
         if cmds.is_empty() {
             tracing::trace!(
                 has_incoming = outcome.coord.has_incoming(),
-                budget = outcome.ctx.config.prefetch_budget,
+                budget = prefetch_budget,
                 "hls peer parked without commands"
             );
             return Poll::Pending;
@@ -639,8 +621,8 @@ where
         PlanCtx {
             bus: self.coord.emit.bus().clone(),
             scope: self.coord.scope.clone(),
-            headers: self.coord.headers.clone(),
-            config: self.config,
+            config: Arc::clone(&self.coord.config),
+            look_ahead_segments: self.coord.look_ahead_segments,
             seek_epoch: self.seek_obs.epoch(),
             signal: self.coord.signal(),
         }

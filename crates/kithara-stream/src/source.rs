@@ -207,8 +207,7 @@ pub enum ReadOutcome {
 ///
 /// Represents a deterministic mapping from target playback time to a byte
 /// position and segment context inside the source.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, kithara_config::bon::Builder)]
-#[builder(crate = ::kithara_config::bon)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bon::Builder)]
 #[non_exhaustive]
 pub struct SourceSeekAnchor {
     #[builder(default)]

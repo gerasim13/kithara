@@ -1,9 +1,13 @@
-use std::{collections::VecDeque, num::NonZeroU32};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    num::NonZeroU32,
+};
 
 use kithara::{
     events::TrackId,
     platform::{
         CancelToken,
+        sync::Arc,
         tokio::{
             self,
             sync::{mpsc, watch},
@@ -31,6 +35,7 @@ pub(crate) struct AnalysisService {
     pub(super) owner: Owner,
     cancel: CancelToken,
     rx: mpsc::Receiver<Request>,
+    bpms: watch::Sender<Arc<BTreeMap<String, f64>>>,
 }
 
 pub(super) struct Owner {
@@ -59,7 +64,8 @@ impl AnalysisService {
         /// entries.
         const LOAD_REPLIES: usize = 16;
 
-        let (handle, rx) = AnalysisHandle::channel();
+        let (bpms, published) = watch::channel(Arc::new(BTreeMap::new()));
+        let (handle, rx) = AnalysisHandle::channel(published);
         let runner = TrackAnalysisRunner::new(
             &cancel,
             config.base_worker.clone(),
@@ -86,7 +92,15 @@ impl AnalysisService {
             active: None,
             axis: None,
         };
-        (Self { owner, cancel, rx }, handle)
+        (
+            Self {
+                owner,
+                cancel,
+                rx,
+                bpms,
+            },
+            handle,
+        )
     }
 
     pub(crate) async fn run(self) {
@@ -94,22 +108,45 @@ impl AnalysisService {
             mut rx,
             mut owner,
             cancel,
+            bpms,
         } = self;
         loop {
-            tokio::select! {
+            let changed = tokio::select! {
                 biased;
                 () = cancel.cancelled() => break,
                 request = rx.recv() => match request {
-                    Some(request) => owner.handle(request),
+                    Some(request) => { owner.handle(request); true },
                     None => break,
                 },
-                () = owner.drive() => {}
+                changed = owner.drive() => changed
+            };
+            if !changed {
+                continue;
+            }
+            let next = owner.bpms();
+            if **bpms.borrow() != next {
+                bpms.send_replace(Arc::new(next));
             }
         }
     }
 }
 
 impl Owner {
+    pub(super) fn bpms(&self) -> BTreeMap<String, f64> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                let bpm = TrackArtifacts::grid_from(
+                    self.cache.analysis(entry.target()),
+                    entry.prepared(),
+                )?
+                .as_raw()
+                .bpm;
+                (bpm.is_finite() && bpm > 0.0).then(|| (entry.config().source().to_string(), bpm))
+            })
+            .collect()
+    }
+
     fn entry_for(
         &mut self,
         queue: &AppQueueControl,

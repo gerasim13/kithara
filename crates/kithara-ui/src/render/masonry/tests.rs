@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
     sync::{Arc, LazyLock},
 };
@@ -2200,12 +2200,14 @@ fn scope_strip_root() -> (MasonryRoot<TestAction>, (f32, f32)) {
     ),
 ])"#;
 
-    let registry = fixture_registry();
-    let reads = FixtureReads;
-    let ui = fixture_ui("leaf-fixture", SCOPE_STRIP, &registry);
-    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
-    let (output, built) =
-        DocumentNodes::built(|| document::render(&ui.root, ctx(&ui, &reads), host));
+    let ui = fixture_ui("leaf-fixture", SCOPE_STRIP, &fixture_registry());
+    let (root, face) = scope_root(&ui, &FixtureReads);
+    (root, centre(face))
+}
+
+fn scope_root(ui: &CompiledUi, reads: &dyn Reads) -> (MasonryRoot<TestAction>, Rect) {
+    let host = MasonryHost::map_actions(ctx(ui, reads), builtin::skin(), TestAction::Document);
+    let (output, built) = DocumentNodes::built(|| document::render(&ui.root, ctx(ui, reads), host));
     let mut root = masonry_root(output, 200, 120);
     let control_id = built.last_in(root.root());
     root.redraw()
@@ -2227,7 +2229,11 @@ fn scope_strip_root() -> (MasonryRoot<TestAction>, (f32, f32)) {
             y: bounds.y0.as_(),
         },
     );
-    (root, (face.x + face.w / 2.0, face.y + face.h / 2.0))
+    (root, face)
+}
+
+fn centre(area: Rect) -> (f32, f32) {
+    (area.x + area.w / 2.0, area.y + area.h / 2.0)
 }
 
 /// How much the retained host drew, in the one unit a Vello scene reports.
@@ -2581,7 +2587,7 @@ fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
             MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
         )
     });
-    let (base, _, _, _, _, _, _, _, _): RootParts = output.into();
+    let (base, _, _, _, _, _): RootParts = output.into();
     let signals = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&signals);
     let mut root = RenderRoot::new(
@@ -2873,6 +2879,345 @@ fn a_mounted_table_draws_rows_that_arrive_during_refresh() {
         .unwrap_or_else(|error| panic!("refreshed Table must draw its rows: {error}"));
 
     assert!(after.encoding().resources.glyphs.len() > before_glyphs);
+}
+
+/// A flagged page holding a table, a read control, a nested block and a popover.
+const PAGED: &str = r#"Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+    Knob(id: "volume", read: Parameter(id: "player.output.volume")),
+    Optional(id: "page", hidden: Model(id: "ui.page.hidden"),
+        child: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Table(
+                id: "tracks",
+                read: Model(id: "library.visible_tracks"),
+                columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)],
+            ),
+            Knob(id: "zoom", read: Model(id: "deck.view.zoom")),
+            Optional(id: "inner", hidden: Model(id: "ui.inner.hidden"),
+                child: Knob(id: "level", read: Model(id: "ui.inner.level"))),
+            Popover(
+                id: "menu",
+                open: Model(id: "ui.menu.open"),
+                align: Start,
+                anchor: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+                content: Knob(id: "popped", read: Model(id: "deck.view.zoom")),
+            ),
+        ])),
+])"#;
+
+/// Answers the paged fixture and records every endpoint asked for.
+#[derive(Default)]
+struct PagedReads {
+    page_hidden: Cell<bool>,
+    inner_hidden: Cell<bool>,
+    loaded: Cell<bool>,
+    menu_open: Cell<bool>,
+    seen: RefCell<BTreeSet<String>>,
+}
+
+impl PagedReads {
+    fn take_seen(&self) -> BTreeSet<String> {
+        std::mem::take(&mut *self.seen.borrow_mut())
+    }
+}
+
+impl Reads for PagedReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
+        self.seen.borrow_mut().insert(id.to_owned());
+        match id {
+            "ui.page.hidden" => Some(ReadValue::Bool(self.page_hidden.get())),
+            "ui.inner.hidden" => Some(ReadValue::Bool(self.inner_hidden.get())),
+            "ui.inner.level" => Some(ReadValue::Scalar(0.5)),
+            "ui.menu.open" => Some(ReadValue::Bool(self.menu_open.get())),
+            "library.visible_tracks" => Some(ReadValue::Table(if self.loaded.get() {
+                &LATE_TABLE_ROWS[..]
+            } else {
+                &[]
+            })),
+            _ => FixtureReads.get(endpoint),
+        }
+    }
+}
+
+fn paged_ui() -> CompiledUi {
+    fixture_ui("paged", PAGED, &paged_registry())
+}
+
+fn paged_registry() -> FixtureRegistry {
+    let mut registry = fixture_registry();
+    for id in ["ui.page.hidden", "ui.inner.hidden", "ui.menu.open"] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Bool),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.inner.level",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry
+}
+
+fn paged_root(ui: &CompiledUi, reads: &PagedReads) -> MasonryRoot<Published> {
+    let output = document::render(
+        &ui.root,
+        ctx(ui, reads),
+        MasonryHost::new(ctx(ui, reads), builtin::skin()),
+    );
+    masonry_root(output, 240, 320)
+}
+
+fn immediate_reads(ui: &CompiledUi, reads: &PagedReads) -> BTreeSet<String> {
+    reads.take_seen();
+    drop(crate::render::tree::render(
+        &ui.root,
+        ui,
+        reads,
+        &view::EMPTY,
+        builtin::skin(),
+        Clock::default(),
+        None,
+    ));
+    reads.take_seen()
+}
+
+#[kithara::test]
+fn a_refresh_reads_nothing_below_a_hidden_block() {
+    let ui = paged_ui();
+    let reads = PagedReads::default();
+    let shown = immediate_reads(&ui, &reads);
+    reads.page_hidden.set(true);
+    let hidden = immediate_reads(&ui, &reads);
+    let below: BTreeSet<&String> = shown.difference(&hidden).collect();
+    for id in [
+        "library.visible_tracks",
+        "deck.view.zoom",
+        "ui.inner.hidden",
+        "ui.inner.level",
+        "ui.menu.open",
+    ] {
+        assert!(
+            below.contains(&id.to_owned()),
+            "the immediate host reads `{id}` only while the page shows: {below:?}"
+        );
+    }
+
+    let mut root = paged_root(&ui, &reads);
+    reads.take_seen();
+    root.refresh(ctx(&ui, &reads));
+    root.refresh(ctx(&ui, &reads));
+    let refreshed = reads.take_seen();
+
+    assert!(
+        refreshed.contains("player.output.volume"),
+        "a sibling of the page keeps refreshing: {refreshed:?}"
+    );
+    let leaked: Vec<&&String> = below
+        .iter()
+        .filter(|id| refreshed.contains(id.as_str()))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "a refresh read below the hidden page: {leaked:?}"
+    );
+}
+
+#[kithara::test]
+fn a_block_shown_again_draws_what_arrived_while_hidden() {
+    let ui = paged_ui();
+    let reads = PagedReads::default();
+    let mut root = paged_root(&ui, &reads);
+
+    reads.page_hidden.set(true);
+    reads.inner_hidden.set(true);
+    root.refresh(ctx(&ui, &reads));
+    reads.loaded.set(true);
+    root.refresh(ctx(&ui, &reads));
+
+    reads.page_hidden.set(false);
+    reads.inner_hidden.set(false);
+    reads.take_seen();
+    root.refresh(ctx(&ui, &reads));
+    let refreshed = reads.take_seen();
+
+    for id in ["library.visible_tracks", "ui.inner.level"] {
+        assert!(
+            refreshed.contains(id),
+            "`{id}` is read in the frame its block shows again: {refreshed:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_refresh_reads_nothing_below_a_block_a_stage_hides() {
+    let ui = fixture_ui(
+        "paged",
+        r#"Stage(id: "scene", size: (w: Fill, h: Fill), children: [
+            Knob(id: "volume", read: Parameter(id: "player.output.volume")),
+            Optional(id: "page", hidden: Model(id: "ui.page.hidden"),
+                child: Knob(id: "zoom", read: Model(id: "deck.view.zoom"))),
+        ])"#,
+        &paged_registry(),
+    );
+    let reads = PagedReads::default();
+    reads.page_hidden.set(true);
+    let mut root = paged_root(&ui, &reads);
+    reads.take_seen();
+    root.refresh(ctx(&ui, &reads));
+    let refreshed = reads.take_seen();
+
+    assert!(
+        refreshed.contains("player.output.volume"),
+        "a sibling of the page keeps refreshing: {refreshed:?}"
+    );
+    assert!(
+        !refreshed.contains("deck.view.zoom"),
+        "a refresh read below the hidden page: {refreshed:?}"
+    );
+}
+
+#[kithara::test]
+fn a_refresh_leaves_an_engine_plan_in_a_hidden_block_unread() {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.page.hidden",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    let ui = fixture_ui(
+        "gallery-knobs",
+        r#"Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Knob(id: "volume", read: Parameter(id: "player.output.volume")),
+            Optional(id: "page", hidden: Model(id: "ui.page.hidden"),
+                child: Wave(
+                    id: "hero",
+                    style: Hero,
+                    read: Model(id: "demo.wave"),
+                    zoom: Model(id: "deck.view.zoom"),
+                )),
+        ])"#,
+        &registry,
+    );
+    let reads = PagedReads::default();
+    reads.page_hidden.set(true);
+    let mut root = paged_root(&ui, &reads);
+    reads.take_seen();
+    root.refresh(ctx(&ui, &reads));
+    let refreshed = reads.take_seen();
+
+    assert!(
+        refreshed.contains("player.output.volume"),
+        "a sibling of the page keeps refreshing: {refreshed:?}"
+    );
+    for id in ["deck.playback.position_normalized", "deck.view.zoom"] {
+        assert!(
+            !refreshed.contains(id),
+            "a refresh read `{id}` below the hidden page: {refreshed:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_hidden_block_shuts_the_picker_menu_open_in_it() {
+    hidden_block_shuts_the_picker_menu("leaf-fixture");
+}
+
+#[kithara::test]
+fn a_hidden_block_shuts_the_menu_of_a_picker_an_outer_engine_drives() {
+    hidden_block_shuts_the_picker_menu("gallery-knobs");
+}
+
+fn hidden_block_shuts_the_picker_menu(module_id: &str) {
+    const PAGED_STRIP: &str = r#"Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Knob(id: "volume", read: Parameter(id: "player.output.volume")),
+        Optional(id: "page", hidden: Model(id: "ui.page.hidden"),
+            child: ContextBar(
+                id: "context",
+                size: Some((w: Fill, h: Fixed(26.0))),
+                read: Model(id: "library.breadcrumb"),
+                write: Command(id: "library.select_scope"),
+                scope_items: ["ZVUK", "LOCAL"],
+                scope: Model(id: "library.scope"),
+            )),
+    ])"#;
+
+    let ui = fixture_ui(module_id, PAGED_STRIP, &paged_registry());
+    let reads = PagedReads::default();
+    reads.page_hidden.set(true);
+    let (mut never_opened, _) = scope_root(&ui, &reads);
+    let hidden_shut = scene_size(&mut never_opened);
+    reads.page_hidden.set(false);
+    let (mut root, face) = scope_root(&ui, &reads);
+    let item = centre(picker_hits(face, builtin::skin().tree.scope_item_height, 2)[0].area());
+    let shown_shut = scene_size(&mut root);
+    press_release(&mut root, centre(face));
+    root.take_actions();
+    press_release(&mut root, item);
+    assert!(
+        !root.take_actions().is_empty(),
+        "a press on the open menu's first item publishes nothing"
+    );
+    press_release(&mut root, centre(face));
+    assert!(
+        scene_size(&mut root) > shown_shut,
+        "the press leaves the menu shut"
+    );
+
+    reads.page_hidden.set(true);
+    root.refresh(ctx(&ui, &reads));
+    let hidden = scene_size(&mut root);
+    root.take_actions();
+    press_release(&mut root, item);
+    let pressed_hidden = root.take_actions();
+    reads.page_hidden.set(false);
+    root.refresh(ctx(&ui, &reads));
+    let shown_again = scene_size(&mut root);
+
+    assert_eq!(hidden, hidden_shut, "the menu stays on a hidden page");
+    assert!(
+        pressed_hidden.is_empty(),
+        "the hidden menu answers a press: {pressed_hidden:?}"
+    );
+    assert_eq!(
+        shown_again, shown_shut,
+        "the page comes back with its menu open"
+    );
+}
+
+#[kithara::test]
+fn a_hidden_block_takes_its_open_popover_off_the_screen() {
+    let ui = paged_ui();
+    let reads = PagedReads::default();
+    reads.menu_open.set(true);
+    let mut root = paged_root(&ui, &reads);
+    assert!(popover_stands(&mut root), "the open popover is not shown");
+
+    reads.page_hidden.set(true);
+    root.refresh(ctx(&ui, &reads));
+    assert!(
+        !popover_stands(&mut root),
+        "an open popover on a hidden page still stands"
+    );
+
+    reads.page_hidden.set(false);
+    root.refresh(ctx(&ui, &reads));
+    assert!(
+        popover_stands(&mut root),
+        "the popover opens again with the page"
+    );
+}
+
+fn popover_stands(root: &mut MasonryRoot<Published>) -> bool {
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the paged fixture must draw: {error}"));
+    root.root()
+        .get_layer_root(1)
+        .children()
+        .into_iter()
+        .next()
+        .is_some_and(|surface| !surface.ctx().is_stashed())
 }
 
 #[kithara::test]
@@ -4737,6 +5082,8 @@ impl drop_fixture::DropHost for MasonryRoot<TestAction> {
 
 drop_fixture::drop_suite!(MasonryRoot<TestAction>);
 
+drop_fixture::tree_suite!(MasonryRoot<TestAction>, false);
+
 fn document_actions(root: &mut MasonryRoot<TestAction>) -> Vec<Published> {
     root.take_actions()
         .into_iter()
@@ -4871,4 +5218,57 @@ fn painted_runs(root: &mut MasonryRoot<TestAction>, glyphs: &[u32]) -> usize {
         .windows(glyphs.len())
         .filter(|window| *window == glyphs)
         .count()
+}
+
+struct LiveTextReads(Cell<bool>);
+
+impl Reads for LiveTextReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        (endpoint == "library.query").then_some(ReadValue::Text(if self.0.get() {
+            "a substantially longer title"
+        } else {
+            "a"
+        }))
+    }
+}
+
+#[kithara::test]
+fn shrink_live_text_grows_and_shrinks_between_nonempty_values() {
+    let reads = LiveTextReads(Cell::new(false));
+    let ui = fixture_ui(
+        "live-text",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Text(id: "title", style: Body, read: Model(id: "library.query"), size: (w: Shrink, h: Shrink)),
+    ])"#,
+        &fixture_registry(),
+    );
+    let state = MasonryState::default();
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()).with_state(state.clone()),
+    );
+    let mut root = masonry_root(output, 400, 120);
+    root.redraw().unwrap();
+    let id = state.widget_id("demo/title").unwrap();
+    let initial = root.root().get_widget(id).unwrap().ctx().size().width;
+    assert!(initial > 0.0);
+    reads.0.set(true);
+    root.refresh(ctx(&ui, &reads));
+    root.redraw().unwrap();
+    let grown = root.root().get_widget(id).unwrap().ctx().size().width;
+    assert!(
+        grown > initial,
+        "live text width stayed at {initial}, now {grown}"
+    );
+    reads.0.set(false);
+    root.refresh(ctx(&ui, &reads));
+    root.redraw().unwrap();
+    assert_eq!(
+        root.root().get_widget(id).unwrap().ctx().size().width,
+        initial
+    );
+    let _ = root.complete_frame();
+    root.refresh(ctx(&ui, &reads));
+    assert!(!root.complete_frame());
 }

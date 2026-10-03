@@ -1,11 +1,11 @@
 use std::num::NonZeroU32;
 
-use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
 use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
+use kithara_config::Config;
 use kithara_download::Downloader;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
@@ -26,8 +26,8 @@ use crate::{EngineLoad, PlayWorker};
 /// configuration document says about each of the three configurations this
 /// resource builds — carried as patches, because none of those configurations
 /// can exist before the track does.
-#[derive(Builder)]
-#[builder(on(String, into), start_fn = for_src)]
+#[derive(Config)]
+#[config(construction, builder(on(String, into), start_fn = for_src))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; B: Clone + Default, S: HasPool<u8> + Send + Sync + 'static)]
 pub struct ResourceConfig<S, B: Default = PlaybackResamplerBackend>
@@ -35,30 +35,31 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Audio resource source (URL or local path).
-    #[builder(start_fn)]
+    #[config(skip = "consumed to select the resource", builder(start_fn))]
     pub(crate) src: ResourceSrc,
     /// Initial ABR mode passed to the HLS stream.
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) initial_abr_mode: AbrMode,
     /// Shared asset store used by playback and derived resources.
+    #[config(skip = "transferred to the selected stream")]
     pub(crate) store: AssetStore<S>,
     /// What a configuration document says about the [`AudioConfig`] this
     /// resource builds, carried as a patch for the same reason [`Self::hls`]
     /// is. A document's live spelling is its own top-level `audio:` section.
     ///
     /// [`AudioConfig`]: kithara_audio::AudioConfig
-    #[builder(default)]
+    #[config(skip = "applied to the audio pipeline", builder(default))]
     pub(crate) audio: AudioConfigPatch,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
-    #[builder(default)]
+    #[config(skip = "transferred to decoder dependencies", builder(default))]
     pub(crate) decoder: AudioDecoderConfig<B>,
     /// What a configuration document says about the [`FileConfig`] this
     /// resource builds, carried as a patch for the same reason [`Self::hls`]
     /// is. A document's live spelling is its own top-level `file:` section.
     ///
     /// [`FileConfig`]: kithara_file::FileConfig
-    #[builder(default)]
+    #[config(skip = "applied to the file stream", builder(default))]
     pub(crate) file: FileConfigPatch,
     /// What a configuration document says about the [`HlsConfig`] this
     /// resource builds, carried as a patch because that configuration cannot
@@ -66,57 +67,68 @@ where
     /// is its own top-level `hls:` section.
     ///
     /// [`HlsConfig`]: kithara_hls::HlsConfig
-    #[builder(default)]
+    #[config(skip = "applied to the HLS stream", builder(default))]
     pub(crate) hls: HlsConfigPatch,
     /// Encryption key handling configuration.
-    #[builder(default)]
+    #[config(skip = "transferred to the key resolver", builder(default))]
     pub(crate) keys: KeyOptions,
     /// A beat grid this track already has, as a structure the caller holds or
     /// a source its bytes are read from. Analysis fills in only what no
     /// prepared artifact covers, so a track opened with a grid here is never
     /// re-analysed for one.
+    #[config(skip = "transferred to the resource artifact source")]
     pub(crate) beat_grid: Option<ArtifactSource<BeatGridModel>>,
     /// Unified event bus for streaming, decode, and audio events.
-    #[builder(name = events)]
+    #[config(skip = "transferred to the event bus", builder(name = events))]
     pub(crate) bus: Option<EventBus>,
     /// Per-track parent cancel. The atomic flag reaches the HLS coord's
     /// lock-free `is_cancelled()` read; downloader / file / decode paths derive
     /// children via [`CancelToken::child`]. `None` lets each subsystem own a
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
+    #[config(skip = "composed into the resource cancel scope")]
     pub(crate) cancel: Option<CancelToken>,
     /// Optional cache discriminator mixed into the asset root.
+    #[config(skip = "transferred to the asset key")]
     pub(crate) discriminator: Option<String>,
     /// Shared downloader instance.
+    #[config(skip = "transferred to the selected stream")]
     pub(crate) downloader: Option<Downloader>,
     /// Shared live audio-engine cost meter (decode + effects).
+    #[config(skip = "transferred to the play-owned producer")]
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Additional HTTP headers to include in all network requests.
+    #[config(skip = "transferred to network requests")]
     pub(crate) headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav"). Per-call input
     /// read twice: the file branch maps it into `FileConfig::extension`,
     /// and both branches pass it to the decoder as a format hint.
+    #[config(skip = "transferred to decoder and file construction")]
     pub(crate) hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
+    #[config(skip = "transferred to HLS URL resolution")]
     pub(crate) hls_base_url: Option<Url>,
     /// Rate the audio host actually opened, handed to the built audio
     /// pipeline. The player overwrites it from its engine, so it is not a
     /// document key.
+    #[config(skip = "transferred to the audio host-rate owner")]
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// A waveform this track already has, on the same terms as
     /// [`Self::beat_grid`].
+    #[config(skip = "transferred to the resource artifact source")]
     pub(crate) waveform: Option<ArtifactSource<Waveform>>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
+    #[config(skip = "transferred to the playback worker")]
     pub(crate) worker: Option<PlayWorker<S>>,
     /// Resident Warp resources and live temporal controls. Not a document
     /// key: a player-managed resource has this overwritten with the player's
     /// own `warp`, which is where a document's `player.warp:` section lands.
-    #[builder(default = WarpConfig::builder().build())]
+    #[config(skip = "transferred to the play-owned warp lane", builder(default = WarpConfig::builder().build()))]
     pub(crate) warp: WarpConfig,
     /// Whether audio-thread reads block on a producer-ring underrun. Only an
     /// offline harness or a player's own policy sets this, so it is not a
     /// document key.
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) block_on_underrun: bool,
     /// Requested peak-bitrate ceiling in bits per second, held for an ABR
     /// reader that does not exist yet. `resource/build.rs` forwards this to
@@ -125,7 +137,7 @@ where
     /// asserting the value survives `Loader::build_config`. Not a document key
     /// for exactly that reason: a document knob the binary ignores is worse
     /// than no knob. Make it one when the ABR wiring lands.
-    #[builder(default = 0.0)]
+    #[config(value, builder(default = 0.0))]
     pub(crate) preferred_peak_bitrate: f64,
 }
 

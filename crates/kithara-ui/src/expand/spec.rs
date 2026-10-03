@@ -10,8 +10,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner},
-    module::{BindingRef, ControlNode, TableColumn, Tone, WaveStyle},
-    param::Param,
+    module::{BindingRef, ControlNode, TableColumn, TableFrame, Tone, WaveStyle},
     shader::{self, ShaderUniform},
     validate,
 };
@@ -169,34 +168,6 @@ pub(super) fn control_spec(
             font: context.optional_param(font.as_ref(), path)?,
             weight: context.optional_param(weight.as_ref(), path)?,
         },
-        ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: context.param(icon, path)?,
-        },
-        ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-        },
-        ControlNode::Button {
-            label,
-            icon,
-            active_label,
-            style,
-            frame,
-            ..
-        } => ControlSpec::Button {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            icon: context.optional_param(icon.as_ref(), path)?,
-            active_label: optional_text(context, machine, active_label.as_deref(), path)?,
-            style: *style,
-            frame: *frame,
-        },
-        ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
-            placeholder: optional_text(context, machine, placeholder.as_deref(), path)?,
-        },
-        ControlNode::Fader { style, label, .. } => ControlSpec::Fader {
-            style: *style,
-            label: optional_text(context, machine, label.as_deref(), path)?,
-        },
         ControlNode::Wave { style, badge, .. } => wave_spec(
             context,
             machine,
@@ -205,11 +176,29 @@ pub(super) fn control_spec(
             extra.zoom.as_ref(),
             path,
         )?,
-        ControlNode::Table { columns, .. } => {
-            table_control_spec(context, machine, columns.as_ref(), extra, path)?
+        ControlNode::Table {
+            columns,
+            footer,
+            padding_left,
+            padding_right,
+            ..
+        } => {
+            let columns = context
+                .optional_param(columns.as_ref(), path)?
+                .unwrap_or_default();
+            table_spec(
+                context,
+                machine,
+                &columns,
+                TableFrame::new(*padding_left, *padding_right, *footer),
+                extra,
+                path,
+            )?
         }
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: optional_binding(context, machine, extra.query.as_ref())?,
+            search: extra.query.is_some() || extra.writes.query.is_some(),
+            toggle: extra.writes.toggle.is_some(),
         },
         ControlNode::ContextBar { scope_items, .. } => context_bar_spec(
             context,
@@ -245,6 +234,46 @@ pub(super) fn control_spec(
         ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
             role: *role,
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
+        },
+        _ => return caption_spec(context, control, path, machine),
+    };
+    Ok(Some(spec))
+}
+
+fn caption_spec(
+    context: &Context<'_>,
+    control: &ControlNode,
+    path: &str,
+    machine: &mut Expander<'_, '_>,
+) -> Result<Option<ControlSpec>, UiDocError> {
+    let spec = match control {
+        ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
+            icon: context.param(icon, path)?,
+        },
+        ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
+        },
+        ControlNode::Button {
+            label,
+            icon,
+            active_label,
+            style,
+            frame,
+            ..
+        } => ControlSpec::Button {
+            label: intern_text(context, machine.interner, label, path, &context.origin)?,
+            icon: context.optional_param(icon.as_ref(), path)?,
+            active_label: optional_text(context, machine, active_label.as_deref(), path)?,
+            style: *style,
+            frame: *frame,
+        },
+        ControlNode::Bpm { placeholder, .. } => ControlSpec::Bpm {
+            placeholder: optional_text(context, machine, placeholder.as_deref(), path)?,
+        },
+        ControlNode::Fader { style, label, .. } => ControlSpec::Fader {
+            style: *style,
+            label: optional_text(context, machine, label.as_deref(), path)?,
         },
         ControlNode::Cell {
             label, highlighted, ..
@@ -411,6 +440,7 @@ fn table_spec(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
     columns: &[TableColumn],
+    frame: TableFrame,
     extra: &ExtraBindings,
     path: &str,
 ) -> Result<ControlSpec, UiDocError> {
@@ -432,22 +462,17 @@ fn table_spec(
     }
     Ok(ControlSpec::Table {
         columns: resolved,
+        status: intern_optional_binding(machine.interner, extra.status.as_ref(), &context.origin)?,
+        frame,
         columns_state: intern_optional_binding(
             machine.interner,
             extra.columns_state.as_ref(),
             &context.origin,
         )?,
-        resizable: extra.writes.width.is_some(),
+        width: intern_optional_binding(
+            machine.interner,
+            extra.writes.width.as_ref(),
+            &context.origin,
+        )?,
     })
-}
-
-fn table_control_spec(
-    context: &Context<'_>,
-    machine: &mut Expander<'_, '_>,
-    columns: Option<&Param<Vec<TableColumn>>>,
-    extra: &ExtraBindings,
-    path: &str,
-) -> Result<ControlSpec, UiDocError> {
-    let columns = context.optional_param(columns, path)?.unwrap_or_default();
-    table_spec(context, machine, &columns, extra, path)
 }

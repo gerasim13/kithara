@@ -31,21 +31,30 @@ impl TrackArtifacts {
         Self { analysis, prepared }
     }
 
-    /// The local analysis result, when a pass produced one. Facts that belong
-    /// to the pass itself — coverage, extent, what it settled on — are read
-    /// from here; artifacts are read from this type instead, which does not
-    /// care which origin served them.
-    pub(crate) const fn analysis(&self) -> Option<&TrackAnalysis> {
-        self.analysis.as_ref()
+    delegate::delegate! {
+        to self.analysis {
+            /// The local analysis result, when a pass produced one. Facts that belong
+            /// to the pass itself — coverage, extent, what it settled on — are read
+            /// from here; artifacts are read from this type instead, which does not
+            /// care which origin served them.
+            #[call(as_ref)]
+            pub(crate) const fn analysis(&self) -> Option<&TrackAnalysis>;
+            /// The beat grid to paint and to clock against.
+            #[expr(Self::grid_from($, &self.prepared))]
+            #[call(as_ref)]
+            pub(crate) fn grid(&self) -> Option<&BeatGridModel>;
+        }
     }
 
-    /// The beat grid to paint and to clock against.
-    pub(crate) fn grid(&self) -> Option<&BeatGridModel> {
-        self.prepared
+    pub(super) fn grid_from<'a>(
+        analysis: Option<&'a TrackAnalysis>,
+        prepared: &'a Prepared,
+    ) -> Option<&'a BeatGridModel> {
+        prepared
             .beat_grid
             .value()
             .map(Arc::as_ref)
-            .or_else(|| self.analysis.as_ref().and_then(TrackAnalysis::grid))
+            .or_else(|| analysis.and_then(TrackAnalysis::grid))
     }
 
     /// The waveform to draw.

@@ -776,6 +776,7 @@ impl TreeSkin {
 #[non_exhaustive]
 pub struct TableSkin {
     pub badge_fill: ColorRole,
+    /// The handle a resizable column shows at its border in the header.
     pub divider_color: ColorRole,
     pub footer_fill: ColorRole,
     /// The ground the grid, the header strip and the footer strip lay down
@@ -784,16 +785,18 @@ pub struct TableSkin {
     pub header_fill: ColorRole,
     pub meter_bar_background: ColorRole,
     pub meter_bar_fill: ColorRole,
-    pub metric_badge_background: ColorRole,
     pub row_selected_fill: ColorRole,
     pub scrollbar_background: ColorRole,
     pub scroller_color: ColorRole,
+    /// An active badge letter, filled with `badge_fill`.
     pub badge_frame: FrameSkin,
-    pub metric_badge_frame: FrameSkin,
+    /// An idle badge letter, drawn unfilled.
+    pub idle_badge_frame: FrameSkin,
     pub row_frame: FrameSkin,
     pub size: SizeSpec,
     pub row_fill: StateColors,
     pub badge_text: TextRoleSkin,
+    pub idle_badge_text: TextRoleSkin,
     pub footer_text: TextRoleSkin,
     pub header_text: TextRoleSkin,
     pub index_text: TextRoleSkin,
@@ -816,8 +819,6 @@ pub struct TableSkin {
     pub meter_bar_gap: f32,
     pub meter_bar_height: f32,
     pub meter_bar_width: f32,
-    pub metric_badge_height: f32,
-    pub metric_badge_padding_x: f32,
     pub min_column_width: f32,
     pub row_height: f32,
     pub scrollbar_margin: f32,
@@ -830,12 +831,12 @@ pub struct TableSkin {
 #[non_exhaustive]
 pub struct TablePatch {
     pub badge_fill: Option<ColorRole>,
+    pub divider_color: Option<ColorRole>,
     pub badge_frame: Option<FrameSkin>,
     pub badge_height: Option<f32>,
     pub badge_text: Option<TextRoleSkin>,
     pub badge_width: Option<f32>,
     pub cell_padding_x: Option<f32>,
-    pub divider_color: Option<ColorRole>,
     pub divider_hit_width: Option<f32>,
     pub divider_width: Option<f32>,
     pub footer_fill: Option<ColorRole>,
@@ -847,6 +848,8 @@ pub struct TablePatch {
     pub header_fill: Option<ColorRole>,
     pub header_height: Option<f32>,
     pub header_text: Option<TextRoleSkin>,
+    pub idle_badge_frame: Option<FrameSkin>,
+    pub idle_badge_text: Option<TextRoleSkin>,
     pub index_text: Option<TextRoleSkin>,
     pub meter_bar_background: Option<ColorRole>,
     pub meter_bar_fill: Option<ColorRole>,
@@ -854,10 +857,6 @@ pub struct TablePatch {
     pub meter_bar_height: Option<f32>,
     pub meter_bar_width: Option<f32>,
     pub meter_text: Option<TextRoleSkin>,
-    pub metric_badge_background: Option<ColorRole>,
-    pub metric_badge_frame: Option<FrameSkin>,
-    pub metric_badge_height: Option<f32>,
-    pub metric_badge_padding_x: Option<f32>,
     pub metric_text: Option<TextRoleSkin>,
     pub min_column_width: Option<f32>,
     pub mono_text: Option<TextRoleSkin>,
@@ -879,24 +878,21 @@ pub struct TablePatch {
 impl TableSkin {
     /// Takes every field the patch restates, keeping the rest.
     pub(crate) fn patch(&mut self, patch: TablePatch) {
-        super::patch::patch_field(
-            &mut self.metric_badge_background,
-            patch.metric_badge_background,
-        );
         super::patch::patch_field(&mut self.grid_color, patch.grid_color);
         super::patch::patch_field(&mut self.header_fill, patch.header_fill);
         super::patch::patch_field(&mut self.footer_fill, patch.footer_fill);
         super::patch::patch_field(&mut self.badge_fill, patch.badge_fill);
+        super::patch::patch_field(&mut self.divider_color, patch.divider_color);
         super::patch::patch_field(&mut self.meter_bar_fill, patch.meter_bar_fill);
         super::patch::patch_field(&mut self.row_fill, patch.row_fill);
         super::patch::patch_field(&mut self.row_selected_fill, patch.row_selected_fill);
-        super::patch::patch_field(&mut self.divider_color, patch.divider_color);
         super::patch::patch_field(&mut self.meter_bar_background, patch.meter_bar_background);
         super::patch::patch_field(&mut self.scrollbar_background, patch.scrollbar_background);
         super::patch::patch_field(&mut self.scroller_color, patch.scroller_color);
         super::patch::patch_field(&mut self.secondary_text, patch.secondary_text);
         super::patch::patch_field(&mut self.metric_text, patch.metric_text);
         super::patch::patch_field(&mut self.badge_text, patch.badge_text);
+        super::patch::patch_field(&mut self.idle_badge_text, patch.idle_badge_text);
         super::patch::patch_field(&mut self.meter_text, patch.meter_text);
         super::patch::patch_field(&mut self.footer_text, patch.footer_text);
         super::patch::patch_field(&mut self.header_text, patch.header_text);
@@ -905,15 +901,10 @@ impl TableSkin {
         super::patch::patch_field(&mut self.time_text, patch.time_text);
         super::patch::patch_field(&mut self.primary_text, patch.primary_text);
         super::patch::patch_field(&mut self.transition_text, patch.transition_text);
-        super::patch::patch_field(&mut self.metric_badge_frame, patch.metric_badge_frame);
         super::patch::patch_field(&mut self.badge_frame, patch.badge_frame);
+        super::patch::patch_field(&mut self.idle_badge_frame, patch.idle_badge_frame);
         super::patch::patch_field(&mut self.row_frame, patch.row_frame);
         super::patch::patch_field(&mut self.size, patch.size);
-        super::patch::patch_field(&mut self.metric_badge_height, patch.metric_badge_height);
-        super::patch::patch_field(
-            &mut self.metric_badge_padding_x,
-            patch.metric_badge_padding_x,
-        );
         super::patch::patch_field(&mut self.cell_padding_x, patch.cell_padding_x);
         super::patch::patch_field(&mut self.badge_height, patch.badge_height);
         super::patch::patch_field(&mut self.badge_width, patch.badge_width);

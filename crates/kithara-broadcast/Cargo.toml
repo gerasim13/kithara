@@ -27,6 +27,7 @@ no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
+kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-encode = { workspace = true }
 kithara-platform = { workspace = true }
@@ -34,7 +35,6 @@ kithara-signal = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-worker = { workspace = true }
 
-bon = { workspace = true }
 bytes = { workspace = true }
 derive-where = { workspace = true }
 humantime-serde = { workspace = true }

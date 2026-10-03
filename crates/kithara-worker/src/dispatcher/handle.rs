@@ -16,7 +16,7 @@ use kithara_platform::{
 
 use super::{
     core::run_loop,
-    state::{Capacity, Command, Registration, Reservation, SchedulerBudgets, TaskFactory},
+    state::{Capacity, Command, Registration, Reservation, TaskFactory},
 };
 use crate::{
     DispatcherConfig, Task, TaskConfig, TaskContext, TaskControl, TaskId, Wake,
@@ -72,33 +72,22 @@ impl Dispatcher {
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Wake::default();
-        let DispatcherConfig {
-            backpressure_poll_interval,
-            cancel: domain_cancel,
-            capacity,
-            fairness_yield_interval,
-            idle_timeout,
-            name,
-            observer,
-            slow_tick_threshold,
-            task_burst,
-            wait_timeout,
-        } = config;
-        let budgets = SchedulerBudgets {
-            backpressure_poll_interval,
-            idle_timeout,
-            slow_tick_threshold,
-            wait_timeout,
-            fairness_yield_interval: fairness_yield_interval.get(),
-            task_burst: task_burst.get(),
-        };
+        let observer = config
+            .observer
+            .lock()
+            .take()
+            .expect("dispatcher config always starts with an observer");
+        let domain_cancel = config.cancel.clone();
+        let name = config.name.clone();
+        let config = Arc::new(config);
         let inner = Arc::new(DispatcherInner {
+            config: Arc::clone(&config),
             cmd_tx,
             compute,
             runtime,
             admission: Mutex::new(Admission::Open),
             cancel: cancel.clone(),
-            capacity: Arc::new(Capacity::new(capacity.get())),
+            capacity: Arc::new(Capacity::default()),
             next_id: AtomicU64::new(1),
             wake: wake.clone(),
         });
@@ -115,7 +104,7 @@ impl Dispatcher {
 
         spawn_named(name, move || {
             let _cancel_guards = cancel_guards;
-            run_loop(&cmd_rx, &wake, &cancel, budgets, observer);
+            run_loop(&cmd_rx, &wake, &cancel, &config, observer);
         });
 
         Self { inner }
@@ -144,6 +133,7 @@ impl Dispatcher {
 }
 
 struct DispatcherInner {
+    config: Arc<DispatcherConfig>,
     capacity: Arc<Capacity>,
     compute: Arc<ComputeRuntime>,
     next_id: AtomicU64,
@@ -181,21 +171,21 @@ impl DispatcherInner {
         if *admission == Admission::Closed || self.cancel.is_cancelled() {
             return Err(TaskError::Stopped);
         }
-        let reservation = Capacity::reserve(&self.capacity).ok_or(TaskError::Capacity {
-            capacity: self.capacity.limit,
-        })?;
+        let limit = self.config.capacity.get();
+        let reservation = Capacity::reserve(&self.capacity, limit)
+            .ok_or(TaskError::Capacity { capacity: limit })?;
         drop(admission);
         let id = TaskId::new(self.next_id.fetch_add(1, Ordering::Relaxed));
         let token = self.cancel.child();
-        let cancel = config.cancel.map_or_else(
+        let cancel = config.cancel.clone().map_or_else(
             || CancelGroup::from(token.clone()),
             |domain| CancelGroup::from(token.clone()) | domain,
         );
-        let control = TaskControl::new(config.priority, token.clone(), self.wake.clone());
+        let control = TaskControl::new(Arc::new(config), token.clone(), self.wake.clone());
         let context = TaskContext::new(
             cancel.clone(),
             Arc::clone(&self.compute),
-            Arc::new(Budget::new(config.max_compute_tasks)),
+            Arc::new(Budget::default()),
             control,
             self.runtime.clone(),
             token.clone(),

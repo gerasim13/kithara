@@ -38,14 +38,18 @@ pub(crate) fn build(
         .name("kithara-analysis-persistence")
         .build();
     dispatcher.apply(config.dispatcher.clone());
-    let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
-        base_worker,
-        config.worker.pools().clone(),
-        NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
-        Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
-        dispatcher,
-        TaskConfig::new(),
-    ))?;
+    let persistence = AnalysisPersistence::new(
+        AnalysisPersistenceConfig::builder()
+            .worker(base_worker)
+            .pools(config.worker.pools().clone())
+            .queue_capacity(NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN))
+            .chunk_duration(Duration::from_secs(u64::from(
+                config.analysis_chunk_seconds.get(),
+            )))
+            .dispatcher(dispatcher)
+            .task(TaskConfig::new())
+            .build(),
+    )?;
     let (analysis, handle) = AnalysisService::new(&config, persistence, config.shutdown.child());
     task::spawn(analysis.run());
 
@@ -57,12 +61,19 @@ pub(crate) fn build(
         .clone()
         .map(Broadcaster::new)
         .ok_or(EngineError::Missing("broadcast service"))?;
-    Ok(Engine::new(session, config, broadcast, snapshots, |deck| {
-        StateController::new(
-            deck.queue.control().clone(),
-            Arc::clone(&deck.timestretch),
-            deck.cancel_child(),
-            handle.clone(),
-        )
-    }))
+    Ok(Engine::new(
+        session,
+        config,
+        broadcast,
+        snapshots,
+        handle.clone(),
+        |deck| {
+            StateController::new(
+                deck.queue.control().clone(),
+                Arc::clone(&deck.timestretch),
+                deck.cancel_child(),
+                handle.clone(),
+            )
+        },
+    ))
 }

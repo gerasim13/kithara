@@ -10,7 +10,7 @@ use masonry::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::custom::HostAction;
+use super::{built::Within, custom::HostAction};
 use crate::{
     atoms::{bar::context::Context, table::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
@@ -96,7 +96,7 @@ pub(crate) struct HostedEngine {
     pointer: Rc<Cell<Option<Pt>>>,
     _projections: Vec<Rc<dyn TableProjection>>,
     _tree_projections: Vec<Rc<dyn TreeProjection>>,
-    targets: Vec<EngineTarget>,
+    targets: Vec<Within<EngineTarget>>,
     #[field(get(copy), vis = "pub(in crate::render)")]
     owner: WidgetId,
     #[field(
@@ -110,25 +110,29 @@ pub(crate) struct HostedEngine {
 impl HostedEngine {
     pub(in crate::render) fn new(
         owner: WidgetId,
-        targets: Vec<EngineTarget>,
+        targets: Vec<Within<EngineTarget>>,
         map_event: Rc<dyn Fn(Published) -> HostAction>,
     ) -> Rc<Self> {
         let text_input = targets
             .iter()
-            .any(|target| matches!(target.plan, HostedControlPlan::Tree(_)));
+            .any(|target| matches!(target.item.plan, HostedControlPlan::Tree(_)));
         let mut engine = Engine::default();
-        engine.reconcile(targets.iter().flat_map(|target| target.plan.descriptors()));
+        engine.reconcile(
+            targets
+                .iter()
+                .flat_map(|target| target.item.plan.descriptors()),
+        );
         let engine = Rc::new(RefCell::new(engine));
         let pointer = Rc::new(Cell::new(None));
         Rc::new_cyclic(|host| {
             let projections = targets
                 .iter()
                 .filter_map(|target| {
-                    let HostedControlPlan::Table(plan) = &target.plan else {
+                    let HostedControlPlan::Table(plan) = &target.item.plan else {
                         return None;
                     };
                     let projection: Rc<dyn TableProjection> = Rc::new(EngineProjection {
-                        area: Rc::clone(&target.area),
+                        area: Rc::clone(&target.item.area),
                         engine: Rc::clone(&engine),
                         host: host.clone(),
                         pointer: Rc::clone(&pointer),
@@ -140,11 +144,11 @@ impl HostedEngine {
             let tree_projections = targets
                 .iter()
                 .filter_map(|target| {
-                    let HostedControlPlan::Tree(plan) = &target.plan else {
+                    let HostedControlPlan::Tree(plan) = &target.item.plan else {
                         return None;
                     };
                     let projection: Rc<dyn TreeProjection> = Rc::new(EngineProjection {
-                        area: Rc::clone(&target.area),
+                        area: Rc::clone(&target.item.area),
                         engine: Rc::clone(&engine),
                         host: host.clone(),
                         pointer: Rc::clone(&pointer),
@@ -188,8 +192,7 @@ impl HostedEngine {
 
     /// The face every control this engine drives shows, in target order.
     fn faces(&self, engine: &Engine, point: Option<Pt>) -> Vec<Face> {
-        self.targets
-            .iter()
+        self.all()
             .map(|target| match &target.plan {
                 HostedControlPlan::Table(plan) => {
                     Face::Table(plan.view(engine, point, target_bounds(target)))
@@ -222,7 +225,7 @@ impl HostedEngine {
     /// time, so the first open one is the answer.
     pub(in crate::render) fn open_picker(&self) -> Option<OpenPicker> {
         let engine = self.engine.borrow();
-        self.targets.iter().find_map(|target| {
+        self.all().find_map(|target| {
             let HostedControlPlan::Picker {
                 path, items, face, ..
             } = &target.plan
@@ -245,9 +248,35 @@ impl HostedEngine {
     /// passed. Nothing is reconciled here: the descriptors are rebuilt from
     /// these plans on the next event anyway.
     pub(in crate::render) fn reread(&self, ctx: Ctx<'_, '_>) {
-        for target in &self.targets {
+        for target in self.standing() {
             target.plan.reread(ctx);
         }
+    }
+
+    pub(in crate::render) fn stand(&self, shown: bool) {
+        let open = self.has_open_picker();
+        let descriptors: Vec<Descriptor> = if shown {
+            self.standing()
+                .flat_map(|target| target.plan.descriptors())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.engine.borrow_mut().reconcile(descriptors);
+        if self.has_open_picker() != open {
+            self.menu_changed.set(true);
+        }
+    }
+
+    fn all(&self) -> impl Iterator<Item = &EngineTarget> {
+        self.targets.iter().map(|target| &target.item)
+    }
+
+    fn standing(&self) -> impl Iterator<Item = &EngineTarget> {
+        self.targets
+            .iter()
+            .filter(|target| target.within.shown())
+            .map(|target| &target.item)
     }
 
     pub(in crate::render) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
@@ -258,9 +287,8 @@ impl HostedEngine {
         }
         let targets = self.targets(&engine, point);
         let descriptors = self
-            .targets
-            .iter()
-            .flat_map(|target| target.plan.active_descriptors(&targets))
+            .standing()
+            .flat_map(|target| target.plan.descriptors())
             .collect::<Vec<Descriptor>>();
         engine.reconcile(descriptors);
         for target in &targets {
@@ -273,8 +301,7 @@ impl HostedEngine {
             self.menu_changed.set(true);
         }
         let repaint = self
-            .targets
-            .iter()
+            .all()
             .zip(&before)
             .zip(&after)
             .filter(|((_, before), after)| before != after)
@@ -309,8 +336,7 @@ impl HostedEngine {
     }
 
     pub(in crate::render) fn carried(&self, table: &str, index: usize) -> Option<Carried> {
-        self.targets
-            .iter()
+        self.all()
             .find_map(|target| target.plan.carried(table, index))
     }
 
@@ -329,7 +355,7 @@ impl HostedEngine {
 
     fn targets<'a>(&'a self, engine: &Engine, point: Option<Pt>) -> Vec<Target<'a>> {
         let mut targets = Vec::new();
-        for target in &self.targets {
+        for target in self.standing() {
             let area = target.area.get();
             target.plan.append_targets(
                 Rect {
@@ -385,11 +411,9 @@ impl TreeProjection for EngineProjection {
 impl EngineProjection {
     fn reconcile_engine(&self) {
         if let Some(host) = self.host.upgrade() {
-            host.engine.borrow_mut().reconcile(
-                host.targets
-                    .iter()
-                    .flat_map(|target| target.plan.descriptors()),
-            );
+            host.engine
+                .borrow_mut()
+                .reconcile(host.standing().flat_map(|target| target.plan.descriptors()));
         }
     }
 }

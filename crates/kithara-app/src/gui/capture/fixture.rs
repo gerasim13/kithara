@@ -9,16 +9,34 @@ use kithara::ui::{
     module::IconName,
     registry::ValueKind,
     render::{
-        PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin, StereoLevels, TableCell,
-        TableRow, TreeRow, UiEvent, WaveBucket, WaveformView,
+        PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Scope, Skin, StereoLevels,
+        TableCell, TableRow, TreeRow, UiEvent, WaveBucket, WaveformView,
     },
 };
 
-use crate::gui::ui::{cache::DeckLayout, endpoints::readable_kind, package::Package};
+use crate::gui::{
+    library::{Library, Registration, StartupSource},
+    test_fixture,
+    ui::{cache::DeckLayout, endpoints::readable_kind, package::Package},
+};
+
+fn startup() -> Vec<Registration> {
+    vec![StartupSource::registered(vec![
+        "/music/Midnight Signal.flac".to_owned(),
+        "https://example.test/Parallel Lines.m3u8".to_owned(),
+    ])]
+}
+
+pub(super) fn package() -> Result<Rc<Package>, String> {
+    test_fixture::mount(None, startup())
+        .map(|(package, _)| package)
+        .map_err(|error| format!("package: {error}"))
+}
 
 pub(super) struct Fixture {
     layout: DeckLayout,
     package: Rc<Package>,
+    library: Library,
     rows: Vec<TableRow<'static>>,
 }
 
@@ -31,29 +49,18 @@ impl Fixture {
     };
     const SCALAR: f64 = 0.5;
 
-    pub(super) fn new(layout: DeckLayout, package: Rc<Package>) -> Self {
-        Self {
+    pub(super) fn new(layout: DeckLayout, package: Rc<Package>) -> Result<Self, String> {
+        let library =
+            Library::new(startup(), package.text()).map_err(|error| format!("library: {error}"))?;
+        Ok(Self {
             layout,
             package,
+            library,
             rows: vec![
-                TableRow::new(
-                    vec![
-                        TableCell::text("deck", "A"),
-                        TableCell::text("title", "Midnight Signal"),
-                        TableCell::text("artist", "Kithara"),
-                    ],
-                    true,
-                ),
-                TableRow::new(
-                    vec![
-                        TableCell::text("deck", "B"),
-                        TableCell::text("title", "Parallel Lines"),
-                        TableCell::text("artist", "Studio Fixture"),
-                    ],
-                    false,
-                ),
+                TableRow::new(vec![TableCell::text("title", "Midnight Signal")], false),
+                TableRow::new(vec![TableCell::text("title", "Parallel Lines")], false),
             ],
-        }
+        })
     }
 
     /// The settings sheet is open in both captures, because a control only the
@@ -71,38 +78,16 @@ impl Fixture {
 
 impl Reads for Fixture {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        /// The browser's source groups, in the order `LibraryView::groups`
-        /// lists them. An empty tree would let the page pass its budget while
-        /// neither host drew a single row.
-        const TREE: [TreeRow<'static>; 3] = [
-            TreeRow {
-                label: "ALL",
-                count: Some(2),
-                expanded: None,
-                icon: IconName::Collection,
-                muted: false,
-                selected: false,
-                depth: 0,
-            },
-            TreeRow {
-                label: "LOCAL",
-                count: Some(2),
-                expanded: None,
-                icon: IconName::Folder,
-                muted: false,
-                selected: true,
-                depth: 0,
-            },
-            TreeRow {
-                label: "STREAM",
-                count: Some(0),
-                expanded: None,
-                icon: IconName::Playlist,
-                muted: false,
-                selected: false,
-                depth: 0,
-            },
-        ];
+        /// The startup branch, selected, so both hosts draw a row.
+        const TREE: [TreeRow<'static>; 1] = [TreeRow {
+            label: "Startup",
+            count: Some(2),
+            expanded: None,
+            icon: IconName::Playlist,
+            muted: false,
+            selected: true,
+            depth: 0,
+        }];
         /// Two decks on the tempo axis. An empty target list would draw an
         /// axis with nothing on it and still pass the page's budget.
         const TEMPOS: [PortalTarget; 2] = [
@@ -158,7 +143,12 @@ impl Reads for Fixture {
             },
         ];
 
-        let base = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
+        let (base, scope) = Scope::split(endpoint);
+        if base == "library.page.hidden" {
+            return Some(ReadValue::Bool(
+                self.library.page_hidden(scope.get("source")?)?,
+            ));
+        }
         let value = match readable_kind(base)? {
             ValueKind::Bool => ReadValue::Bool(self.on(base)),
             ValueKind::Scalar => ReadValue::Scalar(Self::SCALAR),
@@ -195,8 +185,7 @@ impl Reads for Fixture {
 fn text(endpoint: &str) -> &'static str {
     match endpoint {
         "deck.playback.bpm" => "124.0",
-        "library.breadcrumb" => "LOCAL \u{b7} 2",
-        "library.query" => "",
+        "source.status" => "",
         "deck.playback.remain" => "-03:42",
         "deck.playback.tempo" => "+0.0%",
         "deck.stream.quality" => "320 kbps",

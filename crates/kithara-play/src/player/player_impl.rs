@@ -29,6 +29,8 @@ use crate::{
 };
 
 /// Concrete Player implementation managing items queue.
+#[derive(kithara_config::ConfigOwner)]
+#[config_owner(PlayerConfig<S>, runtime.core.config)]
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
     /// Identity of the synchronization group the player's owner builds.

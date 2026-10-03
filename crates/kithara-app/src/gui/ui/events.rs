@@ -36,7 +36,11 @@ fn write(state: &mut Kithara, key: &str, value: WriteValue) -> Option<Message> {
         "mix" | "mixer" => mixer_write(state, id, scope, &value),
         "ui" => ui_write(&mut state.ui.cache, id, scope, &value),
         "broadcast" => broadcast_write(id, &value),
-        "library" => library_write(state, id, &value),
+        "library" => {
+            library_write(state, id, &value);
+            None
+        }
+        "source" => source_write(state, id, scope, &value),
         _ => None,
     }
 }
@@ -146,6 +150,8 @@ fn ui_write(
     }
     match id {
         "ui.window.toggle_full_screen" => Some(Message::Window(WindowCommand::ToggleFullScreen)),
+        #[cfg(not(target_arch = "wasm32"))]
+        "ui.library.add_folder" => Some(Message::AddMusicFolder),
         "ui.module.toggle" => {
             cache.modules.toggle(scope.get("module")?);
             None
@@ -165,13 +171,32 @@ fn broadcast_write(id: &str, value: &WriteValue) -> Option<Message> {
     }
 }
 
-fn library_write(state: &Kithara, id: &str, value: &WriteValue) -> Option<Message> {
+fn library_write(state: &mut Kithara, id: &str, value: &WriteValue) {
     match (id, value) {
-        ("library.select_track", WriteValue::Index(row)) => Some(Message::SelectCatalogTrack(
-            state.ui.cache.library.catalog_index(&state.catalog, *row)?,
-        )),
-        _ => None,
+        ("library.select", WriteValue::Index(row)) => state.library.select(*row),
+        ("library.toggle", WriteValue::Index(row)) => state.library.toggle(*row),
+        _ => {}
     }
+}
+
+fn source_write(
+    state: &mut Kithara,
+    id: &str,
+    scope: Scope<'_>,
+    value: &WriteValue,
+) -> Option<Message> {
+    match (id, value) {
+        ("source.select", WriteValue::Index(row)) => {
+            state.library.select_row(scope.get("source")?, *row);
+        }
+        ("source.column.width", WriteValue::Scalar(width)) => {
+            state
+                .library
+                .set_column_width(scope.get("source")?, scope.get("column")?, *width);
+        }
+        _ => {}
+    }
+    None
 }
 
 fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
@@ -287,8 +312,7 @@ mod tests {
         use std::convert::Infallible;
 
         use ::kithara::ui::render::{
-            ControlAction, DEFAULT_ZOOM, Published, ReadValue, Reads, UiEvent, Walk, WindowCommand,
-            WriteValue,
+            ControlAction, DEFAULT_ZOOM, Published, UiEvent, WindowCommand, WriteValue,
         };
         use kithara_test_utils::{kithara, off_thread::OffThread};
 
@@ -297,10 +321,7 @@ mod tests {
             analysis::fixtures::{short_wav, tone_mp3},
             deck::{DeckId, EqMode, TempoPercent},
             engine::MixCmd,
-            gui::{
-                app::Kithara, deck::DeckMsg, message::Message, reads::ReadRoot, rig::Rig,
-                ui::cache::DeckLayout,
-            },
+            gui::{app::Kithara, deck::DeckMsg, message::Message, rig::Rig, ui::cache::DeckLayout},
             state::AbrVariant,
         };
 
@@ -453,36 +474,28 @@ mod tests {
         }
 
         #[kithara::test(native, flash(false))]
-        fn the_track_list_selects_the_row_it_writes() {
+        fn library_followup_width_writes_stay_with_their_source() {
             let mut rig = Rig::offline();
-            let state = &mut rig.ui;
-
-            assert!(matches!(
-                write(state, "library.select_track", WriteValue::Index(0)),
-                Some(Message::SelectCatalogTrack(0))
-            ));
-        }
-
-        #[kithara::test(native, flash(false))]
-        fn every_library_row_carries_the_url_of_its_entry() {
-            let rig = Rig::offline();
-            let root = ReadRoot::new(&rig.ui);
-            let reads = Walk::new(&root);
-            let Some(ReadValue::Table(rows)) = reads.get("library.tracks") else {
-                panic!("the library draws a table of tracks");
-            };
-            let urls: Vec<&str> = rig
-                .ui
-                .catalog
-                .entries()
-                .iter()
-                .map(|entry| entry.url.as_str())
-                .collect();
-
-            assert!(!rows.is_empty(), "the rig's catalog lists tracks");
+            rig.send(
+                "library/pages/startup-page/rows/width/artist",
+                ControlAction::SetScalar(240.0),
+            );
             assert_eq!(
-                rows.iter().map(|row| row.drag()).collect::<Vec<_>>(),
-                urls.into_iter().map(Some).collect::<Vec<_>>()
+                rig.scalar("source.column.width@column=artist,source=startup"),
+                240.0
+            );
+            write(
+                &mut rig.ui,
+                "source.column.width@column=artist,source=explorer",
+                WriteValue::Scalar(260.0),
+            );
+            assert_eq!(
+                rig.scalar("source.column.width@column=artist,source=explorer"),
+                260.0
+            );
+            assert_eq!(
+                rig.scalar("source.column.width@column=artist,source=startup"),
+                240.0
             );
         }
 

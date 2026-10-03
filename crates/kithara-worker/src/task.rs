@@ -1,10 +1,9 @@
-use kithara_platform::{
-    CancelGroup, CancelToken, atomic::RelaxedAtomicU32, sync::Arc, tokio::runtime::Handle,
-};
+use kithara_platform::{CancelGroup, CancelToken, sync::Arc, tokio::runtime::Handle};
 
 use crate::{
     ComputeContext, ComputeRejected, Wake,
     compute::{Budget, ComputeRuntime},
+    config::TaskConfig,
 };
 
 /// Numeric scheduler priority. Higher values run first.
@@ -68,19 +67,20 @@ pub trait Task: 'static {
 }
 
 /// Cloneable priority and wake control for an admitted task.
-#[derive(Clone)]
+#[derive(Clone, kithara_config::ConfigOwner)]
+#[config_owner(TaskConfig, config)]
 pub struct TaskControl {
-    priority: Arc<RelaxedAtomicU32>,
+    config: Arc<TaskConfig>,
     token: CancelToken,
     wake: Wake,
 }
 
 impl TaskControl {
-    pub(crate) fn new(priority: Priority, token: CancelToken, wake: Wake) -> Self {
+    pub(crate) fn new(config: Arc<TaskConfig>, token: CancelToken, wake: Wake) -> Self {
         Self {
+            config,
             token,
             wake,
-            priority: Arc::new(RelaxedAtomicU32::new(priority.get())),
         }
     }
 
@@ -93,12 +93,12 @@ impl TaskControl {
     /// Return the current scheduler priority.
     #[must_use]
     pub fn priority(&self) -> Priority {
-        Priority::new(self.priority.load())
+        self.config.priority()
     }
 
     /// Publish a new priority and coalesce a scheduler pass.
     pub fn set_priority(&self, priority: Priority) {
-        self.priority.store(priority.get());
+        self.config.set_priority(priority);
         self.wake.defer();
     }
 
@@ -181,6 +181,7 @@ impl TaskContext {
     {
         self.compute.submit(
             &self.compute_budget,
+            self.control.config.max_compute_tasks,
             &self.token,
             self.control.wake_handle(),
             payload,

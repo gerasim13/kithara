@@ -104,7 +104,7 @@ pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
         .or_else(|| {
             hint.extension
                 .as_ref()
-                .and_then(|ext| codec_from_extension(ext))
+                .and_then(|ext| AudioCodec::parse_extension(ext))
         })
         .or_else(|| {
             hint.mime
@@ -119,33 +119,6 @@ pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
         })
         .or_else(|| hint.container.and_then(codec_from_container))
         .ok_or(DecodeError::ProbeFailed)
-}
-
-/// Map file extension to codec.
-pub(super) fn codec_from_extension(ext: &str) -> Option<AudioCodec> {
-    match ext.to_lowercase().as_str() {
-        "mp3" => Some(AudioCodec::Mp3),
-        "aac" | "m4a" | "mp4" => Some(AudioCodec::AacLc),
-        "flac" => Some(AudioCodec::Flac),
-        "ogg" | "oga" => Some(AudioCodec::Vorbis),
-        "opus" => Some(AudioCodec::Opus),
-        "wav" | "wave" | "aiff" | "aif" => Some(AudioCodec::Pcm),
-        "caf" => Some(AudioCodec::Alac),
-        _ => None,
-    }
-}
-
-pub(super) fn container_from_extension(ext: &str) -> Option<ContainerFormat> {
-    match ext.to_lowercase().as_str() {
-        "mp3" => Some(ContainerFormat::MpegAudio),
-        "aac" => Some(ContainerFormat::Adts),
-        "m4a" | "mp4" => Some(ContainerFormat::Mp4),
-        "flac" => Some(ContainerFormat::Flac),
-        "ogg" | "oga" => Some(ContainerFormat::Ogg),
-        "wav" | "wave" => Some(ContainerFormat::Wav),
-        "caf" => Some(ContainerFormat::Caf),
-        _ => None,
-    }
 }
 
 pub(super) fn container_from_mime(mime: &str) -> Option<ContainerFormat> {
@@ -345,29 +318,6 @@ mod tests {
     fn test_probe_fails_for_insufficient_hints(#[case] hint: ProbeHint) {
         let result = probe_codec(&hint);
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
-    }
-
-    #[kithara::test]
-    #[case("unknown")]
-    #[case("")]
-    #[case("doc")]
-    fn test_codec_from_extension_unknown_returns_none(#[case] extension: &str) {
-        assert!(codec_from_extension(extension).is_none());
-    }
-
-    #[kithara::test]
-    #[case("mp3", Some(ContainerFormat::MpegAudio))]
-    #[case("aac", Some(ContainerFormat::Adts))]
-    #[case("m4a", Some(ContainerFormat::Mp4))]
-    #[case("mp4", Some(ContainerFormat::Mp4))]
-    #[case("flac", Some(ContainerFormat::Flac))]
-    #[case("wav", Some(ContainerFormat::Wav))]
-    #[case("unknown", None)]
-    fn test_container_from_extension(
-        #[case] extension: &str,
-        #[case] expected: Option<ContainerFormat>,
-    ) {
-        assert_eq!(container_from_extension(extension), expected);
     }
 
     #[kithara::test]

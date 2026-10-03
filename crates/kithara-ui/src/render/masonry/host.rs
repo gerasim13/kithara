@@ -16,7 +16,7 @@ use super::{
     leaf::{Leaf, TextFace, TextFaces, WindowLeafLayer},
     mount::{
         Cx, NodeControl, NodeLayout, Viewport, activates, alignment, control_declared, declared,
-        main_length, pointer_owner,
+        pointer_owner,
     },
     node::{Detent, Face, Faces},
     popover::{PopoverLayer, PopoverState},
@@ -37,6 +37,7 @@ use crate::{
         Skin,
         document::{
             Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
+            StageMount,
         },
         hosted::hosted_control_plan,
         scroll::{Bar, Window},
@@ -175,12 +176,12 @@ where
     fn block(
         &self,
         binding: Option<Binding>,
-        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
+        child: &mut MasonryNode<Action>,
     ) -> Option<Rc<BlockState>> {
         let binding = binding?;
         let state = Rc::new(BlockState::default());
         state.latch(self.ctx.flag(Some(&binding)));
-        blocks.push((binding, Rc::clone(&state)));
+        child.hidden_by(binding, &state);
         Some(state)
     }
 
@@ -216,14 +217,13 @@ where
     fn flow(
         &self,
         children: Vec<GroupMount<MasonryNode<Action>>>,
-        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
     ) -> (Vec<ChildLayout>, Vec<MasonryNode<Action>>) {
         let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
         let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
-        for child in children {
-            let block = self.block(child.block, blocks);
+        for mut child in children {
+            let block = self.block(child.block, &mut child.output);
             layouts.push(
-                ChildLayout::natural(child.output.declared(), child.minimum)
+                ChildLayout::natural(child.output.natural(), child.minimum)
                     .within(child.band)
                     .blocked(block),
             );
@@ -269,7 +269,7 @@ where
                 let children = vec![header, first_line, content, second_line, footer];
                 let layouts = children
                     .iter()
-                    .map(|child| ChildLayout::natural(child.declared(), None))
+                    .map(|child| ChildLayout::natural(child.natural(), None))
                     .collect();
                 MasonryNode::document(
                     NodeLayout::Flex(Flex::new(
@@ -300,52 +300,6 @@ where
                 )
             }
         }
-    }
-
-    /// The weighted flow one split lays its cells out in.
-    fn mount_split(
-        &self,
-        axis: Axis,
-        measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<MasonryNode<Action>>>,
-    ) -> MasonryNode<Action> {
-        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
-        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
-        let mut blocks = Vec::new();
-        for cell in children {
-            let split_size = match axis {
-                Axis::Horizontal => Size::new(main_length(cell.size.w), Length::Fill),
-                Axis::Vertical => Size::new(Length::Fill, main_length(cell.size.h)),
-            };
-            let block = self.block(cell.block, &mut blocks);
-            layouts.push(
-                ChildLayout::weighted(cell.output.declared(), split_size, cell.weight)
-                    .within(cell.band)
-                    .blocked(block),
-            );
-            nodes.push(cell.output);
-        }
-        let mut output = MasonryNode::document(
-            NodeLayout::Flex(
-                Flex::new(
-                    axis,
-                    Length::Fill,
-                    Length::Fill,
-                    Padding::default(),
-                    0.0,
-                    Alignment::Start,
-                    layouts,
-                )
-                .measure(measure),
-            ),
-            Size::new(Length::Fill, Length::Fill),
-            nodes,
-            true,
-            None,
-            None,
-        );
-        output.hides(blocks);
-        output
     }
 
     pub(in crate::render) fn shader_leaf(
@@ -595,8 +549,7 @@ where
 
     fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
         let size = group.size().unwrap_or(SizeSpec::FILL);
-        let mut blocks = Vec::new();
-        let (layouts, nodes) = self.flow(children, &mut blocks);
+        let (layouts, nodes) = self.flow(children);
         let alpha = group.background_alpha().unwrap_or(1.0);
         let face = |background: Option<ColorRole>, frame_color: ColorRole| Face {
             background: background.map(|role| {
@@ -650,7 +603,6 @@ where
                 Rc::clone(&self.map_event),
             ));
         }
-        output.hides(blocks);
         if let Some((flag, lit)) = lit {
             output.lights(flag.clone(), Some(Faces { idle, lit }));
         }
@@ -725,19 +677,8 @@ where
         let size = popover.size().map_or_else(|| anchor.declared(), declared);
         let mut output =
             MasonryNode::document(NodeLayout::Stack, size, vec![anchor], false, None, None);
-        let (
-            content,
-            declared,
-            layers,
-            popovers,
-            blocks,
-            engine_targets,
-            engines,
-            boxes,
-            native,
-            window,
-            watched,
-        ) = LayerParts::from(content);
+        let (content, declared, layers, registrations, boxes, native, window) =
+            LayerParts::from(content);
         let layer = NewWidget::new(PopoverLayer::new(
             content,
             declared,
@@ -747,16 +688,16 @@ where
             self.skin,
         ))
         .erased();
-        let held = engines.iter().map(|engine| engine.owner()).collect();
+        let held = registrations
+            .engines
+            .iter()
+            .map(|engine| engine.item.owner())
+            .collect();
         output.add_popover(layer.id(), popover.flag(), state, Rc::clone(&dismiss), held);
         output.append_layers(layers);
-        output.append_popovers(popovers);
-        output.append_blocks(blocks);
-        output.append_engine_targets(engine_targets);
-        output.append_engines(engines);
+        output.append_registrations(registrations);
         output.append_boxes(boxes);
         output.append_native(native);
-        output.append_watched(watched);
         if let Some(window) = window {
             output.set_window_tracker(window);
         }
@@ -818,9 +759,8 @@ where
         size: Option<SizeSpec>,
     ) -> Self::Output {
         let declared = size.map_or(Size::new(Length::Fill, Length::Shrink), declared);
-        let mut blocks = Vec::new();
-        let (layouts, nodes) = self.flow(children, &mut blocks);
-        let mut output = MasonryNode::document(
+        let (layouts, nodes) = self.flow(children);
+        MasonryNode::document(
             NodeLayout::Flex(
                 Flex::new(
                     Axis::Vertical,
@@ -838,9 +778,7 @@ where
             true,
             None,
             None,
-        );
-        output.hides(blocks);
-        output
+        )
     }
 
     fn split(
@@ -849,22 +787,37 @@ where
         measure: Option<MeasureAxis>,
         children: Vec<SplitMount<Self::Output>>,
     ) -> Self::Output {
-        self.mount_split(axis, measure, children)
+        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
+        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
+        for mut cell in children {
+            let block = self.block(cell.block, &mut cell.output);
+            layouts.push(
+                ChildLayout::cell(axis, cell.size, cell.weight)
+                    .within(cell.band)
+                    .blocked(block),
+            );
+            nodes.push(cell.output);
+        }
+        MasonryNode::document(
+            NodeLayout::Flex(Flex::split(axis, layouts).measure(measure)),
+            Size::new(Length::Fill, Length::Fill),
+            nodes,
+            true,
+            None,
+            None,
+        )
     }
 
-    /// The stack measures its first child and hands every child that box, so
-    /// the document's own size rule and the immediate host's `Stack` agree with
-    /// it without either of them being told about the other.
-    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
-        let declared = size.map_or_else(
-            || {
-                children
-                    .first()
-                    .map_or_else(|| declared(SizeSpec::FILL), MasonryNode::declared)
-            },
-            declared,
-        );
-        MasonryNode::document(NodeLayout::Stage, declared, children, true, None, None)
+    fn stage(
+        &mut self,
+        children: Vec<StageMount<Self::Output>>,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
+        let children = children
+            .into_iter()
+            .map(|mut child| (self.block(child.block, &mut child.output), child.output))
+            .collect();
+        MasonryNode::stage(size, children)
     }
 
     fn window(&mut self, mut content: Self::Output, resize_edges: bool) -> Self::Output {

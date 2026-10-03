@@ -75,7 +75,7 @@ where
         Some(
             FetchCmd::get(url)
                 .cancel(cancel)
-                .maybe_headers(self.profile.headers.clone())
+                .maybe_headers(self.config.headers.clone())
                 .writer(writer_fn)
                 .on_slow(on_slow)
                 .demand(demand)

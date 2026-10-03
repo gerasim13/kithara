@@ -107,9 +107,13 @@ where
         let prefetch_byte_cap = construction_segment_end
             .is_none()
             .then(|| {
-                ctx.config
-                    .look_ahead_bytes
-                    .map(|n| prefetch_base.saturating_add(n))
+                Some(
+                    prefetch_base.saturating_add(
+                        ctx.config
+                            .look_ahead_bytes
+                            .unwrap_or(consts::DEFAULT_LOOK_AHEAD_BYTES),
+                    ),
+                )
             })
             .flatten();
         let prefetch_segment_cap = construction_segment_end
@@ -318,7 +322,7 @@ fn look_ahead_segments<S>(ctx: &PlanCtx<S>) -> Option<u32>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    let window = ctx.config.look_ahead_segments?;
+    let window = ctx.look_ahead_segments?;
     Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
 }
 

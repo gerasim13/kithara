@@ -41,6 +41,7 @@ kithara-stream = { workspace = true, default-features = false, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true, optional = true }
+
 delegate = { workspace = true, optional = true }
 fs4 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }

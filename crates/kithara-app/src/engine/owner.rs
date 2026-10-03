@@ -20,6 +20,7 @@ use super::{
     snapshot::{BroadcastPhase, DeckSnapshot, EngineSnapshot},
 };
 use crate::{
+    analysis::AnalysisHandle,
     broadcast::Broadcaster,
     catalog,
     config::AppConfig,
@@ -31,6 +32,7 @@ use crate::{
 #[fieldwork(opt_in)]
 pub(crate) struct Engine {
     config: AppConfig,
+    analysis: AnalysisHandle,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,
     broadcast: Broadcaster,
     session: DeckSet,
@@ -61,6 +63,7 @@ impl Engine {
         config: AppConfig,
         broadcast: Broadcaster,
         snapshots: Arc<ArcSwap<EngineSnapshot>>,
+        analysis: AnalysisHandle,
         mut controller: impl FnMut(&Deck) -> StateController,
     ) -> Self {
         let decks = session
@@ -77,6 +80,7 @@ impl Engine {
             .collect();
         let engine = Self {
             broadcast,
+            analysis,
             config,
             session,
             decks,
@@ -269,6 +273,7 @@ impl Engine {
             })
             .collect();
         EngineSnapshot {
+            track_bpms: Arc::clone(&self.analysis.bpms()),
             decks,
             broadcast: BroadcastPhase::new(&self.broadcast),
             eq_mode: self.eq_mode,

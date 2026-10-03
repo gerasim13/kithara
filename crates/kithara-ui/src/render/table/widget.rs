@@ -9,13 +9,11 @@ use iced::{
 use kithara_platform::time::Instant;
 
 use super::{
-    super::{Carried, InputOwner, Published, Skin, controls::RetainedCanvas, drag, index, scalar},
+    super::{Carried, InputOwner, Published, controls::RetainedCanvas, drag, index, scalar},
     paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect},
 };
 use crate::{
-    atoms::table::{
-        ColumnLayout, TableRowData, table_body, table_dividers, table_visible_row_rect,
-    },
+    atoms::table::{face::TableFace, table_body, table_dividers, table_visible_row_rect},
     draw::{Pt, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerPhase, iced as iced_interact,
@@ -25,12 +23,10 @@ use crate::{
 
 pub(crate) fn table<'skin>(
     path: &str,
-    rows: Vec<TableRowData>,
-    columns: Vec<ColumnLayout>,
-    skin: &'skin Skin,
+    face: TableFace,
     owner: InputOwner,
 ) -> Element<'skin, Published> {
-    let paint = TablePaint::new(path, rows, columns, skin);
+    let paint = TablePaint::new(path, face);
     let config = paint.config();
     match owner {
         InputOwner::Leaf => RetainedCanvas::new(
@@ -114,7 +110,7 @@ impl canvas::Program<Published> for TableProgram {
             bounds,
             self.paint.face.columns(),
             state.horizontal.offset(),
-            self.paint.face.skin(),
+            self.paint.face.metrics(),
         );
         for divider in &dividers {
             let Some((_, drag_state)) = state
@@ -124,7 +120,7 @@ impl canvas::Program<Published> for TableProgram {
             else {
                 continue;
             };
-            let drag = divider_drag(divider.value, self.paint.face.skin().table.min_column_width);
+            let drag = divider_drag(divider.track);
             let hit = Hit::new(point, divider.hit);
             let cursor = drag.cursor(drag_state, &hit);
             if cursor != CursorShape::None {
@@ -177,7 +173,7 @@ impl canvas::Program<Published> for TableProgram {
             return Some(action);
         }
 
-        let body = table_body(bounds, self.paint.face.skin());
+        let body = table_body(bounds, self.paint.face.metrics());
         let vertical_hit = Hit::new(point, body);
         let before = state.vertical.offset();
         let outcome = state.vertical.handle(input, &vertical_hit);
@@ -212,7 +208,7 @@ impl TableProgram {
             bounds,
             self.paint.face.columns(),
             state.horizontal.offset(),
-            self.paint.face.skin(),
+            self.paint.face.metrics(),
         );
         for divider in &dividers {
             let Some((_, drag_state)) = state
@@ -222,7 +218,7 @@ impl TableProgram {
             else {
                 continue;
             };
-            let drag = divider_drag(divider.value, self.paint.face.skin().table.min_column_width);
+            let drag = divider_drag(divider.track);
             let hit = Rect {
                 x: divider.hit.x + origin.x,
                 y: divider.hit.y + origin.y,
@@ -267,7 +263,7 @@ impl TableProgram {
             row_index,
             state.horizontal.offset(),
             state.vertical.offset(),
-            self.paint.face.skin(),
+            self.paint.face.metrics(),
         );
         let row = visible.unwrap_or(Rect {
             h: 0.0,
@@ -320,9 +316,9 @@ fn scroll_action(
     }
 }
 
-fn divider_drag(value: f32, minimum: f32) -> Scalar {
+fn divider_drag(track: Track) -> Scalar {
     Scalar::builder()
-        .track(Track::HorizontalPixels { minimum, value })
+        .track(track)
         .hover(Hover::new(CursorShape::ResizeH))
         .build()
 }

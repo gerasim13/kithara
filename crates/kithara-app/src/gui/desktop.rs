@@ -1,5 +1,8 @@
 use arc_swap::ArcSwap;
-use kithara::platform::{sync::Arc, tokio::sync::mpsc};
+use kithara::platform::{
+    sync::Arc,
+    tokio::{runtime::Handle, sync::mpsc},
+};
 
 #[cfg(feature = "masonry")]
 use super::frontend::retained;
@@ -32,7 +35,12 @@ pub enum Host {
 /// # Errors
 /// Returns an error if the studio or the engine cannot be built, or the event
 /// loop fails.
-pub fn run(config: AppConfig, host: Host, audio: AppHost) -> Result<(), FrontendError> {
+pub fn run(
+    config: AppConfig,
+    host: Host,
+    audio: AppHost,
+    runtime: &Handle,
+) -> Result<(), FrontendError> {
     let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
     let (commands, receiver) = mpsc::unbounded_channel();
     let boot = Boot::builder()
@@ -42,9 +50,11 @@ pub fn run(config: AppConfig, host: Host, audio: AppHost) -> Result<(), Frontend
         .palette(config.palette)
         .snapshots(Arc::clone(&snapshots))
         .commands(commands)
+        .runtime(runtime.clone())
         .build()?;
     let shutdown = config.shutdown.clone();
     let driver = engine::spawn(
+        runtime,
         move || engine::build(config, audio, snapshots),
         receiver,
         shutdown.child(),

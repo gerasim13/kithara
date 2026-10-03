@@ -53,12 +53,6 @@ pub struct Envelope {
 /// # Errors
 /// Returns [`UiDocError`] when the RON, schema, or version is invalid.
 pub fn probe(text: &str, origin: &SourceUri) -> Result<Envelope, UiDocError> {
-    const LAYOUT_SCHEMA: &str = "kithara.layout";
-    const MODULE_SCHEMA: &str = "kithara.module";
-    const PACKAGE_SCHEMA: &str = "kithara.package";
-    const SKIN_SCHEMA: &str = "kithara.skin";
-    const TEXT_SCHEMA: &str = "kithara.text";
-
     let raw: EnvelopeProbe =
         ron_io::options()
             .from_str(text)
@@ -66,33 +60,44 @@ pub fn probe(text: &str, origin: &SourceUri) -> Result<Envelope, UiDocError> {
                 origin: origin.clone(),
                 source: Box::new(source),
             })?;
-    let (kind, max) = if raw.schema == LAYOUT_SCHEMA {
+    check(raw.id, &raw.schema, raw.version, origin)
+}
+
+pub(crate) fn check(
+    id: DocId,
+    schema: &str,
+    version: u32,
+    origin: &SourceUri,
+) -> Result<Envelope, UiDocError> {
+    const LAYOUT_SCHEMA: &str = "kithara.layout";
+    const MODULE_SCHEMA: &str = "kithara.module";
+    const PACKAGE_SCHEMA: &str = "kithara.package";
+    const SKIN_SCHEMA: &str = "kithara.skin";
+    const TEXT_SCHEMA: &str = "kithara.text";
+
+    let (kind, max) = if schema == LAYOUT_SCHEMA {
         (DocKind::Layout, LAYOUT_VERSION)
-    } else if raw.schema == MODULE_SCHEMA {
+    } else if schema == MODULE_SCHEMA {
         (DocKind::Module, MODULE_VERSION)
-    } else if raw.schema == PACKAGE_SCHEMA {
+    } else if schema == PACKAGE_SCHEMA {
         (DocKind::Package, PACKAGE_VERSION)
-    } else if raw.schema == SKIN_SCHEMA {
+    } else if schema == SKIN_SCHEMA {
         (DocKind::Skin, SKIN_VERSION)
-    } else if raw.schema == TEXT_SCHEMA {
+    } else if schema == TEXT_SCHEMA {
         (DocKind::Text, TEXT_VERSION)
     } else {
         return Err(UiDocError::UnknownSchema {
             origin: origin.clone(),
-            schema: raw.schema,
+            schema: schema.to_owned(),
         });
     };
-    if raw.version == 0 || raw.version > max {
+    if version == 0 || version > max {
         return Err(UiDocError::UnsupportedVersion {
             max,
             origin: origin.clone(),
-            schema: raw.schema,
-            version: raw.version,
+            schema: schema.to_owned(),
+            version,
         });
     }
-    Ok(Envelope {
-        kind,
-        version: raw.version,
-        id: raw.id,
-    })
+    Ok(Envelope { id, kind, version })
 }

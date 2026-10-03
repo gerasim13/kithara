@@ -3,7 +3,8 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, kithara_config::Config)]
+#[config(builder(none), fields(nested))]
 pub(crate) struct StyleConfig {
     pub(crate) thresholds: ThresholdsConfig,
 }
@@ -16,8 +17,9 @@ impl StyleConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(nested))]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) comment_hygiene: CommentHygieneConfig,
@@ -41,8 +43,9 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) trait_item_order: TraitItemOrderConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct QualifiedPathDepthConfig {
     #[serde(default = "default_qualified_path_excludes")]
     pub(crate) exclude_paths: Vec<String>,
@@ -101,8 +104,9 @@ const fn default_max_segments() -> usize {
     2
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct StructFieldOrderConfig {
     /// Outer-attribute names that exempt a struct from ordering checks.
     /// `repr` covers `#[repr(C)]`, `#[repr(packed)]`, etc., where field order
@@ -146,8 +150,9 @@ fn default_exempt_derives() -> Vec<String> {
     vec!["uniffi::Record".to_owned()]
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct TraitItemOrderConfig {
     /// Where to apply the rule: any combination of `trait` / `impl_inherent`
     /// / `impl_trait`. Defaults cover both kinds of `impl` so methods stay
@@ -193,8 +198,9 @@ fn default_priority_fn_names() -> Vec<String> {
     ["new"].iter().map(|s| (*s).to_string()).collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct StructInitOrderConfig {
     /// Whether shorthand fields (`Foo { x, y, .. }`) must precede explicit
     /// fields (`Foo { z: expr }`).
@@ -225,8 +231,9 @@ const fn default_max_fix_passes() -> usize {
     8
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct CommentHygieneConfig {
     /// Prefixes that keep an inline `//` comment. These are machine and
     /// language markup, not prose: a tool directive, or the safety note the
@@ -318,8 +325,9 @@ fn default_prose_markers() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DocSizeConfig {
     /// Documents excluded from the size limits entirely.
     #[serde(default)]
@@ -330,8 +338,9 @@ pub(crate) struct DocSizeConfig {
 }
 
 /// Documented identifiers that no longer exist in the workspace sources.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DocStalenessConfig {
     /// Backticked terms that are prose or external names, not workspace code.
     #[serde(default)]
@@ -344,8 +353,9 @@ pub(crate) struct DocStalenessConfig {
     pub(crate) include_globs: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DocSizeLimit {
     /// Documents this rule applies to.
     pub(crate) globs: Vec<String>,
@@ -356,8 +366,9 @@ pub(crate) struct DocSizeLimit {
     pub(crate) warn: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct NonEnglishTextConfig {
     /// Workspace-relative glob patterns that opt paths out of the tracked text
     /// scan. Binary payload directories and local-only planning docs live here
@@ -388,8 +399,9 @@ const fn default_excerpt_chars() -> usize {
 }
 
 /// The one shape every crate README follows.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct ReadmeShapeConfig {
     /// Documents excluded from the shape contract entirely.
     #[serde(default)]
@@ -429,8 +441,9 @@ fn default_readme_sections() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
 pub(crate) struct DeadDocRefsConfig {
     /// Workspace-relative referenced target globs allowed to be local-only.
     #[serde(default)]

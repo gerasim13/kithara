@@ -14,13 +14,14 @@ mod consts {
 
 /// Sizes of one channel, fixed when it is built.
 #[derive(Clone, Copy, Debug, Config)]
+#[config(fields(value))]
 #[non_exhaustive]
 pub struct ChannelConfig {
     /// Batches in flight at once: sent and not yet answered by a receipt.
-    #[config(value, builder(default = consts::CAPACITY))]
+    #[config(builder(default = consts::CAPACITY))]
     pub(crate) capacity: NonZeroUsize,
     /// Targets whose time batches shift; every target index is below it.
-    #[config(value, builder(default))]
+    #[config(builder(default))]
     pub(crate) targets: usize,
 }
 

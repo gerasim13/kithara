@@ -42,9 +42,23 @@ pub(crate) enum TableCell {
     Empty,
     Number(u8),
     Text(String),
+    Badges(Vec<BadgeLetter>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BadgeLetter {
+    pub(crate) label: String,
+    pub(crate) active: bool,
 }
 
 impl TableCell {
+    pub(crate) fn badges(&self) -> &[BadgeLetter] {
+        match self {
+            Self::Badges(letters) => letters,
+            Self::Empty | Self::Number(_) | Self::Text(_) => &[],
+        }
+    }
+
     pub(crate) fn number(&self) -> Option<u8> {
         let Self::Number(value) = self else {
             return None;
@@ -55,7 +69,7 @@ impl TableCell {
     pub(crate) fn text(&self) -> Option<&str> {
         match self {
             Self::Text(value) => Some(value),
-            Self::Empty | Self::Number(_) => None,
+            Self::Empty | Self::Number(_) | Self::Badges(_) => None,
         }
     }
 }

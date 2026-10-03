@@ -4,7 +4,7 @@ use crate::{
     error::UiDocError,
     ids::SourceUri,
     module::{ControlNode, ModuleDoc, parse_module},
-    source::{Limits, LoadedSource, SourceResolver},
+    source::{Limits, LoadedSource, ModuleSource, SourceResolver},
     validate,
 };
 
@@ -44,7 +44,7 @@ fn load_rec(
     stack: &mut Vec<SourceUri>,
     depth: usize,
 ) -> Result<SourceUri, UiDocError> {
-    let loaded = load_source(resolver, base, rel, limits)?;
+    let loaded = resolver.module(base, rel)?;
     if stack.contains(&loaded.uri) {
         let mut chain = stack.clone();
         chain.push(loaded.uri);
@@ -60,7 +60,22 @@ fn load_rec(
     if set.defs.contains_key(&loaded.uri) {
         return Ok(loaded.uri);
     }
-    let doc = parse_module(&loaded.text, &loaded.uri)?;
+    let doc = match loaded.source {
+        ModuleSource::Text(text) => {
+            if text.len() > limits.max_bytes {
+                return Err(UiDocError::TooLarge {
+                    bytes: text.len(),
+                    origin: loaded.uri,
+                    max: limits.max_bytes,
+                });
+            }
+            parse_module(&text, &loaded.uri)?
+        }
+        ModuleSource::Document(doc) => {
+            doc.check(&loaded.uri)?;
+            *doc
+        }
+    };
     validate::check_module_id(&doc, &loaded.uri)?;
     validate::check_module_node_ids(&doc, &loaded.uri)?;
     stack.push(loaded.uri.clone());
@@ -210,6 +225,93 @@ mod tests {
 
     fn module(id: &str, body: &str) -> String {
         format!(r#"(schema: "kithara.module", version: 1, id: "{id}", root: {body})"#)
+    }
+
+    #[kithara::test]
+    fn ready_modules_share_envelope_validation_with_text() {
+        for (schema, version) in [
+            ("unknown", 1),
+            ("kithara.module", 0),
+            ("kithara.module", 2),
+            ("kithara.layout", 1),
+        ] {
+            let origin = SourceUri("ready.kmodule.ron".to_owned());
+            let mut doc = ModuleDoc::new(
+                crate::ids::DocId("ready".to_owned()),
+                ControlNode::Spacer {
+                    id: crate::ids::NodeId("body".to_owned()),
+                    size: None,
+                    read: None,
+                    write: None,
+                },
+            );
+            doc.schema = schema.to_owned();
+            doc.version = version;
+            let text = format!(
+                r#"(schema: "{schema}", version: {version}, id: "ready", root: Spacer(id: "body"))"#
+            );
+            let expected = parse_module(&text, &origin).unwrap_err();
+            let mut resolver = MemResolver::default();
+            resolver.insert_module(&origin.0, doc);
+            let actual =
+                load_module_graph(&resolver, None, &origin.0, &Limits::default()).unwrap_err();
+            assert_eq!(
+                std::mem::discriminant(&actual),
+                std::mem::discriminant(&expected)
+            );
+            assert_eq!(actual.to_string(), expected.to_string());
+        }
+    }
+
+    #[kithara::test]
+    fn ready_modules_follow_relative_includes_through_package_overlays() {
+        let mut ready = MemResolver::default();
+        ready.insert_module(
+            "sub/a.kmodule.ron",
+            ModuleDoc::new(
+                crate::ids::DocId("a".to_owned()),
+                ControlNode::Include {
+                    id: crate::ids::NodeId("b".to_owned()),
+                    source: "b.kmodule.ron".to_owned(),
+                    with: BTreeMap::new(),
+                },
+            ),
+        );
+        let mut text = MemResolver::default();
+        text.insert("sub/b.kmodule.ron", &module("b", r#"Spacer(id: "body")"#));
+        let resolver = crate::source::OverlayResolver::new(ready, text);
+        let (_, set) =
+            load_module_graph(&resolver, None, "sub/a.kmodule.ron", &Limits::default()).unwrap();
+        assert_eq!(set.defs.len(), 2);
+        assert!(
+            set.defs
+                .contains_key(&SourceUri("sub/b.kmodule.ron".to_owned()))
+        );
+    }
+
+    #[kithara::test]
+    fn ready_modules_share_include_cycle_detection_with_text() {
+        let mut resolver = MemResolver::default();
+        resolver.insert_module(
+            "a.kmodule.ron",
+            ModuleDoc::new(
+                crate::ids::DocId("a".to_owned()),
+                ControlNode::Include {
+                    id: crate::ids::NodeId("b".to_owned()),
+                    source: "b.kmodule.ron".to_owned(),
+                    with: BTreeMap::new(),
+                },
+            ),
+        );
+        resolver.insert(
+            "b.kmodule.ron",
+            &module("b", r#"Include(id: "a", source: "a.kmodule.ron")"#),
+        );
+        let error =
+            load_module_graph(&resolver, None, "a.kmodule.ron", &Limits::default()).unwrap_err();
+        assert!(
+            matches!(error, UiDocError::IncludeCycle { chain } if chain == ["a.kmodule.ron", "b.kmodule.ron", "a.kmodule.ron"].map(|uri| SourceUri(uri.to_owned())))
+        );
     }
 
     #[kithara::test]

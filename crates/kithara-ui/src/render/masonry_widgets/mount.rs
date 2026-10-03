@@ -6,6 +6,7 @@ use masonry::{
 };
 use num_traits::cast::AsPrimitive;
 
+use super::built::StageSize;
 use crate::{
     atoms::{button::declared_width, tab::TabLarge},
     draw::{DrawListBuilder, Rect as DrawRect},
@@ -254,7 +255,7 @@ pub(in crate::render) enum NodeLayout {
     Measured(Measured),
     Scroll(Viewport),
     Stack,
-    Stage,
+    Stage(Rc<StageSize>),
 }
 
 impl NodeLayout {
@@ -274,7 +275,7 @@ impl NodeLayout {
     pub(in crate::render) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
         match self {
             Self::Scroll(viewport) => viewport.indicate(bounds, list),
-            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => {}
+            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage(_) => {}
         }
     }
 
@@ -297,14 +298,16 @@ impl NodeLayout {
             Self::Measured(plan) => measured(plan, ctx, children, limits, declared),
             Self::Scroll(viewport) => viewport.layout(ctx, children, limits, declared),
             Self::Stack => stack(ctx, children, limits, declared),
-            Self::Stage => stage(ctx, children, limits, declared),
+            Self::Stage(size) => stage(ctx, children, size, limits),
         }
     }
 
     pub(in crate::render) const fn leaf(&mut self) -> Option<&mut Leaf> {
         match self {
             Self::Leaf(leaf) => Some(leaf),
-            Self::Flex(_) | Self::Measured(_) | Self::Scroll(_) | Self::Stack | Self::Stage => None,
+            Self::Flex(_) | Self::Measured(_) | Self::Scroll(_) | Self::Stack | Self::Stage(_) => {
+                None
+            }
         }
     }
 
@@ -317,37 +320,37 @@ impl NodeLayout {
     pub(in crate::render) fn wheel(&mut self, input: Input<'_>) -> bool {
         match self {
             Self::Scroll(viewport) => viewport.wheel(input),
-            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => false,
+            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage(_) => {
+                false
+            }
         }
     }
 }
 
-/// A stage sizes itself off its first child, like a stack, and then offers
-/// every child that box **loosely**: a child keeps whatever size it declared
-/// and sits at the box's origin, which is where an object then offsets it from.
-///
-/// This is the whole difference from `stack`, and it is not a detail. A stack
-/// hands its children a tight box because its one child is a popover or a
-/// viewport that must fill it. Handing a stage's children the same tight box
-/// stretches every one of them to the full width and throws away the placement
-/// the document asked for — measured on the gallery's motion page, where the
-/// immediate host drew three sized children and the retained host drew one
-/// stretched chip.
 fn stage(
     ctx: &mut LayoutCtx<'_>,
     children: &mut [WidgetPod<Node>],
+    stage: &StageSize,
     limits: Limits,
-    declared: Size<Length>,
 ) -> Size {
+    let declared = stage.now();
+    for (child, shown) in children.iter_mut().zip(stage.shown()) {
+        ctx.set_stashed(child, !shown);
+    }
     let inner = normalized(limits.width(declared.width).height(declared.height).loose());
-    let intrinsic = children.first_mut().map_or(Size::ZERO, |first| {
-        Node::set_child_limits(ctx, first, inner);
-        let size = ctx.run_layout(first, &box_constraints(inner));
-        Size::new(size.width.as_(), size.height.as_())
-    });
+    let intrinsic = children
+        .iter_mut()
+        .zip(stage.shown())
+        .find_map(|(child, shown)| shown.then_some(child))
+        .map_or(Size::ZERO, |first| {
+            Node::set_child_limits(ctx, first, inner);
+            let size = ctx.run_layout(first, &box_constraints(inner));
+            Size::new(size.width.as_(), size.height.as_())
+        });
     let size = limits.resolve(declared.width, declared.height, intrinsic);
     let loose = Limits::new(Size::ZERO, size);
-    for child in children {
+    let shown = children.iter_mut().zip(stage.shown());
+    for child in shown.filter_map(|(child, shown)| shown.then_some(child)) {
         Node::set_child_limits(ctx, child, loose);
         ctx.run_layout(child, &box_constraints(loose));
         let at = Node::child_spot(ctx, child).map_or(Point::ORIGIN, |at| {
@@ -437,7 +440,7 @@ pub(crate) fn control_declared(
     let intrinsic = match spec {
         ControlSpec::Button { style, .. } => Size::new(declared_width(*style, skin), Length::Fill),
         ControlSpec::TabLarge { .. } => TabLarge::declared_length(skin.tab_large.height),
-        ControlSpec::Text { .. } => Size::new(Length::Shrink, Length::Fill),
+        ControlSpec::Text { .. } => Size::new(Length::Shrink, Length::Shrink),
         ControlSpec::Spacer | ControlSpec::WindowDrag | ControlSpec::TitleBar { .. } => {
             Size::new(Length::Fill, Length::Fill)
         }

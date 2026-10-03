@@ -16,8 +16,11 @@ use kithara_test_utils::kithara;
 
 use super::{
     cache::DeckLayout,
-    compile::{AppUi, compile_ui},
-    package::Package,
+    compile::{AppUi, compile_package, compile_ui},
+};
+use crate::gui::{
+    library::StartupSource,
+    test_fixture::{self, Probe},
 };
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
@@ -27,7 +30,8 @@ fn each_expanded(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
     match node {
         ExpandedNode::Row { children, .. }
         | ExpandedNode::Column { children, .. }
-        | ExpandedNode::Slot { children, .. } => {
+        | ExpandedNode::Slot { children, .. }
+        | ExpandedNode::Stage { children, .. } => {
             for child in children {
                 each_expanded(child, visit);
             }
@@ -1189,7 +1193,8 @@ fn guarded_by<'a>(ui: &'a CompiledUi, key: &str) -> Vec<&'a str> {
             }
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
+            | ExpandedNode::Slot { children, .. }
+            | ExpandedNode::Stage { children, .. } => {
                 for child in children {
                     walk(child, ui, key, guarded, out);
                 }
@@ -1342,6 +1347,19 @@ fn every_air_control_hides_with_the_packager() {
                 "{layout:?}: `{path}` must hide with the packager, guarded: {guarded:?}",
             );
         }
+    }
+}
+
+#[kithara::test]
+fn the_add_folder_row_hides_without_a_folder_picker() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let guarded = guarded_by(&ui, "library.add_folder.hidden");
+
+        assert!(
+            guarded.contains(&"bar/menu/add-folder"),
+            "{layout:?}: Add folder must hide with the folder picker, guarded: {guarded:?}",
+        );
     }
 }
 
@@ -1549,11 +1567,52 @@ fn a_quality_choice_shuts_the_menu_it_was_picked_from() {
 #[kithara::test]
 fn the_shipped_package_compiles_from_disk() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
-    let package = Package::load(Some(&root)).expect("the shipped package must load from disk");
+    let package =
+        test_fixture::package(Some(&root)).expect("the shipped package must load from disk");
     drop(
         AppUi::new(package, &UiConfig::default())
             .expect("the shipped package must compile from disk"),
     );
+}
+
+#[kithara::test]
+fn the_pages_module_lists_exactly_the_registered_sources() {
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
+    for root in [None, Some(shipped.as_path())] {
+        for with_probe in [true, false] {
+            let mut registered = vec![StartupSource::registered(Vec::new())];
+            if with_probe {
+                registered.push(Probe::registered("menu.module.library").0);
+            }
+            let (package, _) = test_fixture::mount(root, registered).expect("the sources mount");
+            for layout in LAYOUTS {
+                let ui = compile_package(&package, layout).expect("the mounted pages compile");
+                let controls = controls(&ui);
+                for (source, registered) in [("startup", true), (Probe::ID, with_probe)] {
+                    let scoped = format!("@source={source}");
+                    let hidden = format!("library.page.hidden{scoped}");
+                    let guarded = guarded_by(&ui, &hidden);
+                    let bound: Vec<&str> = controls
+                        .iter()
+                        .filter(|(_, keys)| keys.iter().any(|key| key.ends_with(&scoped)))
+                        .map(|(path, _)| *path)
+                        .collect();
+                    if registered {
+                        assert!(
+                            !bound.is_empty() && bound.iter().all(|path| guarded.contains(path)),
+                            "{root:?} {layout:?}: `{source}` must draw its page under `{hidden}`, \
+                             got {bound:?} against {guarded:?}",
+                        );
+                    } else {
+                        assert!(
+                            bound.is_empty() && guarded.is_empty(),
+                            "{root:?} {layout:?}: unregistered `{source}` is bound at {bound:?}",
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A refused screen names each required write no control on it declares.
@@ -1586,7 +1645,7 @@ fn a_write_the_screen_does_not_declare_is_named() {
 #[kithara::test]
 fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui-that-was-never-laid-out");
-    let package = Package::load(Some(&root)).expect("a package nobody laid out must load");
+    let package = test_fixture::package(Some(&root)).expect("a package nobody laid out must load");
     drop(
         AppUi::new(package, &UiConfig::default())
             .expect("a package nobody laid out must leave the build drawing"),
@@ -1615,7 +1674,8 @@ fn the_skin_the_manifest_names_is_the_one_the_pages_wear() {
 )"#,
     )
     .expect("the manifest must be written");
-    let package = Package::load(Some(root.path())).expect("a package naming a skin must load");
+    let package =
+        test_fixture::package(Some(root.path())).expect("a package naming a skin must load");
     assert_eq!(
         package.skin().document().id.0,
         "kithara-neon",
@@ -1642,7 +1702,8 @@ fn a_package_naming_no_skin_wears_the_built_in_one() {
 )"#,
     )
     .expect("the manifest must be written");
-    let package = Package::load(Some(root.path())).expect("a package naming no skin must load");
+    let package =
+        test_fixture::package(Some(root.path())).expect("a package naming no skin must load");
     assert_eq!(
         package.skin().document().id,
         builtin::skin().document().id,
@@ -1668,7 +1729,7 @@ fn a_manifest_on_disk_answers_before_the_one_this_build_embeds() {
 )"#,
     )
     .expect("the manifest must be written");
-    let Err(error) = Package::load(Some(root.path())) else {
+    let Err(error) = test_fixture::package(Some(root.path())) else {
         panic!("the disk manifest names one role only, so this must not compile");
     };
     assert!(
@@ -1703,7 +1764,7 @@ fn without_write(text: &str, id: &str) -> String {
 }
 
 fn compiled_from(root: &Path) -> Result<AppUi, UiDocError> {
-    let package = Package::load(Some(root)).expect("the edited package must load");
+    let package = test_fixture::package(Some(root)).expect("the edited package must load");
     AppUi::new(package, &UiConfig::default())
 }
 
@@ -1787,7 +1848,6 @@ const fn publishes(spec: &ControlSpec) -> bool {
             | ControlSpec::Range
             | ControlSpec::Segmented { .. }
             | ControlSpec::ContextBar { .. }
-            | ControlSpec::Table { .. }
             | ControlSpec::Tree { .. }
             | ControlSpec::Select { .. }
             | ControlSpec::PresetSelector
@@ -1854,15 +1914,18 @@ mod answered {
                 .into_iter()
                 .map(|(instance, _)| format!("{instance}/drop")),
         );
-        each_node(ui, &mut |node| {
-            if let ExpandedNode::Control {
+        each_node(ui, &mut |node| match node {
+            ExpandedNode::Control {
                 path,
                 spec: ControlSpec::Wave { .. },
                 ..
-            } = node
-            {
-                paths.push(format!("{}/zoom", ui.resolve(*path)));
-            }
+            } => paths.push(format!("{}/zoom", ui.resolve(*path))),
+            ExpandedNode::Control {
+                path,
+                spec: ControlSpec::Tree { .. },
+                ..
+            } => paths.push(format!("{}/toggle", ui.resolve(*path))),
+            _ => {}
         });
         let actions = [
             ControlAction::Activate,
@@ -1918,6 +1981,15 @@ mod answered {
         out
     }
 
+    fn drawn_tree(state: &Kithara) -> Vec<(u8, String, Option<bool>, bool)> {
+        state
+            .library
+            .tree()
+            .into_iter()
+            .map(|row| (row.depth, row.label.to_owned(), row.expanded, row.selected))
+            .collect()
+    }
+
     fn zoom(state: &mut Kithara, deck: Option<usize>) -> Option<f64> {
         state.ui.cache.deck_mut(deck?)?.view.zoom
     }
@@ -1952,6 +2024,16 @@ mod answered {
         let zoomed = zoom(state, deck);
         let module = scope.get("module");
         let shown = module.map(|module| state.ui.cache.modules.is_on(module));
+        // Row 1 is selected at mount and opens nothing; row 2 does both.
+        let value = match id {
+            "library.select" | "library.toggle" => WriteValue::Index(2),
+            _ => value,
+        };
+        let tree = drawn_tree(state);
+        let row = match value {
+            WriteValue::Index(row) => Some(row),
+            _ => None,
+        };
 
         let answer = translate(
             state,
@@ -1976,11 +2058,31 @@ mod answered {
                 Some(Message::Window(WindowCommand::ToggleFullScreen))
             ),
             "broadcast.toggle" => matches!(answer, Some(Message::BroadcastToggle)),
+            "ui.library.add_folder" => matches!(answer, Some(Message::AddMusicFolder)),
             "mix.crossfader" => matches!(answer, Some(Message::Mix(MixCmd::Crossfader(_)))),
             "mixer.trim" => {
                 matches!(answer, Some(Message::Mix(MixCmd::Trim(DeckId(index), _))) if Some(index) == deck)
             }
-            "library.select_track" => matches!(answer, Some(Message::SelectCatalogTrack(_))),
+            "library.select" => {
+                answer.is_none()
+                    && state.library.tree().get(2).is_some_and(|row| row.selected)
+                    && drawn_tree(state) != tree
+            }
+            "library.toggle" => answer.is_none() && drawn_tree(state) != tree,
+            "source.select" => {
+                let Some(row) = row else {
+                    return false;
+                };
+                answer.is_none()
+                    && state
+                        .library
+                        .sources()
+                        .enumerate()
+                        .find(|(_, source)| Some(source.id()) == scope.get("source"))
+                        .is_some_and(|(at, source)| {
+                            state.library.selected_row(at) == source.row_key(row)
+                        })
+            }
             "deck.eq.mode" => matches!(answer, Some(Message::SetEqMode(_))),
             _ => {
                 let Some(Message::Deck(DeckId(index), msg)) = answer else {
@@ -2024,6 +2126,8 @@ mod answered {
             "deck.tempo.reset@deck=a",
             "deck.view.zoom@deck=a",
             "deck.queue.load@deck=b",
+            "library.select",
+            "library.toggle",
         ] {
             assert!(declared.contains_key(key), "the studio declares `{key}`");
         }
@@ -2037,5 +2141,38 @@ mod answered {
             unanswered.is_empty(),
             "the app leaves these declared writes unanswered: {unanswered:?}"
         );
+    }
+}
+
+#[kithara::test]
+fn a_source_supplies_its_own_control_tree() {
+    use ::kithara::ui::{ids::NodeId, module::ControlNode};
+
+    use crate::gui::library::{Registration, SourcePage};
+
+    let source = Registration::new(
+        SourcePage {
+            id: Probe::ID,
+            page: ControlNode::Spacer {
+                id: NodeId("custom-page".to_owned()),
+                size: None,
+                read: None,
+                write: None,
+            },
+        },
+        |text| Probe::registered("menu.module.library").0.build(text),
+    );
+    let (package, _) =
+        test_fixture::mount(None, vec![source]).expect("a source mounts without a page template");
+    for layout in LAYOUTS {
+        let ui = compile_package(&package, layout).expect("the custom source page compiles");
+        let mut found = false;
+        each_node(&ui, &mut |node| {
+            if let ExpandedNode::Control { path, spec, .. } = node {
+                found |= ui.resolve(*path).ends_with("custom-page")
+                    && matches!(spec, ControlSpec::Spacer);
+            }
+        });
+        assert!(found, "the source's node must survive package compilation");
     }
 }

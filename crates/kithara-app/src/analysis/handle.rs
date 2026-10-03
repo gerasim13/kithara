@@ -1,8 +1,11 @@
-use std::num::NonZeroU32;
+use std::{collections::BTreeMap, num::NonZeroU32};
 
 use kithara::{
     events::TrackId,
-    platform::tokio::sync::{mpsc, oneshot, watch},
+    platform::{
+        sync::Arc,
+        tokio::sync::{mpsc, oneshot, watch},
+    },
 };
 use tracing::debug;
 
@@ -27,14 +30,21 @@ pub(crate) enum Request {
 #[derive(Clone)]
 pub(crate) struct AnalysisHandle {
     tx: mpsc::Sender<Request>,
+    bpms: watch::Receiver<Arc<BTreeMap<String, f64>>>,
 }
 
 impl AnalysisHandle {
     const QUEUE_DEPTH: usize = 32;
 
-    pub(crate) fn channel() -> (Self, mpsc::Receiver<Request>) {
+    pub(crate) fn channel(
+        bpms: watch::Receiver<Arc<BTreeMap<String, f64>>>,
+    ) -> (Self, mpsc::Receiver<Request>) {
         let (tx, rx) = mpsc::channel(Self::QUEUE_DEPTH);
-        (Self { tx }, rx)
+        (Self { tx, bpms }, rx)
+    }
+
+    pub(crate) fn bpms(&self) -> watch::Ref<'_, Arc<BTreeMap<String, f64>>> {
+        self.bpms.borrow()
     }
 
     pub(crate) async fn subscribe(

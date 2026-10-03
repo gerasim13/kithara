@@ -25,7 +25,6 @@ use super::{
 use crate::{
     HlsEvent, HlsFailure,
     config::HlsConfig,
-    consts,
     handle::StreamPeer,
     peer::HlsPeer,
     playlist::{
@@ -33,7 +32,7 @@ use crate::{
         load_variant_playlists, resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts,
     },
     signal::SizeSignal,
-    variant::{HlsVariant, PlanConfig, PlanCtx},
+    variant::{HlsVariant, PlanCtx},
 };
 
 /// Marker type for HLS streaming.
@@ -66,6 +65,7 @@ where
     /// Builds a single readiness-gate handle shared by the off-RT `wait_range(_, None)` park and
     /// the late-bound audio-worker wake.
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        let config = Arc::new(config);
         let stream_scope = CancelScope::new(config.cancel.clone());
         let cancel = stream_scope.token();
 
@@ -130,11 +130,6 @@ where
             .prefetch_aes128_keys(&media_playlists)
             .await
             .map_err(SourceError::from)?;
-        let look_ahead_bytes = Some(
-            config
-                .look_ahead_bytes
-                .unwrap_or(consts::DEFAULT_LOOK_AHEAD_BYTES),
-        );
         let look_ahead_segments = effective_look_ahead_segments(&config);
 
         playhead.set_duration(playlist_state.track_duration());
@@ -142,18 +137,11 @@ where
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
-        let plan_config = PlanConfig {
-            look_ahead_bytes,
-            look_ahead_segments,
-            prefetch_budget: config.download_batch_size.max(1),
-            acquire_attempt_budget: config.acquire_attempt_budget,
-            size_probe_method: config.size_probe_method,
-        };
         let plan_ctx = PlanCtx {
-            config: plan_config,
+            config: Arc::clone(&config),
+            look_ahead_segments,
             bus: bus.clone(),
             scope: stream_peer.scope(),
-            headers: config.headers.clone(),
             seek_epoch: seek_obs.epoch(),
             signal: signal.clone(),
         };
@@ -180,7 +168,8 @@ where
                 signal,
                 cancel: cancel.clone(),
                 scope: stream_peer.scope(),
-                headers: config.headers.clone(),
+                config,
+                look_ahead_segments,
                 emit: Arc::clone(&emit),
             },
             playhead,
@@ -192,7 +181,7 @@ where
 
         let mut source = HlsSource::new(Arc::clone(&coord), emit, stream_scope);
 
-        hls_peer.activate(coord, evict_rx, plan_config);
+        hls_peer.activate(coord, evict_rx);
 
         source.set_peer_handle(stream_peer.peer_handle());
         source.set_hls_peer(hls_peer);
@@ -221,7 +210,6 @@ where
         stream_peer.peer_handle(),
         config.pools.clone(),
     );
-    playlist_cache.set_master_url(config.url.clone());
     playlist_cache.set_base_url(config.base_url.clone());
     playlist_cache.set_headers(config.headers.clone());
 

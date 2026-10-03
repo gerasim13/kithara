@@ -4,8 +4,8 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
@@ -16,99 +16,89 @@ use crate::{BroadcastError, BroadcastResult, consts};
 /// Audio, segmentation, retention, and origin settings for a live broadcast.
 ///
 /// [`BroadcastConfigPatch`] is what a configuration document may say about it.
-#[derive(Builder, Patch)]
+#[derive(Config, Patch)]
+#[config(fields(value))]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone)]
 pub struct BroadcastConfig<S> {
     /// Shared worker used to schedule the packager task.
-    #[builder(start_fn)]
-    #[patch(skip)]
+    #[config(skip = "runtime worker handle", builder(start_fn), patch(skip))]
     pub worker: Worker,
     /// Typed pool facade used for bounded packager scratch.
-    #[builder(start_fn)]
-    #[patch(skip)]
+    #[config(skip = "runtime pool handle", builder(start_fn), patch(skip))]
     pub pools: PoolRegion<S>,
     /// Codec emitted into HLS media segments. Not a document key:
     /// [`BroadcastConfig::validate`] admits one profile, so every value a
     /// document could name but the default is refused at startup.
-    #[builder(default = AudioCodec::AacLc)]
-    #[patch(skip)]
+    #[config(builder(default = AudioCodec::AacLc), patch(skip))]
     pub codec: AudioCodec,
     /// Container carried by HLS media segments. Not a document key for the
     /// same reason [`Self::codec`] is not.
-    #[builder(default = ContainerFormat::Adts)]
-    #[patch(skip)]
+    #[config(builder(default = ContainerFormat::Adts), patch(skip))]
     pub container: ContainerFormat,
     /// Dispatcher park duration when the broadcast has no work.
-    #[builder(default = Duration::from_millis(100))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_millis(100)), patch(humantime))]
     pub idle_timeout: Duration,
     /// Media duration a segment is cut at.
-    #[builder(default = Duration::from_secs(4))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_secs(4)), patch(humantime))]
     pub segment_target: Duration,
     /// Threshold for reporting a slow packager tick.
-    #[builder(default = Duration::from_millis(10))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_millis(10)), patch(humantime))]
     pub slow_tick_threshold: Duration,
     /// Maximum time a graceful stop waits for the bounded PCM tail.
-    #[builder(default = Duration::from_secs(10))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_secs(10)), patch(humantime))]
     pub stop_timeout: Duration,
     /// Dispatcher wait duration between deferred RT wakes.
-    #[builder(default = Duration::from_millis(2))]
-    #[patch(humantime)]
+    #[config(builder(default = Duration::from_millis(2)), patch(humantime))]
     pub wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
-    #[builder(default = consts::FAIRNESS_YIELD_INTERVAL)]
+    #[config(builder(default = consts::FAIRNESS_YIELD_INTERVAL))]
     pub fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive packager ticks in one dispatcher visit.
-    #[builder(default = NonZeroU32::MIN)]
+    #[config(builder(default = NonZeroU32::MIN))]
     pub task_burst: NonZeroU32,
     /// Maximum stereo PCM frames waiting between RT and the packager worker.
-    #[builder(default = consts::BUFFER_FRAMES)]
+    #[config(builder(default = consts::BUFFER_FRAMES))]
     pub buffer_frames: NonZeroUsize,
     /// Maximum tasks admitted to the broadcast dispatcher.
-    #[builder(default = NonZeroUsize::MIN)]
+    #[config(builder(default = NonZeroUsize::MIN))]
     pub dispatcher_capacity: NonZeroUsize,
     /// Maximum queued master-format generations waiting for the packager.
-    #[builder(default = consts::GENERATION_CAPACITY)]
+    #[config(builder(default = consts::GENERATION_CAPACITY))]
     pub generation_capacity: NonZeroUsize,
     /// Maximum compute jobs admitted for the packager task.
-    #[builder(default = NonZeroUsize::MIN)]
+    #[config(builder(default = NonZeroUsize::MIN))]
     pub max_compute_tasks: NonZeroUsize,
     /// Maximum stereo PCM frames packaged during one worker tick.
-    #[builder(default = consts::TICK_FRAMES)]
+    #[config(builder(default = consts::TICK_FRAMES))]
     pub tick_frames: NonZeroUsize,
     /// Optional cancellation parent for the broadcast lifetime.
-    #[patch(skip)]
+    #[config(skip = "composed into the broadcast cancel scope", patch(skip))]
     pub cancel: Option<CancelToken>,
     /// Packager task priority. Not a document key: `Priority` carries no
     /// `Deserialize`, and giving `kithara-worker` one for a knob nobody has
     /// asked to tune widens that crate's surface for nothing.
-    #[builder(default = Priority::new(0))]
-    #[patch(skip)]
+    #[config(builder(default = Priority::new(0)), patch(skip))]
     pub priority: Priority,
     /// Loopback on an ephemeral port.
-    #[builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
+    #[config(builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)))]
     pub bind: SocketAddr,
     /// Channel count of the mix.
-    #[builder(default = 2)]
+    #[config(builder(default = 2))]
     pub channels: u16,
     /// Sample rate of the mix. Not a document key: the packager overwrites it
     /// with the master format it measured, so a named value would not survive
     /// the first format change.
-    #[builder(default = 48_000)]
-    #[patch(skip)]
+    #[config(builder(default = 48_000), patch(skip))]
     pub sample_rate: u32,
     /// AAC-LC bit rate the encoder targets.
-    #[builder(default = 128_000)]
+    #[config(builder(default = 128_000))]
     pub bit_rate: u64,
     /// Segments kept fetchable past the playlist window.
-    #[builder(default = 3)]
+    #[config(builder(default = 3))]
     pub grace: usize,
     /// Segments a client sees in the playlist.
-    #[builder(default = 6)]
+    #[config(builder(default = 6))]
     pub window: usize,
 }
 

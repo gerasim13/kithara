@@ -351,7 +351,7 @@ fn cell<'a>(row: &'a TableRow<'a>, id: &str) -> &'a str {
         .iter()
         .find(|cell| cell.id() == id)
         .and_then(|cell| match cell.value() {
-            TableValue::Text(text) if !text.is_empty() => Some(text),
+            TableValue::Text(text) if !text.is_empty() => Some(text.as_ref()),
             _ => None,
         })
         .unwrap_or("—")

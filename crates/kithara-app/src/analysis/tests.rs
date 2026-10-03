@@ -93,7 +93,10 @@ fn take_over_run(
 #[kithara::test(native, tokio)]
 async fn a_settled_hit_with_a_gap_is_served_without_a_pass(tone_mp3: String) {
     let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
+    let config = app_config(&cancel, memory_store());
+    let (mut service, handle) =
+        AnalysisService::new(&config, persistence(&cancel, test_pools()), cancel.child());
+    let owner = &mut service.owner;
     let (host, queue) = queue_off().await;
     let (track_id, source) = track(&host, 1, &tone_mp3).await;
     let settled = snapshot(
@@ -108,11 +111,42 @@ async fn a_settled_hit_with_a_gap_is_served_without_a_pass(tone_mp3: String) {
         .cache
         .put(target_of(&owner, &source), progress(settled));
 
-    let rx = owner.subscribe(queue, track_id, source, axis());
+    let rx = owner.subscribe(queue.clone(), track_id, source, axis());
 
     assert_eq!(revision_held(&rx), Some(3), "the hit is served as final");
+    assert_eq!(
+        owner
+            .bpms()
+            .get(&crate::catalog::canonical_source(&tone_mp3)),
+        Some(&128.0)
+    );
+    drop(rx);
+    owner.entries[0].release();
+    assert_eq!(
+        owner
+            .bpms()
+            .get(&crate::catalog::canonical_source(&tone_mp3)),
+        Some(&128.0)
+    );
     assert!(owner.active.is_none(), "nothing is left to analyse");
     assert!(owner.pending.is_empty());
+    ::kithara::platform::tokio::task::spawn(service.run());
+    handle.warm(queue, vec![track_id], axis()).await;
+    for _ in 0..2_000 {
+        if handle
+            .bpms()
+            .contains_key(&crate::catalog::canonical_source(&tone_mp3))
+        {
+            break;
+        }
+        time::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(
+        handle
+            .bpms()
+            .get(&crate::catalog::canonical_source(&tone_mp3)),
+        Some(&128.0)
+    );
     cancel.cancel();
     host.close().await;
 }

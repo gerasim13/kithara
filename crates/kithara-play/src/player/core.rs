@@ -80,6 +80,8 @@ pub(crate) struct PlayerCore<S> {
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
 #[doc(hidden)]
+#[derive(kithara_config::ConfigOwner)]
+#[config_owner(PlayerConfig<S>, core.config)]
 pub struct PlayerRuntime<S> {
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore<S>,

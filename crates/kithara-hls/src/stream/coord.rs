@@ -24,7 +24,9 @@ use kithara_test_utils::kithara;
 
 use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
-    HlsEvent, consts,
+    HlsEvent,
+    config::HlsConfig,
+    consts,
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx},
 };
@@ -40,7 +42,8 @@ where
     pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
     pub(crate) scope: AssetScope<S>,
     pub(crate) cancel: CancelToken,
-    pub(crate) headers: Option<kithara_net::Headers>,
+    pub(crate) config: Arc<HlsConfig<S>>,
+    pub(crate) look_ahead_segments: Option<usize>,
     pub(crate) signal: SizeSignal,
 }
 
@@ -55,7 +58,8 @@ where
     pub(crate) variants: Arc<[Arc<HlsVariant<S>>]>,
     pub(crate) scope: AssetScope<S>,
     pub(crate) cancel: CancelToken,
-    pub(crate) headers: Option<kithara_net::Headers>,
+    pub(crate) config: Arc<HlsConfig<S>>,
+    pub(crate) look_ahead_segments: Option<usize>,
     pub(super) abr_publisher: AbrPublisher,
     /// One authoritative active session and at most one exact incoming session.
     pub(super) sessions: SessionSlots<S>,
@@ -134,7 +138,8 @@ where
             abr_seek_lock: Mutex::new(false),
             cancel: env.cancel,
             scope: env.scope,
-            headers: env.headers,
+            config: env.config,
+            look_ahead_segments: env.look_ahead_segments,
             emit: env.emit,
             sessions: SessionSlots::new(active_session),
             signal: env.signal,
@@ -599,9 +604,10 @@ pub(super) mod tests {
 
     use super::*;
     use crate::{
+        config::HlsConfig,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
-        variant::{PlanConfig, PlanCtx, VariantParts},
+        variant::{PlanCtx, VariantParts},
     };
 
     type TestHlsCoord = HlsCoord<crate::test_pools::TestPools>;
@@ -673,9 +679,15 @@ pub(super) mod tests {
                 })
                 .expect("coord asset scope"),
             seek_epoch: 0,
-            headers: None,
+            look_ahead_segments: None,
             signal: signal.clone(),
-            config: PlanConfig::builder().prefetch_budget(1).build(),
+            config: Arc::new(
+                HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
+                    .store((*store).clone())
+                    .pools(crate::test_pools::pools())
+                    .download_batch_size(1)
+                    .build(),
+            ),
         };
         let v0_urls: Vec<url::Url> = (0..v0_segments)
             .map(|idx| {
@@ -793,7 +805,8 @@ pub(super) mod tests {
                 cancel,
                 signal,
                 scope: ctx.scope.clone(),
-                headers: None,
+                config: Arc::clone(&ctx.config),
+                look_ahead_segments: ctx.look_ahead_segments,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
             },
             Arc::new(PlayheadState::new()),

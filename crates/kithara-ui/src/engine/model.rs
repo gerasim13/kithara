@@ -63,7 +63,7 @@ pub(super) struct ScrollItems {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Activation,
     Crossing,
     Segmented,
@@ -160,12 +160,12 @@ impl Descriptor {
         Self::Activation { path }
     }
 
-    pub(crate) fn column_divider(path: String, value: f32, minimum: f32) -> Self {
+    pub(crate) fn column_divider(path: String, value: f32, track: Track) -> Self {
         Self::ColumnDivider {
             path,
             current: value,
             scalar: Scalar::builder()
-                .track(Track::HorizontalPixels { minimum, value })
+                .track(track)
                 .hover(Hover::new(CursorShape::ResizeH))
                 .build(),
         }

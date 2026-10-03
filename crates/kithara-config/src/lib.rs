@@ -3,18 +3,22 @@
 pub use bon;
 /// `#[derive(Config)]` generates the builder, accessors, `Default`, `Debug`,
 /// the owned snapshot and explicitly selected runtime updates of a struct,
-/// every facet declared through `#[config(...)]`. `construction` classifies a
-/// consumed builder input without generating a retained snapshot.
+/// every facet declared through `#[config(...)]`. `construction` treats unmarked
+/// fields as consumed builder inputs and generates no retained snapshot. On a struct
+/// `fields(...)` supplies field defaults using the same grammar as a field
+/// declaration, for example `fields(value, get(copy), builder(default))`.
+/// `get(ref)` borrows the retained field; `get(skip)` disables an inherited
+/// getter. Explicit field facets override defaults; groups replace whole groups.
 ///
 /// ```compile_fail
 /// #[derive(kithara_config::Config)]
 /// struct Unclassified { value: u32 }
 /// ```
 pub use kithara_derive::Config;
-pub use kithara_derive::Patch;
+pub use kithara_derive::{ConfigOwner, Patch};
 
 mod config;
-pub use config::Config;
+pub use config::{Config, ConfigOwner, ConfigOwnerMut, UpdatableConfig};
 
 #[doc(hidden)]
 pub mod __private;

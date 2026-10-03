@@ -1,10 +1,9 @@
 use kithara::{analysis::Waveform, ui::render::WaveBucket};
 use num_traits::cast::ToPrimitive;
 
-use super::{modules::Modules, scope::deck_letter, window::WindowState};
+use super::{modules::Modules, window::WindowState};
 use crate::{
     analysis::{TrackArtifacts, WaveformId},
-    catalog::{Catalog, CatalogEntry, is_loaded},
     engine::{DeckSnapshot, EngineSnapshot},
     gui::view::track_subtitle,
 };
@@ -12,8 +11,6 @@ use crate::{
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ViewCache {
-    pub(in crate::gui) deck_marks: CatalogRowMarks,
-    pub(in crate::gui) library: LibraryView,
     pub(in crate::gui) modules: Modules,
     pub(in crate::gui) stage: StageView,
     pub(in crate::gui) window: WindowState,
@@ -30,68 +27,6 @@ pub(crate) struct ViewCache {
 #[derive(Debug, Default, PartialEq)]
 pub(in crate::gui) struct StageView {
     pub(in crate::gui) preset: u32,
-}
-
-#[derive(Default)]
-pub(in crate::gui) struct LibraryView {
-    pub(in crate::gui) scope: LibraryScope,
-    pub(in crate::gui) query: String,
-}
-
-impl LibraryView {
-    pub(in crate::gui) fn catalog_index(&self, catalog: &Catalog, row: usize) -> Option<usize> {
-        catalog
-            .entries()
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| self.scope.holds(entry))
-            .nth(row)
-            .map(|(index, _)| index)
-    }
-
-    pub(in crate::gui) fn groups(&self) -> impl Iterator<Item = LibraryScope> + '_ {
-        let query = self.query.trim().to_lowercase();
-        LibraryScope::ALL
-            .into_iter()
-            .filter(move |group| query.is_empty() || group.label().to_lowercase().contains(&query))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::gui) enum LibraryScope {
-    #[default]
-    All,
-    Local,
-    Stream,
-}
-
-impl LibraryScope {
-    pub(in crate::gui) const ALL: [Self; 3] = [Self::All, Self::Local, Self::Stream];
-
-    pub(in crate::gui) fn holds(self, entry: &CatalogEntry) -> bool {
-        let streamed = entry.source.contains("://") && !entry.source.starts_with("file://");
-        match self {
-            Self::All => true,
-            Self::Local => !streamed,
-            Self::Stream => streamed,
-        }
-    }
-
-    pub(in crate::gui) const fn index(self) -> usize {
-        match self {
-            Self::All => 0,
-            Self::Local => 1,
-            Self::Stream => 2,
-        }
-    }
-
-    pub(in crate::gui) const fn label(self) -> &'static str {
-        match self {
-            Self::All => "ALL",
-            Self::Local => "LOCAL",
-            Self::Stream => "STREAM",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -143,11 +78,6 @@ pub(in crate::gui) struct DeckViewState {
     pub(in crate::gui) zoom: Option<f64>,
 }
 
-#[derive(Default)]
-pub(in crate::gui) struct CatalogRowMarks {
-    rows: Vec<String>,
-}
-
 impl ViewCache {
     pub(in crate::gui) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
         self.decks.get_mut(index)
@@ -157,13 +87,12 @@ impl ViewCache {
         self.layout.decks()
     }
 
-    pub(crate) fn refresh(&mut self, snapshot: &EngineSnapshot, catalog: &Catalog) {
+    pub(crate) fn refresh(&mut self, snapshot: &EngineSnapshot) {
         self.decks
             .resize_with(snapshot.decks.len(), Default::default);
         for (cache, deck) in self.decks.iter_mut().zip(&snapshot.decks) {
             cache.refresh(deck);
         }
-        self.deck_marks.refresh(&snapshot.decks, catalog);
         self.window.refresh(self.layout, &self.modules);
     }
 
@@ -213,32 +142,6 @@ impl DeckCache {
     }
 }
 
-impl CatalogRowMarks {
-    pub(in crate::gui) fn get(&self, row: usize) -> Option<&String> {
-        self.rows.get(row)
-    }
-
-    fn refresh(&mut self, decks: &[DeckSnapshot], catalog: &Catalog) {
-        self.rows.clear();
-        self.rows.extend(
-            catalog
-                .entries()
-                .iter()
-                .map(|entry| loaded_deck_letters(entry, decks)),
-        );
-    }
-}
-
-fn loaded_deck_letters(entry: &CatalogEntry, decks: &[DeckSnapshot]) -> String {
-    decks
-        .iter()
-        .enumerate()
-        .filter(|(_, deck)| is_loaded(&deck.tracks, entry))
-        .filter_map(|(at, _)| deck_letter(at))
-        .map(|letter| letter.to_ascii_uppercase())
-        .collect()
-}
-
 fn format_quality(deck: &DeckSnapshot) -> String {
     let stream = &deck.stream;
     let rung = stream.current.or(stream.selected).and_then(|index| {
@@ -286,7 +189,7 @@ mod tests {
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
-            tokio::task,
+            tokio::{sync::watch, task},
         },
     };
     use kithara_test_utils::kithara;
@@ -308,7 +211,8 @@ mod tests {
         let config = fixtures::app_config(&cancel, fixtures::memory_store());
         let mut entry = fixtures::entry(&config, queue.clone(), track_id, source);
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        let (analysis, mut requests) = AnalysisHandle::channel();
+        let (analysis, mut requests) =
+            AnalysisHandle::channel(watch::channel(Default::default()).1);
         task::spawn(listen(
             queue.clone(),
             Arc::clone(&state),

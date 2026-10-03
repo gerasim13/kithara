@@ -1,6 +1,5 @@
 use std::{fmt, num::NonZeroU32, path::PathBuf};
 
-use bon::Builder;
 #[cfg(feature = "gui")]
 use kithara::ui::source::UiConfig;
 use kithara::{
@@ -17,6 +16,7 @@ use kithara::{
     queue::QueueConfigPatch,
     worker::{DispatcherConfigPatch, Worker},
 };
+use kithara_config::Config;
 use kithara_derive::Patch;
 use url::Url;
 
@@ -69,61 +69,60 @@ impl AppDrm {
 /// Shared owners and the downloader are mandatory; product knobs carry the
 /// crate's own defaults, which the configuration document patches through
 /// [`AppConfigPatch`].
-#[derive(Clone, Builder, Patch)]
-#[builder(state_mod(vis = "pub"))]
+#[derive(Clone, Config, Patch)]
+#[config(builder(state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
 pub struct AppConfig {
     /// App-owned DRM policy and its opaque key-request registry.
-    #[patch(skip)]
+    #[config(skip = "owned by the app DRM registry", patch(skip))]
     pub drm: AppDrm,
     /// App-wide shared asset store.
-    #[patch(skip)]
+    #[config(skip = "owned by the app asset store", patch(skip))]
     pub store: AppStore,
     /// Source beat-analysis tunables.
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to the analysis service",
+        builder(default),
+        patch(skip)
+    )]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
     /// Fixed source duration covered by one progressive analysis chunk.
-    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
+    #[config(builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN)))]
     pub analysis_chunk_seconds: NonZeroU32,
     /// One playback worker shared by every deck in this app session.
-    #[patch(skip)]
+    #[config(skip = "owned by the app playback worker", patch(skip))]
     pub worker: AppWorker,
     /// Optional base runtime shared by playback, analysis, and app-owned
     /// background dispatchers. Production supplies one; focused consumers may
     /// let each domain worker own its standalone base.
-    #[patch(skip)]
+    #[config(skip = "transferred to app domain workers", patch(skip))]
     pub base_worker: Option<Worker>,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the playback worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
     /// own [`CancelToken::child`] from this consumer-top master.
-    #[patch(skip)]
+    #[config(skip = "root of the app cancellation tree", patch(skip))]
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
-    #[patch(skip)]
+    #[config(skip = "owned by the app downloader", patch(skip))]
     pub downloader: Downloader,
     /// Color palette for the UI. A document names it under `app.palette`,
     /// one color at a time.
-    #[builder(default)]
-    #[patch(nested)]
+    #[config(builder(default), patch(nested))]
     pub palette: Palette,
     /// What the document's `audio:` section says about every track's audio
     /// pipeline, carried as a patch because no `AudioConfig` exists until a
     /// track does. Reached through `audio`, not through [`AppConfigPatch`].
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(builder(default), patch(skip))]
     pub audio: AudioConfigPatch,
     /// What the document's `hls:` section says about every HLS track. Carried
     /// as a patch for the same reason [`AppConfig::audio`] is.
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(builder(default), patch(skip))]
     pub hls: HlsConfigPatch,
     /// What the document's `file:` section says about every file track.
     /// Carried as a patch for the same reason [`AppConfig::audio`] is.
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(builder(default), patch(skip))]
     pub file: FileConfigPatch,
     /// UI-level knobs threaded into every compiled document, including the
     /// draw-pool limits [`UiConfig::draw_buffers`] is built from. A document
@@ -131,38 +130,38 @@ pub struct AppConfig {
     /// [`AppConfig::audio`] is reached through `audio` — not through
     /// [`AppConfigPatch`].
     #[cfg(feature = "gui")]
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(builder(default), patch(skip))]
     pub ui: UiConfig,
     /// Log filter directives.
-    #[builder(default)]
+    #[config(builder(default))]
     pub log_directives: Vec<String>,
     /// Audio file URLs or paths to play.
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(
+        skip = "transferred to queue construction",
+        builder(default),
+        patch(skip)
+    )]
     pub tracks: Vec<String>,
     /// Accept invalid TLS certificates. Test servers only.
-    #[builder(default = false)]
-    #[patch(skip)]
+    #[config(builder(default = false), patch(skip))]
     pub should_accept_invalid_certs: bool,
     /// What the document's `player:` section says about every deck's player,
     /// carried as a patch because no `PlayerConfig` exists until a deck does.
     /// Reached through `player`, not through [`AppConfigPatch`].
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(builder(default), patch(skip))]
     pub player: PlayerConfigPatch,
     /// Complete live-broadcast construction config for this app session. The
     /// document's `broadcast:` section is applied to it in `main`, where the
     /// worker and pools it is built from exist; nothing here carries a second
     /// spelling of those knobs.
-    #[patch(skip)]
+    #[config(skip = "transferred to the broadcast owner", patch(skip))]
     pub broadcast: Option<AppBroadcastConfig>,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
-    #[builder(default = 96_000)]
+    #[config(builder(default = 96_000))]
     pub waveform_max_buckets: usize,
     /// Band count of the EQ layout every deck's player graph is built with.
-    #[builder(default = 3)]
+    #[config(builder(default = 3))]
     pub eq_bands: usize,
     /// Output rate this application asks its audio session for. `None` leaves
     /// `HostConfig`'s own default standing: the Host owns the product default
@@ -184,20 +183,18 @@ pub struct AppConfig {
     pub ui_package: Option<PathBuf>,
     /// What the document's `queue:` section says about every deck's queue,
     /// carried as a patch for the same reason [`AppConfig::player`] is.
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(builder(default), patch(skip))]
     pub queue: QueueConfigPatch,
     /// Live heap a debug build tolerates before it prints the allocating
     /// stack and aborts. `0` lifts the ceiling. A release build installs no
     /// counting allocator, so this is read only under `debug_assertions`.
-    #[builder(default = crate::memory::DEFAULT_LIMIT_BYTES)]
+    #[config(builder(default = crate::memory::DEFAULT_LIMIT_BYTES))]
     pub memory_limit_bytes: usize,
     /// What the document's `dispatcher:` section says about the background
     /// dispatchers the app builds, carried as a patch for the same reason
     /// [`AppConfig::player`] is: each construction site keeps its own thread
     /// name and lays this over the rest.
-    #[builder(default)]
-    #[patch(skip)]
+    #[config(builder(default), patch(skip))]
     pub dispatcher: DispatcherConfigPatch,
 }
 

@@ -1,6 +1,6 @@
 use kithara_platform::sync::Arc;
 
-use crate::{error::UiDocError, ids::SourceUri};
+use crate::{error::UiDocError, ids::SourceUri, module::ModuleDoc};
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -17,7 +17,35 @@ pub struct LoadedBytes {
     pub uri: SourceUri,
 }
 
+/// A module supplied as authored text or a ready document.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ModuleSource {
+    Text(String),
+    Document(Box<ModuleDoc>),
+}
+
+/// A module and its resolved source location.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct LoadedModule {
+    pub uri: SourceUri,
+    pub source: ModuleSource,
+}
+
 pub trait SourceResolver {
+    /// Loads a module's text or a ready document at the same resolved path.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError`] when the source is unavailable or escapes the root.
+    fn module(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedModule, UiDocError> {
+        let loaded = self.load(base, rel)?;
+        Ok(LoadedModule {
+            uri: loaded.uri,
+            source: ModuleSource::Text(loaded.text),
+        })
+    }
+
     /// Loads `rel` as bytes, resolved against `base` on the same terms.
     ///
     /// A picture is not a document: a skin that names one reads it through

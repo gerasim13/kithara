@@ -3,11 +3,11 @@ use std::{f32::consts::PI, ops::Range};
 use num_traits::ToPrimitive;
 
 use crate::{
+    atoms::icon::mark::Marked,
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
     module::IconName,
     render::{Skin, TreeRow},
     shaping::TextContext,
-    skin::TextRoleSkin,
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -15,8 +15,9 @@ use crate::{
 pub(crate) struct Tree {
     #[field(get, vis = "pub(crate)")]
     skin: Skin,
+    /// What the search field holds, and whether the tree draws one.
     #[field(get, vis = "pub(crate)")]
-    query: String,
+    query: Option<String>,
     rows: Vec<Row>,
 }
 
@@ -32,9 +33,9 @@ struct Row {
 }
 
 impl Tree {
-    pub(crate) fn new(rows: &[TreeRow<'_>], query: &str, skin: &Skin) -> Self {
+    pub(crate) fn new(rows: &[TreeRow<'_>], query: Option<&str>, skin: &Skin) -> Self {
         Self {
-            query: query.to_owned(),
+            query: query.map(str::to_owned),
             rows: rows.iter().copied().map(Row::new).collect(),
             skin: skin.clone(),
         }
@@ -94,6 +95,42 @@ impl Tree {
     pub(crate) fn row_count(&self) -> usize {
         self.rows.len()
     }
+
+    pub(crate) fn toggle_regions(&self, viewport: Rect, offset: f32) -> Vec<(usize, Rect)> {
+        let skin = &self.skin;
+        let visible = visible_rows(self.rows.len(), skin.tree.row_height, viewport.h, offset);
+        let first = visible.start;
+        self.rows[visible]
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.expanded.is_some())
+            .filter_map(|(relative, row)| {
+                let index = first + relative;
+                let y = index
+                    .to_f32()?
+                    .mul_add(skin.tree.row_height, viewport.y - offset);
+                let top = y.max(viewport.y);
+                let bottom = (y + skin.tree.row_height).min(viewport.y + viewport.h);
+                Some((
+                    index,
+                    Rect {
+                        h: (bottom - top).max(0.0),
+                        w: if row.depth == 0 {
+                            viewport.w
+                        } else {
+                            skin.tree.chevron_width
+                        },
+                        x: if row.depth == 0 {
+                            viewport.x
+                        } else {
+                            row.chevron_x(viewport.x, skin)
+                        },
+                        y: top,
+                    },
+                ))
+            })
+            .collect()
+    }
 }
 
 impl Row {
@@ -147,16 +184,20 @@ impl Row {
         } else {
             skin.rgba(skin.tree.row_idle_text_color)
         };
-        let indent = skin
-            .tree
-            .indent_step
-            .mul_add(f32::from(self.depth), skin.tree.indent_base);
-        let chevron_x = marker.x + marker.w + indent;
+        let chevron_x = self.chevron_x(bounds.x, skin);
         self.paint_chevron(list, text, bounds, chevron_x, skin);
         let icon_x = chevron_x + skin.tree.chevron_width + skin.tree.content_gap;
         self.paint_icon(list, text, bounds, icon_x, color, skin);
         let label_x = icon_x + skin.tree.icon_size + skin.tree.content_gap;
         self.paint_labels(list, text, bounds, label_x, color, skin);
+    }
+
+    fn chevron_x(&self, left: f32, skin: &Skin) -> f32 {
+        let indent = skin
+            .tree
+            .indent_step
+            .mul_add(f32::from(self.depth), skin.tree.indent_base);
+        left + skin.tree.marker_width + indent
     }
 
     fn paint_chevron(
@@ -167,25 +208,23 @@ impl Row {
         x: f32,
         skin: &Skin,
     ) {
-        let content = match self.expanded {
-            Some(true) => "\u{2228}",
-            Some(false) => "\u{203a}",
+        let icon = match self.expanded {
+            Some(true) => IconName::ChevronDown,
+            Some(false) => IconName::ChevronRight,
             None => return,
         };
-        let role = TextRoleSkin {
-            color: skin.tree.chevron_color,
-            size: skin.tree.chevron_size,
-            ..skin.tree.count_text
+        let Some(mark) = icon.mark() else {
+            return;
         };
-        let run = text.shape(content, role, None);
-        list.text(
-            &run,
-            content,
-            Transform::translate(Pt {
-                x: x + (skin.tree.chevron_width - run.width()) / 2.0,
-                y: bounds.y + (bounds.h - run.height()) / 2.0,
-            }),
-            skin.rgba(role.color),
+        Marked::new(mark, skin.tree.chevron_size).centred(
+            list,
+            text,
+            Rect {
+                x,
+                w: skin.tree.chevron_width,
+                ..bounds
+            },
+            skin.rgba(skin.tree.chevron_color),
         );
     }
 
@@ -388,7 +427,7 @@ mod tests {
 
     fn commands(offset: f32, viewport: Rect) -> DrawList {
         let skin = builtin::skin();
-        let picture = Tree::new(&rows(), "", skin);
+        let picture = Tree::new(&rows(), None, skin);
         let mut text = TextContext::from(skin.text_resources());
         picture.row_commands(&mut text, viewport, offset, None)
     }
@@ -478,7 +517,7 @@ mod tests {
     #[kithara::test]
     fn the_zvuk_row_stays_on_the_neutral_geometry_seam() {
         let skin = builtin::skin();
-        let picture = Tree::new(&rows()[2..], "", skin);
+        let picture = Tree::new(&rows()[2..], None, skin);
         let mut text = TextContext::from(skin.text_resources());
         let list = picture.row_commands(
             &mut text,

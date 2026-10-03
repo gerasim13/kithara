@@ -3,7 +3,7 @@ use kithara::ui::render::{Node, Scope};
 use super::{
     broadcast::BroadcastNode,
     deck::{DeckNode, DecksNode, EngineNode},
-    library::LibraryNode,
+    library::{LibraryNode, SourcesNode},
     mix::{MixNode, PlayerNode, StripsNode},
     stage::{DeckTempo, TempoNode, VisNode},
     ui::UiNode,
@@ -17,6 +17,7 @@ pub(in crate::gui) struct ReadRoot<'a> {
     mix: MixNode<'a>,
     player: PlayerNode<'a>,
     mixer: StripsNode<'a>,
+    source: SourcesNode<'a>,
     tempo: TempoNode,
     ui: UiNode<'a>,
     decks: Vec<DeckNode<'a>>,
@@ -26,12 +27,6 @@ pub(in crate::gui) struct ReadRoot<'a> {
 impl<'a> ReadRoot<'a> {
     pub(in crate::gui) fn new(state: &'a Kithara) -> Self {
         let cache = &state.ui.cache;
-        let library = LibraryNode::new(
-            &state.catalog,
-            &cache.deck_marks,
-            state.selected_track,
-            &cache.library,
-        );
         let focus = cache.focus_deck();
         let snapshot = &*state.snapshot;
         let decks: Vec<DeckNode<'a>> = snapshot
@@ -56,9 +51,10 @@ impl<'a> ReadRoot<'a> {
             .collect();
 
         Self {
-            library,
             decks,
             engine,
+            library: LibraryNode::new(&state.library, !Kithara::PICKS_FOLDERS),
+            source: SourcesNode::new(&state.library, &snapshot.track_bpms),
             broadcast: BroadcastNode::new(
                 snapshot.broadcast.is_on_air,
                 &snapshot.broadcast.url,
@@ -84,6 +80,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
             "mix" => Box::new(self.mix),
             "mixer" => Box::new(self.mixer),
             "player" => Box::new(self.player),
+            "source" => Box::new(&self.source),
             "tempo" => Box::new(&self.tempo),
             "vis" => Box::new(self.vis),
             "ui" => Box::new(self.ui),
@@ -105,24 +102,26 @@ mod tests {
 
     use super::*;
     use crate::{
-        catalog::Catalog,
         deck::{DeckId, EqMode},
         engine::{DeckSettings, DeckSnapshot},
-        gui::ui::{
-            cache::{CatalogRowMarks, DeckCache, DeckLayout, LibraryView, StageView},
-            endpoints::readable_endpoints,
-            modules::Modules,
-            window::WindowState,
+        gui::{
+            library::{Library, StartupSource},
+            test_fixture::{self, Probe},
+            ui::{
+                cache::{DeckCache, DeckLayout, StageView},
+                endpoints::readable_endpoints,
+                modules::Modules,
+                window::WindowState,
+            },
         },
         mix::MixState,
         state::{AbrVariant, UiState, covered},
     };
 
     struct Fixture {
-        catalog: Catalog,
-        marks: CatalogRowMarks,
         eq_mode: EqMode,
-        library: LibraryView,
+        library: Library,
+        bpms: std::collections::BTreeMap<String, f64>,
         mix: MixState,
         modules: Modules,
         stage: StageView,
@@ -134,9 +133,13 @@ mod tests {
     impl Fixture {
         fn new(tempos: [&str; 2]) -> Self {
             Self {
-                catalog: Catalog::new(vec!["dropped.mp3".to_string()]),
-                marks: CatalogRowMarks::default(),
-                library: LibraryView::default(),
+                library: test_fixture::mount(
+                    None,
+                    vec![StartupSource::registered(vec!["dropped.mp3".to_string()])],
+                )
+                .map(|(_, library)| library)
+                .expect("the shipped package mounts the startup source"),
+                bpms: std::collections::BTreeMap::new(),
                 modules: Modules::default(),
                 window: WindowState::default(),
                 broadcast_available: false,
@@ -148,7 +151,6 @@ mod tests {
         }
 
         fn root<'a>(&'a self, shown: &'a [DeckSnapshot]) -> ReadRoot<'a> {
-            let library = LibraryNode::new(&self.catalog, &self.marks, Some(0), &self.library);
             let decks: Vec<DeckNode<'_>> = shown
                 .iter()
                 .zip(&self.decks)
@@ -169,8 +171,9 @@ mod tests {
                 .collect();
 
             ReadRoot {
-                library,
                 decks,
+                library: LibraryNode::new(&self.library, true),
+                source: SourcesNode::new(&self.library, &self.bpms),
                 engine,
                 broadcast: BroadcastNode::new(false, "", self.broadcast_available),
                 mix: MixNode::new(&self.mix),
@@ -226,6 +229,38 @@ mod tests {
             settings.eq_bands = vec![GainDb::default(); mode.bands().len()];
         }
         fixture
+    }
+
+    #[kithara::test]
+    fn a_source_builds_its_rows_only_when_they_are_read() {
+        let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        let (probe, calls) = Probe::registered("menu.module.library");
+        fixture.library = test_fixture::mount(
+            None,
+            vec![
+                StartupSource::registered(vec!["dropped.mp3".to_string()]),
+                probe,
+            ],
+        )
+        .map(|(_, library)| library)
+        .expect("the shipped package mounts both sources");
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
+        let walk = Walk::new(&root);
+
+        assert!(walk.get("library.tree").is_some());
+        assert!(
+            walk.get(&format!("source.status@source={}", Probe::ID))
+                .is_some()
+        );
+        assert!(walk.get("source.rows@source=startup").is_some());
+        assert_eq!(calls.borrow().rows, 0, "nothing read the probe's rows");
+
+        assert!(
+            walk.get(&format!("source.rows@source={}", Probe::ID))
+                .is_some()
+        );
+        assert_eq!(calls.borrow().rows, 1);
     }
 
     /// The waveform read is where a renderer learns what the analysis has not
@@ -296,6 +331,8 @@ mod tests {
                 .iter()
                 .map(|scope| match *scope {
                     "deck" => "deck=a".to_owned(),
+                    "source" => "source=startup".to_owned(),
+                    "column" => "column=artist".to_owned(),
                     other => format!("{other}=0"),
                 })
                 .collect();
@@ -310,7 +347,8 @@ mod tests {
         // so ownership is a claim about the modes together.
         let mut unowned: Vec<String> = documented.chain(synthesized).collect();
         for mode in [EqMode::ThreeBand, EqMode::FourBand] {
-            let fixture = fixture_in(mode);
+            let mut fixture = fixture_in(mode);
+            fixture.library.set_column_width("startup", "artist", 200.0);
             let shown = fixture.shown();
             let root = fixture.root(&shown);
             let walk = Walk::new(&root);
@@ -510,5 +548,25 @@ mod tests {
                 assert_eq!(walk.get(&key), None, "three-band decks have no `{key}`");
             }
         }
+    }
+    #[kithara::test]
+    fn library_followup_known_bpm_is_a_source_row_cell() {
+        let mut fixture = Fixture::new(["0", "0"]);
+        let known = crate::analysis::fixtures::grid().artifact().bpm();
+        assert_eq!(known, 128.0);
+        fixture.bpms.insert("dropped.mp3".to_owned(), known);
+        let root = fixture.root(&[]);
+        let walk = Walk::new(&root);
+        let Some(ReadValue::Table(rows)) = walk.get("source.rows@source=startup") else {
+            panic!("startup rows are readable");
+        };
+        assert_eq!(
+            rows[0]
+                .cells()
+                .iter()
+                .find(|cell| cell.id() == "bpm")
+                .map(|cell| cell.value()),
+            Some(&::kithara::ui::render::TableValue::Text("128.00".into()))
+        );
     }
 }

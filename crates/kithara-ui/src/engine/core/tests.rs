@@ -557,7 +557,16 @@ fn column_divider_uses_the_wide_hit_rect_and_publishes_pixel_width() {
         y: 0.0,
     };
     let divider = Target::new(path, Hit::new(Some(Pt { x: 100.5, y: 11.0 }), hit_rect));
-    engine.reconcile([Descriptor::column_divider(path.to_owned(), 64.0, 28.0)]);
+    engine.reconcile([Descriptor::column_divider(
+        path.to_owned(),
+        64.0,
+        crate::interact::recognizers::Track::HorizontalPixels {
+            minimum: 28.0,
+            maximum: None,
+            direction: 1.0,
+            value: 64.0,
+        },
+    )]);
 
     assert_eq!(divider.hit.area(), hit_rect);
     assert_eq!(

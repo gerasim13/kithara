@@ -37,6 +37,7 @@ pub(crate) const HASH_PREFIX_BYTES: usize = 16;
 
 /// Default in-memory LRU cache capacity (init + 2-3 media segments).
 pub(crate) const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
+pub(crate) const DEFAULT_SEGMENT_RESERVATION: u64 = 1024 * 1024;
 
 #[cfg(test)]
 pub(crate) const BUILDER_ROOT: &str = "test_asset";

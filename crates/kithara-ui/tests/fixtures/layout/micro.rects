@@ -18,11 +18,11 @@ deck-a 0.000 0.000 1280.000 720.000
       deck-a/bar/stream/pop 816.000 0.000 42.000 44.000
       deck-a/column[0]/row[0]/telemetry-cell 858.000 0.000 80.000 44.000
         deck-a/column[0]/row[0]/telemetry-cell/cpu 870.000 0.000 22.000 44.000
-          deck-a/bar/cpu-label 870.000 0.000 18.000 44.000
+          deck-a/bar/cpu-label 870.000 15.400 18.000 13.200
           deck-a/bar/cpu-value 892.000 0.000 0.000 44.000
         deck-a/column[0]/row[0]/telemetry-cell/latency 904.000 0.000 22.000 44.000
-          deck-a/bar/latency-label 904.000 0.000 18.000 44.000
-          deck-a/bar/latency-value 926.000 0.000 0.000 44.000
+          deck-a/bar/latency-label 904.000 15.400 18.000 13.200
+          deck-a/bar/latency-value 926.000 22.000 0.000 0.000
       deck-a/bar/clock/pop 938.000 0.000 163.000 44.000
       deck-a/bar/rec 1101.000 0.000 61.000 44.000
       deck-a/column[0]/row[0]/settings-cell 1162.000 0.000 38.000 44.000
