@@ -70,3 +70,55 @@ pub trait LiveConfig: CheckedConfig + Copy {
     /// Returns the field check's refusal.
     fn check(change: Self::Change) -> Result<Self::Change, Self::Error>;
 }
+
+/// The owner of a live configuration, addressed by the configuration's change
+/// type so one owner configures several configurations without ambiguity.
+pub trait Configure<Ch> {
+    /// When a change executes; `Default` is the nearest moment.
+    type At: Default;
+    /// The configuration the changes belong to.
+    type Config: LiveConfig<Change = Ch>;
+    /// What the owner refuses a change with.
+    type Error;
+    /// What the owner answers once it accepts a change.
+    type Output;
+
+    /// Hands one change of one field to the owner to execute at `at`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the owner's refusal, a failed field check included.
+    fn configure(&self, change: Ch, at: Self::At) -> Result<Self::Output, Self::Error>;
+
+    /// The configuration as last applied.
+    fn settings(&self) -> Self::Config;
+}
+
+/// A nested live configuration, configured through its parent's owner.
+///
+/// A change goes to the owner as the parent's change, so the parent's check
+/// guards it; `get` reads the nested configuration out of the parent's.
+pub struct Nested<R, G> {
+    pub(crate) get: G,
+    pub(crate) owner: R,
+}
+
+impl<T, P, N> Configure<N::Change> for Nested<&T, fn(&P) -> N>
+where
+    T: Configure<P::Change, Config = P> + ?Sized,
+    P: LiveConfig<Change: From<N::Change>>,
+    N: LiveConfig,
+{
+    type At = T::At;
+    type Config = N;
+    type Error = T::Error;
+    type Output = T::Output;
+
+    fn configure(&self, change: N::Change, at: T::At) -> Result<T::Output, T::Error> {
+        T::configure(self.owner, change.into(), at)
+    }
+
+    fn settings(&self) -> N {
+        (self.get)(&T::settings(self.owner))
+    }
+}

@@ -20,7 +20,7 @@ pub use kithara_derive::{ConfigOwner, Patch};
 mod config;
 mod live;
 pub use config::{Config, ConfigOwner, ConfigOwnerMut};
-pub use live::{CheckedConfig, LiveConfig};
+pub use live::{CheckedConfig, Configure, LiveConfig, Nested};
 
 #[doc(hidden)]
 pub mod __private;

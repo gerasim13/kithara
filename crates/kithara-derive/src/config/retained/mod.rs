@@ -1,3 +1,4 @@
+mod control;
 mod entrypoints;
 mod field;
 mod implementation;

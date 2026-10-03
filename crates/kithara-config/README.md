@@ -99,6 +99,18 @@ configuration's change. `live(owner)` marks a value field whose change the
 owner executes with its own operation; a nested live configuration cannot have
 one.
 
+An owner implements `Configure<<Name>Change>`: `configure(change, at)` checks one
+change and hands it on for the moment `at` (`Default` is the nearest one), and
+`settings()` returns the configuration as last applied. Addressing the trait by
+the change type lets one owner configure several configurations. The derive
+emits `<Name>Control`, implemented for every such owner: a getter per field with
+an accessor, which reads `settings()`, and a `set_<field>` per live value field,
+which calls `configure` for the nearest moment. A nested live field's getter
+returns `Nested`, a `Configure` of the nested configuration whose changes reach
+the owner as the parent's change. `<Name>Exec<Cx>` is the owner's side:
+`exec` sends each `live(owner)` field to its `exec_<field>` method and every
+other live field to `exec_live`.
+
 The derive emits `<Name>Values` with public snapshot fields, preserving field
 documentation. Resource generics stay on the original owner; snapshot types
 must not depend on them. Domain constructors and methods remain responsible for

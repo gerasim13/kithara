@@ -3,13 +3,15 @@ use quote::{format_ident, quote};
 use syn::{Attribute, DeriveInput, Ident, Type};
 
 use super::{
+    control::{control, exec},
     field::{Member, upper_camel},
     implementation::docs,
 };
 use crate::config::field::Live;
 
 /// `CheckedConfig` whenever the struct declares a check error or a live field,
-/// then the change enum and `LiveConfig` when it has a live field.
+/// then the change enum, `LiveConfig`, `<Name>Control` and `<Name>Exec` when it
+/// has a live field.
 pub(super) fn expand(
     item: &DeriveInput,
     members: &[Member<'_>],
@@ -23,13 +25,18 @@ pub(super) fn expand(
         return None;
     }
     let checked = checked(item, members, error);
-    let live = (!fields.is_empty()).then(|| live(item, &fields));
+    let live = (!fields.is_empty()).then(|| {
+        let change = live(item, &fields);
+        let control = control(item, members);
+        let exec = exec(item, &fields);
+        quote! { #change #control #exec }
+    });
     Some(quote! { #checked #live })
 }
 
 /// The `cfg` attributes of a field, which every statement generated from it
 /// carries.
-fn cfgs(attributes: &[Attribute]) -> impl Iterator<Item = &Attribute> {
+pub(super) fn cfgs(attributes: &[Attribute]) -> impl Iterator<Item = &Attribute> {
     attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("cfg"))
@@ -39,6 +46,11 @@ fn cfgs(attributes: &[Attribute]) -> impl Iterator<Item = &Attribute> {
 /// the macro's own.
 pub(super) fn change_name(item: &DeriveInput) -> Ident {
     format_ident!("{}Change", item.ident, span = Span::call_site())
+}
+
+/// The variant of the change enum that carries a change of `field`.
+pub(super) fn variant(field: &Ident) -> Ident {
+    Ident::new(&upper_camel(field), Span::call_site())
 }
 
 fn checked(item: &DeriveInput, members: &[Member<'_>], error: Option<&Type>) -> TokenStream {
@@ -97,7 +109,7 @@ fn live(item: &DeriveInput, fields: &[&Member<'_>]) -> TokenStream {
     for member in fields {
         let field = member.name;
         let ty = member.ty;
-        let variant = Ident::new(&upper_camel(field), Span::call_site());
+        let variant = variant(field);
         let payload = if member.nested {
             quote!(<#ty as ::kithara_config::LiveConfig>::Change)
         } else {
