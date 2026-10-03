@@ -31,6 +31,11 @@ pub(crate) struct CiPins {
     /// to the ABI it declares rather than to whatever the unversioned formula
     /// became overnight.
     pub(crate) brew_formulae: Vec<String>,
+    /// The object store client, copied out of its image into every image that
+    /// reaches the compiler cache and its snapshots.
+    pub(crate) cache_client_image: String,
+    /// The object store each host serves the compiler cache from.
+    pub(crate) cache_server_image: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -73,7 +78,6 @@ pub(crate) struct CiPins {
     pub(crate) rtsan_version: String,
     pub(crate) rustup_version: String,
     pub(crate) rustup_windows_sha256: String,
-    pub(crate) sccache_s3_image: String,
     pub(crate) stable_toolchain: String,
     pub(crate) windows_eval_iso_sha256: String,
     pub(crate) windows_eval_iso_url: String,
@@ -112,6 +116,8 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
+            ("cache_client_image", self.cache_client_image.as_str()),
+            ("cache_server_image", self.cache_server_image.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
@@ -139,7 +145,6 @@ impl CiPins {
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("rtsan_version", self.rtsan_version.as_str()),
             ("rustup_version", self.rustup_version.as_str()),
-            ("sccache_s3_image", self.sccache_s3_image.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
             ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
         ] {

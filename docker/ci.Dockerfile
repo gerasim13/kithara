@@ -1,7 +1,7 @@
 ARG RUST_BASE_DIGEST
 ARG RUST_VERSION
-ARG SCCACHE_S3_IMAGE
-FROM ${SCCACHE_S3_IMAGE} AS minio-client
+ARG CACHE_CLIENT_IMAGE
+FROM ${CACHE_CLIENT_IMAGE} AS cache-client
 FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST} AS ci-base
 
 ARG AST_GREP_VERSION
@@ -240,10 +240,9 @@ FROM ci-base
 # dependencies that select it.
 COPY --from=tool-builder /opt/kithara-ci-tools/bin/ /usr/local/cargo/bin/
 
-# The cache service image is already digest-pinned in ci-pins. Reusing its
-# client keeps S3 protocol behaviour identical for compiler cache and target
-# snapshots without a second unpinned download.
-COPY --from=minio-client /usr/bin/mc /usr/local/bin/mc
+# The object store client the target and source snapshots travel through.
+# It is statically linked, so it runs as copied, and digest-pinned in ci-pins.
+COPY --from=cache-client /usr/bin/rc /usr/local/bin/rc
 
 # The account a job runs as. It is declared here rather than in the image that
 # starts the runner because images built on top of this one have state to hand

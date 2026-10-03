@@ -170,6 +170,22 @@ enum CacheCommand {
     Snapshot(SnapshotArgs),
 }
 
+/// Compose against the host's environment file, which also goes to
+/// `initialize` whole as `CACHE_ENV_FILE`: it reads a quota under a name built
+/// from each scope the host serves, which the Compose file cannot list.
+/// Compose resolves that path beside the Compose file, so it is made absolute.
+fn compose(env_file: &Path) -> Result<Command> {
+    let handed = std::path::absolute(env_file)
+        .with_context(|| format!("resolving {}", env_file.display()))?;
+    let mut command = Command::new("docker");
+    command
+        .args(["compose", "--env-file"])
+        .arg(env_file)
+        .args(["-f", consts::CACHE_COMPOSE_FILE])
+        .env("CACHE_ENV_FILE", handed);
+    Ok(command)
+}
+
 pub(crate) fn run(args: &CacheArgs) -> Result<()> {
     match &args.command {
         CacheCommand::Compose {
@@ -177,12 +193,10 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             arguments,
         } => {
             let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
-            let status = Command::new("docker")
-                .args(["compose", "--env-file"])
-                .arg(env_file)
-                .args(["-f", "docker/ci-cache.compose.yml"])
+            let status = compose(env_file)?
                 .args(arguments)
-                .env("KITHARA_CACHE_IMAGE", &pins.sccache_s3_image)
+                .env("KITHARA_CACHE_SERVER_IMAGE", &pins.cache_server_image)
+                .env("KITHARA_CACHE_CLIENT_IMAGE", &pins.cache_client_image)
                 .env("KITHARA_RUST_VERSION", &pins.stable_toolchain)
                 .env("KITHARA_RUST_DIGEST", &pins.linux_base_digest)
                 .status()
@@ -208,6 +222,7 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     use super::*;
+    use crate::ci::config::workspace_root;
 
     fn host_file(contents: &str) -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
@@ -327,6 +342,66 @@ mod tests {
     #[test]
     fn a_job_without_a_store_is_told_nothing() {
         assert!(missing_defaults(|_| None).is_empty());
+    }
+
+    /// `initialize` reads a quota under a name built from each scope the host
+    /// serves. Compose hands a container only the variables its file names,
+    /// so the quota a host named for one scope never reached it, and every
+    /// initialize flattened that scope to the shared quota.
+    #[test]
+    fn initialize_is_handed_the_environment_file_the_stack_is_started_with() {
+        let host = Path::new("docker/ci-cache/linux.env");
+
+        let command = compose(host).unwrap();
+
+        let handed = command
+            .get_envs()
+            .find(|(key, _)| *key == "CACHE_ENV_FILE")
+            .and_then(|(_, value)| value)
+            .map(PathBuf::from);
+        assert_eq!(handed, Some(env::current_dir().unwrap().join(host)));
+        let stack: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            &fs::read_to_string(workspace_root().join(consts::CACHE_COMPOSE_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            stack["services"]["initialize"]["env_file"]
+                .as_str()
+                .is_some_and(|file| file.starts_with("${CACHE_ENV_FILE")),
+            "initialize must read the file CACHE_ENV_FILE names"
+        );
+    }
+
+    /// A named volume lives wherever the Docker daemon keeps it - inside
+    /// colima's virtual machine on the Mac - so a stack brought up after that
+    /// daemon was reset starts with an empty store and a new admin password,
+    /// and every client key the runners hold stops working. Everything the
+    /// stack keeps has to sit in a directory the host names on its own disk.
+    #[test]
+    fn the_stack_keeps_its_state_only_in_directories_the_host_names() {
+        let stack: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            &fs::read_to_string(workspace_root().join(consts::CACHE_COMPOSE_FILE)).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            stack.get("volumes").is_none(),
+            "the stack declares named volumes"
+        );
+        let services = stack["services"].as_mapping().unwrap();
+        let mut mounts = 0;
+        for (name, service) in services {
+            for mount in service["volumes"].as_sequence().into_iter().flatten() {
+                let mount = mount.as_str().unwrap();
+                let (source, _) = mount.split_once("}:").unwrap_or((mount, ""));
+                assert!(
+                    source.starts_with("${CACHE_") && source.contains("_VOLUME:?"),
+                    "{name:?} mounts {mount}, which is not a host directory the environment must name"
+                );
+                mounts += 1;
+            }
+        }
+        assert!(mounts > 0, "the stack mounts nothing");
     }
 
     #[test]
