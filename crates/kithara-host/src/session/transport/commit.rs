@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp};
 
-use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
+use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -85,48 +85,18 @@ impl SessionGridGeneration {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) enum TransportBoundary {
-    #[default]
-    Continuous,
-    Relocate(SessionBeat),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct SessionTransportCommit {
     #[field(get, copy)]
     tempo: Tempo,
     #[field(get, copy)]
-    boundary: TransportBoundary,
-    #[field(get, copy)]
     revision: TransportRevision,
-    #[field(get = is_playing, copy)]
-    playing: bool,
 }
 
 impl SessionTransportCommit {
-    pub(crate) const fn new(tempo: Tempo, playing: bool, revision: TransportRevision) -> Self {
-        Self {
-            tempo,
-            playing,
-            revision,
-            boundary: TransportBoundary::Continuous,
-        }
-    }
-
-    pub(crate) const fn relocate(
-        tempo: Tempo,
-        playing: bool,
-        revision: TransportRevision,
-        target: SessionBeat,
-    ) -> Self {
-        Self {
-            tempo,
-            playing,
-            revision,
-            boundary: TransportBoundary::Relocate(target),
-        }
+    pub(crate) const fn new(tempo: Tempo, revision: TransportRevision) -> Self {
+        Self { tempo, revision }
     }
 }
 

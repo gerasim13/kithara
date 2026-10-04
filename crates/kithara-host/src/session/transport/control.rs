@@ -7,14 +7,14 @@ use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
     commit::{
-        SessionGridGeneration, SessionTransportCommit, TransportBoundary, TransportCommitResult,
-        TransportCommitStamp, TransportObservation,
+        SessionGridGeneration, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
+        TransportObservation,
     },
     event::TransportEvent,
     process::converge_transport_restart,
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
+    api::{SessionTransportSnapshot, Tempo, TransportRevision},
     session::{SessionError, dispatch::stream_died, state::SessionState},
 };
 
@@ -101,51 +101,7 @@ pub(crate) fn set_tempo<T, S>(
     ensure_no_pending_commit(state)?;
     let revision = next_revision(state)?;
     let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next = SessionTransportCommit::new(
-        tempo,
-        accepted.is_none_or(|commit| commit.is_playing()),
-        revision,
-    );
-    let stamp =
-        TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
-    schedule_commit(state, next, stamp)
-}
-
-pub(crate) fn set_playing<T, S>(
-    state: &mut SessionState<T, S>,
-    playing: bool,
-) -> Result<(), SessionError> {
-    let _ = refresh_observation(state)?;
-    let accepted = state
-        .transport
-        .accepted()
-        .ok_or(SessionError::TransportNotProcessed)?;
-    if accepted.is_playing() == playing {
-        return Ok(());
-    }
-    ensure_no_pending_commit(state)?;
-    let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next = SessionTransportCommit::new(accepted.tempo(), playing, revision);
-    let stamp =
-        TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
-    schedule_commit(state, next, stamp)
-}
-
-pub(crate) fn seek<T, S>(
-    state: &mut SessionState<T, S>,
-    target: SessionBeat,
-) -> Result<(), SessionError> {
-    let _ = refresh_observation(state)?;
-    let accepted = state
-        .transport
-        .accepted()
-        .ok_or(SessionError::TransportNotProcessed)?;
-    ensure_no_pending_commit(state)?;
-    let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next =
-        SessionTransportCommit::relocate(accepted.tempo(), accepted.is_playing(), revision, target);
+    let next = SessionTransportCommit::new(tempo, revision);
     let stamp =
         TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
     schedule_commit(state, next, stamp)
@@ -545,36 +501,15 @@ fn publish_transport_commit<T, S>(
     previous: Option<SessionTransportCommit>,
     next: SessionTransportCommit,
 ) {
-    for event in transport_events(previous, next).into_iter().flatten() {
-        publish_transport_event(state, &event);
+    if previous.is_none_or(|commit| commit.tempo() != next.tempo()) {
+        publish_transport_event(
+            state,
+            &TransportEvent::TempoCommitted {
+                revision: u64::from(next.revision()),
+                beats_per_minute: next.tempo().beats_per_minute(),
+            },
+        );
     }
-}
-
-fn transport_events(
-    previous: Option<SessionTransportCommit>,
-    next: SessionTransportCommit,
-) -> [Option<TransportEvent>; 3] {
-    let revision = u64::from(next.revision());
-    let tempo = previous
-        .is_none_or(|commit| commit.tempo() != next.tempo())
-        .then(|| TransportEvent::TempoCommitted {
-            revision,
-            beats_per_minute: next.tempo().beats_per_minute(),
-        });
-    let play_state = previous
-        .is_none_or(|commit| commit.is_playing() != next.is_playing())
-        .then(|| TransportEvent::PlayStateCommitted {
-            revision,
-            playing: next.is_playing(),
-        });
-    let seek = match next.boundary() {
-        TransportBoundary::Continuous => None,
-        TransportBoundary::Relocate(target) => Some(TransportEvent::SeekCommitted {
-            revision,
-            position_beats: f64::from(target),
-        }),
-    };
-    [tempo, play_state, seek]
 }
 
 fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {

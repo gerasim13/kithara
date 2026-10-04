@@ -4,18 +4,12 @@ use std::num::NonZeroU32;
 
 use kithara_events::{EventBus, EventReceiver};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-use kithara_play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo};
+use kithara_play::{Cmd, Reply, SessionTransportSnapshot, Tempo};
 use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::BeatGridId;
 
 use super::ring::{ManualRingConfig, ManualRingSession};
 use crate::{consts, session::TransportEvent};
-
-#[derive(Clone, Copy)]
-enum CommitCase {
-    Tempo(f64),
-    Playing(bool),
-}
 
 fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
     let rate = NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE)
@@ -73,14 +67,6 @@ fn set_tempo(session: &ManualRingSession, beats_per_minute: f64) {
     );
 }
 
-fn set_playing(session: &ManualRingSession, playing: bool) {
-    expect_ok(
-        session
-            .exec(Cmd::SetSessionPlaying { playing })
-            .expect("invariant: play-state command reaches the session"),
-    );
-}
-
 fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
     match session
         .exec(Cmd::QuerySessionTransport)
@@ -103,16 +89,10 @@ fn commit_initial_transport(
     let committed = snapshot(session);
     assert_eq!(
         drain_transport_events(events),
-        vec![
-            TransportEvent::TempoCommitted {
-                beats_per_minute: 120.0,
-                revision: u64::from(committed.revision()),
-            },
-            TransportEvent::PlayStateCommitted {
-                playing: true,
-                revision: u64::from(committed.revision()),
-            },
-        ]
+        vec![TransportEvent::TempoCommitted {
+            beats_per_minute: 120.0,
+            revision: u64::from(committed.revision()),
+        },]
     );
     committed
 }
@@ -142,88 +122,42 @@ fn transport_commit_is_published_to_every_registered_player_bus() {
         .credit(1)
         .expect("invariant: initial transport commit renders");
     let committed = snapshot(&session);
-    let expected = vec![
-        TransportEvent::TempoCommitted {
-            beats_per_minute: 120.0,
-            revision: u64::from(committed.revision()),
-        },
-        TransportEvent::PlayStateCommitted {
-            playing: true,
-            revision: u64::from(committed.revision()),
-        },
-    ];
+    let expected = vec![TransportEvent::TempoCommitted {
+        beats_per_minute: 120.0,
+        revision: u64::from(committed.revision()),
+    }];
 
     assert_eq!(drain_transport_events(&mut left_events), expected);
     assert_eq!(drain_transport_events(&mut right_events), expected);
 }
 
 #[kithara::test]
-#[case::tempo(CommitCase::Tempo(90.0))]
-#[case::pause(CommitCase::Playing(false))]
-#[case::redundant_tempo(CommitCase::Tempo(120.0))]
-fn transport_commit_announces_only_the_applied_change(#[case] change: CommitCase) {
+#[case::tempo(90.0)]
+#[case::redundant_tempo(120.0)]
+fn transport_commit_announces_only_the_applied_change(#[case] beats_per_minute: f64) {
     let session = session(512, 4);
     let mut events = register_transport_events(&session);
     let initial = commit_initial_transport(&session, &mut events);
 
-    match change {
-        CommitCase::Tempo(beats_per_minute) => set_tempo(&session, beats_per_minute),
-        CommitCase::Playing(playing) => set_playing(&session, playing),
-    }
+    set_tempo(&session, beats_per_minute);
     session
         .credit(2)
         .expect("invariant: transport change reaches its render boundary");
     let committed = snapshot(&session);
     let published = drain_transport_events(&mut events);
 
-    match change {
-        CommitCase::Tempo(beats_per_minute)
-            if beats_per_minute == initial.tempo().beats_per_minute() =>
-        {
-            assert_eq!(committed.revision(), initial.revision());
-            assert!(published.is_empty());
-        }
-        CommitCase::Tempo(beats_per_minute) => assert_eq!(
+    if beats_per_minute == initial.tempo().beats_per_minute() {
+        assert_eq!(committed.revision(), initial.revision());
+        assert!(published.is_empty());
+    } else {
+        assert_eq!(
             published,
             vec![TransportEvent::TempoCommitted {
                 beats_per_minute,
                 revision: u64::from(committed.revision()),
             }]
-        ),
-        CommitCase::Playing(playing) => assert_eq!(
-            published,
-            vec![TransportEvent::PlayStateCommitted {
-                playing,
-                revision: u64::from(committed.revision()),
-            }]
-        ),
+        );
     }
-}
-
-#[kithara::test]
-fn seek_commit_announces_the_target_beat() {
-    let session = session(512, 4);
-    let mut events = register_transport_events(&session);
-    let _ = commit_initial_transport(&session, &mut events);
-    let target = SessionBeat::new(7.25).expect("invariant: seek target is finite");
-
-    expect_ok(
-        session
-            .exec(Cmd::SeekSession { target })
-            .expect("invariant: seek command reaches the session"),
-    );
-    session
-        .credit(2)
-        .expect("invariant: seek reaches its render boundary");
-    let committed = snapshot(&session);
-
-    assert_eq!(
-        drain_transport_events(&mut events),
-        vec![TransportEvent::SeekCommitted {
-            position_beats: f64::from(target),
-            revision: u64::from(committed.revision()),
-        }]
-    );
 }
 
 #[kithara::test]
@@ -365,109 +299,6 @@ fn setting_the_same_tempo_does_not_create_a_new_revision() {
     let later = snapshot(&session);
     assert_eq!(later.revision(), committed.revision());
     assert_eq!(later.tempo(), committed.tempo());
-}
-
-#[kithara::test]
-fn session_seek_relocates_to_the_exact_target_beat() {
-    const BLOCK_FRAMES: u32 = 512;
-    let session = session(BLOCK_FRAMES, 6);
-    set_tempo(&session, 120.0);
-    session.credit(1).expect("invariant: initial tempo commits");
-    let target = SessionBeat::new(7.25).expect("invariant: seek target is finite");
-    expect_ok(
-        session
-            .exec(Cmd::SeekSession { target })
-            .expect("invariant: seek command reaches the session"),
-    );
-    session
-        .credit(1)
-        .expect("invariant: active tempo reaches the seek boundary");
-    session
-        .credit(1)
-        .expect("invariant: seek applies at the exact boundary");
-
-    let rendered_step =
-        f64::from(BLOCK_FRAMES) * 2.0 / f64::from(consts::RING_ADMISSION_SAMPLE_RATE);
-    let relocated_boundary = f64::from(snapshot(&session).position()) - rendered_step;
-    assert!((relocated_boundary - f64::from(target)).abs() <= sample_tolerance(2.0));
-}
-
-#[kithara::test]
-fn paused_transport_holds_its_position_across_rendered_blocks() {
-    const BLOCK_FRAMES: u32 = 512;
-    let session = session(BLOCK_FRAMES, 8);
-    set_tempo(&session, 120.0);
-    session.credit(1).expect("invariant: initial tempo commits");
-    set_playing(&session, false);
-    session
-        .credit(1)
-        .expect("invariant: playing transport reaches the pause boundary");
-    session
-        .credit(1)
-        .expect("invariant: pause applies at the boundary");
-    let paused = snapshot(&session);
-    assert!(!paused.is_playing());
-
-    session
-        .credit(4)
-        .expect("invariant: paused blocks continue rendering");
-    let later = snapshot(&session);
-    assert!(!later.is_playing());
-    assert_eq!(later.position(), paused.position());
-}
-
-#[kithara::test]
-fn changing_tempo_while_paused_does_not_resume_playback() {
-    const BLOCK_FRAMES: u32 = 512;
-    let session = session(BLOCK_FRAMES, 10);
-    set_tempo(&session, 120.0);
-    session.credit(1).expect("invariant: initial tempo commits");
-    set_playing(&session, false);
-    session
-        .credit(2)
-        .expect("invariant: pause applies at its boundary");
-    let paused = snapshot(&session);
-    assert!(!paused.is_playing());
-
-    set_tempo(&session, 90.0);
-    session
-        .credit(2)
-        .expect("invariant: retuned tempo applies at its boundary");
-    let retuned = snapshot(&session);
-
-    assert!(!retuned.is_playing());
-    assert_eq!(retuned.tempo().beats_per_minute(), 90.0);
-    assert_eq!(retuned.position(), paused.position());
-}
-
-#[kithara::test]
-fn resuming_after_a_pause_continues_from_the_held_position() {
-    const BLOCK_FRAMES: u32 = 512;
-    let session = session(BLOCK_FRAMES, 12);
-    set_tempo(&session, 120.0);
-    session.credit(1).expect("invariant: initial tempo commits");
-    set_playing(&session, false);
-    session
-        .credit(2)
-        .expect("invariant: pause applies at its boundary");
-    let paused = snapshot(&session);
-    session
-        .credit(3)
-        .expect("invariant: paused blocks continue rendering");
-
-    set_playing(&session, true);
-    session
-        .credit(2)
-        .expect("invariant: resume applies at its boundary");
-    let resumed = snapshot(&session);
-
-    let step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(consts::RING_ADMISSION_SAMPLE_RATE);
-    assert!(resumed.is_playing());
-    assert!(
-        (f64::from(resumed.position()) - f64::from(paused.position()) - step).abs()
-            <= sample_tolerance(2.0),
-        "resume must continue from the held beat, not skip the paused span"
-    );
 }
 
 #[kithara::test]

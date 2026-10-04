@@ -104,7 +104,7 @@ pub struct OutputContext {
     /// The sample rate defining [`Self::output_frames`].
     #[field(get, copy)]
     sample_rate: NonZeroU32,
-    /// The committed transport revision, including paused transport.
+    /// The committed transport revision.
     #[field(get, copy)]
     transport_revision: Option<TransportRevision>,
     /// The exact half-open session-output frame range.

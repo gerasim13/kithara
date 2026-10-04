@@ -224,14 +224,6 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::SetSessionPlaying { playing } => match transport::set_playing(state, playing) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
-        Cmd::SeekSession { target } => match transport::seek(state, target) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
         Cmd::QuerySessionTransport => match transport::snapshot(state) {
             Ok(snapshot) => Reply::SessionTransport(snapshot),
             Err(err) => Reply::Err(err),

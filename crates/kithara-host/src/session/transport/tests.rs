@@ -45,10 +45,9 @@ fn second_revision() -> TransportRevision {
         .expect("invariant: second transport revision exists")
 }
 
-fn commit(tempo: f64, playing: bool, revision: TransportRevision) -> SessionTransportCommit {
+fn commit(tempo: f64, revision: TransportRevision) -> SessionTransportCommit {
     SessionTransportCommit::new(
         Tempo::new(tempo).expect("invariant: test tempo is valid"),
-        playing,
         revision,
     )
 }
@@ -198,7 +197,7 @@ fn active_harness() -> (
 ) {
     let (mut extra, mut output) = proc_extra();
     let mut processor = SessionTransportProcessor;
-    let active = commit(120.0, true, TransportRevision::first());
+    let active = commit(120.0, TransportRevision::first());
     let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     process_node(
         &mut processor,
@@ -308,8 +307,7 @@ fn invalid_transport_block_replaces_the_previous_render_context() {
 fn transport_commit_publishes_anchor_and_grid_stamp_atomically() {
     let (mut processor, mut extra, mut output, active) = active_harness();
     let before = snapshot(&mut output);
-    let target = SessionBeat::new(3.25).expect("invariant: relocation target is finite");
-    let next = SessionTransportCommit::relocate(active.tempo(), true, second_revision(), target);
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
@@ -349,10 +347,10 @@ fn transport_commit_publishes_anchor_and_grid_stamp_atomically() {
     assert_eq!(session_grid.stamp(), applied.session_grid_stamp());
     let resolved = session_grid.position_at(MapPoint::new(
         session_grid.stamp(),
-        Beat::new(3.25).expect("invariant: relocation beat is finite"),
+        Beat::new(0.04).expect("invariant: transition beat is finite"),
     ));
     let BeatGridQuery::Resolved(position) = resolved else {
-        panic!("expected relocated beat to resolve on the published session grid")
+        panic!("expected the transition beat to resolve on the published session grid")
     };
     assert_eq!(
         *position.value().value(),
@@ -415,7 +413,7 @@ fn reserved_route_restart_promotes_a_commit_rendered_before_stop() {
         .advance_restart()
         .expect("invariant: fixture route generation can advance");
 
-    let next = commit(60.0, true, second_revision());
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
@@ -475,7 +473,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
         old_grid.tempo_at(old_position),
         BeatGridQuery::Resolved(estimate) if *estimate.value() == old_tempo
     ));
-    let next = commit(60.0, true, second_revision());
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
@@ -551,83 +549,9 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
 }
 
 #[kithara::test]
-fn relocation_commit_reanchors_the_exact_target_beat() {
-    let (mut processor, mut extra, mut output, active) = active_harness();
-    let target = SessionBeat::new(3.25).expect("invariant: relocation target is finite");
-    let next = SessionTransportCommit::relocate(active.tempo(), true, second_revision(), target);
-    let stamp = TransportCommitStamp::new(
-        Some(active),
-        next,
-        SessionFrame::new(block_frame(2)),
-        sample_rate(),
-    );
-    process_node(
-        &mut processor,
-        &proc_info_at(block_frame(1)),
-        &mut extra,
-        Some(stage_event(stamp)),
-        None,
-    );
-    process_node(
-        &mut processor,
-        &proc_info_at(block_frame(2)),
-        &mut extra,
-        Some(apply_event(second_revision())),
-        None,
-    );
-
-    let relocated = snapshot(&mut output);
-    assert_eq!(relocated.revision(), second_revision());
-    assert!((f64::from(relocated.position()) - 3.27).abs() <= f64::EPSILON);
-    assert_eq!(
-        relocated
-            .anchor()
-            .frame_at(target)
-            .expect("invariant: relocation target is representable on its observed anchor"),
-        SessionFrame::new(block_frame(2))
-    );
-}
-
-#[kithara::test]
-fn inactive_transport_publishes_a_frozen_position() {
-    let (mut processor, mut extra, mut output, active) = active_harness();
-    let paused = commit(active.tempo().beats_per_minute(), false, second_revision());
-    let stamp = TransportCommitStamp::new(
-        Some(active),
-        paused,
-        SessionFrame::new(block_frame(2)),
-        sample_rate(),
-    );
-    process_node(
-        &mut processor,
-        &proc_info_at(block_frame(1)),
-        &mut extra,
-        Some(stage_event(stamp)),
-        None,
-    );
-    process_node(
-        &mut processor,
-        &proc_info_at(block_frame(2)),
-        &mut extra,
-        Some(apply_event(second_revision())),
-        None,
-    );
-    let paused_snapshot = snapshot(&mut output);
-    assert!(!paused_snapshot.is_playing());
-    assert_eq!(paused_snapshot.revision(), second_revision());
-    assert!((f64::from(paused_snapshot.position()) - 0.04).abs() <= f64::EPSILON);
-
-    assert_eq!(
-        process_result(&proc_info_at(block_frame(3)), &mut extra, None, None,),
-        Ok(())
-    );
-    assert_eq!(snapshot(&mut output), paused_snapshot);
-}
-
-#[kithara::test]
 fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
     let (mut processor, mut extra, mut output, active) = active_harness();
-    let next = commit(60.0, true, second_revision());
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
@@ -671,8 +595,8 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
 #[kithara::test]
 fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
     let (mut processor, mut extra, mut output, active) = active_harness();
-    let stale = commit(100.0, true, TransportRevision::first());
-    let next = commit(60.0, true, second_revision());
+    let stale = commit(100.0, TransportRevision::first());
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(stale),
         next,
@@ -707,7 +631,7 @@ fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
 #[kithara::test]
 fn transport_abort_is_idempotent() {
     let (mut processor, mut extra, mut output, active) = active_harness();
-    let next = commit(60.0, true, second_revision());
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
@@ -746,7 +670,7 @@ fn transport_abort_is_idempotent() {
 #[kithara::test]
 fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     let (mut processor, mut extra, mut output, active) = active_harness();
-    let next = commit(60.0, true, second_revision());
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
@@ -841,7 +765,7 @@ fn repeated_route_reset_preserves_the_beat_until_the_new_axis_renders() {
 #[kithara::test]
 fn duplicate_stage_in_one_block_is_rejected() {
     let (mut extra, _output) = proc_extra();
-    let active = commit(120.0, true, TransportRevision::first());
+    let active = commit(120.0, TransportRevision::first());
     let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     assert_eq!(
         process_result(
@@ -884,7 +808,7 @@ fn stage_for_another_sample_rate_is_rejected() {
         .expect("invariant: doubled sample rate is non-zero");
     let stamp = TransportCommitStamp::new(
         Some(active),
-        commit(60.0, true, second_revision()),
+        commit(60.0, second_revision()),
         SessionFrame::new(block_frame(2)),
         foreign_rate,
     );
@@ -909,7 +833,7 @@ fn stage_for_another_sample_rate_is_rejected() {
 #[kithara::test]
 fn apply_for_another_sample_rate_is_rejected() {
     let (mut processor, mut extra, mut output, active) = active_harness();
-    let next = commit(60.0, true, second_revision());
+    let next = commit(60.0, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
@@ -948,7 +872,7 @@ fn a_failing_block_rejects_the_pending_stamp_and_still_publishes() {
     let (mut processor, mut extra, mut output, active) = active_harness();
     let stamp = TransportCommitStamp::new(
         Some(active),
-        commit(60.0, true, second_revision()),
+        commit(60.0, second_revision()),
         SessionFrame::new(block_frame(2)),
         sample_rate(),
     );

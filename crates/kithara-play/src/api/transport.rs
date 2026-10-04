@@ -75,16 +75,12 @@ pub struct SessionTransportSnapshot {
     /// Returns the monotonic revision of the committed transport configuration.
     #[field(get, copy)]
     revision: TransportRevision,
-    /// Returns whether the processed session transport is playing.
-    #[field(get = is_playing, copy)]
-    playing: bool,
 }
 
 impl SessionTransportSnapshot {
     #[must_use]
     pub const fn new(
         position: SessionBeat,
-        playing: bool,
         tempo: Tempo,
         revision: TransportRevision,
         anchor: SessionAnchor,
@@ -98,7 +94,6 @@ impl SessionTransportSnapshot {
             session_epoch,
             tempo,
             revision,
-            playing,
         }
     }
 
@@ -167,7 +162,6 @@ mod tests {
         .expect("invariant: fixture anchor is valid");
         let snapshot = SessionTransportSnapshot::new(
             SessionBeat::new(8.0).expect("invariant: fixture position is finite"),
-            true,
             Tempo::new(120.0).expect("invariant: fixture tempo is in range"),
             TransportRevision::first(),
             anchor,

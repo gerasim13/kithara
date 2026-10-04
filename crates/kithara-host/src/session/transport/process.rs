@@ -10,8 +10,8 @@ use kithara_warp::{SessionAnchor, SessionBeat};
 use triple_buffer::Input;
 
 use super::commit::{
-    SessionGridGeneration, SessionTransportCommit, TransportBoundary, TransportCommitEvent,
-    TransportCommitResult, TransportCommitStamp, TransportObservation, TransportProcessError,
+    SessionGridGeneration, SessionTransportCommit, TransportCommitEvent, TransportCommitResult,
+    TransportCommitStamp, TransportObservation, TransportProcessError,
 };
 use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 
@@ -205,40 +205,22 @@ impl TransportCommitState {
             self.reject_revision(revision);
             return Ok(());
         }
-        let beat = match (stamp.next().boundary(), stamp.previous()) {
-            (TransportBoundary::Relocate(target), _) => target,
-            (TransportBoundary::Continuous, Some(previous)) => {
-                let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
-                if previous.is_playing() {
-                    anchor
-                        .beat_at(stamp.target_frame())
-                        .map_err(|_| TransportProcessError::InvalidBeatRange)?
-                } else {
-                    anchor.beat()
-                }
-            }
-            (TransportBoundary::Continuous, None) => {
-                SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
-            }
-        };
-        let anchor = match (stamp.next().boundary(), stamp.previous(), self.anchor) {
-            (TransportBoundary::Continuous, Some(previous), Some(anchor))
-                if previous.is_playing() && stamp.next().is_playing() =>
-            {
-                anchor
-                    .retarget(
-                        stamp.target_frame(),
-                        stamp.next().tempo().beats_per_second(),
-                        TEMPO_SMOOTH_SECONDS,
-                    )
-                    .map_err(|_| TransportProcessError::InvalidBeatRange)?
-            }
-            _ => Self::build_anchor(
+        let anchor = if stamp.previous().is_some() {
+            self.anchor
+                .ok_or(TransportProcessError::InvalidBeatRange)?
+                .retarget(
+                    stamp.target_frame(),
+                    stamp.next().tempo().beats_per_second(),
+                    TEMPO_SMOOTH_SECONDS,
+                )
+                .map_err(|_| TransportProcessError::InvalidBeatRange)?
+        } else {
+            Self::build_anchor(
                 stamp.target_frame(),
-                beat,
+                SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?,
                 stamp.next().tempo(),
                 stamp.sample_rate(),
-            )?,
+            )?
         };
         let session_grid_revision = self.session_grid.next_revision()?;
         self.active = Some(stamp.next());
@@ -362,16 +344,11 @@ impl TransportCommitState {
             return Ok(self.snapshot);
         };
         let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
-        let position = if commit.is_playing() {
-            session_beats
-                .ok_or(TransportProcessError::InvalidBeatRange)?
-                .end
-        } else {
-            anchor.beat()
-        };
+        let position = session_beats
+            .ok_or(TransportProcessError::InvalidBeatRange)?
+            .end;
         Ok(Some(SessionTransportSnapshot::new(
             position,
-            commit.is_playing(),
             commit.tempo(),
             commit.revision(),
             anchor,
@@ -450,10 +427,7 @@ impl TransportCommitState {
         &self,
         info: &ProcInfo,
     ) -> Result<Option<Range<SessionBeat>>, TransportProcessError> {
-        let Some(active) = self.active else {
-            return Ok(None);
-        };
-        if !active.is_playing() {
+        if self.active.is_none() {
             return Ok(None);
         }
         let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;

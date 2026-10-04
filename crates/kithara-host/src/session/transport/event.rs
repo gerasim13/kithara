@@ -7,14 +7,6 @@ pub enum TransportEvent {
         beats_per_minute: f64,
         revision: u64,
     },
-    PlayStateCommitted {
-        playing: bool,
-        revision: u64,
-    },
-    SeekCommitted {
-        position_beats: f64,
-        revision: u64,
-    },
     Failed {
         revision: Option<u64>,
         reason: String,
