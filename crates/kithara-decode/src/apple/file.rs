@@ -177,6 +177,17 @@ impl AppleAudioFile {
         Self::open_inner(source, hint, size, false)
     }
 
+    /// Open a segmented container within its header-declared extent, without
+    /// resolving segment sizes or scanning its packets before playback.
+    pub(crate) fn open_segmented(
+        source: BoxedSource,
+        hint: Option<u32>,
+        end: u64,
+    ) -> DecodeResult<Self> {
+        let end = i64::try_from(end).map_err(DecodeError::backend)?;
+        Self::open_inner(source, hint, SizeMode::Snapshot(end), false)
+    }
+
     /// The source byte offset `AudioFileServices` maps `packet` to — the same
     /// offset its own packet read seeks to, so a seek can report it as
     /// `landed_byte` and keep the stream's byte cursor consistent with where
@@ -381,6 +392,17 @@ impl AudioFileCallbacks for CallbackCtx {
         if matches!(self.size, SizeMode::Unknown) && position >= UNKNOWN_SIZE_TAIL_PROBE_MIN {
             return Ok(0);
         }
+        let buffer = match self.size {
+            SizeMode::Snapshot(end) => {
+                let available = usize::try_from(end.saturating_sub(position).max(0))
+                    .map_or(buffer.len(), |available| available.min(buffer.len()));
+                if available == 0 {
+                    return Ok(0);
+                }
+                &mut buffer[..available]
+            }
+            SizeMode::Unknown => buffer,
+        };
         let request = buffer.len();
         if let Some(previous) = self.terminal_short_read.get()
             && previous.position == pos

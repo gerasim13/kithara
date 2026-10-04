@@ -69,6 +69,7 @@ pub(crate) struct AppleAudioFileDemuxer {
 pub(crate) enum SourceOpenMode {
     Complete,
     Streaming,
+    Segmented(u64),
 }
 
 impl AppleAudioFileDemuxer {
@@ -145,6 +146,9 @@ impl AppleAudioFileDemuxer {
         S: HasPool<u8>,
     {
         let file = match (open_mode, codec) {
+            (SourceOpenMode::Segmented(end), _) => {
+                AppleAudioFile::open_segmented(source, hint, end)?
+            }
             (SourceOpenMode::Streaming, AudioCodec::Flac | AudioCodec::Pcm) => {
                 AppleAudioFile::open_sized_streaming(source, hint)?
             }

@@ -89,8 +89,7 @@ pub(super) fn wav_data_range(source: &mut BoxedSource) -> DecodeResult<std::ops:
     wav_chunk_range(source, *b"data")
 }
 
-/// Locate a RIFF chunk without crossing the declared container extent.
-fn wav_chunk_range(source: &mut BoxedSource, id: [u8; 4]) -> DecodeResult<std::ops::Range<u64>> {
+pub(super) fn wav_container_end(source: &mut BoxedSource) -> DecodeResult<u64> {
     let origin = skip_id3_tags(source)?;
     let mut header = [0; 12];
     source.read_exact(&mut header)?;
@@ -102,10 +101,16 @@ fn wav_chunk_range(source: &mut BoxedSource, id: [u8; 4]) -> DecodeResult<std::o
             .try_into()
             .map_err(|_| DecodeError::ProbeFailed)?,
     );
-    let end = origin
+    origin
         .checked_add(u64::from(size))
         .and_then(|end| end.checked_add(8))
-        .ok_or(DecodeError::ProbeFailed)?;
+        .filter(|_| size >= 4)
+        .ok_or(DecodeError::ProbeFailed)
+}
+
+/// Locate a RIFF chunk without crossing the declared container extent.
+fn wav_chunk_range(source: &mut BoxedSource, id: [u8; 4]) -> DecodeResult<std::ops::Range<u64>> {
+    let end = wav_container_end(source)?;
     while source
         .stream_position()?
         .checked_add(8)

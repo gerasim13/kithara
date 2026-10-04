@@ -16,6 +16,8 @@ use kithara_stream::{
 };
 use serde::Deserialize;
 
+#[cfg(apple_backend)]
+use super::probe::wav_container_end;
 use super::probe::{
     ProbeHint, codec_from_mp4_fourcc, resolve_codec_container, skip_id3_tags, sniff_caf_codec,
     sniff_container_from_source, sniff_ogg_codec, sniff_wav_codec, wav_data_range,
@@ -536,7 +538,9 @@ where
     } else {
         None
     };
-    let open_mode = if config.byte_len_handle.is_some()
+    let open_mode = if config.byte_map.is_some() && container == Some(ContainerFormat::Wav) {
+        SourceOpenMode::Segmented(wav_container_end(&mut source)?)
+    } else if config.byte_len_handle.is_some()
         && (codec != AudioCodec::Pcm || config.byte_map.is_some())
     {
         SourceOpenMode::Streaming
