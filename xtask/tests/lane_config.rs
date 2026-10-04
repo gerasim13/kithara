@@ -13,17 +13,15 @@ fn workspace_lane_builds_native_test_packages_in_one_cargo_graph() {
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
     .expect("xtask config is valid TOML");
-    let test = &config["test"];
-    assert_eq!(
-        test["lanes"]["workspace"]["program"].as_str(),
-        Some("cargo")
-    );
+    let workspace = &config["test"]["lanes"]["workspace"]["cargo"];
+    assert_eq!(workspace["workspace"].as_bool(), Some(true));
     assert_eq!(config["stress"]["lane"].as_str(), Some("workspace"));
-    let args = test["lanes"]["workspace"]["prefix_args"]
+    let excluded: Vec<&str> = workspace["exclude"]
         .as_array()
-        .expect("workspace lane has arguments");
-    let args: Vec<&str> = args.iter().filter_map(toml::Value::as_str).collect();
-    assert!(args.contains(&"--workspace"));
+        .expect("workspace lane excludes packages")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
     for package in [
         "kithara-fuzz",
         "kithara-ui",
@@ -35,7 +33,7 @@ fn workspace_lane_builds_native_test_packages_in_one_cargo_graph() {
         "kithara-ffi-web-analysis-tests",
     ] {
         assert!(
-            args.contains(&package),
+            excluded.contains(&package),
             "workspace lane must exclude {package}"
         );
     }

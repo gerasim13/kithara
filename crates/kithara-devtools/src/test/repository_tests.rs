@@ -3,8 +3,8 @@ use std::{fs, path::Path};
 use super::{
     command::lane_command,
     request::TestRequest,
-    selection::{features_for, select_lane},
-    tests::{args_of, envs_of},
+    selection::select_lane,
+    tests::{args_of, envs_of, features_for},
 };
 use crate::common::project::ProjectConfig;
 
@@ -22,8 +22,7 @@ fn linux_usdt_contract_lanes_keep_their_product_feature_closures() {
         ("usdt-hls-stress", "kithara-hls-tests/usdt"),
         ("usdt-queue", "kithara-queue-tests/usdt"),
     ] {
-        let lane = &test.lanes[name];
-        let features = features_for(test, lane, &request).expect("features");
+        let features = features_for(test, name, &request).expect("features");
         assert!(features.contains(feature), "{name} keeps {feature}");
         assert!(
             !features.contains("usdt-observer"),
@@ -62,8 +61,8 @@ fn every_test_lane_renders_the_recorded_command() {
             let mut args = vec![format!("--lane={name}")];
             args.extend(caller.iter().map(|arg| (*arg).to_owned()));
             let request = TestRequest::parse(&args).expect("parse request");
-            let (name, lane) = select_lane(&project.test, &request).expect("select lane");
-            let command = lane_command(&project, name, lane, &request).expect("lane command");
+            let name = select_lane(&project.test, &request).expect("select lane");
+            let command = lane_command(&project.test, name, &request).expect("lane command");
             report.push_str(&format!("# {name} [{}]\n", caller.join(" ")));
             report.push_str(&format!("  {}", command.get_program().to_string_lossy()));
             for arg in args_of(&command) {

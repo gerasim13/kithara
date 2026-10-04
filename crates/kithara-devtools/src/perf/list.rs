@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +8,7 @@ use serde::Deserialize;
 
 use crate::{
     common::project::ProjectConfig,
-    test::{LaneToggles, lane_features},
+    test::{LaneChoice, LaneToggles, NextestAction, resolve},
 };
 
 #[derive(Debug)]
@@ -55,30 +54,22 @@ pub(crate) fn nextest_list(
     target_dir: &Path,
 ) -> Result<BTreeMap<String, SuiteBin>> {
     let test = &project.test;
-    let Some(lane) = test.lanes.get(&test.default_lane) else {
-        bail!("test.default_lane missing from test.lanes");
-    };
-    let mut args = lane.prefix_args.clone();
-    let Some(run_pos) = args.iter().position(|arg| arg == "run") else {
-        bail!("default lane prefix args carry no `run` verb; cannot derive list command");
-    };
-    "list".clone_into(&mut args[run_pos]);
-    let features = lane_features(
+    let mut cmd = resolve(
         test,
-        lane,
-        LaneToggles {
-            flash,
-            no_block: false,
+        &LaneChoice {
+            backend,
+            features: &[],
+            lane: &test.default_lane,
+            toggles: LaneToggles {
+                flash,
+                no_block: false,
+            },
         },
-        backend,
+    )?
+    .command(
+        NextestAction::List,
+        &["--message-format".to_owned(), "json".to_owned()],
     )?;
-    let mut cmd = Command::new(&lane.program);
-    cmd.args(&args);
-    if !features.is_empty() {
-        cmd.arg(&test.feature_arg)
-            .arg(features.iter().cloned().collect::<Vec<_>>().join(","));
-    }
-    cmd.args(["--message-format", "json"]);
     cmd.env("CARGO_TARGET_DIR", target_dir);
     let out = cmd.output().context("run cargo nextest list")?;
     if !out.status.success() {

@@ -136,7 +136,6 @@ pub(crate) const COMMENTED_CONFIG_TEMPLATE: &str = r#"
 # [test]
 # default_lane = ""
 # default_backend = ""
-# feature_arg = ""
 # features = []
 #
 # [test.flash]
@@ -144,13 +143,12 @@ pub(crate) const COMMENTED_CONFIG_TEMPLATE: &str = r#"
 # default = true
 #
 # [test.lanes.default]
-# program = ""
-# prefix_args = []
-# suffix_args = []
+# cargo.packages = []
+# cargo.profile = ""
+# runner.nextest.profile = ""
 # default_features = []
 # default_flash = true
 # default_no_block = false
-# passthrough = ""
 #
 # [test.net_backends.default]
 # features = []
@@ -435,7 +433,7 @@ pub(crate) const CASE: &str = "audio::mix_tap";
 pub(crate) const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
 
 pub(crate) const MANIFEST_READ_LIMIT: u64 = 1_048_577;
-pub(crate) const MANIFEST_SCHEMA: u32 = 4;
+pub(crate) const MANIFEST_SCHEMA: u32 = 5;
 pub(crate) const MAX_MANIFEST_BYTES: usize = 1_048_576;
 
 #[cfg(test)]

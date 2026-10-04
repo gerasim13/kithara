@@ -250,9 +250,10 @@ mod tests {
         );
         assert!(
             test.lanes["core"]
-                .prefix_args
-                .windows(2)
-                .any(|args| args == ["-p", "kithara-core-test-fixtures"]),
+                .cargo
+                .packages
+                .iter()
+                .any(|package| package == "kithara-core-test-fixtures"),
             "the core lane must compile its shared test inputs"
         );
         assert_eq!(

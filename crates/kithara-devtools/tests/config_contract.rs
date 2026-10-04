@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use kithara_devtools::common::{
-    project::ProjectConfig,
+    project::{ProjectConfig, TestCargoRunner, TestNextestRunner, TestRunner},
     scope::Scope,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -205,11 +205,9 @@ CAPTURE_DIR = "captures"
 [test]
 default_lane = "workspace"
 default_backend = "http"
-feature_arg = "--features"
 
 [test.lanes.workspace]
-program = "cargo"
-prefix_args = ["nextest", "run"]
+cargo.workspace = true
 
 [test.net_backends.http]
 features = []
@@ -268,8 +266,7 @@ default_lane = "workspace"
 default_backend = "http"
 
 [test.lanes.workspace]
-program = "cargo"
-prefix_args = ["nextest", "run"]
+cargo.workspace = true
 
 [test.net_backends.http]
 features = []
@@ -323,8 +320,7 @@ default_lane = "workspace"
 default_backend = "http"
 
 [test.lanes.workspace]
-program = "cargo"
-prefix_args = ["nextest", "run"]
+cargo.workspace = true
 
 [test.net_backends.http]
 features = []
@@ -365,4 +361,167 @@ exclude = ["crates/generated/**"]
         .collect();
 
     assert_eq!(rels, ["crates/app/src/lib.rs"]);
+}
+
+/// A lane names what it builds and what runs it as typed keys, which is what
+/// lets every executor and the planner derive the same cargo build from it.
+#[test]
+fn a_test_lane_is_typed_cargo_options_and_a_runner() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[test.lanes.ui]
+cargo.packages = ["demo-ui"]
+cargo.profile = "test-release"
+cargo.lib = true
+cargo.tests = ["frames"]
+runner.nextest.filter = "binary(frames)"
+runner.nextest.profile = "gpu"
+runner.nextest.test_threads = 1
+runner.nextest.ignore_default_filter = true
+
+[test.lanes.doc]
+cargo.workspace = true
+cargo.exclude = ["demo-fuzz"]
+runner.cargo.doc = true
+"#,
+    );
+
+    let config = ProjectConfig::load(temp.path()).expect("load typed lanes");
+
+    let ui = &config.test.lanes["ui"];
+    assert_eq!(ui.cargo.packages, ["demo-ui"]);
+    assert_eq!(ui.cargo.profile.as_deref(), Some("test-release"));
+    assert!(ui.cargo.lib);
+    assert_eq!(ui.cargo.tests, ["frames"]);
+    assert_eq!(
+        ui.runner,
+        TestRunner::Nextest(TestNextestRunner {
+            filter: Some("binary(frames)".to_owned()),
+            profile: Some("gpu".to_owned()),
+            test_threads: Some(1),
+            ignore_default_filter: true,
+        })
+    );
+    let doc = &config.test.lanes["doc"];
+    assert!(doc.cargo.workspace);
+    assert_eq!(doc.cargo.exclude, ["demo-fuzz"]);
+    assert_eq!(
+        doc.runner,
+        TestRunner::Cargo(TestCargoRunner {
+            doc: true,
+            ..TestCargoRunner::default()
+        })
+    );
+}
+
+#[test]
+fn a_test_lane_has_one_runner() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[test.lanes.both]
+cargo.workspace = true
+runner.nextest.filter = "all()"
+runner.cargo.doc = true
+"#,
+    );
+
+    let error = ProjectConfig::load(temp.path()).expect_err("two runners fail");
+
+    assert!(
+        format!("{error:#}").contains("wanted exactly 1 element"),
+        "{error:#}"
+    );
+}
+
+/// The argv keys are gone: a lane that still spells its command is refused
+/// at load instead of running something its typed keys do not say.
+#[test]
+fn a_test_lane_cannot_spell_its_command() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[test.lanes.raw]
+cargo.workspace = true
+prefix_args = ["nextest", "run", "-E", "all()"]
+"#,
+    );
+
+    let error = ProjectConfig::load(temp.path()).expect_err("an argv key fails");
+
+    assert!(
+        format!("{error:#}").contains("unknown field `prefix_args`"),
+        "{error:#}"
+    );
+}
+
+/// Stress hands nextest its own profile and thread count, so a stress lane
+/// that names either would pass nextest the flag twice.
+#[test]
+fn a_stress_lane_cannot_name_its_own_profile_or_thread_count() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[stress]
+default_modes = ["baseline"]
+lane = "workspace"
+backend = "http"
+nextest_config = "config/runner.toml"
+nextest_profile = "repeated"
+default_filter = "all()"
+default_count = 3
+max_count = 10
+test_threads = "4"
+max_test_threads = 8
+build_dir = "target-stress"
+raw_output = "target/evidence"
+report_output = "target/report.md"
+workflow_job_timeout_minutes = 60
+
+[stress.artifacts]
+attempts = "attempts.json"
+subject_junit = "target/runner/junit.xml"
+inventory = "inventory.json"
+junit = "junit.xml"
+log = "runner.log"
+manifest = "manifest.json"
+pressure = "pressure.jsonl"
+report = "report.md"
+
+[stress.environment]
+remove = ["OLD_TRACE"]
+
+[stress.modes.baseline]
+features = ["snapshot-clock"]
+
+[stress.modes.baseline.set_env]
+TRACE_LEVEL = "warn"
+
+[stress.modes.baseline.raw_path_env]
+CAPTURE_DIR = "captures"
+
+[test]
+default_lane = "workspace"
+default_backend = "http"
+
+[test.lanes.workspace]
+cargo.workspace = true
+runner.nextest.profile = "support"
+
+[test.net_backends.http]
+features = []
+"#,
+    );
+
+    let error = ProjectConfig::load(temp.path()).expect_err("a stress lane with a profile fails");
+
+    assert!(
+        format!("{error:#}").contains("must run nextest under `stress.nextest_profile`"),
+        "{error:#}"
+    );
 }

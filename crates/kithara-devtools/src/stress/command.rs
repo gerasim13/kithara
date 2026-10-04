@@ -15,7 +15,7 @@ use super::{
     environment::RunEnvironment,
     manifest::{
         BuildSnapshot, ExecuteResult, ExpectedProvenance, Manifest, ManifestConfig, ManifestSpec,
-        PolicySnapshot, Selection,
+        PolicySnapshot, Selection, StressRunner,
     },
     output,
     pressure::Sampler,
@@ -30,7 +30,7 @@ use crate::{
     consts, lease,
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
-    test::{ConfiguredLane, configured_lane},
+    test::{LaneChoice, LaneToggles, resolve},
     verdict::{ChildFailure, NotClean},
 };
 
@@ -135,7 +135,7 @@ struct ReportExpectation<'a> {
     mode: &'a StressModeConfig,
     filter: &'a str,
     mode_name: &'a str,
-    runner: ConfiguredLane,
+    runner: StressRunner,
     count: usize,
 }
 
@@ -284,20 +284,23 @@ fn lane_runner(
     project: &ProjectConfig,
     config: &StressConfig,
     mode: &StressModeConfig,
-) -> Result<ConfiguredLane> {
-    let Some((program, arguments)) = mode.command.split_first() else {
-        return configured_lane(project, &config.lane, &config.backend, &mode.features);
-    };
-    Ok(ConfiguredLane {
-        lane: config.lane.clone(),
-        backend: config.backend.clone(),
-        program: program.clone(),
-        prefix_args: arguments.to_vec(),
-        suffix_args: Vec::new(),
-        feature_arg: "--features".to_owned(),
-        features: Vec::new(),
-        env: BTreeMap::new(),
-    })
+) -> Result<StressRunner> {
+    if !mode.command.is_empty() {
+        return Ok(StressRunner::Command(mode.command.clone()));
+    }
+    resolve(
+        &project.test,
+        &LaneChoice {
+            features: &mode.features,
+            backend: &config.backend,
+            lane: &config.lane,
+            toggles: LaneToggles {
+                flash: false,
+                no_block: false,
+            },
+        },
+    )
+    .map(|lane| StressRunner::Lane(Box::new(lane)))
 }
 
 /// Records one exit code per attempt, in order.
@@ -434,21 +437,24 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     let commanded = !mode.command.is_empty();
     let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
     let _build_lease = lease::hold(&build);
-    let spec = StressRunSpec {
-        count,
-        inventory: paths.inventory.clone(),
-        junit: subject_junit.clone(),
-        config_file: config_file.clone(),
-        filter: filter.clone(),
-        test_threads: config.test_threads.clone(),
-        profile: config.nextest_profile.clone(),
-        max_count: config.max_count,
-        max_test_threads: config.max_test_threads,
-        runner: runner.clone(),
-        render: config.render.clone(),
+    let spec = match &runner {
+        StressRunner::Lane(lane) => Some(StressRunSpec {
+            count,
+            inventory: paths.inventory.clone(),
+            junit: subject_junit.clone(),
+            config_file: config_file.clone(),
+            filter: filter.clone(),
+            test_threads: config.test_threads.clone(),
+            profile: config.nextest_profile.clone(),
+            max_count: config.max_count,
+            max_test_threads: config.max_test_threads,
+            runner: lane.as_ref().clone(),
+            render: config.render.clone(),
+        }),
+        StressRunner::Command(_) => None,
     };
-    if !commanded {
-        stress_run::validate(&spec)?;
+    if let Some(spec) = &spec {
+        stress_run::validate(spec)?;
         clear_previous_lane_junit(&subject_junit)?;
     }
     ensure_raw_outside_subject_evidence(&paths.raw, &subject_junit)?;
@@ -485,24 +491,27 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
 
     let (primary, sampler_result) = match (manifest_start, sampler) {
         (Ok(()), Ok(sampler)) => {
-            let primary = if commanded {
-                run_command_lane(ctx, mode, &paths, count, &environment).and_then(|codes| {
-                    write_attempts(&paths.attempts, &codes)?;
-                    let failed = codes.iter().filter(|code| **code != 0).count();
-                    if failed == 0 {
-                        Ok(())
-                    } else {
-                        Err(ChildFailure::inherited(
-                            format!("{failed} of {} attempts", codes.len()),
-                            codes.iter().copied().find(|code| *code != 0),
-                        ))
-                    }
-                })
-            } else {
-                stress_run::run(&spec, &subject_root, &paths.log, &|command| {
-                    environment.apply(command);
-                })
-            };
+            let primary = spec.as_ref().map_or_else(
+                || {
+                    run_command_lane(ctx, mode, &paths, count, &environment).and_then(|codes| {
+                        write_attempts(&paths.attempts, &codes)?;
+                        let failed = codes.iter().filter(|code| **code != 0).count();
+                        if failed == 0 {
+                            Ok(())
+                        } else {
+                            Err(ChildFailure::inherited(
+                                format!("{failed} of {} attempts", codes.len()),
+                                codes.iter().copied().find(|code| *code != 0),
+                            ))
+                        }
+                    })
+                },
+                |spec| {
+                    stress_run::run(spec, &subject_root, &paths.log, &|command| {
+                        environment.apply(command);
+                    })
+                },
+            );
             let primary_code = result_code(&primary);
             let sampler_result = sampler.finish(Some(primary_code));
             (primary, sampler_result)
@@ -1420,8 +1429,10 @@ mod tests {
         )
         .expect("a command lane needs no configured test runner");
 
-        assert_eq!(expectation.runner.program, "just");
-        assert_eq!(expectation.runner.prefix_args, ["test", "rtsan"]);
+        assert_eq!(
+            expectation.runner,
+            StressRunner::Command(["just", "test", "rtsan"].map(str::to_owned).to_vec())
+        );
     }
 
     /// nextest's store is rooted at the workspace root and ignores

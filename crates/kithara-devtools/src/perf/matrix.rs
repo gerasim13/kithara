@@ -11,7 +11,7 @@ use crate::{
     common::project::{PerfConfig, ProjectConfig},
     junit::parse_junit,
     perf::lanes::{Lane, RepeatMeta, RunPaths, sanitize},
-    test::{LaneToggles, nextest_lane_command},
+    test::{LaneChoice, LaneToggles, NextestAction, resolve},
 };
 
 pub(crate) struct MatrixParams {
@@ -53,15 +53,19 @@ pub(crate) fn run(params: &MatrixParams, project: &ProjectConfig) -> Result<()> 
                 .with_context(|| format!("create {}", rep_dir.display()))?;
             let mut extra = vec!["--profile".to_owned(), project.perf.nextest_profile.clone()];
             extra.extend(params.extra.iter().cloned());
-            let (features, mut cmd) = nextest_lane_command(
-                project,
-                LaneToggles {
-                    flash: lane.flash,
-                    no_block: false,
+            let resolved = resolve(
+                &project.test,
+                &LaneChoice {
+                    features: &[],
+                    backend: &lane.backend,
+                    lane: &project.test.default_lane,
+                    toggles: LaneToggles {
+                        flash: lane.flash,
+                        no_block: false,
+                    },
                 },
-                &lane.backend,
-                &extra,
             )?;
+            let mut cmd = resolved.command(NextestAction::Run, &extra)?;
             cmd.env("CARGO_TARGET_DIR", &target_dir);
             let started_unix = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -101,7 +105,7 @@ pub(crate) fn run(params: &MatrixParams, project: &ProjectConfig) -> Result<()> 
                 duration_secs,
                 run_id: params.run_id.clone(),
                 lane: lane_name.clone(),
-                features: features.clone(),
+                features: resolved.features.clone(),
                 commit: commit.clone(),
                 exit_code: status.code(),
             };

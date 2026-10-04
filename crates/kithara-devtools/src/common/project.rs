@@ -555,7 +555,6 @@ pub struct TestCommandConfig {
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
     pub default_backend: String,
     pub default_lane: String,
-    pub feature_arg: String,
     pub loom_lane: String,
     /// The file that owns every runner profile, so a lane's verdict reads the
     /// retry count and the report location where they are declared rather than
@@ -637,15 +636,15 @@ pub struct TestLaneConfig {
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,
-    pub passthrough: String,
-    pub program: String,
+    /// What the lane builds: its packages, targets and Cargo profile.
+    pub cargo: TestCargoOptions,
+    /// What runs the built tests: nextest unless the lane names `cargo`.
+    pub runner: TestRunner,
     pub default_features: Vec<String>,
     /// Source prefixes this lane is the test for. `just test run --touched`
     /// runs the lane when the branch changed a path under one of them; a lane
     /// that owns nothing is never selected that way.
     pub owns: Vec<String>,
-    pub prefix_args: Vec<String>,
-    pub suffix_args: Vec<String>,
     /// Toggles whose feature none of this lane's packages declares.
     ///
     /// `default_flash`/`default_no_block` say what a lane runs with by
@@ -655,6 +654,70 @@ pub struct TestLaneConfig {
     /// so a run-wide request has to leave such a lane alone. Valid entries are
     /// `flash` and `no-block`.
     pub undeclared_toggles: Vec<String>,
+}
+
+/// The cargo half of a test lane: what it builds, and so what every runner of
+/// the lane builds. Exactly one of `workspace` and `packages` selects the
+/// packages.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestCargoOptions {
+    /// The Cargo profile the lane builds in.
+    pub profile: Option<String>,
+    /// Members a `workspace` lane leaves out.
+    pub exclude: Vec<String>,
+    /// The packages the lane builds when it does not build the workspace.
+    pub packages: Vec<String>,
+    /// Integration-test targets the lane narrows to.
+    pub tests: Vec<String>,
+    /// Narrows the lane to library unit tests, alone or beside `tests`.
+    pub lib: bool,
+    /// Builds every workspace member but `exclude`.
+    pub workspace: bool,
+}
+
+/// What runs a lane's tests once cargo has built them.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TestRunner {
+    /// `cargo nextest`.
+    Nextest(TestNextestRunner),
+    /// `cargo test`: doctests, which nextest cannot run, and suites the lane
+    /// runs under libtest.
+    Cargo(TestCargoRunner),
+}
+
+impl Default for TestRunner {
+    fn default() -> Self {
+        Self::Nextest(TestNextestRunner::default())
+    }
+}
+
+/// The nextest half of a test lane.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestNextestRunner {
+    /// A filterset every run of the lane is narrowed to; a caller's filterset
+    /// narrows it further.
+    pub filter: Option<String>,
+    /// The nextest profile the lane runs under, over any the caller names.
+    pub profile: Option<String>,
+    /// How many tests run at once; a listing takes none.
+    pub test_threads: Option<u16>,
+    /// Runs the lane outside the profile's `default-filter`.
+    pub ignore_default_filter: bool,
+}
+
+/// The `cargo test` half of a test lane.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TestCargoRunner {
+    /// Test-name filters handed to the test binary.
+    pub name_filters: Vec<String>,
+    /// Runs the doctests of the selected packages.
+    pub doc: bool,
+    /// Shows test output as it is printed.
+    pub no_capture: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
@@ -1176,9 +1239,20 @@ impl ProjectConfig {
         }
         if self.stress.is_configured() {
             self.stress.validate()?;
-            if !self.test.lanes.contains_key(&self.stress.lane) {
+            let Some(lane) = self.test.lanes.get(&self.stress.lane) else {
                 bail!(
                     "stress.lane `{}` is not configured under test.lanes",
+                    self.stress.lane
+                );
+            };
+            if !matches!(
+                &lane.runner,
+                TestRunner::Nextest(nextest) if nextest.profile.is_none() && nextest.test_threads.is_none()
+            ) {
+                bail!(
+                    "stress.lane `{}` must run nextest under `stress.nextest_profile` and \
+                     `stress.test_threads`; a lane with its own profile, its own thread count \
+                     or a `cargo test` runner cannot carry them",
                     self.stress.lane
                 );
             }

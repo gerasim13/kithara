@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
 
-use super::request::TestRequest;
+use super::{request::TestRequest, resolve::LaneChoice};
 use crate::{
     common::project::{TestCommandConfig, TestLaneConfig},
     consts,
@@ -14,9 +14,6 @@ pub(super) fn validate_config(config: &TestCommandConfig) -> Result<()> {
     }
     if config.default_backend.is_empty() {
         bail!("missing test.default_backend in .config/xtask.toml");
-    }
-    if config.feature_arg.is_empty() {
-        bail!("missing test.feature_arg in .config/xtask.toml");
     }
     if config.nextest_config.is_empty() {
         bail!("missing test.nextest_config in .config/xtask.toml");
@@ -51,8 +48,11 @@ pub(super) fn validate_config(config: &TestCommandConfig) -> Result<()> {
         );
     }
     for (name, lane) in &config.lanes {
-        if lane.program.is_empty() {
-            bail!("test.lanes.{name}.program is empty");
+        if lane.cargo.workspace != lane.cargo.packages.is_empty() {
+            bail!("test.lanes.{name}.cargo needs exactly one of `workspace = true` or `packages`");
+        }
+        if !lane.cargo.workspace && !lane.cargo.exclude.is_empty() {
+            bail!("test.lanes.{name}.cargo.exclude needs `workspace = true`");
         }
         if let Some(backend) = &lane.default_backend
             && !config.net_backends.contains_key(backend)
@@ -61,7 +61,6 @@ pub(super) fn validate_config(config: &TestCommandConfig) -> Result<()> {
                 "test.lanes.{name}.default_backend `{backend}` is not configured under test.net_backends"
             );
         }
-        passthrough_position(lane).with_context(|| format!("test.lanes.{name}.passthrough"))?;
     }
     let mut named = BTreeSet::new();
     for flake in &config.known_flakes {
@@ -84,7 +83,7 @@ pub(super) fn validate_config(config: &TestCommandConfig) -> Result<()> {
 pub(super) fn select_lane<'a>(
     config: &'a TestCommandConfig,
     request: &'a TestRequest,
-) -> Result<(&'a str, &'a TestLaneConfig)> {
+) -> Result<&'a str> {
     let explicit_lane = match request.lanes.as_slice() {
         [] => None,
         [lane] => Some(lane.as_str()),
@@ -112,7 +111,7 @@ pub(super) fn select_lane<'a>(
         }
         Some(false) | None => explicit_lane.unwrap_or(&config.default_lane),
     };
-    let Some(lane) = config.lanes.get(lane_name) else {
+    if !config.lanes.contains_key(lane_name) {
         let valid = config
             .lanes
             .keys()
@@ -120,8 +119,8 @@ pub(super) fn select_lane<'a>(
             .collect::<Vec<_>>()
             .join(", ");
         bail!("unsupported test lane `{lane_name}`; configured values: {valid}");
-    };
-    Ok((lane_name, lane))
+    }
+    Ok(lane_name)
 }
 
 #[derive(Clone, Copy)]
@@ -151,7 +150,7 @@ pub(super) fn toggle(
     requested.unwrap_or_else(|| lane_default.unwrap_or(default))
 }
 
-pub(super) fn lane_toggles(
+fn lane_toggles(
     config: &TestCommandConfig,
     lane: &TestLaneConfig,
     request: Option<&TestRequest>,
@@ -174,33 +173,18 @@ pub(super) fn lane_toggles(
     }
 }
 
-pub(super) fn features_for(
-    config: &TestCommandConfig,
-    lane: &TestLaneConfig,
-    request: &TestRequest,
-) -> Result<BTreeSet<String>> {
-    let backend = backend_name(config, lane, request);
-    lane_features(
-        config,
-        lane,
-        lane_toggles(config, lane, Some(request)),
-        backend,
-    )
-}
-
-pub(super) fn backend_name<'a>(
+fn backend_name<'a>(
     config: &'a TestCommandConfig,
     lane: &'a TestLaneConfig,
-    request: &'a TestRequest,
+    request: Option<&'a TestRequest>,
 ) -> &'a str {
     request
-        .net_backend
-        .as_deref()
+        .and_then(|request| request.net_backend.as_deref())
         .or(lane.default_backend.as_deref())
         .unwrap_or(&config.default_backend)
 }
 
-pub(crate) fn lane_features(
+pub(super) fn lane_features(
     config: &TestCommandConfig,
     lane: &TestLaneConfig,
     toggles: LaneToggles,
@@ -228,15 +212,22 @@ pub(crate) fn lane_features(
     Ok(features)
 }
 
-pub(super) enum PassthroughPosition {
-    BeforeSuffix,
-    AfterSuffix,
-}
-
-pub(super) fn passthrough_position(lane: &TestLaneConfig) -> Result<PassthroughPosition> {
-    match lane.passthrough.as_str() {
-        "" | "before-suffix" => Ok(PassthroughPosition::BeforeSuffix),
-        "after-suffix" => Ok(PassthroughPosition::AfterSuffix),
-        value => bail!("unsupported passthrough position `{value}`"),
-    }
+/// What a lane runs with when `request` asks for it, or with no request:
+/// the backend and toggles the request names, else the lane's defaults,
+/// else the project's.
+pub(super) fn requested<'a>(
+    test: &'a TestCommandConfig,
+    lane_name: &'a str,
+    request: Option<&'a TestRequest>,
+) -> Result<LaneChoice<'a>> {
+    let lane = test
+        .lanes
+        .get(lane_name)
+        .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
+    Ok(LaneChoice {
+        features: &[],
+        backend: backend_name(test, lane, request),
+        lane: lane_name,
+        toggles: lane_toggles(test, lane, request),
+    })
 }

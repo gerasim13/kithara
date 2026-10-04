@@ -210,8 +210,7 @@ fn report_path(root: &Path, profile: &str, relative: &str) -> PathBuf {
 ///
 /// `--profile` names the Cargo profile to `cargo test` and the runner profile
 /// to `cargo nextest`, so it is only read past the `nextest` subcommand. The
-/// last one wins, as it does on nextest's own command line: a lane that names
-/// a profile can still be asked for a different one.
+/// last one wins, as it does on nextest's own command line.
 fn nextest_profile(command: &Command) -> Option<String> {
     let args = command
         .get_args()

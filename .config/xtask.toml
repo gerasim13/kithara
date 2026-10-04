@@ -481,7 +481,6 @@ KITHARA_NO_BLOCK_LOG = "no-block.log"
 [test]
 default_lane = "workspace"
 default_backend = "wreq"
-feature_arg = "--features"
 loom_lane = "loom"
 # The file that owns every runner profile. A lane's verdict reads the retry
 # count and the report location from there instead of repeating them here.
@@ -533,77 +532,46 @@ features = ["kithara-net/client-host"]
 # packages, so Cargo can reuse every unchanged test binary while compiling the
 # shared product closure only once. Browser-only packages have their own lane.
 [test.lanes.workspace]
-program = "cargo"
 default_features = []
-prefix_args = [
-  "nextest",
-  "run",
-  "--workspace",
-  "--exclude",
+cargo.workspace = true
+cargo.exclude = [
   "kithara-fuzz",
-  "--exclude",
   "kithara-ui",
-  "--exclude",
   "kithara-ui-gallery",
-  "--exclude",
   "kithara-ui-input",
-  "--exclude",
   "kithara-ui-shaping",
-  "--exclude",
   "kithara-devtools",
-  "--exclude",
   "xtask",
-  "--exclude",
   "kithara-test-utils",
-  "--exclude",
   "kithara-test-macros",
-  "--exclude",
   "kithara-ffi-web-tests",
-  "--exclude",
   "kithara-ffi-web-analysis-tests",
-  "--cargo-profile",
-  "test-release",
 ]
+cargo.profile = "test-release"
 
 [test.lanes.android]
-program = "cargo"
 default_backend = "none"
 default_flash = true
 default_no_block = false
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
+cargo.packages = [
   "kithara-audio-tests",
-  "-p",
   "kithara-decode-tests",
-  "-p",
   "kithara-file-tests",
-  "-p",
   "kithara-hls-tests",
-  "-p",
   "kithara-host-tests",
-  "-p",
   "kithara-integration-tests",
-  "-p",
   "kithara-play-tests",
-  "-p",
   "kithara-queue-tests",
-  "-p",
   "kithara-stream-tests",
-  "-p",
   "kithara-warp-tests",
-  "-p",
   "kithara-sync-tests",
-  "--cargo-profile",
-  "test-release",
 ]
+cargo.profile = "test-release"
 
 # Core data-flow contracts have no reason to compile decoders, encoders, the
 # player, or the app. Keep their selected packages together because they share
 # the same low-level closure and are all exercised by one branch change.
 [test.lanes.core]
-program = "cargo"
 default_features = ["kithara-platform/tokio-rt-multi-thread"]
 owns = [
   "crates/kithara-bufpool/",
@@ -614,32 +582,21 @@ owns = [
   "tests/crates/core/",
   "tests/crates/stream/",
 ]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
+cargo.packages = [
   "kithara-bufpool",
-  "-p",
   "kithara-events",
-  "-p",
   "kithara-platform",
-  "-p",
   "kithara-signal",
-  "-p",
   "kithara-stream",
-  "-p",
   "kithara-stream-tests",
-  "-p",
   "kithara-core-test-fixtures",
-  "--cargo-profile",
-  "test-release",
 ]
+cargo.profile = "test-release"
 
 # The audio closure owns decode/playback-adjacent implementations and the
 # dedicated tests package. It deliberately uses the lightweight fixture
 # registry declared by `kithara-audio-tests`.
 [test.lanes.audio]
-program = "cargo"
 owns = [
   "crates/kithara-audio/",
   "crates/kithara-record/",
@@ -647,70 +604,36 @@ owns = [
   "crates/kithara-stretch/",
   "tests/crates/audio/",
 ]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
+cargo.packages = [
   "kithara-audio",
-  "-p",
   "kithara-record",
-  "-p",
   "kithara-resampler",
-  "-p",
   "kithara-stretch",
-  "-p",
   "kithara-audio-tests",
-  "--cargo-profile",
-  "test-release",
 ]
+cargo.profile = "test-release"
 
 
 [test.lanes.sync]
-program = "cargo"
 owns = ["crates/kithara-sync/", "tests/crates/sync/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-sync",
-  "-p",
-  "kithara-sync-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-sync", "kithara-sync-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.warp]
-program = "cargo"
 default_backend = "none"
 owns = ["crates/kithara-warp/", "tests/crates/warp/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-warp",
-  "-p",
-  "kithara-warp-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-warp", "kithara-warp-tests"]
+cargo.profile = "test-release"
 
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.
 [test.lanes.abr]
-program = "cargo"
 owns = ["crates/kithara-abr/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-abr",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-abr"]
+cargo.profile = "test-release"
 
 [test.lanes.analysis]
-program = "cargo"
 default_features = ["kithara-beat/dsp", "kithara-waveform/dsp"]
 owns = [
   "crates/kithara-analysis/",
@@ -718,82 +641,39 @@ owns = [
   "crates/kithara-waveform/",
   "tests/crates/analysis/",
 ]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
+cargo.packages = [
   "kithara-analysis",
-  "-p",
   "kithara-beat",
-  "-p",
   "kithara-waveform",
-  "-p",
   "kithara-analysis-tests",
-  "--cargo-profile",
-  "test-release",
 ]
+cargo.profile = "test-release"
 
 [test.lanes.app]
-program = "cargo"
 owns = [
   "crates/kithara-app/",
   "crates/kithara-app-document/",
   "tests/crates/app/",
 ]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-app",
-  "-p",
-  "kithara-app-document",
-  "-p",
-  "kithara-app-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-app", "kithara-app-document", "kithara-app-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.assets]
-program = "cargo"
 owns = ["crates/kithara-assets/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-assets",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-assets"]
+cargo.profile = "test-release"
 
 [test.lanes.decode]
-program = "cargo"
 owns = ["crates/kithara-decode/", "tests/crates/decode/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-decode",
-  "-p",
-  "kithara-decode-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-decode", "kithara-decode-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.dsp]
-program = "cargo"
 default_backend = "none"
 default_features = ["kithara-dsp/spectrum"]
 owns = ["crates/kithara-dsp/", "tests/crates/dsp/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-dsp",
-  "-p",
-  "kithara-dsp-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-dsp", "kithara-dsp-tests"]
+cargo.profile = "test-release"
 # kithara-dsp declares no `flash` feature: its kernels never wait on a clock, so
 # the virtual clock has nothing to drive. The poll-blocking detector is the same
 # kind of property, and an unqualified feature no selected package declares fails
@@ -801,141 +681,59 @@ prefix_args = [
 undeclared_toggles = ["flash", "no-block"]
 
 [test.lanes.effects]
-program = "cargo"
 owns = ["crates/kithara-effects/", "tests/crates/effects/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-effects",
-  "-p",
-  "kithara-effects-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-effects", "kithara-effects-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.encode]
-program = "cargo"
 owns = ["crates/kithara-encode/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-encode",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-encode"]
+cargo.profile = "test-release"
 
 [test.lanes.file]
-program = "cargo"
 owns = ["crates/kithara-file/", "tests/crates/file/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-file",
-  "-p",
-  "kithara-file-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-file", "kithara-file-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.hls]
-program = "cargo"
 owns = ["crates/kithara-hls/", "tests/crates/hls/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-hls",
-  "-p",
-  "kithara-hls-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-hls", "kithara-hls-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.host]
-program = "cargo"
 owns = ["crates/kithara-host/", "tests/crates/host/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-host",
-  "-p",
-  "kithara-host-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-host", "kithara-host-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.net]
-program = "cargo"
 owns = ["crates/kithara-net/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-net",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-net"]
+cargo.profile = "test-release"
 
 # kithara-net's own tests with the `client-host` backend, which run against the
 # fake transport in the crate. The other packages reach real servers and have
 # no transport on the host.
 [test.lanes.net-host]
-program = "cargo"
 default_backend = "host"
 undeclared_toggles = ["flash", "no-block"]
 owns = ["crates/kithara-net/src/backend/host/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-net",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-net"]
+cargo.profile = "test-release"
 
 [test.lanes.play]
-program = "cargo"
 owns = ["crates/kithara-play/", "tests/crates/play/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play",
-  "-p",
-  "kithara-play-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-play", "kithara-play-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.queue]
-program = "cargo"
 owns = ["crates/kithara-queue/", "tests/crates/queue/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-queue",
-  "-p",
-  "kithara-queue-tests",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-queue", "kithara-queue-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.storage]
-program = "cargo"
 owns = ["crates/kithara-storage/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-storage",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-storage"]
+cargo.profile = "test-release"
 
 # What the product-only first split excludes is not product:
 # `kithara-devtools` and `xtask` are build tooling, and `kithara-test-utils`
@@ -953,28 +751,18 @@ prefix_args = [
 # here without taking product tests along; `default-filter` in
 # `.config/nextest.toml` removes those. The lanes below run all of it.
 #
-# Returning a support crate to the product-only split is one edit: drop its
-# `--exclude` entry from `.config/just/test.just`.
+# Returning a support crate to the product-only split is one edit: drop it
+# from `cargo.exclude` in `[test.lanes.workspace]` above.
 
 # The build tooling: lint and architecture checks, similarity, viz, quality
 # assessment, release and publish, the platform commands, the xtask self-cache,
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
 default_backend = "none"
-program = "cargo"
 owns = ["xtask/", "crates/kithara-devtools/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "--profile",
-  "support",
-  "-p",
-  "kithara-devtools",
-  "-p",
-  "xtask",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-devtools", "xtask"]
+cargo.profile = "test-release"
+runner.nextest.profile = "support"
 # Neither crate declares a `flash` feature — the virtual clock is a property of
 # the player, not of the tools that build it — so leaving flash on would fail the
 # lane on `none of the selected packages contains these features`. The
@@ -995,7 +783,6 @@ undeclared_toggles = ["flash", "no-block"]
 # not build the facade, so the shared spelling fails the lane outright on `none
 # of the selected packages contains this feature`.
 [test.lanes.harness]
-program = "cargo"
 owns = [
   "crates/kithara-test-utils/",
   "crates/kithara-test-macros/",
@@ -1014,20 +801,13 @@ default_features = [
   "kithara-platform/tokio-rt-multi-thread",
   "kithara-test-utils/flash",
 ]
-prefix_args = [
-  "nextest",
-  "run",
-  "--profile",
-  "harness",
-  "-p",
+cargo.packages = [
   "kithara-test-utils",
-  "-p",
   "kithara-test-macros",
-  "-p",
   "kithara-platform",
-  "--cargo-profile",
-  "test-release",
 ]
+cargo.profile = "test-release"
+runner.nextest.profile = "harness"
 
 # The fixture library and the harness meta-tests: the local test server, the
 # fixture cache and protocol, the signal oracles (`goertzel`,
@@ -1036,7 +816,6 @@ prefix_args = [
 # product tests start lying, which is why they keep a lane rather than being
 # dropped.
 [test.lanes.fixtures]
-program = "cargo"
 owns = [
   "tests/src/",
   "tests/crates/harness/tests/suite_harness.rs",
@@ -1046,24 +825,13 @@ owns = [
 default_backend = "none"
 # `analysis` compiles the beat-grid helper, whose unit tests live nowhere else.
 default_features = ["harness", "kithara-integration-tests/analysis"]
-prefix_args = [
-  "nextest",
-  "run",
-  "--profile",
-  "support",
-  "-p",
-  "kithara-integration-tests",
-  "-p",
-  "kithara-harness-tests",
-  "--lib",
-  "--test",
-  "suite_harness",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.packages = ["kithara-integration-tests", "kithara-harness-tests"]
+cargo.profile = "test-release"
+cargo.lib = true
+cargo.tests = ["suite_harness"]
+runner.nextest.profile = "support"
 
 [test.lanes.ui]
-program = "cargo"
 owns = [
   "crates/kithara-ui/",
   "crates/kithara-ui-gallery/",
@@ -1083,30 +851,18 @@ default_features = [
 # both are properties of the player, and an unqualified feature no selected
 # package declares fails the whole run.
 undeclared_toggles = ["flash", "no-block"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
+cargo.packages = [
   "kithara-ui",
-  "-p",
   "kithara-ui-gallery",
-  "-p",
   "kithara-ui-input",
-  "-p",
   "kithara-ui-shaping",
-  "-p",
   "kithara-app",
-  "--cargo-profile",
-  "test-release",
-  "--ignore-default-filter",
 ]
-suffix_args = [
-  "-E",
-  "package(kithara-ui) | package(kithara-ui-gallery) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))",
-]
+cargo.profile = "test-release"
+runner.nextest.ignore_default_filter = true
+runner.nextest.filter = "package(kithara-ui) | package(kithara-ui-gallery) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))"
 
 [test.lanes.ui-perf]
-program = "cargo"
 default_backend = "none"
 default_features = [
   "kithara-ui/gpu",
@@ -1116,42 +872,26 @@ default_features = [
   "kithara-ui-gallery/perf",
 ]
 default_flash = false
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-ui",
-  "-p",
-  "kithara-ui-gallery",
-  "--cargo-profile",
-  "test-release",
-  "--test-threads",
-  "1",
-  "--ignore-default-filter",
-]
-suffix_args = ["-E", "binary(frame_perf) | binary(page_perf)"]
+cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
+cargo.profile = "test-release"
+runner.nextest.test_threads = 1
+runner.nextest.ignore_default_filter = true
+runner.nextest.filter = "binary(frame_perf) | binary(page_perf)"
 
 [test.lanes.ui-doc]
-program = "cargo"
 default_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
 default_flash = false
-prefix_args = ["test", "--doc", "-p", "kithara-ui"]
+cargo.packages = ["kithara-ui"]
+runner.cargo.doc = true
 
 [test.lanes.loom]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "--workspace",
-  "--exclude",
-  "kithara-fuzz",
-  "--cargo-profile",
-  "test-release",
-]
+cargo.workspace = true
+cargo.exclude = ["kithara-fuzz"]
+cargo.profile = "test-release"
+runner.nextest.filter = "test(/(^|::)loom_model_/)"
 default_features = ["kithara/loom"]
 default_flash = false
-suffix_args = ["-E", "test(/(^|::)loom_model_/)"]
 
 # `test-release` is the profile every other lane builds in, and this one ran in
 # `test`. `just test all` therefore built the whole workspace a second time to
@@ -1159,18 +899,10 @@ suffix_args = ["-E", "test(/(^|::)loom_model_/)"]
 # push, for a second set of artefacts nothing else reads. Naming the same
 # profile makes the doc lane reuse what the suite before it just built.
 [test.lanes.doc]
-program = "cargo"
-prefix_args = [
-  "test",
-  "--doc",
-  "--workspace",
-  "--exclude",
-  "kithara-fuzz",
-  "--exclude",
-  "kithara-ui",
-  "--profile",
-  "test-release",
-]
+cargo.workspace = true
+cargo.exclude = ["kithara-fuzz", "kithara-ui"]
+cargo.profile = "test-release"
+runner.cargo.doc = true
 default_flash = false
 
 # The network tests a runner can reach: the public zvuk CDN and silvercomet.
@@ -1180,19 +912,9 @@ default_flash = false
 # rather than a gate job.
 
 [test.lanes.network]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "-p",
-  "kithara-queue-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "network",
-]
+cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.profile = "test-release"
+cargo.tests = ["network"]
 default_features = [
   "kithara-play-tests/network",
   "kithara-queue-tests/network",
@@ -1205,19 +927,9 @@ default_flash = false
 # device. No CI job runs this and none should — a runner that fails here reports
 # the fence around itself, not the code. `just test run --lane=network-manual`.
 [test.lanes.network-manual]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play-tests",
-  "-p",
-  "kithara-queue-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "network_manual",
-]
+cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.profile = "test-release"
+cargo.tests = ["network_manual"]
 default_features = [
   "kithara-play-tests/network-manual",
   "kithara-queue-tests/network-manual",
@@ -1228,21 +940,12 @@ default_flash = false
 # What only the `broadcast` feature turns on. `kithara-broadcast`'s own unit
 # tests need no feature and stay in the workspace lane.
 [test.lanes.broadcast]
-program = "cargo"
 owns = ["crates/kithara-broadcast/", "tests/crates/broadcast/"]
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-app",
-  "-p",
-  "kithara-broadcast-tests",
-  "--cargo-profile",
-  "test-release",
-  "--lib",
-  "--test",
-  "broadcast",
-]
+cargo.packages = ["kithara-app", "kithara-broadcast-tests"]
+cargo.profile = "test-release"
+cargo.lib = true
+cargo.tests = ["broadcast"]
+runner.nextest.filter = "binary(broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))"
 default_features = [
   "kithara-app/broadcast",
   "kithara-broadcast-tests/broadcast",
@@ -1254,115 +957,61 @@ default_no_block = true
 # `broadcast::state` runs in the gate against stand-in packagers; the live
 # packager in `broadcast::engine` and the on-air shutdown in `engine::owner`
 # need the feature.
-suffix_args = [
-  "-E",
-  "binary(broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))",
-]
 
 # Integration regression tests are red by design and stay outside the main gate.
 [test.lanes.integration-regressions]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-integration-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "suite_integration_regressions",
-]
+cargo.packages = ["kithara-integration-tests"]
+cargo.profile = "test-release"
+cargo.tests = ["suite_integration_regressions"]
 default_features = ["integration-regressions"]
 default_flash = true
 
 [test.lanes.usdt-warp]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-warp-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "warp_playback",
-]
+cargo.packages = ["kithara-warp-tests"]
+cargo.profile = "test-release"
+cargo.tests = ["warp_playback"]
+runner.nextest.filter = "test(/rate_response::/)"
 default_features = ["kithara-warp-tests/usdt"]
 default_flash = false
-suffix_args = ["-E", "test(/rate_response::/)"]
 owns = ["tests/crates/warp/tests/rate_response.rs"]
 
 [test.lanes.usdt-play-scheduler]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-play",
-  "--cargo-profile",
-  "test-release",
-  "--lib",
-]
+cargo.packages = ["kithara-play"]
+cargo.profile = "test-release"
+cargo.lib = true
+runner.nextest.filter = "test(/worker::node::scheduler_tests::probed::/)"
 default_features = ["kithara-play/usdt"]
 default_flash = false
-suffix_args = ["-E", "test(/worker::node::scheduler_tests::probed::/)"]
 owns = ["crates/kithara-play/src/worker/node.rs"]
 
 [test.lanes.usdt-hls]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-hls-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "hls",
-]
+cargo.packages = ["kithara-hls-tests"]
+cargo.profile = "test-release"
+cargo.tests = ["hls"]
+runner.nextest.filter = "test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)"
 default_features = ["kithara-hls-tests/usdt"]
 default_flash = false
-suffix_args = [
-  "-E",
-  "test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)",
-]
 owns = [
   "tests/crates/hls/tests/hls_variant_playlists_concurrent.rs",
   "tests/crates/hls/tests/flac_swallow_fixture.rs",
 ]
 
 [test.lanes.usdt-hls-stress]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-hls-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "hls_stress",
-]
+cargo.packages = ["kithara-hls-tests"]
+cargo.profile = "test-release"
+cargo.tests = ["hls_stress"]
+runner.nextest.filter = "test(/stress_seek_audio::stress_seek_audio_hls/)"
 default_features = ["kithara-hls-tests/usdt"]
 default_flash = false
-suffix_args = ["-E", "test(/stress_seek_audio::stress_seek_audio_hls/)"]
 owns = ["tests/crates/hls/tests/stress_seek_audio.rs"]
 
 [test.lanes.usdt-queue]
-program = "cargo"
-prefix_args = [
-  "nextest",
-  "run",
-  "-p",
-  "kithara-queue-tests",
-  "--cargo-profile",
-  "test-release",
-  "--test",
-  "queue",
-]
+cargo.packages = ["kithara-queue-tests"]
+cargo.profile = "test-release"
+cargo.tests = ["queue"]
+runner.nextest.filter = "test(/full_playthrough_census/)"
 default_features = ["kithara-queue-tests/usdt"]
 default_flash = false
-suffix_args = ["-E", "test(/full_playthrough_census/)"]
 owns = ["tests/crates/queue/tests/full_playthrough_census.rs"]
 
 # The harness (tests/crates/ffi-web/tests/selenium.rs) reads
@@ -1373,18 +1022,11 @@ owns = ["tests/crates/queue/tests/full_playthrough_census.rs"]
 # (geckodriver, below); a `selenium-chrome` lane needs a reviewed chromedriver
 # pin first.
 [test.lanes.selenium-firefox]
-program = "cargo"
-prefix_args = [
-  "+nightly",
-  "test",
-  "-p",
-  "kithara-ffi-web-tests",
-  "--test",
-  "ffi_web",
-]
+cargo.packages = ["kithara-ffi-web-tests"]
+cargo.tests = ["ffi_web"]
+runner.cargo.name_filters = ["selenium"]
+runner.cargo.no_capture = true
 default_features = ["kithara-ffi-web-tests/selenium"]
-suffix_args = ["selenium", "--", "--nocapture"]
-passthrough = "after-suffix"
 default_flash = false
 env = { KITHARA_SELENIUM_BROWSER = "firefox" }
 
