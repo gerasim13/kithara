@@ -151,11 +151,12 @@ twins, keeping float WAV and JSON manifests for listening.
 `.config/nextest.toml`: `default` (all threads, 120s backstop), `fast` (skips
 `suite_heavy`), `stress` (no thread cap, because a player must pass under
 contention; failure bodies land in the JUnit, not the console), `ci` (one retry),
-plus `cold`, `harness`, `support`, `perf`, `rtsan`.
+plus `android`, `perf`, `rtsan`.
 
-`default-filter` intersects with a command-line filter; a lane-level `-E` would
-union with it and silently widen the run. That is why suite exclusions live in
-`default-filter`, never in a lane's arguments.
+`default-filter` intersects with a command-line filter, and so does a lane's
+`runner.nextest.filter`: the caller's `-E` narrows it rather than joining it.
+Suite exclusions live in `default-filter`, which every lane inherits; a lane
+that exists to run excluded targets sets `runner.nextest.ignore_default_filter`.
 
 ## Troubleshooting
 

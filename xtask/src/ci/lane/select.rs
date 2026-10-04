@@ -676,11 +676,5 @@ mod tests {
             .filter(|test_lane| !carriers.contains_key(test_lane))
             .collect();
         assert!(unrun.is_empty(), "main runs no lane that carries {unrun:?}");
-        for test_lane in ["tooling", "harness", "fixtures", "broadcast", "net-host"] {
-            assert!(
-                carriers.contains_key(test_lane),
-                "main runs no `--lane={test_lane}`"
-            );
-        }
     }
 }

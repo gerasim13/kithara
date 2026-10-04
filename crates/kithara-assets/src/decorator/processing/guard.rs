@@ -27,7 +27,7 @@ impl GateGuard {
         to self.readiness {
             pub(super) fn fail(&self);
             pub(super) fn is_ready(&self) -> bool;
-            pub(super) fn mark_ready(&self);
+            pub(super) fn mark_ready(&self) -> bool;
         }
     }
 }

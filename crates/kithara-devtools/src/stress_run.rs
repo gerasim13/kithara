@@ -13,16 +13,16 @@ use crate::{
     consts,
     stress::{run_output, run_stderr_output},
     stress_report::{read_bounded_utf8, validate_inventory, validate_primary_evidence},
-    test::{ConfiguredLane, NextestAction, nextest_configured_lane_command},
+    test::{NextestAction, ResolvedLane},
     verdict::ChildFailure,
 };
 
 #[derive(Debug)]
 pub(crate) struct StressRunSpec {
-    pub(crate) runner: ConfiguredLane,
     pub(crate) config_file: PathBuf,
     pub(crate) inventory: PathBuf,
     pub(crate) junit: PathBuf,
+    pub(crate) runner: ResolvedLane,
     pub(crate) render: StressRenderBudgets,
     pub(crate) filter: String,
     pub(crate) profile: String,
@@ -60,8 +60,7 @@ pub(crate) fn run(
         "--message-format".to_owned(),
         "json".to_owned(),
     ];
-    let (_, mut inventory) =
-        nextest_configured_lane_command(&args.runner, &inventory_args, NextestAction::List)?;
+    let mut inventory = args.runner.command(NextestAction::List, &inventory_args)?;
     let output = create_inventory(&args.inventory)?;
     inventory
         .current_dir(subject_root)
@@ -93,8 +92,7 @@ pub(crate) fn run(
         "--test-threads".to_owned(),
         args.test_threads.clone(),
     ];
-    let (_, mut run) =
-        nextest_configured_lane_command(&args.runner, &run_args, NextestAction::Run)?;
+    let mut run = args.runner.command(NextestAction::Run, &run_args)?;
     run.current_dir(subject_root);
     configure(&mut run);
     run_child(&mut run, log_path)?;

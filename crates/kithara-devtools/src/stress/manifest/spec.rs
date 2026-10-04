@@ -12,32 +12,54 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use super::{super::system::SystemSnapshot, time::format_timestamp};
-use crate::{common::project::StressEvidenceConfig, consts, test::ConfiguredLane};
+use crate::{common::project::StressEvidenceConfig, consts, test::ResolvedLane};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::stress) struct Manifest {
     pub(in crate::stress) build: BuildSnapshot,
-    pub(in crate::stress) runner: ConfiguredLane,
     pub(in crate::stress) config: ManifestConfig,
     pub(in crate::stress) policy: PolicySnapshot,
     pub(in crate::stress) pressure: Pressure,
     pub(in crate::stress) controller: Revision,
     pub(in crate::stress) subject: Revision,
     pub(in crate::stress) selection: Selection,
+    pub(in crate::stress) runner: StressRunner,
     pub(in crate::stress) mode: String,
     pub(in crate::stress) system: SystemSnapshot,
     pub(in crate::stress) timing: Timing,
     pub(in crate::stress) schema: u32,
 }
 
+/// What a stress lane ran: a test lane resolved from the configuration, or a
+/// mode's own command in its own words, so the report verifies either the
+/// same way.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(in crate::stress) enum StressRunner {
+    Lane(Box<ResolvedLane>),
+    Command(Vec<String>),
+}
+
+impl StressRunner {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::Lane(lane) => lane.validate(),
+            Self::Command(command) => {
+                ensure!(!command.is_empty(), "stress command lane names no program");
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::stress) struct ManifestSpec {
     pub(in crate::stress) build: BuildSnapshot,
-    pub(in crate::stress) runner: ConfiguredLane,
     pub(in crate::stress) config: ManifestConfig,
     pub(in crate::stress) policy: PolicySnapshot,
     pub(in crate::stress) selection: Selection,
+    pub(in crate::stress) runner: StressRunner,
     pub(in crate::stress) controller_sha: String,
     pub(in crate::stress) mode: String,
     pub(in crate::stress) subject_sha: String,
@@ -117,7 +139,6 @@ pub(in crate::stress) struct PolicySnapshot {
     pub(in crate::stress) raw_path_env: BTreeMap<String, String>,
     pub(in crate::stress) set_env: BTreeMap<String, String>,
     pub(in crate::stress) evidence: StressEvidenceConfig,
-    pub(in crate::stress) features: Vec<String>,
     pub(in crate::stress) remove_env: Vec<String>,
 }
 
@@ -137,10 +158,10 @@ pub(in crate::stress) struct Pressure {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::stress) struct ExpectedProvenance {
-    pub(in crate::stress) runner: ConfiguredLane,
     pub(in crate::stress) execute_result: ExecuteResult,
     pub(in crate::stress) config: ManifestConfig,
     pub(in crate::stress) policy: PolicySnapshot,
+    pub(in crate::stress) runner: StressRunner,
     pub(in crate::stress) controller_sha: String,
     pub(in crate::stress) filter: String,
     pub(in crate::stress) mode: String,
@@ -202,6 +223,13 @@ impl Manifest {
     }
 
     pub(in crate::stress) fn read(path: &Path) -> Result<Self> {
+        /// The one field every schema shares, read before the rest so a
+        /// manifest of another schema is refused by its version.
+        #[derive(Deserialize)]
+        struct ManifestVersion {
+            schema: u32,
+        }
+
         let file =
             File::open(path).with_context(|| format!("open stress manifest {}", path.display()))?;
         let mut contents = Vec::new();
@@ -219,14 +247,16 @@ impl Manifest {
             consts::MAX_MANIFEST_BYTES,
             path.display()
         );
-        let manifest: Self = serde_json::from_slice(&contents)
+        let version: ManifestVersion = serde_json::from_slice(&contents)
             .with_context(|| format!("parse stress manifest {}", path.display()))?;
         ensure!(
-            manifest.schema == consts::MANIFEST_SCHEMA,
+            version.schema == consts::MANIFEST_SCHEMA,
             "stress manifest schema is {}, expected {}",
-            manifest.schema,
+            version.schema,
             consts::MANIFEST_SCHEMA,
         );
+        let manifest: Self = serde_json::from_slice(&contents)
+            .with_context(|| format!("parse stress manifest {}", path.display()))?;
         manifest.validate_invariants()?;
         Ok(manifest)
     }
@@ -378,12 +408,6 @@ impl Manifest {
         expected: &ExpectedProvenance,
         mismatches: &mut Vec<ProvenanceMismatch>,
     ) {
-        compare_debug(
-            "policy.features",
-            &self.policy.features,
-            &expected.policy.features,
-            mismatches,
-        );
         compare_debug(
             "policy.remove_env",
             &self.policy.remove_env,
@@ -538,17 +562,6 @@ impl Manifest {
 }
 
 fn validate_policy(policy: &PolicySnapshot) -> Result<()> {
-    let mut features = BTreeSet::new();
-    for feature in &policy.features {
-        ensure!(
-            !feature.trim().is_empty(),
-            "manifest policy contains an empty feature"
-        );
-        ensure!(
-            features.insert(feature.as_str()),
-            "manifest policy contains duplicate feature {feature:?}"
-        );
-    }
     let mut removed = BTreeSet::new();
     for key in &policy.remove_env {
         validate_env_key(key)?;
@@ -751,7 +764,10 @@ fn optional_bool(value: Option<bool>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stress::system::{CgroupScope, CgroupV2, CpuSet, Limits};
+    use crate::{
+        common::project::{TestCargoOptions, TestRunner},
+        stress::system::{CgroupScope, CgroupV2, CpuSet, Limits},
+    };
 
     fn system() -> SystemSnapshot {
         SystemSnapshot {
@@ -776,7 +792,6 @@ mod tests {
 
     fn policy() -> PolicySnapshot {
         PolicySnapshot {
-            features: vec!["snapshot-clock".to_owned()],
             remove_env: vec!["LEGACY_SETTING".to_owned()],
             set_env: BTreeMap::from([
                 ("OUTPUT_STYLE".to_owned(), "compact".to_owned()),
@@ -795,17 +810,18 @@ mod tests {
         }
     }
 
-    fn runner() -> ConfiguredLane {
-        ConfiguredLane {
-            lane: "workspace".to_owned(),
-            backend: "http".to_owned(),
-            program: "cargo".to_owned(),
-            prefix_args: vec!["nextest".to_owned(), "run".to_owned()],
-            suffix_args: vec!["--locked".to_owned()],
-            feature_arg: "--features".to_owned(),
-            features: vec!["snapshot-clock".to_owned()],
+    fn runner() -> StressRunner {
+        StressRunner::Lane(Box::new(ResolvedLane {
             env: BTreeMap::new(),
-        }
+            backend: "http".to_owned(),
+            lane: "workspace".to_owned(),
+            cargo: TestCargoOptions {
+                workspace: true,
+                ..TestCargoOptions::default()
+            },
+            runner: TestRunner::default(),
+            features: vec!["snapshot-clock".to_owned()],
+        }))
     }
 
     fn spec() -> ManifestSpec {
@@ -871,9 +887,11 @@ mod tests {
         expected.mode = "instrumented".to_owned();
         expected.config = ManifestConfig::new("alternate", "other/runner.toml", 60);
         expected.config.pressure_schema = "pressure-vNext".to_owned();
-        expected.runner.features = vec!["alternate".to_owned()];
+        let StressRunner::Lane(lane) = &mut expected.runner else {
+            unreachable!("the fixture runner is a lane");
+        };
+        lane.features = vec!["alternate".to_owned()];
         expected.policy = PolicySnapshot {
-            features: vec!["blocking-census".to_owned()],
             remove_env: vec!["DEPRECATED_SETTING".to_owned()],
             set_env: BTreeMap::from([("TRACE_LEVEL".to_owned(), "quiet".to_owned())]),
             raw_path_env: BTreeMap::from([(
@@ -902,7 +920,6 @@ mod tests {
             "config.pressure_schema",
             "config.workflow_job_timeout_minutes",
             "runner",
-            "policy.features",
             "policy.remove_env",
             "policy.set_env",
             "policy.raw_path_env",
@@ -1046,5 +1063,29 @@ mod tests {
         let error = Manifest::read(&path).expect_err("unknown schema must fail");
 
         assert!(error.to_string().contains("schema"), "{error:#}");
+    }
+
+    /// A manifest of another schema may name its runner in a shape this
+    /// version cannot read; the refusal names the schema, which is what a
+    /// person needs to know, rather than the first field that failed.
+    #[test]
+    fn a_manifest_of_another_schema_is_refused_by_its_version_before_its_shape() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("manifest.json");
+        let manifest = Manifest::start(spec(), system()).expect("start manifest");
+        let mut json = serde_json::to_value(manifest).expect("serialize manifest");
+        let previous = consts::MANIFEST_SCHEMA - 1;
+        json["schema"] = serde_json::json!(previous);
+        json["runner"] = serde_json::json!({ "program": "cargo" });
+        fs::write(&path, serde_json::to_vec(&json).expect("encode fixture"))
+            .expect("write fixture");
+
+        let error = Manifest::read(&path).expect_err("another schema must fail");
+
+        let expected = format!(
+            "stress manifest schema is {previous}, expected {}",
+            consts::MANIFEST_SCHEMA
+        );
+        assert!(error.to_string().contains(&expected), "{error:#}");
     }
 }

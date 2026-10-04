@@ -44,10 +44,16 @@ where
             return Ok(outcome);
         }
         let ready = cancel.map_or_else(
-            || self.readiness.wait_until_ready(&|| self.inner_terminal()),
-            |cancel| {
+            || {
                 self.readiness
-                    .wait_until_ready_with_cancel(cancel, &|| self.inner_terminal())
+                    .wait_until_ready(&|| self.inner_committed(), &|| self.inner_terminal())
+            },
+            |cancel| {
+                self.readiness.wait_until_ready_with_cancel(
+                    cancel,
+                    &|| self.inner_committed(),
+                    &|| self.inner_terminal(),
+                )
             },
         );
         if ready {
@@ -60,15 +66,21 @@ where
     }
 
     fn inner_terminal(&self) -> bool {
-        self.readiness.is_failed()
-            || matches!(
-                self.inner.status(),
-                ResourceStatus::Failed(_) | ResourceStatus::Cancelled
-            )
+        matches!(
+            self.inner.status(),
+            ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+        )
+    }
+
+    fn inner_committed(&self) -> bool {
+        matches!(self.inner.status(), ResourceStatus::Committed { .. })
     }
 
     fn is_readable(&self) -> bool {
-        self.processor.is_none() || self.readiness.is_ready()
+        if self.processor.is_none() || self.readiness.is_ready() {
+            return true;
+        }
+        self.inner_committed() && self.readiness.mark_ready()
     }
 
     pub(super) fn with_readiness(
@@ -89,8 +101,9 @@ where
         }
     }
 
-    /// Wraps an already-committed resource. `chunk_size` and
-    /// `gate_poll_interval` carry the same defaults [`ProcessedWriter`] does.
+    /// Wraps a resource opened without its writer's readiness gate. Committed
+    /// storage is already processed; an active resource becomes readable when
+    /// its writer commits. The tuning defaults match [`ProcessedWriter`].
     #[builder]
     pub(super) fn wrap_ready(
         inner: R,
