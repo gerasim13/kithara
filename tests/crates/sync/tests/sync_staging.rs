@@ -42,9 +42,16 @@ const LISTEN_FRAMES: usize = 48_000 * 6;
 /// whatever its build cost. The lead only has to clear what a build leaves
 /// behind, which is a handful of blocks.
 const WINDOW_LEAD_FRAMES: u64 = (BLOCK_FRAMES * 16) as u64;
-/// Long enough to render that lead on a loaded host, short enough that a deck
-/// which never advances is reported rather than waited out.
-const WINDOW_TIMEOUT: Duration = Duration::from_secs(30);
+/// How many blocks a wait for that lead may render before it reports that the
+/// deck never reached it.
+///
+/// Rendering is what moves the deck, so rendered blocks are what bound the
+/// wait. A clock cannot: under flash `Instant::now()` reads the virtual clock,
+/// and the engine fast-forwards it to the next pending deadline whenever every
+/// task is parked, so a deadline there measures the jump rather than the deck.
+/// A deck that advances reaches the lead in the blocks the lead is made of;
+/// this clears that many times over.
+const WINDOW_BLOCK_BUDGET: usize = 1024;
 /// A cue on the second beat of the Tunnel's fifth bar.
 const TUNNEL_WEAK_CUE: Start = Start::Bar { bar: 4, beat: 1 };
 /// A second Tunnel cue that supersedes the first.
@@ -417,8 +424,7 @@ impl fmt::Display for Window {
 /// render advances the deck by one block, so whichever side its build left
 /// further back catches up to the same first position past the lead.
 async fn open_window(harness: &mut ProductHarness, case: SyncCase) -> Window {
-    let deadline = Instant::now() + WINDOW_TIMEOUT;
-    loop {
+    for _ in 0..WINDOW_BLOCK_BUDGET {
         let window = Window::read(harness, case);
         if window
             .frames
@@ -426,14 +432,15 @@ async fn open_window(harness: &mut ProductHarness, case: SyncCase) -> Window {
         {
             return window;
         }
-        assert!(
-            Instant::now() < deadline,
-            "{}: the deck never reached frame {WINDOW_LEAD_FRAMES}, the lead a \
-             measured window opens after; it stopped at {window}",
-            case.id()
-        );
         let _ = harness.render(case, BLOCK_FRAMES).await;
     }
+    panic!(
+        "{}: the deck never reached frame {WINDOW_LEAD_FRAMES} in \
+         {WINDOW_BLOCK_BUDGET} rendered blocks, the lead a measured window \
+         opens after; it stopped at {}",
+        case.id(),
+        Window::read(harness, case),
+    );
 }
 
 /// What separates two renders of the same lane, beyond where it starts.
