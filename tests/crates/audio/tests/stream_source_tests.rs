@@ -42,8 +42,7 @@ async fn wait_for_chunk(
 ) -> (RegisteredAudio<Stream<MemStream>, TestPools>, AudioChunk) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
-        let (next_audio, outcome) =
-            blocking_audio(audio, kithara::audio::AudioRead::next_chunk).await;
+        let (next_audio, outcome) = blocking_audio(audio, AudioRead::next_chunk).await;
         audio = next_audio;
         match outcome.expect("decode while waiting for a PCM chunk") {
             ChunkOutcome::Chunk(chunk) => return (audio, chunk),
