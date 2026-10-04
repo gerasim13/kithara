@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_bufpool::HasPool;
+use kithara_command::When;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
 use kithara_play::{PlayError, StreamShape};
@@ -24,7 +25,11 @@ use super::{
     transport,
     transport::RouteRestartStatus,
 };
-use crate::{PlayerMember, api::HostLevel, host::HostSettingsExec};
+use crate::{
+    PlayerMember,
+    api::HostLevel,
+    host::{HostSettingsChange, HostSettingsExec},
+};
 
 pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
@@ -218,8 +223,12 @@ where
             Err(err) => Reply::Err(err),
         },
         Cmd::SetSessionDucking { mode } => {
-            controls::set_session_ducking(state, mode);
-            Reply::Ok
+            settle_receipts(state);
+            match state.exec(HostSettingsChange::Ducking(mode), When::Next, &mut ()) {
+                Ok(()) => Reply::Ok,
+                Err(PlayError::Session(error)) => Reply::Err(error),
+                Err(error) => Reply::Err(SessionError::Graph(error.to_string())),
+            }
         }
         Cmd::QuerySessionTransport => match transport::snapshot(state) {
             Ok(snapshot) => Reply::SessionTransport(snapshot),
@@ -502,7 +511,13 @@ mod tests {
 
     use audioadapter_buffers::direct::InterleavedSlice;
     use firewheel::{
-        ActivateInfo, backend::BackendProcessInfo, node::StreamStatus,
+        ActivateInfo,
+        backend::BackendProcessInfo,
+        channel_config::{ChannelConfig, ChannelCount},
+        node::{
+            AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
+            NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcessStatus, StreamStatus,
+        },
         processor::FirewheelProcessor,
     };
     use kithara_command::When;
@@ -527,14 +542,14 @@ mod tests {
 
     use super::*;
     use crate::{
-        api::Tap,
+        api::{SessionDuckingMode, Tap},
         bridge::MixTapWriter,
         host::HostSettingsChange,
         rt::MetronomeConfigChange,
         session::{
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
-            state::{Deck, SessionState, TapSlot},
+            state::{Deck, SessionState, TapSlot, add_graph_node},
             tests::{
                 graph::{attach_player, state as test_state},
                 ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
@@ -598,6 +613,57 @@ mod tests {
     }
 
     type TestState = SessionState<RouteLossStream, TestPools>;
+
+    /// The left channel of `blocks` blocks the stream renders from `clock` on.
+    fn render_left(state: &mut TestState, clock: &mut u64, blocks: usize) -> Vec<f32> {
+        let stream = state.stream.as_mut().expect("the stream runs");
+        let frames = u64::try_from(stream.block_frames).expect("a block fits the clock");
+        let mut left = Vec::new();
+        for _ in 0..blocks {
+            left.extend(stream.render(*clock).into_iter().step_by(2));
+            *clock += frames;
+        }
+        left
+    }
+
+    /// A stereo source holding every sample at its value.
+    #[derive(Clone, Copy)]
+    struct DcNode(f32);
+
+    impl AudioNode for DcNode {
+        type Configuration = EmptyConfig;
+
+        fn construct_processor(
+            &self,
+            _config: &Self::Configuration,
+            _cx: ConstructProcessorContext,
+        ) -> Result<impl AudioNodeProcessor, NodeError> {
+            Ok(*self)
+        }
+
+        fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+            Ok(AudioNodeInfo::new()
+                .debug_name("dc")
+                .channel_config(ChannelConfig {
+                    num_inputs: ChannelCount::ZERO,
+                    num_outputs: ChannelCount::STEREO,
+                }))
+        }
+    }
+
+    impl AudioNodeProcessor for DcNode {
+        fn process(
+            &mut self,
+            info: &ProcInfo,
+            buffers: ProcBuffers,
+            _extra: &mut ProcExtra,
+        ) -> ProcessStatus {
+            for output in &mut *buffers.outputs {
+                output[..info.frames].fill(self.0);
+            }
+            ProcessStatus::OutputsModified
+        }
+    }
 
     #[derive(Debug, thiserror::Error)]
     #[error("route lost")]
@@ -1616,6 +1682,81 @@ mod tests {
         assert!(
             block.iter().any(|sample| sample.abs() > 0.1),
             "the first block of the next stream clicks session beat 0"
+        );
+    }
+
+    #[kithara::test]
+    fn a_ducking_change_lowers_a_sounding_dc_along_a_ramp() {
+        const DC: f32 = 0.25;
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+        let session_output = state
+            .session_output_node_id
+            .expect("the session output runs");
+        let ctx = state.ctx.as_mut().expect("the context runs");
+        let dc = add_graph_node(ctx, DcNode(DC)).expect("the graph takes the source");
+        ctx.connect(dc, session_output, &[(0, 0), (1, 1)], false)
+            .expect("the source feeds the session output");
+        ctx.update().expect("the graph takes the source in");
+        let mut clock = 0;
+        let before = render_left(&mut state, &mut clock, 8);
+        let undiminished = *before.last().expect("the stream rendered");
+        assert!(
+            (undiminished - DC).abs() < 1e-4,
+            "the DC reaches the output whole before the change: {undiminished}"
+        );
+
+        assert!(matches!(
+            run_host_cmd(
+                &mut state,
+                HostCmd::Configure {
+                    change: HostSettingsChange::Ducking(SessionDuckingMode::Hard),
+                    at: When::Next,
+                },
+            ),
+            HostReply::Ok
+        ));
+        let after = render_left(&mut state, &mut clock, 40);
+
+        let ducked = DC * SessionDuckingMode::Hard.gain();
+        let settled = *after.last().expect("the stream rendered");
+        assert!(
+            (settled - ducked).abs() < 1e-4,
+            "the DC settles at the hard ducking: {settled}, not {ducked}"
+        );
+        let steepest = [undiminished]
+            .iter()
+            .chain(&after)
+            .zip(&after)
+            .map(|(previous, sample)| (sample - previous).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            steepest < (DC - ducked) / 100.0,
+            "no step between neighbouring samples on the way down: {steepest}"
+        );
+    }
+
+    #[kithara::test]
+    fn a_ducking_mode_from_a_player_session_is_the_host_setting() {
+        let mut state = test_state(start_route_loss_stream);
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetSessionDucking {
+                    mode: SessionDuckingMode::Soft,
+                },
+            ),
+            Reply::Ok
+        ));
+
+        assert_eq!(
+            state.settings.config().ducking(),
+            SessionDuckingMode::Soft,
+            "with no render graph the setting changes at once"
         );
     }
 

@@ -161,7 +161,7 @@ impl TransportState {
     /// that re-anchors the beats takes a new transport revision. A block that
     /// does not follow the last one refuses every tempo change due in it with
     /// `continuity`'s error, since no beat anchor is known on its frames; a
-    /// metronome change applies in any block.
+    /// metronome or ducking change applies in any block.
     fn apply_due(&mut self, info: &ProcInfo, continuity: Result<(), TransportProcessError>) {
         let Self {
             inbox,
@@ -336,7 +336,9 @@ impl TransportState {
                     );
                     staged.retargeted = true;
                 }
-                HostSettingsChange::Metronome(_) => staged.settings.apply_change(change),
+                HostSettingsChange::Metronome(_) | HostSettingsChange::Ducking(_) => {
+                    staged.settings.apply_change(change);
+                }
             }
         }
         Ok(staged)

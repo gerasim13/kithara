@@ -1,6 +1,9 @@
 use kithara_config::Config;
 
-use crate::{MetronomeConfig, PlayError, api::Tempo};
+use crate::{
+    MetronomeConfig, PlayError,
+    api::{SessionDuckingMode, Tempo},
+};
 
 /// What a Host runs with that changes while it runs.
 ///
@@ -22,4 +25,8 @@ pub struct HostSettings {
     /// How the Host metronome sounds, switched off unless changed.
     #[config(nested, live, builder(default))]
     metronome: MetronomeConfig,
+    /// How far the whole session output is lowered under a competing sound,
+    /// not at all unless changed.
+    #[config(live, builder(default))]
+    ducking: SessionDuckingMode,
 }

@@ -30,10 +30,10 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::{SessionDuckingMode, SlotId, Tap},
+    api::{SlotId, Tap},
     bridge::SharedEq,
     host::HostSettings,
-    rt::{MasterEqNode, SessionOutput},
+    rt::{MasterEqNode, MasterNode, SessionOutput},
 };
 
 #[derive(Debug)]
@@ -248,13 +248,11 @@ pub(crate) struct SessionState<T, S> {
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) session_limiter_node_id: Option<NodeID>,
-    pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) stream: Option<T>,
     pub(super) transport_control: Option<TransportControl>,
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
-    pub(super) session_ducking: SessionDuckingMode,
     /// The Host settings as the render graph confirmed them, with the
     /// changes still on their way to it.
     pub(super) settings: Live<HostSettings, HostProtocol>,
@@ -317,8 +315,6 @@ impl<T, S> SessionState<T, S> {
             taps: Taps::default(),
             next_player_id: 1,
             sample_rate_hint,
-            session_ducking: SessionDuckingMode::Off,
-            session_output_memo: None,
             session_output_node_id: None,
             session_limiter_node_id: None,
             retains_output: false,
@@ -490,9 +486,7 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
-    let session_node = VolumeNode::from_linear(state.session_ducking.gain());
-    let session_memo = Memo::new(session_node);
-    let session_id = add_graph_node(fw_ctx, session_node)?;
+    let session_id = add_graph_node(fw_ctx, MasterNode)?;
     let limiter_id = add_graph_node(fw_ctx, limiter)?;
     let metronome_id = add_graph_node(fw_ctx, metronome)?;
     let graph_out = fw_ctx.graph_out_node_id();
@@ -515,7 +509,6 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
         warn!("session graph update after output init failed: {err:?}");
     }
     state.session_output_node_id = Some(session_id);
-    state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
     state.session_metronome_node_id = Some(metronome_id);
     tap::install_requested(state)?;
