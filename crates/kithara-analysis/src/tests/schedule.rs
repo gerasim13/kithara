@@ -8,7 +8,7 @@ use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, mpsc},
-    time::{self, Duration},
+    time::{self, Duration, Instant},
     tokio::sync::watch,
 };
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
@@ -259,12 +259,16 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPoo
     )
 }
 
-/// Consecutive turns a drive hands back while the node refuses work.
+/// How much of the analyser's own clock a drive lets a refusing node spend.
 ///
-/// A node that is going to take work takes it within a few turns; one that
-/// still refuses after this many is not waiting on the scheduler. The bound
-/// only has to terminate, so it is far above what any pass here needs.
-const YIELDS: usize = 4096;
+/// The turns this loop hands back are what the node's progress is made of:
+/// each one parks the drive, and parking is what lets the flash engine
+/// advance its clock to the analyser's next deadline. So the budget is
+/// virtual time the analyser gets to consume, not wall time the test waits -
+/// a turn count cannot stand in for it. Measured: a pass that finishes needs
+/// one such turn on a host that runs the analyser eagerly and upwards of four
+/// thousand on one that does not, while the time it asks for stays the same.
+const ANALYSER_BUDGET: Duration = Duration::from_secs(2);
 
 /// Why a drive stopped, so a pass that does not end says which bound it hit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -306,28 +310,22 @@ where
     }
 
     /// Ticks the node until the pass ends, the tick budget runs out, or the
-    /// node refuses work for [`YIELDS`] turns in a row.
+    /// node refuses work for a whole [`ANALYSER_BUDGET`].
     ///
-    /// What bounds the refusal is turns, not a clock. A clock cannot bound it:
-    /// under flash `Instant::now()` reads the virtual clock, and the engine
-    /// fast-forwards that clock to the next pending deadline whenever every
-    /// task is parked - which a yield here is. A stress attempt that ran for
-    /// 137 ms of real time reported this drive giving up on a deadline of two
-    /// seconds.
+    /// The count a refusal carries is how many turns it bought with that
+    /// budget, which is what says whether the node was starved or wedged.
     async fn drive(&mut self, ticks: usize) -> Drive {
+        let deadline = Instant::now() + ANALYSER_BUDGET;
         let mut remaining = ticks;
         let mut yields = 0usize;
         while remaining > 0 && !self.has_ended() {
             match self.node.tick() {
-                TickResult::Backpressured if yields < YIELDS => {
+                TickResult::Backpressured if Instant::now() < deadline => {
                     yields = yields.saturating_add(1);
                     time::sleep(Duration::ZERO).await;
                 }
                 TickResult::Backpressured => return Drive::Backpressured { yields },
-                _ => {
-                    yields = 0;
-                    remaining -= 1;
-                }
+                _ => remaining -= 1,
             }
         }
         if self.has_ended() {
