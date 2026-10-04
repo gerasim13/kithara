@@ -127,12 +127,17 @@ async fn shared_tracks(hls_saw_15: (Vec<u8>, Vec<u8>)) -> (CreatedHls, CreatedHl
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> CreatedHls {
-    serve(wav_ladder(
-        hls_saw_30,
-        vec![5_000_000, 1_000_000, 2_000_000],
-    ))
-    .await
+async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (CreatedHls, SegmentGateHandle) {
+    let helper = TestServerHelper::new().await;
+    let hls = helper
+        .create_hls(wav_ladder(
+            hls_saw_30,
+            vec![5_000_000, 1_000_000, 2_000_000],
+        ))
+        .await
+        .expect("create HLS fixture");
+    let gate = helper.register_segment_gate(hls.token(), 0, MANUAL_GATE_SEGMENT);
+    (hls, gate)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1239,9 +1244,9 @@ async fn abr_switch_must_not_redownload_covered_segments(
     )
 )]
 async fn runtime_manual_switch_via_handle_changes_playing_variant(
-    #[future(awt)] manual_ladder: CreatedHls,
+    #[future(awt)] manual_ladder: (CreatedHls, SegmentGateHandle),
 ) {
-    let server = manual_ladder;
+    let (server, setup_gate) = manual_ladder;
 
     let url = server.master_url();
     let temp_dir = TestTempDir::new();
@@ -1266,7 +1271,8 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
         .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(auto(0))
+        .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(D.segment_size as u64 * (MANUAL_GATE_SEGMENT as u64 + 1))
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -1287,6 +1293,18 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
         read_until_samples_blocking(audio, 8_192, "runtime manual warmup").await;
     assert!(total > 0, "warmup must yield audio before the Manual flip");
 
+    assert_eq!(
+        collector.switch_count(),
+        0,
+        "V0 must remain pinned before Manual(2)"
+    );
+    assert!(
+        collector
+            .segments()
+            .iter()
+            .all(|segment| { segment.variant != 0 || segment.segment_index < 29 }),
+        "V0's tail must remain unfetched before Manual(2)"
+    );
     let handle = audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle");
@@ -1295,6 +1313,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     handle
         .set_mode(AbrMode::manual(2))
         .expect("Manual(2) target is in the variant list");
+    setup_gate.release();
 
     let switch_seen = Arc::clone(&collector);
     let (mut audio, transition) = spawn_blocking(move || {

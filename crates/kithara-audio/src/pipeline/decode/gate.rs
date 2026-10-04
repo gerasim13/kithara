@@ -296,22 +296,21 @@ fn source_phase_forward<T: StreamType>(stream: &SharedStream<T>) -> SourcePhase 
 
 /// Byte range whose readiness resumes a parked playback decode.
 ///
-/// A segmented source delivers whole segments, so the window ends where the
-/// first segment starting at or after `pos` does: mid-segment that is the rest
-/// of the current segment plus the whole next one, and on a boundary it is the
-/// segment that starts there. Both shapes keep the property a fixed byte count
-/// was chosen for - a decode blocked across the boundary waits for the withheld
-/// next segment rather than hot-spinning the worker - without the fixed count's
-/// other half, a demand for segments the decode never reads, which held startup
-/// until four of them had landed. A source with no byte map has no delivery
-/// unit, and the read-ahead window is the only statement left to make.
+/// A segmented read stops at the end of the unit holding its cursor. Waiting
+/// for a later unit would prevent the decoder reaching the clean boundary
+/// where that unit can be read or replaced. Raw sources use fixed read-ahead.
 fn forward_window(pos: u64, byte_map: Option<&dyn ByteMap>, len: Option<u64>) -> Range<u64> {
     let end = byte_map
-        .and_then(|map| map.segment_after_byte(pos))
-        .map_or_else(
-            || pos.saturating_add(consts::DEFAULT_READ_AHEAD_BYTES),
-            |segment| segment.byte_range.end,
-        );
+        .and_then(|map| {
+            let init = map.init_segment_range();
+            if init.contains(&pos) {
+                Some(init.end)
+            } else {
+                map.segment_at_byte(pos)
+                    .map(|segment| segment.byte_range.end)
+            }
+        })
+        .unwrap_or_else(|| pos.saturating_add(consts::DEFAULT_READ_AHEAD_BYTES));
     pos..len.map_or(end, |len| end.min(len))
 }
 
@@ -378,6 +377,12 @@ mod tests {
                 .find(|segment| segment.byte_range.start >= byte_offset)
         }
 
+        fn segment_at_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+            (0..Self::COUNT)
+                .map(Self::descriptor)
+                .find(|segment| segment.byte_range.contains(&byte_offset))
+        }
+
         fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
             (0..Self::COUNT)
                 .map(Self::descriptor)
@@ -402,12 +407,12 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_wait_inside_a_segment_reaches_past_the_boundary_it_is_blocked_on() {
+    fn a_wait_inside_a_segment_ends_at_its_read_boundary() {
         let map: &dyn ByteMap = &SegmentedMap;
 
         let window = forward_window(SegmentedMap::MID_SEGMENT_BYTE, Some(map), map.len());
 
-        assert_eq!(window.end, SegmentedMap::segment_start(2));
+        assert_eq!(window.end, SegmentedMap::segment_start(1));
     }
 
     #[kithara::test(native, flash(false))]
