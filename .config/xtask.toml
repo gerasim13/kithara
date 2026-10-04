@@ -237,7 +237,8 @@ default_modes = [
   "rtsan-file",
   "rtsan-hls",
 ]
-lane = "workspace"
+# Every lane mode repeats each of these lanes; a command mode runs once.
+lanes = ["workspace"]
 nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
 default_filter = "all()"

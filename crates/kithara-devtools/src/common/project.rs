@@ -744,7 +744,10 @@ pub struct StressConfig {
     /// lane runs belong to the revision the lane was asked about.
     pub build_dir: String,
     pub default_filter: String,
-    pub lane: String,
+    /// The test lanes every lane mode repeats, in order. One lane is not the
+    /// suite: the tests outside the workspace lane belong to lanes of their
+    /// own, and a flake there is found only by repeating that lane.
+    pub lanes: Vec<String>,
     pub nextest_config: String,
     pub nextest_profile: String,
     pub raw_output: String,
@@ -920,7 +923,6 @@ impl StressConfig {
     /// A lane names the directory its evidence lands in, so listing one twice would let the second
     /// run overwrite the first and report half of what it did.
     pub(crate) fn validate(&self) -> Result<()> {
-        require_value("stress.lane", &self.lane)?;
         require_value("stress.nextest_config", &self.nextest_config)?;
         require_value("stress.nextest_profile", &self.nextest_profile)?;
         require_value("stress.default_filter", &self.default_filter)?;
@@ -961,6 +963,16 @@ impl StressConfig {
         for (name, mode) in &self.modes {
             require_value("stress mode name", name)?;
             Self::validate_mode(name, mode)?;
+        }
+        if self.lanes.is_empty() {
+            bail!("stress.lanes must name at least one lane");
+        }
+        let mut lanes = BTreeSet::new();
+        for lane in &self.lanes {
+            require_value("stress.lanes entry", lane)?;
+            if !lanes.insert(lane) {
+                bail!("stress.lanes names `{lane}` twice");
+            }
         }
         if self.default_modes.is_empty() {
             bail!("stress.default_modes must name at least one mode");
@@ -1238,22 +1250,20 @@ impl ProjectConfig {
         }
         if self.stress.is_configured() {
             self.stress.validate()?;
-            let Some(lane) = self.test.lanes.get(&self.stress.lane) else {
-                bail!(
-                    "stress.lane `{}` is not configured under test.lanes",
-                    self.stress.lane
-                );
-            };
-            if !matches!(
-                &lane.runner,
-                TestRunner::Nextest(nextest) if nextest.profile.is_none() && nextest.test_threads.is_none()
-            ) {
-                bail!(
-                    "stress.lane `{}` must run nextest under `stress.nextest_profile` and \
-                     `stress.test_threads`; a lane with its own profile, its own thread count \
-                     or a `cargo test` runner cannot carry them",
-                    self.stress.lane
-                );
+            for name in &self.stress.lanes {
+                let Some(lane) = self.test.lanes.get(name) else {
+                    bail!("stress lane `{name}` is not configured under test.lanes");
+                };
+                if !matches!(
+                    &lane.runner,
+                    TestRunner::Nextest(nextest) if nextest.profile.is_none() && nextest.test_threads.is_none()
+                ) {
+                    bail!(
+                        "stress lane `{name}` must run nextest under `stress.nextest_profile` and \
+                         `stress.test_threads`; a lane with its own profile, its own thread count \
+                         or a `cargo test` runner cannot carry them"
+                    );
+                }
             }
         }
         Ok(())

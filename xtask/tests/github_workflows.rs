@@ -20,10 +20,11 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-# `--mode` repeats per lane; the input is a space-separated list, so
-# one flag carrying the whole string would name a lane that does not
-# exist and fail the run at argument parsing.
+# `--mode` and `--lane` repeat per entry; each input is a space-separated
+# list, so one flag carrying the whole string would name a mode or a lane
+# that does not exist and fail the run at argument parsing.
 for mode in $MODE; do args+=(--mode "$mode"); done
+for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=(
   --raw "$GITHUB_WORKSPACE/raw"
@@ -35,6 +36,7 @@ const STRESS_REPORT_COMMAND: &str = r#"args=(
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
 for mode in $MODE; do args+=(--mode "$mode"); done
+for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress-report "${args[@]}""#;
 
 const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
@@ -932,9 +934,9 @@ fn stress_workflow_is_a_thin_fork_adapter() {
                 .keys()
                 .map(|name| name.as_str().expect("input name is a string"))
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["count", "filter", "mode", "revision",])
+            BTreeSet::from(["count", "filter", "lane", "mode", "revision"])
         );
-        for name in ["count", "filter", "mode", "revision"] {
+        for name in ["count", "filter", "lane", "mode", "revision"] {
             let input = mapping_field(inputs, name)
                 .as_mapping()
                 .unwrap_or_else(|| panic!("{trigger} input `{name}` is a mapping"));
@@ -1087,11 +1089,12 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let stress_env = mapping_field(run, "env")
         .as_mapping()
         .expect("run environment is a mapping");
-    assert_eq!(stress_env.len(), 5);
+    assert_eq!(stress_env.len(), 6);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
         ("FILTER", "${{ inputs.filter }}"),
+        ("LANE", "${{ inputs.lane }}"),
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
     ] {
@@ -1189,12 +1192,13 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let verifier_env = mapping_field(verifier, "env")
         .as_mapping()
         .expect("verifier environment is a mapping");
-    assert_eq!(verifier_env.len(), 6);
+    assert_eq!(verifier_env.len(), 7);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
         ("EXECUTE_RESULT", "${{ needs.execute.result }}"),
         ("FILTER", "${{ inputs.filter }}"),
+        ("LANE", "${{ inputs.lane }}"),
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
     ] {

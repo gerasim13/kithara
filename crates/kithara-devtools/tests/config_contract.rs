@@ -166,7 +166,7 @@ fn stress_config_owns_generic_modes_environment_and_artifacts() {
         r#"
 [stress]
 default_modes = ["baseline"]
-lane = "workspace"
+lanes = ["workspace"]
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -233,7 +233,7 @@ fn a_stress_mode_that_runs_a_command_cannot_ask_for_a_toggle() {
         r#"
 [stress]
 default_modes = ["probe"]
-lane = "workspace"
+lanes = ["workspace"]
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -289,7 +289,7 @@ fn stress_envelope_policy_requires_an_envelope_artifact() {
         r#"
 [stress]
 default_modes = ["baseline"]
-lane = "workspace"
+lanes = ["workspace"]
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -346,7 +346,7 @@ fn a_stress_config_must_name_the_directory_it_builds_into() {
         r#"
 [stress]
 default_modes = ["baseline"]
-lane = "workspace"
+lanes = ["workspace"]
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -514,17 +514,13 @@ prefix_args = ["nextest", "run", "-E", "all()"]
     );
 }
 
-/// Stress hands nextest its own profile and thread count, so a stress lane
-/// that names either would pass nextest the flag twice.
-#[test]
-fn a_stress_lane_cannot_name_its_own_profile_or_thread_count() {
-    let temp = tempdir().expect("tempdir");
-    write_config(
-        temp.path(),
+/// A campaign config repeating `lanes`, over the test lanes `test_lanes`.
+fn campaign(lanes: &str, test_lanes: &str) -> String {
+    format!(
         r#"
 [stress]
 default_modes = ["baseline"]
-lane = "workspace"
+lanes = {lanes}
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -547,35 +543,78 @@ manifest = "manifest.json"
 pressure = "pressure.jsonl"
 report = "report.md"
 
-[stress.environment]
-remove = ["OLD_TRACE"]
-
 [stress.modes.baseline]
 flash = true
-
-[stress.modes.baseline.set_env]
-TRACE_LEVEL = "warn"
-
-[stress.modes.baseline.raw_path_env]
-CAPTURE_DIR = "captures"
 
 [test]
 default_lane = "workspace"
 default_backend = "http"
 
-[test.lanes.workspace]
-cargo.workspace = true
-runner.nextest.profile = "support"
-
 [test.net_backends.http]
 features = []
-"#,
-    );
 
-    let error = ProjectConfig::load(temp.path()).expect_err("a stress lane with a profile fails");
+[test.lanes.workspace]
+cargo.workspace = true
+{test_lanes}
+"#
+    )
+}
+
+fn campaign_error(lanes: &str, test_lanes: &str) -> String {
+    let temp = tempdir().expect("tempdir");
+    write_config(temp.path(), &campaign(lanes, test_lanes));
+    format!(
+        "{:#}",
+        ProjectConfig::load(temp.path()).expect_err("the campaign is refused")
+    )
+}
+
+/// Stress hands nextest its own profile and thread count, so a stress lane
+/// that names either would pass nextest the flag twice.
+#[test]
+fn a_stress_lane_cannot_name_its_own_profile_or_thread_count() {
+    let error = campaign_error(
+        r#"["workspace", "gpu"]"#,
+        "[test.lanes.gpu]\ncargo.workspace = true\nrunner.nextest.profile = \"support\"\n",
+    );
 
     assert!(
-        format!("{error:#}").contains("must run nextest under `stress.nextest_profile`"),
-        "{error:#}"
+        error.contains("must run nextest under `stress.nextest_profile`"),
+        "{error}"
     );
+}
+
+/// A campaign repeats every lane it names under every lane mode, so each one
+/// is named once, is configured, and is run by nextest.
+#[test]
+fn a_stress_campaign_names_each_lane_it_can_repeat_once() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        &campaign(
+            r#"["workspace", "tools"]"#,
+            "[test.lanes.tools]\ncargo.packages = [\"demo-tools\"]\n",
+        ),
+    );
+    let config = ProjectConfig::load(temp.path()).expect("a campaign over two lanes");
+    assert_eq!(config.stress.lanes, ["workspace", "tools"]);
+
+    for (lanes, refusal) in [
+        ("[]", "stress.lanes must name at least one lane"),
+        (
+            r#"["workspace", "workspace"]"#,
+            "stress.lanes names `workspace` twice",
+        ),
+        (
+            r#"["absent"]"#,
+            "stress lane `absent` is not configured under test.lanes",
+        ),
+        (r#"["doc"]"#, "must run nextest"),
+    ] {
+        let error = campaign_error(
+            lanes,
+            "[test.lanes.doc]\ncargo.workspace = true\nrunner.cargo.doc = true\n",
+        );
+        assert!(error.contains(refusal), "{lanes}: {error}");
+    }
 }

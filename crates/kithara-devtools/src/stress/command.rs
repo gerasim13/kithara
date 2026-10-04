@@ -65,9 +65,15 @@ pub struct RunArgs {
     #[arg(long, default_value = ".")]
     subject_root: PathBuf,
     /// Configured stress mode; repeat the flag for several, empty for the
-    /// project's own list. Each becomes one lane of the same run.
+    /// project's own list.
     #[arg(long = "mode")]
     modes: Vec<String>,
+    /// Stressed test lane the lane modes run on; repeat the flag for several,
+    /// empty for every lane the project stresses. A filter aimed at one lane's
+    /// tests selects nothing in the others, and a lane that selects nothing
+    /// fails.
+    #[arg(long = "lane")]
+    lanes: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -89,9 +95,13 @@ pub struct ReportArgs {
     expected_controller_sha: String,
     #[arg(long)]
     expected_subject_sha: String,
-    /// Lane to verify; repeat to verify several, empty for the project's list.
+    /// Mode to verify; repeat to verify several, empty for the project's list.
     #[arg(long = "mode")]
     modes: Vec<String>,
+    /// Stressed test lane to verify; repeat to verify several, empty for every
+    /// lane the project stresses.
+    #[arg(long = "lane")]
+    lanes: Vec<String>,
 }
 
 /// Runs the selected stress command.
@@ -130,40 +140,46 @@ struct Paths {
     report: PathBuf,
 }
 
+/// What the report expects a unit's manifest to say.
+///
+/// The unit comes from `units`, the same place the run took it from. A unit
+/// records the runner `units` gave it, so anything else the report expects is
+/// a second opinion about the same question, and the two disagree exactly
+/// where the units differ most — a command mode runs its own command and would
+/// read as evidence of unknown origin against the test runner's identity.
 struct ReportExpectation<'a> {
     config: &'a StressConfig,
-    mode: &'a StressModeConfig,
+    unit: &'a Unit<'a>,
     filter: &'a str,
-    mode_name: &'a str,
-    runner: StressRunner,
     count: usize,
 }
 
-impl<'a> ReportExpectation<'a> {
-    /// Derives what the lane should have been from the same place the lane
-    /// itself did.
-    ///
-    /// The runner is not passed in. A lane records the runner `unit_runner`
-    /// gave it, so anything else the report expects is a second opinion about
-    /// the same question, and the two disagree exactly where the lanes differ
-    /// most — a command lane runs its own command and would read as evidence
-    /// of unknown origin against the test runner's identity.
-    fn new(
-        project: &ProjectConfig,
-        config: &'a StressConfig,
-        mode_name: &'a str,
-        mode: &'a StressModeConfig,
-        filter: &'a str,
-        count: usize,
-    ) -> Result<Self> {
-        Ok(Self {
-            config,
-            mode_name,
-            mode,
-            filter,
-            count,
-            runner: unit_runner(project, mode, &config.lane)?,
-        })
+/// One body of evidence a run produces: a lane mode on one test lane, or a
+/// command mode on its own.
+#[derive(Debug)]
+struct Unit<'a> {
+    mode_name: &'a str,
+    mode: &'a StressModeConfig,
+    /// The test lane a lane mode runs on; a command mode has none.
+    lane: Option<&'a str>,
+    runner: StressRunner,
+}
+
+impl Unit<'_> {
+    /// Where the unit's evidence lands inside the run: `<mode>/<lane>`, or
+    /// `<mode>` for a command mode.
+    fn directory(&self) -> PathBuf {
+        let mode = PathBuf::from(self.mode_name);
+        self.lane
+            .map_or_else(|| mode.clone(), |lane| mode.join(lane))
+    }
+
+    /// The unit as the report names it.
+    fn name(&self) -> String {
+        self.lane.map_or_else(
+            || self.mode_name.to_owned(),
+            |lane| format!("{}/{lane}", self.mode_name),
+        )
     }
 }
 
@@ -185,16 +201,19 @@ impl Paths {
     }
 }
 
-/// Runs every lane, in order, into one evidence directory.
+/// Runs every unit, in order, into one evidence directory.
 ///
-/// A lane that fails does not stop the ones after it. A run exists to
-/// find out which lane a flake belongs to, and a run that stopped at the first
-/// red lane would answer that question only when the answer was already known.
-/// The first failure is what the caller sees, once every lane has finished.
+/// A unit that fails does not stop the ones after it. A run exists to
+/// find out which mode and lane a flake belongs to, and a run that stopped at
+/// the first red unit would answer that question only when the answer was
+/// already known. The first failure is what the caller sees, once every unit
+/// has finished.
 fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress run is not configured");
-    let lanes = resolve_lanes(&args.modes, config)?;
+    let modes = resolve_modes(&args.modes, config)?;
+    let lanes = resolve_lanes(&args.lanes, config)?;
+    let units = units(&ctx.config, config, &modes, &lanes)?;
     let root = absolute_from(
         &ctx.root,
         args.output
@@ -212,8 +231,8 @@ fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     );
     prepare_run_root(&root)?;
     let mut failure = None;
-    for lane in &lanes {
-        let outcome = run_lane(args, ctx, lane, &root.join(lane));
+    for unit in &units {
+        let outcome = run_lane(args, ctx, unit, &root.join(unit.directory()));
         if let Err(error) = outcome
             && failure.is_none()
         {
@@ -244,54 +263,114 @@ fn subject_junit(subject_root: &Path, config: &StressConfig) -> PathBuf {
     subject_root.join(&config.artifacts.subject_junit)
 }
 
-/// The lanes this invocation is made of: what was asked for, or what the
+/// The modes this invocation is made of: what was asked for, or what the
 /// project says a run is.
-fn resolve_lanes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
-    let lanes = if requested.is_empty() {
+fn resolve_modes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
+    let modes = if requested.is_empty() {
         config.default_modes.clone()
     } else {
         requested.to_vec()
     };
-    ensure!(!lanes.is_empty(), "a run must name at least one mode");
+    ensure!(!modes.is_empty(), "a run must name at least one mode");
+    let mut seen = BTreeSet::new();
+    for mode in &modes {
+        config.mode(mode)?;
+        validate_directory_name("mode", mode)?;
+        ensure!(seen.insert(mode), "stress mode `{mode}` is named twice");
+    }
+    Ok(modes)
+}
+
+/// The test lanes this invocation's lane modes run on: what was asked for, or
+/// every lane the project stresses.
+fn resolve_lanes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
+    let lanes = if requested.is_empty() {
+        config.lanes.clone()
+    } else {
+        requested.to_vec()
+    };
     let mut seen = BTreeSet::new();
     for lane in &lanes {
-        config.mode(lane)?;
-        validate_lane_directory(lane)?;
-        ensure!(seen.insert(lane), "stress mode `{lane}` is named twice");
+        ensure!(
+            config.lanes.contains(lane),
+            "stress lane `{lane}` is not in stress.lanes"
+        );
+        validate_directory_name("lane", lane)?;
+        ensure!(seen.insert(lane), "stress lane `{lane}` is named twice");
     }
     Ok(lanes)
 }
 
-/// A lane names the directory its evidence lands in, so it has to be a plain
-/// directory name rather than anything that could climb out of the run.
-fn validate_lane_directory(lane: &str) -> Result<()> {
-    let mut components = Path::new(lane).components();
+/// A mode or a lane names the directory its evidence lands in, so it has to be
+/// a plain directory name rather than anything that could climb out of the run.
+fn validate_directory_name(kind: &str, name: &str) -> Result<()> {
+    let mut components = Path::new(name).components();
     let single =
         matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
     ensure!(
-        single && !lane.is_empty(),
-        "stress mode `{lane}` is not usable as a directory name"
+        single && !name.is_empty(),
+        "stress {kind} `{name}` is not usable as a directory name"
     );
     Ok(())
 }
 
-/// What one mode of one lane actually invokes, in the shape the manifest
+/// What a run is made of, in order: each lane mode on each lane, and each
+/// command mode once.
+///
+/// A unit whose runner and policy an earlier unit already has is left out. A
+/// lane that declares no flash resolves the same under both clocks, and
+/// repeating it under the second would spend hours measuring the same tests
+/// twice.
+fn units<'a>(
+    project: &ProjectConfig,
+    config: &'a StressConfig,
+    modes: &'a [String],
+    lanes: &'a [String],
+) -> Result<Vec<Unit<'a>>> {
+    let mut seen = Vec::<(StressRunner, PolicySnapshot)>::new();
+    let mut units = Vec::new();
+    for mode_name in modes {
+        let mode = config.mode(mode_name)?;
+        let targets = if mode.command.is_empty() {
+            lanes.iter().map(|lane| Some(lane.as_str())).collect()
+        } else {
+            vec![None]
+        };
+        for lane in targets {
+            let runner = unit_runner(project, mode, lane)?;
+            let identity = (runner.clone(), policy_snapshot(config, mode));
+            if seen.contains(&identity) {
+                continue;
+            }
+            seen.push(identity);
+            units.push(Unit {
+                mode_name,
+                mode,
+                lane,
+                runner,
+            });
+        }
+    }
+    Ok(units)
+}
+
+/// What one mode actually invokes on `lane`, in the shape the manifest
 /// records.
 ///
-/// A command mode is described by its own words rather than by the project's
-/// test runner, so that its manifest names what really ran and the reporter
-/// can verify it the same way it verifies any other mode. A lane mode asks the
-/// lane for its toggles and nothing else: the lane resolves on its own backend
-/// and keeps off a toggle none of its packages declares, exactly as
-/// `just test run --lane` would.
+/// A command mode has no lane and is described by its own words rather than
+/// by the project's test runner, so that its manifest names what really ran
+/// and the reporter can verify it the same way it verifies any other mode. A
+/// lane mode asks the lane for its toggles and nothing else: the lane resolves
+/// on its own backend and keeps off a toggle none of its packages declares,
+/// exactly as `just test run --lane` would.
 fn unit_runner(
     project: &ProjectConfig,
     mode: &StressModeConfig,
-    lane: &str,
+    lane: Option<&str>,
 ) -> Result<StressRunner> {
-    if !mode.command.is_empty() {
+    let Some(lane) = lane else {
         return Ok(StressRunner::Command(mode.command.clone()));
-    }
+    };
     let choice = toggled(&project.test, lane, mode.flash, mode.no_block)?;
     resolve(&project.test, &choice).map(|lane| StressRunner::Lane(Box::new(lane)))
 }
@@ -399,9 +478,9 @@ fn keep_attempt_report(report: &Path, directory: &Path, attempt: usize) -> Resul
 
 /// The build lease is held for the lane so the host's build-cache budget leaves these artifacts
 /// alone while the lane is still executing them.
-fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()> {
+fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()> {
     let config = &ctx.config.stress;
-    let mode = config.mode(mode_name)?;
+    let mode = unit.mode;
     let filter = args
         .filter
         .clone()
@@ -426,8 +505,8 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         "subject",
     )?;
     let subject_junit = subject_junit(&subject_root, config);
-    let runner = unit_runner(&ctx.config, mode, &config.lane)?;
-    let commanded = !mode.command.is_empty();
+    let runner = unit.runner.clone();
+    let commanded = unit.lane.is_none();
     let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
     let _build_lease = lease::hold(&build);
     let spec = match &runner {
@@ -458,7 +537,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
             controller_sha,
             subject_sha,
             runner,
-            mode: mode_name.to_owned(),
+            mode: unit.mode_name.to_owned(),
             build: BuildSnapshot::new(&build)?,
             config: ManifestConfig::new(
                 config.nextest_profile.clone(),
@@ -569,17 +648,19 @@ fn render_raw_report(paths: &Paths, count: usize, config: &StressConfig) -> Resu
     stress_report::run(&args)
 }
 
-/// Verifies every lane of a downloaded run and renders them as one report.
+/// Verifies every unit of a downloaded run and renders them as one report.
 ///
-/// The lanes are read independently — each carries its own manifest, inventory
+/// The units are read independently — each carries its own manifest, inventory
 /// and `JUnit`, and each is checked against what the project says it should have
-/// been. They are rendered together because the question a multi-lane run
-/// answers is a comparison, and a comparison split across two documents is one
-/// the reader has to make by hand.
+/// been. They are rendered together because the question a run answers is a
+/// comparison, and a comparison split across documents is one the reader has
+/// to make by hand.
 fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress run is not configured");
-    let lanes = resolve_lanes(&args.modes, config)?;
+    let modes = resolve_modes(&args.modes, config)?;
+    let lanes = resolve_lanes(&args.lanes, config)?;
+    let units = units(&ctx.config, config, &modes, &lanes)?;
     let filter = args
         .filter
         .clone()
@@ -596,15 +677,15 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     ensure_report_outside_raw(&raw_root, &output)?;
 
     let mut sections = String::new();
-    let mut measured = Vec::new();
+    let mut measured = Vec::<stress_report::Comparison>::new();
     let mut commanded = Vec::new();
     let mut excluded = Vec::new();
     let mut exit_codes = Vec::new();
     let mut failure = None;
     let mut unclean = Vec::new();
-    for lane_name in &lanes {
-        let mode = config.mode(lane_name)?;
-        let paths = Paths::new(raw_root.join(lane_name), &config.artifacts);
+    for unit in &units {
+        let mode = unit.mode;
+        let paths = Paths::new(raw_root.join(unit.directory()), &config.artifacts);
         let report_args = StressReportArgs::new(
             paths.junit.clone(),
             paths.inventory.clone(),
@@ -624,28 +705,40 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         )
         .with_optional_lines(paths.lines.clone())
         .with_optional_command_log(Some(paths.log.clone()));
-        let lane = if mode.command.is_empty() {
+        let lane = if unit.lane.is_some() {
             stress_report::lane_report(&report_args)?
         } else {
             command_lane_report(&paths, mode, count, &config.evidence, &config.render)
         };
-        let expectation =
-            ReportExpectation::new(&ctx.config, config, lane_name, mode, &filter, count)?;
+        let expectation = ReportExpectation {
+            config,
+            unit,
+            filter: &filter,
+            count,
+        };
         let checked = verify_manifest(args, &expectation, &paths.manifest);
         let trusted = checked.verdict.is_ok();
         let excluded_because = exclusion_reason(trusted, &lane);
         if let Some(reason) = unclean_reason(excluded_because.as_deref(), &lane.verdict) {
-            unclean.push((lane_name.clone(), reason));
+            unclean.push((unit.name(), reason));
         }
         exit_codes.push(checked.exit_code);
         let body = with_provenance(lane.markdown, &checked.verdict, &checked.details)?;
-        writeln!(sections, "\n# Lane `{}`\n", markdown_cell(lane_name))?;
+        match unit.lane {
+            Some(test_lane) => writeln!(
+                sections,
+                "\n# Mode `{}` on lane `{}`\n",
+                markdown_cell(unit.mode_name),
+                markdown_cell(test_lane)
+            )?,
+            None => writeln!(sections, "\n# Mode `{}`\n", markdown_cell(unit.mode_name))?,
+        }
         sections.push_str(&body);
         match excluded_because {
-            Some(reason) => excluded.push((lane_name.clone(), reason)),
+            Some(reason) => excluded.push((unit.name(), reason)),
             None => match lane.attempts {
-                Some(rate) => commanded.push((lane_name.clone(), rate)),
-                None => measured.push((lane_name.clone(), lane.rates)),
+                Some(rate) => commanded.push((unit.mode_name.to_owned(), rate)),
+                None => compare(&mut measured, unit, lane.rates),
             },
         }
         let lane_failure = choose_failure(lane.verdict, checked.verdict, Ok(()), Ok(()));
@@ -657,11 +750,11 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     }
 
     let run = verify_run_result(args.execute_result, &exit_codes);
-    let mut document = stress_report::render_lane_comparison(
+    let mut document = stress_report::render_run_comparison(
         &measured,
         &commanded,
         &excluded,
-        lanes.len(),
+        units.len(),
         &config.render,
     );
     if let Err(error) = &run {
@@ -677,6 +770,23 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         println!("{summary}");
     }
     choose_failure(failure.map_or(Ok(()), Err), run, Ok(()), Ok(())).map_or(Ok(()), Err)
+}
+
+/// Places a unit's per-test rates in its lane's comparison, a column per mode.
+///
+/// Command modes share one comparison: they have no lane, and what they have in
+/// common is that each runs a recipe of its own.
+fn compare(
+    comparisons: &mut Vec<stress_report::Comparison>,
+    unit: &Unit<'_>,
+    rates: BTreeMap<stress_report::TestId, stress_report::LaneRate>,
+) {
+    let lane = unit.lane.map(str::to_owned);
+    let column = (unit.mode_name.to_owned(), rates);
+    match comparisons.iter_mut().find(|(group, _)| *group == lane) {
+        Some((_, columns)) => columns.push(column),
+        None => comparisons.push((lane, vec![column])),
+    }
 }
 
 /// Why this lane is not clean, or `None` when it is.
@@ -1039,14 +1149,14 @@ fn verify_manifest(
         filter: expected.filter.to_owned(),
         count: expected.count,
         test_threads: expected.config.test_threads.clone(),
-        mode: expected.mode_name.to_owned(),
+        mode: expected.unit.mode_name.to_owned(),
         config: ManifestConfig::new(
             expected.config.nextest_profile.clone(),
             expected.config.nextest_config.clone(),
             expected.config.workflow_job_timeout_minutes,
         ),
-        runner: expected.runner.clone(),
-        policy: policy_snapshot(expected.config, expected.mode),
+        runner: expected.unit.runner.clone(),
+        policy: policy_snapshot(expected.config, expected.unit.mode),
         execute_result: args.execute_result,
         sampler_healthy: true,
     };
@@ -1398,7 +1508,8 @@ mod tests {
 
     fn command_lane_config() -> (StressConfig, StressModeConfig) {
         let config = StressConfig {
-            lane: "workspace".to_owned(),
+            lanes: vec!["workspace".to_owned()],
+            modes: BTreeMap::from([("rtsan".to_owned(), per_repeat_mode())]),
             ..StressConfig::default()
         };
         (config, per_repeat_mode())
@@ -1471,11 +1582,12 @@ mod tests {
             flash: Some(true),
             ..StressModeConfig::default()
         };
-        let resolved =
-            |lane: &str| match unit_runner(&project, &mode, lane).expect("a lane mode resolves") {
-                StressRunner::Lane(lane) => (lane.backend, lane.features),
-                StressRunner::Command(_) => panic!("a lane mode runs its lane"),
-            };
+        let resolved = |lane: &str| match unit_runner(&project, &mode, Some(lane))
+            .expect("a lane mode resolves")
+        {
+            StressRunner::Lane(lane) => (lane.backend, lane.features),
+            StressRunner::Command(_) => panic!("a lane mode runs its lane"),
+        };
 
         assert_eq!(
             resolved("product"),
@@ -1494,28 +1606,79 @@ mod tests {
         );
     }
 
-    /// The report has to expect the command the lane was told to run. Expecting
-    /// the test runner instead condemns a lane that did exactly what the
-    /// project asked, and a condemned lane leaves the comparison — which is how
-    /// a run can repeat its sanitizer lanes and still report nothing about
-    /// them.
+    /// A run repeats every lane mode on every lane it names and a command mode
+    /// once, each into a directory of its own. A lane that declares no flash
+    /// resolves the same under both clocks, and repeating it under the second
+    /// would spend hours measuring the same tests a second time.
     #[test]
-    fn a_command_lane_is_expected_to_have_run_its_own_command() {
-        let (config, mode) = command_lane_config();
+    fn a_run_is_each_mode_on_each_lane_without_repeating_what_it_ran() {
+        let project = lanes_project();
+        let clock = |flash| StressModeConfig {
+            flash: Some(flash),
+            ..StressModeConfig::default()
+        };
+        let config = StressConfig {
+            modes: BTreeMap::from([
+                ("on".to_owned(), clock(true)),
+                ("off".to_owned(), clock(false)),
+                ("rtsan".to_owned(), per_repeat_mode()),
+            ]),
+            ..StressConfig::default()
+        };
+        let modes = ["on", "off", "rtsan"].map(str::to_owned);
+        let lanes = ["product", "tools"].map(str::to_owned);
 
-        let expectation = ReportExpectation::new(
-            &ProjectConfig::default(),
-            &config,
-            "rtsan",
-            &mode,
-            "all()",
-            2,
-        )
-        .expect("a command lane needs no configured test runner");
+        let units = units(&project, &config, &modes, &lanes).expect("the run resolves");
 
         assert_eq!(
-            expectation.runner,
-            StressRunner::Command(["just", "test", "rtsan"].map(str::to_owned).to_vec())
+            units.iter().map(Unit::directory).collect::<Vec<_>>(),
+            ["on/product", "on/tools", "off/product", "rtsan"].map(PathBuf::from)
+        );
+    }
+
+    /// A filter aimed at one lane's tests selects nothing in the others, so a
+    /// run can be narrowed to lanes — but only to lanes the project stresses.
+    #[test]
+    fn a_run_narrows_only_to_lanes_the_project_stresses() {
+        let config = StressConfig {
+            lanes: vec!["product".to_owned(), "tools".to_owned()],
+            ..StressConfig::default()
+        };
+
+        assert_eq!(
+            resolve_lanes(&["tools".to_owned()], &config).expect("a stressed lane"),
+            ["tools"]
+        );
+        assert_eq!(
+            resolve_lanes(&[], &config).expect("the project's lanes"),
+            ["product", "tools"]
+        );
+        let error = resolve_lanes(&["detector".to_owned()], &config)
+            .expect_err("a lane the project does not stress");
+        assert!(
+            error.to_string().contains("not in stress.lanes"),
+            "{error:#}"
+        );
+    }
+
+    /// The report has to expect the command the mode was told to run. Expecting
+    /// the test runner instead condemns a unit that did exactly what the
+    /// project asked, and a condemned unit leaves the comparison — which is how
+    /// a run can repeat its sanitizer modes and still report nothing about
+    /// them.
+    #[test]
+    fn a_command_mode_is_expected_to_have_run_its_own_command() {
+        let (config, _) = command_lane_config();
+        let modes = ["rtsan".to_owned()];
+
+        let units = units(&ProjectConfig::default(), &config, &modes, &config.lanes)
+            .expect("a command mode needs no configured test runner");
+
+        assert_eq!(
+            units.iter().map(|unit| &unit.runner).collect::<Vec<_>>(),
+            [&StressRunner::Command(
+                ["just", "test", "rtsan"].map(str::to_owned).to_vec()
+            )]
         );
     }
 
@@ -2091,11 +2254,12 @@ mod tests {
     fn a_lane_that_is_not_a_plain_directory_name_is_refused() {
         for lane in ["../escape", "nested/lane", "", "/absolute"] {
             assert!(
-                validate_lane_directory(lane).is_err(),
+                validate_directory_name("lane", lane).is_err(),
                 "accepted `{lane}` as a lane"
             );
         }
-        validate_lane_directory("reproduction-flash-off").expect("a plain name is a lane");
+        validate_directory_name("mode", "reproduction-flash-off")
+            .expect("a plain name is a directory");
     }
 
     #[test]

@@ -122,7 +122,11 @@ struct EvidenceProblems {
     total: usize,
 }
 
-type TestId = (String, String);
+pub(crate) type TestId = (String, String);
+
+/// The per-test rates of one lane across the modes that ran it, a column per
+/// mode; the lane is `None` for the comparison of command modes.
+pub(crate) type Comparison = (Option<String>, Vec<(String, BTreeMap<TestId, LaneRate>)>);
 
 #[derive(Debug, Deserialize)]
 struct Inventory {
@@ -614,39 +618,54 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
     Ok(())
 }
 
-/// The lanes of one run, side by side, ordered by how much they disagree.
+/// The units of one run: each lane's modes side by side, ordered by how much
+/// they disagree.
 ///
-/// Disagreement is what the table is for. A test that fails at the same rate on
-/// both clocks is a flake that owes nothing to either of them; a test that
-/// fails on one and not the other is the run's whole point, and it must
-/// not be buried under a hundred rows of the first kind.
+/// A unit is one mode on one lane, or one command mode. Disagreement is what
+/// each table is for. A test that fails at the same rate on both clocks is a
+/// flake that owes nothing to either of them; a test that fails on one and not
+/// the other is the run's whole point, and it must not be buried under a
+/// hundred rows of the first kind.
 ///
-/// A test present in one lane and absent from the other is reported as absent
-/// rather than as zero: the lanes do not select the same tests, because targets
-/// behind a feature exist in one and not the other, and calling that a rate of
-/// zero would invent a passing result for a test that never ran.
-/// Lanes measured by attempts are reported separately. Their verdict is one
-/// exit code per attempt, so they have no per-test rate to place in the table
-/// above and would otherwise be a column of tests that were never selected.
-/// Lanes kept out of the comparison are named with the reason that kept them
-/// out. A run that silently drops a lane reads as though it covered every
-/// lane it requested, which is the one thing the summary must never imply.
-pub(crate) fn render_lane_comparison(
-    lanes: &[(String, BTreeMap<TestId, LaneRate>)],
+/// A lane is compared only with itself. Its tests are not another lane's, so a
+/// column per lane would mark every test of one as not selected by the other.
+/// Within a lane, a test present in one mode and absent from another is
+/// reported as absent rather than as zero: a mode's toggles put targets behind
+/// a feature in or out, and calling that a rate of zero would invent a passing
+/// result for a test that never ran.
+/// Modes measured by attempts are reported separately. Their verdict is one
+/// exit code per attempt, so they have no per-test rate to place in a table
+/// and would otherwise be a column of tests that were never selected.
+/// Units kept out of the comparison are named with the reason that kept them
+/// out. A run that silently drops a unit reads as though it covered every
+/// unit it requested, which is the one thing the summary must never imply.
+pub(crate) fn render_run_comparison(
+    measured: &[Comparison],
     commanded: &[(String, LaneRate)],
     excluded: &[(String, String)],
     requested: usize,
     budgets: &StressRenderBudgets,
 ) -> String {
     let mut out = String::from("# Stress run\n");
-    let _ = writeln!(out, "\n- Lanes requested: `{requested}`");
     let _ = writeln!(
         out,
-        "- Lanes with trustworthy evidence: `{}`",
-        lanes.len() + commanded.len()
+        "\n- Units requested (a mode on a lane, or a command mode): `{requested}`"
+    );
+    let _ = writeln!(
+        out,
+        "- Units with trustworthy evidence: `{}`",
+        measured.iter().map(|(_, modes)| modes.len()).sum::<usize>() + commanded.len()
     );
     render_excluded_lanes(&mut out, excluded, budgets);
-    render_per_test_comparison(&mut out, lanes, budgets);
+    for (lane, modes) in measured {
+        match lane {
+            Some(lane) => {
+                let _ = writeln!(out, "\n## Lane `{}`", markdown_cell(lane, budgets));
+            }
+            None => out.push_str("\n## Command modes\n"),
+        }
+        render_per_test_comparison(&mut out, modes, budgets);
+    }
     render_attempt_comparison(&mut out, commanded, budgets);
     out
 }
@@ -661,10 +680,10 @@ fn render_excluded_lanes(
     }
     let _ = writeln!(
         out,
-        "- Lanes excluded from comparison: `{}`",
+        "- Units excluded from comparison: `{}`",
         excluded.len()
     );
-    out.push_str("\n## Lanes excluded from comparison\n\n| lane | reason |\n|---|---|\n");
+    out.push_str("\n## Units excluded from comparison\n\n| unit | reason |\n|---|---|\n");
     for (name, reason) in excluded {
         let _ = writeln!(
             out,
@@ -683,7 +702,7 @@ fn render_attempt_comparison(
     if commanded.is_empty() {
         return;
     }
-    out.push_str("\n## Failure rate by attempt\n\n| lane | rate |\n|---|---:|\n");
+    out.push_str("\n## Failure rate by attempt\n\n| mode | rate |\n|---|---:|\n");
     for (name, rate) in commanded {
         let _ = writeln!(
             out,
@@ -698,21 +717,21 @@ fn render_attempt_comparison(
 
 fn render_per_test_comparison(
     out: &mut String,
-    lanes: &[(String, BTreeMap<TestId, LaneRate>)],
+    modes: &[(String, BTreeMap<TestId, LaneRate>)],
     budgets: &StressRenderBudgets,
 ) {
-    if lanes.len() < 2 {
+    if modes.len() < 2 {
         out.push_str(
-            "\nA comparison needs two verified lanes. The lane sections below stand on their own.\n",
+            "\nA comparison needs two verified modes. The unit sections below stand on their own.\n",
         );
         return;
     }
 
     let mut rows = BTreeMap::<TestId, Vec<Option<LaneRate>>>::new();
-    for (index, (_, rates)) in lanes.iter().enumerate() {
+    for (index, (_, rates)) in modes.iter().enumerate() {
         for (id, rate) in rates {
             rows.entry(id.clone())
-                .or_insert_with(|| vec![None; lanes.len()])[index] = Some(*rate);
+                .or_insert_with(|| vec![None; modes.len()])[index] = Some(*rate);
         }
     }
     let mut ranked = rows
@@ -724,7 +743,7 @@ fn render_per_test_comparison(
         })
         .collect::<Vec<_>>();
     if ranked.is_empty() {
-        out.push_str("\nNo test failed in any lane.\n");
+        out.push_str("\nNo test failed in any mode.\n");
         return;
     }
     ranked.sort_by(|left, right| {
@@ -734,12 +753,12 @@ fn render_per_test_comparison(
             .then_with(|| left.1.cmp(&right.1))
     });
 
-    out.push_str("\n## Failure rate by test\n\n| test |");
-    for (name, _) in lanes {
+    out.push_str("\n### Failure rate by test\n\n| test |");
+    for (name, _) in modes {
         let _ = write!(out, " {} |", markdown_cell(name, budgets));
     }
     out.push_str(" holds in |\n|---|");
-    for _ in lanes {
+    for _ in modes {
         out.push_str("---:|");
     }
     out.push_str("---|\n");
@@ -766,7 +785,7 @@ fn render_per_test_comparison(
         let _ = writeln!(
             out,
             " {} |",
-            markdown_cell(&lane_span(lanes, cells), budgets)
+            markdown_cell(&mode_span(modes, cells), budgets)
         );
     }
     if ranked.len() > budgets.failure_rows {
@@ -779,15 +798,15 @@ fn render_per_test_comparison(
     }
 }
 
-/// Which lanes a test's redness survives in, as one phrase.
+/// Which modes a test's redness survives in, as one phrase.
 ///
 /// The rate columns already carry this, but reading it off them means holding
-/// three numbers at once and knowing which lane means what. Run
+/// three numbers at once and knowing which mode means what. Run
 /// 32075786002 cost an afternoon to that: `packaged_abr_switch` is 2/50 on
-/// `reproduction-flash-on` and 0/50 on both of the other lanes, so the virtual
+/// `reproduction-flash-on` and 0/50 on both of the other modes, so the virtual
 /// clock is the whole defect and no product path is implicated — but the table
 /// said that only to a reader who compared the columns by hand.
-fn lane_span(lanes: &[(String, BTreeMap<TestId, LaneRate>)], cells: &[Option<LaneRate>]) -> String {
+fn mode_span(modes: &[(String, BTreeMap<TestId, LaneRate>)], cells: &[Option<LaneRate>]) -> String {
     let selected = cells.iter().flatten().count();
     let red = cells
         .iter()
@@ -797,20 +816,20 @@ fn lane_span(lanes: &[(String, BTreeMap<TestId, LaneRate>)], cells: &[Option<Lan
         .collect::<Vec<_>>();
 
     match (selected, red.as_slice()) {
-        (0 | 1, _) => "only one lane ran it".to_string(),
-        (selected, red) if red.len() == selected => "every lane".to_string(),
-        (_, [index]) => lanes.get(*index).map_or_else(
-            || "one lane".to_string(),
+        (0 | 1, _) => "only one mode ran it".to_string(),
+        (selected, red) if red.len() == selected => "every mode".to_string(),
+        (_, [index]) => modes.get(*index).map_or_else(
+            || "one mode".to_string(),
             |(name, _)| format!("only {name}"),
         ),
-        (selected, red) => format!("{} of {selected} lanes", red.len()),
+        (selected, red) => format!("{} of {selected} modes", red.len()),
     }
 }
 
-/// How far apart the lanes are on one test, as a fraction.
+/// How far apart the modes are on one test, as a fraction.
 ///
-/// A test selected by only some of the lanes is maximally interesting: the
-/// lanes cannot even be compared on it, and the reader should see it first.
+/// A test selected by only some of the modes is maximally interesting: the
+/// modes cannot even be compared on it, and the reader should see it first.
 fn disagreement(cells: &[Option<LaneRate>]) -> f64 {
     if cells.iter().any(Option::is_none) {
         return f64::INFINITY;
@@ -2479,13 +2498,52 @@ seek landed short of the requested frame
         )
     }
 
+    /// The comparison of one lane, its modes as columns.
+    fn one_lane(modes: Vec<(String, BTreeMap<TestId, LaneRate>)>) -> Vec<Comparison> {
+        vec![(Some("workspace".to_owned()), modes)]
+    }
+
+    /// Each lane is compared with itself across modes. Its tests are not
+    /// another lane's, so a column per lane would mark every test of one as
+    /// not selected by the other and bury the clock a flake belongs to.
+    #[test]
+    fn each_lane_is_compared_across_modes_on_its_own() {
+        let table = render_run_comparison(
+            &[
+                (
+                    Some("product".to_owned()),
+                    vec![
+                        lane("on", &[("clockbound", 2, 50)]),
+                        lane("off", &[("clockbound", 0, 50)]),
+                    ],
+                ),
+                (
+                    Some("tools".to_owned()),
+                    vec![
+                        lane("on", &[("steady", 1, 50)]),
+                        lane("off", &[("steady", 1, 50)]),
+                    ],
+                ),
+            ],
+            &[],
+            &[],
+            4,
+            &StressRenderBudgets::default(),
+        );
+
+        assert!(table.contains("## Lane `product`"), "{table}");
+        assert!(table.contains("## Lane `tools`"), "{table}");
+        assert!(!table.contains("not selected"), "{table}");
+        assert!(table.contains("only on"), "{table}");
+    }
+
     #[test]
     fn a_test_the_lanes_disagree_about_is_ranked_above_one_they_agree_on() {
-        let table = render_lane_comparison(
-            &[
+        let table = render_run_comparison(
+            &one_lane(vec![
                 lane("on", &[("agreed", 5, 10), ("disputed", 0, 10)]),
                 lane("off", &[("agreed", 5, 10), ("disputed", 9, 10)]),
-            ],
+            ]),
             &[],
             &[],
             2,
@@ -2499,11 +2557,11 @@ seek landed short of the requested frame
 
     #[test]
     fn a_test_absent_from_one_lane_is_reported_absent_rather_than_passing() {
-        let table = render_lane_comparison(
-            &[
+        let table = render_run_comparison(
+            &one_lane(vec![
                 lane("on", &[("flash_only", 3, 10)]),
                 lane("off", &[("shared", 1, 10)]),
-            ],
+            ]),
             &[],
             &[],
             2,
@@ -2515,26 +2573,26 @@ seek landed short of the requested frame
 
     #[test]
     fn a_run_with_one_trustworthy_lane_refuses_to_compare() {
-        let table = render_lane_comparison(
-            &[lane("on", &[("solo", 1, 10)])],
+        let table = render_run_comparison(
+            &one_lane(vec![lane("on", &[("solo", 1, 10)])]),
             &[],
             &[],
             2,
             &StressRenderBudgets::default(),
         );
 
-        assert!(table.contains("needs two verified lanes"), "{table}");
+        assert!(table.contains("needs two verified modes"), "{table}");
     }
 
     /// A test that only one lane can redden is a defect of that lane's
     /// configuration, not of the code every lane shares.
     #[test]
     fn a_test_red_in_one_lane_names_that_lane() {
-        let table = render_lane_comparison(
-            &[
+        let table = render_run_comparison(
+            &one_lane(vec![
                 lane("flash-on", &[("clockbound", 2, 50)]),
                 lane("flash-off", &[("clockbound", 0, 50)]),
-            ],
+            ]),
             &[],
             &[],
             2,
@@ -2548,18 +2606,18 @@ seek landed short of the requested frame
     /// configuration, and the table must say so rather than name a lane.
     #[test]
     fn a_test_red_in_every_lane_names_no_lane() {
-        let table = render_lane_comparison(
-            &[
+        let table = render_run_comparison(
+            &one_lane(vec![
                 lane("flash-on", &[("everywhere", 2, 50)]),
                 lane("flash-off", &[("everywhere", 3, 50)]),
-            ],
+            ]),
             &[],
             &[],
             2,
             &StressRenderBudgets::default(),
         );
 
-        assert!(table.contains("every lane"), "{table}");
+        assert!(table.contains("every mode"), "{table}");
     }
 
     fn attempted(name: &str, failed: usize, attempts: usize) -> (String, LaneRate) {
@@ -2578,11 +2636,11 @@ seek landed short of the requested frame
     /// how a sanitizer lane runs and reports nothing.
     #[test]
     fn a_lane_measured_by_attempts_is_reported_beside_the_per_test_lanes() {
-        let table = render_lane_comparison(
-            &[
+        let table = render_run_comparison(
+            &one_lane(vec![
                 lane("on", &[("solo", 1, 10)]),
                 lane("off", &[("solo", 0, 10)]),
-            ],
+            ]),
             &[attempted("rtsan", 1, 4)],
             &[],
             3,
@@ -2595,7 +2653,7 @@ seek landed short of the requested frame
 
     #[test]
     fn a_lane_measured_by_attempts_counts_as_trustworthy_evidence() {
-        let table = render_lane_comparison(
+        let table = render_run_comparison(
             &[],
             &[attempted("rtsan", 0, 2)],
             &[],
@@ -2604,7 +2662,7 @@ seek landed short of the requested frame
         );
 
         assert!(
-            table.contains("Lanes with trustworthy evidence: `1`"),
+            table.contains("Units with trustworthy evidence: `1`"),
             "{table}"
         );
     }
@@ -2614,11 +2672,11 @@ seek landed short of the requested frame
     /// still counted it among the six lanes with trustworthy evidence.
     #[test]
     fn an_excluded_lane_is_kept_out_of_the_trustworthy_count() {
-        let table = render_lane_comparison(
-            &[
+        let table = render_run_comparison(
+            &one_lane(vec![
                 lane("on", &[("solo", 1, 10)]),
                 lane("off", &[("solo", 0, 10)]),
-            ],
+            ]),
             &[],
             &[(
                 "flash-off".to_owned(),
@@ -2629,18 +2687,18 @@ seek landed short of the requested frame
         );
 
         assert!(
-            table.contains("Lanes with trustworthy evidence: `2`"),
+            table.contains("Units with trustworthy evidence: `2`"),
             "{table}"
         );
     }
 
     #[test]
     fn an_excluded_lane_is_named_with_its_reason() {
-        let table = render_lane_comparison(
-            &[
+        let table = render_run_comparison(
+            &one_lane(vec![
                 lane("on", &[("solo", 1, 10)]),
                 lane("off", &[("solo", 0, 10)]),
-            ],
+            ]),
             &[],
             &[(
                 "flash-off".to_owned(),
