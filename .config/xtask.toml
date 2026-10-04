@@ -871,7 +871,7 @@ default_features = [
   "kithara-ui-gallery/masonry",
   "kithara-ui-gallery/perf",
 ]
-default_flash = false
+undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
 cargo.profile = "test-release"
 runner.nextest.test_threads = 1
@@ -881,7 +881,7 @@ runner.nextest.filter = "binary(frame_perf) | binary(page_perf)"
 [test.lanes.ui-doc]
 default_backend = "none"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
-default_flash = false
+undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui"]
 runner.cargo.doc = true
 
@@ -937,15 +937,15 @@ default_features = [
 ]
 default_flash = false
 
-# What only the `broadcast` feature turns on. `kithara-broadcast`'s own unit
-# tests need no feature and stay in the workspace lane.
+# What only the `broadcast` feature turns on, and every test of
+# `kithara-broadcast`, so a change to the crate the lane owns runs its tests.
 [test.lanes.broadcast]
 owns = ["crates/kithara-broadcast/", "tests/crates/broadcast/"]
-cargo.packages = ["kithara-app", "kithara-broadcast-tests"]
+cargo.packages = ["kithara-app", "kithara-broadcast", "kithara-broadcast-tests"]
 cargo.profile = "test-release"
 cargo.lib = true
-cargo.tests = ["broadcast"]
-runner.nextest.filter = "binary(broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))"
+cargo.tests = ["broadcast", "packaging_tests"]
+runner.nextest.filter = "binary(broadcast) + package(kithara-broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))"
 default_features = [
   "kithara-app/broadcast",
   "kithara-broadcast-tests/broadcast",

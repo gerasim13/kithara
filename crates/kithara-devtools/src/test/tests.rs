@@ -25,13 +25,13 @@ use crate::{
     verdict::ChildFailure,
 };
 
-pub(super) fn args_of(cmd: &Command) -> Vec<String> {
+fn args_of(cmd: &Command) -> Vec<String> {
     cmd.get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect()
 }
 
-pub(super) fn envs_of(cmd: &Command) -> Vec<(String, String)> {
+fn envs_of(cmd: &Command) -> Vec<(String, String)> {
     cmd.get_envs()
         .filter_map(|(key, value)| {
             value.map(|value| {
@@ -80,13 +80,74 @@ fn typed_lane() -> TestLaneConfig {
 }
 
 /// The features a lane resolves to for `request`.
-pub(super) fn features_for(
+fn features_for(
     test: &TestCommandConfig,
     lane_name: &str,
     request: &TestRequest,
 ) -> Result<BTreeSet<String>> {
     let resolved = resolve(test, &requested(test, lane_name, Some(request))?)?;
     Ok(resolved.features.into_iter().collect())
+}
+
+/// An argument as the snapshot prints it: quoted when the shell would
+/// otherwise split it.
+fn quoted(arg: &str) -> String {
+    if arg.is_empty() || arg.contains(char::is_whitespace) {
+        format!("'{arg}'")
+    } else {
+        arg.to_owned()
+    }
+}
+
+/// Every lane of `tests/fixtures/test-lanes.toml` renders the command
+/// `test-lane-commands.txt` records, alone and under the two callers the
+/// gates are: one that names a profile and one that names a filterset. The
+/// fixture's lanes between them set every typed key, so a change to how a
+/// key becomes an argument shows up as a reviewed diff.
+#[test]
+fn every_typed_lane_key_renders_the_recorded_command() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let test: TestCommandConfig = toml::from_str(
+        &fs::read_to_string(fixtures.join("test-lanes.toml")).expect("the lane fixture exists"),
+    )
+    .expect("the lane fixture is a test configuration");
+    let callers: [&[&str]; 3] = [
+        &[],
+        &["--profile", "ci", "--timings"],
+        &["-E", "test(seek)"],
+    ];
+    let mut report = String::new();
+    for name in test.lanes.keys() {
+        for caller in callers {
+            let mut args = vec![format!("--lane={name}")];
+            args.extend(caller.iter().map(|arg| (*arg).to_owned()));
+            let request = TestRequest::parse(&args).expect("parse request");
+            let name = select_lane(&test, &request).expect("select lane");
+            let command = lane_command(&test, name, &request).expect("lane command");
+            report.push_str(&format!("# {name} [{}]\n", caller.join(" ")));
+            report.push_str(&format!("  {}", command.get_program().to_string_lossy()));
+            for arg in args_of(&command) {
+                report.push(' ');
+                report.push_str(&quoted(&arg));
+            }
+            report.push('\n');
+            let mut envs = envs_of(&command);
+            envs.sort();
+            for (key, value) in envs {
+                report.push_str(&format!("    {key}={value}\n"));
+            }
+        }
+    }
+    let snapshot = fixtures.join("test-lane-commands.txt");
+    if std::env::var_os("KITHARA_UPDATE_SNAPSHOT").is_some() {
+        fs::write(&snapshot, &report).expect("snapshot is writable");
+    }
+    let expected = fs::read_to_string(&snapshot).expect("the lane snapshot exists");
+    assert_eq!(
+        report, expected,
+        "a test lane renders a different command than the snapshot records; \
+         re-record with KITHARA_UPDATE_SNAPSHOT=1 only when the change is intended"
+    );
 }
 
 fn synthetic_project() -> ProjectConfig {

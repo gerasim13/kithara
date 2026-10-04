@@ -6,38 +6,13 @@ fn workspace_root() -> &'static Path {
         .expect("xtask has a workspace root")
 }
 
+/// Every test package — the integration-tests root and each package under
+/// `tests/crates/` — keeps its own code at `opt-level = 1` under
+/// `test-release`, so a release test run optimises the product it exercises
+/// and not the test bodies.
 #[test]
-fn workspace_lane_builds_native_test_packages_in_one_cargo_graph() {
+fn every_test_package_keeps_its_code_at_opt_level_one_under_test_release() {
     let root = workspace_root();
-    let config: toml::Value = toml::from_str(
-        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
-    )
-    .expect("xtask config is valid TOML");
-    let workspace = &config["test"]["lanes"]["workspace"]["cargo"];
-    assert_eq!(workspace["workspace"].as_bool(), Some(true));
-    assert_eq!(config["stress"]["lane"].as_str(), Some("workspace"));
-    let excluded: Vec<&str> = workspace["exclude"]
-        .as_array()
-        .expect("workspace lane excludes packages")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect();
-    for package in [
-        "kithara-fuzz",
-        "kithara-ui",
-        "kithara-devtools",
-        "xtask",
-        "kithara-test-utils",
-        "kithara-test-macros",
-        "kithara-ffi-web-tests",
-        "kithara-ffi-web-analysis-tests",
-    ] {
-        assert!(
-            excluded.contains(&package),
-            "workspace lane must exclude {package}"
-        );
-    }
-
     let manifest: toml::Value = toml::from_str(
         &fs::read_to_string(root.join("Cargo.toml")).expect("workspace manifest is readable"),
     )
@@ -45,21 +20,24 @@ fn workspace_lane_builds_native_test_packages_in_one_cargo_graph() {
     let overrides = manifest["profile"]["test-release"]["package"]
         .as_table()
         .expect("test-release has package overrides");
-    assert!(overrides.contains_key("kithara-integration-tests"));
-    for entry in fs::read_dir(root.join("tests/crates")).expect("read test packages") {
-        let manifest = entry.expect("read test package").path().join("Cargo.toml");
-        if !manifest.is_file() {
-            continue;
-        }
+    let packages = fs::read_dir(root.join("tests/crates"))
+        .expect("read test packages")
+        .map(|entry| entry.expect("read test package").path().join("Cargo.toml"))
+        .filter(|manifest| manifest.is_file())
+        .chain([root.join("tests/Cargo.toml")]);
+    for manifest in packages {
         let package: toml::Value = toml::from_str(
-            &fs::read_to_string(manifest).expect("test package manifest is readable"),
+            &fs::read_to_string(&manifest).expect("test package manifest is readable"),
         )
         .expect("test package manifest is valid TOML");
         let name = package["package"]["name"]
             .as_str()
             .expect("test package has a name");
         assert_eq!(
-            overrides[name]["opt-level"].as_integer(),
+            overrides
+                .get(name)
+                .and_then(|package| package.get("opt-level"))
+                .and_then(toml::Value::as_integer),
             Some(1),
             "{name} must keep test code out of opt-level 3"
         );

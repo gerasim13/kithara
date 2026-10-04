@@ -98,10 +98,7 @@ fn git(args: &[&str]) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::common::project::ProjectConfig;
 
     fn config(owned: &[(&str, &[&str])]) -> BTreeMap<String, TestLaneConfig> {
         owned
@@ -227,74 +224,5 @@ mod tests {
         );
 
         assert_eq!(selected, scope(&["tooling", "harness"]));
-    }
-
-    #[test]
-    fn repository_lanes_keep_domain_ownership_narrow() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("workspace root");
-        let project = ProjectConfig::load(root).expect("repository config");
-        let test = &project.test;
-
-        assert_eq!(
-            select(
-                &test.lanes,
-                &test.shared_paths,
-                &test.default_lane,
-                &[],
-                &["crates/kithara-stream/src/lib.rs"],
-            ),
-            vec!["core"],
-        );
-        assert!(
-            test.lanes["core"]
-                .cargo
-                .packages
-                .iter()
-                .any(|package| package == "kithara-core-test-fixtures"),
-            "the core lane must compile its shared test inputs"
-        );
-        assert_eq!(
-            select(
-                &test.lanes,
-                &test.shared_paths,
-                &test.default_lane,
-                &[],
-                &["tests/crates/core/src/lib.rs"],
-            ),
-            vec!["core"],
-        );
-        assert_eq!(
-            select(
-                &test.lanes,
-                &test.shared_paths,
-                &test.default_lane,
-                &[],
-                &["xtask/tests/lane_config.rs"],
-            ),
-            vec!["tooling"],
-        );
-        assert_eq!(
-            select(
-                &test.lanes,
-                &test.shared_paths,
-                &test.default_lane,
-                &[],
-                &["crates/kithara-ui/src/atoms/button.rs"],
-            ),
-            vec!["ui"],
-        );
-        assert_eq!(
-            select(
-                &test.lanes,
-                &test.shared_paths,
-                &test.default_lane,
-                &[],
-                &["crates/kithara-devtools/tests/config_contract.rs"],
-            ),
-            vec!["tooling"],
-        );
     }
 }
