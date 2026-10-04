@@ -22,12 +22,17 @@ use crate::{
 type Build = BTreeMap<String, Vec<BTreeSet<String>>>;
 
 /// The packages and features cargo resolves for a lane's build, read from
-/// `cargo tree` over the lane's own selection and features.
+/// `cargo tree` over the lane's own selection and features. The output is
+/// parsed, so it never inherits a forced colour: a runner that sets
+/// `CARGO_TERM_COLOR=always` wraps the duplicate marker in escapes, and the
+/// marker then reads as a feature name.
 fn build_of(lane: &ResolvedLane) -> Build {
     let cargo = std::env::var_os("CARGO").expect("the test runner names the cargo it uses");
     let mut command = Command::new(cargo);
     command.current_dir(root()).args([
         "tree",
+        "--color",
+        "never",
         "--prefix",
         "none",
         "--format",
