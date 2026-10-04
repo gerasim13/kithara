@@ -47,12 +47,8 @@ pub fn audio_clock_pace<S>(config: &HostConfig<S>) -> Duration {
         f64::from(frames.get()) / f64::from(config.settings().sample_rate().get()),
     )
 }
-/// Slack a playhead-against-cursor comparison needs. The product publishes
-/// `PlaybackProgress` only once the reported position has moved
-/// `PROGRESS_EMIT_MIN_DELTA_MS`, so an endpoint sourced from an event sits
-/// that far from the cursor snapshot taken beside it — a lag that cancels
-/// across a window whose two endpoints carry the same one, and consumes this
-/// entire budget across a window whose endpoints do not.
+/// Progress publication quantum. Sampling the latest committed event between
+/// render blocks bounds each endpoint's reporting lag by this quantum.
 const PROGRESS_QUANTUM_SECS: f64 = 0.1;
 
 pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
@@ -234,6 +230,17 @@ where
         R: MaybeSend + 'static,
     {
         self.off.call(move |_| f()).await
+    }
+
+    /// Samples an observation and the render cursor between completed blocks.
+    /// The renderer cannot advance while `sample` reads its committed events.
+    pub async fn observe<R>(&self, sample: impl FnOnce() -> R + MaybeSend + 'static) -> (R, u64)
+    where
+        R: MaybeSend + 'static,
+    {
+        self.off
+            .call(move |state| (sample(), state.position.load(Ordering::Relaxed)))
+            .await
     }
 
     /// Transfer one configured player facade into the product Host.
@@ -446,10 +453,9 @@ impl TapProbe {
 }
 
 /// Asserts the position the player reported over one measurement window tracks
-/// the frames the renderer put through it. Read both endpoints the same way —
-/// the same freshness of position, an [`OfflineHostHarness::position`] read
-/// beside each — or the difference of the two reporting lags spends the slack
-/// below before playback ever gets to.
+/// the frames the renderer put through it. Use [`OfflineHostHarness::observe`]
+/// to sample the latest committed position alongside the cursor: an observer
+/// can be descheduled between receiving an event and reading the cursor.
 ///
 /// The two numbers are kept by different owners — the cursor by the offline
 /// renderer, the position by the player — so their agreement is a property of
