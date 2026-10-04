@@ -176,7 +176,6 @@ FROM ci-base AS tool-builder
 # image copies only these binaries, leaving the registry and install target in
 # this disposable build stage.
 ENV CARGO_INSTALL_ROOT=/opt/kithara-ci-tools CARGO_TARGET_DIR=/tmp/cargo-install-target
-COPY install.sh cargo-geiger.patch /tmp/kithara-geiger/
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -185,7 +184,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_CRAP_VERSION}" cargo-crap \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_DENY_VERSION}" cargo-deny \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_FUZZ_VERSION}" cargo-fuzz \
- && bash /tmp/kithara-geiger/install.sh "${CARGO_GEIGER_REV}" "${CARGO_INSTALL_ROOT}" \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked \
+      --git https://github.com/gerasim13/cargo-geiger --rev "${CARGO_GEIGER_REV}" cargo-geiger \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \

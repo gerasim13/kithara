@@ -115,8 +115,7 @@ pub(crate) fn floating_tag(pinned: &str) -> Result<String> {
     Ok(format!("{repository}:{platform}-latest"))
 }
 
-/// Build with the small reviewed analyzer context; the workspace is not sent
-/// to the daemon. The toolchain image consumes the pinned source patch.
+/// Send only the Docker definitions; images fetch their pinned dependencies directly.
 fn build(
     process: &Process,
     dockerfile: &str,
@@ -129,7 +128,7 @@ fn build(
     for (name, value) in arguments {
         command.arg("--build-arg").arg(format!("{name}={value}"));
     }
-    command.arg("docker/cargo-geiger");
+    command.arg("docker");
     process.run_command(&mut command, "build pinned CI image")?;
     info!(image = tag, dockerfile, "CI image built");
     Ok(())

@@ -35,7 +35,7 @@ brew_formulae = [
 ]
 cache_client_image = "rustfs/rc:v0.1.36@sha256:ab024bfebee49a750ce886b4c70963ccd9ddaa03f491704a90710641d7a26699"
 cache_server_image = "rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c"
-cargo_geiger_rev = "549f37c996cbcaa9e636390fcaeaa5aedc5e3ff0"
+cargo_geiger_rev = "82da32cf2b22558e95754e689d848194cd8f26ab"
 cmake_linux_amd64_sha256 = "0dc2e9a6860f06bf10bd8fadc03e35d9eeb4df46e33763a7e480e987758f385c"
 cmake_linux_arm64_sha256 = "83f8fd91d2038a56556e1400390fcfe42f79602940c494f6c6f1cdae7f9e7f40"
 cmake_version = "3.31.12"
