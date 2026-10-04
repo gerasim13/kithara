@@ -1,11 +1,11 @@
 use core::num::NonZeroUsize;
+pub use std::convert::identity as wrap_pool_task;
 use std::sync::atomic::Ordering;
 
 use crate::{common::thread_id::ACTIVE_NAMED_THREADS, loom::thread as backend};
 pub use crate::{
     common::{thread_id::active_named_thread_count, time::Duration},
     loom::thread::JoinHandle,
-    system::thread::wrap_pool_task,
 };
 
 pub type Thread = ::loom::thread::Thread;

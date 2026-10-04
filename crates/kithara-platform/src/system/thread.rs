@@ -1,3 +1,5 @@
+/// Native pool tasks need no additional platform context.
+pub use std::convert::identity as wrap_pool_task;
 use std::sync::atomic::Ordering;
 pub use std::time::Duration;
 
@@ -193,16 +195,4 @@ pub fn current_thread_id() -> u64 {
 #[must_use]
 pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
     std::thread::available_parallelism().ok()
-}
-
-/// Capture platform context before queueing work onto a reusable thread pool.
-///
-/// Native execution needs no additional context.
-#[inline]
-pub fn wrap_pool_task<F, R>(f: F) -> F
-where
-    F: FnOnce() -> R + Send + 'static,
-    R: Send + 'static,
-{
-    f
 }
