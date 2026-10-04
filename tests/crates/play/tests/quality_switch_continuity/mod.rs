@@ -14,7 +14,7 @@ use kithara::{
     audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
     events::{EventBus, EventReceiver},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,

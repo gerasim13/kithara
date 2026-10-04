@@ -3,7 +3,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    host::{HostConfig, Tap},
+    host::{HostConfig, HostSettings, Tap},
     platform::time::Duration,
     play::{Resource, ResourceConfig, ResourceSrc},
 };
@@ -38,7 +38,11 @@ async fn playing_worker() -> OfflineWorker {
     let url = server.signal(SignalAsset::MP3_SINE440_60S);
     let region = pools();
     let host = HostConfig::offline(region.clone())
-        .sample_rate(SAMPLE_RATE.try_into().expect("the sample rate is non-zero"))
+        .settings(
+            HostSettings::builder()
+                .sample_rate(SAMPLE_RATE.try_into().expect("the sample rate is non-zero"))
+                .build(),
+        )
         .build();
     let worker = OfflineWorker::new(async move || OfflinePlayer::new(host).await).await;
     worker

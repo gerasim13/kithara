@@ -5,7 +5,7 @@ use kithara::{
     decode::GaplessMode,
     effects::eq::EqBandConfig,
     events::{EventReceiver, TrackId},
-    host::{HostConfig, HostOwned},
+    host::{HostConfig, HostOwned, HostSettings},
     platform::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
@@ -111,7 +111,7 @@ impl OfflinePlayer {
         let sample_rate =
             NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero");
         let session = HostConfig::offline(pools())
-            .sample_rate(sample_rate)
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
             .maybe_max_block_frames(options.output_block_frames)
             .build();
         Self::with_options(options, session).await
@@ -126,7 +126,7 @@ impl OfflinePlayer {
         options: OfflinePlayerOptions,
         session: HostConfig<TestPools>,
     ) -> Self {
-        let sample_rate = session.sample_rate();
+        let sample_rate = session.settings().sample_rate();
         let pools = offline_pools(&session).clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let player = PlayerImpl::new(

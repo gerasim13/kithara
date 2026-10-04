@@ -39,7 +39,7 @@ async fn a_cleared_queue_plays_the_track_appended_after_it(
     let session = HostConfig::offline(session_pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
+            .sample_rate(session.settings().sample_rate())
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(session_pools.clone()).build(),
             ))

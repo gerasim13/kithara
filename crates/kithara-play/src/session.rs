@@ -1,7 +1,7 @@
 //! Lower player-to-host session protocol.
 
 mod wire {
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::num::NonZeroUsize;
 
     use kithara_bufpool::PoolRegion;
     use kithara_dsp::param::SmootherConfig;
@@ -12,7 +12,7 @@ mod wire {
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
-        api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId},
         bridge::{SharedEq, SlotControl},
         rt::StreamShape,
     };
@@ -31,8 +31,6 @@ mod wire {
     pub enum SessionError {
         #[error("player not found: {0}")]
         PlayerNotFound(PlayerId),
-        #[error("invalid session sample rate: {0}")]
-        InvalidSampleRate(u32),
         #[error("player identity space is exhausted")]
         PlayerIdExhausted,
         #[error("player already started: {0}")]
@@ -57,14 +55,8 @@ mod wire {
         TapActive,
         #[error("session transport has not been processed")]
         TransportNotProcessed,
-        #[error("session transport commit was rejected at the render boundary")]
-        TransportCommitRejected,
-        #[error("session transport update failed: {0}")]
-        TransportSync(String),
-        #[error("session transport frame is exhausted")]
-        TransportFrameExhausted,
-        #[error("session transport revision is exhausted")]
-        TransportRevisionExhausted,
+        #[error("host command queue is full")]
+        HostQueueFull,
         #[error(
             "session output requires {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
         )]
@@ -91,7 +83,6 @@ mod wire {
             eq_layout: Vec<EqBandConfig>,
             gate_smoothing: SmootherConfig,
             pools: PoolRegion<S>,
-            sample_rate: u32,
         },
         UnregisterPlayer {
             player_id: PlayerId,
@@ -101,7 +92,6 @@ mod wire {
             player_id: PlayerId,
             render_quantum_frames: Option<NonZeroUsize>,
             response_budget_frames: Option<NonZeroUsize>,
-            sample_rate: u32,
         },
         StopPlayer {
             player_id: PlayerId,
@@ -133,21 +123,9 @@ mod wire {
         SetSessionDucking {
             mode: SessionDuckingMode,
         },
-        SetSessionTempo {
-            tempo: Tempo,
-        },
-        SetSessionPlaying {
-            playing: bool,
-        },
-        SeekSession {
-            target: SessionBeat,
-        },
         QuerySessionTransport,
         InvalidateAudioRoute {
             reason: String,
-        },
-        SetSampleRate {
-            sample_rate: NonZeroU32,
         },
         QuerySampleRate,
         QueryStreamShape,
@@ -309,9 +287,10 @@ mod handle {
     impl<S> SessionBinding<S> {
         /// Wraps the canonical session for one Host insertion.
         ///
-        /// The rate is the session's own configuration, so it travels from the
-        /// owner that chose it. Asking the session for it would send a command
-        /// and park the caller on a reply carrying a value the owner holds.
+        /// The rate is the one the owner's settings name when the player
+        /// joins; a player built for another rate is refused. The session
+        /// starts its output at the rate its settings name then, not at this
+        /// copy.
         #[doc(hidden)]
         #[must_use]
         pub fn new(
@@ -421,14 +400,12 @@ mod handle {
             pools: PoolRegion<S>,
             gate_smoothing: SmootherConfig,
         ) -> Result<RegisteredPlayer, PlayError> {
-            let sample_rate = self.requested_sample_rate()?.get();
             match self.exec_ok(Cmd::RegisterPlayer {
                 grid_id,
                 bus,
                 eq_layout,
                 gate_smoothing,
                 pools,
-                sample_rate,
             })? {
                 Reply::PlayerRegistered(id) => Ok(id),
                 _ => Err(PlayError::Internal(
@@ -510,13 +487,11 @@ mod handle {
             render_quantum_frames: Option<NonZeroUsize>,
             response_budget_frames: Option<NonZeroUsize>,
         ) -> Result<(), PlayError> {
-            let sample_rate = self.requested_sample_rate()?.get();
             self.exec_ok(Cmd::StartPlayer {
                 master_volume,
                 player_id,
                 render_quantum_frames,
                 response_budget_frames,
-                sample_rate,
             })
             .map(|_| ())
         }
@@ -616,7 +591,6 @@ mod tests {
 
     #[derive(Default)]
     struct RateCapture {
-        applied: AtomicU32,
         queries: AtomicU32,
     }
 
@@ -648,16 +622,11 @@ mod tests {
                         sample_rate().get(),
                     )))
                 }
-                Cmd::RegisterPlayer { sample_rate, .. } => {
-                    self.applied.store(sample_rate, Ordering::Relaxed);
+                Cmd::RegisterPlayer { .. } => {
                     Ok(Reply::PlayerRegistered(crate::session::RegisteredPlayer {
                         id: 1,
                         eq: crate::bridge::SharedEq::new(10),
                     }))
-                }
-                Cmd::StartPlayer { sample_rate, .. } => {
-                    self.applied.store(sample_rate, Ordering::Relaxed);
-                    Ok(Reply::Ok)
                 }
                 _ => Ok(Reply::Ok),
             }
@@ -699,31 +668,6 @@ mod tests {
             handle.bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate())),
             Err(PlayError::SessionAlreadyBound)
         ));
-    }
-
-    #[kithara::test]
-    fn session_commands_use_the_bound_host_rate() {
-        let capture = Arc::new(RateCapture::default());
-        let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = capture.clone();
-        let handle = SessionHandle::new(SessionBinding::new(dispatcher, sample_rate()));
-
-        let player_id = handle
-            .register_player(
-                BeatGridId::allocate().expect("player id"),
-                EventBus::default(),
-                Vec::new(),
-                pools(),
-                DEFAULT_GATE_SMOOTHING,
-            )
-            .expect("register player")
-            .id;
-        assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
-
-        capture.applied.store(0, Ordering::Relaxed);
-        handle
-            .start_player(player_id, 1.0, None, NonZeroUsize::new(448))
-            .expect("start player");
-        assert_eq!(capture.applied.load(Ordering::Relaxed), sample_rate().get());
     }
 
     #[kithara::test]

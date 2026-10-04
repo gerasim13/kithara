@@ -17,7 +17,10 @@ use kithara::{
 use kithara::{
     beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
     hls::AbrMode,
-    host::{HostConfig, HostOwned, MetronomeConfig, Tap},
+    host::{
+        HostConfig, HostOwned, HostSettings, HostSettingsControl, MetronomeConfig,
+        MetronomeConfigControl, Tap,
+    },
     platform::{
         sync::Arc,
         time::{self, Duration, Instant},
@@ -585,7 +588,7 @@ fn recording_config(sample_rate: u32, packet_frames: usize) -> RecordingConfig {
 fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, OfflineRenderRequest) {
     let spec = AudioSpec::new(CHANNELS, sample_rate);
     let session = HostConfig::offline(pools())
-        .sample_rate(sample_rate)
+        .settings(HostSettings::builder().sample_rate(sample_rate).build())
         .build();
     let host = Host::new(session).unwrap_or_else(|error| panic!("create offline Host: {error}"));
     let request = OfflineRenderRequest::builder()
@@ -708,12 +711,16 @@ impl ProductHarness {
         )
         .expect("offline render block count is non-zero");
         let session = HostConfig::offline(pools)
-            .sample_rate(sample_rate)
             .max_block_frames(render_block_frames)
-            .metronome(
-                MetronomeConfig::builder()
-                    .level(METRONOME_DUCK)
-                    .duck(METRONOME_DUCK)
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(sample_rate)
+                    .metronome(
+                        MetronomeConfig::builder()
+                            .level(METRONOME_DUCK)
+                            .duck(METRONOME_DUCK)
+                            .build(),
+                    )
                     .build(),
             )
             .build();
@@ -721,7 +728,7 @@ impl ProductHarness {
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
-        host.set_metronome(true)
+        host.with(|host| host.metronome().set_enabled(true))
             .await
             .unwrap_or_else(|error| panic!("{}: metronome: {error}", case.id));
         let master = host

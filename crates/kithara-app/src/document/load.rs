@@ -390,7 +390,7 @@ mod tests {
     use kithara::{
         assets::FlushPolicy,
         hls::SizeProbeMethod,
-        host::HostConfig,
+        host::{HostConfig, HostSettings},
         net::{Compression, NetOptions},
         platform::{CancelToken, time::Duration, tokio::runtime::Handle},
         worker::ComputePool,
@@ -792,8 +792,8 @@ mod tests {
     }
 
     /// The Host owns the output rate -- it refuses a player whose rate
-    /// disagrees, and `Deck::build` reads every player's rate back off
-    /// `Host::requested_sample_rate` -- so `PlayerConfig::sample_rate` carries
+    /// disagrees, and `Deck::build` reads every player's rate back off the
+    /// Host's settings -- so `PlayerConfig::sample_rate` carries
     /// `#[patch(skip)]` and the document names the rate once. It names it
     /// under `app`, not `host`: `HostConfig` is a session-mode enum with no
     /// patch of its own, so `main` reads the key off the built `AppConfig` and
@@ -806,10 +806,14 @@ mod tests {
 
         let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
         let host = HostConfig::<AppPools>::builder()
-            .maybe_sample_rate_hint(document.app().sample_rate)
+            .settings(
+                HostSettings::builder()
+                    .maybe_sample_rate(document.app().sample_rate)
+                    .build(),
+            )
             .build();
 
-        assert_eq!(host.sample_rate().get(), 48_000);
+        assert_eq!(host.settings().sample_rate().get(), 48_000);
     }
 
     fn assembled(dir: &TempDir, name: &str, app: &str, shutdown: &CancelToken) -> AppConfig {

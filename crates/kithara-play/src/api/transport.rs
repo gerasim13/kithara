@@ -6,11 +6,11 @@ use kithara_warp::{BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat};
 /// carry.
 ///
 /// The upper bound is what keeps the anchor arithmetic finite: an unbounded
-/// tempo overflows the beat span of a single block, and the resulting failure
-/// strands the transport with an active commit and no anchor.
+/// tempo overflows the beat span of a single block, and the transport could
+/// place no beat anchor on it.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, fieldwork::Fieldwork, Ranged)]
 #[fieldwork(get)]
-#[ranged(min = 1.0, max = 1_000.0)]
+#[ranged(min = 1.0, max = 1_000.0, default = 120.0)]
 pub struct Tempo(
     /// Returns the tempo in beats per minute.
     #[field(get = beats_per_minute, copy)]
@@ -75,16 +75,12 @@ pub struct SessionTransportSnapshot {
     /// Returns the monotonic revision of the committed transport configuration.
     #[field(get, copy)]
     revision: TransportRevision,
-    /// Returns whether the processed session transport is playing.
-    #[field(get = is_playing, copy)]
-    playing: bool,
 }
 
 impl SessionTransportSnapshot {
     #[must_use]
     pub const fn new(
         position: SessionBeat,
-        playing: bool,
         tempo: Tempo,
         revision: TransportRevision,
         anchor: SessionAnchor,
@@ -98,7 +94,6 @@ impl SessionTransportSnapshot {
             session_epoch,
             tempo,
             revision,
-            playing,
         }
     }
 
@@ -167,7 +162,6 @@ mod tests {
         .expect("invariant: fixture anchor is valid");
         let snapshot = SessionTransportSnapshot::new(
             SessionBeat::new(8.0).expect("invariant: fixture position is finite"),
-            true,
             Tempo::new(120.0).expect("invariant: fixture tempo is in range"),
             TransportRevision::first(),
             anchor,

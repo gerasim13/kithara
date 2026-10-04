@@ -9,6 +9,8 @@ use firewheel::{
     nodes::volume::VolumeNode,
 };
 use kithara_bufpool::PoolRegion;
+use kithara_command::Live;
+use kithara_config::ConfigOwner;
 use kithara_dsp::param::SmootherConfig;
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_events::EventBus;
@@ -23,13 +25,15 @@ use super::{
     dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
     graph::tap,
     protocol::{PlayerId, SessionError, StartStreamFn},
-    transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
+    queue::HostProtocol,
+    transport::{SessionGridGeneration, TransportControl, install},
 };
 use crate::{
     PlayerMember,
-    api::{SessionDuckingMode, SlotId, Tap},
+    api::{SlotId, Tap},
     bridge::SharedEq,
-    rt::{MasterEqNode, MetronomeNode, SessionOutput},
+    host::HostSettings,
+    rt::{MasterEqNode, MasterNode, SessionOutput},
 };
 
 #[derive(Debug)]
@@ -168,6 +172,7 @@ impl Taps {
 
 struct RootSnapshot {
     grid: BeatGridSnapshot,
+    settings: HostSettings,
     stream_shape: Option<StreamShape>,
     topology: Result<SyncGroupSnapshot, SyncError>,
     sample_rate: SessionSampleRate,
@@ -178,11 +183,12 @@ struct RootSnapshot {
 pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
 
 impl RootView {
-    pub(crate) fn new(root: &GroupState<PlayerMember>, sample_rate: NonZeroU32) -> Self {
+    pub(crate) fn new(root: &GroupState<PlayerMember>, settings: HostSettings) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
+            settings,
             grid: root.snapshot(),
             stream_shape: None,
-            sample_rate: SessionSampleRate::new(None, sample_rate.get()),
+            sample_rate: SessionSampleRate::new(None, settings.sample_rate().get()),
             status: root.status(),
             topology: root.topology(),
         })))
@@ -191,10 +197,12 @@ impl RootView {
     fn publish(
         &self,
         root: &GroupState<PlayerMember>,
+        settings: HostSettings,
         stream_shape: Option<StreamShape>,
         sample_rate: SessionSampleRate,
     ) {
         self.0.store(Arc::new(RootSnapshot {
+            settings,
             stream_shape,
             sample_rate,
             grid: root.snapshot(),
@@ -212,6 +220,9 @@ impl RootView {
             #[expr($.sample_rate)]
             pub(crate) fn sample_rate(&self) -> SessionSampleRate;
             #[call(load)]
+            #[expr($.settings)]
+            pub(crate) fn settings(&self) -> HostSettings;
+            #[call(load)]
             #[expr($.stream_shape)]
             pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
             #[call(load)]
@@ -228,9 +239,6 @@ pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
     pub(super) root: GroupState<PlayerMember>,
     pub(super) output: SessionOutput,
-    /// Whether the Host metronome clicks; outlives the context.
-    pub(super) metronome: bool,
-    pub(super) session_metronome_memo: Option<Memo<MetronomeNode>>,
     pub(super) session_metronome_node_id: Option<NodeID>,
     pub(super) ctx: Option<FirewheelContext>,
     pub(super) taps: Taps,
@@ -240,20 +248,19 @@ pub(crate) struct SessionState<T, S> {
     pub(super) requested_max_block_frames: Option<NonZeroU32>,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) session_limiter_node_id: Option<NodeID>,
-    pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) stream: Option<T>,
     pub(super) transport_control: Option<TransportControl>,
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
-    pub(super) session_ducking: SessionDuckingMode,
-    pub(super) transport: SessionTransportState,
+    /// The Host settings as the render graph confirmed them, with the
+    /// changes still on their way to it.
+    pub(super) settings: Live<HostSettings, HostProtocol>,
     pub(super) start_stream_fn: StartStreamFn<T>,
     /// Set when the output device is acquired once and cannot be rebuilt, so
     /// an idle session must keep it rather than release it.
     pub(super) retains_output: bool,
     pub(super) stream_needs_restart: bool,
-    pub(super) sample_rate_hint: u32,
 }
 
 /// The stream outlives nothing: it is dropped before the context.
@@ -273,15 +280,16 @@ impl<T, S> SessionState<T, S> {
     #[cfg(test)]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
-    /// Creates session state with its own musical-grid topology.
+    /// Creates session state with its own musical-grid topology, asking for
+    /// the output at the sample rate its settings name.
     #[must_use]
     pub(crate) fn new<F>(
         root: GroupState<PlayerMember>,
         root_view: RootView,
-        sample_rate: NonZeroU32,
         requested_max_block_frames: Option<NonZeroU32>,
         requested_declick_frames: Option<NonZeroU32>,
         output: SessionOutput,
+        settings: Live<HostSettings, HostProtocol>,
         start_stream_fn: F,
     ) -> Self
     where
@@ -291,11 +299,10 @@ impl<T, S> SessionState<T, S> {
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
+            settings,
             requested_max_block_frames,
             requested_declick_frames,
             output,
-            metronome: false,
-            session_metronome_memo: None,
             session_metronome_node_id: None,
             root,
             root_view,
@@ -305,14 +312,10 @@ impl<T, S> SessionState<T, S> {
             transport_control: None,
             taps: Taps::default(),
             next_player_id: 1,
-            sample_rate_hint: sample_rate.get(),
-            session_ducking: SessionDuckingMode::Off,
-            session_output_memo: None,
             session_output_node_id: None,
             session_limiter_node_id: None,
             retains_output: false,
             stream_needs_restart: false,
-            transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
             graph: GraphRegistry::default(),
         };
@@ -321,8 +324,12 @@ impl<T, S> SessionState<T, S> {
     }
 
     pub(super) fn publish_root(&self) {
-        self.root_view
-            .publish(&self.root, stream_shape(self), sample_rate(self));
+        self.root_view.publish(
+            &self.root,
+            *self.settings.config(),
+            stream_shape(self),
+            sample_rate(self),
+        );
     }
 }
 
@@ -343,10 +350,8 @@ pub(super) fn register_player<T, S>(
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pools: PoolRegion<S>,
-    sample_rate: u32,
     gate_smoothing: SmootherConfig,
 ) -> Result<RegisteredPlayer, SessionError> {
-    NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
     let player_id = state.next_player_id;
     let next_player_id = player_id
         .checked_add(1)
@@ -388,28 +393,19 @@ pub(super) fn register_player<T, S>(
     Ok(registration)
 }
 
-pub(super) fn ensure_ctx<T, S>(
-    state: &mut SessionState<T, S>,
-    sample_rate: u32,
-) -> Result<(), SessionError> {
-    ensure_stream_ready(state, sample_rate)?;
+pub(super) fn ensure_ctx<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    ensure_stream_ready(state)?;
     ensure_session_output(state)
 }
 
-fn ensure_stream_ready<T, S>(
-    state: &mut SessionState<T, S>,
-    sample_rate: u32,
-) -> Result<(), SessionError> {
+fn ensure_stream_ready<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if state.ctx.is_none() {
-        return create_firewheel_context(state, sample_rate);
+        return create_firewheel_context(state);
     }
 
     if state.stream_needs_restart {
-        debug!(
-            sample_rate,
-            "[KITHARA-ROUTE] ensuring stopped stream is restarted"
-        );
-        restart_stream(state, sample_rate)?;
+        debug!("[KITHARA-ROUTE] ensuring stopped stream is restarted");
+        restart_stream(state)?;
     }
 
     Ok(())
@@ -417,10 +413,8 @@ fn ensure_stream_ready<T, S>(
 
 /// Converts the fade through `Duration` rather than casting directly, since Firewheel takes the
 /// fade in seconds while the frame count is the session's own unit.
-fn create_firewheel_context<T, S>(
-    state: &mut SessionState<T, S>,
-    sample_rate: u32,
-) -> Result<(), SessionError> {
+fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    let sample_rate = state.settings.config().sample_rate().get();
     debug!(sample_rate, "[KITHARA-ROUTE] creating firewheel context");
     let mut config = FirewheelConfig {
         num_graph_outputs: ChannelCount::STEREO,
@@ -436,7 +430,7 @@ fn create_firewheel_context<T, S>(
         .reserved_session_grid
         .take()
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
-    let transport_control = match install(&mut ctx, session_grid) {
+    let transport_control = match install(&mut ctx, session_grid, *state.settings.config()) {
         Ok(control) => control,
         Err(error) => {
             state.reserved_session_grid = Some(session_grid);
@@ -453,7 +447,6 @@ fn create_firewheel_context<T, S>(
     state.ctx = Some(ctx);
     state.stream = Some(stream);
     state.transport_control = Some(transport_control);
-    state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
     state.publish_root();
     trace_stream_info(state, "start-stream");
@@ -472,14 +465,11 @@ fn ensure_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
 fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     debug!("[KITHARA-ROUTE] creating session output graph");
     let limiter = state.output.limiter();
-    let metronome = state.output.metronome(state.metronome);
+    let metronome = state.output.metronome(state.settings.config().metronome());
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
-    let session_node = VolumeNode::from_linear(state.session_ducking.gain());
-    let session_memo = Memo::new(session_node);
-    let metronome_memo = Memo::new(metronome);
-    let session_id = add_graph_node(fw_ctx, session_node)?;
+    let session_id = add_graph_node(fw_ctx, MasterNode)?;
     let limiter_id = add_graph_node(fw_ctx, limiter)?;
     let metronome_id = add_graph_node(fw_ctx, metronome)?;
     let graph_out = fw_ctx.graph_out_node_id();
@@ -502,10 +492,8 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
         warn!("session graph update after output init failed: {err:?}");
     }
     state.session_output_node_id = Some(session_id);
-    state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
     state.session_metronome_node_id = Some(metronome_id);
-    state.session_metronome_memo = Some(metronome_memo);
     tap::install_requested(state)?;
     debug!(
         ?session_id,

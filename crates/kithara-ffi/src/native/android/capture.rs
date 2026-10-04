@@ -10,7 +10,7 @@ use jni::{Env, objects::JString, sys::jint};
 use kithara::{
     assets::StorageBackend,
     events::TrackId,
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -96,7 +96,11 @@ fn render(
     let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut host = FfiHost::new(
         HostConfig::offline(pools)
-            .sample_rate(consts::SAMPLE_RATE)
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(consts::SAMPLE_RATE)
+                    .build(),
+            )
             .build(),
     )
     .map_err(|err| CaptureError::step("offline-host", err))?;

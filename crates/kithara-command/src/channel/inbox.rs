@@ -8,7 +8,7 @@ use ringbuf::{
 use super::{ledger::Ledger, schedule::Schedule, sender::Sent};
 use crate::{
     config::ChannelConfig,
-    protocol::{Batch, Clock, Protocol, Seq, When},
+    protocol::{Batch, Protocol, Seq, When},
     receipt::{Outcome, Receipt, Rejection},
 };
 
@@ -60,15 +60,15 @@ pub struct Due<'inbox, P: Protocol> {
 }
 
 /// Where a moment falls against a block it does not come after.
-enum Place<T> {
+enum Place<P: Protocol> {
     Past,
-    Within { offset: usize, at: T },
+    Within { offset: usize, at: P::Clock },
 }
 
-impl<T: Clock> Place<T> {
+impl<P: Protocol> Place<P> {
     /// `None` when the block of `frames` frames is empty or the moment comes
     /// after it.
-    fn of(when: When<T>, start: T, frames: usize) -> Option<Self> {
+    fn of(when: When<P::Clock>, start: P::Clock, frames: usize) -> Option<Self> {
         if frames == 0 {
             return None;
         }
@@ -78,7 +78,7 @@ impl<T: Clock> Place<T> {
                 at: start,
             });
         };
-        match at.frames_since(start).map(usize::try_from) {
+        match P::frames_since(at, start).map(usize::try_from) {
             None => Some(Self::Past),
             Some(Ok(offset)) if offset < frames => Some(Self::Within { offset, at }),
             Some(_) => None,
@@ -115,7 +115,7 @@ impl<P: Protocol> Inbox<P> {
     /// `None` means nothing more is due inside the block.
     pub fn next_due(&mut self, start: P::Clock, frames: usize) -> Option<Due<'_, P>> {
         loop {
-            let place = Place::of(self.schedule.peek()?, start, frames)?;
+            let place = Place::<P>::of(self.schedule.peek()?, start, frames)?;
             let sent = self.schedule.pop()?;
             let rejection = match place {
                 Place::Within { offset, at } if self.ledger.is_current(&sent.batch.basis) => {
@@ -136,6 +136,24 @@ impl<P: Protocol> Inbox<P> {
             self.reply(Receipt {
                 seq: sent.seq,
                 outcome: Outcome::Rejected(rejection),
+                batch: sent.batch,
+            });
+        }
+    }
+
+    /// Refuses with `refusal`, in time order, every batch waiting for a
+    /// moment of the clock, for an executor whose clock starts a new axis on
+    /// which those moments no longer fall. A batch for the next block keeps
+    /// waiting.
+    pub fn refuse_timed(&mut self, refusal: P::Refusal)
+    where
+        P::Refusal: Clone,
+    {
+        self.drain();
+        while let Some(sent) = self.schedule.take_timed() {
+            self.reply(Receipt {
+                seq: sent.seq,
+                outcome: Outcome::Rejected(Rejection::Refused(refusal.clone())),
                 batch: sent.batch,
             });
         }

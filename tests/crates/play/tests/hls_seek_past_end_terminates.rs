@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::time::{Duration, sleep},
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
@@ -79,7 +79,13 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(
+                        NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"),
+                    )
+                    .build(),
+            )
             .build(),
     )
     .await;

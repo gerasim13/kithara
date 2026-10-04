@@ -78,6 +78,12 @@ pub enum PlayError {
     #[error("invalid parameter value: {name}={value}")]
     InvalidParameter { name: String, value: f32 },
 
+    #[error("the frame a change was asked for is already rendered or about to be")]
+    Late,
+
+    #[error("a change at a frame needs a running render clock")]
+    Untimed,
+
     #[error("invalid player configuration: {reason}")]
     InvalidConfiguration { reason: String },
 

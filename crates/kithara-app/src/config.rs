@@ -164,7 +164,7 @@ pub struct AppConfig {
     #[config(builder(default = 3))]
     pub eq_bands: usize,
     /// Output rate this application asks its audio session for. `None` leaves
-    /// `HostConfig`'s own default standing: the Host owns the product default
+    /// the Host settings' own default standing: the Host owns the product default
     /// and refuses a player whose rate disagrees, so this names an override
     /// and every deck's player still reads the rate back off the Host.
     pub sample_rate: Option<NonZeroU32>,

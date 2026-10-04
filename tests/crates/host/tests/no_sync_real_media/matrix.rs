@@ -4,7 +4,7 @@ use kithara::{
     bufpool::PoolRegion,
     events::{EventBus, TrackId},
     hls::AbrMode,
-    host::{HostConfig, Tap},
+    host::{HostConfig, HostSettings, Tap},
     platform::{
         sync::Arc,
         time::{self, Duration},
@@ -13,6 +13,7 @@ use kithara::{
         CrossfadeSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
         ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SelectionPlayback,
     },
+    signal::TransportRevision,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -303,7 +304,7 @@ async fn run_case(
     let _trace = usdt_trace::scope();
     let host = OfflineHostHarness::new(
         HostConfig::offline(pool_region.clone())
-            .sample_rate(sample_rate)
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
             .max_block_frames(max_block_frames)
             .build(),
     )
@@ -318,7 +319,7 @@ async fn run_case(
     }
 
     load_decks(case, &host, &decks, &mut failures).await;
-    runtime::record_transport_state(&host, "before first render", &mut failures).await;
+    runtime::record_transport_state(&host, None, "before first render", &mut failures).await;
     runtime::drain_all_events(
         &mut decks,
         "startup",
@@ -354,7 +355,13 @@ async fn run_case(
         runtime::validate_deck(case, deck_index, deck, &mut failures);
         runtime::record_control_state(case, deck_index, deck, "after capture", &mut failures);
     }
-    runtime::record_transport_state(&host, "after capture", &mut failures).await;
+    runtime::record_transport_state(
+        &host,
+        Some(TransportRevision::first()),
+        "after capture",
+        &mut failures,
+    )
+    .await;
     let oracles = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
     tracing::debug!(
         cochlea = ?oracles.cochlea,

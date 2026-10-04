@@ -5,7 +5,7 @@ use kithara::{
     assets::StorageBackend,
     drm::{KeyRequest, KeyRequestFactory},
     hls::KeyOptions,
-    host::wasm,
+    host::{HostSettingsControl, wasm},
     platform::{
         sync::{Arc, mpsc},
         thread::{assert_not_main_thread, keep_worker_alive},
@@ -101,7 +101,7 @@ pub(crate) fn worker_main(
         let queue_store = state.store.clone();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(host.requested_sample_rate())
+                .sample_rate(host.sample_rate())
                 .worker(state.worker.clone())
                 .build(),
         );

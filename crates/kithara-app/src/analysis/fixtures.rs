@@ -12,7 +12,7 @@ use kithara::{
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
     events::TrackId,
-    host::HostConfig,
+    host::{HostConfig, HostSettingsControl},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -160,7 +160,7 @@ pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
-            .sample_rate(host.requested_sample_rate())
+            .sample_rate(host.sample_rate())
             .build(),
     );
     let queue = AppQueue::new(QueueConfig::builder().player(player).build());

@@ -16,15 +16,14 @@ use tracing::{debug, warn};
 
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
+    queue::settle_receipts,
     state::{
         Deck, GraphRegistry, SessionState, SlotNodes, TapSlot, Taps, add_graph_node, ensure_ctx,
         prepare_eq_layout,
     },
-    transport::SessionTransportState,
 };
 use crate::{
-    PlayError,
-    api::{SessionDuckingMode, SlotId},
+    api::SlotId,
     bridge::slot_channels,
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
@@ -162,7 +161,6 @@ pub(super) mod lifecycle {
     pub(in crate::session) fn start_player<T, S>(
         state: &mut SessionState<T, S>,
         player_id: PlayerId,
-        sample_rate: u32,
         master_volume: f32,
         render_quantum_frames: Option<NonZeroUsize>,
         response_budget_frames: Option<NonZeroUsize>,
@@ -170,11 +168,8 @@ pub(super) mod lifecycle {
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        debug!(
-            player_id,
-            sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
-        );
-        ensure_ctx(state, sample_rate)?;
+        debug!(player_id, master_volume, "[KITHARA-ROUTE] starting player");
+        ensure_ctx(state)?;
         validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
         let idx = player_index(state, player_id)?;
         let Some(session_output_id) = state.session_output_node_id else {
@@ -339,15 +334,14 @@ pub(super) mod lifecycle {
                 .request_deactivate();
             state.stream = None;
             state.ctx = None;
+            settle_receipts(state);
+            state.settings.abandon();
             state.publish_root();
             state.transport_control = None;
             state.taps = Taps::default();
-            state.transport = SessionTransportState::default();
             state.session_output_node_id = None;
-            state.session_output_memo = None;
             state.session_limiter_node_id = None;
             state.session_metronome_node_id = None;
-            state.session_metronome_memo = None;
         }
         Ok(())
     }
@@ -490,53 +484,6 @@ pub(super) mod slots {
 
 pub(super) mod controls {
     use super::*;
-
-    pub(in crate::session) fn set_session_ducking<T, S>(
-        state: &mut SessionState<T, S>,
-        mode: SessionDuckingMode,
-    ) {
-        state.session_ducking = mode;
-        if let (Some(fw_ctx), Some(session_id), Some(memo)) = (
-            &mut state.ctx,
-            state.session_output_node_id,
-            &mut state.session_output_memo,
-        ) {
-            memo.volume = Volume::Linear(mode.gain());
-            let mut queue = fw_ctx.event_queue(session_id);
-            memo.update_memo(&mut queue);
-        }
-    }
-
-    pub(in crate::session) fn set_metronome<T, S>(state: &mut SessionState<T, S>, on: bool) {
-        state.metronome = on;
-        if let (Some(fw_ctx), Some(id), Some(memo)) = (
-            &mut state.ctx,
-            state.session_metronome_node_id,
-            &mut state.session_metronome_memo,
-        ) {
-            memo.enabled = on;
-            let mut queue = fw_ctx.event_queue(id);
-            memo.update_memo(&mut queue);
-        }
-    }
-
-    /// The next click sounds at `level`; a sounding click keeps its own.
-    pub(in crate::session) fn set_metronome_level<T, S>(
-        state: &mut SessionState<T, S>,
-        level: f32,
-    ) -> Result<(), PlayError> {
-        state.output.set_metronome_level(level)?;
-        if let (Some(fw_ctx), Some(id), Some(memo)) = (
-            &mut state.ctx,
-            state.session_metronome_node_id,
-            &mut state.session_metronome_memo,
-        ) {
-            memo.level = level;
-            let mut queue = fw_ctx.event_queue(id);
-            memo.update_memo(&mut queue);
-        }
-        Ok(())
-    }
 
     /// Validates the whole request before mutating anything, so an invalid
     /// entry leaves the batch untouched. Omitted players are unchanged.
@@ -711,6 +658,7 @@ mod tests {
         ActivateInfo, backend::BackendProcessInfo, node::StreamStatus,
         processor::FirewheelProcessor,
     };
+    use kithara_command::When;
     use kithara_effects::eq::generate_log_spaced_bands;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
@@ -728,6 +676,7 @@ mod tests {
     use crate::{
         api::{SessionTransportSnapshot, Tempo},
         consts,
+        host::{HostSettingsChange, HostSettingsExec},
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,
@@ -851,7 +800,6 @@ mod tests {
                 eq_layout: generate_log_spaced_bands(5),
                 gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
                 pools: pools(),
-                sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             },
         ) {
             Reply::PlayerRegistered(registered) => registered.id,
@@ -860,12 +808,11 @@ mod tests {
         }
     }
 
-    fn start_at(state: &mut TestState, player_id: PlayerId, sample_rate: u32) {
+    fn start(state: &mut TestState, player_id: PlayerId) {
         match run_cmd(
             state,
             Cmd::StartPlayer {
                 player_id,
-                sample_rate,
                 render_quantum_frames: None,
                 response_budget_frames: NonZeroUsize::new(448),
                 master_volume: 1.0,
@@ -875,10 +822,6 @@ mod tests {
             Reply::Err(err) => panic!("player {player_id} failed to start: {err}"),
             _ => panic!("player start returned unexpected reply"),
         }
-    }
-
-    fn start(state: &mut TestState, player_id: PlayerId) {
-        start_at(state, player_id, TestState::DEFAULT_SAMPLE_RATE);
     }
 
     fn unregister(state: &mut TestState, player_id: PlayerId) {
@@ -897,17 +840,8 @@ mod tests {
         }
     }
 
-    fn set_tempo_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
-        assert!(matches!(
-            run_cmd(
-                state,
-                Cmd::SetSessionTempo {
-                    tempo: Tempo::new(120.0).expect("invariant: fixture tempo is valid"),
-                },
-            ),
-            Reply::Ok
-        ));
-        assert!(deliver_one_block(), "transport commit must be rendered");
+    fn render_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
+        assert!(deliver_one_block(), "the transport must render a block");
         match run_cmd(state, Cmd::QuerySessionTransport) {
             Reply::SessionTransport(snapshot) => snapshot,
             Reply::Err(error) => panic!("transport snapshot failed: {error}"),
@@ -921,16 +855,7 @@ mod tests {
         let mut state = test_state(start_test_stream);
         let player = register(&mut state);
         start(&mut state, player);
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetSessionTempo {
-                    tempo: Tempo::new(124.0).expect("invariant: fixture tempo is valid"),
-                },
-            ),
-            Reply::Ok
-        ));
-        assert!(deliver_one_block(), "transport commit must be rendered");
+        assert!(deliver_one_block(), "the transport must render a block");
 
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
 
@@ -1114,8 +1039,8 @@ mod tests {
                 .expect("the initial session-grid revision is committed"),
             initial.stamp()
         );
-        start_at(&mut state, first_player, 0);
-        let before = set_tempo_and_read_session_grid(&mut state);
+        start(&mut state, first_player);
+        let before = render_and_read_session_grid(&mut state);
         let first_live = state.root.snapshot();
         assert_eq!(first_live, before.session_grid());
         assert_eq!(
@@ -1130,10 +1055,8 @@ mod tests {
             Beat::new(1.0).expect("invariant: fixture beat is finite"),
         );
 
-        assert!(matches!(
-            invalidate_audio_route(&mut state, "deferred route before idle teardown"),
-            Reply::Ok
-        ));
+        invalidate_audio_route(&mut state, "deferred route before idle teardown")
+            .expect("the route restarts");
         let route_boundary = state.root.snapshot();
         assert_eq!(
             state
@@ -1188,8 +1111,8 @@ mod tests {
         });
 
         let second_player = register(&mut state);
-        start_at(&mut state, second_player, 0);
-        let after = set_tempo_and_read_session_grid(&mut state);
+        start(&mut state, second_player);
+        let after = render_and_read_session_grid(&mut state);
         let second_live = state.root.snapshot();
         assert_eq!(second_live, after.session_grid());
         assert_eq!(
@@ -1228,13 +1151,10 @@ mod tests {
         });
         let mut state = test_state(start_test_stream);
         let player = register(&mut state);
-        start_at(&mut state, player, 0);
-        let live = set_tempo_and_read_session_grid(&mut state);
+        start(&mut state, player);
+        let live = render_and_read_session_grid(&mut state);
 
-        assert!(matches!(
-            invalidate_audio_route(&mut state, "test route restart"),
-            Reply::Ok
-        ));
+        invalidate_audio_route(&mut state, "test route restart").expect("the route restarts");
         let reserved = state.root.snapshot();
         assert!(reserved.revision() > live.session_grid_stamp().revision());
         assert_eq!(
@@ -1250,7 +1170,7 @@ mod tests {
             panic!("the pending route restart must answer the sample-rate query")
         };
         assert_eq!(rate.measured, None);
-        assert_eq!(rate.requested, 0);
+        assert_eq!(rate.requested, 44_100);
         assert!(matches!(
             run_cmd(&mut state, Cmd::QuerySessionTransport),
             Reply::Err(SessionError::TransportNotProcessed)
@@ -1260,19 +1180,17 @@ mod tests {
             reserved,
             "a stale transport observation must not replace the route reservation"
         );
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetSessionTempo {
-                    tempo: Tempo::new(121.0).expect("invariant: fixture tempo is valid"),
-                },
-            ),
-            Reply::Err(SessionError::TransportNotProcessed)
-        ));
+        let tempo = Tempo::new(121.0).expect("invariant: fixture tempo is valid");
+        assert!(
+            state
+                .exec(HostSettingsChange::Tempo(tempo), When::Next, &mut ())
+                .is_ok(),
+            "a change for the next block waits in the queue across a route restart"
+        );
         assert_eq!(
             state.root.snapshot(),
             reserved,
-            "a transport command must not cross an unfinished route boundary"
+            "a queued change must not touch an unfinished route boundary"
         );
         device(|dev| {
             assert_eq!(dev.retired_processors.len(), 1);

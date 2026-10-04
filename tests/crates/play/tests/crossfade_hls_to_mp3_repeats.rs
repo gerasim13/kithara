@@ -8,7 +8,7 @@ use kithara::{
     audio::AudioConfig,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::{
         sync::Arc,
         time::{Duration, timeout},
@@ -91,7 +91,11 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools.clone())
-            .sample_rate(NonZeroU32::new(consts::SR).expect("sample rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(consts::SR).expect("sample rate is non-zero"))
+                    .build(),
+            )
             .build(),
     )
     .await;

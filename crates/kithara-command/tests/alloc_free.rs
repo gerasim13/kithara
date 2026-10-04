@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use kithara_command::{
-    Batch, ChannelConfig, Clock, Outcome, Protocol, Rejection, Seq, Target, When, channel,
+    Batch, ChannelConfig, Outcome, Protocol, Rejection, Seq, Target, When, channel,
 };
 use kithara_test_utils::kithara;
 
@@ -31,18 +31,16 @@ impl Target for Slot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Frame(u64);
 
-impl Clock for Frame {
-    fn frames_since(self, start: Self) -> Option<u64> {
-        self.0.checked_sub(start.0)
-    }
-}
-
 impl Protocol for Test {
     type Applied = ();
     type Clock = Frame;
     type Command = u32;
     type Refusal = &'static str;
     type Target = Slot;
+
+    fn frames_since(at: Frame, start: Frame) -> Option<u64> {
+        at.0.checked_sub(start.0)
+    }
 }
 
 fn batch(command: u32, basis: &[(Slot, Option<Seq>)]) -> Batch<Test> {

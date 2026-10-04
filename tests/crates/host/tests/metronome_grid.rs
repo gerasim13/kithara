@@ -4,7 +4,9 @@ use std::num::NonZeroU32;
 
 use kithara::{
     audio::mock::TestPcmReader,
-    host::{HostConfig, MetronomeConfig, Tap},
+    host::{
+        HostConfig, HostSettings, HostSettingsControl, MetronomeConfig, MetronomeConfigControl, Tap,
+    },
     play::Tempo,
     signal::AudioSpec,
     warp::BeatGridSnapshot,
@@ -28,11 +30,7 @@ mod consts {
     /// The Host eases a tempo change in: the tempo approaches the new one as
     /// `e^(-t/τ)` with this time constant, in seconds.
     pub(super) const TEMPO_SMOOTH_SECONDS: f64 = 0.005;
-    /// A tempo change commits one render block after it is set: the block
-    /// the audio thread may already be rendering. The first tempo commits on
-    /// the frame it is set on, since no grid plays before it.
-    pub(super) const CHANGE_LEAD_FRAMES: u64 = 512;
-    /// The Host tempo a ride starts from.
+    /// The Host tempo a ride starts from: the tempo a Host starts at.
     pub(super) const RIDE_FROM_BPM: u32 = 120;
     /// The Host tempo a ride ends at, one BPM more on each change.
     pub(super) const RIDE_TO_BPM: u32 = 145;
@@ -55,9 +53,8 @@ mod consts {
     pub(super) const SILENT_FOOT: u64 = 1;
     /// The default metronome level: a downbeat click at the limiter ceiling.
     pub(super) const FULL_LEVEL: f32 = 1.0;
-    /// The tempo of the recorded metronome: 22 050 frames a beat.
-    pub(super) const OVERLAY_BPM: u32 = 120;
-    /// Frames a beat lasts at [`OVERLAY_BPM`] and [`SAMPLE_RATE`].
+    /// Frames a beat lasts at the tempo a Host starts at, 120 BPM, and
+    /// [`SAMPLE_RATE`].
     pub(super) const OVERLAY_PERIOD: u64 = 22_050;
     /// Beats the recorded metronome clicks: four bars.
     pub(super) const OVERLAY_BEATS: u64 = 16;
@@ -66,10 +63,6 @@ mod consts {
     pub(super) const OVERLAY_LEVEL: f32 = 0.5;
     /// No duck: the live click adds to the mix and leaves it whole.
     pub(super) const NO_DUCK: f32 = 0.0;
-    /// Silence the deck plays before the recording, so the live metronome
-    /// starts on another frame, and on another phase of a render block,
-    /// than the recorded one did.
-    pub(super) const OVERLAY_PAD: u64 = 7_777;
 }
 
 /// One stretch of the Host tempo as the math has it. From `frame` on, the
@@ -223,14 +216,15 @@ struct HostRide {
 }
 
 impl HostRide {
-    /// The stretches the math places the ride's beats with: the first tempo
-    /// commits on its own frame, each change one lead later.
+    /// The stretches the math places the ride's beats with: the Host runs at
+    /// the first tempo from the first frame it renders, and each change
+    /// commits on the frame it is set on, where the next block starts.
     fn stretches(&self) -> Vec<Stretch> {
         let mut stretches: Vec<Stretch> = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
             let stretch = stretches.last().map_or_else(
-                || Stretch::first(step.requested, step.bpm),
-                |last| last.then(step.requested + consts::CHANGE_LEAD_FRAMES, step.bpm),
+                || Stretch::first(self.start, step.bpm),
+                |last| last.then(step.requested, step.bpm),
             );
             stretches.push(stretch);
         }
@@ -245,7 +239,11 @@ async fn host_ride() -> HostRide {
     let steps = u64::from(consts::RIDE_TO_BPM - consts::RIDE_FROM_BPM);
     let frames = block * (1 + steps * consts::STEP_BLOCKS + consts::LAST_BLOCKS);
     let config = HostConfig::offline(pools())
-        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+        .settings(
+            HostSettings::builder()
+                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+                .build(),
+        )
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
         .build();
     let host = OfflineHostHarness::new(config)
@@ -255,29 +253,28 @@ async fn host_ride() -> HostRide {
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     let start = host.position();
     host.render_forward(block).await;
 
     let mut ride = Vec::new();
     for bpm in consts::RIDE_FROM_BPM..=consts::RIDE_TO_BPM {
-        let revision = host.session_grid().await.revision();
         let requested = host.position();
         let tempo = Tempo::new(f64::from(bpm)).expect("ride tempo");
-        host.with(move |host| host.set_tempo(tempo))
-            .await
-            .expect("Host tempo");
-        let commit = if ride.is_empty() {
-            requested
-        } else {
-            requested + consts::CHANGE_LEAD_FRAMES
-        };
-        host.render_forward(commit + block - host.position()).await;
-        assert_ne!(
-            host.session_grid().await.revision(),
-            revision,
-            "the Host publishes the {bpm} BPM grid once the block its commit lands in renders"
-        );
+        if host.with(|host| host.tempo()).await != tempo {
+            let revision = host.session_grid().await.revision();
+            host.with(move |host| host.set_tempo(tempo))
+                .await
+                .expect("Host tempo");
+            host.render_forward(block).await;
+            assert_ne!(
+                host.session_grid().await.revision(),
+                revision,
+                "the Host publishes the {bpm} BPM grid once the block it commits on renders"
+            );
+        }
         ride.push(RideStep {
             bpm,
             requested,
@@ -308,11 +305,10 @@ async fn the_host_grid_places_every_beat_on_the_frame_nearest_its_computed_time(
     let ride = host_ride().await;
     let beats = computed_beats(&ride.stretches(), ride.end);
 
-    let first = &ride.steps[0];
     assert_eq!(
-        beat_frame(&first.grid, 0),
-        first.requested,
-        "the first tempo pins beat 0 on the frame it is set on"
+        beat_frame(&ride.steps[0].grid, 0),
+        ride.start,
+        "the Host starts with beat 0 on the first frame it renders"
     );
     assert!(
         beats.len() > ride.steps.len(),
@@ -385,56 +381,48 @@ async fn the_metronome_clicks_on_the_frame_nearest_every_computed_beat() {
 /// [`consts::OVERLAY_LEVEL`] with no duck.
 fn overlay_session() -> HostConfig<TestPools> {
     HostConfig::offline(pools())
-        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
-        .metronome(
-            MetronomeConfig::builder()
-                .level(consts::OVERLAY_LEVEL)
-                .duck(consts::NO_DUCK)
+        .settings(
+            HostSettings::builder()
+                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+                .metronome(
+                    MetronomeConfig::builder()
+                        .level(consts::OVERLAY_LEVEL)
+                        .duck(consts::NO_DUCK)
+                        .build(),
+                )
                 .build(),
         )
         .build()
 }
 
-fn overlay_tempo() -> Tempo {
-    Tempo::new(f64::from(consts::OVERLAY_BPM)).expect("overlay tempo")
-}
-
-/// The Host metronome with no deck under it, recorded from the frame its
-/// first tempo is set on: [`consts::OVERLAY_BEATS`] beats, beat 0 on
-/// frame 0.
+/// The Host metronome with no deck under it, recorded from the first frame
+/// the Host renders: [`consts::OVERLAY_BEATS`] beats, beat 0 on frame 0.
 async fn recorded_metronome() -> Vec<f32> {
-    let block = u64::from(consts::BLOCK_FRAMES);
     let frames = consts::OVERLAY_BEATS * consts::OVERLAY_PERIOD;
     let host = OfflineHostHarness::new(overlay_session())
         .await
         .expect("offline Host without a deck");
     let mut tap = host
-        .attach_tap(Tap::Output, capacity(block + frames))
+        .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
-    let start = host.position();
-    host.render_forward(block).await;
-    let requested = host.position();
-    host.with(|host| host.set_tempo(overlay_tempo()))
+    host.with(|host| host.metronome().set_enabled(true))
         .await
-        .expect("Host tempo");
+        .expect("metronome on");
     host.render_forward(frames).await;
     host.close().await;
 
     assert_eq!(tap.drops(), 0, "the tap keeps every frame");
-    let mut recording = tap.drain().split_off(capacity(requested - start));
-    recording.truncate(capacity(frames));
-    recording
+    tap.drain()
 }
 
-/// A deck playing `recording` after [`consts::OVERLAY_PAD`] frames of
-/// silence, settled from its first frame and never short of decoded audio.
-async fn overlay_deck(recording: &[f32]) -> OfflinePlayer {
+/// A deck playing `recording` after `pad` frames of silence, settled from
+/// its first frame and never short of decoded audio.
+async fn overlay_deck(recording: &[f32], pad: u64) -> OfflinePlayer {
     // WHY: The PCM reader plays one sample a frame on every channel; the
     // metronome clicks both channels alike.
-    let pad = usize::try_from(consts::OVERLAY_PAD).expect("pad frames");
+    let pad = usize::try_from(pad).expect("pad frames");
     let samples: Vec<f32> = std::iter::repeat_n(0.0, pad)
         .chain(
             recording
@@ -460,17 +448,17 @@ async fn overlay_deck(recording: &[f32]) -> OfflinePlayer {
     .await
 }
 
-/// The session frame an [`overlay_deck`] plays frame 0 of `recording` on,
-/// found with the metronome off: the deck's first sound less the frames the
-/// recording is silent before its first click.
-async fn recording_start(recording: &[f32]) -> u64 {
+/// The session frame an [`overlay_deck`] padded by `pad` plays frame 0 of
+/// `recording` on, found with the metronome off: the deck's first sound less
+/// the frames the recording is silent before its first click.
+async fn recording_start(recording: &[f32], pad: u64) -> u64 {
     let lead = clicks(recording)
         .first()
         .expect("the recording clicks")
         .frame;
-    let harness = overlay_deck(recording).await;
+    let harness = overlay_deck(recording, pad).await;
     let host = harness.host();
-    let horizon = consts::OVERLAY_PAD + consts::OVERLAY_PERIOD;
+    let horizon = pad + consts::OVERLAY_PERIOD;
     let mut master = host
         .attach_tap(
             Tap::Master,
@@ -516,9 +504,18 @@ async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
         usize::try_from(consts::OVERLAY_BEATS).expect("beats"),
         "the recording clicks every beat"
     );
-    let at = recording_start(&recording).await;
+    // WHY: The live Host runs at the recording's tempo from its first frame,
+    // so its bars open on whole multiples of a bar. Padded to start on one,
+    // the recording's beat 0 meets a live downbeat on another phase of a
+    // render block than it was recorded on. The probe pads a beat, so the
+    // deck's first sound renders after the taps attach.
+    let bar = consts::OVERLAY_PERIOD * u64::from(consts::BEATS_PER_BAR);
+    let probe = recording_start(&recording, consts::OVERLAY_PERIOD).await;
+    let pad = consts::OVERLAY_PERIOD + bar - probe % bar;
+    let at = recording_start(&recording, pad).await;
+    assert_eq!(at % bar, 0, "the recording starts on a Host bar");
 
-    let harness = overlay_deck(&recording).await;
+    let harness = overlay_deck(&recording, pad).await;
     let host = harness.host();
     let frames = consts::OVERLAY_BEATS * consts::OVERLAY_PERIOD;
     let start = host.position();
@@ -531,19 +528,14 @@ async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
         .attach_tap(Tap::Output, held)
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
-    // WHY: The first tempo pins beat 0 on the frame it is set on: the frame
-    // the deck plays the recording's beat 0 on.
-    while host.position() < at {
-        let step = (at - host.position()).min(u64::from(consts::BLOCK_FRAMES));
-        harness
-            .render(usize::try_from(step).expect("block frames"))
-            .await;
-        let _ = harness.tick_and_drain().await;
+    // WHY: A metronome switched on clicks from the next beat: switched on in
+    // the block before the recording, it clicks from the recording's beat 0.
+    while host.position() + u64::from(consts::BLOCK_FRAMES) < at {
+        render_blocks(&harness, 1).await;
     }
-    host.with(|host| host.set_tempo(overlay_tempo()))
+    host.with(|host| host.metronome().set_enabled(true))
         .await
-        .expect("Host tempo");
+        .expect("metronome on");
     while host.position() < at + frames {
         render_blocks(&harness, 1).await;
     }

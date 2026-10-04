@@ -96,7 +96,11 @@ async fn prepare_tiny_ring_player(
         .unwrap_or_else(|| panic!("{label} HLS audio must expose an ABR handle"));
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools)
-            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
             .build(),
     )
     .await;

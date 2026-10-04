@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::DecoderBackend,
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::time::Duration,
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
@@ -93,7 +93,13 @@ async fn hls_seek_middle_repeated_seeks_stress(
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(
+                        NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"),
+                    )
+                    .build(),
+            )
             .build(),
     )
     .await;
