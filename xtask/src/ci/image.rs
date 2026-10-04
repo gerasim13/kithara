@@ -115,20 +115,22 @@ pub(crate) fn floating_tag(pinned: &str) -> Result<String> {
     Ok(format!("{repository}:{platform}-latest"))
 }
 
-/// Send only the Docker definitions; images fetch their pinned dependencies directly.
+/// Build images from their recipe alone; pinned dependencies are downloaded
+/// or copied from other build stages, without sending workspace files.
 fn build(
     process: &Process,
     dockerfile: &str,
     tag: &str,
     arguments: &[(&'static str, String)],
 ) -> Result<()> {
-    fs::metadata(dockerfile).with_context(|| format!("reading Dockerfile {dockerfile}"))?;
+    let recipe =
+        fs::File::open(dockerfile).with_context(|| format!("reading Dockerfile {dockerfile}"))?;
     let mut command = process.command("docker");
-    command.args(["build", "--file", dockerfile, "--tag", tag]);
+    command.args(["build", "--tag", tag]);
     for (name, value) in arguments {
         command.arg("--build-arg").arg(format!("{name}={value}"));
     }
-    command.arg("docker");
+    command.arg("-").stdin(recipe);
     process.run_command(&mut command, "build pinned CI image")?;
     info!(image = tag, dockerfile, "CI image built");
     Ok(())
