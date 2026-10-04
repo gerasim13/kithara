@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 use super::{SendError, Sender, channel};
 use crate::{
     ChannelConfig, Inbox,
-    protocol::{Batch, Clock, Protocol, Seq, Target, When},
+    protocol::{Batch, Protocol, Seq, Target, When},
     receipt::{Outcome, Rejection},
 };
 
@@ -29,18 +29,16 @@ impl Target for Slot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Frame(u64);
 
-impl Clock for Frame {
-    fn frames_since(self, start: Self) -> Option<u64> {
-        self.0.checked_sub(start.0)
-    }
-}
-
 impl Protocol for Test {
     type Applied = ();
     type Clock = Frame;
     type Command = u32;
     type Refusal = &'static str;
     type Target = Slot;
+
+    fn frames_since(at: Frame, start: Frame) -> Option<u64> {
+        at.0.checked_sub(start.0)
+    }
 }
 
 fn pair(capacity: usize, targets: usize) -> (Sender<Test>, Inbox<Test>) {

@@ -23,7 +23,7 @@ executor's thread never allocates or drops.
 ## Usage
 
 ```rust
-use kithara_command::{Batch, ChannelConfig, Clock, Protocol, Target, When, channel};
+use kithara_command::{Batch, ChannelConfig, Protocol, Target, When, channel};
 
 #[derive(Debug)]
 struct Deck;
@@ -40,12 +40,6 @@ impl Target for Slot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Frame(u64);
 
-impl Clock for Frame {
-    fn frames_since(self, start: Self) -> Option<u64> {
-        self.0.checked_sub(start.0)
-    }
-}
-
 #[derive(Debug)]
 enum Command {
     Seek(u64),
@@ -57,6 +51,10 @@ impl Protocol for Deck {
     type Command = Command;
     type Refusal = ();
     type Target = Slot;
+
+    fn frames_since(at: Frame, start: Frame) -> Option<u64> {
+        at.0.checked_sub(start.0)
+    }
 }
 
 let (mut sender, mut inbox) = channel::<Deck>(ChannelConfig::builder().targets(1).build());
@@ -82,7 +80,7 @@ assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>Protocol</code></td><td>Names one executor's command, target, clock, and answer types</td></tr>
+<tr><td><code>Protocol</code></td><td>Names one executor's command, target, clock, and answer types, and counts frames on its clock</td></tr>
 
 <tr><td><code>Batch</code></td><td>Commands applied together, with the basis they were computed from</td></tr>
 

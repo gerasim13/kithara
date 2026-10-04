@@ -136,8 +136,8 @@ mod tests {
 
     use super::{Live, LiveError};
     use crate::{
-        ChannelConfig, Clock, Inbox, Outcome, Protocol, Rejection, SendError, Sender, Seq, Target,
-        When, channel,
+        ChannelConfig, Inbox, Outcome, Protocol, Rejection, SendError, Sender, Seq, Target, When,
+        channel,
     };
 
     /// A level of at most ten and a mute switch.
@@ -185,6 +185,10 @@ mod tests {
         type Command = Part;
         type Refusal = ();
         type Target = NoTarget;
+
+        fn frames_since(at: Frame, start: Frame) -> Option<u64> {
+            at.0.checked_sub(start.0)
+        }
     }
 
     /// Changes of a configuration shift no time, so no batch names a target.
@@ -199,12 +203,6 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     struct Frame(u64);
-
-    impl Clock for Frame {
-        fn frames_since(self, start: Self) -> Option<u64> {
-            self.0.checked_sub(start.0)
-        }
-    }
 
     fn pair(capacity: usize) -> (Sender<Test>, Inbox<Test>) {
         let capacity = NonZeroUsize::new(capacity).expect("a test channel holds a batch");
