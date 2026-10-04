@@ -150,8 +150,10 @@ impl TransportState {
     /// Applies the batches due inside the block in time order. A batch
     /// applies whole or not at all: its commands stage on copies, and only a
     /// batch whose every command staged moves the transport. Only a batch
-    /// that re-anchors the beats takes a new transport revision.
-    fn apply_due(&mut self, info: &ProcInfo) {
+    /// that re-anchors the beats takes a new transport revision. A block that
+    /// does not follow the last one refuses every tempo change due in it with
+    /// `continuity`'s error, since no beat anchor is known on its frames.
+    fn apply_due(&mut self, info: &ProcInfo, continuity: Result<(), TransportProcessError>) {
         let Self {
             inbox,
             settings,
@@ -163,7 +165,7 @@ impl TransportState {
         inbox.drain();
         let start = SessionFrame::new(info.clock_samples.0);
         while let Some(due) = inbox.next_due(start, info.frames) {
-            let staged = Self::stage(&due, *settings, *anchor).and_then(|staged| {
+            let staged = Self::stage(&due, *settings, *anchor, continuity).and_then(|staged| {
                 if !staged.retargeted {
                     return Ok((staged, *revision, None));
                 }
@@ -236,8 +238,9 @@ impl TransportState {
 
     fn process(&mut self, info: &ProcInfo) -> Result<TransportFrame, TransportProcessError> {
         self.anchor_block(info)?;
-        self.validate_frame(info)?;
-        self.apply_due(info);
+        let continuity = self.validate_frame(info);
+        self.apply_due(info, continuity);
+        continuity?;
         let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
         let (frames, beats) = Self::block_span(anchor, info)?;
         self.boundary = Some(frames.end);
@@ -295,6 +298,7 @@ impl TransportState {
         due: &Due<'_, HostProtocol>,
         settings: HostSettings,
         anchor: Option<SessionAnchor>,
+        continuity: Result<(), TransportProcessError>,
     ) -> Result<Staged, TransportProcessError> {
         let mut staged = Staged {
             settings,
@@ -304,6 +308,7 @@ impl TransportState {
         for command in due.commands() {
             let HostPart::Settings(change) = *command;
             let HostSettingsChange::Tempo(tempo) = change;
+            continuity?;
             if tempo == staged.settings.tempo() {
                 continue;
             }

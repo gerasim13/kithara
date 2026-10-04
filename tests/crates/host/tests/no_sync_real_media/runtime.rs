@@ -8,6 +8,7 @@ use kithara::{
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
     queue::ItemEvent,
+    signal::TransportRevision,
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};
@@ -347,19 +348,27 @@ pub(super) fn record_control_state(
     }
 }
 
+/// Records a failure unless the session transport stands at `expected`:
+/// `None` while it has rendered no block. Nothing changes the tempo of a
+/// no-SYNC session, so once rendering it stays at its first revision.
 pub(super) async fn record_transport_state(
     host: &OfflineHostHarness<TestPools>,
+    expected: Option<TransportRevision>,
     phase: &str,
     failures: &mut Vec<String>,
 ) {
-    match host.transport_revision().await {
-        Err(PlayError::Session(SessionError::TransportNotProcessed)) => {}
-        Err(error) => failures.push(format!(
-            "session transport returned {error} {phase}, expected unconfigured",
-        )),
-        Ok(_) => failures.push(format!(
-            "session transport was configured {phase}, but this is a no-SYNC matrix",
-        )),
+    let actual = match host.transport_revision().await {
+        Ok(revision) => Some(revision),
+        Err(PlayError::Session(SessionError::TransportNotProcessed)) => None,
+        Err(error) => {
+            failures.push(format!("session transport returned {error} {phase}"));
+            return;
+        }
+    };
+    if actual != expected {
+        failures.push(format!(
+            "session transport stands at {actual:?} {phase}, expected {expected:?} in a no-SYNC matrix",
+        ));
     }
 }
 

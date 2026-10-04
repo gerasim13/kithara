@@ -65,8 +65,9 @@ mod consts {
     pub(super) const SETTLE_BLOCKS: usize = 4;
     /// Blocks rendered with every deck paused: more than two beats at [`BPM`].
     pub(super) const PAUSED_BLOCKS: usize = 100;
-    /// Blocks rendered over a loud mix: a click with its whole duck.
-    pub(super) const LOUD_BLOCKS: usize = 16;
+    /// Blocks rendered over a loud mix: the first block, one beat at [`BPM`]
+    /// and a click's whole duck, so the duck sounds wherever the beat falls.
+    pub(super) const LOUD_BLOCKS: usize = 52;
     pub(super) const LOUD_CEILING: f32 = 0.25;
     /// Peak of a downbeat click as a share of [`LOUD_CEILING`].
     pub(super) const LOUD_LEVEL: f32 = 0.8;
@@ -233,7 +234,8 @@ fn tempo() -> Tempo {
 
 /// An offline Host at `sample_rate` with no deck, its metronome on, its
 /// transport running at [`consts::BPM`], and an output tap holding `frames`
-/// frames. One block is rendered first: the tempo commits on a running session.
+/// frames. The tempo is set before the first block, so the transport starts
+/// at it with beat 0 on session frame 0.
 async fn metronome_host(
     sample_rate: u32,
     frames: u64,
@@ -246,26 +248,24 @@ async fn metronome_host(
     let host = OfflineHostHarness::new(config)
         .await
         .expect("offline Host without a deck");
+    let tempo = tempo();
+    host.with(move |host| host.set_tempo(tempo))
+        .await
+        .expect("Host tempo");
     let tap = host
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
     host.set_metronome(true).await.expect("metronome on");
-    host.render_forward(u64::from(consts::BLOCK_FRAMES)).await;
-    let tempo = tempo();
-    host.with(move |host| host.set_tempo(tempo))
-        .await
-        .expect("Host tempo");
     (host, tap)
 }
 
 #[kithara::test(tokio)]
 async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
-    let block = u64::from(consts::BLOCK_FRAMES);
-    let frames = consts::BLOCKS * block;
+    let frames = consts::BLOCKS * u64::from(consts::BLOCK_FRAMES);
     let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, frames).await;
 
-    let rendered = host.render_forward(frames - block).await;
+    let rendered = host.render_forward(frames).await;
     let pcm = tap.drain();
     let grid = host.session_grid().await;
     host.close().await;
@@ -276,16 +276,12 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
     {
         artifact.push(&pcm);
     }
-    assert_eq!(
-        rendered,
-        frames - block,
-        "the Host renders every requested frame"
-    );
+    assert_eq!(rendered, frames, "the Host renders every requested frame");
     assert_eq!(tap.drops(), 0, "the tap keeps every frame");
     assert_eq!(
         pcm.len(),
         capacity(frames),
-        "the tap sees the priming block too"
+        "the tap sees every rendered frame"
     );
     let beats = host_beats(&grid, 0..frames);
     let heard = clicks(&pcm);
@@ -302,6 +298,43 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
         "one click rises from the frame of every Host beat, and nowhere else"
     );
     assert_click_levels(&heard, &beats, consts::FULL_LEVEL);
+}
+
+#[kithara::test(tokio)]
+async fn a_host_never_given_a_tempo_counts_and_clicks_at_120_bpm() {
+    let frames = consts::BLOCKS * u64::from(consts::BLOCK_FRAMES);
+    let config = HostConfig::offline(pools())
+        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+        .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
+        .build();
+    let host = OfflineHostHarness::new(config)
+        .await
+        .expect("offline Host without a deck");
+    let mut tap = host
+        .attach_tap(Tap::Output, capacity(frames))
+        .await
+        .expect("output tap");
+    host.set_metronome(true).await.expect("metronome on");
+
+    host.render_forward(frames).await;
+    let pcm = tap.drain();
+    let tempo = host.with(|host| host.tempo()).await;
+    host.close().await;
+
+    assert_eq!(tempo, Tempo::new(120.0).expect("the default tempo"));
+    let frames_per_beat = u64::from(consts::SAMPLE_RATE) / 2;
+    assert_eq!(
+        clicks(&pcm)
+            .iter()
+            .map(|click| click.frame)
+            .collect::<Vec<_>>(),
+        (0..)
+            .map(|beat| beat * frames_per_beat)
+            .take_while(|frame| *frame < frames)
+            .map(|frame| frame + consts::SILENT_FOOT)
+            .collect::<Vec<_>>(),
+        "a click rises on every beat at 120 BPM from the first frame"
+    );
 }
 
 #[kithara::test(tokio)]
@@ -600,12 +633,11 @@ async fn ride_over(tone: Vec<f32>) -> Ride {
     // a click sounds keeps every beat out of that window, so each beat is
     // placed by the grid of the step it belongs to.
     let mut beats = Vec::new();
-    let mut bpm = None;
     for step in ride() {
         let from = host.position();
-        if bpm != Some(step) {
+        let tempo = Tempo::new(f64::from(step)).expect("ride tempo");
+        if host.with(|host| host.tempo()).await != tempo {
             let revision = host.session_grid().await.revision();
-            let tempo = Tempo::new(f64::from(step)).expect("ride tempo");
             host.with(move |host| host.set_tempo(tempo))
                 .await
                 .expect("Host tempo");
@@ -618,7 +650,6 @@ async fn ride_over(tone: Vec<f32>) -> Ride {
                 render_blocks(&harness, 1).await;
                 waited += 1;
             }
-            bpm = Some(step);
         }
         let (beat, downbeat) = beat_from(&host.session_grid().await, from);
         while host.position() <= beat + consts::SILENT_FOOT {

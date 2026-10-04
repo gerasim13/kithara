@@ -1,11 +1,13 @@
 //! The Host queue: Host settings changes the session transport applies on
 //! its render clock, and the receipts that settle them on the session owner.
 
-use kithara_command::{LiveError, Outcome, Protocol, SendError, Target, When};
+use std::mem;
+
+use kithara_command::{LiveError, Outcome, Protocol, Receipt, Rejection, SendError, Target, When};
 use kithara_config::ConfigOwner;
 use kithara_play::PlayError;
 use kithara_signal::SessionFrame;
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::{
     SessionError,
@@ -97,8 +99,9 @@ impl<T, S> SessionState<T, S> {
 }
 
 /// Settles every receipt the transport returned. An applied change moves
-/// into the settings the Host reads and announces a tempo it changed; a
-/// rejected one is dropped and reported.
+/// into the settings the Host reads and announces a tempo it changed. A
+/// change for the next block the transport refused goes out again; any other
+/// rejected change is dropped and reported.
 pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
     let mut applied = false;
     while let Some(receipt) = state
@@ -125,6 +128,12 @@ pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
                     },
                 );
             }
+            Outcome::Rejected(Rejection::Unanswered) => {
+                error!(change = ?settled.change, "the transport dropped a host settings change unanswered");
+            }
+            Outcome::Rejected(Rejection::Refused(_)) if settled.when == When::Next => {
+                send_again(state, &receipt, settled.change);
+            }
             Outcome::Rejected(rejection) => {
                 warn!(?rejection, change = ?settled.change, "host settings change was not applied");
                 if let When::At(_) = settled.when {
@@ -141,5 +150,26 @@ pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
     }
     if applied {
         state.publish_root();
+    }
+}
+
+/// Sends a change for the next block the transport refused once more, unless
+/// a newer change of the same field for the next block is already on its way
+/// and decides the setting instead.
+fn send_again<T, S>(
+    state: &mut SessionState<T, S>,
+    receipt: &Receipt<HostProtocol>,
+    change: HostSettingsChange,
+) {
+    let superseded = state.settings.pending().any(|(seq, when, pending)| {
+        seq > receipt.seq()
+            && when == When::Next
+            && mem::discriminant(&pending) == mem::discriminant(&change)
+    });
+    if superseded {
+        return;
+    }
+    if let Err(error) = state.exec(change, When::Next, &mut ()) {
+        warn!(%error, ?change, "a refused host settings change could not be sent again");
     }
 }

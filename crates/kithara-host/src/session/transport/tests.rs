@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use firewheel::{
+    FirewheelContext,
     clock::InstantSamples,
     dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     log::{RealtimeLoggerConfig, realtime_logger},
@@ -11,10 +12,11 @@ use firewheel::{
     },
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
+use kithara_config::ConfigOwner;
 use kithara_platform::time::Duration;
 use kithara_play::rt::{install_render_context, read_render_context};
 use kithara_signal::{SessionEpoch, SessionFrame};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::{Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition};
 use triple_buffer::{Output, triple_buffer};
 
@@ -28,8 +30,12 @@ use super::{
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
     consts,
-    host::{HostSettings, HostSettingsChange},
-    session::queue::{HostPart, HostProtocol},
+    host::{HostSettings, HostSettingsChange, HostSettingsExec},
+    session::{
+        queue::{HostPart, HostProtocol, settle_receipts},
+        state::{SessionState, ensure_ctx},
+        tests::graph,
+    },
 };
 
 type Harness = (
@@ -160,6 +166,42 @@ fn outcome(queue: &mut Sender<HostProtocol>) -> Outcome<HostProtocol> {
         .expect("invariant: the transport answered the batch");
     let (outcome, _batch) = receipt.into();
     outcome
+}
+
+/// A session whose transport the test renders by hand: its context is built
+/// and never started, so the transport store stays with the session owner.
+fn owned_session() -> SessionState<(), TestPools> {
+    let mut state = graph::state(|_ctx, _sample_rate| Ok(()));
+    assert!(ensure_ctx(&mut state, consts::TRANSPORT_SAMPLE_RATE).is_ok());
+    state
+}
+
+/// Renders one transport block at `clock_samples`, then settles its receipts
+/// as the session owner does between blocks.
+fn render(
+    state: &mut SessionState<(), TestPools>,
+    clock_samples: i64,
+) -> Result<(), TransportProcessError> {
+    let store = state
+        .ctx
+        .as_mut()
+        .and_then(FirewheelContext::proc_store_mut)
+        .expect("invariant: a context never started keeps its store");
+    let result = process_transport(&proc_info_at(clock_samples), store).map(drop);
+    settle_receipts(state);
+    result
+}
+
+fn configure_tempo(state: &mut SessionState<(), TestPools>, beats_per_minute: f64) {
+    assert!(
+        state
+            .exec(
+                HostSettingsChange::Tempo(tempo(beats_per_minute)),
+                When::Next,
+                &mut ()
+            )
+            .is_ok()
+    );
 }
 
 fn observation(output: &mut Output<TransportObservation>) -> TransportObservation {
@@ -589,6 +631,79 @@ fn a_discontinuous_block_is_rejected_and_still_publishes() {
     );
 
     assert_eq!(observation(&mut output).snapshot(), Some(before));
+}
+
+#[kithara::test]
+fn a_tempo_change_due_in_a_discontinuous_block_is_refused() {
+    let (_processor, mut extra, mut output, mut queue) = active_harness();
+    let before = snapshot(&mut output);
+    send_tempo(&mut queue, 60.0, When::Next);
+
+    assert_eq!(
+        process_transport(&proc_info_at(481), &mut extra.store).map(drop),
+        Err(TransportProcessError::FrameDiscontinuity)
+    );
+
+    assert!(matches!(
+        outcome(&mut queue),
+        Outcome::Rejected(Rejection::Refused(
+            TransportProcessError::FrameDiscontinuity
+        ))
+    ));
+    assert_eq!(observation(&mut output).snapshot(), Some(before));
+}
+
+#[kithara::test]
+fn a_tempo_change_refused_for_the_next_block_is_sent_again() {
+    let mut state = owned_session();
+    assert_eq!(render(&mut state, 0), Ok(()));
+    configure_tempo(&mut state, 60.0);
+    let refused: Vec<_> = state.settings.pending().map(|(seq, ..)| seq).collect();
+
+    assert_eq!(
+        render(&mut state, 481),
+        Err(TransportProcessError::FrameDiscontinuity)
+    );
+    assert_eq!(
+        state.settings.config().tempo(),
+        HostSettings::default().tempo()
+    );
+    let pending: Vec<_> = state.settings.pending().collect();
+    assert!(
+        matches!(
+            pending.as_slice(),
+            [(seq, When::Next, HostSettingsChange::Tempo(sent))]
+                if !refused.contains(seq) && *sent == tempo(60.0)
+        ),
+        "the refused change goes out again as a new batch: {pending:?}"
+    );
+
+    assert_eq!(render(&mut state, block_frame(1)), Ok(()));
+    assert_eq!(state.settings.config().tempo(), tempo(60.0));
+}
+
+#[kithara::test]
+fn a_newer_tempo_change_for_the_next_block_decides_after_a_discontinuity() {
+    let mut state = owned_session();
+    assert_eq!(render(&mut state, 0), Ok(()));
+    configure_tempo(&mut state, 60.0);
+    configure_tempo(&mut state, 90.0);
+
+    assert_eq!(
+        render(&mut state, 481),
+        Err(TransportProcessError::FrameDiscontinuity)
+    );
+
+    let pending: Vec<_> = state.settings.pending().collect();
+    assert!(
+        matches!(
+            pending.as_slice(),
+            [(_, When::Next, HostSettingsChange::Tempo(sent))] if *sent == tempo(90.0)
+        ),
+        "only the newest refused change goes out again: {pending:?}"
+    );
+    assert_eq!(render(&mut state, block_frame(1)), Ok(()));
+    assert_eq!(state.settings.config().tempo(), tempo(90.0));
 }
 
 #[kithara::test]
