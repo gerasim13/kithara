@@ -1,6 +1,8 @@
 #![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::fmt;
+
 use kithara::{
     platform::time::{Duration, Instant},
     signal::SessionFrame,
@@ -28,6 +30,21 @@ const CANCELLED: u64 = 4;
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Longer than a lane's ring holds, so the sounding lane has to keep decoding.
 const LISTEN_FRAMES: usize = 48_000 * 6;
+/// How far into the deck's own timeline a measured window opens.
+///
+/// A harness leaves its deck wherever its build happened to land, and that
+/// landing is not fixed: the transport warm-up renders until the renderer
+/// publishes a revision, which off the virtual clock costs one render more on
+/// a loaded host. Two harnesses compared sample by sample then open one block
+/// apart, and a whole window of the same audio read one block late is every
+/// sample differing at a matching level. Both sides render up to this lead
+/// instead, so a window opens at a point of the deck's timeline rather than at
+/// whatever its build cost. The lead only has to clear what a build leaves
+/// behind, which is a handful of blocks.
+const WINDOW_LEAD_FRAMES: u64 = (BLOCK_FRAMES * 16) as u64;
+/// Long enough to render that lead on a loaded host, short enough that a deck
+/// which never advances is reported rather than waited out.
+const WINDOW_TIMEOUT: Duration = Duration::from_secs(30);
 /// A cue on the second beat of the Tunnel's fifth bar.
 const TUNNEL_WEAK_CUE: Start = Start::Bar { bar: 4, beat: 1 };
 /// A second Tunnel cue that supersedes the first.
@@ -302,7 +319,7 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         let mut harness =
             ProductHarness::new_for_block(control, &sources, cue, Audible::Deck(0), BLOCK_FRAMES)
                 .await;
-        let opened = window_opened(&harness);
+        let opened = open_window(&mut harness, control).await;
         (
             opened,
             render_frames(&mut harness, control, LISTEN_FRAMES).await,
@@ -313,7 +330,7 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     harness.mark("staged cue, then a superseding cue");
     let superseded = prepare_cue(&mut harness, case, rate, cue).await;
     let successor = prepare_cue(&mut harness, case, rate, superseding).await;
-    let candidate_opened = window_opened(&harness);
+    let candidate_opened = open_window(&mut harness, case).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(
@@ -337,10 +354,17 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         case.id(),
     );
     assert_eq!(
+        candidate_opened,
+        control_opened,
+        "{}: the two windows opened at different points of the deck's own \
+         timeline, so one covers audio the other has already played",
+        case.id(),
+    );
+    assert_eq!(
         divergence(&candidate, &control),
         None,
         "{}: staging beside the sounding lane changed what it plays; \
-         the window opened on {candidate_opened}, the control on {control_opened}",
+         both windows opened on {candidate_opened}",
         case.id(),
     );
 }
@@ -350,15 +374,66 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
 /// Two harnesses compared sample by sample have to open their window at the
 /// same point in the deck's own timeline. A divergence that starts at frame 0
 /// while both levels agree reads as that timeline being shifted, and nothing
-/// in the PCM says which side moved - the deck's own position when the window
-/// opened does.
-fn window_opened(harness: &ProductHarness) -> String {
-    let playback = harness.decks[0].playback_view();
-    format!(
-        "deck 0 at {:.6}s, playing {}",
-        playback.position.unwrap_or(f64::NAN),
-        playback.playing
-    )
+/// in the PCM says which side moved - the deck's own position does.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Window {
+    /// The deck's own position, in frames of the session it renders into.
+    /// Absent until the deck reports one.
+    frames: Option<u64>,
+    playing: bool,
+}
+
+impl Window {
+    /// Reads where the deck stands now, in the session's own frames so that
+    /// two readings compare exactly.
+    fn read(harness: &ProductHarness, case: SyncCase) -> Self {
+        let playback = harness.decks[0].playback_view();
+        let frames = playback
+            .position
+            .map(|seconds| seconds * f64::from(case.sample_rate))
+            .filter(|frames| frames.is_finite() && *frames >= 0.0)
+            .map(|frames| frames.round() as u64);
+        Self {
+            frames,
+            playing: playback.playing,
+        }
+    }
+}
+
+impl fmt::Display for Window {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.frames {
+            Some(frames) => write!(formatter, "deck 0 at frame {frames}"),
+            None => formatter.write_str("deck 0 reporting no position"),
+        }?;
+        write!(formatter, ", playing {}", self.playing)
+    }
+}
+
+/// Renders whole blocks until the deck has reached [`WINDOW_LEAD_FRAMES`], and
+/// reports where the window opens.
+///
+/// Both sides of a comparison call this, so both open on the same frame: a
+/// render advances the deck by one block, so whichever side its build left
+/// further back catches up to the same first position past the lead.
+async fn open_window(harness: &mut ProductHarness, case: SyncCase) -> Window {
+    let deadline = Instant::now() + WINDOW_TIMEOUT;
+    loop {
+        let window = Window::read(harness, case);
+        if window
+            .frames
+            .is_some_and(|frames| frames >= WINDOW_LEAD_FRAMES)
+        {
+            return window;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{}: the deck never reached frame {WINDOW_LEAD_FRAMES}, the lead a \
+             measured window opens after; it stopped at {window}",
+            case.id()
+        );
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+    }
 }
 
 /// What separates two renders of the same lane, beyond where it starts.
