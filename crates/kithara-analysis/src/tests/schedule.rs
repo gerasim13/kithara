@@ -259,7 +259,8 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPoo
     )
 }
 
-/// How much of the analyser's own clock a drive lets a refusing node spend.
+/// How much of the analyser's own clock a drive lets a refusing node spend
+/// before it has taken any work at all.
 ///
 /// The turns this loop hands back are what the node's progress is made of:
 /// each one parks the drive, and parking is what lets the flash engine
@@ -268,6 +269,12 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPoo
 /// a turn count cannot stand in for it. Measured: a pass that finishes needs
 /// one such turn on a host that runs the analyser eagerly and upwards of four
 /// thousand on one that does not, while the time it asks for stays the same.
+///
+/// It bounds a stall, not a pass, so every turn that takes work restarts it.
+/// Spending it over a whole pass fails one that is still moving: a stress
+/// round on this branch gave up after 12573 refused turns in one attempt and
+/// after 1955 in another, each inside about a third of a second of real time -
+/// a spread only a pass that kept going can produce.
 const ANALYSER_BUDGET: Duration = Duration::from_secs(2);
 
 /// Why a drive stopped, so a pass that does not end says which bound it hit.
@@ -310,12 +317,12 @@ where
     }
 
     /// Ticks the node until the pass ends, the tick budget runs out, or the
-    /// node refuses work for a whole [`ANALYSER_BUDGET`].
+    /// node refuses work for a whole [`ANALYSER_BUDGET`] without taking any.
     ///
-    /// The count a refusal carries is how many turns it bought with that
-    /// budget, which is what says whether the node was starved or wedged.
+    /// The count a refusal carries is how many turns in a row it bought with
+    /// that budget, which is what says whether the node was starved or wedged.
     async fn drive(&mut self, ticks: usize) -> Drive {
-        let deadline = Instant::now() + ANALYSER_BUDGET;
+        let mut deadline = Instant::now() + ANALYSER_BUDGET;
         let mut remaining = ticks;
         let mut yields = 0usize;
         while remaining > 0 && !self.has_ended() {
@@ -325,7 +332,11 @@ where
                     time::sleep(Duration::ZERO).await;
                 }
                 TickResult::Backpressured => return Drive::Backpressured { yields },
-                _ => remaining -= 1,
+                _ => {
+                    remaining -= 1;
+                    yields = 0;
+                    deadline = Instant::now() + ANALYSER_BUDGET;
+                }
             }
         }
         if self.has_ended() {
