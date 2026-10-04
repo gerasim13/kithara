@@ -29,15 +29,12 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
-    fixture_protocol::DelayRule,
     mixed_plain,
     reads::{read_to_eof, read_until_samples},
     waits::wait_for_event,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_test_fixtures::hls_fixtures::{
-    hls_saw_6, hls_saw_8, hls_saw_15, hls_saw_20, hls_saw_30,
-};
+use kithara_test_fixtures::hls_fixtures::{hls_saw_6, hls_saw_8, hls_saw_15, hls_saw_30};
 use kithara_test_utils::{TestTempDir, wait_until};
 use tracing::info;
 use url::Url;
@@ -62,6 +59,7 @@ fn wav_ladder(data: (Vec<u8>, Vec<u8>), bandwidths: Vec<u64>) -> HlsFixtureBuild
         .segment_duration_secs(segment_duration_secs())
         .custom_data_per_variant(vec![Arc::new(pcm); variant_count])
         .init_data_per_variant(vec![Arc::new(init); variant_count])
+        .codecs("wav".to_string())
         .variant_bandwidths(bandwidths)
 }
 
@@ -72,27 +70,6 @@ async fn serve(ladder: HlsFixtureBuilder) -> CreatedHls {
         .create_hls(ladder)
         .await
         .expect("create HLS fixture")
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-async fn delayed_server(data: (Vec<u8>, Vec<u8>)) -> CreatedHls {
-    serve(
-        wav_ladder(data, vec![5_000_000, 1_000_000])
-            .codecs("wav".to_string())
-            .delay_rules(vec![DelayRule {
-                variant: Some(0),
-                segment_gte: Some(5),
-                delay_ms: 500,
-                ..Default::default()
-            }]),
-    )
-    .await
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
-async fn delayed_twenty(hls_saw_20: (Vec<u8>, Vec<u8>)) -> CreatedHls {
-    delayed_server(hls_saw_20).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1134,19 +1111,9 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     );
 }
 
-/// RED: ABR variant switch must NOT re-download segments already covered.
-///
-/// Industry standard: on variant switch, download new variant segments
-/// starting from the switch point forward. Never re-download segments
-/// for time ranges already covered by the previous variant.
-///
-/// With N segments total, the number of unique (variant, `segment_index`)
-/// network fetches must be ≤ N + small overhead (init segments, 1-2
-/// overlap at switch boundary). Full double-download (2×N) is a bug.
-///
-/// Current behavior: downloader resets cursor to segment 0 on variant
-/// switch, downloading the entire new variant from the start. With ABR
-/// oscillation this produces 2× bandwidth usage.
+/// A mid-stream variant switch fetches the remaining tail without downloading
+/// the covered prefix again. A gated V0 and explicit Manual(1) command make the
+/// switch independent of throughput estimates and automatic ABR cooldowns.
 #[kithara::test(
     native,
     tokio,
@@ -1155,11 +1122,14 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
+#[case::platform_default(DecoderBackend::default())]
+#[cfg_attr(not(target_os = "android"), case::software(DecoderBackend::Symphonia))]
 async fn abr_switch_must_not_redownload_covered_segments(
-    #[future(awt)] delayed_twenty: CreatedHls,
+    #[future(awt)] manual_thirty_gated: (CreatedHls, SegmentGateHandle),
+    #[case] backend: DecoderBackend,
 ) {
-    let segment_count = 20;
-    let server = delayed_twenty;
+    let segment_count = 30;
+    let (server, gate) = manual_thirty_gated;
 
     let url = server.master_url();
     let temp_dir = TestTempDir::new();
@@ -1184,7 +1154,8 @@ async fn abr_switch_must_not_redownload_covered_segments(
         .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(auto(0))
+        .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(D.segment_size as u64 * (MANUAL_GATE_SEGMENT as u64 + 1))
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -1194,14 +1165,50 @@ async fn abr_switch_must_not_redownload_covered_segments(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
 
-    let total = spawn_blocking(move || read_to_eof(&mut audio))
+    let warmup_budget = D.segment_size as u64 / 2 * (MANUAL_GATE_SEGMENT as u64 - 1);
+    let (audio, warmup_samples) =
+        read_until_samples_blocking(audio, warmup_budget, "covered-prefix warmup").await;
+    assert!(warmup_samples >= warmup_budget, "V0 must cover the prefix");
+    wait_until(Duration::from_secs(20), "V0 gated request", || {
+        gate.requested() > 0
+    })
+    .await
+    .expect("V0 must reach the gated segment before the command");
+    assert_eq!(collector.switch_count(), 0, "V0 must remain pinned");
+    let applied_before = collector.applied_transitions().len();
+    audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle")
+        .set_mode(AbrMode::manual(1))
+        .expect("Manual(1) target must be valid");
+    gate.release();
+    let (mut audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        1,
+        "covered-prefix switch",
+    )
+    .await;
+    assert!(!transition.saw_eof, "switch must apply before EOF");
+    assert!(
+        collector.applied_transitions()[applied_before..].contains(&(1, AbrReason::ManualOverride)),
+        "the requested switch must apply before EOF"
+    );
+
+    let tail_samples = spawn_blocking(move || read_to_eof(&mut audio))
         .await
         .expect("read");
-
-    assert!(total > 0, "expected audio output");
+    let total = transition.samples + tail_samples;
+    assert!(total > 0, "expected audio after the switch command");
 
     let segments = collector.segments();
 
@@ -1224,6 +1231,22 @@ async fn abr_switch_must_not_redownload_covered_segments(
         v1_fetches > 0,
         "ABR must switch to V1 (no V1 segments downloaded)"
     );
+    assert!(
+        unique_fetches.contains(&(1, segment_count - 1)),
+        "V1 must fetch the final segment"
+    );
+    // Segment zero can be probed while opening V1, and the handover segment
+    // can overlap. The completed media segments between them must stay on V0.
+    for covered_segment in 1..MANUAL_GATE_SEGMENT - 2 {
+        assert!(
+            unique_fetches.contains(&(0, covered_segment)),
+            "V0 must fetch covered segment {covered_segment}"
+        );
+        assert!(
+            !unique_fetches.contains(&(1, covered_segment)),
+            "V1 must not download covered segment {covered_segment}"
+        );
+    }
 }
 
 /// Phase L1: same-codec runtime Manual switch via `AbrHandle::set_mode`.
