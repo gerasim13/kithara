@@ -54,12 +54,11 @@ pub(crate) fn resolve(test: &TestCommandConfig, choice: &LaneChoice<'_>) -> Resu
 
 impl ResolvedLane {
     /// The lane's command for `action`, with the caller's arguments placed by
-    /// three rules. A lane that names its own profile keeps it: a gate fans
-    /// one profile out over every lane it runs, and both runners refuse a
-    /// second `--profile`. A caller filterset narrows the lane's filter
-    /// instead of joining it, because nextest unions repeated `-E`. A caller
-    /// package selection replaces a workspace selection, so `-p` narrows any
-    /// workspace lane.
+    /// three rules. A `cargo test` lane that names its own Cargo profile keeps
+    /// it, because `cargo test` refuses a second `--profile`. A caller
+    /// filterset narrows the lane's filter instead of joining it, because
+    /// nextest unions repeated `-E`. A caller package selection replaces a
+    /// workspace selection, so `-p` narrows any workspace lane.
     pub(crate) fn command(&self, action: NextestAction, caller: &[String]) -> Result<Command> {
         let mut command = Command::new("cargo");
         command.envs(&self.env);
@@ -69,9 +68,6 @@ impl ResolvedLane {
                     NextestAction::Run => "run",
                     NextestAction::List => "list",
                 });
-                if let Some(profile) = &nextest.profile {
-                    command.arg("--profile").arg(profile);
-                }
                 command.args(self.cargo_args("--cargo-profile", selects_packages(caller)));
                 if let (NextestAction::Run, Some(threads)) = (action, nextest.test_threads) {
                     command.arg("--test-threads").arg(threads.to_string());
@@ -79,11 +75,7 @@ impl ResolvedLane {
                 if nextest.ignore_default_filter {
                     command.arg("--ignore-default-filter");
                 }
-                let mut caller = if nextest.profile.is_some() {
-                    without_profile(caller, &["--profile", "-P"])
-                } else {
-                    caller.to_vec()
-                };
+                let mut caller = caller.to_vec();
                 if let Some(filter) = &nextest.filter {
                     let (rest, filters) = split_filters(&caller)?;
                     command.arg("-E").arg(intersect(filter, &filters));
@@ -102,7 +94,7 @@ impl ResolvedLane {
                 command.arg("test");
                 command.args(self.cargo_args("--profile", selects_packages(cargo_caller)));
                 if self.cargo.profile.is_some() {
-                    command.args(without_profile(cargo_caller, &["--profile"]));
+                    command.args(without_profile(cargo_caller));
                 } else {
                     command.args(cargo_caller);
                 }
@@ -182,12 +174,12 @@ impl ResolvedLane {
     }
 }
 
-/// `args` without the profile `flags` name, each with its value.
-fn without_profile(args: &[String], flags: &[&str]) -> Vec<String> {
+/// `args` without `--profile` and its value.
+fn without_profile(args: &[String]) -> Vec<String> {
     let mut kept = Vec::with_capacity(args.len());
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if flags.contains(&arg.as_str()) {
+        if arg == "--profile" {
             iter.next();
         } else if !arg.starts_with("--profile=") {
             kept.push(arg.clone());

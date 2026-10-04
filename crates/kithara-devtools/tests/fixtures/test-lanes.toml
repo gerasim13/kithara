@@ -40,7 +40,6 @@ cargo.profile = "test-release"
 cargo.lib = true
 cargo.tests = ["suite"]
 runner.nextest.filter = "test(fast)"
-runner.nextest.profile = "support"
 runner.nextest.test_threads = 1
 runner.nextest.ignore_default_filter = true
 

@@ -71,7 +71,6 @@ fn typed_lane() -> TestLaneConfig {
         },
         runner: TestRunner::Nextest(TestNextestRunner {
             filter: Some("test(fast)".to_owned()),
-            profile: Some("support".to_owned()),
             test_threads: Some(1),
             ignore_default_filter: true,
         }),
@@ -647,54 +646,24 @@ fn a_lane_that_names_an_environment_runs_with_it() {
     );
 }
 
+/// A lane says which tests it runs with a filter, never with a runner profile
+/// of its own: the caller's profile is how a gate gives every lane one retry
+/// policy and one report, and a lane that swapped it out kept neither.
 #[test]
-fn a_lane_that_names_its_own_profile_keeps_it_over_the_callers() {
-    let mut project = synthetic_project();
-    project.test.lanes.insert(
-        "tooling".to_owned(),
-        TestLaneConfig {
-            cargo: TestCargoOptions {
-                packages: vec!["demo-tools".to_owned()],
-                ..TestCargoOptions::default()
-            },
-            runner: TestRunner::Nextest(TestNextestRunner {
-                profile: Some("support".to_owned()),
-                ..TestNextestRunner::default()
-            }),
-            ..TestLaneConfig::default()
-        },
-    );
-    let request = TestRequest::parse(
-        &[
-            "--lane=tooling",
-            "--profile",
-            "ci",
-            "--profile=ci",
-            "-P",
-            "ci",
-            "--timings",
-        ]
-        .map(str::to_owned),
+fn a_lane_cannot_name_a_runner_profile() {
+    let error = toml::from_str::<TestCommandConfig>(
+        "[lanes.tools]\ncargo.packages = [\"demo-tools\"]\nrunner.nextest.profile = \"support\"\n",
     )
-    .expect("parse request");
-    let name = select_lane(&project.test, &request).expect("select tooling lane");
+    .expect_err("a lane that names a runner profile is refused");
 
-    let cmd = lane_command(&project.test, name, &request).expect("tooling lane command");
-
-    let args = args_of(&cmd);
-    assert_eq!(
-        args.iter()
-            .filter(|arg| arg.starts_with("--profile"))
-            .count(),
-        1
+    assert!(
+        error.to_string().contains("unknown field `profile`"),
+        "{error}"
     );
-    assert!(args.windows(2).any(|pair| pair == ["--profile", "support"]));
-    assert!(!args.contains(&"-P".to_owned()), "{args:?}");
-    assert!(args.contains(&"--timings".to_owned()));
 }
 
 #[test]
-fn a_lane_without_a_profile_takes_the_callers() {
+fn every_lane_takes_the_callers_profile() {
     let project = synthetic_project();
     let request = TestRequest::parse(&["--lane=detector", "--profile", "ci"].map(str::to_owned))
         .expect("parse request");
@@ -926,8 +895,6 @@ fn a_nextest_lane_renders_its_typed_options_in_one_order() {
         [
             "nextest",
             "run",
-            "--profile",
-            "support",
             "-p",
             "demo",
             "--cargo-profile",

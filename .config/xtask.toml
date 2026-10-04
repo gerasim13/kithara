@@ -765,7 +765,7 @@ default_backend = "none"
 owns = ["xtask/", "crates/kithara-devtools/"]
 cargo.packages = ["kithara-devtools", "xtask"]
 cargo.profile = "test-release"
-runner.nextest.profile = "support"
+runner.nextest.ignore_default_filter = true
 # Neither crate declares a `flash` feature — the virtual clock is a property of
 # the player, not of the tools that build it — so leaving flash on would fail the
 # lane on `none of the selected packages contains these features`. The
@@ -810,7 +810,11 @@ cargo.packages = [
   "kithara-platform",
 ]
 cargo.profile = "test-release"
-runner.nextest.profile = "harness"
+# `kithara-platform` has to be built whole to reach its two flash targets, and
+# the filter keeps its product tests out of this lane. A caller's `-E` narrows
+# it rather than joining it.
+runner.nextest.ignore_default_filter = true
+runner.nextest.filter = "binary_id(=kithara-platform::flash_attr) + binary_id(=kithara-platform::flash_spawn) + package(kithara-test-utils) + package(kithara-test-macros)"
 
 # The fixture library and the harness meta-tests: the local test server, the
 # fixture cache and protocol, the signal oracles (`goertzel`,
@@ -832,7 +836,7 @@ cargo.packages = ["kithara-integration-tests", "kithara-harness-tests"]
 cargo.profile = "test-release"
 cargo.lib = true
 cargo.tests = ["suite_harness"]
-runner.nextest.profile = "support"
+runner.nextest.ignore_default_filter = true
 
 [test.lanes.ui]
 owns = [

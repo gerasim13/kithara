@@ -14,8 +14,8 @@
 # product run while the integration helper library stays out.
 #
 # Returning a target to the product suite is one edit: drop its term.
-# `.config/xtask.toml` `[test.lanes.fixtures]` and `[test.lanes.harness]` run
-# these under `profile.support`, which opts back in.
+# `.config/xtask.toml` `[test.lanes.fixtures]` and `[test.lanes.harness]` opt
+# back in with `runner.nextest.ignore_default_filter`.
 #
 # The last four terms are the UI, which owns a graphics-backed pipeline of its
 # own: `[test.lanes.ui]` opts out of this filter with `runner.nextest.ignore_default_filter`
@@ -119,26 +119,6 @@ store-failure-output = true
 # the reporter declares that gap instead of computing divergence. Volume stays
 # bounded because only annotated tests emit runtime lines, at debug level.
 store-success-output = true
-
-# `kithara-platform` has to be built whole to reach its two flash targets, which
-# would drag its product tests into the harness lane. Naming them here rather
-# than as an `-E` in the lane is the same rule as above: a lane-level `-E` unions
-# with whatever the caller passes, so `just test run --lane=harness -E '...'`
-# would widen the lane instead of narrowing it.
-[profile.harness]
-default-filter = """
-binary_id(=kithara-platform::flash_attr)
-+ binary_id(=kithara-platform::flash_spawn)
-+ package(kithara-test-utils)
-+ package(kithara-test-macros)
-"""
-
-# The support lanes (`tooling`, `harness`, `fixtures`) run under this profile.
-# Its whole job is to undo the product suite's `default-filter`: a lane that
-# exists to run the excluded targets must not inherit the exclusion that removed
-# them. Everything else is inherited from `default`.
-[profile.support]
-default-filter = 'all()'
 
 # Perf-measurement profile: behavior identical to default (profiles inherit
 # it); adds JUnit so `just perf suite` gets exact per-test timings.

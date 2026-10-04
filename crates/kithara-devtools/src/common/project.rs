@@ -700,8 +700,6 @@ pub struct TestNextestRunner {
     /// A filterset every run of the lane is narrowed to; a caller's filterset
     /// narrows it further.
     pub filter: Option<String>,
-    /// The nextest profile the lane runs under, over any the caller names.
-    pub profile: Option<String>,
     /// How many tests run at once; a listing takes none.
     pub test_threads: Option<u16>,
     /// Runs the lane outside the profile's `default-filter`.
@@ -1256,12 +1254,11 @@ impl ProjectConfig {
                 };
                 if !matches!(
                     &lane.runner,
-                    TestRunner::Nextest(nextest) if nextest.profile.is_none() && nextest.test_threads.is_none()
+                    TestRunner::Nextest(nextest) if nextest.test_threads.is_none()
                 ) {
                     bail!(
-                        "stress lane `{name}` must run nextest under `stress.nextest_profile` and \
-                         `stress.test_threads`; a lane with its own profile, its own thread count \
-                         or a `cargo test` runner cannot carry them"
+                        "stress lane `{name}` must run nextest under `stress.test_threads`; a lane \
+                         with its own thread count or a `cargo test` runner cannot carry it"
                     );
                 }
             }

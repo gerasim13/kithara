@@ -432,7 +432,6 @@ cargo.profile = "test-release"
 cargo.lib = true
 cargo.tests = ["frames"]
 runner.nextest.filter = "binary(frames)"
-runner.nextest.profile = "gpu"
 runner.nextest.test_threads = 1
 runner.nextest.ignore_default_filter = true
 
@@ -454,7 +453,6 @@ runner.cargo.doc = true
         ui.runner,
         TestRunner::Nextest(TestNextestRunner {
             filter: Some("binary(frames)".to_owned()),
-            profile: Some("gpu".to_owned()),
             test_threads: Some(1),
             ignore_default_filter: true,
         })
@@ -569,17 +567,17 @@ fn campaign_error(lanes: &str, test_lanes: &str) -> String {
     )
 }
 
-/// Stress hands nextest its own profile and thread count, so a stress lane
-/// that names either would pass nextest the flag twice.
+/// Stress hands nextest its own thread count, so a stress lane that names one
+/// would pass nextest the flag twice.
 #[test]
-fn a_stress_lane_cannot_name_its_own_profile_or_thread_count() {
+fn a_stress_lane_cannot_name_its_own_thread_count() {
     let error = campaign_error(
         r#"["workspace", "gpu"]"#,
-        "[test.lanes.gpu]\ncargo.workspace = true\nrunner.nextest.profile = \"support\"\n",
+        "[test.lanes.gpu]\ncargo.workspace = true\nrunner.nextest.test_threads = 1\n",
     );
 
     assert!(
-        error.contains("must run nextest under `stress.nextest_profile`"),
+        error.contains("must run nextest under `stress.test_threads`"),
         "{error}"
     );
 }

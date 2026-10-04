@@ -145,7 +145,6 @@ pub(crate) const COMMENTED_CONFIG_TEMPLATE: &str = r#"
 # [test.lanes.default]
 # cargo.packages = []
 # cargo.profile = ""
-# runner.nextest.profile = ""
 # default_features = []
 # default_flash = true
 # default_no_block = false
