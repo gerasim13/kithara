@@ -2,7 +2,7 @@
 use kithara::effects::{GainDb, eq::EqBandConfig};
 use kithara::{
     effects::eq::generate_log_spaced_bands,
-    host::HostOwned,
+    host::{HostOwned, HostSettingsControl},
     platform::{CancelToken, sync::Arc},
     play::{PlayError, PlayerConfig, PlayerImpl, StretchControls},
     queue::QueueConfig,
@@ -112,7 +112,7 @@ impl Deck {
         let mut player_config = PlayerConfig::builder()
             .cancel(cancel.clone())
             .eq_layout(generate_log_spaced_bands(config.eq_bands))
-            .sample_rate(host.requested_sample_rate())
+            .sample_rate(host.sample_rate())
             .warp(
                 WarpConfig::builder()
                     .stretch(Arc::clone(&timestretch))
@@ -328,7 +328,7 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .cancel(cancel.clone())
-                .sample_rate(host.requested_sample_rate())
+                .sample_rate(host.sample_rate())
                 .warp(
                     WarpConfig::builder()
                         .stretch(Arc::clone(&timestretch))

@@ -30,6 +30,7 @@ mod consts {
         None => unreachable!(),
     };
     pub(super) const CHANNELS: u16 = 2;
+    #[cfg(test)]
     pub(super) const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
         Some(value) => value,
         None => unreachable!(),
@@ -60,7 +61,6 @@ impl<S> HostConfig<S> {
     #[builder(finish_fn = build)]
     pub fn offline(
         #[builder(start_fn)] pools: PoolRegion<S>,
-        #[builder(default = consts::SAMPLE_RATE)] sample_rate: NonZeroU32,
         #[builder(default = consts::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
         #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
@@ -72,7 +72,6 @@ impl<S> HostConfig<S> {
     ) -> Self {
         Self::Offline {
             pools,
-            sample_rate,
             max_block_frames,
             declick_frames,
             declared_latency,
@@ -106,7 +105,6 @@ where
     ) -> Result<StartedOfflineRuntime<S>, PlayError> {
         let HostConfig::Offline {
             pools,
-            sample_rate: _,
             max_block_frames,
             declick_frames,
             declared_latency,
@@ -246,7 +244,7 @@ where
         sink: &mut dyn RenderSink,
     ) -> Result<OfflineRenderReport, OfflineRenderError> {
         let rate = self
-            .sample_rate()
+            .output_sample_rate()
             .map_err(OfflineRenderError::backend)?
             .output();
         let rate = NonZeroU32::new(rate).ok_or_else(|| {
@@ -307,7 +305,7 @@ mod tests {
         let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
         let block_frames = NonZeroU32::new(128).expect("test block size is non-zero");
         let config = HostConfig::offline(pools())
-            .sample_rate(sample_rate)
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
             .max_block_frames(block_frames)
             .build();
 
@@ -315,7 +313,7 @@ mod tests {
         assert_eq!(config.max_block_frames(), Some(block_frames));
 
         let host = Host::<TestPools>::new(config).expect("fixture offline Host");
-        assert_eq!(host.requested_sample_rate(), sample_rate);
+        assert_eq!(host.sample_rate(), sample_rate);
     }
 
     #[kithara::test(native, flash(false))]
@@ -337,7 +335,6 @@ mod tests {
     fn tempo_host() -> Host<TestPools> {
         let block_frames = NonZeroU32::new(128).expect("test block size is non-zero");
         let config = HostConfig::offline(pools())
-            .sample_rate(consts::SAMPLE_RATE)
             .max_block_frames(block_frames)
             .build();
         Host::<TestPools>::new(config).expect("fixture offline Host")

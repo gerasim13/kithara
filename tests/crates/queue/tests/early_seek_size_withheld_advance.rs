@@ -23,7 +23,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{
@@ -84,7 +84,13 @@ struct Harness {
 impl Harness {
     async fn new(pools: Pools) -> Self {
         let session = HostConfig::offline(pools.clone())
-            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(
+                        NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"),
+                    )
+                    .build(),
+            )
             .build();
         let host = OfflineHostHarness::new(session)
             .await

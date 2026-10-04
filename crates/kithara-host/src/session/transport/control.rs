@@ -1,5 +1,4 @@
-use std::num::NonZeroU32;
-
+use kithara_config::ConfigOwner;
 use kithara_sync::{ParentGridUpdate, SyncError};
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
@@ -27,11 +26,10 @@ pub(crate) enum RouteRestartStatus {
     Ready,
 }
 
-/// Zero sample rate remains a valid backend-default request; the grid axis's sample rate is always
-/// concrete, so it substitutes for zero rather than propagating it.
+/// Publishes the route boundary on the host grid at the rate the settings ask
+/// the next stream for.
 pub(crate) fn prepare_route_restart<T, S>(
     state: &mut SessionState<T, S>,
-    sample_rate: u32,
 ) -> Result<RouteRestartStatus, SessionError> {
     let was_running = state
         .ctx
@@ -79,7 +77,7 @@ pub(crate) fn prepare_route_restart<T, S>(
         let stamp = target
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        let sample_rate = NonZeroU32::new(sample_rate).unwrap_or_else(|| axis.sample_rate());
+        let sample_rate = state.settings.config().sample_rate();
         state
             .root
             .publish_unavailable_grid(stamp, sample_rate, target.epoch())?;

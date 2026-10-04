@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::time::{Duration, Instant, sleep},
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
@@ -146,7 +146,11 @@ async fn run_case(
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(out_rate).expect("output rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(out_rate).expect("output rate is non-zero"))
+                    .build(),
+            )
             .build(),
     )
     .await;

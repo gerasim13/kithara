@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use kithara::{
-    host::{HostConfig, wasm},
+    host::{HostConfig, HostSettings, wasm},
     platform::{
         CancelToken,
         sync::Arc,
@@ -45,7 +45,11 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     let pools = pools::build(&document.pools())?;
     let host = AppHost::new(
         HostConfig::builder()
-            .maybe_sample_rate_hint(app.sample_rate)
+            .settings(
+                HostSettings::builder()
+                    .maybe_sample_rate(app.sample_rate)
+                    .build(),
+            )
             .maybe_output_block_frames(app.output_block_frames)
             .build(),
     )?;

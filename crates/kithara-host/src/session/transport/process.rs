@@ -336,7 +336,9 @@ impl TransportState {
                     );
                     staged.retargeted = true;
                 }
-                HostSettingsChange::Metronome(_) | HostSettingsChange::Ducking(_) => {
+                HostSettingsChange::SampleRate(_)
+                | HostSettingsChange::Metronome(_)
+                | HostSettingsChange::Ducking(_) => {
                     staged.settings.apply_change(change);
                 }
             }

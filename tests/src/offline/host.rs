@@ -6,7 +6,7 @@ use std::{num::NonZeroU32, ops::Deref};
 use kithara::play::{SessionError, TransportRevision};
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{Host, HostConfig, HostLevel, HostOwned, Tap},
+    host::{Host, HostConfig, HostLevel, HostOwned, HostSettingsControl, Tap},
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -478,7 +478,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let rate = host
-        .sample_rate()
+        .output_sample_rate()
         .unwrap_or_else(|error| panic!("query product offline Host output rate: {error}"))
         .output();
     AudioSpec::new(

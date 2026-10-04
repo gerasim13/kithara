@@ -244,7 +244,7 @@ async fn metronome_host(
 ) -> (OfflineHostHarness<TestPools>, TapProbe) {
     let sample_rate = NonZeroU32::new(sample_rate).expect("test sample rate");
     let config = HostConfig::offline(pools())
-        .sample_rate(sample_rate)
+        .settings(HostSettings::builder().sample_rate(sample_rate).build())
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
         .build();
     let host = OfflineHostHarness::new(config)
@@ -308,7 +308,11 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
 async fn a_host_never_given_a_tempo_counts_and_clicks_at_120_bpm() {
     let frames = consts::BLOCKS * u64::from(consts::BLOCK_FRAMES);
     let config = HostConfig::offline(pools())
-        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+        .settings(
+            HostSettings::builder()
+                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+                .build(),
+        )
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
         .build();
     let host = OfflineHostHarness::new(config)
@@ -759,7 +763,6 @@ async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_rid
 async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling() {
     let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
     let session = HostConfig::offline(pools())
-        .sample_rate(rate)
         .limiter(
             LimiterConfig::builder()
                 .ceiling(consts::LOUD_CEILING)
@@ -768,6 +771,7 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
         )
         .settings(
             HostSettings::builder()
+                .sample_rate(rate)
                 .metronome(
                     MetronomeConfig::builder()
                         .level(consts::LOUD_LEVEL)

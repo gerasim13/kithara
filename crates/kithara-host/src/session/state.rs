@@ -183,12 +183,12 @@ struct RootSnapshot {
 pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
 
 impl RootView {
-    pub(crate) fn new(root: &GroupState<PlayerMember>, sample_rate: NonZeroU32) -> Self {
+    pub(crate) fn new(root: &GroupState<PlayerMember>, settings: HostSettings) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
+            settings,
             grid: root.snapshot(),
-            settings: HostSettings::default(),
             stream_shape: None,
-            sample_rate: SessionSampleRate::new(None, sample_rate.get()),
+            sample_rate: SessionSampleRate::new(None, settings.sample_rate().get()),
             status: root.status(),
             topology: root.topology(),
         })))
@@ -261,7 +261,6 @@ pub(crate) struct SessionState<T, S> {
     /// an idle session must keep it rather than release it.
     pub(super) retains_output: bool,
     pub(super) stream_needs_restart: bool,
-    pub(super) sample_rate_hint: u32,
 }
 
 /// The stream outlives nothing: it is dropped before the context.
@@ -282,7 +281,7 @@ impl<T, S> SessionState<T, S> {
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     /// Creates session state with its own musical-grid topology, asking for
-    /// the output at the sample rate its root grid counts frames at.
+    /// the output at the sample rate its settings name.
     #[must_use]
     pub(crate) fn new<F>(
         root: GroupState<PlayerMember>,
@@ -297,7 +296,6 @@ impl<T, S> SessionState<T, S> {
         F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
         let grid_id = root.id();
-        let sample_rate_hint = root.snapshot().axis().sample_rate().get();
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
@@ -314,7 +312,6 @@ impl<T, S> SessionState<T, S> {
             transport_control: None,
             taps: Taps::default(),
             next_player_id: 1,
-            sample_rate_hint,
             session_output_node_id: None,
             session_limiter_node_id: None,
             retains_output: false,
@@ -353,10 +350,8 @@ pub(super) fn register_player<T, S>(
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pools: PoolRegion<S>,
-    sample_rate: u32,
     gate_smoothing: SmootherConfig,
 ) -> Result<RegisteredPlayer, SessionError> {
-    NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
     let player_id = state.next_player_id;
     let next_player_id = player_id
         .checked_add(1)
@@ -398,28 +393,19 @@ pub(super) fn register_player<T, S>(
     Ok(registration)
 }
 
-pub(super) fn ensure_ctx<T, S>(
-    state: &mut SessionState<T, S>,
-    sample_rate: u32,
-) -> Result<(), SessionError> {
-    ensure_stream_ready(state, sample_rate)?;
+pub(super) fn ensure_ctx<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    ensure_stream_ready(state)?;
     ensure_session_output(state)
 }
 
-fn ensure_stream_ready<T, S>(
-    state: &mut SessionState<T, S>,
-    sample_rate: u32,
-) -> Result<(), SessionError> {
+fn ensure_stream_ready<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if state.ctx.is_none() {
-        return create_firewheel_context(state, sample_rate);
+        return create_firewheel_context(state);
     }
 
     if state.stream_needs_restart {
-        debug!(
-            sample_rate,
-            "[KITHARA-ROUTE] ensuring stopped stream is restarted"
-        );
-        restart_stream(state, sample_rate)?;
+        debug!("[KITHARA-ROUTE] ensuring stopped stream is restarted");
+        restart_stream(state)?;
     }
 
     Ok(())
@@ -427,10 +413,8 @@ fn ensure_stream_ready<T, S>(
 
 /// Converts the fade through `Duration` rather than casting directly, since Firewheel takes the
 /// fade in seconds while the frame count is the session's own unit.
-fn create_firewheel_context<T, S>(
-    state: &mut SessionState<T, S>,
-    sample_rate: u32,
-) -> Result<(), SessionError> {
+fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    let sample_rate = state.settings.config().sample_rate().get();
     debug!(sample_rate, "[KITHARA-ROUTE] creating firewheel context");
     let mut config = FirewheelConfig {
         num_graph_outputs: ChannelCount::STEREO,
@@ -463,7 +447,6 @@ fn create_firewheel_context<T, S>(
     state.ctx = Some(ctx);
     state.stream = Some(stream);
     state.transport_control = Some(transport_control);
-    state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
     state.publish_root();
     trace_stream_info(state, "start-stream");

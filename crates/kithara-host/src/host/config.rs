@@ -8,7 +8,7 @@ use {
     kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig},
 };
 
-use crate::{HostSettings, consts};
+use crate::HostSettings;
 
 /// Configuration for the shared output session owned by `Host`.
 #[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
@@ -17,8 +17,6 @@ pub enum HostConfig<S> {
     /// Device-backed platform session.
     #[non_exhaustive]
     Realtime {
-        /// Initial device-rate hint; `Host::set_sample_rate` moves it later.
-        sample_rate_hint: NonZeroU32,
         /// Optional native output callback-size override. `None` preserves the backend default.
         output_block_frames: Option<NonZeroU32>,
         /// Session output limiter policy.
@@ -33,8 +31,6 @@ pub enum HostConfig<S> {
     Offline {
         /// Typed output pool shared with the Host's players.
         pools: PoolRegion<S>,
-        /// Initial offline output rate; `Host::set_sample_rate` moves it later.
-        sample_rate: NonZeroU32,
         /// Maximum frames processed by one backend/task quantum.
         max_block_frames: NonZeroU32,
         /// Firewheel smoothing window for graph changes.
@@ -63,13 +59,11 @@ impl<S> HostConfig<S> {
         start_fn(name = builder, vis = "pub")
     )]
     fn new(
-        #[builder(default = consts::DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default)] settings: HostSettings,
     ) -> Self {
         Self::Realtime {
-            sample_rate_hint,
             output_block_frames,
             limiter,
             settings,
@@ -77,15 +71,19 @@ impl<S> HostConfig<S> {
         }
     }
 
-    /// Initial sample rate requested by the selected session mode.
+    /// Rate the Host's output starts at.
     #[must_use]
-    pub const fn sample_rate(&self) -> NonZeroU32 {
+    pub fn sample_rate(&self) -> NonZeroU32 {
+        self.settings().sample_rate()
+    }
+
+    /// Settings the Host starts with.
+    #[must_use]
+    pub const fn settings(&self) -> HostSettings {
         match self {
-            Self::Realtime {
-                sample_rate_hint, ..
-            } => *sample_rate_hint,
+            Self::Realtime { settings, .. } => *settings,
             #[cfg(feature = "offline")]
-            Self::Offline { sample_rate, .. } => *sample_rate,
+            Self::Offline { settings, .. } => *settings,
         }
     }
 }

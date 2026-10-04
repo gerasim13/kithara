@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     abr::AbrMode,
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::{
         time::{Duration, sleep},
         tokio::task::yield_now,
@@ -211,7 +211,13 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(
+                        NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"),
+                    )
+                    .build(),
+            )
             .build(),
     )
     .await;

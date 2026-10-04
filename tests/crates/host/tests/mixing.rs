@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     events::TrackId,
-    host::{HostConfig, HostOwned},
+    host::{HostConfig, HostOwned, HostSettings},
     platform::time::{self, Duration},
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
@@ -43,7 +43,7 @@ impl MixHarness {
         let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero");
         let host = OfflineHostHarness::new(
             HostConfig::offline(pools.clone())
-                .sample_rate(sample_rate)
+                .settings(HostSettings::builder().sample_rate(sample_rate).build())
                 .build(),
         )
         .await

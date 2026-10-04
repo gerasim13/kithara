@@ -171,8 +171,10 @@ fn outcome(queue: &mut Sender<HostProtocol>) -> Outcome<HostProtocol> {
 /// A session whose transport the test renders by hand: its context is built
 /// and never started, so the transport store stays with the session owner.
 fn owned_session() -> SessionState<(), TestPools> {
-    let mut state = graph::state(|_ctx, _sample_rate| Ok(()));
-    assert!(ensure_ctx(&mut state, consts::TRANSPORT_SAMPLE_RATE).is_ok());
+    let sample_rate = NonZeroU32::new(consts::TRANSPORT_SAMPLE_RATE)
+        .expect("invariant: the fixture rate is non-zero");
+    let mut state = graph::state_for(sample_rate, |_ctx, _sample_rate| Ok(()));
+    assert!(ensure_ctx(&mut state).is_ok());
     state
 }
 

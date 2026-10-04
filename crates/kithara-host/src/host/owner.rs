@@ -1,8 +1,8 @@
-use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
+use std::{marker::PhantomData, ops::Deref};
 
 use kithara_bufpool::HasPool;
 use kithara_command::{Live, When};
-use kithara_config::Configure;
+use kithara_config::{ConfigOwner, Configure};
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, SessionBinding, SessionDispatcher, player::PlayerControlSource};
@@ -149,7 +149,7 @@ impl<S> Host<S> {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         let attachment = player.attach_session(SessionBinding::new(
             dispatcher,
-            self.requested_sample_rate(),
+            self.settings().sample_rate(),
         ))?;
         Ok((attachment, player.control()))
     }
@@ -210,6 +210,21 @@ impl<S> Host<S> {
         })
     }
 
+    /// Reads the rate the output runs at as measured, beside the rate the
+    /// settings ask for.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical session cannot answer the query.
+    pub fn output_sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
+        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
+            Reply::SampleRate(sample_rate) => Ok(sample_rate),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for sample-rate query".into(),
+            )),
+        }
+    }
+
     pub(super) fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
     where
         P: PlayerControlSource,
@@ -237,50 +252,21 @@ impl<S> Host<S> {
         }
     }
 
-    /// Returns the session rate used before the output device is measured.
-    #[must_use]
-    pub fn requested_sample_rate(&self) -> NonZeroU32 {
-        self.root_view.grid().axis().sample_rate()
-    }
-
-    /// Reads the current output-rate observation without exposing the lower
-    /// session handle.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
-            Reply::SampleRate(sample_rate) => Ok(sample_rate),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for sample-rate query".into(),
-            )),
-        }
-    }
-
-    pub(super) fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
+    pub(super) fn session_root(settings: HostSettings) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let group = GroupState::unavailable(
             grid_id,
-            sample_rate,
+            settings.sample_rate(),
             SessionEpoch::new(0),
             SyncMemberKind::Group,
             SyncMode::Off,
         );
-        let view = RootView::new(&group, sample_rate);
+        let view = RootView::new(&group, settings);
         Ok(SessionRoot {
             group,
             view,
             id: grid_id,
         })
-    }
-
-    /// Move the output stream to `sample_rate`, keeping Host-owned graph state.
-    ///
-    /// # Errors
-    /// Returns an error when the session cannot restart its output at that rate.
-    pub fn set_sample_rate(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSampleRate { sample_rate })
     }
 
     pub(super) fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
@@ -320,14 +306,13 @@ where
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         match config {
             HostConfig::Realtime {
-                sample_rate_hint,
                 output_block_frames,
                 limiter,
                 settings,
                 ..
             } => {
                 let settings = Live::new(settings)?;
-                let root = Self::session_root(sample_rate_hint)?;
+                let root = Self::session_root(*settings.config())?;
                 let (dispatcher, platform) = Platform::realtime(
                     root.group,
                     root.view.clone(),
@@ -346,7 +331,7 @@ where
             #[cfg(feature = "offline")]
             config @ HostConfig::Offline { .. } => {
                 let platform = Platform::offline().resolve()?;
-                let root = Self::session_root(config.sample_rate())?;
+                let root = Self::session_root(config.settings())?;
                 let (dispatcher, runtime) =
                     OfflineRuntime::new(config, root.group, root.view.clone())?;
                 Ok(Self::owner(
@@ -442,6 +427,8 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_signal::SessionFrame;
     use kithara_sync::{ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate};
     use kithara_test_utils::{bufpool::TestPools, kithara};
@@ -518,9 +505,9 @@ mod tests {
     fn host_root_owns_the_configured_sample_rate() {
         let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
         let config = HostConfig::<TestPools>::builder()
-            .sample_rate_hint(sample_rate)
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
             .build();
-        let root = Host::<TestPools>::session_root(config.sample_rate()).expect("host root");
+        let root = Host::<TestPools>::session_root(config.settings()).expect("host root");
 
         assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
     }

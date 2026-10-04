@@ -588,7 +588,7 @@ fn recording_config(sample_rate: u32, packet_frames: usize) -> RecordingConfig {
 fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, OfflineRenderRequest) {
     let spec = AudioSpec::new(CHANNELS, sample_rate);
     let session = HostConfig::offline(pools())
-        .sample_rate(sample_rate)
+        .settings(HostSettings::builder().sample_rate(sample_rate).build())
         .build();
     let host = Host::new(session).unwrap_or_else(|error| panic!("create offline Host: {error}"));
     let request = OfflineRenderRequest::builder()
@@ -711,10 +711,10 @@ impl ProductHarness {
         )
         .expect("offline render block count is non-zero");
         let session = HostConfig::offline(pools)
-            .sample_rate(sample_rate)
             .max_block_frames(render_block_frames)
             .settings(
                 HostSettings::builder()
+                    .sample_rate(sample_rate)
                     .metronome(
                         MetronomeConfig::builder()
                             .level(METRONOME_DUCK)

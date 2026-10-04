@@ -4,7 +4,7 @@ use kithara::{
     bufpool::PoolRegion,
     events::{EventBus, TrackId},
     hls::AbrMode,
-    host::{HostConfig, Tap},
+    host::{HostConfig, HostSettings, Tap},
     platform::{
         sync::Arc,
         time::{self, Duration},
@@ -304,7 +304,7 @@ async fn run_case(
     let _trace = usdt_trace::scope();
     let host = OfflineHostHarness::new(
         HostConfig::offline(pool_region.clone())
-            .sample_rate(sample_rate)
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
             .max_block_frames(max_block_frames)
             .build(),
     )

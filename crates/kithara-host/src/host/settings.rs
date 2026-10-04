@@ -1,8 +1,11 @@
+use std::num::NonZeroU32;
+
 use kithara_config::Config;
 
 use crate::{
     MetronomeConfig, PlayError,
     api::{SessionDuckingMode, Tempo},
+    consts,
 };
 
 /// What a Host runs with that changes while it runs.
@@ -19,6 +22,10 @@ use crate::{
 )]
 #[non_exhaustive]
 pub struct HostSettings {
+    /// Rate the Host asks the output to run at, 44.1 kHz unless changed. A
+    /// change restarts the output route at the new rate.
+    #[config(live(owner), builder(default = consts::DEFAULT_SAMPLE_RATE))]
+    sample_rate: NonZeroU32,
     /// Tempo the session transport counts beats in, 120 BPM unless changed.
     #[config(live(owner), builder(default = Tempo::DEFAULT))]
     tempo: Tempo,

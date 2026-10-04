@@ -42,7 +42,6 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
             eq_layout: Vec::new(),
             gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
-            sample_rate: consts::RING_ADMISSION_SAMPLE_RATE,
         })
         .expect("invariant: player registration reaches the session")
     {

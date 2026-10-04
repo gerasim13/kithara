@@ -77,7 +77,7 @@ where
     }
 
     #[must_use]
-    fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
+    pub(crate) fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
     where
         F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
@@ -110,7 +110,7 @@ where
     )
 }
 
-fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
+pub(crate) fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
 where
     F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 {
@@ -122,14 +122,15 @@ where
         SyncMemberKind::Group,
         SyncMode::Off,
     );
-    let root_view = RootView::new(&root, sample_rate);
+    let settings = HostSettings::builder().sample_rate(sample_rate).build();
+    let root_view = RootView::new(&root, settings);
     SessionState::new(
         root,
         root_view,
         None,
         None,
         SessionOutput::new(LimiterConfig::default()),
-        Live::new(HostSettings::default()).expect("the default settings are valid"),
+        Live::new(settings).expect("the fixture settings are valid"),
         start_stream_fn,
     )
 }
@@ -155,7 +156,10 @@ pub(crate) fn root_with_player(
     );
     let player_grid_id = BeatGridId::allocate().expect("fixture player grid id");
     attach_member(&mut root, player_grid_id, pools(), sample_rate);
-    let root_view = RootView::new(&root, sample_rate);
+    let root_view = RootView::new(
+        &root,
+        HostSettings::builder().sample_rate(sample_rate).build(),
+    );
     (root, root_view, player_grid_id)
 }
 

@@ -300,7 +300,8 @@ mod tests {
             root_view.clone(),
             None,
             SessionOutput::new(LimiterConfig::default()),
-            Live::new(HostSettings::default()).expect("the default settings are valid"),
+            Live::new(HostSettings::builder().sample_rate(sample_rate).build())
+                .expect("the fixture settings are valid"),
             move |ctx, _| {
                 let backend = RingBackend::start(
                     ctx,
@@ -325,7 +326,6 @@ mod tests {
             eq_layout: Vec::new(),
             gate_smoothing: DEFAULT_GATE_SMOOTHING,
             pools: pools(),
-            sample_rate: sample_rate.get(),
         }) {
             Ok(Reply::PlayerRegistered(registered)) => registered.id,
             Ok(Reply::Err(error)) => panic!("register fixture player: {error}"),
@@ -335,7 +335,6 @@ mod tests {
         assert!(matches!(
             client.exec(Cmd::StartPlayer {
                 player_id,
-                sample_rate: sample_rate.get(),
                 master_volume: 1.0,
                 render_quantum_frames: None,
                 response_budget_frames: None,

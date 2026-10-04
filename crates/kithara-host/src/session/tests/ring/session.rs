@@ -363,22 +363,25 @@ fn ring_session_thread(
     setup: RingSetup,
 ) {
     let mut backend_config = Some(backend_config);
-    let mut state = GraphSession::<RingBackend, TestPools>::new(move |ctx, _sample_rate| {
-        let config = backend_config
-            .take()
-            .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
-        let mut backend = RingBackend::start(ctx, config).map_err(|error| error.to_string())?;
-        match backend.render_block(0) {
-            Err(RingRenderError::NotArmed) => {
-                probe.record_pre_arm_error(RingRenderError::NotArmed);
+    let mut state = GraphSession::<RingBackend, TestPools>::with_sample_rate(
+        session_rate,
+        move |ctx, _sample_rate| {
+            let config = backend_config
+                .take()
+                .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
+            let mut backend = RingBackend::start(ctx, config).map_err(|error| error.to_string())?;
+            match backend.render_block(0) {
+                Err(RingRenderError::NotArmed) => {
+                    probe.record_pre_arm_error(RingRenderError::NotArmed);
+                }
+                Err(error) => return Err(format!("unexpected pre-arm render result: {error}")),
+                Ok(()) => return Err(String::from("pre-arm ring render was accepted")),
             }
-            Err(error) => return Err(format!("unexpected pre-arm render result: {error}")),
-            Ok(()) => return Err(String::from("pre-arm ring render was accepted")),
-        }
-        backend.arm();
-        Ok(backend)
-    });
-    let ready = bootstrap(&mut state, session_rate, setup).and_then(|()| snapshot(&mut state));
+            backend.arm();
+            Ok(backend)
+        },
+    );
+    let ready = bootstrap(&mut state, setup).and_then(|()| snapshot(&mut state));
     let is_ready = ready.is_ok();
     if ready_tx.send(ready).is_err() || !is_ready {
         return;
@@ -401,7 +404,6 @@ fn ring_session_thread(
 
 fn bootstrap(
     state: &mut GraphSession<RingBackend, TestPools>,
-    session_rate: NonZeroU32,
     setup: RingSetup,
 ) -> Result<(), RingSessionError> {
     let player_id = match state.exec(Cmd::RegisterPlayer {
@@ -410,7 +412,6 @@ fn bootstrap(
         eq_layout: Vec::new(),
         gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
         pools: pools(),
-        sample_rate: session_rate.get(),
     }) {
         Reply::PlayerRegistered(registered) => registered.id,
         Reply::Err(error) => return Err(error.into()),
@@ -421,7 +422,6 @@ fn bootstrap(
         master_volume: 1.0,
         render_quantum_frames: None,
         response_budget_frames: NonZeroUsize::new(448),
-        sample_rate: session_rate.get(),
     }) {
         Reply::Ok => {}
         Reply::Err(error) => return Err(error.into()),

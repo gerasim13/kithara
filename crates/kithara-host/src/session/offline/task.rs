@@ -245,8 +245,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     if state.ctx.is_none() {
-        ensure_ctx(state, state.sample_rate_hint)
-            .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        ensure_ctx(state).map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
     }
     let total_samples = usize::try_from(frames)
         .map_err(|_| OfflineSessionError::SampleCountOverflow)?

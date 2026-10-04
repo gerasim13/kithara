@@ -161,7 +161,6 @@ pub(super) mod lifecycle {
     pub(in crate::session) fn start_player<T, S>(
         state: &mut SessionState<T, S>,
         player_id: PlayerId,
-        sample_rate: u32,
         master_volume: f32,
         render_quantum_frames: Option<NonZeroUsize>,
         response_budget_frames: Option<NonZeroUsize>,
@@ -169,11 +168,8 @@ pub(super) mod lifecycle {
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        debug!(
-            player_id,
-            sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
-        );
-        ensure_ctx(state, sample_rate)?;
+        debug!(player_id, master_volume, "[KITHARA-ROUTE] starting player");
+        ensure_ctx(state)?;
         validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
         let idx = player_index(state, player_id)?;
         let Some(session_output_id) = state.session_output_node_id else {
@@ -804,7 +800,6 @@ mod tests {
                 eq_layout: generate_log_spaced_bands(5),
                 gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
                 pools: pools(),
-                sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             },
         ) {
             Reply::PlayerRegistered(registered) => registered.id,
@@ -813,12 +808,11 @@ mod tests {
         }
     }
 
-    fn start_at(state: &mut TestState, player_id: PlayerId, sample_rate: u32) {
+    fn start(state: &mut TestState, player_id: PlayerId) {
         match run_cmd(
             state,
             Cmd::StartPlayer {
                 player_id,
-                sample_rate,
                 render_quantum_frames: None,
                 response_budget_frames: NonZeroUsize::new(448),
                 master_volume: 1.0,
@@ -828,10 +822,6 @@ mod tests {
             Reply::Err(err) => panic!("player {player_id} failed to start: {err}"),
             _ => panic!("player start returned unexpected reply"),
         }
-    }
-
-    fn start(state: &mut TestState, player_id: PlayerId) {
-        start_at(state, player_id, TestState::DEFAULT_SAMPLE_RATE);
     }
 
     fn unregister(state: &mut TestState, player_id: PlayerId) {
@@ -1049,7 +1039,7 @@ mod tests {
                 .expect("the initial session-grid revision is committed"),
             initial.stamp()
         );
-        start_at(&mut state, first_player, 0);
+        start(&mut state, first_player);
         let before = render_and_read_session_grid(&mut state);
         let first_live = state.root.snapshot();
         assert_eq!(first_live, before.session_grid());
@@ -1065,10 +1055,8 @@ mod tests {
             Beat::new(1.0).expect("invariant: fixture beat is finite"),
         );
 
-        assert!(matches!(
-            invalidate_audio_route(&mut state, "deferred route before idle teardown"),
-            Reply::Ok
-        ));
+        invalidate_audio_route(&mut state, "deferred route before idle teardown")
+            .expect("the route restarts");
         let route_boundary = state.root.snapshot();
         assert_eq!(
             state
@@ -1123,7 +1111,7 @@ mod tests {
         });
 
         let second_player = register(&mut state);
-        start_at(&mut state, second_player, 0);
+        start(&mut state, second_player);
         let after = render_and_read_session_grid(&mut state);
         let second_live = state.root.snapshot();
         assert_eq!(second_live, after.session_grid());
@@ -1163,13 +1151,10 @@ mod tests {
         });
         let mut state = test_state(start_test_stream);
         let player = register(&mut state);
-        start_at(&mut state, player, 0);
+        start(&mut state, player);
         let live = render_and_read_session_grid(&mut state);
 
-        assert!(matches!(
-            invalidate_audio_route(&mut state, "test route restart"),
-            Reply::Ok
-        ));
+        invalidate_audio_route(&mut state, "test route restart").expect("the route restarts");
         let reserved = state.root.snapshot();
         assert!(reserved.revision() > live.session_grid_stamp().revision());
         assert_eq!(
@@ -1185,7 +1170,7 @@ mod tests {
             panic!("the pending route restart must answer the sample-rate query")
         };
         assert_eq!(rate.measured, None);
-        assert_eq!(rate.requested, 0);
+        assert_eq!(rate.requested, 44_100);
         assert!(matches!(
             run_cmd(&mut state, Cmd::QuerySessionTransport),
             Reply::Err(SessionError::TransportNotProcessed)

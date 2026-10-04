@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_bufpool::HasPool;
 use kithara_command::When;
+use kithara_config::ConfigOwner;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
 use kithara_play::{PlayError, StreamShape};
@@ -148,16 +149,7 @@ where
             eq_layout,
             gate_smoothing,
             pools,
-            sample_rate,
-        } => match register_player(
-            state,
-            grid_id,
-            bus,
-            eq_layout,
-            pools,
-            sample_rate,
-            gate_smoothing,
-        ) {
+        } => match register_player(state, grid_id, bus, eq_layout, pools, gate_smoothing) {
             Ok(player_id) => Reply::PlayerRegistered(player_id),
             Err(error) => Reply::Err(error),
         },
@@ -170,11 +162,9 @@ where
             player_id,
             render_quantum_frames,
             response_budget_frames,
-            sample_rate,
         } => match lifecycle::start_player(
             state,
             player_id,
-            sample_rate,
             master_volume,
             render_quantum_frames,
             response_budget_frames,
@@ -234,8 +224,10 @@ where
             Ok(snapshot) => Reply::SessionTransport(snapshot),
             Err(err) => Reply::Err(err),
         },
-        Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
-        Cmd::SetSampleRate { sample_rate } => set_sample_rate(state, sample_rate),
+        Cmd::InvalidateAudioRoute { reason } => match invalidate_audio_route(state, &reason) {
+            Ok(()) => Reply::Ok,
+            Err(err) => Reply::Err(err),
+        },
         Cmd::QuerySampleRate => {
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(sample_rate(state))
@@ -266,21 +258,21 @@ fn measured_stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape
 
 pub(super) fn sample_rate<T, S>(state: &SessionState<T, S>) -> SessionSampleRate {
     let measured = measured_stream_shape(state).map(|shape| shape.sample_rate.get());
-    SessionSampleRate::new(measured, state.sample_rate_hint)
+    SessionSampleRate::new(measured, state.settings.config().sample_rate().get())
 }
 
 pub(super) fn stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape> {
     measured_stream_shape(state).or_else(|| {
         Some(StreamShape::new(
             state.requested_max_block_frames?,
-            NonZeroU32::new(state.sample_rate_hint)?,
+            state.settings.config().sample_rate(),
         ))
     })
 }
 
 pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Reply {
     if state.stream_needs_restart {
-        match restart_stream(state, state.sample_rate_hint) {
+        match restart_stream(state) {
             Ok(()) => {}
             Err(err) => {
                 warn!(?err, "[KITHARA-ROUTE] deferred stream restart failed");
@@ -415,10 +407,10 @@ fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Reply {
     state.publish_root();
     warn!("session stream stopped unexpectedly; restarting audio stream");
     trace!(
-        sample_rate_hint = state.sample_rate_hint,
+        sample_rate = state.settings.config().sample_rate().get(),
         "[KITHARA-ROUTE] firewheel context went inactive under a live stream"
     );
-    match restart_stream(state, state.sample_rate_hint) {
+    match restart_stream(state) {
         Ok(()) => Reply::Ok,
         Err(restart_err) => Reply::Err(SessionError::RestartFailed {
             reason: "audio stream stopped".to_owned(),
@@ -427,7 +419,10 @@ fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Reply {
     }
 }
 
-pub(super) fn invalidate_audio_route<T, S>(state: &mut SessionState<T, S>, reason: &str) -> Reply {
+pub(super) fn invalidate_audio_route<T, S>(
+    state: &mut SessionState<T, S>,
+    reason: &str,
+) -> Result<(), SessionError> {
     debug!(
         reason,
         ctx_ready = state.ctx.is_some(),
@@ -435,33 +430,23 @@ pub(super) fn invalidate_audio_route<T, S>(state: &mut SessionState<T, S>, reaso
         "[KITHARA-ROUTE] audio route invalidated"
     );
     if state.ctx.is_none() {
-        return Reply::Ok;
+        return Ok(());
     }
     state.stream_needs_restart = true;
-    match restart_stream(state, state.sample_rate_hint) {
-        Ok(()) => Reply::Ok,
-        Err(err) => Reply::Err(SessionError::RestartFailed {
-            reason: reason.to_owned(),
-            r#source: err.to_string(),
-        }),
-    }
+    restart_stream(state).map_err(|err| SessionError::RestartFailed {
+        reason: reason.to_owned(),
+        r#source: err.to_string(),
+    })
 }
 
-/// Moves the output to `sample_rate` through the same restart a route change takes.
-fn set_sample_rate<T, S>(state: &mut SessionState<T, S>, sample_rate: NonZeroU32) -> Reply {
-    state.sample_rate_hint = sample_rate.get();
-    invalidate_audio_route(state, "sample rate change")
-}
-
-pub(super) fn restart_stream<T, S>(
-    state: &mut SessionState<T, S>,
-    sample_rate: u32,
-) -> Result<(), SessionError> {
+/// Restarts the output at the rate the settings ask for.
+pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if state.ctx.is_none() {
         return Err(SessionError::NoContext);
     }
+    let sample_rate = state.settings.config().sample_rate().get();
     debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
-    if transport::prepare_route_restart(state, sample_rate)? == RouteRestartStatus::Pending {
+    if transport::prepare_route_restart(state)? == RouteRestartStatus::Pending {
         trace!("[KITHARA-ROUTE] waiting for the previous stream processor to stop");
         return Ok(());
     }
@@ -469,7 +454,6 @@ pub(super) fn restart_stream<T, S>(
     let stream = (state.start_stream_fn)(fw_ctx, sample_rate).map_err(SessionError::StreamStart)?;
     state.stream = Some(stream);
     state.reserved_session_grid = None;
-    state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
     state.publish_root();
     trace_stream_info(state, "restart-stream");
@@ -494,7 +478,7 @@ pub(super) fn trace_stream_info<T, S>(state: &SessionState<T, S>, context: &'sta
     } else {
         trace!(
             context,
-            sample_rate_hint = state.sample_rate_hint,
+            sample_rate = state.settings.config().sample_rate().get(),
             requested_max_block_frames = state.requested_max_block_frames.map(NonZeroU32::get),
             stream_needs_restart = state.stream_needs_restart,
             "[KITHARA-ROUTE] session stream-info unavailable"
@@ -698,10 +682,9 @@ mod tests {
         })
     }
 
-    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
+    fn register_command(grid_id: kithara_warp::BeatGridId) -> Cmd<TestPools> {
         Cmd::RegisterPlayer {
             grid_id,
-            sample_rate,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
             gate_smoothing: DEFAULT_GATE_SMOOTHING,
@@ -711,20 +694,31 @@ mod tests {
 
     fn register_player(state: &mut TestState) -> u64 {
         let grid_id = attach_player(state);
-        match run_cmd(
-            state,
-            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
-        ) {
+        match run_cmd(state, register_command(grid_id)) {
             Reply::PlayerRegistered(registered) => registered.id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
     }
 
-    fn start_command(player_id: u64, sample_rate: u32) -> Cmd<TestPools> {
+    /// Asks the session for `rate` from the next block on.
+    fn configure_sample_rate(state: &mut TestState, rate: u32) {
+        let rate = NonZeroU32::new(rate).expect("a fixture rate is not zero");
+        assert!(matches!(
+            run_host_cmd(
+                state,
+                HostCmd::Configure {
+                    change: HostSettingsChange::SampleRate(rate),
+                    at: When::Next,
+                },
+            ),
+            HostReply::Ok
+        ));
+    }
+
+    fn start_command(player_id: u64) -> Cmd<TestPools> {
         Cmd::StartPlayer {
             player_id,
-            sample_rate,
             master_volume: 1.0,
             render_quantum_frames: None,
             response_budget_frames: NonZeroUsize::new(448),
@@ -795,10 +789,7 @@ mod tests {
         assert!(registered.members()[0].group_topology().is_some());
 
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                start_command(player_id, TestState::DEFAULT_SAMPLE_RATE),
-            ),
+            run_cmd(&mut state, start_command(player_id),),
             Reply::Ok
         ));
         assert!(deck_by_player_id(&state, player_id).started);
@@ -845,10 +836,7 @@ mod tests {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = kithara_warp::BeatGridId::allocate().expect("fixture player grid id");
 
-        let reply = run_cmd(
-            &mut state,
-            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
-        );
+        let reply = run_cmd(&mut state, register_command(grid_id));
 
         assert!(matches!(reply, Reply::Err(SessionError::Graph(_))));
         assert_eq!(member_count(&state), 0);
@@ -859,7 +847,7 @@ mod tests {
     fn duplicate_graph_projection_is_rejected() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let command = || register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE);
+        let command = || register_command(grid_id);
 
         assert!(matches!(
             run_cmd(&mut state, command()),
@@ -880,10 +868,8 @@ mod tests {
     fn detach_is_rejected_while_the_graph_projection_is_live() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let Reply::PlayerRegistered(registered) = run_cmd(
-            &mut state,
-            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
-        ) else {
+        let Reply::PlayerRegistered(registered) = run_cmd(&mut state, register_command(grid_id))
+        else {
             panic!("fixture player is registered")
         };
         let player_id = registered.id;
@@ -964,35 +950,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn invalid_registration_preserves_the_canonical_root() {
-        let mut state = test_state(start_route_loss_stream);
-        let grid_id = attach_player(&mut state);
-        let next_player_id = state.next_player_id;
-        let topology = state.root.topology().expect("fixture topology");
-
-        let reply = run_cmd(&mut state, register_command(grid_id, 0));
-
-        assert!(matches!(
-            reply,
-            Reply::Err(SessionError::InvalidSampleRate(0))
-        ));
-        assert_eq!(state.next_player_id, next_player_id);
-        assert_eq!(deck_count(&state), 0);
-        assert_eq!(state.root.topology().expect("fixture topology"), topology);
-        assert!(state.reserved_session_grid.is_some());
-    }
-
-    #[kithara::test]
     fn exhausted_player_identity_preserves_the_canonical_root() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
         let topology = state.root.topology().expect("fixture topology");
         state.next_player_id = u64::MAX;
 
-        let reply = run_cmd(
-            &mut state,
-            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
-        );
+        let reply = run_cmd(&mut state, register_command(grid_id));
 
         assert!(matches!(reply, Reply::Err(SessionError::PlayerIdExhausted)));
         assert_eq!(state.next_player_id, u64::MAX);
@@ -1028,10 +992,16 @@ mod tests {
                 ..
             })
         ));
+        configure_sample_rate(&mut state, 48_000);
         assert!(matches!(
-            run_cmd(&mut state, start_command(player_id, 48_000),),
-            Reply::Ok
+            run_cmd(&mut state, Cmd::QuerySampleRate),
+            Reply::SampleRate(SessionSampleRate {
+                measured: None,
+                requested: 48_000,
+                ..
+            })
         ));
+        start_player_cmd(&mut state, player_id);
         assert!(matches!(
             run_cmd(&mut state, Cmd::QuerySampleRate),
             Reply::SampleRate(SessionSampleRate {
@@ -1040,6 +1010,28 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[kithara::test]
+    fn a_sample_rate_set_while_idle_is_the_rate_play_starts_the_stream_at() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let rate = NonZeroU32::new(48_000).expect("48000 is not zero");
+        configure_sample_rate(&mut state, rate.get());
+        let player_id = register_player(&mut state);
+        start_player_cmd(&mut state, player_id);
+
+        let started = state
+            .ctx
+            .as_ref()
+            .and_then(FirewheelContext::stream_info)
+            .expect("play starts the stream")
+            .sample_rate;
+        assert_eq!(
+            started, rate,
+            "the stream starts at the rate set while idle"
+        );
     }
 
     #[kithara::test]
@@ -1061,10 +1053,7 @@ mod tests {
 
         let player_id = register_player(&mut state);
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                start_command(player_id, TestState::DEFAULT_SAMPLE_RATE),
-            ),
+            run_cmd(&mut state, start_command(player_id),),
             Reply::Ok
         ));
         let Reply::StreamShape(Some(measured)) = run_cmd(&mut state, Cmd::QueryStreamShape) else {
@@ -1073,7 +1062,7 @@ mod tests {
         assert_eq!(measured.max_block_frames.get(), 512);
         assert_eq!(measured.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
         assert_eq!(state.root_view.stream_shape(), Some(measured));
-        restart_stream(&mut state, 48_000).expect("restart stream");
+        configure_sample_rate(&mut state, 48_000);
         assert_eq!(
             state
                 .root_view
@@ -1107,7 +1096,6 @@ mod tests {
             master_volume: 1.0,
             render_quantum_frames: NonZeroUsize::new(64),
             response_budget_frames: NonZeroUsize::new(441),
-            sample_rate: TestState::DEFAULT_SAMPLE_RATE,
         };
 
         assert!(matches!(
@@ -1130,14 +1118,14 @@ mod tests {
         let player_id = register_player(&mut state);
 
         assert!(matches!(
-            run_cmd(&mut state, start_command(player_id, 0),),
+            run_cmd(&mut state, start_command(player_id),),
             Reply::Ok
         ));
         assert!(matches!(
             run_cmd(&mut state, Cmd::QuerySampleRate),
             Reply::SampleRate(SessionSampleRate {
                 measured: Some(44_100),
-                requested: 0,
+                requested: 44_100,
                 ..
             })
         ));
@@ -1216,7 +1204,7 @@ mod tests {
         let player_id = register_player(&mut state);
 
         assert!(matches!(
-            run_cmd(&mut state, start_command(player_id, 0),),
+            run_cmd(&mut state, start_command(player_id),),
             Reply::Ok
         ));
         assert!(state.ctx.is_some());
@@ -1278,7 +1266,7 @@ mod tests {
         let player_id = register_player(&mut state);
 
         assert!(matches!(
-            run_cmd(&mut state, start_command(player_id, 44_100)),
+            run_cmd(&mut state, start_command(player_id)),
             Reply::Ok
         ));
         assert_eq!(
@@ -1315,8 +1303,7 @@ mod tests {
             )
             .map_err(|err| err.to_string())
         });
-        crate::session::state::ensure_ctx(&mut state, sample_rate.get())
-            .expect("active browser graph");
+        crate::session::state::ensure_ctx(&mut state).expect("active browser graph");
         let stream = state.stream.as_mut().expect("stream started");
         stream.arm();
         stream.render_block(0).expect("initial render");
@@ -1358,7 +1345,7 @@ mod tests {
         let player_id = register_player(&mut state);
 
         assert!(matches!(
-            run_cmd(&mut state, start_command(player_id, 44_100),),
+            run_cmd(&mut state, start_command(player_id),),
             Reply::Ok
         ));
         assert_eq!(
@@ -1403,7 +1390,7 @@ mod tests {
 
     fn start_player_cmd(state: &mut TestState, player_id: u64) {
         assert!(matches!(
-            run_cmd(&mut *state, start_command(player_id, 44_100),),
+            run_cmd(&mut *state, start_command(player_id),),
             Reply::Ok
         ));
     }
@@ -1445,10 +1432,8 @@ mod tests {
             ),
             HostReply::Ok
         ));
-        let Reply::PlayerRegistered(registered) = run_cmd(
-            &mut state,
-            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
-        ) else {
+        let Reply::PlayerRegistered(registered) = run_cmd(&mut state, register_command(grid_id))
+        else {
             panic!("player registration must succeed")
         };
         let player_id = registered.id;

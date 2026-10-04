@@ -239,7 +239,11 @@ async fn host_ride() -> HostRide {
     let steps = u64::from(consts::RIDE_TO_BPM - consts::RIDE_FROM_BPM);
     let frames = block * (1 + steps * consts::STEP_BLOCKS + consts::LAST_BLOCKS);
     let config = HostConfig::offline(pools())
-        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+        .settings(
+            HostSettings::builder()
+                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
+                .build(),
+        )
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
         .build();
     let host = OfflineHostHarness::new(config)
@@ -377,10 +381,10 @@ async fn the_metronome_clicks_on_the_frame_nearest_every_computed_beat() {
 /// [`consts::OVERLAY_LEVEL`] with no duck.
 fn overlay_session() -> HostConfig<TestPools> {
     HostConfig::offline(pools())
-        .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
         .settings(
             HostSettings::builder()
+                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
                 .metronome(
                     MetronomeConfig::builder()
                         .level(consts::OVERLAY_LEVEL)

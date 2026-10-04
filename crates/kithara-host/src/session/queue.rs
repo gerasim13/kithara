@@ -1,7 +1,7 @@
 //! The Host queue: Host settings changes the session transport applies on
 //! its render clock, and the receipts that settle them on the session owner.
 
-use std::mem;
+use std::{mem, num::NonZeroU32};
 
 use kithara_command::{LiveError, Outcome, Protocol, Receipt, Rejection, SendError, Target, When};
 use kithara_config::ConfigOwner;
@@ -11,6 +11,7 @@ use tracing::{error, warn};
 
 use super::{
     SessionError,
+    dispatch::invalidate_audio_route,
     state::SessionState,
     transport::{TransportEvent, TransportProcessError, publish_transport_event},
 };
@@ -55,6 +56,21 @@ impl Protocol for HostProtocol {
 impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
     type At = When<SessionFrame>;
     type Output = Result<(), PlayError>;
+
+    /// The owner restarts the output route at the new rate; the render graph
+    /// never sees it, so no frame can carry a rate change. A restart that
+    /// fails keeps the rate, and the next restart starts the output at it.
+    fn exec_sample_rate(&mut self, value: NonZeroU32, at: Self::At, _cx: &mut ()) -> Self::Output {
+        if let When::At(_) = at {
+            return Err(PlayError::Untimed);
+        }
+        self.settings.apply(HostSettingsChange::SampleRate(value))?;
+        self.publish_root();
+        if self.stream_needs_restart {
+            return Ok(());
+        }
+        invalidate_audio_route(self, "sample rate change").map_err(PlayError::from)
+    }
 
     /// The transport re-anchors the session beats on the frame the tempo
     /// changes on.

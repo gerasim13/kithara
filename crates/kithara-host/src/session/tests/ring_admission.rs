@@ -66,7 +66,6 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             eq_layout: Vec::new(),
             gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
-            sample_rate: consts::RING_ADMISSION_SAMPLE_RATE,
         })
         .expect("register player command")
     {
@@ -81,7 +80,6 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
                 master_volume: 1.0,
                 render_quantum_frames: None,
                 response_budget_frames: NonZeroUsize::new(448),
-                sample_rate: consts::RING_ADMISSION_SAMPLE_RATE,
             })
             .expect("start player command"),
     );

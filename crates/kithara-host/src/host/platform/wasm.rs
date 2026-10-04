@@ -268,7 +268,7 @@ mod tests {
 
     use super::{Host, Platform, Resident, SessionRuntime};
     use crate::{
-        PlayerMember,
+        HostSettings, PlayerMember,
         host::owner::SessionRoot,
         session::{
             HostCmd, HostDispatcher, HostReply, Reply,
@@ -369,7 +369,10 @@ mod tests {
             id: host_id,
             group: mut root,
             view: root_view,
-        } = Host::<TestPools>::session_root(sample_rate).expect("fixture Host session");
+        } = Host::<TestPools>::session_root(
+            HostSettings::builder().sample_rate(sample_rate).build(),
+        )
+        .expect("fixture Host session");
         let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
         let base = root.topology().expect("fixture root topology").stamp();
         let admission = root
