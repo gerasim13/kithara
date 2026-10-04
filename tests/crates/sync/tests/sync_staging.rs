@@ -334,11 +334,34 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
     let candidate_built = Window::read(&harness, case);
+    assert_eq!(
+        candidate_built,
+        control_built,
+        "{}: the two sides of this comparison differ only in the lane staged \
+         beside the sounding deck, and nothing has been staged yet, so the two \
+         builds must leave their decks on the same frame. They did not, which \
+         makes every later sample-by-sample comparison a comparison of two \
+         different points of the same timeline",
+        case.id(),
+    );
     harness.mark("staged cue, then a superseding cue");
     let superseded = prepare_cue(&mut harness, case, rate, cue).await;
     let candidate_staged = Window::read(&harness, case);
     let successor = prepare_cue(&mut harness, case, rate, superseding).await;
     let candidate_superseded = Window::read(&harness, case);
+    assert_eq!(
+        (candidate_staged, candidate_superseded),
+        (candidate_built, candidate_built),
+        "{}: staging a lane beside the sounding deck moved that deck. Only a \
+         render advances a deck and neither staging call renders one, so the \
+         deck should have held the {candidate_built} its build left it on; it \
+         stood on {candidate_staged} once a lane was staged beside it and on \
+         {candidate_superseded} once that lane was superseded. This is the \
+         displacement the comparison below would otherwise report second-hand, \
+         as two windows opening apart or as audio read from the wrong place, \
+         depending only on whether it happens to cross a block boundary",
+        case.id(),
+    );
     let candidate_opened = open_window(&mut harness, case).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     let candidate_closed = Window::read(&harness, case);
@@ -367,14 +390,12 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         candidate_opened,
         control_opened,
         "{}: the two windows opened at different points of the deck's own \
-         timeline, so one covers audio the other has already played; the \
-         control's deck stood on {control_built} when its build returned and \
-         the candidate's on {candidate_built}, then on {candidate_staged} once \
-         a lane was staged beside it and on {candidate_superseded} once that \
-         lane was superseded. Only a render advances a deck, and none of those \
-         steps renders, so a reading that moves between them was moved by the \
-         staging; readings that hold still through them put the move inside \
-         the waiting renders themselves",
+         timeline, so one covers audio the other has already played. The two \
+         checks above already put both decks on {candidate_built} after their \
+         builds and held them there through the staging, so what moved this \
+         one moved it inside the blocks rendered while waiting for the lead. \
+         That loop steps whole blocks, so a deck displaced within a block \
+         carries the displacement into its opening rather than losing it",
         case.id(),
     );
     assert_eq!(
