@@ -69,14 +69,17 @@ fn build_of(lane: &ResolvedLane) -> Build {
     build
 }
 
-/// Every package `own` builds, `theirs` builds too, with at least the same
-/// features.
-fn covers(own: &Build, theirs: &Build) -> bool {
-    own.iter().all(|(package, sets)| {
-        theirs.get(package).is_some_and(|more| {
-            sets.iter()
-                .all(|features| more.iter().any(|other| features.is_subset(other)))
-        })
+/// The first package `own` builds that `theirs` does not build with at least
+/// the same features, or `None` when `theirs` covers all of `own`.
+fn first_uncovered<'a>(own: &'a Build, theirs: &Build) -> Option<(&'a str, &'a BTreeSet<String>)> {
+    own.iter().find_map(|(package, sets)| {
+        sets.iter()
+            .find(|features| {
+                !theirs
+                    .get(package)
+                    .is_some_and(|more| more.iter().any(|other| features.is_subset(other)))
+            })
+            .map(|features| (package.as_str(), features))
     })
 }
 
@@ -167,7 +170,7 @@ fn every_lane_is_stressed_exempt_or_covered() {
             lanes.push(resolved(name, None, None));
         }
     }
-    let mut units = BTreeMap::<&str, Vec<usize>>::new();
+    let mut units = BTreeMap::<&str, Vec<(&str, usize)>>::new();
     for stressed in candidates.iter().flat_map(|(_, within)| within) {
         if units.contains_key(stressed.as_str()) {
             continue;
@@ -176,7 +179,7 @@ fn every_lane_is_stressed_exempt_or_covered() {
         for name in &stress.default_modes {
             let mode = &stress.modes[name];
             if mode.command.is_empty() {
-                indices.push(lanes.len());
+                indices.push((name.as_str(), lanes.len()));
                 lanes.push(resolved(stressed, mode.flash, mode.no_block));
             }
         }
@@ -184,21 +187,45 @@ fn every_lane_is_stressed_exempt_or_covered() {
     }
     let builds = builds_of(&lanes);
     for (name, within) in &candidates {
+        let lane = own.get(name.as_str()).map(|&index| &builds[index]);
         let covered_by = within.iter().find(|stressed| {
-            let lane = &builds[own[name.as_str()]];
-            units[stressed.as_str()]
-                .iter()
-                .any(|&unit| covers(lane, &builds[unit]))
+            lane.is_some_and(|lane| {
+                units[stressed.as_str()]
+                    .iter()
+                    .any(|&(_, unit)| first_uncovered(lane, &builds[unit]).is_none())
+            })
         });
         match (covered_by, stress.not_stressed.contains_key(name.as_str())) {
             (Some(stressed), true) => failures.push(format!(
                 "lane `{name}` is exempt from stress, but stress lane `{stressed}` already repeats \
                  every test it runs"
             )),
-            (None, false) => failures.push(format!(
-                "lane `{name}` is not in stress.lanes, has no reason in stress.not_stressed, and no \
-                 stress lane runs every test it runs"
-            )),
+            (None, false) => {
+                let mut why = Vec::new();
+                for stressed in within {
+                    for &(mode, unit) in &units[stressed.as_str()] {
+                        if let Some((package, features)) =
+                            lane.and_then(|lane| first_uncovered(lane, &builds[unit]))
+                        {
+                            why.push(format!(
+                                "`{stressed}` under `{mode}` builds no `{package}` with {features:?}"
+                            ));
+                        }
+                    }
+                }
+                if why.is_empty() {
+                    why.push(
+                        "no stress lane runs it under the same runner, profile, environment, \
+                         selection and targets"
+                            .to_owned(),
+                    );
+                }
+                failures.push(format!(
+                    "lane `{name}` is not in stress.lanes, has no reason in stress.not_stressed, \
+                     and no stress lane runs every test it runs: {}",
+                    why.join("; ")
+                ));
+            }
             _ => {}
         }
     }
