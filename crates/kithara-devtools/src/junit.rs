@@ -46,9 +46,10 @@ pub(crate) struct JunitReport {
 /// # Errors
 ///
 /// Fails when the document is not `XML`, a `testcase` identity is empty, a
-/// stress suite does not own its testcase, or a `time` attribute is missing,
-/// negative, non-finite, or not a number. A skipped stress testcase is also
-/// rejected because it is not per-iteration execution evidence. The testcase
+/// stress suite does not own its testcase, or an executed case's `time`
+/// attribute is missing, negative, non-finite, or not a number. A skipped stress testcase is also
+/// rejected because it is not per-iteration execution evidence. Ordinary
+/// skipped cases carry no execution evidence and are omitted. The testcase
 /// limit rejects the artifact; an oversized retained output only truncates its
 /// own case and marks it [`CaseTiming::output_truncated`]. A case that passed
 /// on a retry is not a failure and is marked [`CaseTiming::flaky`].
@@ -73,8 +74,12 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
         .and_then(|node| node.attribute("timestamp"))
         .map(str::to_owned);
     let mut cases = Vec::new();
-    for node in doc.descendants().filter(|n| n.has_tag_name("testcase")) {
-        validate_case_count(cases.len().saturating_add(1))?;
+    for (index, node) in doc
+        .descendants()
+        .filter(|n| n.has_tag_name("testcase"))
+        .enumerate()
+    {
+        validate_case_count(index.saturating_add(1))?;
         let name = node.attribute("name").unwrap_or_default().to_owned();
         let suite = node.attribute("classname").unwrap_or_default().to_owned();
         if name.trim().is_empty() {
@@ -96,6 +101,22 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
                 Ok(iteration)
             })
             .transpose()?;
+        let failed = node
+            .children()
+            .any(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
+        let flaky = !failed
+            && node
+                .children()
+                .any(|child| child.has_tag_name("flakyFailure"));
+        if node.children().any(|child| child.has_tag_name("skipped")) {
+            if iteration.is_some() {
+                bail!("selected testcase {suite} {name} was skipped");
+            }
+            if failed || flaky {
+                bail!("skipped testcase {suite} {name} also carries a failure");
+            }
+            continue;
+        }
         let secs: f64 = node
             .attribute("time")
             .context("testcase time attribute is missing")?
@@ -104,17 +125,6 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
         if !secs.is_finite() || secs < 0.0 {
             bail!("invalid time attribute on {suite} {name}");
         }
-        let stress = iteration.is_some();
-        if stress && node.children().any(|child| child.has_tag_name("skipped")) {
-            bail!("selected testcase {suite} {name} was skipped");
-        }
-        let failed = node
-            .children()
-            .any(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
-        let flaky = !failed
-            && node
-                .children()
-                .any(|child| child.has_tag_name("flakyFailure"));
         let timestamp = node.attribute("timestamp").map(str::to_owned);
         let (output, output_truncated) = if flaky {
             retried_failure_output(node)
@@ -459,15 +469,17 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_invalid_timing() {
-        for time in [None, Some("-1"), Some("NaN"), Some("inf"), Some("bad")] {
-            let attribute = time.map_or_else(String::new, |time| format!(r#" time="{time}""#));
-            let xml = format!(
-                r#"<testsuite name="demo@stress-0"><testcase name="seek" classname="demo"{attribute}/></testsuite>"#
-            );
+        for suite in ["demo", "demo@stress-0"] {
+            for time in [None, Some("-1"), Some("NaN"), Some("inf"), Some("bad")] {
+                let attribute = time.map_or_else(String::new, |time| format!(r#" time="{time}""#));
+                let xml = format!(
+                    r#"<testsuite name="{suite}"><testcase name="seek" classname="demo"{attribute}/></testsuite>"#
+                );
 
-            let error = parse_junit(&xml).expect_err("invalid timing must be rejected");
+                let error = parse_junit(&xml).expect_err("invalid timing must be rejected");
 
-            assert!(error.to_string().contains("time attribute"), "{error:?}");
+                assert!(error.to_string().contains("time attribute"), "{error:?}");
+            }
         }
     }
 
@@ -480,6 +492,52 @@ mod tests {
         let error = parse_junit(xml).expect_err("skipped evidence is incomplete");
 
         assert!(error.to_string().contains("was skipped"), "{error:?}");
+    }
+
+    #[test]
+    fn ordinary_skipped_cases_are_not_execution_timing_evidence() {
+        let xml = r#"<testsuite name="SwiftTests">
+  <testcase name="local" classname="SwiftTests" time="0.25"/>
+  <testcase name="production" classname="SwiftTests">
+    <skipped>Production streams are opt-in</skipped>
+  </testcase>
+</testsuite>"#;
+
+        let cases = parse_junit(xml).expect("parse executed cases beside an ordinary skip");
+
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].name, "local");
+        assert_eq!(cases[0].secs, 0.25);
+        assert!(!cases[0].failing());
+    }
+
+    #[test]
+    fn a_skipped_stress_case_is_rejected_without_timing() {
+        let xml = r#"<testsuite name="demo@stress-0">
+  <testcase name="seek" classname="demo"><skipped/></testcase>
+</testsuite>"#;
+
+        let error = parse_junit(xml).expect_err("a selected stress case must execute");
+
+        assert!(error.to_string().contains("was skipped"), "{error:?}");
+    }
+
+    #[test]
+    fn a_skip_cannot_hide_failure_evidence() {
+        for outcome in ["failure", "error", "flakyFailure"] {
+            let xml = format!(
+                r#"<testsuite name="demo">
+  <testcase name="seek" classname="demo" time="0.1"><skipped/><{outcome}/></testcase>
+</testsuite>"#
+            );
+
+            let error = parse_junit(&xml).expect_err("contradictory outcomes must be rejected");
+
+            assert!(
+                error.to_string().contains("also carries a failure"),
+                "{error:?}"
+            );
+        }
     }
 
     #[test]
