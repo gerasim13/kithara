@@ -2,12 +2,12 @@
 use std::{cell::RefCell, collections::VecDeque};
 use std::{
     cmp::Reverse,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Component, Path, PathBuf},
     process::Output,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -1002,32 +1002,44 @@ impl<'a> HostStorage<'a> {
     ///
     /// Measured two levels down, so an answer names a subsystem — `vm/tart`,
     /// `cache/trusted`, one runner's workspaces — rather than the volume it is
-    /// already known to be on. A first-level directory with no subdirectories
-    /// of its own stands for itself.
+    /// already known to be on. A first-level directory with nothing measured
+    /// below it stands for itself.
     ///
-    /// Sizes are apparent, not allocated, so a sparse disk image reads larger
-    /// than it costs rather than smaller. This picks which tree to look at; it
-    /// is not an accounting of the volume.
+    /// One `du` over every root, with its duration in the log: the walk this
+    /// replaced ran file by file in this process after `cleanup completed`, so
+    /// a pass killed at its deadline left no trace of the step it was in. Sizes
+    /// are allocated, what the volume pays: a sparse disk image counts what it
+    /// holds, not what it could grow to. What `du` cannot read it skips and
+    /// says so, exiting non-zero; the rest of its answer still stands, because
+    /// this runs while jobs are being refused and a tree vanishing under a
+    /// running job is no reason to name nothing.
     fn largest_trees(&self, count: usize) -> Vec<(PathBuf, u64)> {
         let mut roots = vec![self.host_root.clone()];
         if !self.build_root.starts_with(&self.host_root) {
             roots.push(self.build_root.clone());
         }
-        let mut sizes = Vec::new();
-        for root in &roots {
-            for first in child_dirs(root) {
-                let children = child_dirs(&first);
-                if children.is_empty() {
-                    let bytes = tree_bytes(&first);
-                    sizes.push((first, bytes));
-                    continue;
-                }
-                for child in children {
-                    let bytes = tree_bytes(&child);
-                    sizes.push((child, bytes));
-                }
+        let label = "measure the largest CI trees";
+        info!(step = label, "starting");
+        let started = Instant::now();
+        let output = self
+            .process
+            .command("du")
+            .args(["-k", "-d", "2"])
+            .args(&roots)
+            .output();
+        info!(
+            step = label,
+            seconds = started.elapsed().as_secs_f64(),
+            "done"
+        );
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                warn!(%error, "could not measure the CI trees");
+                return Vec::new();
             }
-        }
+        };
+        let mut sizes = deepest_trees(&String::from_utf8_lossy(&output.stdout), &roots);
         sizes.sort_unstable_by_key(|(_, bytes)| Reverse(*bytes));
         sizes.truncate(count);
         sizes
@@ -1048,43 +1060,35 @@ fn name_holders(holders: &[(PathBuf, u64)]) -> String {
         .join(", ")
 }
 
-/// Immediate subdirectories of `directory`, following no symlink, empty when it
-/// cannot be read.
-fn child_dirs(directory: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Vec::new();
-    };
+/// The second-level trees of a `du -k -d 2` listing over `roots`, and the
+/// first-level ones with nothing listed below them, in bytes.
+fn deepest_trees(listing: &str, roots: &[PathBuf]) -> Vec<(PathBuf, u64)> {
+    let entries: Vec<(PathBuf, usize, u64)> = listing
+        .lines()
+        .filter_map(|line| {
+            let (kib, path) = line.split_once('\t')?;
+            let bytes = kib.parse::<u64>().ok()?.saturating_mul(1024);
+            let path = PathBuf::from(path);
+            let depth = roots
+                .iter()
+                .find_map(|root| path.strip_prefix(root).ok())?
+                .components()
+                .count();
+            Some((path, depth, bytes))
+        })
+        .collect();
+    let parents: BTreeSet<&Path> = entries
+        .iter()
+        .filter(|(_, depth, _)| *depth == 2)
+        .filter_map(|(path, _, _)| path.parent())
+        .collect();
     entries
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .map(|entry| entry.path())
+        .iter()
+        .filter(|(path, depth, _)| {
+            *depth == 2 || (*depth == 1 && !parents.contains(path.as_path()))
+        })
+        .map(|(path, _, bytes)| (path.clone(), *bytes))
         .collect()
-}
-
-/// Apparent bytes of the files under `path`, following no symlink.
-///
-/// What it cannot read it skips: this runs to name a tree while jobs are being
-/// refused, and one unreadable directory is not a reason to answer nothing.
-fn tree_bytes(path: &Path) -> u64 {
-    let mut pending = vec![path.to_path_buf()];
-    let mut total: u64 = 0;
-    while let Some(directory) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_dir() {
-                pending.push(entry.path());
-            } else if kind.is_file() {
-                total =
-                    total.saturating_add(entry.metadata().map(|it| it.len()).unwrap_or_default());
-            }
-        }
-    }
-    total
 }
 
 fn is_removable_under(root: &Path, target: &Path, removable_roots: &[impl AsRef<str>]) -> bool {
@@ -1215,6 +1219,8 @@ mod tests {
     use std::{collections::BTreeMap, ffi::OsString, fs::FileTimes, time::SystemTime};
 
     use super::*;
+    #[cfg(unix)]
+    use crate::testing::install_script;
     use crate::{ci::config::fixture, testing::install_double};
 
     fn config(root: &Path) -> CiConfig {
@@ -1846,6 +1852,7 @@ mod tests {
     /// Reporting only that every owned step reached its floor is what let this
     /// recur: it rules out the caches and names nothing, so the trees no step
     /// owns are never the thing anyone looks at next.
+    #[cfg(unix)]
     #[test]
     fn a_pass_that_cannot_reach_the_threshold_names_what_holds_the_space() {
         let directory = tempfile::tempdir().unwrap();
@@ -1868,13 +1875,78 @@ mod tests {
 
         let error = storage.cleanup().unwrap_err().to_string();
 
+        let heavy = error
+            .find("vm/tart=")
+            .unwrap_or_else(|| panic!("the failure must name the tree holding the space: {error}"));
         assert!(
-            error.contains("vm/tart=400000"),
-            "the failure must name the tree holding the space and its size: {error}"
+            error.find("logs/bridge=").is_none_or(|light| heavy < light),
+            "the tree holding the space must come first: {error}"
         );
         assert!(
             !error.contains("not build caches"),
             "the old message ruled the caches out and named nothing: {error}"
+        );
+    }
+
+    /// The holders are one `du` over the CI roots, in the allocated bytes the
+    /// volume pays. A first-level tree stands for itself only with nothing
+    /// measured below it, and a walk that hit a vanished file still answers.
+    #[cfg(unix)]
+    #[test]
+    fn the_holders_come_from_one_du_over_the_ci_roots() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let asked = root.join("du-asked");
+        let listing = format!(
+            "1\t{r}/logs/bridge\n4\t{r}/logs\n500\t{r}/home/kithara-ci\n502\t{r}/home\n7\t{r}/vm\n\
+             513\t{r}\n",
+            r = root.display()
+        );
+        install_script(
+            &bin.join("du"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{asked}'\nprintf '%s' '{listing}'\n\
+                 echo 'du: gone: No such file or directory' >&2\nexit 1\n",
+                asked = asked.display()
+            ),
+        );
+        let mut cfg = config(root);
+        cfg.host.brew_root = root.join("brew");
+        let mut search = OsString::from(&bin);
+        search.push(":");
+        search.push(std::env::var_os("PATH").unwrap_or_default());
+        let process = Process::new(root, BTreeMap::from([(OsString::from("PATH"), search)]));
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([consts::FREE_AGGRESSIVE; 4]);
+
+        let error = storage.cleanup().unwrap_err().to_string();
+
+        let named = |tree: &str, kib: u64| format!("{}={}", root.join(tree).display(), kib * 1024);
+        let holders = [
+            named("home/kithara-ci", 500),
+            named("vm", 7),
+            named("logs/bridge", 1),
+        ];
+        let at: Vec<usize> = holders
+            .iter()
+            .map(|holder| {
+                error
+                    .find(holder.as_str())
+                    .unwrap_or_else(|| panic!("{holder} is missing from: {error}"))
+            })
+            .collect();
+        assert!(at.is_sorted(), "holders must come largest first: {error}");
+        for summed in [named("home", 502), named("logs", 4)] {
+            assert!(
+                !error.contains(&summed),
+                "{summed} sums trees already named: {error}"
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(&asked).unwrap(),
+            format!("-k\n-d\n2\n{}\n", root.display())
         );
     }
 
