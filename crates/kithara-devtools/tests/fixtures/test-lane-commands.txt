@@ -1,0 +1,243 @@
+# abr []
+  cargo nextest run -p kithara-abr --cargo-profile test-release --features client-wreq,flash
+# abr [--profile ci --timings]
+  cargo nextest run -p kithara-abr --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# abr [-E test(seek)]
+  cargo nextest run -p kithara-abr --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# analysis []
+  cargo nextest run -p kithara-analysis -p kithara-beat -p kithara-waveform -p kithara-analysis-tests --cargo-profile test-release --features client-wreq,flash,kithara-beat/dsp,kithara-waveform/dsp
+# analysis [--profile ci --timings]
+  cargo nextest run -p kithara-analysis -p kithara-beat -p kithara-waveform -p kithara-analysis-tests --cargo-profile test-release --features client-wreq,flash,kithara-beat/dsp,kithara-waveform/dsp --profile ci --timings
+# analysis [-E test(seek)]
+  cargo nextest run -p kithara-analysis -p kithara-beat -p kithara-waveform -p kithara-analysis-tests --cargo-profile test-release --features client-wreq,flash,kithara-beat/dsp,kithara-waveform/dsp -E test(seek)
+# android []
+  cargo nextest run -p kithara-audio-tests -p kithara-decode-tests -p kithara-file-tests -p kithara-hls-tests -p kithara-host-tests -p kithara-integration-tests -p kithara-play-tests -p kithara-queue-tests -p kithara-stream-tests -p kithara-warp-tests -p kithara-sync-tests --cargo-profile test-release --features flash
+# android [--profile ci --timings]
+  cargo nextest run -p kithara-audio-tests -p kithara-decode-tests -p kithara-file-tests -p kithara-hls-tests -p kithara-host-tests -p kithara-integration-tests -p kithara-play-tests -p kithara-queue-tests -p kithara-stream-tests -p kithara-warp-tests -p kithara-sync-tests --cargo-profile test-release --features flash --profile ci --timings
+# android [-E test(seek)]
+  cargo nextest run -p kithara-audio-tests -p kithara-decode-tests -p kithara-file-tests -p kithara-hls-tests -p kithara-host-tests -p kithara-integration-tests -p kithara-play-tests -p kithara-queue-tests -p kithara-stream-tests -p kithara-warp-tests -p kithara-sync-tests --cargo-profile test-release --features flash -E test(seek)
+# app []
+  cargo nextest run -p kithara-app -p kithara-app-document -p kithara-app-tests --cargo-profile test-release --features client-wreq,flash
+# app [--profile ci --timings]
+  cargo nextest run -p kithara-app -p kithara-app-document -p kithara-app-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# app [-E test(seek)]
+  cargo nextest run -p kithara-app -p kithara-app-document -p kithara-app-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# assets []
+  cargo nextest run -p kithara-assets --cargo-profile test-release --features client-wreq,flash
+# assets [--profile ci --timings]
+  cargo nextest run -p kithara-assets --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# assets [-E test(seek)]
+  cargo nextest run -p kithara-assets --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# audio []
+  cargo nextest run -p kithara-audio -p kithara-record -p kithara-resampler -p kithara-stretch -p kithara-audio-tests --cargo-profile test-release --features client-wreq,flash
+# audio [--profile ci --timings]
+  cargo nextest run -p kithara-audio -p kithara-record -p kithara-resampler -p kithara-stretch -p kithara-audio-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# audio [-E test(seek)]
+  cargo nextest run -p kithara-audio -p kithara-record -p kithara-resampler -p kithara-stretch -p kithara-audio-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# broadcast []
+  cargo nextest run -p kithara-app -p kithara-broadcast-tests --cargo-profile test-release --lib --test broadcast --features client-wreq,flash,kithara-app/broadcast,kithara-broadcast-tests/broadcast,no-block -E 'binary(broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))'
+# broadcast [--profile ci --timings]
+  cargo nextest run -p kithara-app -p kithara-broadcast-tests --cargo-profile test-release --lib --test broadcast --features client-wreq,flash,kithara-app/broadcast,kithara-broadcast-tests/broadcast,no-block --profile ci --timings -E 'binary(broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))'
+# broadcast [-E test(seek)]
+  cargo nextest run -p kithara-app -p kithara-broadcast-tests --cargo-profile test-release --lib --test broadcast --features client-wreq,flash,kithara-app/broadcast,kithara-broadcast-tests/broadcast,no-block -E test(seek) -E 'binary(broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))'
+# core []
+  cargo nextest run -p kithara-bufpool -p kithara-events -p kithara-platform -p kithara-signal -p kithara-stream -p kithara-stream-tests -p kithara-core-test-fixtures --cargo-profile test-release --features client-wreq,flash,kithara-platform/tokio-rt-multi-thread
+# core [--profile ci --timings]
+  cargo nextest run -p kithara-bufpool -p kithara-events -p kithara-platform -p kithara-signal -p kithara-stream -p kithara-stream-tests -p kithara-core-test-fixtures --cargo-profile test-release --features client-wreq,flash,kithara-platform/tokio-rt-multi-thread --profile ci --timings
+# core [-E test(seek)]
+  cargo nextest run -p kithara-bufpool -p kithara-events -p kithara-platform -p kithara-signal -p kithara-stream -p kithara-stream-tests -p kithara-core-test-fixtures --cargo-profile test-release --features client-wreq,flash,kithara-platform/tokio-rt-multi-thread -E test(seek)
+# decode []
+  cargo nextest run -p kithara-decode -p kithara-decode-tests --cargo-profile test-release --features client-wreq,flash
+# decode [--profile ci --timings]
+  cargo nextest run -p kithara-decode -p kithara-decode-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# decode [-E test(seek)]
+  cargo nextest run -p kithara-decode -p kithara-decode-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# doc []
+  cargo test --doc --workspace --exclude kithara-fuzz --exclude kithara-ui --profile test-release --features client-wreq
+# doc [--profile ci --timings]
+  cargo test --doc --workspace --exclude kithara-fuzz --exclude kithara-ui --profile test-release --features client-wreq --timings
+# doc [-E test(seek)]
+  cargo test --doc --workspace --exclude kithara-fuzz --exclude kithara-ui --profile test-release --features client-wreq -E test(seek)
+# dsp []
+  cargo nextest run -p kithara-dsp -p kithara-dsp-tests --cargo-profile test-release --features kithara-dsp/spectrum
+# dsp [--profile ci --timings]
+  cargo nextest run -p kithara-dsp -p kithara-dsp-tests --cargo-profile test-release --features kithara-dsp/spectrum --profile ci --timings
+# dsp [-E test(seek)]
+  cargo nextest run -p kithara-dsp -p kithara-dsp-tests --cargo-profile test-release --features kithara-dsp/spectrum -E test(seek)
+# effects []
+  cargo nextest run -p kithara-effects -p kithara-effects-tests --cargo-profile test-release --features client-wreq,flash
+# effects [--profile ci --timings]
+  cargo nextest run -p kithara-effects -p kithara-effects-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# effects [-E test(seek)]
+  cargo nextest run -p kithara-effects -p kithara-effects-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# encode []
+  cargo nextest run -p kithara-encode --cargo-profile test-release --features client-wreq,flash
+# encode [--profile ci --timings]
+  cargo nextest run -p kithara-encode --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# encode [-E test(seek)]
+  cargo nextest run -p kithara-encode --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# file []
+  cargo nextest run -p kithara-file -p kithara-file-tests --cargo-profile test-release --features client-wreq,flash
+# file [--profile ci --timings]
+  cargo nextest run -p kithara-file -p kithara-file-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# file [-E test(seek)]
+  cargo nextest run -p kithara-file -p kithara-file-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# fixtures []
+  cargo nextest run --profile support -p kithara-integration-tests -p kithara-harness-tests --lib --test suite_harness --cargo-profile test-release --features flash,harness,kithara-integration-tests/analysis
+# fixtures [--profile ci --timings]
+  cargo nextest run --profile support -p kithara-integration-tests -p kithara-harness-tests --lib --test suite_harness --cargo-profile test-release --features flash,harness,kithara-integration-tests/analysis --timings
+# fixtures [-E test(seek)]
+  cargo nextest run --profile support -p kithara-integration-tests -p kithara-harness-tests --lib --test suite_harness --cargo-profile test-release --features flash,harness,kithara-integration-tests/analysis -E test(seek)
+# harness []
+  cargo nextest run --profile harness -p kithara-test-utils -p kithara-test-macros -p kithara-platform --cargo-profile test-release --features client-wreq,kithara-platform/flash,kithara-platform/tokio-rt-multi-thread,kithara-test-utils/client-reqwest,kithara-test-utils/flash,kithara-test-utils/tls-rustls
+# harness [--profile ci --timings]
+  cargo nextest run --profile harness -p kithara-test-utils -p kithara-test-macros -p kithara-platform --cargo-profile test-release --features client-wreq,kithara-platform/flash,kithara-platform/tokio-rt-multi-thread,kithara-test-utils/client-reqwest,kithara-test-utils/flash,kithara-test-utils/tls-rustls --timings
+# harness [-E test(seek)]
+  cargo nextest run --profile harness -p kithara-test-utils -p kithara-test-macros -p kithara-platform --cargo-profile test-release --features client-wreq,kithara-platform/flash,kithara-platform/tokio-rt-multi-thread,kithara-test-utils/client-reqwest,kithara-test-utils/flash,kithara-test-utils/tls-rustls -E test(seek)
+# hls []
+  cargo nextest run -p kithara-hls -p kithara-hls-tests --cargo-profile test-release --features client-wreq,flash
+# hls [--profile ci --timings]
+  cargo nextest run -p kithara-hls -p kithara-hls-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# hls [-E test(seek)]
+  cargo nextest run -p kithara-hls -p kithara-hls-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# host []
+  cargo nextest run -p kithara-host -p kithara-host-tests --cargo-profile test-release --features client-wreq,flash
+# host [--profile ci --timings]
+  cargo nextest run -p kithara-host -p kithara-host-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# host [-E test(seek)]
+  cargo nextest run -p kithara-host -p kithara-host-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# integration-regressions []
+  cargo nextest run -p kithara-integration-tests --cargo-profile test-release --test suite_integration_regressions --features client-wreq,flash,integration-regressions
+# integration-regressions [--profile ci --timings]
+  cargo nextest run -p kithara-integration-tests --cargo-profile test-release --test suite_integration_regressions --features client-wreq,flash,integration-regressions --profile ci --timings
+# integration-regressions [-E test(seek)]
+  cargo nextest run -p kithara-integration-tests --cargo-profile test-release --test suite_integration_regressions --features client-wreq,flash,integration-regressions -E test(seek)
+# loom []
+  cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features client-wreq,kithara/loom -E test(/(^|::)loom_model_/)
+# loom [--profile ci --timings]
+  cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features client-wreq,kithara/loom --profile ci --timings -E test(/(^|::)loom_model_/)
+# loom [-E test(seek)]
+  cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release --features client-wreq,kithara/loom -E test(seek) -E test(/(^|::)loom_model_/)
+# net []
+  cargo nextest run -p kithara-net --cargo-profile test-release --features client-wreq,flash
+# net [--profile ci --timings]
+  cargo nextest run -p kithara-net --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# net [-E test(seek)]
+  cargo nextest run -p kithara-net --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# net-host []
+  cargo nextest run -p kithara-net --cargo-profile test-release --features kithara-net/client-host
+# net-host [--profile ci --timings]
+  cargo nextest run -p kithara-net --cargo-profile test-release --features kithara-net/client-host --profile ci --timings
+# net-host [-E test(seek)]
+  cargo nextest run -p kithara-net --cargo-profile test-release --features kithara-net/client-host -E test(seek)
+# network []
+  cargo nextest run -p kithara-play-tests -p kithara-queue-tests --cargo-profile test-release --test network --features client-wreq,kithara-play-tests/network,kithara-queue-tests/network,kithara/resample-rubato
+# network [--profile ci --timings]
+  cargo nextest run -p kithara-play-tests -p kithara-queue-tests --cargo-profile test-release --test network --features client-wreq,kithara-play-tests/network,kithara-queue-tests/network,kithara/resample-rubato --profile ci --timings
+# network [-E test(seek)]
+  cargo nextest run -p kithara-play-tests -p kithara-queue-tests --cargo-profile test-release --test network --features client-wreq,kithara-play-tests/network,kithara-queue-tests/network,kithara/resample-rubato -E test(seek)
+# network-manual []
+  cargo nextest run -p kithara-play-tests -p kithara-queue-tests --cargo-profile test-release --test network_manual --features client-wreq,kithara-play-tests/network-manual,kithara-queue-tests/network-manual,kithara/resample-rubato
+# network-manual [--profile ci --timings]
+  cargo nextest run -p kithara-play-tests -p kithara-queue-tests --cargo-profile test-release --test network_manual --features client-wreq,kithara-play-tests/network-manual,kithara-queue-tests/network-manual,kithara/resample-rubato --profile ci --timings
+# network-manual [-E test(seek)]
+  cargo nextest run -p kithara-play-tests -p kithara-queue-tests --cargo-profile test-release --test network_manual --features client-wreq,kithara-play-tests/network-manual,kithara-queue-tests/network-manual,kithara/resample-rubato -E test(seek)
+# play []
+  cargo nextest run -p kithara-play -p kithara-play-tests --cargo-profile test-release --features client-wreq,flash
+# play [--profile ci --timings]
+  cargo nextest run -p kithara-play -p kithara-play-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# play [-E test(seek)]
+  cargo nextest run -p kithara-play -p kithara-play-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# queue []
+  cargo nextest run -p kithara-queue -p kithara-queue-tests --cargo-profile test-release --features client-wreq,flash
+# queue [--profile ci --timings]
+  cargo nextest run -p kithara-queue -p kithara-queue-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# queue [-E test(seek)]
+  cargo nextest run -p kithara-queue -p kithara-queue-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# selenium-firefox []
+  cargo +nightly test -p kithara-ffi-web-tests --test ffi_web --features client-wreq,kithara-ffi-web-tests/selenium selenium -- --nocapture
+    KITHARA_SELENIUM_BROWSER=firefox
+# selenium-firefox [--profile ci --timings]
+  cargo +nightly test -p kithara-ffi-web-tests --test ffi_web --features client-wreq,kithara-ffi-web-tests/selenium selenium -- --nocapture --profile ci --timings
+    KITHARA_SELENIUM_BROWSER=firefox
+# selenium-firefox [-E test(seek)]
+  cargo +nightly test -p kithara-ffi-web-tests --test ffi_web --features client-wreq,kithara-ffi-web-tests/selenium selenium -- --nocapture -E test(seek)
+    KITHARA_SELENIUM_BROWSER=firefox
+# storage []
+  cargo nextest run -p kithara-storage --cargo-profile test-release --features client-wreq,flash
+# storage [--profile ci --timings]
+  cargo nextest run -p kithara-storage --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# storage [-E test(seek)]
+  cargo nextest run -p kithara-storage --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# sync []
+  cargo nextest run -p kithara-sync -p kithara-sync-tests --cargo-profile test-release --features client-wreq,flash
+# sync [--profile ci --timings]
+  cargo nextest run -p kithara-sync -p kithara-sync-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# sync [-E test(seek)]
+  cargo nextest run -p kithara-sync -p kithara-sync-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
+# tooling []
+  cargo nextest run --profile support -p kithara-devtools -p xtask --cargo-profile test-release
+# tooling [--profile ci --timings]
+  cargo nextest run --profile support -p kithara-devtools -p xtask --cargo-profile test-release --timings
+# tooling [-E test(seek)]
+  cargo nextest run --profile support -p kithara-devtools -p xtask --cargo-profile test-release -E test(seek)
+# ui []
+  cargo nextest run -p kithara-ui -p kithara-ui-gallery -p kithara-ui-input -p kithara-ui-shaping -p kithara-app --cargo-profile test-release --ignore-default-filter --features client-wreq,kithara-app/backend-cpal,kithara-app/masonry,kithara-ui-gallery/masonry,kithara-ui/capture,kithara-ui/gpu,kithara-ui/masonry -E 'package(kithara-ui) | package(kithara-ui-gallery) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))'
+# ui [--profile ci --timings]
+  cargo nextest run -p kithara-ui -p kithara-ui-gallery -p kithara-ui-input -p kithara-ui-shaping -p kithara-app --cargo-profile test-release --ignore-default-filter --features client-wreq,kithara-app/backend-cpal,kithara-app/masonry,kithara-ui-gallery/masonry,kithara-ui/capture,kithara-ui/gpu,kithara-ui/masonry --profile ci --timings -E 'package(kithara-ui) | package(kithara-ui-gallery) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))'
+# ui [-E test(seek)]
+  cargo nextest run -p kithara-ui -p kithara-ui-gallery -p kithara-ui-input -p kithara-ui-shaping -p kithara-app --cargo-profile test-release --ignore-default-filter --features client-wreq,kithara-app/backend-cpal,kithara-app/masonry,kithara-ui-gallery/masonry,kithara-ui/capture,kithara-ui/gpu,kithara-ui/masonry -E test(seek) -E 'package(kithara-ui) | package(kithara-ui-gallery) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))'
+# ui-doc []
+  cargo test --doc -p kithara-ui --features kithara-ui/gpu,kithara-ui/masonry
+# ui-doc [--profile ci --timings]
+  cargo test --doc -p kithara-ui --features kithara-ui/gpu,kithara-ui/masonry --profile ci --timings
+# ui-doc [-E test(seek)]
+  cargo test --doc -p kithara-ui --features kithara-ui/gpu,kithara-ui/masonry -E test(seek)
+# ui-perf []
+  cargo nextest run -p kithara-ui -p kithara-ui-gallery --cargo-profile test-release --test-threads 1 --ignore-default-filter --features kithara-ui-gallery/masonry,kithara-ui-gallery/perf,kithara-ui/gpu,kithara-ui/masonry,kithara-ui/perf -E 'binary(frame_perf) | binary(page_perf)'
+# ui-perf [--profile ci --timings]
+  cargo nextest run -p kithara-ui -p kithara-ui-gallery --cargo-profile test-release --test-threads 1 --ignore-default-filter --features kithara-ui-gallery/masonry,kithara-ui-gallery/perf,kithara-ui/gpu,kithara-ui/masonry,kithara-ui/perf --profile ci --timings -E 'binary(frame_perf) | binary(page_perf)'
+# ui-perf [-E test(seek)]
+  cargo nextest run -p kithara-ui -p kithara-ui-gallery --cargo-profile test-release --test-threads 1 --ignore-default-filter --features kithara-ui-gallery/masonry,kithara-ui-gallery/perf,kithara-ui/gpu,kithara-ui/masonry,kithara-ui/perf -E test(seek) -E 'binary(frame_perf) | binary(page_perf)'
+# usdt-hls []
+  cargo nextest run -p kithara-hls-tests --cargo-profile test-release --test hls --features client-wreq,kithara-hls-tests/usdt -E test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)
+# usdt-hls [--profile ci --timings]
+  cargo nextest run -p kithara-hls-tests --cargo-profile test-release --test hls --features client-wreq,kithara-hls-tests/usdt --profile ci --timings -E test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)
+# usdt-hls [-E test(seek)]
+  cargo nextest run -p kithara-hls-tests --cargo-profile test-release --test hls --features client-wreq,kithara-hls-tests/usdt -E test(seek) -E test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)
+# usdt-hls-stress []
+  cargo nextest run -p kithara-hls-tests --cargo-profile test-release --test hls_stress --features client-wreq,kithara-hls-tests/usdt -E test(/stress_seek_audio::stress_seek_audio_hls/)
+# usdt-hls-stress [--profile ci --timings]
+  cargo nextest run -p kithara-hls-tests --cargo-profile test-release --test hls_stress --features client-wreq,kithara-hls-tests/usdt --profile ci --timings -E test(/stress_seek_audio::stress_seek_audio_hls/)
+# usdt-hls-stress [-E test(seek)]
+  cargo nextest run -p kithara-hls-tests --cargo-profile test-release --test hls_stress --features client-wreq,kithara-hls-tests/usdt -E test(seek) -E test(/stress_seek_audio::stress_seek_audio_hls/)
+# usdt-play-scheduler []
+  cargo nextest run -p kithara-play --cargo-profile test-release --lib --features client-wreq,kithara-play/usdt -E test(/worker::node::scheduler_tests::probed::/)
+# usdt-play-scheduler [--profile ci --timings]
+  cargo nextest run -p kithara-play --cargo-profile test-release --lib --features client-wreq,kithara-play/usdt --profile ci --timings -E test(/worker::node::scheduler_tests::probed::/)
+# usdt-play-scheduler [-E test(seek)]
+  cargo nextest run -p kithara-play --cargo-profile test-release --lib --features client-wreq,kithara-play/usdt -E test(seek) -E test(/worker::node::scheduler_tests::probed::/)
+# usdt-queue []
+  cargo nextest run -p kithara-queue-tests --cargo-profile test-release --test queue --features client-wreq,kithara-queue-tests/usdt -E test(/full_playthrough_census/)
+# usdt-queue [--profile ci --timings]
+  cargo nextest run -p kithara-queue-tests --cargo-profile test-release --test queue --features client-wreq,kithara-queue-tests/usdt --profile ci --timings -E test(/full_playthrough_census/)
+# usdt-queue [-E test(seek)]
+  cargo nextest run -p kithara-queue-tests --cargo-profile test-release --test queue --features client-wreq,kithara-queue-tests/usdt -E test(seek) -E test(/full_playthrough_census/)
+# usdt-warp []
+  cargo nextest run -p kithara-warp-tests --cargo-profile test-release --test warp_playback --features client-wreq,kithara-warp-tests/usdt -E test(/rate_response::/)
+# usdt-warp [--profile ci --timings]
+  cargo nextest run -p kithara-warp-tests --cargo-profile test-release --test warp_playback --features client-wreq,kithara-warp-tests/usdt --profile ci --timings -E test(/rate_response::/)
+# usdt-warp [-E test(seek)]
+  cargo nextest run -p kithara-warp-tests --cargo-profile test-release --test warp_playback --features client-wreq,kithara-warp-tests/usdt -E test(seek) -E test(/rate_response::/)
+# warp []
+  cargo nextest run -p kithara-warp -p kithara-warp-tests --cargo-profile test-release --features flash
+# warp [--profile ci --timings]
+  cargo nextest run -p kithara-warp -p kithara-warp-tests --cargo-profile test-release --features flash --profile ci --timings
+# warp [-E test(seek)]
+  cargo nextest run -p kithara-warp -p kithara-warp-tests --cargo-profile test-release --features flash -E test(seek)
+# workspace []
+  cargo nextest run --workspace --exclude kithara-fuzz --exclude kithara-ui --exclude kithara-ui-gallery --exclude kithara-ui-input --exclude kithara-ui-shaping --exclude kithara-devtools --exclude xtask --exclude kithara-test-utils --exclude kithara-test-macros --exclude kithara-ffi-web-tests --exclude kithara-ffi-web-analysis-tests --cargo-profile test-release --features client-wreq,flash
+# workspace [--profile ci --timings]
+  cargo nextest run --workspace --exclude kithara-fuzz --exclude kithara-ui --exclude kithara-ui-gallery --exclude kithara-ui-input --exclude kithara-ui-shaping --exclude kithara-devtools --exclude xtask --exclude kithara-test-utils --exclude kithara-test-macros --exclude kithara-ffi-web-tests --exclude kithara-ffi-web-analysis-tests --cargo-profile test-release --features client-wreq,flash --profile ci --timings
+# workspace [-E test(seek)]
+  cargo nextest run --workspace --exclude kithara-fuzz --exclude kithara-ui --exclude kithara-ui-gallery --exclude kithara-ui-input --exclude kithara-ui-shaping --exclude kithara-devtools --exclude xtask --exclude kithara-test-utils --exclude kithara-test-macros --exclude kithara-ffi-web-tests --exclude kithara-ffi-web-analysis-tests --cargo-profile test-release --features client-wreq,flash -E test(seek)
