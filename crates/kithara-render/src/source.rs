@@ -1652,7 +1652,7 @@ mod tests {
         let meta = pending.chunk.meta;
         let consumed = pending.consumed_frames;
         let input_head = head.load(Ordering::Acquire);
-        controls.set_keylock(false);
+        source.warp.set_keylock(false);
         source.warp.prepare(spec);
         assert!(
             source.warp.transition_pending(),
@@ -1890,9 +1890,13 @@ mod tests {
     }
 
     fn speed_batch(speed: f32) -> Batch<LaneProtocol> {
+        command_batch(LaneCommand::SetSpeed(SpeedCurve::Constant(speed)))
+    }
+
+    fn command_batch(command: LaneCommand) -> Batch<LaneProtocol> {
         Batch {
             basis: Vec::new(),
-            commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(speed))],
+            commands: vec![command],
         }
     }
 
@@ -1905,14 +1909,15 @@ mod tests {
         lane_over(pools, 3, |_| quarter, StretchControls::new(1.0))
     }
 
-    /// A keylock lane over `signal` at unity speed, rendered by `backend`.
-    fn keylock_lane(
+    /// A lane over `signal` at unity speed, rendered by `backend` with keylock
+    /// when `keylock`.
+    fn stretch_lane(
         pools: &PoolRegion<TestPools>,
-        backend: StretchKind,
+        (backend, keylock): (StretchKind, bool),
         signal: &[f32],
     ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
         let controls = StretchControls::new(1.0);
-        controls.set_keylock(true);
+        controls.set_keylock(keylock);
         controls.set_backend(backend);
         let chunks = signal.len() / (2 * consts::LANE_CHUNK_FRAMES as usize);
         lane_over(
@@ -2181,7 +2186,7 @@ mod tests {
         const REACH: usize = 2_048;
         let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
         let pools = pools();
-        let (mut changed, mut lane) = keylock_lane(&pools, backend, &signal);
+        let (mut changed, mut lane) = stretch_lane(&pools, (backend, true), &signal);
         lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(0.8))
             .expect("the lane has room for the engaging batch");
         lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
@@ -2189,7 +2194,7 @@ mod tests {
         let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
         let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
 
-        let (mut started, mut fresh) = keylock_lane(&pools, backend, &signal);
+        let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
         fresh
             .send(When::At(LaneFrame(cue)), speed_batch(1.25))
             .expect("the lane has room for the start");
@@ -2206,6 +2211,144 @@ mod tests {
             offset == 0 && correlation > 0.95,
             "{backend:?}: after the change at lane frame {AT} (source {cue}) the lane \
              renders {offset} frames off a fresh engine, correlation {correlation:.3}"
+        );
+    }
+
+    /// A batch that changes the engine on lane frame X renders from X on what
+    /// the new engine started at X's source frame renders: the engine changes
+    /// on its frame, the source does not jump, and the receipt names X. The
+    /// old engine's tail fades out within `SETTLE` frames.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::keylock_signalsmith(
+            (StretchKind::Signalsmith, false),
+            LaneCommand::SetKeylock(true),
+            (StretchKind::Signalsmith, true)
+        )
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::keylock_bungee(
+            (StretchKind::Bungee, false),
+            LaneCommand::SetKeylock(true),
+            (StretchKind::Bungee, true)
+        )
+    )]
+    #[cfg_attr(
+        all(feature = "stretch-signalsmith", feature = "stretch-bungee"),
+        case::bungee_to_signalsmith(
+            (StretchKind::Bungee, true),
+            LaneCommand::SetBackend(StretchKind::Signalsmith),
+            (StretchKind::Signalsmith, true)
+        )
+    )]
+    #[cfg_attr(
+        all(feature = "stretch-signalsmith", feature = "stretch-bungee"),
+        case::signalsmith_to_bungee(
+            (StretchKind::Signalsmith, true),
+            LaneCommand::SetBackend(StretchKind::Bungee),
+            (StretchKind::Bungee, true)
+        )
+    )]
+    fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame(
+        #[case] from: (StretchKind, bool),
+        #[case] command: LaneCommand,
+        #[case] to: (StretchKind, bool),
+    ) {
+        const ENGAGE: u64 = 1_024;
+        // At 1.25 the 3072 frames from ENGAGE play 3840 source frames whole.
+        const AT: u64 = 4_096;
+        const SETTLE: u64 = 16_384;
+        const WINDOW: usize = 4_096;
+        const REACH: usize = 2_048;
+        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let pools = pools();
+        let (mut changed, mut lane) = stretch_lane(&pools, from, &signal);
+        lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(1.25))
+            .expect("the lane has room for the engaging batch");
+        let seq = lane
+            .send(When::At(LaneFrame(AT)), command_batch(command))
+            .expect("the lane has room for the change");
+        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
+        let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
+
+        let (mut started, mut fresh) = stretch_lane(&pools, to, &signal);
+        fresh
+            .send(When::At(LaneFrame(cue)), speed_batch(1.25))
+            .expect("the lane has room for the start");
+        let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+
+        let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+        let (offset, correlation) = alignment(
+            rendered,
+            &lane_pcm(&reference),
+            (cue + SETTLE) as usize,
+            REACH,
+        );
+        assert!(
+            offset == 0 && correlation > 0.95,
+            "{command:?}: after the change at lane frame {AT} (source {cue}) the lane \
+             renders {offset} frames off a fresh {to:?} engine, correlation {correlation:.3}"
+        );
+        assert!(
+            lane.receipts().any(|receipt| receipt.seq() == seq
+                && matches!(
+                    receipt.outcome(),
+                    Outcome::Applied {
+                        at: LaneFrame(AT),
+                        ..
+                    }
+                )),
+            "the change's receipt names its frame"
+        );
+    }
+
+    /// An engine batch and a speed batch on the same lane frame X of a lane at
+    /// unity render from X on what the new engine started at X with the new
+    /// speed renders: the old engine never renders the new speed.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn an_engine_and_a_speed_batch_on_one_frame_engage_the_new_engine(
+        #[case] backend: StretchKind,
+    ) {
+        const AT: u64 = 4_096;
+        const SETTLE: u64 = 16_384;
+        const WINDOW: usize = 4_096;
+        const REACH: usize = 2_048;
+        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let pools = pools();
+        let (mut changed, mut lane) = stretch_lane(&pools, (backend, false), &signal);
+        lane.send(
+            When::At(LaneFrame(AT)),
+            command_batch(LaneCommand::SetKeylock(true)),
+        )
+        .expect("the lane has room for the engine change");
+        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            .expect("the lane has room for the speed change");
+        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
+
+        let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
+        fresh
+            .send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            .expect("the lane has room for the start");
+        let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
+
+        let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+        let (offset, correlation) = alignment(
+            rendered,
+            &lane_pcm(&reference),
+            (AT + SETTLE) as usize,
+            REACH,
+        );
+        assert!(
+            offset == 0 && correlation > 0.95,
+            "{backend:?}: after keylock and speed at lane frame {AT} the lane renders \
+             {offset} frames off a fresh keylock engine, correlation {correlation:.3}"
         );
     }
 }

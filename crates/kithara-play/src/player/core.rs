@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 
 use super::{
     PlayerConfig,
+    config::TrackSettings,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
     state::{ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
@@ -148,8 +149,13 @@ impl<S> PlayerRuntime<S> {
             })
             .is_ok();
         if loaded && let Some(lane) = item.lane {
-            let speed = self.core.config.warp.stretch().speed();
-            self.core.lanes.load(item.item_id, lane, speed);
+            let stretch = self.core.config.warp.stretch();
+            let settings = TrackSettings::builder()
+                .speed(stretch.speed())
+                .keylock(stretch.keylock())
+                .backend(stretch.backend())
+                .build();
+            self.core.lanes.load(item.item_id, lane, settings);
         }
         Ok(Some((item.item_id, src, item.duration_seconds)))
     }

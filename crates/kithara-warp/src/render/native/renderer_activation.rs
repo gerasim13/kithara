@@ -173,7 +173,8 @@ where
                 Err(crate::WarpRenderError::OutstandingQuantum)
             };
         }
-        if self.projection.retired.is_some() || self.transition_pending() {
+        if self.projection.retired.is_some() || self.transition_pending() || self.engine_outdated()
+        {
             return Err(crate::WarpRenderError::NeedsService);
         }
         if let Some(prepared) = self.continue_resident_projection(meta, remaining)? {

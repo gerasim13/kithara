@@ -263,8 +263,7 @@ where
             applied.update_sample_rate(spec.sample_rate);
         }
 
-        let kind = self.controls.backend();
-        let keylock = self.controls.keylock();
+        let (kind, keylock) = self.stretch_target();
         let entering_unity = spec == self.spec
             && (self.active || self.pending_frames(channels) > 0)
             && self.unity_passthrough(self.rate.speed());

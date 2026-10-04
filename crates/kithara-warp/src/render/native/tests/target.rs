@@ -32,7 +32,7 @@ fn live_backend_swap_continues_and_keeps_pitch(
     let mut out: Vec<f32> = Vec::new();
     for i in 0..24 {
         if i == 6 {
-            controls.set_backend(replacement);
+            fx.set_backend(replacement);
             fx.prepare(spec());
             while fx.transition_pending() {
                 if let Some(output) = flush_serviced(&mut fx) {

@@ -763,7 +763,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
         source += u64::try_from(frames).expect("source count");
     }
     let output_frontier = renderer.projection.cursor.expect("mapped output frontier");
-    controls.set_keylock(false);
+    renderer.set_keylock(false);
     renderer.prepare(spec());
     while flush_serviced(&mut renderer).is_some() {}
     assert_eq!(

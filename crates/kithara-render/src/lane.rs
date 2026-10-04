@@ -4,7 +4,7 @@ use std::convert::Infallible;
 
 use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Protocol};
-use kithara_warp::{SpeedCurve, WarpRenderer};
+use kithara_warp::{SpeedCurve, StretchKind, WarpRenderer};
 
 /// What a player and its render lane say to each other.
 #[derive(Debug)]
@@ -20,6 +20,11 @@ pub struct LaneFrame(pub u64);
 pub enum LaneCommand {
     /// Render from this frame on at the speed the curve holds.
     SetSpeed(SpeedCurve),
+    /// Render from this frame on with a keylock engine, which keeps the
+    /// pitch at any speed, when on and the backend has one.
+    SetKeylock(bool),
+    /// Render from this frame on with this backend's engine.
+    SetBackend(StretchKind),
 }
 
 impl Protocol for LaneProtocol {
@@ -63,6 +68,8 @@ impl Lane {
             for command in due.commands() {
                 match *command {
                     LaneCommand::SetSpeed(curve) => warp.set_speed(curve, revision),
+                    LaneCommand::SetKeylock(on) => warp.set_keylock(on),
+                    LaneCommand::SetBackend(kind) => warp.set_backend(kind),
                 }
             }
             due.apply(());

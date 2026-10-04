@@ -5,7 +5,8 @@ use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::{
-    ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest, StretchKind,
+    BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest,
+    StretchKind,
 };
 use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive;
@@ -128,6 +129,10 @@ pub struct WarpRenderer<S> {
     pub(super) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
+    /// Backend the lane last asked for; the scheduler shell prepares its engine.
+    pub(super) requested_kind: StretchKind,
+    /// Whether the lane last asked for a keylock engine.
+    pub(super) requested_keylock: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
@@ -172,8 +177,9 @@ where
         pools: PoolRegion<S>,
     ) -> Self {
         let controls = Arc::clone(config.stretch());
-        let current_kind = controls.backend();
-        let current_keylock = controls.keylock();
+        let requested_kind = controls.backend();
+        let requested_keylock = controls.keylock();
+        let (current_kind, current_keylock) = Self::stretch_for(requested_kind, requested_keylock);
         let plan = controls.region_plan();
         let speed = controls.speed();
         let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
@@ -202,6 +208,8 @@ where
             retired_engine: None,
             current_kind,
             current_keylock,
+            requested_kind,
+            requested_keylock,
             backend_transition_pending: false,
             reprime_pending: false,
             resident_feed: None,
@@ -415,6 +423,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
+    /// Whether the next quantum would engage an engine other than the one
+    /// the lane asks for, so the scheduler shell must prepare that one first.
+    pub(super) fn engine_outdated(&self) -> bool {
+        !self.active
+            && !self.unity_passthrough(self.rate.speed())
+            && self.stretch_target() != (self.current_kind, self.current_keylock)
+    }
+
     pub(super) fn held_source_frames(&self) -> u64 {
         if !self.active {
             return 0;
@@ -542,10 +558,34 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         true
     }
 
+    /// Re-primes a running engine on this frame when the requested one differs
+    /// from it, and drops a quantum prepared before.
+    fn retarget_engine(&mut self) {
+        self.reprime_pending |= self.active
+            && self.projection.active.is_none()
+            && self.stretch_target() != (self.current_kind, self.current_keylock);
+        self.prepared_quantum = None;
+    }
+
     pub(super) fn retire_engine(&mut self) {
         debug_assert!(self.retired_engine.is_none());
         self.retired_engine = self.engine.take();
         self.rebuild_pending = true;
+    }
+
+    /// Render from the next prepared quantum on with `kind`'s engine. A running
+    /// engine retires its tail into a crossfade and the new engine re-primes
+    /// from the source history on this frame.
+    pub fn set_backend(&mut self, kind: StretchKind) {
+        self.requested_kind = kind;
+        self.retarget_engine();
+    }
+
+    /// Render from the next prepared quantum on with a keylock engine when `on`
+    /// and the backend has one, switching engines as [`Self::set_backend`] does.
+    pub fn set_keylock(&mut self, on: bool) {
+        self.requested_keylock = on;
+        self.retarget_engine();
     }
 
     /// Render from the next prepared quantum on at the speed `curve` holds,
@@ -573,6 +613,20 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             applied.reset_to_target();
         }
         self.prepared_quantum = None;
+    }
+
+    /// The engine `kind` and `keylock` ask for: keylock only where the backend
+    /// has it.
+    fn stretch_for(kind: StretchKind, keylock: bool) -> (StretchKind, bool) {
+        (
+            kind,
+            keylock && kind.capabilities().contains(BackendCapabilities::KEYLOCK),
+        )
+    }
+
+    /// The engine the lane last asked for.
+    pub(super) fn stretch_target(&self) -> (StretchKind, bool) {
+        Self::stretch_for(self.requested_kind, self.requested_keylock)
     }
 
     /// Pull the live region plan handle; on a swap drop the region cursor.

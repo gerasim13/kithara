@@ -584,7 +584,7 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
         "off: vinyl pitch follows speed"
     );
 
-    controls.set_keylock(true);
+    fx.set_keylock(true);
     let mut stretched: Vec<f32> = Vec::new();
     fx.prepare(spec());
     while fx.transition_pending() {
