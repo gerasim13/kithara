@@ -22,7 +22,9 @@ field changes a common API. Rejected changes leave the accepted configuration
 intact.
 `#[derive(ConfigOwner)]` implements the owner accessor from
 `#[config_owner(field)]`. For a nested field, give its type and path as
-`#[config_owner(ConfigType, field.path)]`.
+`#[config_owner(ConfigType, field.path)]`; for a field that is itself an
+owner, such as a live tracker, `#[config_owner(delegate(field))]` reads the
+configuration that field owns.
 With `#[config(owner_access)]`, fields marked `get(ref)` also produce a
 `<Config>OwnerAccess` trait. Import
 that trait to call the same getter on any `ConfigOwner` of that type; the method

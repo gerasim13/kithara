@@ -113,6 +113,14 @@ struct NestedOwner {
     inner: std::sync::Arc<Owner>,
 }
 
+/// An owner whose configuration is whatever its field owns.
+#[derive(ConfigOwner)]
+#[config_owner(delegate(owner))]
+#[config_owner_mut]
+struct Delegating {
+    owner: Owner,
+}
+
 fn refusal<T: core::fmt::Debug>(result: Result<T, Error>) -> String {
     result.expect_err("the check refuses the value").to_string()
 }
@@ -239,4 +247,18 @@ fn an_owner_change_is_checked_and_a_refusal_keeps_the_value() {
     };
     assert!(std::ptr::eq(nested.config(), &nested.inner.config));
     assert_eq!(nested.level(), 3);
+}
+
+#[kithara::test]
+fn a_delegating_owner_reads_and_changes_the_config_its_field_owns() {
+    let mut delegating = Delegating {
+        owner: Owner {
+            config: Gauge::default(),
+        },
+    };
+    assert!(std::ptr::eq(delegating.config(), &delegating.owner.config));
+    delegating
+        .apply_config_change(GaugeChange::Level(4))
+        .expect("level in bounds");
+    assert_eq!((delegating.level(), delegating.owner.level()), (4, 4));
 }
