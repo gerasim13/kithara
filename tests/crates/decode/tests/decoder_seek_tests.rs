@@ -26,11 +26,12 @@ async fn source(asset: SignalAsset) -> (TestServerHelper, Url) {
 /// Open a remote encoded asset as `Audio<Stream<File>>` with optional hw/sw backend
 /// and optional event bus. Centralises the setup shared by every seek test.
 async fn open_test_audio(
+    asset: SignalAsset,
     url: &Url,
     temp_dir: &TestTempDir,
     backend: DecoderBackend,
     events: Option<EventBus>,
-) -> RegisteredAudio<Stream<File<TestPools>>, TestPools> {
+) -> Option<RegisteredAudio<Stream<File<TestPools>>, TestPools>> {
     let pools = pools();
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
@@ -52,7 +53,7 @@ async fn open_test_audio(
         .maybe_events(events)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    worker.open(config).await.unwrap()
+    kithara_integration_tests::fixtures::assert_fixture_open(asset, worker.open(config).await)
 }
 
 /// Nonblocking re-poll loop: these tests are browser-portable (async body,
@@ -208,7 +209,11 @@ async fn next_chunk(audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPoo
 )]
 async fn decoder_file_reads_samples(#[case] asset: SignalAsset, temp_dir: TestTempDir) {
     let (_server, url) = source(asset).await;
-    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), None).await;
+    let Some(mut decoder) =
+        open_test_audio(asset, &url, &temp_dir, DecoderBackend::default(), None).await
+    else {
+        return;
+    };
 
     next_chunk(&mut decoder, "initial read").await;
 }
@@ -537,7 +542,11 @@ async fn decoder_file_single_seek(
     #[case] target: Duration,
 ) {
     let (_server, url) = source(asset).await;
-    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), None).await;
+    let Some(mut decoder) =
+        open_test_audio(asset, &url, &temp_dir, DecoderBackend::default(), None).await
+    else {
+        return;
+    };
 
     let spec = decoder.spec();
     assert!(spec.sample_rate.get() > 0 && spec.channels > 0);
@@ -679,7 +688,11 @@ async fn decoder_file_single_seek(
 )]
 async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTempDir) {
     let (_server, url) = source(asset).await;
-    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), None).await;
+    let Some(mut decoder) =
+        open_test_audio(asset, &url, &temp_dir, DecoderBackend::default(), None).await
+    else {
+        return;
+    };
 
     for stage in 0..3 {
         next_chunk(&mut decoder, &format!("warmup chunk {stage}")).await;
@@ -1252,7 +1265,9 @@ async fn decoder_file_seek_multiple(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (_server, url) = source(asset).await;
-    let mut decoder = open_test_audio(&url, &temp_dir, backend, None).await;
+    let Some(mut decoder) = open_test_audio(asset, &url, &temp_dir, backend, None).await else {
+        return;
+    };
 
     next_chunk(&mut decoder, "initial read").await;
 
@@ -1395,7 +1410,11 @@ async fn decoder_file_seek_emits_events(#[case] asset: SignalAsset, temp_dir: Te
     let bus = EventBus::new(64);
     let mut events_rx = bus.subscribe();
 
-    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), Some(bus)).await;
+    let Some(mut decoder) =
+        open_test_audio(asset, &url, &temp_dir, DecoderBackend::default(), Some(bus)).await
+    else {
+        return;
+    };
 
     next_chunk(&mut decoder, "before seek events").await;
     decoder.seek(Duration::from_secs(2)).unwrap();

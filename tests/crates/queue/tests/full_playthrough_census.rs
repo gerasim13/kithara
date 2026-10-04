@@ -292,7 +292,11 @@ impl Census {
     }
 }
 
-async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
+async fn build_queue(
+    sources: Vec<ResourceSrc>,
+    origins: [Origin; 3],
+    seam: Seam,
+) -> Option<Census> {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(seam.crossfade_seconds())
@@ -312,16 +316,58 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(sources.len());
-    for source in sources {
+    let mut rejected = 0;
+    for (source, origin) in sources.into_iter().zip(origins) {
         let mut events = queue.subscribe();
         let id = harness
             .run(&queue, move |control| control.append(source.to_string()))
             .await
             .expect("append census track through the production loader");
-        wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE)
-            .await
-            .expect("the census track loads");
+        let loaded = wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE).await;
+        let rejection = match origin {
+            Origin::RemoteSignal(asset) => {
+                kithara_integration_tests::fixtures::android_fixture_rejection(asset)
+            }
+            _ => None,
+        };
+        match (rejection, loaded) {
+            (Some((expected, _)), Err(error)) => {
+                assert_eq!(
+                    error,
+                    format!("track entered Failed: resource error: {expected}")
+                );
+                assert!(matches!(
+                    queue
+                        .track(id)
+                        .expect("rejected track remains visible")
+                        .status,
+                    kithara::queue::TrackStatus::Failed(_)
+                ));
+                rejected += 1;
+            }
+            (Some((_, false)), Ok(())) => panic!("MediaCodec-only fixture unexpectedly loaded"),
+            (_, Err(error)) => panic!("the census track must load: {error}"),
+            (_, Ok(())) => {}
+        }
         tracks.push(id);
+    }
+    if rejected > 0 {
+        assert_eq!(
+            rejected,
+            tracks.len(),
+            "the rejection census must reject every track"
+        );
+        assert_eq!(queue.current_index(), None);
+        assert!(
+            harness
+                .render(BLOCK_FRAMES)
+                .await
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        drop(queue);
+        harness.close().await;
+        return None;
     }
     harness
         .run(&queue, {
@@ -332,11 +378,11 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
         .await
         .expect("select the first loaded track");
 
-    Census {
+    Some(Census {
         harness,
         queue,
         tracks,
-    }
+    })
 }
 
 /// Pace each block so the decode worker runs between them; without the yield
@@ -526,13 +572,17 @@ struct Take {
     ordered: Vec<(u64, Active)>,
 }
 
-async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &TestTempDir) -> Take {
+async fn census_provenance(
+    prepared: PreparedTracks,
+    seam: Seam,
+    _temp_dir: &TestTempDir,
+) -> Option<Take> {
     let PreparedTracks {
         server: _server,
         origins,
         sources,
     } = prepared;
-    let census = build_queue(sources, seam).await;
+    let census = build_queue(sources, origins, seam).await?;
     let trace = usdt_trace::scope();
     let (rendered, log) = play_to_the_end(&census).await;
     let records = trace.events_of("render");
@@ -641,7 +691,7 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
     );
 
     census.close().await;
-    Take { rendered, ordered }
+    Some(Take { rendered, ordered })
 }
 
 /// The oracles that read the rendered audio rather than the probe: each
@@ -701,7 +751,9 @@ fn census_acoustics(take: &Take) {
 }
 
 async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir) {
-    let take = census_provenance(prepared, seam, temp_dir).await;
+    let take = census_provenance(prepared, seam, temp_dir)
+        .await
+        .expect("supported census produces a take");
     census_acoustics(&take);
 }
 

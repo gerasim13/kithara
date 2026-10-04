@@ -156,14 +156,17 @@ async fn test_signal_server_encoded_formats_are_decodable(
     let bytes = response.bytes().await.unwrap();
     assert!(!bytes.is_empty());
 
-    let mut decoder = DecoderFactory::create_with_probe(
+    let result = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
         DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
             .pools(pools())
             .build(),
-    )
-    .unwrap();
+    );
+    let Some(mut decoder) = kithara_integration_tests::fixtures::assert_fixture_open(asset, result)
+    else {
+        return;
+    };
 
     let mut frames = 0;
     let mut nonzero = false;
