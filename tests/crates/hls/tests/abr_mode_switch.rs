@@ -90,12 +90,6 @@ async fn delayed_server(data: (Vec<u8>, Vec<u8>)) -> CreatedHls {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn delayed_thirty(hls_saw_30: (Vec<u8>, Vec<u8>)) -> CreatedHls {
-    delayed_server(hls_saw_30).await
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
 async fn delayed_twenty(hls_saw_20: (Vec<u8>, Vec<u8>)) -> CreatedHls {
     delayed_server(hls_saw_20).await
 }
@@ -138,6 +132,18 @@ async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> CreatedHls {
         vec![5_000_000, 1_000_000, 2_000_000],
     ))
     .await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn manual_thirty_gated(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (CreatedHls, SegmentGateHandle) {
+    let helper = TestServerHelper::new().await;
+    let hls = helper
+        .create_hls(wav_ladder(hls_saw_30, vec![5_000_000, 1_000_000]))
+        .await
+        .expect("create HLS fixture");
+    let gate = helper.register_segment_gate(hls.token(), 0, 5);
+    (hls, gate)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -623,10 +629,10 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
 
 /// VOD single-track: manual quality switch takes effect on future segments.
 ///
-/// - V0 = 5 Mbps (delayed after segment 5 → ABR downswitch trigger)
+/// - V0 = 5 Mbps (segment 5 is gated until the switch applies)
 /// - V1 = 1 Mbps (fast)
-/// - Start Auto(0) → first segments download as V0
-/// - V0 delay triggers ABR downswitch → `VariantApplied` to V1
+/// - Start Manual(0) and prove V0 has reached the gated request
+/// - Request Manual(1) and require its `VariantApplied` before releasing V0
 /// - Subsequent segments download as V1
 /// - Cached V0 segments play out naturally (no re-fetch at V1)
 #[kithara::test(
@@ -637,9 +643,14 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty: CreatedHls) {
+#[case::platform_default(DecoderBackend::default())]
+#[cfg_attr(not(target_os = "android"), case::software(DecoderBackend::Symphonia))]
+async fn vod_manual_switch_affects_future_segments(
+    #[future(awt)] manual_thirty_gated: (CreatedHls, SegmentGateHandle),
+    #[case] backend: DecoderBackend,
+) {
     let segment_count = 30;
-    let server = delayed_thirty;
+    let (server, gate) = manual_thirty_gated;
 
     let url = server.master_url();
     let temp_dir = TestTempDir::new();
@@ -663,7 +674,7 @@ async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty
         .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
-        .initial_abr_mode(auto(0))
+        .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -673,8 +684,46 @@ async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let audio = worker.open(config).await.expect("create audio");
+
+    let (audio, warmup_samples) =
+        read_until_samples_blocking(audio, 8_192, "manual switch warmup").await;
+    assert!(
+        warmup_samples > 0,
+        "V0 must produce audio before the command"
+    );
+    wait_until(Duration::from_secs(20), "V0 gated request", || {
+        gate.requested() > 0
+    })
+    .await
+    .expect("V0 must reach the gated segment before the command");
+    assert_eq!(collector.switch_count(), 0, "V0 must remain pinned");
+    let applied_before = collector.applied_transitions().len();
+    audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle")
+        .set_mode(AbrMode::manual(1))
+        .expect("Manual(1) target must be valid");
+    let (mut audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        1,
+        "manual switch transition",
+    )
+    .await;
+    assert!(!transition.saw_eof, "manual switch must apply before EOF");
+    assert!(
+        collector.applied_transitions()[applied_before..].contains(&(1, AbrReason::ManualOverride)),
+        "the requested manual switch must apply before releasing V0"
+    );
+    gate.release();
 
     let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
