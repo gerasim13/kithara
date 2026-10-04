@@ -45,6 +45,7 @@ use url::Url;
 use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
+const MANUAL_GATE_SEGMENT: usize = 5;
 
 fn segment_duration_secs() -> f64 {
     D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0)
@@ -142,7 +143,7 @@ async fn manual_thirty_gated(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (CreatedHls, Seg
         .create_hls(wav_ladder(hls_saw_30, vec![5_000_000, 1_000_000]))
         .await
         .expect("create HLS fixture");
-    let gate = helper.register_segment_gate(hls.token(), 0, 5);
+    let gate = helper.register_segment_gate(hls.token(), 0, MANUAL_GATE_SEGMENT);
     (hls, gate)
 }
 
@@ -629,10 +630,10 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
 
 /// VOD single-track: manual quality switch takes effect on future segments.
 ///
-/// - V0 = 5 Mbps (segment 5 is gated until the switch applies)
+/// - V0 = 5 Mbps (segment 5 is gated before the manual command)
 /// - V1 = 1 Mbps (fast)
 /// - Start Manual(0) and prove V0 has reached the gated request
-/// - Request Manual(1) and require its `VariantApplied` before releasing V0
+/// - Request Manual(1), release V0 and require `VariantApplied` before EOF
 /// - Subsequent segments download as V1
 /// - Cached V0 segments play out naturally (no re-fetch at V1)
 #[kithara::test(
@@ -675,6 +676,7 @@ async fn vod_manual_switch_affects_future_segments(
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(D.segment_size as u64 * (MANUAL_GATE_SEGMENT as u64 + 1))
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -704,12 +706,20 @@ async fn vod_manual_switch_affects_future_segments(
     .await
     .expect("V0 must reach the gated segment before the command");
     assert_eq!(collector.switch_count(), 0, "V0 must remain pinned");
+    assert!(
+        collector
+            .segments()
+            .iter()
+            .all(|segment| { segment.variant != 0 || segment.segment_index < segment_count - 1 }),
+        "V0's tail must remain unfetched before the manual command"
+    );
     let applied_before = collector.applied_transitions().len();
     audio
         .abr_handle()
         .expect("HLS stream must expose AbrHandle")
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
+    gate.release();
     let (mut audio, transition) = read_until_manual_applied(
         audio,
         &collector,
@@ -721,9 +731,8 @@ async fn vod_manual_switch_affects_future_segments(
     assert!(!transition.saw_eof, "manual switch must apply before EOF");
     assert!(
         collector.applied_transitions()[applied_before..].contains(&(1, AbrReason::ManualOverride)),
-        "the requested manual switch must apply before releasing V0"
+        "the requested manual switch must apply before EOF"
     );
-    gate.release();
 
     let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
