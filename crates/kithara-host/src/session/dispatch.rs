@@ -32,22 +32,23 @@ use crate::{
     host::{HostSettingsChange, HostSettingsExec},
 };
 
+/// Runs one Host command after settling the transport's receipts, so the
+/// queue's credits come back and the settings catch up even while no tick
+/// runs.
 pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    settle_receipts(state);
     match cmd {
         HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
         HostCmd::Sync(cmd) => run_sync_cmd(state, cmd),
         HostCmd::ApplyMix { levels } => {
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
-        HostCmd::Configure { change, at } => {
-            settle_receipts(state);
-            state
-                .exec(change, at, &mut ())
-                .map_or_else(HostReply::Err, |()| HostReply::Ok)
-        }
+        HostCmd::Configure { change, at } => state
+            .exec(change, at, &mut ())
+            .map_or_else(HostReply::Err, |()| HostReply::Ok),
         HostCmd::AttachOutputs {
             tap: target,
             outputs,
@@ -213,7 +214,6 @@ where
             Err(err) => Reply::Err(err),
         },
         Cmd::SetSessionDucking { mode } => {
-            settle_receipts(state);
             match state.exec(HostSettingsChange::Ducking(mode), When::Next, &mut ()) {
                 Ok(()) => Reply::Ok,
                 Err(PlayError::Session(error)) => Reply::Err(error),
@@ -505,7 +505,7 @@ mod tests {
         processor::FirewheelProcessor,
     };
     use kithara_command::When;
-    use kithara_config::ConfigOwner;
+    use kithara_config::{Config, ConfigOwner};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
     use kithara_platform::{
@@ -531,6 +531,7 @@ mod tests {
         host::HostSettingsChange,
         rt::MetronomeConfigChange,
         session::{
+            applied_settings,
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, SessionState, TapSlot, add_graph_node},
@@ -1667,6 +1668,146 @@ mod tests {
         assert!(
             block.iter().any(|sample| sample.abs() > 0.1),
             "the first block of the next stream clicks session beat 0"
+        );
+    }
+
+    /// Sends `change` for the next block.
+    fn configure_next(state: &mut TestState, change: HostSettingsChange) -> HostReply {
+        run_host_cmd(
+            state,
+            HostCmd::Configure {
+                change,
+                at: When::Next,
+            },
+        )
+    }
+
+    /// The Host queue's capacity: the batches in flight before a block
+    /// answers them.
+    fn host_queue_capacity() -> u16 {
+        let capacity = kithara_command::ChannelConfig::builder()
+            .build()
+            .values()
+            .capacity
+            .get();
+        u16::try_from(capacity).expect("the queue capacity fits a step count")
+    }
+
+    /// A metronome level of its own for every step of a run.
+    fn level_change(step: u16) -> (f32, HostSettingsChange) {
+        let level = 0.25 + f32::from(step) / 1024.0;
+        (
+            level,
+            HostSettingsChange::Metronome(MetronomeConfigChange::Level(level)),
+        )
+    }
+
+    #[kithara::test]
+    fn two_restarts_with_a_change_between_them_leave_the_render_copy_on_the_host_settings() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+        configure_sample_rate(&mut state, 48_000);
+        let enable = HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true));
+        assert!(matches!(configure_next(&mut state, enable), HostReply::Ok));
+        let mut clock = 0;
+        render_left(&mut state, &mut clock, 1);
+
+        route_loss(|probe| probe.fail_next_start.store(true, Ordering::SeqCst));
+        state.stream = None;
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::Tick),
+            Reply::Err(SessionError::RestartFailed { .. })
+        ));
+
+        let host = *state.settings.config();
+        assert_eq!(
+            state
+                .ctx
+                .as_mut()
+                .and_then(FirewheelContext::proc_store_mut)
+                .and_then(|store| applied_settings(store)),
+            Some(host),
+            "the restart seeds the render copy with the settings the Host reads"
+        );
+        assert_eq!(host.sample_rate().get(), 48_000, "the first restart's rate");
+        assert!(
+            host.metronome().enabled(),
+            "the change the first stream applied is settled before the seed"
+        );
+    }
+
+    #[kithara::test]
+    fn changes_past_the_queue_capacity_flow_while_blocks_render_without_a_tick() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+        let mut clock = 0;
+        let mut applied = state.settings.config().metronome().level();
+        for step in 0..2 * host_queue_capacity() {
+            let (level, change) = level_change(step);
+            assert!(
+                matches!(configure_next(&mut state, change), HostReply::Ok),
+                "change {step} goes out"
+            );
+            assert_eq!(
+                state.settings.config().metronome().level(),
+                applied,
+                "the Host reads the change the last block applied"
+            );
+            render_left(&mut state, &mut clock, 1);
+            applied = level;
+        }
+    }
+
+    #[kithara::test]
+    fn a_full_queue_refuses_a_change_until_a_block_answers_the_ones_in_flight() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let id = register_player(&mut state);
+        start_player_cmd(&mut state, id);
+        let capacity = host_queue_capacity();
+        for step in 0..capacity {
+            assert!(
+                matches!(
+                    configure_next(&mut state, level_change(step).1),
+                    HostReply::Ok
+                ),
+                "change {step} fits the queue"
+            );
+        }
+        let before = *state.settings.config();
+
+        assert!(matches!(
+            configure_next(&mut state, level_change(capacity).1),
+            HostReply::Err(PlayError::Session(SessionError::HostQueueFull))
+        ));
+        assert_eq!(
+            *state.settings.config(),
+            before,
+            "a refused change leaves the settings alone"
+        );
+        assert_eq!(
+            state.settings.pending().count(),
+            usize::from(capacity),
+            "a refused change leaves the changes in flight alone"
+        );
+
+        let mut clock = 0;
+        render_left(&mut state, &mut clock, 1);
+        assert!(matches!(
+            configure_next(&mut state, level_change(capacity).1),
+            HostReply::Ok
+        ));
+        assert_eq!(
+            state.settings.config().metronome().level(),
+            level_change(capacity - 1).0,
+            "the block applied every change in flight"
         );
     }
 

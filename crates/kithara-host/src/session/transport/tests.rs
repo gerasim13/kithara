@@ -24,7 +24,8 @@ use super::{
     commit::{SessionGridGeneration, TransportObservation, TransportProcessError},
     node::SessionTransportProcessor,
     process::{
-        TransportObservationInput, TransportState, converge_transport_restart, process_transport,
+        TransportObservationInput, TransportState, applied_settings, converge_transport_restart,
+        process_transport,
     },
 };
 use crate::{
@@ -551,7 +552,8 @@ fn reserved_route_restart_promotes_a_change_rendered_before_stop() {
                 .revision()
     );
 
-    let converged = converge_transport_restart(&mut extra.store, reserved)
+    let settings = applied_settings(&extra.store).expect("the transport is installed");
+    let converged = converge_transport_restart(&mut extra.store, reserved, settings)
         .expect("the reserved restart accepts a newer revision in its target epoch");
     assert_eq!(converged, stopped);
     assert_eq!(observation(&mut output).session_grid(), stopped);

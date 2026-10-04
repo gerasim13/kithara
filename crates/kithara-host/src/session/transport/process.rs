@@ -83,11 +83,12 @@ pub(crate) fn restart_transport(store: &mut ProcStore) -> Result<(), TransportPr
 pub(crate) fn converge_transport_restart(
     store: &mut ProcStore,
     target: SessionGridGeneration,
+    settings: HostSettings,
 ) -> Result<SessionGridGeneration, TransportProcessError> {
     let result = store
         .try_get_mut::<TransportState>()
         .ok_or(TransportProcessError::MissingState)?
-        .converge_restart(target);
+        .converge_restart(target, settings);
     publish_observation(store)?;
     result
 }
@@ -216,10 +217,14 @@ impl TransportState {
         Ok(anchor)
     }
 
+    /// Takes `settings` as the ones the next stream starts from and moves the
+    /// session grid to the restart `target`.
     fn converge_restart(
         &mut self,
         target: SessionGridGeneration,
+        settings: HostSettings,
     ) -> Result<SessionGridGeneration, TransportProcessError> {
+        self.settings = settings;
         let target_stamp = target.stamp()?;
         let current_stamp = self.session_grid.stamp()?;
         if current_stamp.grid_id() != target_stamp.grid_id() {

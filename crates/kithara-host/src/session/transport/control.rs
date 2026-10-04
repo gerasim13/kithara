@@ -1,3 +1,4 @@
+use firewheel::FirewheelContext;
 use kithara_config::ConfigOwner;
 use kithara_sync::{ParentGridUpdate, SyncError};
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
@@ -9,7 +10,7 @@ use super::{
 };
 use crate::{
     api::SessionTransportSnapshot,
-    session::{SessionError, state::SessionState},
+    session::{SessionError, queue::settle_receipts, state::SessionState},
 };
 
 pub(crate) fn snapshot<T, S>(
@@ -98,19 +99,32 @@ pub(crate) fn prepare_route_restart<T, S>(
     finish_route_restart(state, target)
 }
 
+/// Once the stopped stream's processor is back, settles every receipt it
+/// returned and seeds the transport with the settings the Host reads, so the
+/// next stream renders from them; the batches still queued apply on top.
 fn finish_route_restart<T, S>(
     state: &mut SessionState<T, S>,
     target: SessionGridGeneration,
 ) -> Result<RouteRestartStatus, SessionError> {
+    if state
+        .ctx
+        .as_ref()
+        .ok_or(SessionError::NoContext)?
+        .proc_store()
+        .is_none()
+    {
+        return Ok(RouteRestartStatus::Pending);
+    }
+    settle_receipts(state);
+    let settings = *state.settings.config();
     let Some(store) = state
         .ctx
         .as_mut()
-        .ok_or(SessionError::NoContext)?
-        .proc_store_mut()
+        .and_then(FirewheelContext::proc_store_mut)
     else {
         return Ok(RouteRestartStatus::Pending);
     };
-    let actual = converge_transport_restart(store, target)
+    let actual = converge_transport_restart(store, target, settings)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     let promoted = target
         .promote(actual)
