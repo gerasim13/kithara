@@ -60,6 +60,7 @@ pub(crate) fn swift_test(
     command
         .env("KITHARA_LOCAL_DEV", "1")
         .arg("test")
+        .arg("--disable-xctest")
         .arg("--cache-path")
         .arg(swiftpm_cache)
         .arg("--xunit-output")
