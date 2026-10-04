@@ -224,20 +224,15 @@ impl<'a> HostStorage<'a> {
         // Cargo targets are the largest reproducible caches and already have a
         // bounded owner. Re-read pressure after enforcing that budget so a
         // successful trim does not throw away review compiler artifacts too.
-        let (cache_pressure, cache_volume) = self.worst_pressure()?;
+        let (cache_pressure, _) = self.worst_pressure()?;
         match cache_pressure {
             Pressure::Soft => {
                 self.prune_host_trees("cache/quarantine", 7 * Self::DAY)?;
                 self.prune_host_trees("cache/review", 30 * Self::DAY)?;
                 self.prune_host_trees("cache/bootstrap/quarantine", 7 * Self::DAY)?;
                 self.prune_host_trees("cache/bootstrap/review", 30 * Self::DAY)?;
-                self.prune_docker_cache("720h");
             }
             Pressure::Aggressive | Pressure::Reject => {
-                build_cache::reclaim_at_least(
-                    &target_dirs,
-                    self.shortfall_to_the_floor(&cache_volume),
-                )?;
                 self.prune_host_trees("cache/quarantine", Duration::ZERO)?;
                 self.prune_host_trees("cache/review", Duration::ZERO)?;
                 self.prune_host_trees("cache/bootstrap/quarantine", Duration::ZERO)?;
@@ -245,11 +240,11 @@ impl<'a> HostStorage<'a> {
                 self.prune_host_trees("cache/trusted", 7 * Self::DAY)?;
                 self.prune_host_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
                 self.prune_host_trees("vm/tart/cache", 7 * Self::DAY)?;
-                self.prune_docker_cache("168h");
             }
             Pressure::Normal => {}
         }
 
+        self.prune_docker_build_cache(self.config.host.docker_build_cache_budget_bytes()?);
         // Unconditional, and after the pruning above, because the guest frees
         // blocks on its own schedule and holds them until asked. Its root
         // filesystem is mounted `discard` and stays at a gigabyte, but the data
@@ -260,12 +255,25 @@ impl<'a> HostStorage<'a> {
         // the drift reach refusal five times.
         self.trim_linux_guest();
 
+        // The warm builds go last. Every step above takes stale state, a
+        // compiler cache or Docker's; an evicted slot costs the next job of its
+        // lane a cold build of the workspace. Spent first, they went on every
+        // `Aggressive` pass while the steps after them would have covered the
+        // shortfall alone.
         let (mut final_pressure, mut final_volume) = self.worst_pressure()?;
+        if final_pressure >= Pressure::Aggressive {
+            build_cache::reclaim_at_least(
+                &target_dirs,
+                self.shortfall_to_the_floor(&final_volume),
+            )?;
+            (final_pressure, final_volume) = self.worst_pressure()?;
+        }
         if final_pressure == Pressure::Reject {
-            // The Linux guest has already been trimmed, so what remains is
-            // Docker state younger than the prune window. Recycling reaches
-            // that state at the cost of a cold image build, which is reserved
-            // for the point where new jobs are already being refused.
+            // The Linux guest has already been trimmed and its build cache held
+            // to its size, so what remains is its images and the cache inside
+            // that bound. Recycling reaches that state at the cost of a cold
+            // image build, which is reserved for the point where new jobs are
+            // already being refused.
             self.recycle_linux_guest();
             (final_pressure, final_volume) = self.worst_pressure()?;
         }
@@ -862,7 +870,10 @@ impl<'a> HostStorage<'a> {
             .any(|vm| vm.name == consts::JOB_VM_NAME && vm.running)
     }
 
-    fn prune_docker_cache(&self, age: &str) {
+    /// Hold the guest's build cache to `budget` bytes, least recently used
+    /// first. Its disk is a sparse file this volume pays for, so a cache that
+    /// grows unbounded between passes is space no other step can reach.
+    fn prune_docker_build_cache(&self, budget: u64) {
         let home = self.host_root.join("home").join(&self.config.host.ci_user);
         let socket = docker_socket(&home, &self.config.host.colima_profile);
         let docker = self.config.host.brew_tool("docker");
@@ -875,8 +886,8 @@ impl<'a> HostStorage<'a> {
                 "DOCKER_HOST",
                 docker_host(&home, &self.config.host.colima_profile),
             )
-            .args(["builder", "prune", "--force", "--filter"])
-            .arg(format!("until={age}"));
+            .args(["builder", "prune", "--force", "--max-used-space"])
+            .arg(budget.to_string());
         if let Err(error) = self
             .process
             .run_command(&mut command, "Docker build cache cleanup")
@@ -1321,6 +1332,46 @@ mod tests {
         );
     }
 
+    /// Held to a size on every pass, and before the trim that hands what it
+    /// frees back to the volume. An age keeps whatever one busy week wrote,
+    /// however large, and was only asked for once the volume was already short.
+    #[test]
+    fn every_pass_holds_the_docker_build_cache_to_its_size_before_the_trim() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        install_double(&cfg.host.brew_root.join("bin"), "docker");
+        install_double(&cfg.host.brew_root.join("bin"), "colima");
+        let home = directory.path().join("home").join(&cfg.host.ci_user);
+        let socket = docker_socket(&home, &cfg.host.colima_profile);
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        fs::write(&socket, b"").unwrap();
+        let process = Process::recording(directory.path(), Recording::default());
+        {
+            let storage = HostStorage::for_test(&cfg, &process).unwrap();
+            assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
+            storage.cleanup().unwrap();
+        }
+
+        let recording = process.recorded().expect("a recording process records");
+        let steps = recording.steps();
+        let position = |label: &str| steps.iter().position(|step| step.label == label);
+        let prune = position("Docker build cache cleanup")
+            .expect("a pass with nothing under pressure left the Docker build cache unbounded");
+        let budget = cfg
+            .host
+            .docker_build_cache_budget_bytes()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            steps[prune].args,
+            ["builder", "prune", "--force", "--max-used-space", &budget]
+        );
+        let trim =
+            position("return the Linux guest's freed blocks").expect("the guest was trimmed");
+        assert!(prune < trim, "the trim ran before the prune it hands back");
+    }
+
     #[test]
     fn legacy_macos_runner_is_not_health_owned() {
         let host = fixture().host;
@@ -1727,6 +1778,7 @@ mod tests {
         storage.set_available_sequence([
             consts::FREE_AGGRESSIVE,
             consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
             consts::FREE_NORMAL,
         ]);
 
@@ -1735,6 +1787,37 @@ mod tests {
         assert!(
             !slot.join("debug").exists(),
             "the pass stopped at the build cache ceiling the caches were already under"
+        );
+    }
+
+    /// Warm builds are the last rung: a pass whose cheaper steps lift the volume
+    /// out of `Aggressive` evicts none of them.
+    ///
+    /// Spent first, they went on every `Aggressive` pass, and every job after it
+    /// built the workspace cold, while the stale trees, the Docker cache and the
+    /// guest's unreturned blocks reached for afterwards would have covered the
+    /// shortfall on their own.
+    #[test]
+    fn an_aggressive_pass_the_cheaper_steps_relieve_keeps_every_build_slot() {
+        let directory = tempfile::tempdir().unwrap();
+        let slot = directory.path().join("cache/target-slots/slot-0");
+        fs::create_dir_all(slot.join("debug")).unwrap();
+        fs::write(slot.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+        ]);
+
+        storage.cleanup().unwrap();
+
+        assert!(
+            slot.join("debug/artifact.bin").is_file(),
+            "the pass evicted a warm build before the steps that relieved the volume"
         );
     }
 
@@ -1749,6 +1832,7 @@ mod tests {
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
         storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
             consts::FREE_AGGRESSIVE,
             consts::FREE_AGGRESSIVE,
             consts::FREE_AGGRESSIVE,
@@ -1776,6 +1860,7 @@ mod tests {
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
         storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
             consts::FREE_AGGRESSIVE,
             consts::FREE_AGGRESSIVE,
             consts::FREE_AGGRESSIVE,
