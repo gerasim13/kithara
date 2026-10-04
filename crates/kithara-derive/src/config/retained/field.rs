@@ -5,7 +5,7 @@ use syn::{
     Type, ext::IdentExt as _, parse::Parser as _, punctuated::Punctuated, visit::Visit as _,
 };
 
-use super::implementation::docs;
+use super::{implementation::docs, live::spelled};
 use crate::config::field::{Accessor, Declaration, Live, Role, Wrap};
 
 /// What one field contributes to its configuration type.
@@ -105,6 +105,7 @@ pub(super) fn expand<'a>(
     let accessor = accessor.filter(|mode| !matches!(mode, Accessor::Skip));
     let owner_accessor = accessor.map(|mode| {
         let copy = matches!(mode, Accessor::Copy);
+        let ty = spelled(ty, owner);
         let output = if copy { quote!(#ty) } else { quote!(&#ty) };
         quote! {
             #(#surface)*
@@ -193,7 +194,7 @@ fn retained(
     let (ty, expression): (Type, Expr) = match role {
         Role::Skip => return Ok(None),
         Role::Value => (
-            original_type.clone(),
+            syn::parse2(spelled(original_type, owner))?,
             syn::parse_quote!(::core::clone::Clone::clone(&self.#name)),
         ),
         Role::Nested => (

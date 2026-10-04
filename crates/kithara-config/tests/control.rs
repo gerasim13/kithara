@@ -1,6 +1,6 @@
 use std::{cell::RefCell, convert::Infallible, io::Error};
 
-use kithara_config::{Config, Configure, LiveConfig};
+use kithara_config::{Config, ConfigOwner, Configure, LiveConfig};
 use kithara_test_utils::kithara;
 
 /// A gain of at most ten and a mute switch.
@@ -65,13 +65,14 @@ struct Rate {
     hz: u32,
 }
 
-/// A live level beside a resource whose type names the configuration `Self`.
+/// A live level beside the configuration it follows, whose type names it
+/// `Self`.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(fields(value, get(copy)))]
+#[config(owner_access, fields(value, get(copy)))]
 struct Chain {
     #[config(live)]
     level: u8,
-    #[config(skip = "the configuration it follows", get(ref))]
+    #[config(get(ref))]
     next: Option<&'static Self>,
 }
 
@@ -172,7 +173,11 @@ impl Configure<StripChange> for Mixer {
 }
 
 /// Owns a chain whose configuration only reads.
-struct Follower(Chain);
+#[derive(ConfigOwner)]
+#[config_owner(chain)]
+struct Follower {
+    chain: Chain,
+}
 
 impl Configure<ChainChange> for Follower {
     type At = Moment;
@@ -185,7 +190,7 @@ impl Configure<ChainChange> for Follower {
     }
 
     fn settings(&self) -> Chain {
-        self.0
+        self.chain
     }
 }
 
@@ -289,17 +294,21 @@ fn exec_routes_owner_fields_to_their_method_and_the_rest_to_exec_live() {
 }
 
 #[kithara::test]
-fn a_field_type_naming_self_reads_as_the_configuration_through_its_owner() {
-    let follower = Follower(Chain {
-        level: 2,
-        next: Some(&FIRST),
-    });
+fn a_field_type_naming_self_reads_as_the_configuration_in_every_generated_item() {
+    let follower = Follower {
+        chain: Chain {
+            level: 2,
+            next: Some(&FIRST),
+        },
+    };
     assert_eq!(ChainControl::next(&follower).map(Chain::level), Some(1));
+    assert_eq!(ChainOwnerAccess::next(&follower).map(Chain::level), Some(1));
+    assert_eq!(follower.chain.values().next.map(Chain::level), Some(1));
 }
 
 /// Generated bodies beside constants named like their bindings.
 mod shadowed {
-    use std::f32::consts::{E as value, LN_2 as cx, PI as at, TAU as change};
+    use std::f32::consts::{E as value, LN_2 as cx, PI as at, SQRT_2 as config, TAU as change};
 
     use kithara_config::{Config, LiveConfig};
     use kithara_test_utils::kithara;
@@ -344,9 +353,14 @@ mod shadowed {
         let mut log = Vec::new();
         KnobExec::exec(&mut turner, KnobChange::Turn(value), at, &mut log);
         KnobExec::exec(&mut turner, KnobChange::Glow(change), cx, &mut log);
+        KnobExec::exec(&mut turner, KnobChange::Turn(config), value, &mut log);
         assert_eq!(
             log,
-            [format!("turn {value} {at}"), format!("glow {change} {cx}")]
+            [
+                format!("turn {value} {at}"),
+                format!("glow {change} {cx}"),
+                format!("turn {config} {value}"),
+            ]
         );
     }
 }

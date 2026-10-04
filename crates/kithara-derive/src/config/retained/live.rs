@@ -50,23 +50,25 @@ pub(super) fn change_name(item: &DeriveInput) -> Ident {
     format_ident!("{}Change", item.ident, span = Span::call_site())
 }
 
-/// A field type with `Self` spelled as the struct `name`, for items in which
-/// `Self` names the change enum or the owner.
-pub(super) fn spelled(ty: &Type, name: &Ident) -> TokenStream {
-    respell(ty.to_token_stream(), name)
+/// A field type with `Self` spelled as the struct and its generics, for items
+/// in which `Self` names the change enum, an owner or the snapshot.
+pub(super) fn spelled(ty: &Type, item: &DeriveInput) -> TokenStream {
+    let name = &item.ident;
+    let (_, ty_generics, _) = item.generics.split_for_impl();
+    respell(ty.to_token_stream(), &quote!(#name #ty_generics))
 }
 
-fn respell(tokens: TokenStream, name: &Ident) -> TokenStream {
+fn respell(tokens: TokenStream, config: &TokenStream) -> TokenStream {
     tokens
         .into_iter()
-        .map(|token| match token {
-            TokenTree::Ident(ident) if ident == "Self" => TokenTree::Ident(name.clone()),
+        .flat_map(|token| match token {
+            TokenTree::Ident(ident) if ident == "Self" => config.clone(),
             TokenTree::Group(group) => {
-                let mut respelled = Group::new(group.delimiter(), respell(group.stream(), name));
+                let mut respelled = Group::new(group.delimiter(), respell(group.stream(), config));
                 respelled.set_span(group.span());
-                TokenTree::Group(respelled)
+                TokenTree::Group(respelled).into()
             }
-            other => other,
+            other => other.into(),
         })
         .collect()
 }
@@ -131,7 +133,7 @@ fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream
     for (member, live) in fields {
         let variant = &live.variant;
         let field = member.name;
-        let ty = spelled(member.ty, name);
+        let ty = spelled(member.ty, item);
         let payload = if member.nested {
             quote!(<#ty as ::kithara_config::LiveConfig>::Change)
         } else {

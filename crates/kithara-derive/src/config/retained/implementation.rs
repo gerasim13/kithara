@@ -145,6 +145,16 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             "owner_access requires a get(ref) or get(copy) accessor",
         ));
     }
+    if options.owner_access
+        && let Some(member) = members
+            .iter()
+            .find(|member| member.owner_accessor.is_some() && member.name.unraw() == "config")
+    {
+        return Err(syn::Error::new_spanned(
+            member.name,
+            "owner_access cannot generate a getter named config, which ConfigOwner declares",
+        ));
+    }
     if !options.debug
         && let Some(member) = members.iter().find(|member| !member.debugged)
     {
@@ -577,6 +587,25 @@ mod tests {
             }),
             "owner_access requires a get(ref) or get(copy) accessor"
         );
+    }
+
+    #[kithara::test(native)]
+    fn owner_access_refuses_a_getter_named_like_the_owners_own() {
+        for input in [
+            quote! {
+                #[config(owner_access, fields(value, get(copy)))]
+                struct Settings { config: u32 }
+            },
+            quote! {
+                #[config(owner_access, fields(value, get(copy)))]
+                struct Settings { level: u32, r#config: u32 }
+            },
+        ] {
+            assert_eq!(
+                refusal(input),
+                "owner_access cannot generate a getter named config, which ConfigOwner declares"
+            );
+        }
     }
 
     #[kithara::test(native, flash(false))]

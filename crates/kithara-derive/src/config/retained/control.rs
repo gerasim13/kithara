@@ -19,11 +19,12 @@ pub(super) fn control(item: &DeriveInput, members: &[Member<'_>]) -> Result<Toke
     let control = format_ident!("{}Control", name, span = Span::call_site());
     let configure = quote!(::kithara_config::Configure<#change>);
     let value = format_ident!("__kithara_value");
+    let config = format_ident!("__kithara_config");
     let mut taken: Vec<(String, &Ident)> = Vec::new();
     let mut methods: Vec<TokenStream> = Vec::new();
     for member in members {
         let field = member.name;
-        let ty = spelled(member.ty, name);
+        let ty = spelled(member.ty, item);
         let surface = docs(member.attributes);
         let cfgs: Vec<&Attribute> = cfgs(member.attributes).collect();
         let mut getter = field.clone();
@@ -34,7 +35,7 @@ pub(super) fn control(item: &DeriveInput, members: &[Member<'_>]) -> Result<Toke
                 #(#cfgs)*
                 #(#surface)*
                 fn #getter(&self) -> ::kithara_config::Nested<&Self, fn(&#name) -> #ty> {
-                    ::kithara_config::__private::nested(self, |config: &#name| config.#field)
+                    ::kithara_config::__private::nested(self, |#config: &#name| #config.#field)
                 }
             });
         } else if member.accessor.is_some() {
@@ -114,7 +115,7 @@ pub(super) fn exec(
     for (member, live) in fields {
         let variant = &live.variant;
         let field = member.name;
-        let ty = spelled(member.ty, name);
+        let ty = spelled(member.ty, item);
         let cfgs: Vec<&Attribute> = cfgs(member.attributes).collect();
         if matches!(live.mode, Live::Owner) {
             let method = format_ident!("exec_{}", field, span = Span::call_site());
