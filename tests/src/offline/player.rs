@@ -126,7 +126,7 @@ impl OfflinePlayer {
         options: OfflinePlayerOptions,
         session: HostConfig<TestPools>,
     ) -> Self {
-        let sample_rate = session.sample_rate();
+        let sample_rate = session.settings().sample_rate();
         let pools = offline_pools(&session).clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let player = PlayerImpl::new(

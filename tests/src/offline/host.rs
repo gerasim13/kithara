@@ -43,7 +43,9 @@ pub fn audio_clock_pace<S>(config: &HostConfig<S>) -> Duration {
     let frames = config
         .max_block_frames()
         .expect("offline Host config must have a render block size");
-    Duration::from_secs_f64(f64::from(frames.get()) / f64::from(config.sample_rate().get()))
+    Duration::from_secs_f64(
+        f64::from(frames.get()) / f64::from(config.settings().sample_rate().get()),
+    )
 }
 /// Slack a playhead-against-cursor comparison needs. The product publishes
 /// `PlaybackProgress` only once the reported position has moved

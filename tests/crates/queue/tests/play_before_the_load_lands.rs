@@ -46,7 +46,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track(
     let session = HostConfig::offline(session_pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
+            .sample_rate(session.settings().sample_rate())
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(session_pools.clone()).build(),
             ))

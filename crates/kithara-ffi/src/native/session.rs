@@ -31,7 +31,12 @@ where
 
 pub(crate) fn requested_sample_rate() -> NonZeroU32 {
     host().lock().as_ref().map_or_else(
-        || HostConfig::<FfiPools>::builder().build().sample_rate(),
+        || {
+            HostConfig::<FfiPools>::builder()
+                .build()
+                .settings()
+                .sample_rate()
+        },
         HostSettingsControl::sample_rate,
     )
 }

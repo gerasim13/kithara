@@ -71,12 +71,6 @@ impl<S> HostConfig<S> {
         }
     }
 
-    /// Rate the Host's output starts at.
-    #[must_use]
-    pub fn sample_rate(&self) -> NonZeroU32 {
-        self.settings().sample_rate()
-    }
-
     /// Settings the Host starts with.
     #[must_use]
     pub const fn settings(&self) -> HostSettings {

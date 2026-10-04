@@ -813,7 +813,7 @@ mod tests {
             )
             .build();
 
-        assert_eq!(host.sample_rate().get(), 48_000);
+        assert_eq!(host.settings().sample_rate().get(), 48_000);
     }
 
     fn assembled(dir: &TempDir, name: &str, app: &str, shutdown: &CancelToken) -> AppConfig {

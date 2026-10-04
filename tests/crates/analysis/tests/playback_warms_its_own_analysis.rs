@@ -45,7 +45,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(session_config.sample_rate())
+            .sample_rate(session_config.settings().sample_rate())
             .worker(worker)
             .build(),
     );

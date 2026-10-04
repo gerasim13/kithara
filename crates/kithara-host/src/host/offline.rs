@@ -309,7 +309,7 @@ mod tests {
             .max_block_frames(block_frames)
             .build();
 
-        assert_eq!(config.sample_rate(), sample_rate);
+        assert_eq!(config.settings().sample_rate(), sample_rate);
         assert_eq!(config.max_block_frames(), Some(block_frames));
 
         let host = Host::<TestPools>::new(config).expect("fixture offline Host");
