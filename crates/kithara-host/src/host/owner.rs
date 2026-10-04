@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use kithara_bufpool::HasPool;
-use kithara_command::When;
+use kithara_command::{Live, When};
 use kithara_config::Configure;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
@@ -113,7 +113,6 @@ impl<S> SessionRuntime<S> {
 pub(super) struct SessionRoot {
     pub(super) id: BeatGridId,
     pub(super) group: GroupState<PlayerMember>,
-    pub(super) sample_rate: NonZeroU32,
     pub(super) view: RootView,
 }
 
@@ -198,27 +197,6 @@ impl<S> Host<S> {
         self.exec_host_ok(HostCmd::DetachOutputs { tap }, "output detach")
     }
 
-    /// Switches the Host metronome; switching it off lets a sounding click finish.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when graph dispatch fails.
-    pub fn set_metronome(&self, on: bool) -> Result<(), PlayError> {
-        self.exec_host_ok(HostCmd::SetMetronome { on }, "metronome")
-    }
-
-    /// Sets the metronome level; the next click sounds at it, and a sounding
-    /// click finishes at its own.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`
-    /// unless `0 < level <= 1`, keeping the last level, or an error when
-    /// graph dispatch fails.
-    pub fn set_metronome_level(&self, level: f32) -> Result<(), PlayError> {
-        self.exec_host_ok(HostCmd::SetMetronomeLevel { level }, "metronome level")
-    }
-
     /// Restart the current output route while preserving Host-owned graph state.
     ///
     /// # Errors
@@ -291,7 +269,6 @@ impl<S> Host<S> {
         );
         let view = RootView::new(&group, sample_rate);
         Ok(SessionRoot {
-            sample_rate,
             group,
             view,
             id: grid_id,
@@ -337,8 +314,8 @@ where
     /// Creates one Host with its configured realtime or offline session.
     ///
     /// # Errors
-    /// Returns [`PlayError::InvalidParameter`] naming the first metronome
-    /// field out of its bounds, or an error when the session root or selected
+    /// Returns [`PlayError::InvalidParameter`] naming the first setting
+    /// out of its bounds, or an error when the session root or selected
     /// runtime cannot start.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         match config {
@@ -346,17 +323,17 @@ where
                 sample_rate_hint,
                 output_block_frames,
                 limiter,
-                metronome,
+                settings,
                 ..
             } => {
-                let output = SessionOutput::new(limiter, metronome)?;
+                let settings = Live::new(settings)?;
                 let root = Self::session_root(sample_rate_hint)?;
                 let (dispatcher, platform) = Platform::realtime(
                     root.group,
                     root.view.clone(),
-                    root.sample_rate,
                     output_block_frames,
-                    output,
+                    SessionOutput::new(limiter),
+                    settings,
                 )
                 .resolve()?;
                 Ok(Self::owner(
@@ -545,7 +522,6 @@ mod tests {
             .build();
         let root = Host::<TestPools>::session_root(config.sample_rate()).expect("host root");
 
-        assert_eq!(root.sample_rate, sample_rate);
         assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
     }
 }

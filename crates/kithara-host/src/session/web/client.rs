@@ -1,17 +1,19 @@
-use std::{cell::Cell, num::NonZeroU32};
+use std::cell::Cell;
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
+use kithara_command::Live;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
 use kithara_play::{SessionSampleRate, StreamShape};
 use kithara_sync::GroupState;
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
-    PlayerMember,
+    HostSettings, PlayerMember,
     error::PlayError,
     rt::SessionOutput,
     session::{
+        HostProtocol,
         dispatch::run_host_cmd,
         protocol::{
             Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
@@ -120,8 +122,8 @@ thread_local! {
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
     output: SessionOutput,
+    settings: Live<HostSettings, HostProtocol>,
 ) -> Result<(Arc<dyn HostDispatcher<S>>, WebSessionState<S>), PlayError> {
     WASM_SESSION_ACTIVE.with(|active| {
         if active.replace(true) {
@@ -132,10 +134,10 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     let mut session = SessionState::new(
         root,
         root_view.clone(),
-        sample_rate,
         None,
         None,
         output,
+        settings,
         start_stream_web_audio,
     );
     // A browser unlocks its output through a user gesture and can never resume

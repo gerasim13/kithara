@@ -56,18 +56,28 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
     type At = When<SessionFrame>;
     type Output = Result<(), PlayError>;
 
-    /// Without a render graph the tempo applies at once, since no clock runs
-    /// to place a frame on; with one, it goes to the transport, which
-    /// re-anchors the session beats on the asked frame.
-    fn exec_tempo(&mut self, value: Tempo, at: Self::At, _cx: &mut ()) -> Self::Output {
-        let change = HostSettingsChange::Tempo(value);
+    /// The transport re-anchors the session beats on the frame the tempo
+    /// changes on.
+    fn exec_tempo(&mut self, value: Tempo, at: Self::At, cx: &mut ()) -> Self::Output {
+        self.exec_live(HostSettingsChange::Tempo(value), at, cx)
+    }
+
+    /// Without a render graph a change applies at once, since no clock runs
+    /// to place a frame on; with one, it goes to the transport, which applies
+    /// it on the asked frame.
+    fn exec_live(
+        &mut self,
+        change: HostSettingsChange,
+        at: Self::At,
+        _cx: &mut (),
+    ) -> Self::Output {
         if let When::At(frame) = at
             && frame < self.earliest_frame().ok_or(PlayError::Untimed)?
         {
             return Err(PlayError::Late);
         }
         let Some(control) = self.transport_control.as_mut() else {
-            let Ok(()) = self.settings.apply(change);
+            self.settings.apply(change)?;
             self.publish_root();
             return Ok(());
         };
@@ -75,7 +85,7 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
             .send(control.queue(), at, change, HostPart::Settings)
             .map(drop)
             .map_err(|error| match error {
-                LiveError::Invalid(never) => match never {},
+                LiveError::Invalid(error) => error,
                 LiveError::Send(SendError::Full(_)) => SessionError::HostQueueFull.into(),
                 LiveError::Send(SendError::Target(_)) => {
                     PlayError::Internal("a host settings batch names a target".to_owned())
@@ -99,7 +109,7 @@ impl<T, S> SessionState<T, S> {
 }
 
 /// Settles every receipt the transport returned. An applied change moves
-/// into the settings the Host reads and announces a tempo it changed. A
+/// into the settings the Host reads; a tempo it changed is announced. A
 /// change for the next block the transport refused goes out again; any other
 /// rejected change is dropped and reported.
 pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
@@ -116,7 +126,9 @@ pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
         match receipt.outcome() {
             Outcome::Applied { data, .. } => {
                 applied = true;
-                let HostSettingsChange::Tempo(tempo) = settled.change;
+                let HostSettingsChange::Tempo(tempo) = settled.change else {
+                    continue;
+                };
                 if tempo == before.tempo() {
                     continue;
                 }

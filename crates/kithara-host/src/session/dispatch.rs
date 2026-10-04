@@ -51,12 +51,6 @@ where
             tap::detach(state, target);
             HostReply::Ok
         }
-        HostCmd::SetMetronome { on } => {
-            controls::set_metronome(state, on);
-            HostReply::Ok
-        }
-        HostCmd::SetMetronomeLevel { level } => controls::set_metronome_level(state, level)
-            .map_or_else(HostReply::Err, |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
@@ -506,13 +500,21 @@ mod tests {
         sync::atomic::AtomicBool,
     };
 
-    use firewheel::{ActivateInfo, processor::FirewheelProcessor};
+    use audioadapter_buffers::direct::InterleavedSlice;
+    use firewheel::{
+        ActivateInfo, backend::BackendProcessInfo, node::StreamStatus,
+        processor::FirewheelProcessor,
+    };
     use kithara_command::When;
+    use kithara_config::ConfigOwner;
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
-    use kithara_platform::sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+    use kithara_platform::{
+        sync::{
+            Arc,
+            atomic::{AtomicU64, AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
     use kithara_play::{DEFAULT_GATE_SMOOTHING, Tempo};
     use kithara_sync::SyncGroupSnapshot;
@@ -528,6 +530,7 @@ mod tests {
         api::Tap,
         bridge::MixTapWriter,
         host::HostSettingsChange,
+        rt::MetronomeConfigChange,
         session::{
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
@@ -564,7 +567,34 @@ mod tests {
     /// this is what a lost audio stream looks like to the context, so a test
     /// simulates the loss by dropping `state.stream`.
     struct RouteLossStream {
-        _processor: FirewheelProcessor,
+        processor: FirewheelProcessor,
+        block_frames: usize,
+    }
+
+    impl RouteLossStream {
+        /// The interleaved stereo block the graph renders at `clock_samples`.
+        fn render(&mut self, clock_samples: u64) -> Vec<f32> {
+            let mut block = vec![0.0; self.block_frames * 2];
+            let input = InterleavedSlice::new(&[] as &[f32], 0, 0).expect("an empty input");
+            let mut output = InterleavedSlice::new_mut(&mut block, 2, self.block_frames)
+                .expect("a stereo block");
+            self.processor.process(
+                &input,
+                &mut output,
+                BackendProcessInfo {
+                    frames: self.block_frames,
+                    process_timestamp: Some(bevy_platform::time::Instant::now()),
+                    duration_since_stream_start: Duration::from_secs_f64(
+                        clock_samples as f64 / f64::from(TestState::DEFAULT_SAMPLE_RATE),
+                    ),
+                    input_stream_status: StreamStatus::empty(),
+                    output_stream_status: StreamStatus::empty(),
+                    dropped_frames: 0,
+                    process_to_playback_delay: None,
+                },
+            );
+            block
+        }
     }
 
     type TestState = SessionState<RouteLossStream, TestPools>;
@@ -597,7 +627,8 @@ mod tests {
             })
             .map_err(|err| err.to_string())?;
         Ok(RouteLossStream {
-            _processor: processor,
+            processor,
+            block_frames: max_block_frames.get() as usize,
         })
     }
 
@@ -1546,31 +1577,45 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_metronome_flag_survives_an_idle_teardown() {
+    fn a_metronome_change_in_flight_at_an_idle_teardown_sounds_in_the_next_stream() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
         let id = register_player(&mut state);
         start_player_cmd(&mut state, id);
         assert!(matches!(
-            run_host_cmd(&mut state, HostCmd::SetMetronome { on: true }),
+            run_host_cmd(
+                &mut state,
+                HostCmd::Configure {
+                    change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
+                    at: When::Next,
+                },
+            ),
             HostReply::Ok
         ));
+        assert!(
+            !state.settings.config().metronome().enabled(),
+            "the change waits for a block that never renders"
+        );
 
         assert!(matches!(
             run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
             Reply::Ok
         ));
-        assert!(state.session_metronome_node_id.is_none());
-        start_player_cmd(&mut state, id);
-
-        assert!(state.metronome, "the flag outlives the context");
         assert!(
-            state
-                .session_metronome_memo
-                .as_ref()
-                .is_some_and(|memo| memo.enabled),
-            "the rebuilt metronome node starts switched on"
+            state.settings.config().metronome().enabled(),
+            "the teardown folds the change in flight into the settings"
+        );
+
+        start_player_cmd(&mut state, id);
+        let block = state
+            .stream
+            .as_mut()
+            .expect("the next stream runs")
+            .render(0);
+        assert!(
+            block.iter().any(|sample| sample.abs() > 0.1),
+            "the first block of the next stream clicks session beat 0"
         );
     }
 

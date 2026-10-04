@@ -92,6 +92,14 @@ pub(crate) fn converge_transport_restart(
     result
 }
 
+/// The Host settings as the render graph applied them for the block
+/// rendering now; none until the transport is installed.
+pub(crate) fn applied_settings(store: &ProcStore) -> Option<HostSettings> {
+    store
+        .try_get::<TransportState>()
+        .map(|state| state.settings)
+}
+
 fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessError> {
     let observation = {
         let state = store
@@ -152,7 +160,8 @@ impl TransportState {
     /// batch whose every command staged moves the transport. Only a batch
     /// that re-anchors the beats takes a new transport revision. A block that
     /// does not follow the last one refuses every tempo change due in it with
-    /// `continuity`'s error, since no beat anchor is known on its frames.
+    /// `continuity`'s error, since no beat anchor is known on its frames; a
+    /// metronome change applies in any block.
     fn apply_due(&mut self, info: &ProcInfo, continuity: Result<(), TransportProcessError>) {
         let Self {
             inbox,
@@ -307,24 +316,28 @@ impl TransportState {
         };
         for command in due.commands() {
             let HostPart::Settings(change) = *command;
-            let HostSettingsChange::Tempo(tempo) = change;
-            continuity?;
-            if tempo == staged.settings.tempo() {
-                continue;
+            match change {
+                HostSettingsChange::Tempo(tempo) => {
+                    continuity?;
+                    if tempo == staged.settings.tempo() {
+                        continue;
+                    }
+                    staged.settings.apply_change(change);
+                    staged.anchor = Some(
+                        staged
+                            .anchor
+                            .ok_or(TransportProcessError::InvalidBeatRange)?
+                            .retarget(
+                                due.at(),
+                                tempo.beats_per_second(),
+                                consts::TEMPO_SMOOTH_SECONDS,
+                            )
+                            .map_err(|_| TransportProcessError::InvalidBeatRange)?,
+                    );
+                    staged.retargeted = true;
+                }
+                HostSettingsChange::Metronome(_) => staged.settings.apply_change(change),
             }
-            staged.settings.apply_change(change);
-            staged.anchor = Some(
-                staged
-                    .anchor
-                    .ok_or(TransportProcessError::InvalidBeatRange)?
-                    .retarget(
-                        due.at(),
-                        tempo.beats_per_second(),
-                        consts::TEMPO_SMOOTH_SECONDS,
-                    )
-                    .map_err(|_| TransportProcessError::InvalidBeatRange)?,
-            );
-            staged.retargeted = true;
         }
         Ok(staged)
     }

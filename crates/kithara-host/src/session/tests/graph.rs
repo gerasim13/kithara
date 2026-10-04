@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use firewheel::FirewheelContext;
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_command::Live;
 use kithara_effects::LimiterConfig;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
@@ -25,7 +26,7 @@ use super::super::{
     protocol::{Cmd, HostCmd, HostReply, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
-use crate::{MetronomeConfig, PlayerMember, host::HeldPlayer, rt::SessionOutput};
+use crate::{HostSettings, PlayerMember, host::HeldPlayer, rt::SessionOutput};
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
@@ -125,11 +126,10 @@ where
     SessionState::new(
         root,
         root_view,
-        sample_rate,
         None,
         None,
-        SessionOutput::new(LimiterConfig::default(), MetronomeConfig::default())
-            .expect("the default output chain"),
+        SessionOutput::new(LimiterConfig::default()),
+        Live::new(HostSettings::default()).expect("the default settings are valid"),
         start_stream_fn,
     )
 }

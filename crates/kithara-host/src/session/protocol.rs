@@ -42,12 +42,6 @@ pub(crate) enum HostCmd<S> {
     DetachOutputs {
         tap: Tap,
     },
-    SetMetronome {
-        on: bool,
-    },
-    SetMetronomeLevel {
-        level: f32,
-    },
     Shutdown,
 }
 

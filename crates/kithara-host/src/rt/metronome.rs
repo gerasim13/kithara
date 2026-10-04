@@ -6,8 +6,6 @@ use core::{
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
-    diff::{Diff, Patch},
-    event::ProcEvents,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
@@ -21,7 +19,7 @@ use kithara_test_utils::kithara;
 use kithara_warp::{SessionAnchor, SessionBeat};
 use num_traits::ToPrimitive;
 
-use crate::PlayError;
+use crate::{PlayError, session::applied_settings};
 
 mod consts {
     use kithara_platform::time::Duration;
@@ -44,6 +42,8 @@ mod consts {
     pub(super) const BEATS_PER_BAR: i64 = 4;
     /// Peak of a beat click relative to a downbeat click.
     pub(super) const BEAT_RATIO: f64 = 0.625;
+    /// The metronome stays silent until switched on.
+    pub(super) const DEFAULT_ENABLED: bool = false;
     /// A downbeat click peaks at the limiter ceiling.
     pub(super) const DEFAULT_LEVEL: f32 = 1.0;
     /// The duck mutes the mix under every click.
@@ -79,6 +79,9 @@ mod consts {
 )]
 #[non_exhaustive]
 pub struct MetronomeConfig {
+    /// Whether a click sounds on every session beat.
+    #[config(live, builder(default = consts::DEFAULT_ENABLED))]
+    enabled: bool,
     /// Peak of a downbeat click as a share of the limiter ceiling, above
     /// zero and at most one; a beat click peaks at five eighths of it.
     #[config(live, check = Self::level_bounds, builder(default = consts::DEFAULT_LEVEL))]
@@ -153,21 +156,17 @@ struct Shape {
 }
 
 /// The Host metronome between the limiter and `graph_out`: a click on every
-/// session beat while enabled and the transport runs.
-#[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
+/// session beat while the Host settings the render graph applied switch it
+/// on and the transport runs. A click sounds at the level those settings
+/// carry when it starts.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MetronomeNode {
-    pub(crate) enabled: bool,
-    /// Peak of a downbeat click as a share of the limiter ceiling.
-    pub(crate) level: f32,
-    #[diff(skip)]
     shape: Shape,
 }
 
 impl MetronomeNode {
-    pub(crate) fn new(enabled: bool, config: MetronomeConfig, ceiling: f32) -> Self {
+    pub(crate) fn new(config: MetronomeConfig, ceiling: f32) -> Self {
         Self {
-            enabled,
-            level: config.level,
             shape: Shape {
                 ceiling: f64::from(ceiling),
                 depth: f64::from(config.duck),
@@ -332,17 +331,16 @@ impl Metronome {
     }
 
     /// Renders one block starting at session frame `start`: the sounding
-    /// click first, then a new click on every owed session beat whose frame
-    /// is before the block's end, taking over the duck of the click it cuts
-    /// off. A block continuing the last one owes the beats from its owed
+    /// click first, then a new click at `beats`' level on every owed session
+    /// beat of its trajectory whose frame is before the block's end, taking
+    /// over the duck of the click it cuts off. A block continuing the last one owes the beats from its owed
     /// beat on, clicking one a restart rounded behind the block on its first
     /// frame; any other block owes the beats from its start on. Returns
     /// whether the block was touched.
     fn render(
         &mut self,
-        trajectory: Option<SessionAnchor>,
+        beats: Option<(SessionAnchor, f32)>,
         start: SessionFrame,
-        level: f32,
         shape: Shape,
         left: &mut [f32],
         right: &mut [f32],
@@ -350,7 +348,7 @@ impl Metronome {
         let sounding = self.sounding();
         let mut cursor = 0;
         let mut started = false;
-        if let Some(anchor) = trajectory {
+        if let Some((anchor, level)) = beats {
             let first = i64::from(start);
             let continues = self
                 .reached
@@ -424,7 +422,7 @@ impl AudioNode for MetronomeNode {
         _cx: ConstructProcessorContext,
     ) -> Result<impl AudioNodeProcessor, NodeError> {
         Ok(MetronomeProcessor {
-            params: *self,
+            shape: self.shape,
             metronome: Metronome::default(),
         })
     }
@@ -440,18 +438,11 @@ impl AudioNode for MetronomeNode {
 }
 
 struct MetronomeProcessor {
-    params: MetronomeNode,
+    shape: Shape,
     metronome: Metronome,
 }
 
 impl AudioNodeProcessor for MetronomeProcessor {
-    #[kithara::rtsan_forbid_blocking]
-    fn events(&mut self, _info: &ProcInfo, events: &mut ProcEvents, _extra: &mut ProcExtra) {
-        for patch in events.drain_patches::<MetronomeNode>() {
-            self.params.apply(patch);
-        }
-    }
-
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.metronome.retune(stream_info.sample_rate);
     }
@@ -463,14 +454,16 @@ impl AudioNodeProcessor for MetronomeProcessor {
         buffers: ProcBuffers,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let trajectory = if self.params.enabled {
-            read_render_context(&extra.store, info)
-                .ok()
-                .and_then(|context| context.trajectory().copied())
-        } else {
-            None
-        };
-        if trajectory.is_none() && !self.metronome.sounding() {
+        let beats = applied_settings(&extra.store)
+            .map(|settings| settings.metronome())
+            .filter(MetronomeConfig::enabled)
+            .and_then(|config| {
+                read_render_context(&extra.store, info)
+                    .ok()
+                    .and_then(|context| context.trajectory().copied())
+                    .map(|trajectory| (trajectory, config.level()))
+            });
+        if beats.is_none() && !self.metronome.sounding() {
             return ProcessStatus::Bypass;
         }
         let frames = info.frames;
@@ -490,10 +483,9 @@ impl AudioNodeProcessor for MetronomeProcessor {
         out_left.copy_from_slice(in_left);
         out_right.copy_from_slice(in_right);
         self.metronome.render(
-            trajectory,
+            beats,
             SessionFrame::new(info.clock_samples.0),
-            self.params.level,
-            self.params.shape,
+            self.shape,
             out_left,
             out_right,
         );
@@ -532,13 +524,13 @@ mod tests {
         // that keeps a level under the ceiling, and a click rising in the
         // release of the last.
         for (level, duck) in [(1.0, 1.0), (0.8, 0.8)] {
-            let node = MetronomeNode::new(true, config(level, duck), CEILING);
+            let node = MetronomeNode::new(config(level, duck), CEILING);
             for from in [0.0, 0.5] {
                 for downbeat in [true, false] {
                     for mix in [CEILING, -CEILING] {
                         let mut left = [mix; FRAMES];
                         let mut right = [mix; FRAMES];
-                        Click::new(downbeat, rate(), node.level, node.shape, from)
+                        Click::new(downbeat, rate(), level, node.shape, from)
                             .render(&mut left, &mut right);
                         let bound = CEILING * (1.0 + 4.0 * f32::EPSILON);
                         assert!(
@@ -598,11 +590,11 @@ mod tests {
             (tone, MetronomeConfig::default()),
             (held, sharpest),
         ] {
-            let node = MetronomeNode::new(true, config, ceiling());
+            let node = MetronomeNode::new(config, ceiling());
             for downbeat in [true, false] {
                 let mut left = mix.clone();
                 let mut right = mix.clone();
-                Click::new(downbeat, rate(), node.level, node.shape, 0.0).render(
+                Click::new(downbeat, rate(), config.level(), node.shape, 0.0).render(
                     left.get_mut(ONSET..).expect("onset inside the mix"),
                     right.get_mut(ONSET..).expect("onset inside the mix"),
                 );
@@ -640,9 +632,8 @@ mod tests {
         let mut left = [0.0; FRAMES];
         let mut right = [0.0; FRAMES];
         metronome.render(
-            Some(transport(0, 0.0)),
+            Some((transport(0, 0.0), consts::DEFAULT_LEVEL)),
             SessionFrame::new(start),
-            node.level,
             node.shape,
             &mut left,
             &mut right,
@@ -657,16 +648,15 @@ mod tests {
     #[kithara::test]
     fn a_seek_forward_clicks_none_of_the_beats_it_jumps_over() {
         const TARGET: f64 = 40.25;
-        let node = MetronomeNode::new(true, MetronomeConfig::default(), ceiling());
+        let node = MetronomeNode::new(MetronomeConfig::default(), ceiling());
         let mut metronome = Metronome::default();
         let seek = past_beat_one(&mut metronome, node);
 
         let mut left = [0.0; 1_024];
         let mut right = [0.0; 1_024];
         let touched = metronome.render(
-            Some(transport(seek, TARGET)),
+            Some((transport(seek, TARGET), consts::DEFAULT_LEVEL)),
             SessionFrame::new(seek),
-            node.level,
             node.shape,
             &mut left,
             &mut right,
@@ -681,7 +671,7 @@ mod tests {
     #[kithara::test]
     fn a_seek_backward_clicks_the_beats_it_plays_again() {
         const TARGET: f64 = 0.99;
-        let node = MetronomeNode::new(true, MetronomeConfig::default(), ceiling());
+        let node = MetronomeNode::new(MetronomeConfig::default(), ceiling());
         let mut metronome = Metronome::default();
         let seek = past_beat_one(&mut metronome, node);
         let anchor = transport(seek, TARGET);
@@ -693,9 +683,8 @@ mod tests {
         let mut left = [0.0; 1_024];
         let mut right = [0.0; 1_024];
         metronome.render(
-            Some(anchor),
+            Some((anchor, consts::DEFAULT_LEVEL)),
             SessionFrame::new(seek),
-            node.level,
             node.shape,
             &mut left,
             &mut right,
@@ -717,14 +706,13 @@ mod tests {
             .hold(Duration::ZERO)
             .release(Duration::from_secs(1))
             .build();
-        let node = MetronomeNode::new(true, config, ceiling());
+        let node = MetronomeNode::new(config, ceiling());
         let render = |mix: f32| {
             let mut left = vec![mix; FRAMES];
             let mut right = vec![mix; FRAMES];
             Metronome::default().render(
-                Some(transport(0, 0.0)),
+                Some((transport(0, 0.0), consts::DEFAULT_LEVEL)),
                 SessionFrame::new(START),
-                node.level,
                 node.shape,
                 &mut left,
                 &mut right,

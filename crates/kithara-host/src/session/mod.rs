@@ -20,8 +20,10 @@ pub(crate) mod web;
 pub(crate) use protocol::{
     Cmd, HostCmd, HostDispatcher, HostReply, Reply, SessionError, SessionSampleRate,
 };
+pub(crate) use queue::HostProtocol;
 pub(crate) use state::RootView;
 pub use transport::TransportEvent;
+pub(crate) use transport::applied_settings;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::{
     bridge_duration_secs, bridge_is_playing, bridge_position_secs, bridge_process_calls,

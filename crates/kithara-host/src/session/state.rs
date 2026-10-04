@@ -33,7 +33,7 @@ use crate::{
     api::{SessionDuckingMode, SlotId, Tap},
     bridge::SharedEq,
     host::HostSettings,
-    rt::{MasterEqNode, MetronomeNode, SessionOutput},
+    rt::{MasterEqNode, SessionOutput},
 };
 
 #[derive(Debug)]
@@ -239,9 +239,6 @@ pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
     pub(super) root: GroupState<PlayerMember>,
     pub(super) output: SessionOutput,
-    /// Whether the Host metronome clicks; outlives the context.
-    pub(super) metronome: bool,
-    pub(super) session_metronome_memo: Option<Memo<MetronomeNode>>,
     pub(super) session_metronome_node_id: Option<NodeID>,
     pub(super) ctx: Option<FirewheelContext>,
     pub(super) taps: Taps,
@@ -286,31 +283,30 @@ impl<T, S> SessionState<T, S> {
     #[cfg(test)]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
-    /// Creates session state with its own musical-grid topology.
+    /// Creates session state with its own musical-grid topology, asking for
+    /// the output at the sample rate its root grid counts frames at.
     #[must_use]
     pub(crate) fn new<F>(
         root: GroupState<PlayerMember>,
         root_view: RootView,
-        sample_rate: NonZeroU32,
         requested_max_block_frames: Option<NonZeroU32>,
         requested_declick_frames: Option<NonZeroU32>,
         output: SessionOutput,
+        settings: Live<HostSettings, HostProtocol>,
         start_stream_fn: F,
     ) -> Self
     where
         F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
         let grid_id = root.id();
+        let sample_rate_hint = root.snapshot().axis().sample_rate().get();
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
-        let Ok(settings) = Live::new(HostSettings::default());
         let state = Self {
             settings,
             requested_max_block_frames,
             requested_declick_frames,
             output,
-            metronome: false,
-            session_metronome_memo: None,
             session_metronome_node_id: None,
             root,
             root_view,
@@ -320,7 +316,7 @@ impl<T, S> SessionState<T, S> {
             transport_control: None,
             taps: Taps::default(),
             next_player_id: 1,
-            sample_rate_hint: sample_rate.get(),
+            sample_rate_hint,
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
@@ -490,13 +486,12 @@ fn ensure_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
 fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     debug!("[KITHARA-ROUTE] creating session output graph");
     let limiter = state.output.limiter();
-    let metronome = state.output.metronome(state.metronome);
+    let metronome = state.output.metronome(state.settings.config().metronome());
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
     let session_node = VolumeNode::from_linear(state.session_ducking.gain());
     let session_memo = Memo::new(session_node);
-    let metronome_memo = Memo::new(metronome);
     let session_id = add_graph_node(fw_ctx, session_node)?;
     let limiter_id = add_graph_node(fw_ctx, limiter)?;
     let metronome_id = add_graph_node(fw_ctx, metronome)?;
@@ -523,7 +518,6 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     state.session_output_memo = Some(session_memo);
     state.session_limiter_node_id = Some(limiter_id);
     state.session_metronome_node_id = Some(metronome_id);
-    state.session_metronome_memo = Some(metronome_memo);
     tap::install_requested(state)?;
     debug!(
         ?session_id,

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, mem, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
+use kithara_command::Live;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{
@@ -10,9 +11,9 @@ use kithara_warp::BeatGridId;
 
 use super::super::{HeldPlayer, Host, HostOwned, owner::SessionRuntime};
 use crate::{
-    PlayerMember,
+    HostSettings, PlayerMember,
     rt::SessionOutput,
-    session::{HostDispatcher, RootView, web::WebSessionState},
+    session::{HostDispatcher, HostProtocol, RootView, web::WebSessionState},
     wasm::HostRoute,
 };
 type Resident = Box<dyn FnMut() -> Result<(), PlayError>>;
@@ -87,15 +88,15 @@ impl<S> Platform<S> {
     pub(in crate::host) fn realtime(
         group: GroupState<PlayerMember>,
         view: RootView,
-        sample_rate: NonZeroU32,
         _output_block_frames: Option<NonZeroU32>,
         output: SessionOutput,
+        settings: Live<HostSettings, HostProtocol>,
     ) -> Result<StartedPlatform<S>, PlayError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(group, view, sample_rate, output)?;
+            crate::session::web::spawn::<S>(group, view, output, settings)?;
         Ok((dispatcher, Self::owner(web_state)))
     }
 
@@ -363,13 +364,12 @@ mod tests {
         close: Outcome,
         detach: Outcome,
     ) -> (Host<TestPools>, BeatGridId, Rc<RefCell<usize>>) {
+        let sample_rate = NonZeroU32::new(44_100).expect("fixture sample rate");
         let SessionRoot {
             id: host_id,
-            sample_rate,
             group: mut root,
             view: root_view,
-        } = Host::<TestPools>::session_root(NonZeroU32::new(44_100).expect("fixture sample rate"))
-            .expect("fixture Host session");
+        } = Host::<TestPools>::session_root(sample_rate).expect("fixture Host session");
         let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
         let base = root.topology().expect("fixture root topology").stamp();
         let admission = root

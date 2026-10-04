@@ -5,7 +5,9 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     effects::LimiterConfig,
-    host::{HostConfig, HostSettingsControl, MetronomeConfig, Tap},
+    host::{
+        HostConfig, HostSettings, HostSettingsControl, MetronomeConfig, MetronomeConfigControl, Tap,
+    },
     play::{PlayError, Tempo},
     signal::AudioSpec,
     warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
@@ -256,7 +258,9 @@ async fn metronome_host(
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     (host, tap)
 }
 
@@ -314,7 +318,9 @@ async fn a_host_never_given_a_tempo_counts_and_clicks_at_120_bpm() {
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
 
     host.render_forward(frames).await;
     let pcm = tap.drain();
@@ -448,12 +454,16 @@ async fn a_metronome_switched_back_on_clicks_from_the_next_beat() {
     let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, frames).await;
     host.render_forward(block).await;
     let beat_three = beat_frame(&host.session_grid().await, 3);
-    host.set_metronome(false).await.expect("metronome off");
+    host.with(|host| host.metronome().set_enabled(false))
+        .await
+        .expect("metronome off");
     host.render_forward(beat_three + block - host.position())
         .await;
     tap.drain();
     let start = host.position();
-    host.set_metronome(true).await.expect("metronome back on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome back on");
     host.render_forward(frames - start).await;
     let heard: Vec<u64> = clicks(&tap.drain())
         .iter()
@@ -548,7 +558,7 @@ async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
         .expect("output tap");
     harness
         .host()
-        .set_metronome(true)
+        .with(|host| host.metronome().set_enabled(true))
         .await
         .expect("metronome on");
     let tempo = tempo();
@@ -625,7 +635,9 @@ async fn ride_over(tone: Vec<f32>) -> Ride {
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     let start = host.position();
 
     // WHY: A tempo change commits one block after it is set, onto a grid
@@ -754,10 +766,14 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
                 .build()
                 .expect("limiter ceiling"),
         )
-        .metronome(
-            MetronomeConfig::builder()
-                .level(consts::LOUD_LEVEL)
-                .duck(consts::LOUD_DUCK)
+        .settings(
+            HostSettings::builder()
+                .metronome(
+                    MetronomeConfig::builder()
+                        .level(consts::LOUD_LEVEL)
+                        .duck(consts::LOUD_DUCK)
+                        .build(),
+                )
                 .build(),
         )
         .build();
@@ -791,7 +807,9 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     let tempo = tempo();
     host.with(move |host| host.set_tempo(tempo))
         .await
@@ -862,7 +880,9 @@ async fn deck_under_clicks(level: f32) -> (Vec<f32>, Vec<f32>) {
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     let tempo = tempo();
     host.with(move |host| host.set_tempo(tempo))
         .await
@@ -1030,7 +1050,7 @@ async fn a_metronome_level_set_mid_click_sounds_from_the_next_click() {
         first.frame - consts::SILENT_FOOT + consts::ATTACK_FRAMES > host.position(),
         "the first click has not peaked when its level changes: {first:?}"
     );
-    host.set_metronome_level(consts::HALF_LEVEL)
+    host.with(|host| host.metronome().set_level(consts::HALF_LEVEL))
         .await
         .expect("half the level");
     let (take, beats) = render_to_the_level_beat(&host, &mut tap, take).await;
@@ -1047,7 +1067,9 @@ async fn a_refused_metronome_level_keeps_the_last_level() {
     let block = u64::from(consts::BLOCK_FRAMES);
     let (host, mut tap) = metronome_host(consts::SAMPLE_RATE, consts::BLOCKS * block).await;
     for level in [consts::OVER_LEVEL, 0.0] {
-        let refused = host.set_metronome_level(level).await;
+        let refused = host
+            .with(move |host| host.metronome().set_level(level))
+            .await;
         assert!(
             matches!(
                 &refused,
@@ -1078,8 +1100,9 @@ async fn a_host_refuses_a_metronome_config_out_of_its_bounds() {
             "metronome_duck",
         ),
     ] {
+        let settings = HostSettings::builder().metronome(metronome).build();
         let refused =
-            OfflineHostHarness::new(HostConfig::offline(pools()).metronome(metronome).build())
+            OfflineHostHarness::new(HostConfig::offline(pools()).settings(settings).build())
                 .await
                 .err();
         assert!(

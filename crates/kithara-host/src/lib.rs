@@ -20,6 +20,6 @@ pub use host::{
     PlayerMember,
 };
 pub use kithara_play::SessionSampleRate;
-pub use rt::MetronomeConfig;
+pub use rt::{MetronomeConfig, MetronomeConfigChange, MetronomeConfigControl};
 pub use session::TransportEvent;
 mod consts;

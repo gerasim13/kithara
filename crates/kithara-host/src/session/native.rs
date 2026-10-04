@@ -6,6 +6,7 @@ use firewheel::{
 };
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
+use kithara_command::Live;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
@@ -21,9 +22,10 @@ use super::{
         Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
         SessionDispatcher,
     },
+    queue::HostProtocol,
     state::{RootView, SessionState},
 };
-use crate::{PlayerMember, consts, error::PlayError, rt::SessionOutput};
+use crate::{HostSettings, PlayerMember, consts, error::PlayError, rt::SessionOutput};
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
@@ -127,9 +129,9 @@ fn engine_thread<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
     output: SessionOutput,
+    settings: Live<HostSettings, HostProtocol>,
     start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
@@ -137,10 +139,10 @@ fn engine_thread<T, S>(
     let mut state = SessionState::<T, S>::new(
         root,
         root_view,
-        sample_rate,
         requested_max_block_frames,
         None,
         output,
+        settings,
         start_stream_fn,
     );
     debug!("[KITHARA-ROUTE] native session worker started");
@@ -169,9 +171,9 @@ fn spawn_session_client<T, S>(
     thread_name: &'static str,
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
     requested_max_block_frames: Option<NonZeroU32>,
     output: SessionOutput,
+    settings: Live<HostSettings, HostProtocol>,
     start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 ) -> Arc<SessionClient<S>>
 where
@@ -184,9 +186,9 @@ where
             cmd_rx,
             root,
             root_view,
-            sample_rate,
             requested_max_block_frames,
             output,
+            settings,
             start_stream_fn,
         );
     });
@@ -231,23 +233,24 @@ fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> Cpa
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
-    sample_rate: NonZeroU32,
     output_block_frames: Option<NonZeroU32>,
     output: SessionOutput,
+    settings: Live<HostSettings, HostProtocol>,
 ) -> Arc<dyn HostDispatcher<S>> {
     spawn_session_client::<CpalStream, S>(
         "kithara-engine",
         root,
         root_view,
-        sample_rate,
         output_block_frames,
         output,
+        settings,
         move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
     )
 }
 
 #[cfg(test)]
 mod tests {
+    use kithara_command::When;
     use kithara_effects::LimiterConfig;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
@@ -260,7 +263,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        MetronomeConfig,
+        HostSettingsChange, MetronomeConfigChange,
         session::tests::{
             graph::root_with_player,
             ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
@@ -295,10 +298,9 @@ mod tests {
             "host-pump-regression",
             root,
             root_view.clone(),
-            sample_rate,
             None,
-            SessionOutput::new(LimiterConfig::default(), MetronomeConfig::default())
-                .expect("valid output config"),
+            SessionOutput::new(LimiterConfig::default()),
+            Live::new(HostSettings::default()).expect("the default settings are valid"),
             move |ctx, _| {
                 let backend = RingBackend::start(
                     ctx,
@@ -362,7 +364,10 @@ mod tests {
             .expect("the transport's own tempo reaches the read-only Host view without a command");
 
         assert!(matches!(
-            client.exec_host(HostCmd::SetMetronome { on: true }),
+            client.exec_host(HostCmd::Configure {
+                change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
+                at: When::Next,
+            }),
             Ok(HostReply::Ok)
         ));
         let mut on_blocks = 0;
@@ -389,7 +394,10 @@ mod tests {
             });
 
         assert!(matches!(
-            client.exec_host(HostCmd::SetMetronome { on: false }),
+            client.exec_host(HostCmd::Configure {
+                change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(false)),
+                at: When::Next,
+            }),
             Ok(HostReply::Ok)
         ));
         runtime

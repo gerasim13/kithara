@@ -1,6 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_command::Live;
 use kithara_effects::LimiterConfig;
 use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
@@ -13,7 +14,7 @@ use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
 use super::{Host, HostConfig};
 use crate::{
-    MetronomeConfig, PlayerMember,
+    HostSettings, PlayerMember,
     rt::SessionOutput,
     session::{
         HostDispatcher, RootView,
@@ -64,7 +65,7 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
         #[builder(default)] limiter: LimiterConfig,
-        #[builder(default)] metronome: MetronomeConfig,
+        #[builder(default)] settings: HostSettings,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
         #[builder(default = default_dispatcher_config())] dispatcher: DispatcherConfig,
         #[builder(default = TaskConfig::new())] task: TaskConfig,
@@ -76,7 +77,7 @@ impl<S> HostConfig<S> {
             declick_frames,
             declared_latency,
             limiter,
-            metronome,
+            settings,
             worker,
             task,
             dispatcher: Box::new(dispatcher),
@@ -105,12 +106,12 @@ where
     ) -> Result<StartedOfflineRuntime<S>, PlayError> {
         let HostConfig::Offline {
             pools,
-            sample_rate,
+            sample_rate: _,
             max_block_frames,
             declick_frames,
             declared_latency,
             limiter,
-            metronome,
+            settings,
             worker,
             dispatcher,
             task,
@@ -118,7 +119,7 @@ where
         else {
             unreachable!("offline runtime requires offline Host config");
         };
-        let output = SessionOutput::new(limiter, metronome)?;
+        let settings = Live::new(settings)?;
         let worker = Worker::new(worker);
         let dispatcher = worker.dispatcher(*dispatcher);
         let (client, task_handle) = crate::session::offline::spawn(
@@ -128,10 +129,10 @@ where
             root_view,
             OfflineTaskConfig::builder()
                 .declared_latency(declared_latency)
-                .output(output)
+                .output(SessionOutput::new(limiter))
+                .settings(settings)
                 .declick_frames(declick_frames)
                 .max_block_frames(max_block_frames)
-                .sample_rate(sample_rate)
                 .pools(pools)
                 .build(),
         )?;
@@ -279,12 +280,24 @@ mod tests {
     use kithara_warp::{BeatGrid, BeatGridQuery, MapPoint, MapPosition};
 
     use super::*;
-    use crate::{HostConfig, HostSettingsChange, HostSettingsControl, api::Tempo};
+    use crate::{
+        HostConfig, HostSettingsChange, HostSettingsControl, MetronomeConfigControl, api::Tempo,
+    };
 
     struct Discard;
 
     impl RenderSink for Discard {
         fn write(&mut self, _samples: &[f32]) -> Result<(), RenderSinkError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct Capture(Vec<f32>);
+
+    impl RenderSink for Capture {
+        fn write(&mut self, samples: &[f32]) -> Result<(), RenderSinkError> {
+            self.0.extend_from_slice(samples);
             Ok(())
         }
     }
@@ -331,12 +344,27 @@ mod tests {
     }
 
     fn render_frames(host: &mut Host<TestPools>, frames: std::ops::Range<u64>) {
+        render_into(host, frames, &mut Discard);
+    }
+
+    /// The interleaved samples `frames` render to.
+    fn render_samples(host: &mut Host<TestPools>, frames: std::ops::Range<u64>) -> Vec<f32> {
+        let mut capture = Capture::default();
+        render_into(host, frames, &mut capture);
+        capture.0
+    }
+
+    fn render_into(
+        host: &mut Host<TestPools>,
+        frames: std::ops::Range<u64>,
+        sink: &mut dyn RenderSink,
+    ) {
         let request = OfflineRenderRequest::builder()
             .spec(AudioSpec::new(consts::CHANNELS, consts::SAMPLE_RATE))
             .frames(frames)
             .build();
         let cancel = CancelScope::new(None);
-        host.render(&request, &cancel.token(), &mut Discard)
+        host.render(&request, &cancel.token(), sink)
             .expect("offline render");
     }
 
@@ -427,5 +455,42 @@ mod tests {
             128.0,
             "the transport starts at the configured tempo"
         );
+    }
+
+    #[kithara::test(native)]
+    fn an_offline_metronome_level_change_sounds_in_the_block_it_is_set_before() {
+        // Beat 1 at 120 BPM falls on frame 22 050, inside the block from 22 016.
+        let beat_block = 22_016..22_144;
+        let mut full_host = tempo_host();
+        let mut quiet_host = tempo_host();
+        for host in [&mut full_host, &mut quiet_host] {
+            host.metronome()
+                .set_enabled(true)
+                .expect("the metronome switches on");
+            render_frames(host, 0..beat_block.start);
+        }
+
+        quiet_host
+            .metronome()
+            .set_level(0.5)
+            .expect("half level is in bounds");
+        let full = render_samples(&mut full_host, beat_block.clone());
+        let quiet = render_samples(&mut quiet_host, beat_block);
+
+        assert_eq!(
+            quiet_host.metronome().level(),
+            0.5,
+            "the getter shows the level once its receipt arrives"
+        );
+        assert!(
+            full.iter().any(|sample| sample.abs() > 0.1),
+            "the block carries the click of beat 1"
+        );
+        for (index, (full, quiet)) in full.iter().zip(&quiet).enumerate() {
+            assert!(
+                (quiet - full * 0.5).abs() < 1e-6,
+                "sample {index} sounds at half level: full {full}, quiet {quiet}"
+            );
+        }
     }
 }

@@ -4,7 +4,9 @@ use std::num::NonZeroU32;
 
 use kithara::{
     audio::mock::TestPcmReader,
-    host::{HostConfig, HostSettingsControl, MetronomeConfig, Tap},
+    host::{
+        HostConfig, HostSettings, HostSettingsControl, MetronomeConfig, MetronomeConfigControl, Tap,
+    },
     play::Tempo,
     signal::AudioSpec,
     warp::BeatGridSnapshot,
@@ -247,7 +249,9 @@ async fn host_ride() -> HostRide {
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     let start = host.position();
     host.render_forward(block).await;
 
@@ -375,10 +379,14 @@ fn overlay_session() -> HostConfig<TestPools> {
     HostConfig::offline(pools())
         .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate"))
         .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
-        .metronome(
-            MetronomeConfig::builder()
-                .level(consts::OVERLAY_LEVEL)
-                .duck(consts::NO_DUCK)
+        .settings(
+            HostSettings::builder()
+                .metronome(
+                    MetronomeConfig::builder()
+                        .level(consts::OVERLAY_LEVEL)
+                        .duck(consts::NO_DUCK)
+                        .build(),
+                )
                 .build(),
         )
         .build()
@@ -395,7 +403,9 @@ async fn recorded_metronome() -> Vec<f32> {
         .attach_tap(Tap::Output, capacity(frames))
         .await
         .expect("output tap");
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     host.render_forward(frames).await;
     host.close().await;
 
@@ -519,7 +529,9 @@ async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
     while host.position() + u64::from(consts::BLOCK_FRAMES) < at {
         render_blocks(&harness, 1).await;
     }
-    host.set_metronome(true).await.expect("metronome on");
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
     while host.position() < at + frames {
         render_blocks(&harness, 1).await;
     }
