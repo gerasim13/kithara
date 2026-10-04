@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use kithara_devtools::lock::FileLock;
 
-use super::{pool::SlotPool, prune, sources, tracked, units};
+use super::{layout, pool::SlotPool, prune, sources, tracked, units};
 use crate::config::LaneFreshness;
 
 /// One job's hold on a lane slot.
@@ -38,6 +38,7 @@ impl LaneBuild {
         let (dir, lock) = pool.take()?;
         fs::create_dir_all(&dir)
             .with_context(|| format!("creating lane build directory {}", dir.display()))?;
+        layout::retire_relocated_runs(&dir)?;
         prune::prune(&dir, window)?;
         let tracked = tracked::list(project_root)?;
         let claim = match pool.freshness() {
