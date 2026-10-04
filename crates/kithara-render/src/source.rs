@@ -744,7 +744,7 @@ mod tests {
     use kithara_warp::{SpeedCurve, StretchControls, StretchKind};
 
     use super::*;
-    use crate::{LaneCommand, LaneFrame, LaneProtocol};
+    use crate::{LaneCommand, LaneFrame, LaneProtocol, consts};
 
     fn flush_deferred<S>(source: &mut S)
     where
@@ -1886,6 +1886,7 @@ mod tests {
         lane_start: u64,
         source_start: u64,
         revision: u64,
+        samples: Vec<f32>,
     }
 
     fn speed_batch(speed: f32) -> Batch<LaneProtocol> {
@@ -1901,10 +1902,46 @@ mod tests {
         pools: &PoolRegion<TestPools>,
         quarter: &[f32],
     ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
-        const FRAMES: u32 = 4096;
+        lane_over(pools, 3, |_| quarter, StretchControls::new(1.0))
+    }
+
+    /// A keylock lane over `signal` at unity speed, rendered by `backend`.
+    fn keylock_lane(
+        pools: &PoolRegion<TestPools>,
+        backend: StretchKind,
+        signal: &[f32],
+    ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
+        let controls = StretchControls::new(1.0);
+        controls.set_keylock(true);
+        controls.set_backend(backend);
+        let chunks = signal.len() / (2 * consts::LANE_CHUNK_FRAMES as usize);
+        lane_over(
+            pools,
+            u32::try_from(chunks).expect("test chunk count fits u32"),
+            |index| &signal[index as usize * 2 * consts::LANE_CHUNK_FRAMES as usize..],
+            controls,
+        )
+    }
+
+    /// A lane over `chunks` source chunks of [`consts::LANE_CHUNK_FRAMES`] frames, the
+    /// `index`th copied from the front of `samples(index)`.
+    fn lane_over<'a>(
+        pools: &PoolRegion<TestPools>,
+        chunks: u32,
+        samples: impl Fn(u32) -> &'a [f32],
+        controls: Arc<StretchControls>,
+    ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let chunks = (0..3_u32)
-            .map(|index| chunk_with_frames(pools, spec, u64::from(index * FRAMES), FRAMES, quarter))
+        let chunks = (0..chunks)
+            .map(|index| {
+                chunk_with_frames(
+                    pools,
+                    spec,
+                    u64::from(index * consts::LANE_CHUNK_FRAMES),
+                    consts::LANE_CHUNK_FRAMES,
+                    samples(index),
+                )
+            })
             .collect();
         let raw = RawSource {
             chunks,
@@ -1913,6 +1950,7 @@ mod tests {
         };
         let (lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let config = kithara_warp::WarpConfig::builder()
+            .stretch(controls)
             .render_quantum_frames(NonZeroUsize::new(256).expect("test quantum is non-zero"))
             .build();
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
@@ -1926,7 +1964,7 @@ mod tests {
     fn emit(source: &mut WarpSource<RawSource, TestPools>, from: u64, until: u64) -> Vec<Emitted> {
         let mut emitted = Vec::new();
         let mut cursor = from;
-        for _ in 0..512 {
+        for _ in 0..4096 {
             if cursor >= until {
                 return emitted;
             }
@@ -1936,11 +1974,13 @@ mod tests {
                         lane_start: cursor,
                         source_start: data.meta.frame_offset,
                         revision: data.meta.render_revision,
+                        samples: data.samples.to_vec(),
                     });
                     cursor += u64::from(data.meta.frames);
                 }
                 TrackStep::StateChanged | TrackStep::Blocked(_) => {}
-                _ => panic!("the lane must keep rendering until frame {until}"),
+                TrackStep::Eof => panic!("the lane ended at frame {cursor} before {until}"),
+                _ => panic!("the lane failed at frame {cursor} before {until}"),
             }
             flush_deferred(source);
         }
@@ -2041,5 +2081,131 @@ mod tests {
                 chunk.source_start
             );
         }
+    }
+
+    /// A quantum at a speed other than unity cannot end on an arbitrary frame
+    /// by rounding whole source frames; the lane still lands it on the
+    /// batch's frame, so the batch applies there.
+    #[kithara::test]
+    #[cfg(feature = "stretch-signalsmith")]
+    fn a_speed_batch_lands_on_its_frame_from_any_speed(quarter: Vec<f32>) {
+        const AT: u64 = 1_000;
+        let pools = pools();
+        let (mut source, mut lane) = lane_over(&pools, 3, |_| &quarter, StretchControls::new(0.8));
+        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            .expect("the lane has room for one batch");
+
+        let emitted = emit(&mut source, 0, AT + 1_000);
+
+        assert!(
+            emitted.iter().any(|chunk| chunk.lane_start == AT),
+            "a quantum starts on the batch's frame: {:?}",
+            emitted
+                .iter()
+                .map(|chunk| chunk.lane_start)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A stereo linear chirp, 220 Hz to 1760 Hz: every source frame sounds a
+    /// frequency of its own, so audio rendered from another frame decorrelates.
+    fn chirp(frames: usize) -> Vec<f32> {
+        let rate = 44_100.0_f64;
+        let span = frames as f64 / rate;
+        (0..frames)
+            .flat_map(|frame| {
+                let time = frame as f64 / rate;
+                let phase = std::f64::consts::TAU
+                    * time.mul_add(220.0, (1_760.0 - 220.0) / (2.0 * span) * time * time);
+                let sample = (0.5 * phase.sin()) as f32;
+                [sample, sample]
+            })
+            .collect()
+    }
+
+    /// The left channel the lane emitted, indexed by lane frame.
+    fn lane_pcm(emitted: &[Emitted]) -> Vec<f32> {
+        emitted
+            .iter()
+            .flat_map(|chunk| chunk.samples.iter().step_by(2).copied())
+            .collect()
+    }
+
+    /// The offset of `rendered` within `reference` around `center` that
+    /// correlates best, within `reach` frames, and that correlation.
+    fn alignment(rendered: &[f32], reference: &[f32], center: usize, reach: usize) -> (i64, f64) {
+        let energy = |samples: &[f32]| {
+            samples
+                .iter()
+                .map(|&sample| f64::from(sample) * f64::from(sample))
+                .sum::<f64>()
+        };
+        let rendered_energy = energy(rendered);
+        (0..=2 * reach)
+            .map(|shift| {
+                let window = &reference[center - reach + shift..][..rendered.len()];
+                let product = rendered
+                    .iter()
+                    .zip(window)
+                    .map(|(&left, &right)| f64::from(left) * f64::from(right))
+                    .sum::<f64>();
+                let correlation = product / (rendered_energy * energy(window)).sqrt();
+                (shift as i64 - reach as i64, correlation)
+            })
+            .fold(
+                (0, f64::MIN),
+                |best, next| {
+                    if next.1 > best.1 { next } else { best }
+                },
+            )
+    }
+
+    /// A keylock engine that changes speed on lane frame X renders from X on
+    /// what an engine started at X's source frame with the new speed renders:
+    /// the change lands on its frame and the source does not jump. The old
+    /// engine's tail fades out within `SETTLE` frames.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn a_keylock_speed_change_renders_on_as_an_engine_started_on_its_frame(
+        #[case] backend: StretchKind,
+    ) {
+        const ENGAGE: u64 = 1_024;
+        // At 0.8 the 3075 frames from ENGAGE play 2460 source frames whole.
+        const AT: u64 = 4_099;
+        const SETTLE: u64 = 16_384;
+        const WINDOW: usize = 4_096;
+        const REACH: usize = 2_048;
+        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let pools = pools();
+        let (mut changed, mut lane) = keylock_lane(&pools, backend, &signal);
+        lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(0.8))
+            .expect("the lane has room for the engaging batch");
+        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            .expect("the lane has room for the change");
+        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
+        let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
+
+        let (mut started, mut fresh) = keylock_lane(&pools, backend, &signal);
+        fresh
+            .send(When::At(LaneFrame(cue)), speed_batch(1.25))
+            .expect("the lane has room for the start");
+        let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+
+        let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+        let (offset, correlation) = alignment(
+            rendered,
+            &lane_pcm(&reference),
+            (cue + SETTLE) as usize,
+            REACH,
+        );
+        assert!(
+            offset == 0 && correlation > 0.95,
+            "{backend:?}: after the change at lane frame {AT} (source {cue}) the lane \
+             renders {offset} frames off a fresh engine, correlation {correlation:.3}"
+        );
     }
 }

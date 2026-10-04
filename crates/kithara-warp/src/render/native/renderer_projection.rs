@@ -422,6 +422,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             speed,
             active_frames: frames,
             frames,
+            landing_frames: None,
         })
     }
 

@@ -87,6 +87,38 @@ impl SourceResidency {
         Ok(())
     }
 
+    /// Fade `output` in from the retired engine's tail, continuing where the
+    /// previous output left the fade.
+    pub(super) fn blend_replacement(
+        &mut self,
+        output: &mut [f32],
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let available = self
+            .replacement
+            .len()
+            .saturating_sub(self.replacement_offset);
+        let blend_samples = output.len().min(available);
+        let total_frames = self.replacement.len() / channels;
+        for (offset, sample) in output[..blend_samples].iter_mut().enumerate() {
+            let index = self.replacement_offset + offset;
+            let mix = (index / channels + 1)
+                .to_f32()
+                .ok_or(ElasticError::SampleCountOverflow)?
+                / total_frames
+                    .max(1)
+                    .to_f32()
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+            *sample = self.replacement[index].mul_add(1.0 - mix, *sample * mix);
+        }
+        self.replacement_offset += blend_samples;
+        if self.replacement_offset == self.replacement.len() {
+            self.replacement.clear();
+            self.replacement_offset = 0;
+        }
+        Ok(())
+    }
+
     pub(super) fn clear(&mut self) {
         self.samples.clear();
         self.replacement.clear();
@@ -289,6 +321,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             activation: None,
             projection: Some(projection),
             rate: request.rate,
+            landing_frames: None,
         }))
     }
 
@@ -593,6 +626,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             activation: None,
             projection: Some(projection),
             rate: request.rate,
+            landing_frames: None,
         })
     }
 

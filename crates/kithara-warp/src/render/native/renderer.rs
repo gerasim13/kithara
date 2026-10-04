@@ -53,6 +53,8 @@ pub(super) struct PreparedQuantum {
     pub(super) source_start: u64,
     pub(super) active_frames: usize,
     pub(super) frames: usize,
+    /// Output frames a quantum that ends on a scheduled frame renders exactly.
+    pub(super) landing_frames: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -130,6 +132,12 @@ pub struct WarpRenderer<S> {
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
     pub(super) backend_transition_pending: bool,
+    /// A speed set while the engine runs: its tail retires into the
+    /// residency's replacement and the engine re-primes on the speed's frame.
+    pub(super) reprime_pending: bool,
+    /// Source frame the engine reads next while it trails the decoded frontier
+    /// after a prime; the residency holds every frame from it on.
+    pub(super) resident_feed: Option<u64>,
     pub(super) current_keylock: bool,
     /// One scheduler-shell rebuild requested after a checked engine failure.
     /// The intent is consumed even when preparation fails.
@@ -195,6 +203,8 @@ where
             current_kind,
             current_keylock,
             backend_transition_pending: false,
+            reprime_pending: false,
+            resident_feed: None,
             controls,
             pools,
             spec,
@@ -304,6 +314,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
         self.active = false;
+        self.reprime_pending = false;
+        self.resident_feed = None;
         self.region = None;
     }
 
@@ -424,13 +436,17 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     pub(super) fn meta_at_frame(meta: AudioChunkInfo, frame_offset: u64) -> AudioChunkInfo {
         let mut start = meta;
-        let delta = frame_offset.saturating_sub(meta.frame_offset);
+        let delta = frame_offset.abs_diff(meta.frame_offset);
+        let span = meta
+            .spec
+            .duration_for(delta)
+            .unwrap_or(Duration::from_nanos(u64::MAX));
         start.frame_offset = frame_offset;
-        start.timestamp = meta.timestamp.saturating_add(
-            meta.spec
-                .duration_for(delta)
-                .unwrap_or(Duration::from_nanos(u64::MAX)),
-        );
+        start.timestamp = if frame_offset < meta.frame_offset {
+            meta.timestamp.saturating_sub(span)
+        } else {
+            meta.timestamp.saturating_add(span)
+        };
         if delta > 0 {
             start.source_byte_offset = None;
             start.source_bytes = 0;
@@ -536,9 +552,18 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// stamping `revision` on every chunk rendered toward it. A quantum
     /// prepared before is dropped, so the next one is planned at this speed.
     pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) {
-        match curve {
-            SpeedCurve::Constant(speed) => self.rate = RateTarget::new(speed, revision),
-        }
+        let target = match curve {
+            SpeedCurve::Constant(speed) => RateTarget::new(speed, revision),
+        };
+        self.reprime_pending |= self.active
+            && self.projection.active.is_none()
+            && (target.speed() - self.rate.speed()).abs() > f32::EPSILON
+            && !self.unity_passthrough(target.speed())
+            && self
+                .engine
+                .as_ref()
+                .is_some_and(|engine| engine.capabilities().latency().source_frames() > 0);
+        self.rate = target;
         self.prepared_quantum = None;
     }
 
@@ -568,7 +593,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Whether a live active-to-unity transition still owns queued samples.
     #[must_use]
     pub const fn transition_pending(&self) -> bool {
-        self.pending_unity_meta.is_some() || self.backend_transition_pending
+        self.pending_unity_meta.is_some() || self.backend_transition_pending || self.reprime_pending
     }
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {

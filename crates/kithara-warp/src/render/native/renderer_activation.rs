@@ -16,9 +16,11 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    /// Prime the engine from the residency so its first output is the source
+    /// frame presented last; the engine then reads on from the residency.
     pub(super) fn activate_prepared_quantum(
         &mut self,
-        chunk: &mut AudioChunk,
+        chunk: &AudioChunk,
         prepared: PreparedQuantum,
     ) -> Result<(), ElasticError> {
         let Some(activation) = prepared.activation else {
@@ -30,7 +32,7 @@ where
                 .ok_or(ElasticError::EnginePreparation(
                     "Warp renderer has no presented source frontier",
                 ))?;
-        if chunk.meta.frame_offset != cue || chunk.meta.spec.sample_rate != sample_rate {
+        if chunk.meta.spec.sample_rate != sample_rate {
             return Err(ElasticError::DiscontinuousSource {
                 expected: cue.to_f64().ok_or(ElasticError::SampleCountOverflow)?,
                 actual: chunk
@@ -52,25 +54,21 @@ where
             .history_frames
             .checked_mul(channels)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let warm_samples = activation
-            .warm
-            .source_frames()
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let prefix_samples = prefix_frames
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let active_samples = prepared
-            .active_frames
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let active_end = prefix_samples
-            .checked_add(active_samples)
-            .ok_or(ElasticError::SampleCountOverflow)?;
         let discard_samples = activation
             .warm
             .output_frames()
             .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let lookahead_end = cue
+            .checked_add(
+                u64::try_from(activation.history_frames)
+                    .map_err(|_| ElasticError::SampleCountOverflow)?,
+            )
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let prefix_end = cue
+            .checked_add(
+                u64::try_from(prefix_frames).map_err(|_| ElasticError::SampleCountOverflow)?,
+            )
             .ok_or(ElasticError::SampleCountOverflow)?;
         let pitch = if self.current_keylock {
             1.0
@@ -103,20 +101,13 @@ where
             history[missing..].copy_from_slice(resident_history);
             history.as_ref()
         };
-
-        let lookahead = chunk.samples.get(..history_samples).ok_or_else(|| {
-            ElasticError::LookaheadSampleCount {
-                actual: chunk.samples.len().min(history_samples),
-                expected: history_samples,
-            }
-        })?;
-        let warm = chunk
-            .samples
-            .get(history_samples..prefix_samples)
-            .ok_or_else(|| ElasticError::SourceSampleCount {
-                actual: chunk.samples.len().saturating_sub(history_samples),
-                expected: warm_samples,
-            })?;
+        let resident_from = |start: u64, end: u64| {
+            i64::try_from(start)
+                .map_err(|_| ElasticError::SampleCountOverflow)
+                .and_then(|start| residency.range(start, end, channels))
+        };
+        let lookahead = &residency.samples[resident_from(cue, lookahead_end)?];
+        let warm = &residency.samples[resident_from(lookahead_end, prefix_end)?];
         let scratch = self
             .activation_scratch
             .as_mut()
@@ -140,22 +131,8 @@ where
         scratch.clear();
 
         self.clear_pending_source();
-        chunk.samples.copy_within(prefix_samples..active_end, 0);
-        chunk.samples.truncate(active_samples);
-        let original = chunk.meta;
-        chunk.meta = Self::meta_at_frame(
-            original,
-            original
-                .frame_offset
-                .checked_add(
-                    u64::try_from(prefix_frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-                )
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        );
-        chunk.meta.frames =
-            u32::try_from(prepared.active_frames).map_err(|_| ElasticError::SampleCountOverflow)?;
-        chunk.meta.end_timestamp = original.end_timestamp;
-        self.output_start_meta = Some(original);
+        self.output_start_meta = Some(Self::meta_at_frame(chunk.meta, cue));
+        self.resident_feed = Some(prefix_end);
         self.source_frames_admitted =
             u64::try_from(prefix_frames).map_err(|_| ElasticError::SampleCountOverflow)?;
         self.primed_source_debt = u64::try_from(activation.warm.source_frames())
@@ -235,21 +212,35 @@ where
             })
             .and_then(|(speed, activation)| {
                 let prefix = activation.map_or(Ok(0), PreparedActivation::prefix_frames)?;
-                let frame_offset = meta
-                    .frame_offset
-                    .checked_add(
-                        u64::try_from(prefix).map_err(|_| ElasticError::SampleCountOverflow)?,
-                    )
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                let active_frames = self.source_frames_for_quantum(
-                    Self::meta_at_frame(meta, frame_offset),
+                let active_start = match activation {
+                    Some(_) => self
+                        .rendered_source_end
+                        .ok_or(ElasticError::EnginePreparation(
+                            "Warp renderer has no presented source frontier",
+                        ))?
+                        .0
+                        .checked_add(
+                            u64::try_from(prefix).map_err(|_| ElasticError::SampleCountOverflow)?,
+                        )
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                    None => self.resident_feed.unwrap_or(meta.frame_offset),
+                };
+                let (active_frames, landing_frames) = self.source_frames_for_quantum(
+                    Self::meta_at_frame(meta, active_start),
                     remaining,
                     speed,
                     output_limit,
                 )?;
-                let frames = prefix
-                    .checked_add(active_frames)
-                    .ok_or(ElasticError::SampleCountOverflow)?;
+                let frames = usize::try_from(
+                    active_start
+                        .checked_add(
+                            u64::try_from(active_frames)
+                                .map_err(|_| ElasticError::SampleCountOverflow)?,
+                        )
+                        .ok_or(ElasticError::SampleCountOverflow)?
+                        .saturating_sub(meta.frame_offset),
+                )
+                .map_err(|_| ElasticError::SampleCountOverflow)?;
                 Ok(PreparedQuantum {
                     activation,
                     rate,
@@ -258,6 +249,7 @@ where
                     frames,
                     source_start: meta.frame_offset,
                     projection: None,
+                    landing_frames,
                 })
             });
         match result {
@@ -306,17 +298,16 @@ where
                 }
             }
         }
+        let shrink = prepared.frames - frames;
+        if shrink > 0 {
+            prepared.landing_frames = None;
+        }
         prepared.frames = frames;
-        if let Some(activation) = prepared.activation {
-            let prefix = activation.prefix_frames().ok()?;
-            if frames > prefix {
-                prepared.active_frames = frames - prefix;
-            } else {
-                prepared.active_frames = frames;
-                prepared.activation = None;
-            }
+        if prepared.active_frames > shrink {
+            prepared.active_frames -= shrink;
         } else {
             prepared.active_frames = frames;
+            prepared.activation = None;
         }
         self.prepared_quantum = Some(prepared);
         Some(FrameCount::new(frames))

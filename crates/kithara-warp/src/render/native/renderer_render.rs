@@ -154,6 +154,33 @@ where
         Ok((output_frames, exact - emitted))
     }
 
+    /// The output of a quantum's last request when the quantum ends on a
+    /// scheduled frame: what `emitted` leaves of `landing`, with the exact
+    /// output it does not cover carried as the remainder.
+    fn landing_output_frames(
+        source_frames: usize,
+        stretch: f64,
+        remainder: f64,
+        landing: usize,
+        emitted: usize,
+    ) -> Result<(usize, f64), ElasticError> {
+        let output = landing
+            .checked_sub(emitted)
+            .filter(|output| *output > 0)
+            .ok_or(ElasticError::OutputFrameLimit {
+                frames: emitted,
+                limit: landing,
+            })?;
+        let exact = source_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?
+            .mul_add(stretch, remainder);
+        Ok((
+            output,
+            exact - output.to_f64().ok_or(ElasticError::SampleCountOverflow)?,
+        ))
+    }
+
     fn quantized_source_span(
         frames: usize,
         pending_frames: usize,
@@ -238,13 +265,15 @@ where
         Ok(source_limit)
     }
 
+    /// Source frames for the next quantum and, when `output_limit` ends it on a
+    /// scheduled frame, the exact output it renders there.
     pub(super) fn source_frames_for_quantum(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
         speed: f32,
         output_limit: usize,
-    ) -> Result<usize, ElasticError> {
+    ) -> Result<(usize, Option<usize>), ElasticError> {
         if remaining == 0 {
             return Err(ElasticError::EmptySource);
         }
@@ -253,10 +282,12 @@ where
             && self.pending_frames(usize::from(self.spec.channels.max(1))) == 0
             && self.unity_passthrough(speed)
         {
-            return Ok(self
-                .render_quantum_frames
-                .map_or(remaining, |frames| remaining.min(frames.get()))
-                .min(output_limit));
+            return Ok((
+                self.render_quantum_frames
+                    .map_or(remaining, |frames| remaining.min(frames.get()))
+                    .min(output_limit),
+                None,
+            ));
         }
 
         let channels = usize::from(self.spec.channels.max(1));
@@ -278,15 +309,24 @@ where
             .as_ref()
             .map(|engine| engine.capabilities())
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        let output_limit = self
-            .render_quantum_frames
-            .map_or_else(
-                || capabilities.max_output_frames(),
-                |frames| capabilities.max_output_frames().min(frames.get()),
-            )
-            .min(output_limit);
-        let source_limit = Self::source_block_limit(stretch, capabilities, output_limit)?;
+        let quantum_limit = self.render_quantum_frames.map_or_else(
+            || capabilities.max_output_frames(),
+            |frames| capabilities.max_output_frames().min(frames.get()),
+        );
         let pending_frames = self.pending_frames(channels);
+        if output_limit <= quantum_limit {
+            let source_room = capabilities
+                .max_source_frames()
+                .saturating_sub(pending_frames);
+            let landing = Self::landing_source_span(output_limit, stretch, self.output_remainder)?;
+            return Ok(if landing <= region_frames.min(source_room) {
+                (landing, Some(output_limit))
+            } else {
+                (region_frames.min(source_room).max(1), None)
+            });
+        }
+        let output_limit = quantum_limit;
+        let source_limit = Self::source_block_limit(stretch, capabilities, output_limit)?;
         let available =
             source_limit
                 .checked_sub(pending_frames)
@@ -298,15 +338,34 @@ where
             return Err(ElasticError::InvalidRate(stretch.recip()));
         }
         let frames = region_frames.min(available);
-        Ok(Self::quantized_source_span(
-            frames,
-            pending_frames,
-            stretch,
-            self.output_remainder,
-            capabilities,
-            output_limit,
-        )?
-        .unwrap_or(frames))
+        Ok((
+            Self::quantized_source_span(
+                frames,
+                pending_frames,
+                stretch,
+                self.output_remainder,
+                capabilities,
+                output_limit,
+            )?
+            .unwrap_or(frames),
+            None,
+        ))
+    }
+
+    /// The fewest source frames whose exact output, after `remainder`, rounds
+    /// to at least `output` frames: rendered as exactly `output`, they end a
+    /// quantum on that frame and carry the rest as the remainder.
+    fn landing_source_span(
+        output: usize,
+        stretch: f64,
+        remainder: f64,
+    ) -> Result<usize, ElasticError> {
+        let output = output.to_f64().ok_or(ElasticError::SampleCountOverflow)?;
+        ((output - Self::OUTPUT_ROUNDING_MARGIN - remainder) / stretch)
+            .ceil()
+            .max(1.0)
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)
     }
 }
 
@@ -314,6 +373,8 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    /// Render `frames` source frames; with `landing`, the last engine request
+    /// emits exactly what is left of that many output frames.
     pub(super) fn render_active(
         &mut self,
         meta: AudioChunkInfo,
@@ -321,6 +382,7 @@ where
         speed: f32,
         channels: usize,
         frames: usize,
+        landing: Option<usize>,
     ) -> Result<(), ElasticError> {
         let base = 1.0 / f64::from(speed);
         let pitch = if self.current_keylock {
@@ -359,17 +421,22 @@ where
                 return Err(ElasticError::InvalidRate(stretch.recip()));
             }
             let sub = Self::balanced_source_block(remaining, available);
-            let request_span = Self::quantized_source_span(
-                sub,
-                pending_frames,
-                stretch,
-                self.output_remainder,
-                capabilities,
-                capabilities.max_output_frames(),
-            )?;
+            let landing = landing.filter(|_| consumed + sub == frames);
+            let request_span = if landing.is_some() {
+                Some(sub)
+            } else {
+                Self::quantized_source_span(
+                    sub,
+                    pending_frames,
+                    stretch,
+                    self.output_remainder,
+                    capabilities,
+                    capabilities.max_output_frames(),
+                )?
+            };
             let sub = request_span.unwrap_or(sub);
             let (output_frames, next_remainder) =
-                Self::output_frames(sub, stretch, self.output_remainder)?;
+                self.request_output_frames(sub, stretch, landing, channels)?;
             let part = &samples[consumed * channels..(consumed + sub) * channels];
             if output_frames == 0 || request_span.is_none() {
                 self.append_pending_source(part, meta, frame)?;
@@ -457,6 +524,24 @@ where
                 "time-stretch render exceeded its source-frame iteration bound",
             ))
         }
+    }
+
+    /// Output frames one engine request emits for `sub` source frames and the
+    /// remainder it leaves; a `landing` request emits what is left of it.
+    fn request_output_frames(
+        &self,
+        sub: usize,
+        stretch: f64,
+        landing: Option<usize>,
+        channels: usize,
+    ) -> Result<(usize, f64), ElasticError> {
+        landing.map_or_else(
+            || Self::output_frames(sub, stretch, self.output_remainder),
+            |landing| {
+                let emitted = self.scratch.as_deref().map_or(0, <[f32]>::len) / channels;
+                Self::landing_output_frames(sub, stretch, self.output_remainder, landing, emitted)
+            },
+        )
     }
 
     pub(super) fn render_terminal_pending(&mut self, channels: usize) -> Result<(), ElasticError> {
@@ -650,28 +735,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 &resident.samples[source],
                 output,
             )?;
-        let available = resident
-            .replacement
-            .len()
-            .saturating_sub(resident.replacement_offset);
-        let blend_samples = output.len().min(available);
-        let total_frames = resident.replacement.len() / channels;
-        for (offset, sample) in output[..blend_samples].iter_mut().enumerate() {
-            let index = resident.replacement_offset + offset;
-            let mix = (index / channels + 1)
-                .to_f32()
-                .ok_or(ElasticError::SampleCountOverflow)?
-                / total_frames
-                    .max(1)
-                    .to_f32()
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-            *sample = resident.replacement[index].mul_add(1.0 - mix, *sample * mix);
-        }
-        resident.replacement_offset += blend_samples;
-        if resident.replacement_offset == resident.replacement.len() {
-            resident.replacement.clear();
-            resident.replacement_offset = 0;
-        }
+        resident.blend_replacement(output, channels)?;
         resident.retain_from(request.projection.end.source(), channels);
         resident.prepared = None;
         self.clear_pending_source();
