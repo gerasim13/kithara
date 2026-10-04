@@ -321,20 +321,24 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     #[case] superseding: Start,
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
-    let (control_opened, control, control_closed) = {
+    let (control_built, control_opened, control, control_closed) = {
         let control = STAGED_BESIDE_PLAYBACK_CONTROL;
         let mut harness =
             ProductHarness::new_for_block(control, &sources, cue, Audible::Deck(0), BLOCK_FRAMES)
                 .await;
+        let built = Window::read(&harness, control);
         let opened = open_window(&mut harness, control).await;
         let pcm = render_frames(&mut harness, control, LISTEN_FRAMES).await;
-        (opened, pcm, Window::read(&harness, control))
+        (built, opened, pcm, Window::read(&harness, control))
     };
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
+    let candidate_built = Window::read(&harness, case);
     harness.mark("staged cue, then a superseding cue");
     let superseded = prepare_cue(&mut harness, case, rate, cue).await;
+    let candidate_staged = Window::read(&harness, case);
     let successor = prepare_cue(&mut harness, case, rate, superseding).await;
+    let candidate_superseded = Window::read(&harness, case);
     let candidate_opened = open_window(&mut harness, case).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     let candidate_closed = Window::read(&harness, case);
@@ -363,7 +367,14 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         candidate_opened,
         control_opened,
         "{}: the two windows opened at different points of the deck's own \
-         timeline, so one covers audio the other has already played",
+         timeline, so one covers audio the other has already played; the \
+         control's deck stood on {control_built} when its build returned and \
+         the candidate's on {candidate_built}, then on {candidate_staged} once \
+         a lane was staged beside it and on {candidate_superseded} once that \
+         lane was superseded. Only a render advances a deck, and none of those \
+         steps renders, so a reading that moves between them was moved by the \
+         staging; readings that hold still through them put the move inside \
+         the waiting renders themselves",
         case.id(),
     );
     assert_eq!(
@@ -428,9 +439,13 @@ impl fmt::Display for Window {
 /// Renders whole blocks until the deck has reached [`WINDOW_LEAD_FRAMES`], and
 /// reports where the window opens.
 ///
-/// Both sides of a comparison call this, so both open on the same frame: a
-/// render advances the deck by one block, so whichever side its build left
-/// further back catches up to the same first position past the lead.
+/// Both sides of a comparison call this, and they open on the same frame only
+/// while both step the same grid: a render advances a deck by one block, so a
+/// side its build left further back catches up to the same first position past
+/// the lead. A side that is off that grid instead stops at the first of its own
+/// steps past the lead, which is a different frame, and the caller's assertion
+/// on the two openings is what reports it. Measured: a deck 359 frames off the
+/// block grid opened on 8551 against the other's 8192.
 async fn open_window(harness: &mut ProductHarness, case: SyncCase) -> Window {
     for _ in 0..WINDOW_BLOCK_BUDGET {
         let window = Window::read(harness, case);
