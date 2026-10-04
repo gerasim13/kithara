@@ -2,21 +2,12 @@ diff --git a/cargo-geiger/src/graph.rs b/cargo-geiger/src/graph.rs
 index e5eeb71..0bf8b7b 100644
 --- a/cargo-geiger/src/graph.rs
 +++ b/cargo-geiger/src/graph.rs
-@@ -4,9 +4,7 @@ use extra_deps::ExtraDeps;
- 
- use crate::args::{Args, DepsArgs, TargetArgs};
- use crate::cli::get_cfgs;
+@@ -7,3 +7 @@ use crate::cli::get_cfgs;
 -use crate::mapping::{
 -    CargoMetadataParameters, DepsNotReplaced, MatchesIgnoringSource,
 -};
 +use crate::mapping::{CargoMetadataParameters, DepsNotReplaced};
- 
- use cargo::util::CargoResult;
- use cargo_platform::Cfg;
-@@ -177,11 +175,15 @@ fn filter_dependencies<'a>(
-         .dependencies
-         .iter()
-         .filter(|d| {
+@@ -180,5 +178,9 @@ fn filter_dependencies<'a>(
 -            d.matches_ignoring_source(
 -                cargo_metadata_parameters.krates,
 -                dependency_package_id,
@@ -31,82 +22,36 @@ index e5eeb71..0bf8b7b 100644
 +                    candidate.name == d.name
 +                        && d.req.matches(&candidate.version)
 +                })
-         })
-         .filter(|d| graph_configuration.extra_deps.allows(d.kind))
-         .filter(|d| {
 diff --git a/cargo-geiger/src/scan/default.rs b/cargo-geiger/src/scan/default.rs
 index 380cf9e..7d47c2d 100644
 --- a/cargo-geiger/src/scan/default.rs
 +++ b/cargo-geiger/src/scan/default.rs
-@@ -103,13 +103,19 @@ fn scan(
-     );
- 
-     match resolve_rs_file_deps(&compile_options, workspace) {
+@@ -106 +106 @@ fn scan(
 -        Ok(rs_files_used) => {
 +        Ok(dependency_groups) => {
-             let geiger_context = find_unsafe(
-                 cargo_metadata_parameters,
-                 scan_parameters.gctx,
-                 ScanMode::Full,
-                 scan_parameters.print_config,
+@@ -111,0 +112 @@ fn scan(
 +                Some(&dependency_groups),
-             )?;
+@@ -112,0 +114,5 @@ fn scan(
 +            let rs_files_used = dependency_groups
 +                .into_iter()
 +                .flatten()
 +                .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
 +                .collect();
-             Ok(ScanDetails {
-                 rs_files_used,
-                 geiger_context,
 diff --git a/cargo-geiger/src/scan/find.rs b/cargo-geiger/src/scan/find.rs
 index 8dc107c..4f73cb4 100644
 --- a/cargo-geiger/src/scan/find.rs
 +++ b/cargo-geiger/src/scan/find.rs
-@@ -26,6 +26,7 @@ pub fn find_unsafe(
-     gctx: &GlobalContext,
-     mode: ScanMode,
-     print_config: &PrintConfig,
+@@ -28,0 +29 @@ pub fn find_unsafe(
 +    dependency_groups: Option<&[HashSet<PathBuf>]>,
- ) -> Result<GeigerContext, CliError> {
-     let mut progress = cargo::util::Progress::new("Scanning", gctx);
-     let geiger_context = find_unsafe_in_packages_with_progress(
-@@ -33,6 +34,7 @@ pub fn find_unsafe(
-         cargo_metadata_parameters,
-         print_config.include_tests,
-         mode,
+@@ -35,0 +37 @@ pub fn find_unsafe(
 +        dependency_groups,
-         |progress_count, count| {
-             progress.tick(progress_count, count, "find_unsafe_tick")
-         },
-@@ -47,6 +49,7 @@ fn find_unsafe_in_packages_with_progress<F>(
-     cargo_metadata_parameters: &CargoMetadataParameters,
-     include_tests: IncludeTests,
-     mode: ScanMode,
+@@ -49,0 +52 @@ fn find_unsafe_in_packages_with_progress<F>(
 +    dependency_groups: Option<&[HashSet<PathBuf>]>,
-     mut progress_fn: F,
- ) -> GeigerContext
- where
-@@ -64,6 +67,7 @@ where
-                 cargo_metadata_parameters,
-                 include_tests,
-                 mode,
+@@ -66,0 +70 @@ where
 +                dependency_groups,
-                 Some(on_processed),
-             ))
-         });
-@@ -80,6 +84,7 @@ fn find_unsafe_in_packages<F>(
-     cargo_metadata_parameters: &CargoMetadataParameters,
-     include_tests: IncludeTests,
-     mode: ScanMode,
+@@ -82,0 +87 @@ fn find_unsafe_in_packages<F>(
 +    dependency_groups: Option<&[HashSet<PathBuf>]>,
-     on_processed: Option<F>,
- ) -> GeigerContext
- where
-@@ -88,8 +93,17 @@ where
-     let package_id_to_metrics = Arc::new(Mutex::new(HashMap::new()));
-     let ignored = Arc::new(Mutex::new(HashSet::new()));
-     let packages = cargo_metadata_parameters.metadata.packages.to_vec();
+@@ -91,2 +96,11 @@ where
 -    let package_code_files: Vec<_> =
 -        find_rs_files_in_packages(&packages).collect();
 +    let package_code_files: Vec<_> = match dependency_groups {
@@ -120,13 +65,7 @@ index 8dc107c..4f73cb4 100644
 +            .collect(),
 +        None => find_rs_files_in_packages(&packages).collect(),
 +    };
-     let package_code_file_count = package_code_files.len();
-     let processed_count = AtomicUsize::new(0);
-     package_code_files.into_par_iter().for_each_with(
-@@ -151,6 +165,37 @@ where
-     }
- }
- 
+@@ -153,0 +168,31 @@ where
 +/// Attribute compiler inputs by the target root in each dep-info group.
 +/// Generated include! sources share that group even outside the package tree.
 +fn compiled_rs_files(
@@ -158,71 +97,39 @@ index 8dc107c..4f73cb4 100644
 +    files.into_values().collect()
 +}
 +
- fn find_rs_files_in_dir(dir: &Path) -> impl Iterator<Item = PathBuf> {
-     let walker = WalkDir::new(dir).into_iter();
-     walker.filter_map(|entry| {
 diff --git a/cargo-geiger/src/scan/forbid.rs b/cargo-geiger/src/scan/forbid.rs
 index 355408a..7cb4d8d 100644
 --- a/cargo-geiger/src/scan/forbid.rs
 +++ b/cargo-geiger/src/scan/forbid.rs
-@@ -51,6 +51,7 @@ fn scan_forbid_to_report(
-         gctx,
-         ScanMode::EntryPointsOnly,
-         print_config,
+@@ -53,0 +54 @@ fn scan_forbid_to_report(
 +        None,
-     )?;
-     let mut report = QuickSafetyReport::default();
-     for (package, package_metrics) in package_metrics(
 diff --git a/cargo-geiger/src/scan/forbid/table.rs b/cargo-geiger/src/scan/forbid/table.rs
 index 2f86dad..c2e6a19 100644
 --- a/cargo-geiger/src/scan/forbid/table.rs
 +++ b/cargo-geiger/src/scan/forbid/table.rs
-@@ -55,6 +55,7 @@ pub fn scan_forbid_to_table(
-                     gctx,
-                     ScanMode::EntryPointsOnly,
-                     print_config,
+@@ -57,0 +58 @@ pub fn scan_forbid_to_table(
 +                    None,
-                 )?;
- 
-                 handle_package_text_tree_line(
 diff --git a/cargo-geiger/src/scan/rs_file.rs b/cargo-geiger/src/scan/rs_file.rs
 index 22cfdc0..23b9d7b 100644
 --- a/cargo-geiger/src/scan/rs_file.rs
 +++ b/cargo-geiger/src/scan/rs_file.rs
-@@ -5,9 +5,8 @@ use custom_executor::{CustomExecutor, CustomExecutorInnerContext};
- use cargo::core::compiler::Executor;
- use cargo::core::manifest::TargetKind;
- use cargo::core::Workspace;
+@@ -8,3 +8,2 @@ use cargo::core::Workspace;
 -use cargo::ops;
 -use cargo::ops::{CleanOptions, CompileOptions};
 -use cargo::util::{interning::InternedString, CargoResult};
 +use cargo::ops::{self, CompileOptions};
 +use cargo::util::CargoResult;
- use cargo::GlobalContext;
- use cargo_util::paths;
- use geiger::RsFileMetrics;
-@@ -17,7 +16,7 @@ use std::fmt;
- use std::io;
- use std::path::{Path, PathBuf};
- use std::sync::{Arc, Mutex, PoisonError};
+@@ -20 +19 @@ use std::sync::{Arc, Mutex, PoisonError};
 -use walkdir::{DirEntry, WalkDir};
 +use walkdir::DirEntry;
- 
- /// Provides information needed to scan for crate root
- /// `#![forbid(unsafe_code)]`.
-@@ -144,94 +143,49 @@ pub fn is_file_with_ext(entry: &DirEntry, file_ext: &str) -> bool {
-     ext.to_string_lossy() == file_ext
- }
- 
+@@ -147,2 +146 @@ pub fn is_file_with_ext(entry: &DirEntry, file_ext: &str) -> bool {
 -/// Trigger a `cargo clean` + `cargo check` and listen to the cargo/rustc
 -/// communication to figure out which source files were used by the build.
 +/// Compile through an executor and retain only dep-info emitted by that build.
- pub fn resolve_rs_file_deps(
-     compile_options: &CompileOptions,
-     workspace: &Workspace,
+@@ -152 +150 @@ pub fn resolve_rs_file_deps(
 -) -> Result<HashSet<PathBuf>, RsResolveError> {
 +) -> Result<Vec<HashSet<PathBuf>>, RsResolveError> {
-     let gctx = workspace.gctx();
+@@ -154,24 +151,0 @@ pub fn resolve_rs_file_deps(
 -    let (pkg_set, _) = ops::resolve_ws(workspace, false)
 -        .map_err(|e| RsResolveError::Cargo(e.to_string()))?;
 -    let packages = pkg_set
@@ -247,20 +154,15 @@ index 22cfdc0..23b9d7b 100644
 -    ops::clean(workspace, &clean_options)
 -        .map_err(|e| RsResolveError::Cargo(e.to_string()))?;
 -
-     let inner_arc = Arc::new(Mutex::new(CustomExecutorInnerContext::default()));
-     {
-         compile_with_exec(compile_options, gctx, inner_arc.clone(), workspace)?;
-     }
- 
+@@ -183 +156,0 @@ pub fn resolve_rs_file_deps(
 -    let workspace_root = workspace.root().to_path_buf();
-     let inner_mutex =
-         Arc::try_unwrap(inner_arc).map_err(|_| RsResolveError::ArcUnwrap())?;
+@@ -186 +159 @@ pub fn resolve_rs_file_deps(
 -    let (rs_files, out_dir_args) = {
 +    let (rs_files, dep_info_files) = {
-         let ctx = inner_mutex.into_inner()?;
+@@ -188 +161 @@ pub fn resolve_rs_file_deps(
 -        (ctx.rs_file_args, ctx.out_dir_args)
 +        (ctx.rs_file_args, ctx.dep_info_files)
-     };
+@@ -190,32 +163,4 @@ pub fn resolve_rs_file_deps(
 -    let mut path_buf_hash_set = HashSet::<PathBuf>::new();
 -    for out_dir in out_dir_args {
 -        // TODO: Figure out if the `.d` dep files are used by one or more rustc
@@ -297,10 +199,10 @@ index 22cfdc0..23b9d7b 100644
 +    for (dep_file, cwd) in dep_info_files {
 +        let dependencies = parse_rustc_dep_info(&dep_file).map_err(|e| {
 +            RsResolveError::DepParse(e.to_string(), dep_file.clone())
-         })?;
+@@ -223 +168 @@ fn add_dir_entries_to_path_buf_hash_set(
 -        let canonical_paths = dependencies
 +        let paths = dependencies
-             .into_iter()
+@@ -225,6 +170,15 @@ fn add_dir_entries_to_path_buf_hash_set(
 -            .flat_map(|(_, dependency_files)| dependency_files)
 -            .map(PathBuf::from)
 -            .map(|pb| workspace_root.join(pb))
@@ -322,38 +224,24 @@ index 22cfdc0..23b9d7b 100644
 +            .any(|group| group.contains(&path_buf))
 +        {
 +            dependency_groups.push(HashSet::from([path_buf]));
-         }
-     }
- 
+@@ -234 +188 @@ fn add_dir_entries_to_path_buf_hash_set(
 -    Ok(())
 +    Ok(dependency_groups)
- }
- 
- fn compile_with_exec(
 diff --git a/cargo-geiger/src/scan/rs_file/custom_executor.rs b/cargo-geiger/src/scan/rs_file/custom_executor.rs
 index bffbb65..b2c1a97 100644
 --- a/cargo-geiger/src/scan/rs_file/custom_executor.rs
 +++ b/cargo-geiger/src/scan/rs_file/custom_executor.rs
-@@ -2,9 +2,8 @@ use cargo::core::compiler::{CompileMode, Executor, Unit};
- use cargo::core::{PackageId, Target};
- use cargo::util::CargoResult;
- use cargo_util::ProcessBuilder;
+@@ -5 +5 @@ use cargo_util::ProcessBuilder;
 -use std::collections::HashSet;
 +use std::collections::{HashMap, HashSet};
- use std::error::Error;
+@@ -7 +6,0 @@ use std::error::Error;
 -use std::ffi::OsString;
- use std::fmt;
- use std::io;
- use std::path::PathBuf;
-@@ -46,22 +45,10 @@ impl Executor for CustomExecutor {
-         _id: PackageId,
-         _target: &Target,
-         _mode: CompileMode,
+@@ -49,2 +48,2 @@ impl Executor for CustomExecutor {
 -        _on_stdout_line: &mut dyn FnMut(&str) -> CargoResult<()>,
 -        _on_stderr_line: &mut dyn FnMut(&str) -> CargoResult<()>,
 +        on_stdout_line: &mut dyn FnMut(&str) -> CargoResult<()>,
 +        on_stderr_line: &mut dyn FnMut(&str) -> CargoResult<()>,
-     ) -> CargoResult<()> {
+@@ -52,13 +51 @@ impl Executor for CustomExecutor {
 -        let mut args = cmd.get_args();
 -        let out_dir_key = OsString::from("--out-dir");
 -
@@ -368,15 +256,9 @@ index bffbb65..b2c1a97 100644
 -            })
 -            .map(PathBuf::from)?;
 +        let args = cmd.get_args();
- 
-         // This can be different from the cwd used to launch the wrapping cargo
-         // plugin. Discovered while fixing
-@@ -86,9 +73,18 @@ impl Executor for CustomExecutor {
-                     .map_err(|e| CustomExecutorError::Io(e, raw_path))?;
-                 ctx.rs_file_args.insert(path);
-             }
+@@ -89 +75,0 @@ impl Executor for CustomExecutor {
 -            ctx.out_dir_args.insert(out_dir);
-         }
+@@ -91 +77,11 @@ impl Executor for CustomExecutor {
 -        cmd.exec()?;
 +        cmd.exec_with_streaming(
 +            &mut |line| {
@@ -389,13 +271,7 @@ index bffbb65..b2c1a97 100644
 +            },
 +            false,
 +        )?;
-         Ok(())
-     }
- 
-@@ -115,5 +111,28 @@ pub struct CustomExecutorInnerContext {
- 
-     /// Investigate if this needs to be intercepted like this or if it can be
-     /// looked up in a nicer way.
+@@ -118 +114,24 @@ pub struct CustomExecutorInnerContext {
 -    pub out_dir_args: HashSet<PathBuf>,
 +    pub dep_info_files: HashMap<PathBuf, PathBuf>,
 +}
@@ -421,7 +297,6 @@ index bffbb65..b2c1a97 100644
 +        }
 +        Ok(())
 +    }
- }
 diff --git a/cargo-geiger/tests/compiled_inputs.rs b/cargo-geiger/tests/compiled_inputs.rs
 new file mode 100644
 index 0000000..d4084cd
