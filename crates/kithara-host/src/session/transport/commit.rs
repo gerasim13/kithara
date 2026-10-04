@@ -125,6 +125,8 @@ pub(crate) enum TransportProcessError {
     MissingState,
     #[error("{}", Self::RevisionExhausted.message())]
     RevisionExhausted,
+    #[error("{}", Self::SessionAxisRestarted.message())]
+    SessionAxisRestarted,
 }
 
 impl TransportProcessError {
@@ -144,6 +146,9 @@ impl TransportProcessError {
             Self::MissingObservation => "transport observation store slot is missing",
             Self::MissingState => "transport state store slot is missing",
             Self::RevisionExhausted => "session transport revision space is exhausted",
+            Self::SessionAxisRestarted => {
+                "the session frame axis restarted before the change's frame"
+            }
         }
     }
 }

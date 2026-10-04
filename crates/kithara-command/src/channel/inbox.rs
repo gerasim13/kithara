@@ -141,6 +141,24 @@ impl<P: Protocol> Inbox<P> {
         }
     }
 
+    /// Refuses with `refusal`, in time order, every batch waiting for a
+    /// moment of the clock, for an executor whose clock starts a new axis on
+    /// which those moments no longer fall. A batch for the next block keeps
+    /// waiting.
+    pub fn refuse_timed(&mut self, refusal: P::Refusal)
+    where
+        P::Refusal: Clone,
+    {
+        self.drain();
+        while let Some(sent) = self.schedule.take_timed() {
+            self.reply(Receipt {
+                seq: sent.seq,
+                outcome: Outcome::Rejected(Rejection::Refused(refusal.clone())),
+                batch: sent.batch,
+            });
+        }
+    }
+
     fn reply(&mut self, receipt: Receipt<P>) {
         let pushed = self.answers.try_push(receipt);
         debug_assert!(pushed.is_ok(), "credits bound the receipts in flight");

@@ -273,7 +273,12 @@ impl TransportState {
         })
     }
 
+    /// Ends the stream's frame axis: refuses every change waiting for a frame
+    /// on it, keeps the ones for the next block, and leaves the beat it
+    /// stopped on for the next stream to anchor.
     fn restart(&mut self) -> Result<(), TransportProcessError> {
+        self.inbox
+            .refuse_timed(TransportProcessError::SessionAxisRestarted);
         if let Some(snapshot) = self.snapshot.take() {
             self.reanchor_beat = Some(snapshot.position());
         }

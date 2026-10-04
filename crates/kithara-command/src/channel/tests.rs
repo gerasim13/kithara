@@ -171,6 +171,29 @@ fn a_skipped_block_returns_its_batches_late_in_time_order() {
 }
 
 #[kithara::test]
+fn a_new_axis_refuses_every_timed_batch_and_keeps_the_next_ones() {
+    let (mut sender, mut inbox) = pair(3, 0);
+    let later = send(&mut sender, When::At(Frame(200)), batch(1, &[]));
+    let earlier = send(&mut sender, When::At(Frame(100)), batch(2, &[]));
+    let next = send(&mut sender, When::Next, batch(3, &[]));
+
+    inbox.refuse_timed("new axis");
+
+    let refused = || Outcome::Rejected(Rejection::Refused("new axis"));
+    assert_eq!(
+        outcomes(&mut sender),
+        [(earlier, refused()), (later, refused())]
+    );
+    send(&mut sender, When::At(Frame(150)), batch(4, &[]));
+    send(&mut sender, When::At(Frame(160)), batch(5, &[]));
+    assert_eq!(
+        run_block(&mut inbox, 128, BLOCK),
+        [(0, 3), (22, 4), (32, 5)]
+    );
+    assert_eq!(outcomes(&mut sender)[0], (next, applied(128)));
+}
+
+#[kithara::test]
 fn a_full_channel_returns_the_batch_whole() {
     let (mut sender, _inbox) = pair(1, 0);
     send(&mut sender, When::Next, batch(1, &[]));

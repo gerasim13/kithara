@@ -658,6 +658,36 @@ fn a_tempo_change_due_in_a_discontinuous_block_is_refused() {
 }
 
 #[kithara::test]
+fn a_restart_refuses_a_change_waiting_on_the_old_axis_and_keeps_the_next_one() {
+    let (mut processor, mut extra, mut output, mut queue) = active_harness();
+    send_tempo(
+        &mut queue,
+        60.0,
+        When::At(SessionFrame::new(block_frame(4))),
+    );
+    send_tempo(&mut queue, 90.0, When::Next);
+
+    stop_stream(&mut processor, &mut extra);
+
+    assert!(matches!(
+        outcome(&mut queue),
+        Outcome::Rejected(Rejection::Refused(
+            TransportProcessError::SessionAxisRestarted
+        ))
+    ));
+    for block in 1..=5 {
+        process_node(
+            &mut processor,
+            &proc_info_at(block_frame(block)),
+            &mut extra,
+        );
+    }
+    assert!(matches!(outcome(&mut queue), Outcome::Applied { .. }));
+    assert!(queue.receipts().next().is_none());
+    assert_eq!(snapshot(&mut output).tempo(), tempo(90.0));
+}
+
+#[kithara::test]
 fn a_tempo_change_refused_for_the_next_block_is_sent_again() {
     let mut state = owned_session();
     assert_eq!(render(&mut state, 0), Ok(()));
