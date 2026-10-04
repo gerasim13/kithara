@@ -11,11 +11,11 @@ use tempfile::TempDir;
 use super::{NextestAction, request::TestRequest, resolve, selection::requested};
 use crate::common::project::{ProjectConfig, TestCargoOptions, TestRunner};
 
-fn root() -> PathBuf {
+pub(crate) fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn this_workspace() -> Metadata {
+pub(crate) fn this_workspace() -> Metadata {
     MetadataCommand::new()
         .manifest_path(root().join("Cargo.toml"))
         .no_deps()
@@ -35,7 +35,10 @@ fn member_dir(metadata: &Metadata, package: &Package) -> String {
 }
 
 /// The members a lane's cargo options select.
-fn selected_by<'a>(cargo: &TestCargoOptions, metadata: &'a Metadata) -> BTreeSet<&'a str> {
+pub(crate) fn selected_by<'a>(
+    cargo: &TestCargoOptions,
+    metadata: &'a Metadata,
+) -> BTreeSet<&'a str> {
     metadata
         .workspace_packages()
         .into_iter()

@@ -746,6 +746,11 @@ pub struct StressConfig {
     /// suite: the tests outside the workspace lane belong to lanes of their
     /// own, and a flake there is found only by repeating that lane.
     pub lanes: Vec<String>,
+    /// The test lanes no campaign repeats, each with the reason. A lane is
+    /// either repeated — named in `lanes`, or running only what a named lane
+    /// already runs — or listed here, so a gap is a decision someone wrote
+    /// down rather than a lane nobody added.
+    pub not_stressed: BTreeMap<String, String>,
     pub nextest_config: String,
     pub nextest_profile: String,
     pub raw_output: String,
@@ -970,6 +975,12 @@ impl StressConfig {
             require_value("stress.lanes entry", lane)?;
             if !lanes.insert(lane) {
                 bail!("stress.lanes names `{lane}` twice");
+            }
+        }
+        for (lane, reason) in &self.not_stressed {
+            require_value(&format!("stress.not_stressed reason for `{lane}`"), reason)?;
+            if lanes.contains(lane) {
+                bail!("stress lane `{lane}` is both stressed and exempt");
             }
         }
         if self.default_modes.is_empty() {
@@ -1260,6 +1271,11 @@ impl ProjectConfig {
                         "stress lane `{name}` must run nextest under `stress.test_threads`; a lane \
                          with its own thread count or a `cargo test` runner cannot carry it"
                     );
+                }
+            }
+            for name in self.stress.not_stressed.keys() {
+                if !self.test.lanes.contains_key(name) {
+                    bail!("stress exemption `{name}` is not configured under test.lanes");
                 }
             }
         }

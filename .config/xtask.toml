@@ -237,8 +237,19 @@ default_modes = [
   "rtsan-file",
   "rtsan-hls",
 ]
-# Every lane mode repeats each of these lanes; a command mode runs once.
-lanes = ["workspace"]
+# Every lane mode repeats each of these lanes; a command mode runs once. A lane
+# missing here is either one whose every test a lane here already runs, or one
+# `[stress.not_stressed]` gives a reason for.
+lanes = [
+  "workspace",
+  "broadcast",
+  "harness",
+  "fixtures",
+  "tooling",
+  "net-host",
+  "analysis",
+  "integration-regressions",
+]
 nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
 default_filter = "all()"
@@ -254,6 +265,16 @@ build_dir = "target-stress"
 raw_output = "target/stress"
 report_output = "target/stress-report.md"
 workflow_job_timeout_minutes = 1380
+
+[stress.not_stressed]
+loom = "a loom model explores every interleaving in one run; a repeat replays the same search"
+ui = "its suites draw through a GPU adapter and the host's fonts, which a stress host does not promise"
+ui-perf = "frame-time measurements run one test at a time; under the campaign's thread count they measure contention"
+network = "it reaches the public CDN with credentials only some runners hold; a repeat measures the network"
+network-manual = "it reaches hosts only the corporate network resolves, and no runner can"
+doc = "doc-tests run under `cargo test`, which leaves no per-test verdict a campaign can count"
+ui-doc = "doc-tests run under `cargo test`, which leaves no per-test verdict a campaign can count"
+selenium-firefox = "it drives a real browser under `cargo test`, which leaves no per-test verdict a campaign can count"
 
 [stress.artifacts]
 attempts = "attempts.json"

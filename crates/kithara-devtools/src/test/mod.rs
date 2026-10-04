@@ -4,7 +4,7 @@ mod resolve;
 mod selection;
 
 #[cfg(test)]
-mod repository_tests;
+pub(crate) mod repository_tests;
 #[cfg(test)]
 mod tests;
 

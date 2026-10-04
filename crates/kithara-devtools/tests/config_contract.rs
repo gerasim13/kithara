@@ -616,3 +616,40 @@ fn a_stress_campaign_names_each_lane_it_can_repeat_once() {
         assert!(error.contains(refusal), "{lanes}: {error}");
     }
 }
+
+/// A lane the campaign leaves out says why, so a deliberate gap reads
+/// differently from a forgotten one.
+#[test]
+fn a_stress_exemption_names_a_configured_lane_and_why() {
+    let exempt = |entry: &str| {
+        format!(
+            "[test.lanes.doc]\ncargo.workspace = true\nrunner.cargo.doc = true\n\
+             [stress.not_stressed]\n{entry}\n"
+        )
+    };
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        &campaign(r#"["workspace"]"#, &exempt(r#"doc = "doc-tests run once""#)),
+    );
+    let config = ProjectConfig::load(temp.path()).expect("an exempt lane");
+    assert_eq!(config.stress.not_stressed["doc"], "doc-tests run once");
+
+    for (entry, refusal) in [
+        (
+            r#"absent = "gone""#,
+            "stress exemption `absent` is not configured under test.lanes",
+        ),
+        (
+            r#"doc = " ""#,
+            "stress.not_stressed reason for `doc` must not be empty",
+        ),
+        (
+            r#"workspace = "repeated anyway""#,
+            "stress lane `workspace` is both stressed and exempt",
+        ),
+    ] {
+        let error = campaign_error(r#"["workspace"]"#, &exempt(entry));
+        assert!(error.contains(refusal), "{entry}: {error}");
+    }
+}
