@@ -321,16 +321,14 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     #[case] superseding: Start,
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
-    let (control_opened, control) = {
+    let (control_opened, control, control_closed) = {
         let control = STAGED_BESIDE_PLAYBACK_CONTROL;
         let mut harness =
             ProductHarness::new_for_block(control, &sources, cue, Audible::Deck(0), BLOCK_FRAMES)
                 .await;
         let opened = open_window(&mut harness, control).await;
-        (
-            opened,
-            render_frames(&mut harness, control, LISTEN_FRAMES).await,
-        )
+        let pcm = render_frames(&mut harness, control, LISTEN_FRAMES).await;
+        (opened, pcm, Window::read(&harness, control))
     };
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
@@ -339,6 +337,7 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     let successor = prepare_cue(&mut harness, case, rate, superseding).await;
     let candidate_opened = open_window(&mut harness, case).await;
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
+    let candidate_closed = Window::read(&harness, case);
     let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(
         receipts.iter().all(|receipt| receipt.rejected == INSTALLED
@@ -370,18 +369,27 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     assert_eq!(
         divergence(&candidate, &control),
         None,
-        "{}: staging beside the sounding lane changed what it plays; \
-         both windows opened on {candidate_opened}",
+        "{}: staging beside the sounding lane changed what it plays; both \
+         windows opened on {candidate_opened} and took {LISTEN_FRAMES} frames, \
+         closing with the candidate on {candidate_closed} and the control on \
+         {control_closed}; closings that disagree put the two decks on \
+         different timelines, closings that agree put different audio on one",
         case.id(),
     );
 }
 
-/// Where the sounding deck stood when a measured window opened.
+/// Where the sounding deck stood when a measured window opened or closed.
 ///
 /// Two harnesses compared sample by sample have to open their window at the
 /// same point in the deck's own timeline. A divergence that starts at frame 0
 /// while both levels agree reads as that timeline being shifted, and nothing
 /// in the PCM says which side moved - the deck's own position does.
+///
+/// Read at both ends, it also separates the two ways a divergence that starts
+/// mid-window can happen. The same count of frames went into each render, so
+/// two decks that close on different positions were running their own
+/// timelines at different speeds, and two that close together were handed
+/// different audio to play on one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Window {
     /// The deck's own position, in frames of the session it renders into.
