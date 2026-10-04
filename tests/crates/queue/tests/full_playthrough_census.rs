@@ -357,7 +357,10 @@ async fn build_queue(
             tracks.len(),
             "the rejection census must reject every track"
         );
-        assert_eq!(queue.current_index(), None);
+        assert!(
+            queue.current().is_none(),
+            "a rejected track must not become current"
+        );
         assert!(
             harness
                 .render(BLOCK_FRAMES)

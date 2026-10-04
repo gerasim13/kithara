@@ -61,7 +61,6 @@ pub fn android_fixture_rejection(asset: SignalAsset) -> Option<(&'static str, bo
         SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT => {
             Some(("Unsupported codec: Ape", false))
         }
-        SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3 => Some(("Unsupported codec: Mp3", false)),
         SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT | SignalAsset::PROFILE_ALAC_SILENCE_TAIL => {
             Some((
                 "Decoder error: android backend failed during codec-create-decoder: mime=audio/alac returned null",
