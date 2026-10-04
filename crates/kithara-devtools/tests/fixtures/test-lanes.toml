@@ -1,0 +1,63 @@
+# Lanes that between them set every typed key of a test lane, so
+# `test-lane-commands.txt` records where each key lands in the command.
+default_lane = "suite"
+default_backend = "http"
+loom_lane = "loom"
+nextest_config = ".config/nextest.toml"
+features = ["base-feature"]
+
+[flash]
+default = true
+features = ["virtual-time"]
+
+[no_block]
+default = false
+features = ["nb-detect"]
+
+[net_backends.http]
+features = []
+
+[net_backends.native]
+features = ["demo/native-net"]
+
+[lanes.suite]
+cargo.workspace = true
+cargo.exclude = ["demo-tools", "demo-web"]
+
+[lanes.loom]
+default_flash = false
+default_features = ["demo/loom"]
+cargo.workspace = true
+cargo.profile = "test-release"
+runner.nextest.filter = "test(loom_model_)"
+
+[lanes.typed]
+default_backend = "native"
+default_no_block = true
+env.DEMO_MODE = "strict"
+cargo.packages = ["demo", "demo-tests"]
+cargo.profile = "test-release"
+cargo.lib = true
+cargo.tests = ["suite"]
+runner.nextest.filter = "test(fast)"
+runner.nextest.test_threads = 1
+runner.nextest.ignore_default_filter = true
+
+[lanes.tools]
+undeclared_toggles = ["flash", "no-block"]
+cargo.packages = ["demo-tools"]
+
+[lanes.docs]
+default_flash = false
+cargo.workspace = true
+cargo.exclude = ["demo-web"]
+runner.cargo.doc = true
+
+[lanes.browser]
+default_flash = false
+env.DEMO_BROWSER = "firefox"
+cargo.packages = ["demo-web"]
+cargo.profile = "test-release"
+cargo.tests = ["web"]
+runner.cargo.name_filters = ["selenium"]
+runner.cargo.no_capture = true

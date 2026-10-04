@@ -1,0 +1,42 @@
+# browser []
+  cargo test -p demo-web --profile test-release --test web --features base-feature -- selenium --nocapture
+    DEMO_BROWSER=firefox
+# browser [--profile ci --timings]
+  cargo test -p demo-web --profile test-release --test web --features base-feature --timings -- selenium --nocapture
+    DEMO_BROWSER=firefox
+# browser [-E test(seek)]
+  cargo test -p demo-web --profile test-release --test web --features base-feature -E test(seek) -- selenium --nocapture
+    DEMO_BROWSER=firefox
+# docs []
+  cargo test --doc --workspace --exclude demo-web --features base-feature
+# docs [--profile ci --timings]
+  cargo test --doc --workspace --exclude demo-web --features base-feature --profile ci --timings
+# docs [-E test(seek)]
+  cargo test --doc --workspace --exclude demo-web --features base-feature -E test(seek)
+# loom []
+  cargo nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E test(loom_model_)
+# loom [--profile ci --timings]
+  cargo nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E test(loom_model_) --profile ci --timings
+# loom [-E test(seek)]
+  cargo nextest run --workspace --cargo-profile test-release --features base-feature,demo/loom -E '(test(loom_model_)) & ((test(seek)))'
+# suite []
+  cargo nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time
+# suite [--profile ci --timings]
+  cargo nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time --profile ci --timings
+# suite [-E test(seek)]
+  cargo nextest run --workspace --exclude demo-tools --exclude demo-web --features base-feature,virtual-time -E test(seek)
+# tools []
+  cargo nextest run -p demo-tools --features base-feature
+# tools [--profile ci --timings]
+  cargo nextest run -p demo-tools --features base-feature --profile ci --timings
+# tools [-E test(seek)]
+  cargo nextest run -p demo-tools --features base-feature -E test(seek)
+# typed []
+  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast)
+    DEMO_MODE=strict
+# typed [--profile ci --timings]
+  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast) --profile ci --timings
+    DEMO_MODE=strict
+# typed [-E test(seek)]
+  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E '(test(fast)) & ((test(seek)))'
+    DEMO_MODE=strict

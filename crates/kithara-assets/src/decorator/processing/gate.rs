@@ -1,16 +1,20 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use kithara_platform::{
     CancelToken,
     sync::{Arc, CondvarGate},
     time::{Duration, Instant},
 };
 
+#[derive(Clone, Copy)]
+enum Readiness {
+    Pending,
+    Ready,
+    Failed,
+}
+
 pub(super) struct ReadinessGate {
-    failed: AtomicBool,
-    gate: CondvarGate<bool>,
-    /// Backstop between condvar wakeups, so an abort request is noticed even
-    /// when no writer ever signals. Mirrors
+    gate: CondvarGate<Readiness>,
+    /// Backstop between condvar wakeups, so readiness or an abort request from
+    /// the underlying resource is noticed without a shared writer gate. Mirrors
     /// `AssetStore::builder(pools).processing_gate_poll_interval(..)`.
     poll_interval: Duration,
 }
@@ -19,58 +23,63 @@ impl ReadinessGate {
     pub(super) fn new(initial: bool, poll_interval: Duration) -> Self {
         Self {
             poll_interval,
-            gate: CondvarGate::new(initial),
-            failed: AtomicBool::new(false),
+            gate: CondvarGate::new(if initial {
+                Readiness::Ready
+            } else {
+                Readiness::Pending
+            }),
         }
     }
 
     pub(super) fn fail(&self) {
-        self.failed.store(true, Ordering::Release);
+        *self.gate.lock() = Readiness::Failed;
         self.gate.notify_all();
-    }
-
-    pub(super) fn is_failed(&self) -> bool {
-        self.failed.load(Ordering::Acquire)
     }
 
     pub(super) fn is_ready(&self) -> bool {
-        *self.gate.lock()
+        matches!(*self.gate.lock(), Readiness::Ready)
     }
 
-    pub(super) fn mark_ready(&self) {
-        *self.gate.lock() = true;
+    pub(super) fn mark_ready(&self) -> bool {
+        let mut state = self.gate.lock();
+        if matches!(*state, Readiness::Failed) {
+            return false;
+        }
+        *state = Readiness::Ready;
+        drop(state);
         self.gate.notify_all();
+        true
     }
 
-    pub(super) fn wait_until_ready(&self, should_abort: &dyn Fn() -> bool) -> bool {
+    pub(super) fn wait_until_ready(
+        &self,
+        is_ready: &dyn Fn() -> bool,
+        should_abort: &dyn Fn() -> bool,
+    ) -> bool {
+        let mut state = self.gate.lock();
         loop {
-            if self.is_failed() {
+            match *state {
+                Readiness::Failed => return false,
+                Readiness::Ready => return true,
+                Readiness::Pending => {}
+            }
+            if is_ready() {
+                *state = Readiness::Ready;
+                self.gate.notify_all();
+                return true;
+            }
+            if should_abort() {
                 return false;
             }
-            let ready = {
-                let guard = self.gate.lock();
-                if *guard {
-                    return !self.is_failed();
-                }
-                if self.is_failed() || should_abort() {
-                    return false;
-                }
-                let deadline = Instant::now() + self.poll_interval;
-                let next = self.gate.wait_until(guard, deadline);
-                *next
-            };
-            if ready {
-                return !self.is_failed();
-            }
-            if self.is_failed() || should_abort() {
-                return false;
-            }
+            let deadline = Instant::now() + self.poll_interval;
+            state = self.gate.wait_until(state, deadline);
         }
     }
 
     pub(super) fn wait_until_ready_with_cancel(
         self: &Arc<Self>,
         cancel: &CancelToken,
+        is_ready: &dyn Fn() -> bool,
         should_abort: &dyn Fn() -> bool,
     ) -> bool {
         let gate = Arc::clone(self);
@@ -78,6 +87,6 @@ impl ReadinessGate {
             let _guard = gate.gate.lock();
             gate.gate.notify_all();
         });
-        self.wait_until_ready(&|| cancel.is_cancelled() || should_abort())
+        self.wait_until_ready(is_ready, &|| cancel.is_cancelled() || should_abort())
     }
 }

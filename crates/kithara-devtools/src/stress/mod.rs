@@ -1,6 +1,8 @@
 //! Portable repeated-test runs and independent evidence verification.
 
 mod command;
+#[cfg(test)]
+mod coverage_tests;
 mod environment;
 mod manifest;
 mod output;

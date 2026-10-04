@@ -205,13 +205,13 @@ fn report_path(root: &Path, profile: &str, relative: &str) -> PathBuf {
         .join(relative)
 }
 
-/// The nextest profile a lane's command selects, or `None` when the lane runs
-/// no nextest and so cannot retry anything.
+/// The nextest profile a lane's command runs its tests under, or `None` when
+/// the lane runs no nextest, or builds with `--no-run` and runs no test, and
+/// so cannot retry anything.
 ///
 /// `--profile` names the Cargo profile to `cargo test` and the runner profile
 /// to `cargo nextest`, so it is only read past the `nextest` subcommand. The
-/// last one wins, as it does on nextest's own command line: a lane that names
-/// a profile can still be asked for a different one.
+/// last one wins, as it does on nextest's own command line.
 fn nextest_profile(command: &Command) -> Option<String> {
     let args = command
         .get_args()
@@ -224,6 +224,8 @@ fn nextest_profile(command: &Command) -> Option<String> {
         if awaiting_value {
             profile = arg.clone();
             awaiting_value = false;
+        } else if arg == "--no-run" {
+            return None;
         } else if let Some(value) = arg.strip_prefix("--profile=") {
             profile = value.to_owned();
         } else {
@@ -410,6 +412,21 @@ mod tests {
             .to_string();
 
         assert!(error.contains("junit.xml"), "{error}");
+    }
+
+    /// A rebuild check repeats a suite with `--no-run`: nextest builds, runs
+    /// no test, and writes no report, so the build's status is the verdict.
+    #[test]
+    fn a_build_that_runs_no_test_is_judged_by_its_status() {
+        let temp = lane(consts::RETRYING_PROFILE, None);
+
+        judge(
+            temp.path(),
+            &[],
+            &["nextest", "run", "--profile", "ci", "--no-run"],
+            Some(0),
+        )
+        .expect("a build that ran no test has no report to present");
     }
 
     #[test]
