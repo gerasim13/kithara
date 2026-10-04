@@ -115,23 +115,21 @@ pub(crate) fn floating_tag(pinned: &str) -> Result<String> {
     Ok(format!("{repository}:{platform}-latest"))
 }
 
-/// Build one image with no context at all. Every Dockerfile here downloads what
-/// it needs and copies nothing, so the recipe arrives on standard input and the
-/// working tree is never sent to the daemon.
+/// Build with the small reviewed analyzer context; the workspace is not sent
+/// to the daemon. The toolchain image consumes the pinned source patch.
 fn build(
     process: &Process,
     dockerfile: &str,
     tag: &str,
     arguments: &[(&'static str, String)],
 ) -> Result<()> {
-    let recipe =
-        fs::File::open(dockerfile).with_context(|| format!("reading Dockerfile {dockerfile}"))?;
+    fs::metadata(dockerfile).with_context(|| format!("reading Dockerfile {dockerfile}"))?;
     let mut command = process.command("docker");
-    command.args(["build", "--tag", tag]);
+    command.args(["build", "--file", dockerfile, "--tag", tag]);
     for (name, value) in arguments {
         command.arg("--build-arg").arg(format!("{name}={value}"));
     }
-    command.arg("-").stdin(recipe);
+    command.arg("docker/cargo-geiger");
     process.run_command(&mut command, "build pinned CI image")?;
     info!(image = tag, dockerfile, "CI image built");
     Ok(())
@@ -144,6 +142,7 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("RUST_VERSION", pins.stable_toolchain.clone()),
         ("RUST_BASE_DIGEST", pins.linux_base_digest.clone()),
         ("CACHE_CLIENT_IMAGE", pins.cache_client_image.clone()),
+        ("CARGO_GEIGER_REV", pins.cargo_geiger_rev.clone()),
         ("MSRV_TOOLCHAIN", pins.msrv_toolchain.clone()),
         ("NIGHTLY_TOOLCHAIN", pins.nightly_toolchain.clone()),
         ("LOCKBUD_TOOLCHAIN", pins.lockbud_toolchain.clone()),
@@ -186,7 +185,6 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("CARGO_CRAP_VERSION", "cargo-crap"),
         ("CARGO_DENY_VERSION", "cargo-deny"),
         ("CARGO_FUZZ_VERSION", "cargo-fuzz"),
-        ("CARGO_GEIGER_VERSION", "cargo-geiger"),
         ("CARGO_HACK_VERSION", "cargo-hack"),
         ("CARGO_LLVM_COV_VERSION", "cargo-llvm-cov"),
         ("CARGO_MACHETE_VERSION", "cargo-machete"),

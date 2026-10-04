@@ -36,6 +36,7 @@ pub(crate) struct CiPins {
     pub(crate) cache_client_image: String,
     /// The object store each host serves the compiler cache from.
     pub(crate) cache_server_image: String,
+    pub(crate) cargo_geiger_rev: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -170,6 +171,10 @@ impl CiPins {
         {
             bail!("CI tool package names and versions must not be empty");
         }
+        self.validate_hashes()
+    }
+
+    fn validate_hashes(&self) -> Result<()> {
         for (name, digest) in [
             (
                 "actions_runner_linux_amd64_sha256",
@@ -242,6 +247,14 @@ impl CiPins {
             if !is_sha256(digest) {
                 bail!("CI pin {name} must be a SHA-256 digest");
             }
+        }
+        if self.cargo_geiger_rev.len() != 40
+            || !self
+                .cargo_geiger_rev
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("CI pin cargo_geiger_rev must be a full Git revision");
         }
         Ok(())
     }

@@ -1,0 +1,493 @@
+diff --git a/cargo-geiger/src/graph.rs b/cargo-geiger/src/graph.rs
+index e5eeb71..0bf8b7b 100644
+--- a/cargo-geiger/src/graph.rs
++++ b/cargo-geiger/src/graph.rs
+@@ -4,9 +4,7 @@ use extra_deps::ExtraDeps;
+ 
+ use crate::args::{Args, DepsArgs, TargetArgs};
+ use crate::cli::get_cfgs;
+-use crate::mapping::{
+-    CargoMetadataParameters, DepsNotReplaced, MatchesIgnoringSource,
+-};
++use crate::mapping::{CargoMetadataParameters, DepsNotReplaced};
+ 
+ use cargo::util::CargoResult;
+ use cargo_platform::Cfg;
+@@ -177,11 +175,15 @@ fn filter_dependencies<'a>(
+         .dependencies
+         .iter()
+         .filter(|d| {
+-            d.matches_ignoring_source(
+-                cargo_metadata_parameters.krates,
+-                dependency_package_id,
+-            )
+-            .unwrap_or(false)
++            cargo_metadata_parameters
++                .metadata
++                .packages
++                .iter()
++                .find(|candidate| candidate.id == *dependency_package_id)
++                .is_some_and(|candidate| {
++                    candidate.name == d.name
++                        && d.req.matches(&candidate.version)
++                })
+         })
+         .filter(|d| graph_configuration.extra_deps.allows(d.kind))
+         .filter(|d| {
+diff --git a/cargo-geiger/src/scan/default.rs b/cargo-geiger/src/scan/default.rs
+index 380cf9e..7d47c2d 100644
+--- a/cargo-geiger/src/scan/default.rs
++++ b/cargo-geiger/src/scan/default.rs
+@@ -103,13 +103,19 @@ fn scan(
+     );
+ 
+     match resolve_rs_file_deps(&compile_options, workspace) {
+-        Ok(rs_files_used) => {
++        Ok(dependency_groups) => {
+             let geiger_context = find_unsafe(
+                 cargo_metadata_parameters,
+                 scan_parameters.gctx,
+                 ScanMode::Full,
+                 scan_parameters.print_config,
++                Some(&dependency_groups),
+             )?;
++            let rs_files_used = dependency_groups
++                .into_iter()
++                .flatten()
++                .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
++                .collect();
+             Ok(ScanDetails {
+                 rs_files_used,
+                 geiger_context,
+diff --git a/cargo-geiger/src/scan/find.rs b/cargo-geiger/src/scan/find.rs
+index 8dc107c..4f73cb4 100644
+--- a/cargo-geiger/src/scan/find.rs
++++ b/cargo-geiger/src/scan/find.rs
+@@ -26,6 +26,7 @@ pub fn find_unsafe(
+     gctx: &GlobalContext,
+     mode: ScanMode,
+     print_config: &PrintConfig,
++    dependency_groups: Option<&[HashSet<PathBuf>]>,
+ ) -> Result<GeigerContext, CliError> {
+     let mut progress = cargo::util::Progress::new("Scanning", gctx);
+     let geiger_context = find_unsafe_in_packages_with_progress(
+@@ -33,6 +34,7 @@ pub fn find_unsafe(
+         cargo_metadata_parameters,
+         print_config.include_tests,
+         mode,
++        dependency_groups,
+         |progress_count, count| {
+             progress.tick(progress_count, count, "find_unsafe_tick")
+         },
+@@ -47,6 +49,7 @@ fn find_unsafe_in_packages_with_progress<F>(
+     cargo_metadata_parameters: &CargoMetadataParameters,
+     include_tests: IncludeTests,
+     mode: ScanMode,
++    dependency_groups: Option<&[HashSet<PathBuf>]>,
+     mut progress_fn: F,
+ ) -> GeigerContext
+ where
+@@ -64,6 +67,7 @@ where
+                 cargo_metadata_parameters,
+                 include_tests,
+                 mode,
++                dependency_groups,
+                 Some(on_processed),
+             ))
+         });
+@@ -80,6 +84,7 @@ fn find_unsafe_in_packages<F>(
+     cargo_metadata_parameters: &CargoMetadataParameters,
+     include_tests: IncludeTests,
+     mode: ScanMode,
++    dependency_groups: Option<&[HashSet<PathBuf>]>,
+     on_processed: Option<F>,
+ ) -> GeigerContext
+ where
+@@ -88,8 +93,17 @@ where
+     let package_id_to_metrics = Arc::new(Mutex::new(HashMap::new()));
+     let ignored = Arc::new(Mutex::new(HashSet::new()));
+     let packages = cargo_metadata_parameters.metadata.packages.to_vec();
+-    let package_code_files: Vec<_> =
+-        find_rs_files_in_packages(&packages).collect();
++    let package_code_files: Vec<_> = match dependency_groups {
++        Some(groups) => packages
++            .iter()
++            .flat_map(|package| {
++                compiled_rs_files(package, groups)
++                    .into_iter()
++                    .map(move |file| (package.id.clone(), file))
++            })
++            .collect(),
++        None => find_rs_files_in_packages(&packages).collect(),
++    };
+     let package_code_file_count = package_code_files.len();
+     let processed_count = AtomicUsize::new(0);
+     package_code_files.into_par_iter().for_each_with(
+@@ -151,6 +165,37 @@ where
+     }
+ }
+ 
++/// Attribute compiler inputs by the target root in each dep-info group.
++/// Generated include! sources share that group even outside the package tree.
++fn compiled_rs_files(
++    package: &krates::cm::Package,
++    groups: &[HashSet<PathBuf>],
++) -> Vec<RsFile> {
++    let mut files = HashMap::new();
++    for target in &package.targets {
++        let Ok(root) = target.src_path.canonicalize() else {
++            continue;
++        };
++        for group in groups.iter().filter(|group| group.contains(&root)) {
++            for path in group
++                .iter()
++                .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
++            {
++                files
++                    .entry(path.clone())
++                    .or_insert_with(|| RsFile::Other(path.clone()));
++            }
++        }
++        if files.contains_key(&root) {
++            files.insert(
++                root.clone(),
++                into_rs_code_file(&into_target_kind(&target.kind), root),
++            );
++        }
++    }
++    files.into_values().collect()
++}
++
+ fn find_rs_files_in_dir(dir: &Path) -> impl Iterator<Item = PathBuf> {
+     let walker = WalkDir::new(dir).into_iter();
+     walker.filter_map(|entry| {
+diff --git a/cargo-geiger/src/scan/forbid.rs b/cargo-geiger/src/scan/forbid.rs
+index 355408a..7cb4d8d 100644
+--- a/cargo-geiger/src/scan/forbid.rs
++++ b/cargo-geiger/src/scan/forbid.rs
+@@ -51,6 +51,7 @@ fn scan_forbid_to_report(
+         gctx,
+         ScanMode::EntryPointsOnly,
+         print_config,
++        None,
+     )?;
+     let mut report = QuickSafetyReport::default();
+     for (package, package_metrics) in package_metrics(
+diff --git a/cargo-geiger/src/scan/forbid/table.rs b/cargo-geiger/src/scan/forbid/table.rs
+index 2f86dad..c2e6a19 100644
+--- a/cargo-geiger/src/scan/forbid/table.rs
++++ b/cargo-geiger/src/scan/forbid/table.rs
+@@ -55,6 +55,7 @@ pub fn scan_forbid_to_table(
+                     gctx,
+                     ScanMode::EntryPointsOnly,
+                     print_config,
++                    None,
+                 )?;
+ 
+                 handle_package_text_tree_line(
+diff --git a/cargo-geiger/src/scan/rs_file.rs b/cargo-geiger/src/scan/rs_file.rs
+index 22cfdc0..23b9d7b 100644
+--- a/cargo-geiger/src/scan/rs_file.rs
++++ b/cargo-geiger/src/scan/rs_file.rs
+@@ -5,9 +5,8 @@ use custom_executor::{CustomExecutor, CustomExecutorInnerContext};
+ use cargo::core::compiler::Executor;
+ use cargo::core::manifest::TargetKind;
+ use cargo::core::Workspace;
+-use cargo::ops;
+-use cargo::ops::{CleanOptions, CompileOptions};
+-use cargo::util::{interning::InternedString, CargoResult};
++use cargo::ops::{self, CompileOptions};
++use cargo::util::CargoResult;
+ use cargo::GlobalContext;
+ use cargo_util::paths;
+ use geiger::RsFileMetrics;
+@@ -17,7 +16,7 @@ use std::fmt;
+ use std::io;
+ use std::path::{Path, PathBuf};
+ use std::sync::{Arc, Mutex, PoisonError};
+-use walkdir::{DirEntry, WalkDir};
++use walkdir::DirEntry;
+ 
+ /// Provides information needed to scan for crate root
+ /// `#![forbid(unsafe_code)]`.
+@@ -144,94 +143,49 @@ pub fn is_file_with_ext(entry: &DirEntry, file_ext: &str) -> bool {
+     ext.to_string_lossy() == file_ext
+ }
+ 
+-/// Trigger a `cargo clean` + `cargo check` and listen to the cargo/rustc
+-/// communication to figure out which source files were used by the build.
++/// Compile through an executor and retain only dep-info emitted by that build.
+ pub fn resolve_rs_file_deps(
+     compile_options: &CompileOptions,
+     workspace: &Workspace,
+-) -> Result<HashSet<PathBuf>, RsResolveError> {
++) -> Result<Vec<HashSet<PathBuf>>, RsResolveError> {
+     let gctx = workspace.gctx();
+-    let (pkg_set, _) = ops::resolve_ws(workspace, false)
+-        .map_err(|e| RsResolveError::Cargo(e.to_string()))?;
+-    let packages = pkg_set
+-        .package_ids()
+-        .map(|package_id| package_id.name().as_str().to_owned())
+-        .collect();
+-    // Need to run a cargo clean to identify all new .d deps files.
+-    // TODO: Figure out how this can be avoided to improve performance, clean
+-    // Rust builds are __slow__.
+-    let clean_options = CleanOptions {
+-        gctx,
+-        spec: packages,
+-        targets: vec![],
+-        profile_specified: false,
+-        // A temporary hack to get cargo 0.43 to build, TODO: look closer at the updated cargo API
+-        // later.
+-        requested_profile: InternedString::new("dev"),
+-        doc: false,
+-        dry_run: false,
+-    };
+-
+-    ops::clean(workspace, &clean_options)
+-        .map_err(|e| RsResolveError::Cargo(e.to_string()))?;
+-
+     let inner_arc = Arc::new(Mutex::new(CustomExecutorInnerContext::default()));
+     {
+         compile_with_exec(compile_options, gctx, inner_arc.clone(), workspace)?;
+     }
+ 
+-    let workspace_root = workspace.root().to_path_buf();
+     let inner_mutex =
+         Arc::try_unwrap(inner_arc).map_err(|_| RsResolveError::ArcUnwrap())?;
+-    let (rs_files, out_dir_args) = {
++    let (rs_files, dep_info_files) = {
+         let ctx = inner_mutex.into_inner()?;
+-        (ctx.rs_file_args, ctx.out_dir_args)
++        (ctx.rs_file_args, ctx.dep_info_files)
+     };
+-    let mut path_buf_hash_set = HashSet::<PathBuf>::new();
+-    for out_dir in out_dir_args {
+-        // TODO: Figure out if the `.d` dep files are used by one or more rustc
+-        // calls. It could be useful to know which `.d` dep files belong to
+-        // which rustc call. That would allow associating each `.rs` file found
+-        // in each dep file with a PackageId.
+-        add_dir_entries_to_path_buf_hash_set(
+-            out_dir,
+-            &mut path_buf_hash_set,
+-            workspace_root.clone(),
+-        )?;
+-    }
+-    for path_buf in rs_files {
+-        // rs_files must already be canonicalized
+-        path_buf_hash_set.insert(path_buf);
+-    }
+-
+-    Ok(path_buf_hash_set)
+-}
+-
+-fn add_dir_entries_to_path_buf_hash_set(
+-    out_dir: PathBuf,
+-    path_buf_hash_set: &mut HashSet<PathBuf>,
+-    workspace_root: PathBuf,
+-) -> Result<(), RsResolveError> {
+-    for entry in WalkDir::new(&out_dir) {
+-        let entry = entry.map_err(RsResolveError::Walkdir)?;
+-        if !is_file_with_ext(&entry, "d") {
+-            continue;
+-        }
+-        let dependencies = parse_rustc_dep_info(entry.path()).map_err(|e| {
+-            RsResolveError::DepParse(e.to_string(), entry.path().to_path_buf())
++    let mut dependency_groups = Vec::new();
++    for (dep_file, cwd) in dep_info_files {
++        let dependencies = parse_rustc_dep_info(&dep_file).map_err(|e| {
++            RsResolveError::DepParse(e.to_string(), dep_file.clone())
+         })?;
+-        let canonical_paths = dependencies
++        let paths = dependencies
+             .into_iter()
+-            .flat_map(|(_, dependency_files)| dependency_files)
+-            .map(PathBuf::from)
+-            .map(|pb| workspace_root.join(pb))
+-            .map(|pb| pb.canonicalize().map_err(|e| RsResolveError::Io(e, pb)));
+-        for path_buf in canonical_paths {
+-            path_buf_hash_set.insert(path_buf?);
++            .flat_map(|(_, inputs)| inputs)
++            .map(|path| cwd.join(path))
++            .map(|path| {
++                path.canonicalize()
++                    .map_err(|error| RsResolveError::Io(error, path))
++            })
++            .collect::<Result<HashSet<_>, _>>()?;
++        dependency_groups.push(paths);
++    }
++    for path_buf in rs_files {
++        if !dependency_groups
++            .iter()
++            .any(|group| group.contains(&path_buf))
++        {
++            dependency_groups.push(HashSet::from([path_buf]));
+         }
+     }
+ 
+-    Ok(())
++    Ok(dependency_groups)
+ }
+ 
+ fn compile_with_exec(
+diff --git a/cargo-geiger/src/scan/rs_file/custom_executor.rs b/cargo-geiger/src/scan/rs_file/custom_executor.rs
+index bffbb65..b2c1a97 100644
+--- a/cargo-geiger/src/scan/rs_file/custom_executor.rs
++++ b/cargo-geiger/src/scan/rs_file/custom_executor.rs
+@@ -2,9 +2,8 @@ use cargo::core::compiler::{CompileMode, Executor, Unit};
+ use cargo::core::{PackageId, Target};
+ use cargo::util::CargoResult;
+ use cargo_util::ProcessBuilder;
+-use std::collections::HashSet;
++use std::collections::{HashMap, HashSet};
+ use std::error::Error;
+-use std::ffi::OsString;
+ use std::fmt;
+ use std::io;
+ use std::path::PathBuf;
+@@ -46,22 +45,10 @@ impl Executor for CustomExecutor {
+         _id: PackageId,
+         _target: &Target,
+         _mode: CompileMode,
+-        _on_stdout_line: &mut dyn FnMut(&str) -> CargoResult<()>,
+-        _on_stderr_line: &mut dyn FnMut(&str) -> CargoResult<()>,
++        on_stdout_line: &mut dyn FnMut(&str) -> CargoResult<()>,
++        on_stderr_line: &mut dyn FnMut(&str) -> CargoResult<()>,
+     ) -> CargoResult<()> {
+-        let mut args = cmd.get_args();
+-        let out_dir_key = OsString::from("--out-dir");
+-
+-        args.position(|s| *s == out_dir_key).ok_or_else(|| {
+-            CustomExecutorError::OutDirKeyMissing(cmd.to_string())
+-        })?;
+-
+-        let out_dir = args
+-            .next()
+-            .ok_or_else(|| {
+-                CustomExecutorError::OutDirValueMissing(cmd.to_string())
+-            })
+-            .map(PathBuf::from)?;
++        let args = cmd.get_args();
+ 
+         // This can be different from the cwd used to launch the wrapping cargo
+         // plugin. Discovered while fixing
+@@ -86,9 +73,18 @@ impl Executor for CustomExecutor {
+                     .map_err(|e| CustomExecutorError::Io(e, raw_path))?;
+                 ctx.rs_file_args.insert(path);
+             }
+-            ctx.out_dir_args.insert(out_dir);
+         }
+-        cmd.exec()?;
++        cmd.exec_with_streaming(
++            &mut |line| {
++                self.record_dep_info(line, &cwd)?;
++                on_stdout_line(line)
++            },
++            &mut |line| {
++                self.record_dep_info(line, &cwd)?;
++                on_stderr_line(line)
++            },
++            false,
++        )?;
+         Ok(())
+     }
+ 
+@@ -115,5 +111,28 @@ pub struct CustomExecutorInnerContext {
+ 
+     /// Investigate if this needs to be intercepted like this or if it can be
+     /// looked up in a nicer way.
+-    pub out_dir_args: HashSet<PathBuf>,
++    pub dep_info_files: HashMap<PathBuf, PathBuf>,
++}
++
++impl CustomExecutor {
++    fn record_dep_info(
++        &self,
++        line: &str,
++        cwd: &std::path::Path,
++    ) -> CargoResult<()> {
++        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
++            if value.get("emit").and_then(|v| v.as_str()) == Some("dep-info") {
++                if let Some(path) =
++                    value.get("artifact").and_then(|v| v.as_str())
++                {
++                    let mut ctx = self.inner_ctx.lock().map_err(|e| {
++                        CustomExecutorError::InnerContextMutex(e.to_string())
++                    })?;
++                    ctx.dep_info_files
++                        .insert(cwd.join(path), cwd.to_path_buf());
++                }
++            }
++        }
++        Ok(())
++    }
+ }
+diff --git a/cargo-geiger/tests/compiled_inputs.rs b/cargo-geiger/tests/compiled_inputs.rs
+new file mode 100644
+index 0000000..d4084cd
+--- /dev/null
++++ b/cargo-geiger/tests/compiled_inputs.rs
+@@ -0,0 +1,63 @@
++use assert_cmd::prelude::*;
++use cargo_geiger_serde::SafetyReport;
++use std::{fs, process::Command};
++
++#[test]
++fn generated_rust_is_counted_and_resource_inputs_are_not_rust() {
++    let dir = tempfile::tempdir().unwrap();
++    fs::create_dir(dir.path().join("src")).unwrap();
++    fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"generated-input-proof\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n").unwrap();
++    fs::write(dir.path().join("build.rs"), r#"fn main() {
++        std::fs::write(std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("generated.rs"), "pub unsafe fn generated() {}\n").unwrap();
++    }"#).unwrap();
++    fs::write(
++        dir.path().join("src/lib.rs"),
++        r#"include!(concat!(env!("OUT_DIR"), "/generated.rs"));
++        pub const DOC: &str = include_str!("../README.md");
++        pub const DATA: &[u8] = include_bytes!("../sample.data");"#,
++    )
++    .unwrap();
++    fs::write(dir.path().join("README.md"), "Documentation, not Rust.")
++        .unwrap();
++    fs::write(dir.path().join("sample.data"), [0xff, 0x00]).unwrap();
++    fs::write(
++        dir.path().join("src/uncompiled.rs"),
++        "intentionally invalid UI fixture",
++    )
++    .unwrap();
++    for format in ["Ascii", "Json"] {
++        let output = Command::cargo_bin("cargo-geiger")
++            .unwrap()
++            .args(["geiger", "--color=never", "--output-format", format])
++            .arg("--manifest-path")
++            .arg(dir.path().join("Cargo.toml"))
++            .current_dir(dir.path())
++            .output()
++            .unwrap();
++        assert!(
++            output.status.success(),
++            "{}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++        assert!(!String::from_utf8_lossy(&output.stderr)
++            .contains("Failed to parse"));
++        if format == "Json" {
++            let report: SafetyReport =
++                serde_json::from_slice(&output.stdout).unwrap();
++            assert!(report.used_but_not_scanned_files.is_empty(), "{report:?}");
++            assert!(report.packages_without_metrics.is_empty(), "{report:?}");
++            assert_eq!(
++                report
++                    .packages
++                    .values()
++                    .next()
++                    .unwrap()
++                    .unsafety
++                    .used
++                    .functions
++                    .unsafe_,
++                1
++            );
++        }
++    }
++}
