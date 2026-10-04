@@ -5391,6 +5391,7 @@ dependencies = [
  "firewheel-web-audio",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-command",
  "kithara-config",
  "kithara-dsp",
  "kithara-effects",

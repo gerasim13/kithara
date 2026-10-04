@@ -16,6 +16,7 @@ use super::{
     super::{
         dispatch::run_host_cmd,
         protocol::{HostCmd, HostCmdMsg, HostReply},
+        queue::settle_receipts,
         state::{RootView, SessionState, ensure_ctx},
         transport,
     },
@@ -269,6 +270,7 @@ where
             &mut output,
         )?;
     transport::observe_commits(state)?;
+    settle_receipts(state);
     Ok(output)
 }
 

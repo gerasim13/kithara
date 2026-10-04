@@ -9,6 +9,8 @@ use firewheel::{
     nodes::volume::VolumeNode,
 };
 use kithara_bufpool::PoolRegion;
+use kithara_command::Live;
+use kithara_config::ConfigOwner;
 use kithara_dsp::param::SmootherConfig;
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_events::EventBus;
@@ -23,12 +25,14 @@ use super::{
     dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
     graph::tap,
     protocol::{PlayerId, SessionError, StartStreamFn},
-    transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
+    queue::HostProtocol,
+    transport::{SessionGridGeneration, TransportControl, install},
 };
 use crate::{
     PlayerMember,
     api::{SessionDuckingMode, SlotId, Tap},
     bridge::SharedEq,
+    host::HostSettings,
     rt::{MasterEqNode, MetronomeNode, SessionOutput},
 };
 
@@ -168,6 +172,7 @@ impl Taps {
 
 struct RootSnapshot {
     grid: BeatGridSnapshot,
+    settings: HostSettings,
     stream_shape: Option<StreamShape>,
     topology: Result<SyncGroupSnapshot, SyncError>,
     sample_rate: SessionSampleRate,
@@ -181,6 +186,7 @@ impl RootView {
     pub(crate) fn new(root: &GroupState<PlayerMember>, sample_rate: NonZeroU32) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
             grid: root.snapshot(),
+            settings: HostSettings::default(),
             stream_shape: None,
             sample_rate: SessionSampleRate::new(None, sample_rate.get()),
             status: root.status(),
@@ -191,10 +197,12 @@ impl RootView {
     fn publish(
         &self,
         root: &GroupState<PlayerMember>,
+        settings: HostSettings,
         stream_shape: Option<StreamShape>,
         sample_rate: SessionSampleRate,
     ) {
         self.0.store(Arc::new(RootSnapshot {
+            settings,
             stream_shape,
             sample_rate,
             grid: root.snapshot(),
@@ -211,6 +219,9 @@ impl RootView {
             #[call(load)]
             #[expr($.sample_rate)]
             pub(crate) fn sample_rate(&self) -> SessionSampleRate;
+            #[call(load)]
+            #[expr($.settings)]
+            pub(crate) fn settings(&self) -> HostSettings;
             #[call(load)]
             #[expr($.stream_shape)]
             pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
@@ -247,7 +258,9 @@ pub(crate) struct SessionState<T, S> {
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
     pub(super) session_ducking: SessionDuckingMode,
-    pub(super) transport: SessionTransportState,
+    /// The Host settings as the render graph confirmed them, with the
+    /// changes still on their way to it.
+    pub(super) settings: Live<HostSettings, HostProtocol>,
     pub(super) start_stream_fn: StartStreamFn<T>,
     /// Set when the output device is acquired once and cannot be rebuilt, so
     /// an idle session must keep it rather than release it.
@@ -290,7 +303,9 @@ impl<T, S> SessionState<T, S> {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
+        let Ok(settings) = Live::new(HostSettings::default());
         let state = Self {
+            settings,
             requested_max_block_frames,
             requested_declick_frames,
             output,
@@ -312,7 +327,6 @@ impl<T, S> SessionState<T, S> {
             session_limiter_node_id: None,
             retains_output: false,
             stream_needs_restart: false,
-            transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
             graph: GraphRegistry::default(),
         };
@@ -321,8 +335,12 @@ impl<T, S> SessionState<T, S> {
     }
 
     pub(super) fn publish_root(&self) {
-        self.root_view
-            .publish(&self.root, stream_shape(self), sample_rate(self));
+        self.root_view.publish(
+            &self.root,
+            *self.settings.config(),
+            stream_shape(self),
+            sample_rate(self),
+        );
     }
 }
 
@@ -436,7 +454,7 @@ fn create_firewheel_context<T, S>(
         .reserved_session_grid
         .take()
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
-    let transport_control = match install(&mut ctx, session_grid) {
+    let transport_control = match install(&mut ctx, session_grid, *state.settings.config()) {
         Ok(control) => control,
         Err(error) => {
             state.reserved_session_grid = Some(session_grid);

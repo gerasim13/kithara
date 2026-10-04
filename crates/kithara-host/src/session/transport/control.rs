@@ -1,111 +1,17 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelContext, error::UpdateError};
-use kithara_signal::SessionFrame;
 use kithara_sync::{ParentGridUpdate, SyncError};
 use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
 
 use super::{
-    commit::{
-        SessionGridGeneration, SessionTransportCommit, TransportCommitResult, TransportCommitStamp,
-        TransportObservation,
-    },
+    commit::{SessionGridGeneration, TransportObservation},
     event::TransportEvent,
     process::converge_transport_restart,
 };
 use crate::{
-    api::{SessionTransportSnapshot, Tempo, TransportRevision},
-    session::{SessionError, dispatch::stream_died, state::SessionState},
+    api::SessionTransportSnapshot,
+    session::{SessionError, state::SessionState},
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AbortDelivery {
-    Pending,
-    Sent,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct TransportLedger {
-    completed: Option<TransportRevision>,
-    last: Option<TransportRevision>,
-    rejected: Option<TransportRevision>,
-}
-
-/// The revision bookkeeping is the same in every phase, so it lives beside the
-/// phase rather than being repeated inside each variant.
-#[derive(Debug, Default, fieldwork::Fieldwork)]
-#[fieldwork(get, get_mut, vis = "pub(crate)")]
-pub(crate) struct SessionTransportState {
-    ledger: TransportLedger,
-    #[field(skip)]
-    phase: TransportPhase,
-}
-
-#[derive(Debug, Default)]
-enum TransportPhase {
-    #[default]
-    Unconfigured,
-    Stable {
-        active: SessionTransportCommit,
-    },
-    Applying {
-        next: SessionTransportCommit,
-        previous: Option<SessionTransportCommit>,
-    },
-    Aborting {
-        delivery: AbortDelivery,
-        previous: Option<SessionTransportCommit>,
-        revision: TransportRevision,
-    },
-}
-
-impl SessionTransportState {
-    /// The commit the caller has already asked for, pending or not.
-    pub(crate) const fn accepted(&self) -> Option<SessionTransportCommit> {
-        match self.phase {
-            TransportPhase::Unconfigured => None,
-            TransportPhase::Stable { active } => Some(active),
-            TransportPhase::Applying { next, .. } => Some(next),
-            TransportPhase::Aborting { previous, .. } => previous,
-        }
-    }
-
-    /// The commit the graph has actually rendered.
-    pub(crate) const fn observed(&self) -> Option<SessionTransportCommit> {
-        match self.phase {
-            TransportPhase::Unconfigured => None,
-            TransportPhase::Stable { active } => Some(active),
-            TransportPhase::Applying { previous, .. }
-            | TransportPhase::Aborting { previous, .. } => previous,
-        }
-    }
-
-    pub(crate) fn pending_revision(&self) -> Option<TransportRevision> {
-        match self.phase {
-            TransportPhase::Applying { next, .. } => Some(next.revision()),
-            TransportPhase::Aborting { revision, .. } => Some(revision),
-            TransportPhase::Unconfigured | TransportPhase::Stable { .. } => None,
-        }
-    }
-}
-
-pub(crate) fn set_tempo<T, S>(
-    state: &mut SessionState<T, S>,
-    tempo: Tempo,
-) -> Result<(), SessionError> {
-    let _ = refresh_observation(state)?;
-    let accepted = state.transport.accepted();
-    if accepted.is_some_and(|commit| commit.tempo() == tempo) {
-        return Ok(());
-    }
-    ensure_no_pending_commit(state)?;
-    let revision = next_revision(state)?;
-    let (target_frame, sample_rate) = commit_boundary(state)?;
-    let next = SessionTransportCommit::new(tempo, revision);
-    let stamp =
-        TransportCommitStamp::new(state.transport.observed(), next, target_frame, sample_rate);
-    schedule_commit(state, next, stamp)
-}
 
 pub(crate) fn snapshot<T, S>(
     state: &mut SessionState<T, S>,
@@ -243,136 +149,6 @@ fn finish_route_restart<T, S>(
     Ok(RouteRestartStatus::Ready)
 }
 
-fn ensure_no_pending_commit<T, S>(state: &SessionState<T, S>) -> Result<(), SessionError> {
-    if state.transport.pending_revision().is_some() {
-        return Err(SessionError::TransportNotProcessed);
-    }
-    Ok(())
-}
-
-fn next_revision<T, S>(state: &SessionState<T, S>) -> Result<TransportRevision, SessionError> {
-    state
-        .transport
-        .ledger()
-        .last
-        .map_or(Ok(TransportRevision::first()), |revision| {
-            revision
-                .checked_next()
-                .ok_or(SessionError::TransportRevisionExhausted)
-        })
-}
-
-fn schedule_commit<T, S>(
-    state: &mut SessionState<T, S>,
-    next: SessionTransportCommit,
-    stamp: TransportCommitStamp,
-) -> Result<(), SessionError> {
-    let revision = next.revision();
-    queue_stamp(state, stamp)?;
-    state.transport.ledger_mut().last = Some(revision);
-    if let Err(error) = update_context(state) {
-        publish_transport_event(
-            state,
-            &TransportEvent::Failed {
-                revision: Some(u64::from(revision)),
-                reason: error.to_string(),
-            },
-        );
-        abort_commit(state, revision)?;
-        return Err(error);
-    }
-    let previous = state.transport.observed();
-    state.transport.phase = TransportPhase::Applying { next, previous };
-    Ok(())
-}
-
-fn commit_boundary<T, S>(
-    state: &SessionState<T, S>,
-) -> Result<(SessionFrame, NonZeroU32), SessionError> {
-    let ctx = state.ctx.as_ref().ok_or(SessionError::NoContext)?;
-    let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
-    let lead_frames = state
-        .transport
-        .observed()
-        .map_or(0, |_| i64::from(stream_info.max_block_frames.get()));
-    let target_frame = ctx
-        .audio_clock()
-        .samples
-        .0
-        .checked_add(lead_frames)
-        .ok_or(SessionError::TransportFrameExhausted)?;
-    Ok((SessionFrame::new(target_frame), stream_info.sample_rate))
-}
-
-fn queue_stamp<T, S>(
-    state: &mut SessionState<T, S>,
-    stamp: TransportCommitStamp,
-) -> Result<(), SessionError> {
-    let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let control = state
-        .transport_control
-        .as_ref()
-        .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?;
-    control.queue_stamp(ctx, stamp);
-    Ok(())
-}
-
-/// Marks the stream for restart directly rather than routing through a message, since the session
-/// owns stream restarts and a message would strand the transport behind a stream nobody rearms.
-fn update_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
-    let Err(error) = state.ctx.as_mut().ok_or(SessionError::NoContext)?.update() else {
-        return Ok(());
-    };
-    if stream_died(state) {
-        state.stream_needs_restart = true;
-    }
-    Err(SessionError::TransportSync(sync_error_reason(error)))
-}
-
-fn abort_commit<T, S>(
-    state: &mut SessionState<T, S>,
-    revision: TransportRevision,
-) -> Result<(), SessionError> {
-    let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let control = state
-        .transport_control
-        .as_ref()
-        .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?;
-    control.queue_abort(ctx, revision);
-    let previous = state.transport.observed();
-    state.transport.phase = TransportPhase::Aborting {
-        previous,
-        revision,
-        delivery: AbortDelivery::Pending,
-    };
-    deliver_abort(state)
-}
-
-/// Leaves a pending abort delivery untouched when the stream is stopped, since Firewheel only
-/// flushes queued events while running; the next refresh retries an update that would otherwise
-/// deliver nothing.
-fn deliver_abort<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
-    update_context(state)?;
-    if !state.ctx.as_ref().is_some_and(FirewheelContext::is_active) {
-        return Ok(());
-    }
-    if let TransportPhase::Aborting { delivery, .. } = &mut state.transport.phase
-        && *delivery == AbortDelivery::Pending
-    {
-        *delivery = AbortDelivery::Sent;
-    }
-    Ok(())
-}
-
-fn sync_error_reason(error: UpdateError) -> String {
-    match error {
-        UpdateError::MsgChannelFull => "message channel is full".to_owned(),
-        UpdateError::GraphCompileError(error) => {
-            format!("audio graph compilation failed: {error}")
-        }
-    }
-}
-
 fn refresh_observation<T, S>(
     state: &mut SessionState<T, S>,
 ) -> Result<TransportObservation, SessionError> {
@@ -385,18 +161,6 @@ fn refresh_observation<T, S>(
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
     publish_committed(state, &observation)?;
-    if matches!(
-        state.transport.phase,
-        TransportPhase::Aborting {
-            delivery: AbortDelivery::Pending,
-            ..
-        }
-    ) {
-        deliver_abort(state)?;
-    }
-    if state.transport.ledger_mut().rejected.take().is_some() {
-        return Err(SessionError::TransportCommitRejected);
-    }
     Ok(observation)
 }
 
@@ -405,8 +169,7 @@ fn refresh_observation<T, S>(
 /// it, so the Host grid follows the tempo it clicks with no deck ticking.
 ///
 /// Nothing is committed while no graph runs or a route restart holds the
-/// session grid. Delivering a pending abort and reporting a rejected commit
-/// stay with the next transport command.
+/// session grid.
 ///
 /// # Errors
 ///
@@ -422,8 +185,7 @@ pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) -> Result<()
     publish_committed(state, &observation)
 }
 
-/// Publishes the committed session grid on the root group and records the
-/// commit completion the graph reported; both are idempotent.
+/// Publishes the committed session grid on the root group; idempotent.
 fn publish_committed<T, S>(
     state: &mut SessionState<T, S>,
     observation: &TransportObservation,
@@ -439,80 +201,10 @@ fn publish_committed<T, S>(
         ))?;
         state.publish_root();
     }
-    if let Some(completion) = observation.completion() {
-        apply_completion(state, completion);
-    }
     Ok(())
 }
 
-/// Treats the graph's reported pending revision as authoritative for whether an abort happened,
-/// regardless of whether this side's own delivery bookkeeping had caught up.
-fn apply_completion<T, S>(state: &mut SessionState<T, S>, completion: TransportCommitResult) {
-    let revision = completion.revision();
-    if state
-        .transport
-        .ledger()
-        .completed
-        .is_some_and(|completed| revision <= completed)
-    {
-        return;
-    }
-    let observed = state.transport.observed();
-    let phase = std::mem::take(&mut state.transport.phase);
-    let (active, committed, rejected) = match (completion, phase) {
-        (TransportCommitResult::Applied(_), TransportPhase::Applying { next, .. })
-            if next.revision() == revision =>
-        {
-            (Some(next), Some(next), false)
-        }
-        (
-            TransportCommitResult::Aborted(_),
-            TransportPhase::Aborting {
-                previous,
-                revision: pending_revision,
-                ..
-            },
-        ) if pending_revision == revision => (previous, None, false),
-        _ => (observed, None, true),
-    };
-    let ledger = state.transport.ledger_mut();
-    ledger.completed = Some(revision);
-    if rejected {
-        ledger.rejected = Some(revision);
-    }
-    state.transport.phase = active.map_or(TransportPhase::Unconfigured, |active| {
-        TransportPhase::Stable { active }
-    });
-    if let Some(next) = committed {
-        publish_transport_commit(state, observed, next);
-    } else if rejected {
-        publish_transport_event(
-            state,
-            &TransportEvent::Failed {
-                revision: Some(u64::from(revision)),
-                reason: "render graph rejected transport commit".to_owned(),
-            },
-        );
-    }
-}
-
-fn publish_transport_commit<T, S>(
-    state: &SessionState<T, S>,
-    previous: Option<SessionTransportCommit>,
-    next: SessionTransportCommit,
-) {
-    if previous.is_none_or(|commit| commit.tempo() != next.tempo()) {
-        publish_transport_event(
-            state,
-            &TransportEvent::TempoCommitted {
-                revision: u64::from(next.revision()),
-                beats_per_minute: next.tempo().beats_per_minute(),
-            },
-        );
-    }
-}
-
-fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
+pub(crate) fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
     for deck in state.graph.decks() {
         deck.bus.publish(event.clone());
     }

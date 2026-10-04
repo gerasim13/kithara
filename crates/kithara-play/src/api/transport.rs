@@ -6,11 +6,11 @@ use kithara_warp::{BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat};
 /// carry.
 ///
 /// The upper bound is what keeps the anchor arithmetic finite: an unbounded
-/// tempo overflows the beat span of a single block, and the resulting failure
-/// strands the transport with an active commit and no anchor.
+/// tempo overflows the beat span of a single block, and the transport could
+/// place no beat anchor on it.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, fieldwork::Fieldwork, Ranged)]
 #[fieldwork(get)]
-#[ranged(min = 1.0, max = 1_000.0)]
+#[ranged(min = 1.0, max = 1_000.0, default = 120.0)]
 pub struct Tempo(
     /// Returns the tempo in beats per minute.
     #[field(get = beats_per_minute, copy)]

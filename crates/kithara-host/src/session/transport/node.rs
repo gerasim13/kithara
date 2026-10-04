@@ -1,12 +1,11 @@
 use firewheel::{
     FirewheelContext,
-    clock::{EventInstant, InstantSamples},
-    event::{NodeEventType, ProcEvents},
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeError, NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
+        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
+use kithara_command::{ChannelConfig, Sender, channel};
 use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
 use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
@@ -14,73 +13,51 @@ use kithara_warp::RenderContext;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
-    commit::{
-        SessionGridGeneration, TransportCommitEvent, TransportCommitStamp, TransportObservation,
-    },
+    commit::{SessionGridGeneration, TransportObservation},
     process::{
-        TransportCommitState, TransportFrame, TransportObservationInput, process_transport,
-        restart_transport, stage_transport_events,
+        TransportFrame, TransportObservationInput, TransportState, process_transport,
+        restart_transport,
     },
 };
-use crate::api::TransportRevision;
+use crate::{host::HostSettings, session::queue::HostProtocol};
 
 pub(crate) fn install(
     ctx: &mut FirewheelContext,
     session_grid: SessionGridGeneration,
+    settings: HostSettings,
 ) -> Result<TransportControl, &'static str> {
-    let initial = TransportObservation::new(None, None, session_grid);
+    let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
+    let (queue, inbox) = channel(ChannelConfig::builder().build());
     let store = ctx
         .proc_store_mut()
         .ok_or("session transport store is unavailable while the stream is running")?;
     install_render_context(store)?;
     store
-        .insert(TransportCommitState::new(session_grid))
+        .insert(TransportState::new(inbox, settings, session_grid))
         .map_err(|_| "session transport state store slot already exists")?;
     store
         .insert(TransportObservationInput::new(observation_input))
         .map_err(|_| "session transport observation store slot already exists")?;
-    let node_id = ctx
-        .add_node(SessionTransportNode, None)
+    ctx.add_node(SessionTransportNode, None)
         .map_err(|_| "session transport node was rejected by the audio graph")?;
-    Ok(TransportControl::new(node_id, observation_output))
+    Ok(TransportControl {
+        queue,
+        observation: observation_output,
+    })
 }
 
-#[derive(Debug)]
+/// The session owner's half of the transport: the queue it sends Host
+/// changes through and the observation the render graph publishes.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, vis = "pub(crate)")]
 pub(crate) struct TransportControl {
-    node_id: NodeID,
     observation: Output<TransportObservation>,
+    #[field(get_mut = queue)]
+    queue: Sender<HostProtocol>,
 }
 
 impl TransportControl {
-    const fn new(node_id: NodeID, observation: Output<TransportObservation>) -> Self {
-        Self {
-            node_id,
-            observation,
-        }
-    }
-
-    pub(crate) fn queue_abort(&self, ctx: &mut FirewheelContext, revision: TransportRevision) {
-        ctx.queue_event_for(
-            self.node_id,
-            NodeEventType::custom(TransportCommitEvent::Abort(revision)),
-        );
-    }
-
-    pub(crate) fn queue_stamp(&self, ctx: &mut FirewheelContext, stamp: TransportCommitStamp) {
-        ctx.queue_event_for(
-            self.node_id,
-            NodeEventType::custom(TransportCommitEvent::Stage(stamp)),
-        );
-        ctx.schedule_event_for(
-            self.node_id,
-            NodeEventType::custom(TransportCommitEvent::Apply(stamp.revision())),
-            Some(EventInstant::AtClockSamples(InstantSamples(i64::from(
-                stamp.target_frame(),
-            )))),
-        );
-    }
-
     delegate::delegate! {
         to self.observation {
             #[expr(*$)]
@@ -113,13 +90,6 @@ impl AudioNode for SessionTransportNode {
 pub(crate) struct SessionTransportProcessor;
 
 impl AudioNodeProcessor for SessionTransportProcessor {
-    #[kithara::rtsan_forbid_blocking]
-    fn events(&mut self, _info: &ProcInfo, events: &mut ProcEvents, extra: &mut ProcExtra) {
-        if let Err(error) = stage_transport_events(events, &mut extra.store) {
-            let _ = extra.logger.try_error(error.message());
-        }
-    }
-
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
@@ -166,7 +136,7 @@ fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
         SessionFrame::new(output_frames.start.0)..SessionFrame::new(output_frames.end.0),
         info.sample_rate,
         transport.session_epoch,
-        transport.transport_revision,
+        Some(transport.transport_revision),
     )?;
-    RenderContext::new(output, transport.trajectory)
+    RenderContext::new(output, Some(transport.trajectory))
 }

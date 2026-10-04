@@ -16,11 +16,11 @@ use tracing::{debug, warn};
 
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
+    queue::settle_receipts,
     state::{
         Deck, GraphRegistry, SessionState, SlotNodes, TapSlot, Taps, add_graph_node, ensure_ctx,
         prepare_eq_layout,
     },
-    transport::SessionTransportState,
 };
 use crate::{
     PlayError,
@@ -339,10 +339,11 @@ pub(super) mod lifecycle {
                 .request_deactivate();
             state.stream = None;
             state.ctx = None;
+            settle_receipts(state);
+            state.settings.abandon();
             state.publish_root();
             state.transport_control = None;
             state.taps = Taps::default();
-            state.transport = SessionTransportState::default();
             state.session_output_node_id = None;
             state.session_output_memo = None;
             state.session_limiter_node_id = None;
@@ -711,6 +712,7 @@ mod tests {
         ActivateInfo, backend::BackendProcessInfo, node::StreamStatus,
         processor::FirewheelProcessor,
     };
+    use kithara_command::When;
     use kithara_effects::eq::generate_log_spaced_bands;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
@@ -728,6 +730,7 @@ mod tests {
     use crate::{
         api::{SessionTransportSnapshot, Tempo},
         consts,
+        host::{HostSettingsChange, HostSettingsExec},
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,
@@ -897,17 +900,8 @@ mod tests {
         }
     }
 
-    fn set_tempo_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
-        assert!(matches!(
-            run_cmd(
-                state,
-                Cmd::SetSessionTempo {
-                    tempo: Tempo::new(120.0).expect("invariant: fixture tempo is valid"),
-                },
-            ),
-            Reply::Ok
-        ));
-        assert!(deliver_one_block(), "transport commit must be rendered");
+    fn render_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
+        assert!(deliver_one_block(), "the transport must render a block");
         match run_cmd(state, Cmd::QuerySessionTransport) {
             Reply::SessionTransport(snapshot) => snapshot,
             Reply::Err(error) => panic!("transport snapshot failed: {error}"),
@@ -921,16 +915,7 @@ mod tests {
         let mut state = test_state(start_test_stream);
         let player = register(&mut state);
         start(&mut state, player);
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetSessionTempo {
-                    tempo: Tempo::new(124.0).expect("invariant: fixture tempo is valid"),
-                },
-            ),
-            Reply::Ok
-        ));
-        assert!(deliver_one_block(), "transport commit must be rendered");
+        assert!(deliver_one_block(), "the transport must render a block");
 
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
 
@@ -1115,7 +1100,7 @@ mod tests {
             initial.stamp()
         );
         start_at(&mut state, first_player, 0);
-        let before = set_tempo_and_read_session_grid(&mut state);
+        let before = render_and_read_session_grid(&mut state);
         let first_live = state.root.snapshot();
         assert_eq!(first_live, before.session_grid());
         assert_eq!(
@@ -1189,7 +1174,7 @@ mod tests {
 
         let second_player = register(&mut state);
         start_at(&mut state, second_player, 0);
-        let after = set_tempo_and_read_session_grid(&mut state);
+        let after = render_and_read_session_grid(&mut state);
         let second_live = state.root.snapshot();
         assert_eq!(second_live, after.session_grid());
         assert_eq!(
@@ -1229,7 +1214,7 @@ mod tests {
         let mut state = test_state(start_test_stream);
         let player = register(&mut state);
         start_at(&mut state, player, 0);
-        let live = set_tempo_and_read_session_grid(&mut state);
+        let live = render_and_read_session_grid(&mut state);
 
         assert!(matches!(
             invalidate_audio_route(&mut state, "test route restart"),
@@ -1260,19 +1245,17 @@ mod tests {
             reserved,
             "a stale transport observation must not replace the route reservation"
         );
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetSessionTempo {
-                    tempo: Tempo::new(121.0).expect("invariant: fixture tempo is valid"),
-                },
-            ),
-            Reply::Err(SessionError::TransportNotProcessed)
-        ));
+        let tempo = Tempo::new(121.0).expect("invariant: fixture tempo is valid");
+        assert!(
+            state
+                .exec(HostSettingsChange::Tempo(tempo), When::Next, &mut ())
+                .is_ok(),
+            "a change for the next block waits in the queue across a route restart"
+        );
         assert_eq!(
             state.root.snapshot(),
             reserved,
-            "a transport command must not cross an unfinished route boundary"
+            "a queued change must not touch an unfinished route boundary"
         );
         device(|dev| {
             assert_eq!(dev.retired_processors.len(), 1);

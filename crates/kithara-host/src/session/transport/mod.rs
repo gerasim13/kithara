@@ -7,10 +7,9 @@ mod process;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use commit::SessionGridGeneration;
+pub(crate) use commit::{SessionGridGeneration, TransportProcessError};
 pub(crate) use control::{
-    RouteRestartStatus, SessionTransportState, observe_commits, prepare_route_restart, set_tempo,
-    snapshot,
+    RouteRestartStatus, observe_commits, prepare_route_restart, publish_transport_event, snapshot,
 };
 pub use event::TransportEvent;
 pub(crate) use node::{TransportControl, install};

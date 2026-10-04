@@ -251,7 +251,7 @@ mod tests {
     use kithara_effects::LimiterConfig;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
-    use kithara_play::{DEFAULT_GATE_SMOOTHING, Tempo};
+    use kithara_play::DEFAULT_GATE_SMOOTHING;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara, wait_until,
@@ -344,16 +344,6 @@ mod tests {
         stream.lock().arm();
         stream.lock().render_block(0).expect("initial render");
         let _ = reader.drain(512);
-        assert_eq!(
-            root_view.grid().state(),
-            BeatGridState::Unavailable(kithara_warp::BeatGridUnavailable::NoGeometry)
-        );
-        let tempo = Tempo::new(90.0).expect("valid tempo");
-        assert!(matches!(
-            client.exec(Cmd::SetSessionTempo { tempo }),
-            Ok(Reply::Ok)
-        ));
-        let before = root_view.grid();
         let mut clock_samples = 512;
         runtime
             .block_on(wait_until(
@@ -369,8 +359,7 @@ mod tests {
                     root_view.grid().state() == BeatGridState::Live
                 },
             ))
-            .expect("committed transport reaches the read-only Host view without another command");
-        assert!(root_view.grid().revision() > before.revision());
+            .expect("the transport's own tempo reaches the read-only Host view without a command");
 
         assert!(matches!(
             client.exec_host(HostCmd::SetMetronome { on: true }),

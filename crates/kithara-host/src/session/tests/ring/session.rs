@@ -21,6 +21,7 @@ use super::{
     super::graph::GraphSession, MasterRing, RingBackend, RingBackendConfig, RingBackendProbe,
     RingLayout, RingReader, RingRenderError,
 };
+use crate::session::protocol::{HostCmd, HostReply};
 
 type RingSetup =
     Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
@@ -92,6 +93,10 @@ enum RingMsg {
     Cmd {
         cmd: Cmd<TestPools>,
         reply_tx: mpsc::Sender<Reply>,
+    },
+    Host {
+        cmd: HostCmd<TestPools>,
+        reply_tx: mpsc::Sender<HostReply>,
     },
     Credit {
         blocks: usize,
@@ -191,6 +196,23 @@ impl ManualRingSession {
             return self.worker_failure();
         };
         let sent = cmd_tx.send(RingMsg::Cmd { cmd, reply_tx });
+        if sent.is_err() {
+            return self.worker_failure();
+        }
+        match reply_rx.recv() {
+            Ok(reply) => Ok(reply),
+            Err(_) => self.worker_failure(),
+        }
+    }
+
+    /// Synchronous Host command-reply bridge; call from a blocking control thread.
+    pub(crate) fn exec_host(&self, cmd: HostCmd<TestPools>) -> Result<HostReply, RingSessionError> {
+        self.ensure_available()?;
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
+            return self.worker_failure();
+        };
+        let sent = cmd_tx.send(RingMsg::Host { cmd, reply_tx });
         if sent.is_err() {
             return self.worker_failure();
         }
@@ -365,6 +387,9 @@ fn ring_session_thread(
         match message {
             RingMsg::Cmd { cmd, reply_tx } => {
                 let _ = reply_tx.send(state.exec(cmd));
+            }
+            RingMsg::Host { cmd, reply_tx } => {
+                let _ = reply_tx.send(state.exec_host(cmd));
             }
             RingMsg::Credit { blocks, reply_tx } => {
                 let _ = reply_tx.send(credit_blocks(&mut state, blocks));

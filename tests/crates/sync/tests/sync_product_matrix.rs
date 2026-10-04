@@ -17,7 +17,7 @@ use kithara::{
 use kithara::{
     beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION},
     hls::AbrMode,
-    host::{HostConfig, HostOwned, MetronomeConfig, Tap},
+    host::{HostConfig, HostOwned, HostSettingsControl, MetronomeConfig, Tap},
     platform::{
         sync::Arc,
         time::{self, Duration, Instant},

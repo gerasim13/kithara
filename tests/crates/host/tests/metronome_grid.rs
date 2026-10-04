@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     audio::mock::TestPcmReader,
-    host::{HostConfig, MetronomeConfig, Tap},
+    host::{HostConfig, HostSettingsControl, MetronomeConfig, Tap},
     play::Tempo,
     signal::AudioSpec,
     warp::BeatGridSnapshot,

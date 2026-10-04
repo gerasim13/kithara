@@ -31,6 +31,13 @@ pub enum When<T> {
     At(T),
 }
 
+impl<T> Default for When<T> {
+    /// The nearest moment: the next block.
+    fn default() -> Self {
+        Self::Next
+    }
+}
+
 /// Something whose time a batch shifts, such as a deck slot or a transport.
 pub trait Target: Copy {
     /// Position of this target among the targets a channel tracks.

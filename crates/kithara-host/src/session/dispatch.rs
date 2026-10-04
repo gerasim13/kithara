@@ -19,11 +19,12 @@ use super::{
         Cmd, HostCmd, HostReply, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
         SyncCmd,
     },
+    queue::settle_receipts,
     state::{SessionState, register_player},
     transport,
     transport::RouteRestartStatus,
 };
-use crate::{PlayerMember, api::HostLevel};
+use crate::{PlayerMember, api::HostLevel, host::HostSettingsExec};
 
 pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> HostReply
 where
@@ -34,6 +35,12 @@ where
         HostCmd::Sync(cmd) => run_sync_cmd(state, cmd),
         HostCmd::ApplyMix { levels } => {
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
+        }
+        HostCmd::Configure { change, at } => {
+            settle_receipts(state);
+            state
+                .exec(change, at, &mut ())
+                .map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
         HostCmd::AttachOutputs {
             tap: target,
@@ -220,10 +227,6 @@ where
             controls::set_session_ducking(state, mode);
             Reply::Ok
         }
-        Cmd::SetSessionTempo { tempo } => match transport::set_tempo(state, tempo) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
         Cmd::QuerySessionTransport => match transport::snapshot(state) {
             Ok(snapshot) => Reply::SessionTransport(snapshot),
             Err(err) => Reply::Err(err),
@@ -296,7 +299,9 @@ pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Reply {
     if stream_died(state) {
         return restart_dead_stream(state);
     }
-    match transport::observe_commits(state) {
+    let observed = transport::observe_commits(state);
+    settle_receipts(state);
+    match observed {
         Ok(()) => Reply::Ok,
         Err(error) => Reply::Err(error.into()),
     }
@@ -502,6 +507,7 @@ mod tests {
     };
 
     use firewheel::{ActivateInfo, processor::FirewheelProcessor};
+    use kithara_command::When;
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
     use kithara_platform::sync::{
@@ -521,6 +527,7 @@ mod tests {
     use crate::{
         api::Tap,
         bridge::MixTapWriter,
+        host::HostSettingsChange,
         session::{
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
@@ -1222,15 +1229,12 @@ mod tests {
             BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
         );
 
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetSessionTempo {
-                    tempo: Tempo::new(90.0).expect("valid tempo"),
-                },
-            ),
-            Reply::Ok
-        ));
+        let tempo = Tempo::new(90.0).expect("valid tempo");
+        assert!(
+            state
+                .exec(HostSettingsChange::Tempo(tempo), When::Next, &mut ())
+                .is_ok()
+        );
         assert!(matches!(tick_session(&mut state), Reply::Ok));
         for clock_samples in [512, 1024, 1536] {
             state

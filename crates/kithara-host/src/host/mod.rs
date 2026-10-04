@@ -5,8 +5,11 @@ mod member;
 mod offline;
 mod owner;
 mod platform;
+mod settings;
 
 pub use config::HostConfig;
 pub(crate) use held::HeldPlayer;
 pub use member::PlayerMember;
 pub use owner::{Host, HostOwned};
+pub(crate) use settings::HostSettingsExec;
+pub use settings::{HostSettings, HostSettingsChange, HostSettingsControl};

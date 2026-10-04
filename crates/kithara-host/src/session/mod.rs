@@ -3,6 +3,7 @@
 mod dispatch;
 mod graph;
 pub(crate) mod protocol;
+mod queue;
 pub(crate) mod state;
 #[cfg(test)]
 pub(crate) mod tests;

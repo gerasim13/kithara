@@ -4,6 +4,10 @@ use kithara_platform::time::Duration;
 
 pub(crate) const SESSION_PUMP_INTERVAL: Duration = Duration::from_millis(10);
 
+/// Seconds the session tempo takes to turn toward a new target, so a tempo
+/// change bends the beat curve instead of breaking its slope.
+pub(crate) const TEMPO_SMOOTH_SECONDS: f64 = 0.005;
+
 pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
     None => unreachable!(),

@@ -1,12 +1,12 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use kithara_bufpool::HasPool;
+use kithara_command::When;
+use kithara_config::Configure;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-use kithara_play::{
-    PlayError, SessionBinding, SessionDispatcher, Tempo, player::PlayerControlSource,
-};
-use kithara_signal::SessionEpoch;
+use kithara_play::{PlayError, SessionBinding, SessionDispatcher, player::PlayerControlSource};
+use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_sync::{
     GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup, SyncGroupSnapshot,
     SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
@@ -17,7 +17,7 @@ use kithara_warp::{BeatGrid, BeatGridId};
 #[cfg(feature = "offline")]
 use super::offline::OfflineRuntime;
 use super::{
-    HostConfig,
+    HostConfig, HostSettings, HostSettingsChange,
     platform::{Platform, PlatformResult},
 };
 use crate::{
@@ -306,14 +306,6 @@ impl<S> Host<S> {
         self.exec_play_ok(Cmd::SetSampleRate { sample_rate })
     }
 
-    /// Change the canonical session tempo at the next render boundary.
-    ///
-    /// # Errors
-    /// Returns an error when the Host rejects or cannot dispatch the update.
-    pub fn set_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSessionTempo { tempo })
-    }
-
     pub(super) fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
     where
         P: PlayerControlSource<Schema = S>,
@@ -388,6 +380,23 @@ where
                 ))
             }
         }
+    }
+}
+
+/// A change goes to the session owner, which hands it to the render graph to
+/// apply on a session frame; the settings show it once the graph confirms it.
+impl<S> Configure<HostSettingsChange> for Host<S> {
+    type At = When<SessionFrame>;
+    type Config = HostSettings;
+    type Error = PlayError;
+    type Output = ();
+
+    fn configure(&self, change: HostSettingsChange, at: Self::At) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::Configure { change, at }, "host settings")
+    }
+
+    fn settings(&self) -> HostSettings {
+        self.root_view.settings()
     }
 }
 

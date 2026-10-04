@@ -12,7 +12,7 @@ mod wire {
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::{
-        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
+        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId},
         bridge::{SharedEq, SlotControl},
         rt::StreamShape,
     };
@@ -57,14 +57,8 @@ mod wire {
         TapActive,
         #[error("session transport has not been processed")]
         TransportNotProcessed,
-        #[error("session transport commit was rejected at the render boundary")]
-        TransportCommitRejected,
-        #[error("session transport update failed: {0}")]
-        TransportSync(String),
-        #[error("session transport frame is exhausted")]
-        TransportFrameExhausted,
-        #[error("session transport revision is exhausted")]
-        TransportRevisionExhausted,
+        #[error("host command queue is full")]
+        HostQueueFull,
         #[error(
             "session output requires {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
         )]
@@ -132,9 +126,6 @@ mod wire {
         },
         SetSessionDucking {
             mode: SessionDuckingMode,
-        },
-        SetSessionTempo {
-            tempo: Tempo,
         },
         QuerySessionTransport,
         InvalidateAudioRoute {

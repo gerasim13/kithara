@@ -267,15 +267,19 @@ struct TimelineOverflow;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use kithara_command::When;
+    use kithara_config::Configure;
     use kithara_output::{OfflineRenderRequest, OfflineRenderer, RenderSinkError};
     use kithara_platform::CancelScope;
+    use kithara_signal::SessionFrame;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,
     };
+    use kithara_warp::{BeatGrid, BeatGridQuery, MapPoint, MapPosition};
 
     use super::*;
-    use crate::HostConfig;
+    use crate::{HostConfig, HostSettingsChange, HostSettingsControl, api::Tempo};
 
     struct Discard;
 
@@ -315,5 +319,113 @@ mod tests {
             host.render(&request, &cancel.token(), &mut Discard),
             Err(OfflineRenderError::SessionModeUnavailable)
         ));
+    }
+
+    fn tempo_host() -> Host<TestPools> {
+        let block_frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let config = HostConfig::offline(pools())
+            .sample_rate(consts::SAMPLE_RATE)
+            .max_block_frames(block_frames)
+            .build();
+        Host::<TestPools>::new(config).expect("fixture offline Host")
+    }
+
+    fn render_frames(host: &mut Host<TestPools>, frames: std::ops::Range<u64>) {
+        let request = OfflineRenderRequest::builder()
+            .spec(AudioSpec::new(consts::CHANNELS, consts::SAMPLE_RATE))
+            .frames(frames)
+            .build();
+        let cancel = CancelScope::new(None);
+        host.render(&request, &cancel.token(), &mut Discard)
+            .expect("offline render");
+    }
+
+    fn tempo(beats_per_minute: f64) -> Tempo {
+        Tempo::new(beats_per_minute).expect("fixture tempo is in range")
+    }
+
+    /// Tempo the Host grid resolves at session frame `frame`.
+    fn grid_bpm(host: &Host<TestPools>, frame: i64) -> f64 {
+        let grid = host.snapshot();
+        let position = MapPoint::new(grid.stamp(), MapPosition::Session(SessionFrame::new(frame)));
+        let BeatGridQuery::Resolved(estimate) = grid.tempo_at(position) else {
+            panic!("the Host grid resolves its tempo at frame {frame}");
+        };
+        f64::from(*estimate.value())
+    }
+
+    #[kithara::test(native)]
+    fn a_tempo_change_at_a_frame_reanchors_the_transport_on_that_frame() {
+        let mut host = tempo_host();
+        render_frames(&mut host, 0..256);
+        assert_eq!(host.tempo(), tempo(120.0), "a Host starts at 120 BPM");
+        assert_eq!(grid_bpm(&host, 200), 120.0, "the transport counts 120 BPM");
+
+        host.configure(
+            HostSettingsChange::Tempo(tempo(128.0)),
+            When::At(SessionFrame::new(1_000)),
+        )
+        .expect("a frame two blocks ahead is reachable");
+        render_frames(&mut host, 256..896);
+        assert_eq!(
+            host.tempo(),
+            tempo(120.0),
+            "the getter keeps 120 BPM until the change applies"
+        );
+
+        render_frames(&mut host, 896..1_024);
+        assert_eq!(
+            host.tempo(),
+            tempo(128.0),
+            "the getter shows the change once its receipt arrives"
+        );
+        assert_eq!(
+            grid_bpm(&host, 999),
+            120.0,
+            "the frame before the change keeps 120 BPM"
+        );
+        let settled = grid_bpm(&host, 1_000 + i64::from(consts::SAMPLE_RATE.get()));
+        assert!(
+            (settled - 128.0).abs() < 1e-9,
+            "a second after the change the transport counts 128 BPM, got {settled}"
+        );
+    }
+
+    #[kithara::test(native)]
+    fn a_tempo_change_at_a_rendered_frame_is_late() {
+        let mut host = tempo_host();
+        render_frames(&mut host, 0..2_048);
+
+        assert!(matches!(
+            host.configure(
+                HostSettingsChange::Tempo(tempo(128.0)),
+                When::At(SessionFrame::new(1_000)),
+            ),
+            Err(PlayError::Late)
+        ));
+        assert_eq!(host.tempo(), tempo(120.0), "a late change changes nothing");
+    }
+
+    #[kithara::test(native)]
+    fn without_a_render_context_a_frame_has_no_clock_and_the_next_moment_applies_at_once() {
+        let mut host = tempo_host();
+
+        assert!(matches!(
+            host.configure(
+                HostSettingsChange::Tempo(tempo(128.0)),
+                When::At(SessionFrame::new(1_000)),
+            ),
+            Err(PlayError::Untimed)
+        ));
+        host.set_tempo(tempo(128.0))
+            .expect("the next moment needs no clock");
+        assert_eq!(host.tempo(), tempo(128.0), "the change applies at once");
+
+        render_frames(&mut host, 0..128);
+        assert_eq!(
+            grid_bpm(&host, 64),
+            128.0,
+            "the transport starts at the configured tempo"
+        );
     }
 }

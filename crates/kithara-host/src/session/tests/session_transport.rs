@@ -2,14 +2,20 @@
 
 use std::num::NonZeroU32;
 
+use kithara_command::When;
 use kithara_events::{EventBus, EventReceiver};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use kithara_play::{Cmd, Reply, SessionTransportSnapshot, Tempo};
+use kithara_signal::SessionFrame;
 use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::BeatGridId;
 
 use super::ring::{ManualRingConfig, ManualRingSession};
-use crate::{consts, session::TransportEvent};
+use crate::{
+    consts,
+    host::HostSettingsChange,
+    session::{HostCmd, HostReply, TransportEvent},
+};
 
 fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
     let rate = NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE)
@@ -58,16 +64,33 @@ fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<Tra
     transport
 }
 
-fn set_tempo(session: &ManualRingSession, beats_per_minute: f64) {
+fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<SessionFrame>) {
     let tempo = Tempo::new(beats_per_minute).expect("invariant: test tempo is valid");
-    expect_ok(
-        session
-            .exec(Cmd::SetSessionTempo { tempo })
-            .expect("invariant: tempo command reaches the session"),
-    );
+    match session
+        .exec_host(HostCmd::Configure {
+            at,
+            change: HostSettingsChange::Tempo(tempo),
+        })
+        .expect("invariant: tempo command reaches the session")
+    {
+        HostReply::Ok => {}
+        HostReply::Err(error) => panic!("tempo command failed: {error}"),
+        _ => panic!("unexpected tempo command reply"),
+    }
 }
 
+fn set_tempo(session: &ManualRingSession, beats_per_minute: f64) {
+    set_tempo_at(session, beats_per_minute, When::Next);
+}
+
+/// Ticks the session first, as its owner loop does between device blocks, so
+/// the receipts of the rendered blocks are settled before the query.
 fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
+    expect_ok(
+        session
+            .exec(Cmd::Tick)
+            .expect("invariant: tick reaches the session"),
+    );
     match session
         .exec(Cmd::QuerySessionTransport)
         .expect("invariant: transport query reaches the session")
@@ -82,17 +105,14 @@ fn commit_initial_transport(
     session: &ManualRingSession,
     events: &mut EventReceiver<TransportEvent>,
 ) -> SessionTransportSnapshot {
-    set_tempo(session, 120.0);
     session
         .credit(1)
-        .expect("invariant: initial transport commit renders");
+        .expect("invariant: the initial transport renders");
     let committed = snapshot(session);
     assert_eq!(
         drain_transport_events(events),
-        vec![TransportEvent::TempoCommitted {
-            beats_per_minute: 120.0,
-            revision: u64::from(committed.revision()),
-        },]
+        Vec::new(),
+        "the transport starts at its configured tempo without announcing a change"
     );
     committed
 }
@@ -117,13 +137,13 @@ fn transport_commit_is_published_to_every_registered_player_bus() {
     let mut left_events = register_transport_events(&session);
     let mut right_events = register_transport_events(&session);
 
-    set_tempo(&session, 120.0);
+    set_tempo(&session, 90.0);
     session
         .credit(1)
-        .expect("invariant: initial transport commit renders");
+        .expect("invariant: the tempo change renders");
     let committed = snapshot(&session);
     let expected = vec![TransportEvent::TempoCommitted {
-        beats_per_minute: 120.0,
+        beats_per_minute: 90.0,
         revision: u64::from(committed.revision()),
     }];
 
@@ -236,7 +256,14 @@ fn tempo_change_preserves_beat_and_changes_slope_at_the_scheduled_boundary() {
         .expect("invariant: initial tempo commits and advances");
     let initial = snapshot(&session);
 
-    set_tempo(&session, 60.0);
+    let boundary_frame = clock_samples(&session) + u64::from(BLOCK_FRAMES);
+    set_tempo_at(
+        &session,
+        60.0,
+        When::At(SessionFrame::new(
+            i64::try_from(boundary_frame).expect("invariant: the boundary frame fits i64"),
+        )),
+    );
     session
         .credit(1)
         .expect("invariant: old tempo reaches the scheduled boundary");

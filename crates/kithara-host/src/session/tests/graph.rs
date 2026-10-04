@@ -21,8 +21,8 @@ use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::BeatGridId;
 
 use super::super::{
-    dispatch::run_cmd,
-    protocol::{Cmd, Reply, SessionDispatcher},
+    dispatch::{run_cmd, run_host_cmd},
+    protocol::{Cmd, HostCmd, HostReply, Reply, SessionDispatcher},
     state::{RootView, SessionState},
 };
 use crate::{MetronomeConfig, PlayerMember, host::HeldPlayer, rt::SessionOutput};
@@ -64,6 +64,11 @@ where
             attach_player_with_id(&mut self.state, *grid_id, pools.clone());
         }
         run_cmd(&mut self.state, cmd)
+    }
+
+    #[must_use]
+    pub(crate) fn exec_host(&mut self, cmd: HostCmd<S>) -> HostReply {
+        run_host_cmd(&mut self.state, cmd)
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {

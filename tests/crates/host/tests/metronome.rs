@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     effects::LimiterConfig,
-    host::{HostConfig, MetronomeConfig, Tap},
+    host::{HostConfig, HostSettingsControl, MetronomeConfig, Tap},
     play::{PlayError, Tempo},
     signal::AudioSpec,
     warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
