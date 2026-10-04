@@ -6,7 +6,7 @@ use std::{num::NonZeroU32, ops::Deref};
 use kithara::play::{SessionError, TransportRevision};
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{Host, HostConfig, HostLevel, HostOwned, Tap},
+    host::{Host, HostConfig, HostLevel, HostOwned, HostSettingsControl, Tap},
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -43,7 +43,9 @@ pub fn audio_clock_pace<S>(config: &HostConfig<S>) -> Duration {
     let frames = config
         .max_block_frames()
         .expect("offline Host config must have a render block size");
-    Duration::from_secs_f64(f64::from(frames.get()) / f64::from(config.sample_rate().get()))
+    Duration::from_secs_f64(
+        f64::from(frames.get()) / f64::from(config.settings().sample_rate().get()),
+    )
 }
 /// Slack a playhead-against-cursor comparison needs. The product publishes
 /// `PlaybackProgress` only once the reported position has moved
@@ -327,18 +329,6 @@ where
             .await
     }
 
-    pub async fn set_metronome(&self, on: bool) -> Result<(), PlayError> {
-        self.off
-            .call(move |state| state.host.set_metronome(on))
-            .await
-    }
-
-    pub async fn set_metronome_level(&self, level: f32) -> Result<(), PlayError> {
-        self.off
-            .call(move |state| state.host.set_metronome_level(level))
-            .await
-    }
-
     pub async fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
     where
         I: IntoIterator<Item = HostLevel>,
@@ -490,7 +480,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let rate = host
-        .sample_rate()
+        .output_sample_rate()
         .unwrap_or_else(|error| panic!("query product offline Host output rate: {error}"))
         .output();
     AudioSpec::new(

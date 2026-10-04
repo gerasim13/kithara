@@ -364,7 +364,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     let session_config = HostConfig::offline(pools).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(session_config.sample_rate())
+            .sample_rate(session_config.settings().sample_rate())
             .worker(worker)
             .build(),
     );

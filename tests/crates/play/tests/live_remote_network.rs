@@ -16,7 +16,7 @@ use kithara::{
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     events::TrackId,
-    host::{Host, HostConfig},
+    host::{Host, HostConfig, HostSettingsControl},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, time,
@@ -303,7 +303,7 @@ async fn player_mp3_duration_matches_app_flow(
     let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(host.requested_sample_rate())
+            .sample_rate(host.sample_rate())
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
             .build(),
     );

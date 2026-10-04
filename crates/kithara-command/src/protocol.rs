@@ -31,11 +31,11 @@ pub enum When<T> {
     At(T),
 }
 
-/// Frame counter an executor renders by.
-pub trait Clock: Copy + Ord {
-    /// Frames from `start` to this moment, or `None` when this moment comes
-    /// before `start`.
-    fn frames_since(self, start: Self) -> Option<u64>;
+impl<T> Default for When<T> {
+    /// The nearest moment: the next block.
+    fn default() -> Self {
+        Self::Next
+    }
 }
 
 /// Something whose time a batch shifts, such as a deck slot or a transport.
@@ -47,18 +47,22 @@ pub trait Target: Copy {
 /// Types one executor speaks: its commands, targets, clock and answers.
 ///
 /// Every type is [`Debug`] so batches, receipts and send errors print in logs
-/// and test failures.
+/// and test failures. The clock is any ordered frame counter; the protocol
+/// counts frames on it, so the clock type needs no trait of this crate.
 pub trait Protocol {
     /// What the executor reports about a batch it applied.
     type Applied: Debug;
-    /// The executor's clock.
-    type Clock: Clock + Debug;
+    /// The executor's frame counter.
+    type Clock: Copy + Ord + Debug;
     /// One command the executor applies.
     type Command: Debug;
     /// Why the executor refused a due batch.
     type Refusal: Debug;
     /// A target whose time a batch shifts.
     type Target: Target + Debug;
+
+    /// Frames from `start` to `at`, or `None` when `at` comes before `start`.
+    fn frames_since(at: Self::Clock, start: Self::Clock) -> Option<u64>;
 }
 
 /// Commands applied together, and the basis they were computed from.

@@ -6,7 +6,7 @@ use kithara::{
     decode::DecoderBackend,
     effects::LimiterConfig,
     events::{EventBus, EventReceiver},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
@@ -329,7 +329,11 @@ async fn prepare_player(
     // can exceed a unity ceiling. Keep it below the limiter while measuring playback.
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
             .limiter(
                 LimiterConfig::builder()
                     .ceiling(1.0)

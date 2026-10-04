@@ -1,7 +1,7 @@
 //! A host owns the players inserted into it: only the owning host closes a
 //! player, and dropping the host closes every player it still owns.
 
-use kithara_host::{Host, HostConfig, HostOwned};
+use kithara_host::{Host, HostConfig, HostOwned, HostSettingsControl};
 use kithara_play::{PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
 #[cfg(target_os = "android")]
 use kithara_test_dylib as _;
@@ -16,7 +16,7 @@ fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>>
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(instance_id)
-            .sample_rate(host.requested_sample_rate())
+            .sample_rate(host.sample_rate())
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );

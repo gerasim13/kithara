@@ -1,6 +1,6 @@
 use clap::Parser;
 use kithara::{
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::{CancelToken, tokio},
 };
 use kithara_app::{
@@ -122,7 +122,11 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
 
     let host = AppHost::new(
         HostConfig::builder()
-            .maybe_sample_rate_hint(config.sample_rate)
+            .settings(
+                HostSettings::builder()
+                    .maybe_sample_rate(config.sample_rate)
+                    .build(),
+            )
             .maybe_output_block_frames(config.output_block_frames)
             .build(),
     )?;

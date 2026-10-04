@@ -4,7 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
     download::{Downloader, DownloaderConfig},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
@@ -120,7 +120,7 @@ async fn run_case(
     );
     let queue = OfflineQueue::new(
         HostConfig::offline(pools)
-            .sample_rate(sample_rate)
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
             .max_block_frames(block_frames)
             .build(),
         Queue::new(

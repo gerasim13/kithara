@@ -23,7 +23,7 @@ executor's thread never allocates or drops.
 ## Usage
 
 ```rust
-use kithara_command::{Batch, ChannelConfig, Clock, Protocol, Target, When, channel};
+use kithara_command::{Batch, ChannelConfig, Protocol, Target, When, channel};
 
 #[derive(Debug)]
 struct Deck;
@@ -40,12 +40,6 @@ impl Target for Slot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Frame(u64);
 
-impl Clock for Frame {
-    fn frames_since(self, start: Self) -> Option<u64> {
-        self.0.checked_sub(start.0)
-    }
-}
-
 #[derive(Debug)]
 enum Command {
     Seek(u64),
@@ -57,6 +51,10 @@ impl Protocol for Deck {
     type Command = Command;
     type Refusal = ();
     type Target = Slot;
+
+    fn frames_since(at: Frame, start: Frame) -> Option<u64> {
+        at.0.checked_sub(start.0)
+    }
 }
 
 let (mut sender, mut inbox) = channel::<Deck>(ChannelConfig::builder().targets(1).build());
@@ -82,7 +80,7 @@ assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>Protocol</code></td><td>Names one executor's command, target, clock, and answer types</td></tr>
+<tr><td><code>Protocol</code></td><td>Names one executor's command, target, clock, and answer types, and counts frames on its clock</td></tr>
 
 <tr><td><code>Batch</code></td><td>Commands applied together, with the basis they were computed from</td></tr>
 
@@ -92,6 +90,8 @@ assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 
 <tr><td><code>Receipt</code></td><td>What became of a batch, carrying the batch back to the sender</td></tr>
 
+<tr><td><code>Live</code></td><td>A live configuration as its executor confirmed it, with copies of the changes in flight</td></tr>
+
 </table>
 
 ## Integration
@@ -100,5 +100,15 @@ The real-time Host, the lane dispatcher, and each lane own one `Inbox` each
 and speak their own `Protocol`; the owner that computes commands holds the
 matching `Sender`. The crate carries no audio domain: frames, targets, and
 commands are the executor's types.
+
+### Live configuration
+
+`Live<C, P>` keeps a `LiveConfig` on the sender's side of an executor. `send`
+checks a field change and hands it over as one batch with an empty basis and
+the single command `wrap` makes of it; the configuration changes only when
+`settle` meets the batch's receipt as applied, so getters read what the
+executor confirmed. `apply` changes a field at once when no executor receives
+it, and `abandon` folds the copies still in flight in `(When, Seq)` order when
+the queue goes away unanswered.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-command) for detailed contracts, invariants, and internals.

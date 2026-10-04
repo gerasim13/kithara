@@ -22,6 +22,8 @@ apple-fused-src = ["kithara/apple-fused-src"]
 
 [dependencies]
 kithara = { workspace = true, features = ["usdt", "mock", "offline", "resample-rubato", "signal"] }
+kithara-command = { workspace = true }
+kithara-config = { workspace = true }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }

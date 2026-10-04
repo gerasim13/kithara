@@ -6,8 +6,6 @@ use core::{
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
-    diff::{Diff, Patch},
-    event::ProcEvents,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
@@ -21,7 +19,10 @@ use kithara_test_utils::kithara;
 use kithara_warp::{SessionAnchor, SessionBeat};
 use num_traits::ToPrimitive;
 
-use crate::PlayError;
+use crate::{
+    PlayError,
+    session::{Span, applied_spans},
+};
 
 mod consts {
     use kithara_platform::time::Duration;
@@ -44,6 +45,8 @@ mod consts {
     pub(super) const BEATS_PER_BAR: i64 = 4;
     /// Peak of a beat click relative to a downbeat click.
     pub(super) const BEAT_RATIO: f64 = 0.625;
+    /// The metronome stays silent until switched on.
+    pub(super) const DEFAULT_ENABLED: bool = false;
     /// A downbeat click peaks at the limiter ceiling.
     pub(super) const DEFAULT_LEVEL: f32 = 1.0;
     /// The duck mutes the mix under every click.
@@ -66,77 +69,81 @@ mod consts {
 /// a shallower duck, or none, lets a loud mix plus the click pass it.
 ///
 /// The builder takes any values; the Host checks them when it starts and
-/// refuses a config out of the bounds each field names.
+/// refuses a config out of the bounds each field names with
+/// [`PlayError::InvalidParameter`], naming `metronome_level`,
+/// `metronome_duck`, `metronome_decay`, `metronome_hold` or
+/// `metronome_release`.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(default, update, builder(state_mod(vis = "pub")), patch(validate = Self::validated, error = PlayError), fields(value, get(copy)))]
+#[config(
+    default,
+    builder(state_mod(vis = "pub")),
+    check(error = PlayError),
+    fields(value, get(copy))
+)]
 #[non_exhaustive]
 pub struct MetronomeConfig {
+    /// Whether a click sounds on every session beat.
+    #[config(live, builder(default = consts::DEFAULT_ENABLED))]
+    enabled: bool,
     /// Peak of a downbeat click as a share of the limiter ceiling, above
     /// zero and at most one; a beat click peaks at five eighths of it.
-    #[config(update, builder(default = consts::DEFAULT_LEVEL))]
+    #[config(live, check = Self::level_bounds, builder(default = consts::DEFAULT_LEVEL))]
     level: f32,
     /// Share of the mix the duck takes away while the click sounds, from
     /// zero to one: one mutes the mix, zero leaves it whole.
-    #[config(builder(default = consts::DEFAULT_DUCK))]
+    #[config(check = Self::duck_bounds, builder(default = consts::DEFAULT_DUCK))]
     duck: f32,
     /// Fall of a click from its peak back to silence, 8 to 50 ms.
-    #[config(builder(default = consts::DEFAULT_DECAY))]
+    #[config(check = Self::decay_bounds, builder(default = consts::DEFAULT_DECAY))]
     decay: Duration,
     /// How long the duck keeps the mix down after the click has fallen, at
     /// most 1 s.
-    #[config(builder(default = consts::DEFAULT_HOLD))]
+    #[config(check = Self::hold_bounds, builder(default = consts::DEFAULT_HOLD))]
     hold: Duration,
     /// How long the duck takes to return the mix after its hold, 8 ms to 1 s.
-    #[config(builder(default = consts::DEFAULT_RELEASE))]
+    #[config(check = Self::release_bounds, builder(default = consts::DEFAULT_RELEASE))]
     release: Duration,
 }
 
 impl MetronomeConfig {
-    /// This config if every field sits within its bounds: the one check a
-    /// Host start and a runtime update both pass through.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`,
-    /// `metronome_duck`, `metronome_decay`, `metronome_hold` or
-    /// `metronome_release` for the first field out of its bounds.
-    pub(crate) fn validated(self) -> Result<Self, PlayError> {
-        let check = |valid: bool, name: &str, value: f32| {
-            if valid {
-                Ok(())
-            } else {
-                Err(PlayError::InvalidParameter {
-                    name: name.to_owned(),
-                    value,
-                })
-            }
-        };
-        check(
-            self.level > 0.0 && self.level <= 1.0,
-            "metronome_level",
-            self.level,
-        )?;
-        check(
-            (0.0..=1.0).contains(&self.duck),
-            "metronome_duck",
-            self.duck,
-        )?;
-        check(
-            (consts::MIN_DECAY..=consts::MAX_DECAY).contains(&self.decay),
-            "metronome_decay",
-            self.decay.as_secs_f32(),
-        )?;
-        check(
-            self.hold <= consts::MAX_HOLD,
+    fn level_bounds(level: f32) -> Result<f32, PlayError> {
+        bounded(level > 0.0 && level <= 1.0, "metronome_level", level, level)
+    }
+
+    fn duck_bounds(duck: f32) -> Result<f32, PlayError> {
+        bounded((0.0..=1.0).contains(&duck), "metronome_duck", duck, duck)
+    }
+
+    fn decay_bounds(decay: Duration) -> Result<Duration, PlayError> {
+        let valid = (consts::MIN_DECAY..=consts::MAX_DECAY).contains(&decay);
+        bounded(valid, "metronome_decay", decay.as_secs_f32(), decay)
+    }
+
+    fn hold_bounds(hold: Duration) -> Result<Duration, PlayError> {
+        bounded(
+            hold <= consts::MAX_HOLD,
             "metronome_hold",
-            self.hold.as_secs_f32(),
-        )?;
-        check(
-            (consts::MIN_RELEASE..=consts::MAX_RELEASE).contains(&self.release),
-            "metronome_release",
-            self.release.as_secs_f32(),
-        )?;
-        Ok(self)
+            hold.as_secs_f32(),
+            hold,
+        )
+    }
+
+    fn release_bounds(release: Duration) -> Result<Duration, PlayError> {
+        let valid = (consts::MIN_RELEASE..=consts::MAX_RELEASE).contains(&release);
+        bounded(valid, "metronome_release", release.as_secs_f32(), release)
+    }
+}
+
+/// `field` if it is `valid`, or the refusal naming the parameter and its
+/// value.
+fn bounded<T>(valid: bool, name: &str, value: f32, field: T) -> Result<T, PlayError> {
+    if valid {
+        Ok(field)
+    } else {
+        Err(PlayError::InvalidParameter {
+            name: name.to_owned(),
+            value,
+        })
     }
 }
 
@@ -152,21 +159,17 @@ struct Shape {
 }
 
 /// The Host metronome between the limiter and `graph_out`: a click on every
-/// session beat while enabled and the transport runs.
-#[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
+/// session beat while the Host settings the render graph applied switch it
+/// on and the transport runs. A click sounds at the level those settings
+/// carry when it starts.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MetronomeNode {
-    pub(crate) enabled: bool,
-    /// Peak of a downbeat click as a share of the limiter ceiling.
-    pub(crate) level: f32,
-    #[diff(skip)]
     shape: Shape,
 }
 
 impl MetronomeNode {
-    pub(crate) fn new(enabled: bool, config: MetronomeConfig, ceiling: f32) -> Self {
+    pub(crate) fn new(config: MetronomeConfig, ceiling: f32) -> Self {
         Self {
-            enabled,
-            level: config.level,
             shape: Shape {
                 ceiling: f64::from(ceiling),
                 depth: f64::from(config.duck),
@@ -331,17 +334,16 @@ impl Metronome {
     }
 
     /// Renders one block starting at session frame `start`: the sounding
-    /// click first, then a new click on every owed session beat whose frame
-    /// is before the block's end, taking over the duck of the click it cuts
-    /// off. A block continuing the last one owes the beats from its owed
+    /// click first, then a new click at `beats`' level on every owed session
+    /// beat of its trajectory whose frame is before the block's end, taking
+    /// over the duck of the click it cuts off. A block continuing the last one owes the beats from its owed
     /// beat on, clicking one a restart rounded behind the block on its first
     /// frame; any other block owes the beats from its start on. Returns
     /// whether the block was touched.
     fn render(
         &mut self,
-        trajectory: Option<SessionAnchor>,
+        beats: Option<(SessionAnchor, f32)>,
         start: SessionFrame,
-        level: f32,
         shape: Shape,
         left: &mut [f32],
         right: &mut [f32],
@@ -349,7 +351,7 @@ impl Metronome {
         let sounding = self.sounding();
         let mut cursor = 0;
         let mut started = false;
-        if let Some(anchor) = trajectory {
+        if let Some((anchor, level)) = beats {
             let first = i64::from(start);
             let continues = self
                 .reached
@@ -423,7 +425,7 @@ impl AudioNode for MetronomeNode {
         _cx: ConstructProcessorContext,
     ) -> Result<impl AudioNodeProcessor, NodeError> {
         Ok(MetronomeProcessor {
-            params: *self,
+            shape: self.shape,
             metronome: Metronome::default(),
         })
     }
@@ -439,18 +441,11 @@ impl AudioNode for MetronomeNode {
 }
 
 struct MetronomeProcessor {
-    params: MetronomeNode,
+    shape: Shape,
     metronome: Metronome,
 }
 
 impl AudioNodeProcessor for MetronomeProcessor {
-    #[kithara::rtsan_forbid_blocking]
-    fn events(&mut self, _info: &ProcInfo, events: &mut ProcEvents, _extra: &mut ProcExtra) {
-        for patch in events.drain_patches::<MetronomeNode>() {
-            self.params.apply(patch);
-        }
-    }
-
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.metronome.retune(stream_info.sample_rate);
     }
@@ -462,17 +457,22 @@ impl AudioNodeProcessor for MetronomeProcessor {
         buffers: ProcBuffers,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let trajectory = if self.params.enabled {
-            read_render_context(&extra.store, info)
-                .ok()
-                .and_then(|context| context.trajectory().copied())
-        } else {
-            None
+        let frames = info.frames;
+        let timed = read_render_context(&extra.store, info).is_ok();
+        let beats = |span: Span| {
+            let config = span.settings().metronome();
+            span.anchor()
+                .filter(|_| timed && config.enabled())
+                .map(|anchor| (anchor, config.level()))
         };
-        if trajectory.is_none() && !self.metronome.sounding() {
+        let spans = applied_spans(&extra.store, frames);
+        if !self.metronome.sounding()
+            && !spans
+                .clone()
+                .is_some_and(|mut spans| spans.any(|(_, span)| beats(span).is_some()))
+        {
             return ProcessStatus::Bypass;
         }
-        let frames = info.frames;
         let ([in_left, in_right, ..], [out_left, out_right, ..]) =
             (buffers.inputs, buffers.outputs)
         else {
@@ -488,14 +488,35 @@ impl AudioNodeProcessor for MetronomeProcessor {
         };
         out_left.copy_from_slice(in_left);
         out_right.copy_from_slice(in_right);
-        self.metronome.render(
-            trajectory,
-            SessionFrame::new(info.clock_samples.0),
-            self.params.level,
-            self.params.shape,
-            out_left,
-            out_right,
-        );
+        let start = info.clock_samples.0;
+        let Some(spans) = spans else {
+            self.metronome.render(
+                None,
+                SessionFrame::new(start),
+                self.shape,
+                out_left,
+                out_right,
+            );
+            return ProcessStatus::OutputsModified;
+        };
+        for (range, span) in spans {
+            let from = i64::try_from(range.start)
+                .ok()
+                .and_then(|offset| start.checked_add(offset));
+            if let (Some(from), Some(left), Some(right)) = (
+                from,
+                out_left.get_mut(range.clone()),
+                out_right.get_mut(range),
+            ) {
+                self.metronome.render(
+                    beats(span),
+                    SessionFrame::new(from),
+                    self.shape,
+                    left,
+                    right,
+                );
+            }
+        }
         ProcessStatus::OutputsModified
     }
 }
@@ -504,6 +525,7 @@ impl AudioNodeProcessor for MetronomeProcessor {
 mod tests {
     use core::f32::consts::PI;
 
+    use kithara_config::{CheckedConfig, LiveConfig};
     use kithara_effects::{LimiterConfig, mock::reconstructed_peak};
 
     use super::*;
@@ -530,13 +552,13 @@ mod tests {
         // that keeps a level under the ceiling, and a click rising in the
         // release of the last.
         for (level, duck) in [(1.0, 1.0), (0.8, 0.8)] {
-            let node = MetronomeNode::new(true, config(level, duck), CEILING);
+            let node = MetronomeNode::new(config(level, duck), CEILING);
             for from in [0.0, 0.5] {
                 for downbeat in [true, false] {
                     for mix in [CEILING, -CEILING] {
                         let mut left = [mix; FRAMES];
                         let mut right = [mix; FRAMES];
-                        Click::new(downbeat, rate(), node.level, node.shape, from)
+                        Click::new(downbeat, rate(), level, node.shape, from)
                             .render(&mut left, &mut right);
                         let bound = CEILING * (1.0 + 4.0 * f32::EPSILON);
                         assert!(
@@ -596,11 +618,11 @@ mod tests {
             (tone, MetronomeConfig::default()),
             (held, sharpest),
         ] {
-            let node = MetronomeNode::new(true, config, ceiling());
+            let node = MetronomeNode::new(config, ceiling());
             for downbeat in [true, false] {
                 let mut left = mix.clone();
                 let mut right = mix.clone();
-                Click::new(downbeat, rate(), node.level, node.shape, 0.0).render(
+                Click::new(downbeat, rate(), config.level(), node.shape, 0.0).render(
                     left.get_mut(ONSET..).expect("onset inside the mix"),
                     right.get_mut(ONSET..).expect("onset inside the mix"),
                 );
@@ -638,9 +660,8 @@ mod tests {
         let mut left = [0.0; FRAMES];
         let mut right = [0.0; FRAMES];
         metronome.render(
-            Some(transport(0, 0.0)),
+            Some((transport(0, 0.0), consts::DEFAULT_LEVEL)),
             SessionFrame::new(start),
-            node.level,
             node.shape,
             &mut left,
             &mut right,
@@ -655,16 +676,15 @@ mod tests {
     #[kithara::test]
     fn a_seek_forward_clicks_none_of_the_beats_it_jumps_over() {
         const TARGET: f64 = 40.25;
-        let node = MetronomeNode::new(true, MetronomeConfig::default(), ceiling());
+        let node = MetronomeNode::new(MetronomeConfig::default(), ceiling());
         let mut metronome = Metronome::default();
         let seek = past_beat_one(&mut metronome, node);
 
         let mut left = [0.0; 1_024];
         let mut right = [0.0; 1_024];
         let touched = metronome.render(
-            Some(transport(seek, TARGET)),
+            Some((transport(seek, TARGET), consts::DEFAULT_LEVEL)),
             SessionFrame::new(seek),
-            node.level,
             node.shape,
             &mut left,
             &mut right,
@@ -679,7 +699,7 @@ mod tests {
     #[kithara::test]
     fn a_seek_backward_clicks_the_beats_it_plays_again() {
         const TARGET: f64 = 0.99;
-        let node = MetronomeNode::new(true, MetronomeConfig::default(), ceiling());
+        let node = MetronomeNode::new(MetronomeConfig::default(), ceiling());
         let mut metronome = Metronome::default();
         let seek = past_beat_one(&mut metronome, node);
         let anchor = transport(seek, TARGET);
@@ -691,9 +711,8 @@ mod tests {
         let mut left = [0.0; 1_024];
         let mut right = [0.0; 1_024];
         metronome.render(
-            Some(anchor),
+            Some((anchor, consts::DEFAULT_LEVEL)),
             SessionFrame::new(seek),
-            node.level,
             node.shape,
             &mut left,
             &mut right,
@@ -715,14 +734,13 @@ mod tests {
             .hold(Duration::ZERO)
             .release(Duration::from_secs(1))
             .build();
-        let node = MetronomeNode::new(true, config, ceiling());
+        let node = MetronomeNode::new(config, ceiling());
         let render = |mix: f32| {
             let mut left = vec![mix; FRAMES];
             let mut right = vec![mix; FRAMES];
             Metronome::default().render(
-                Some(transport(0, 0.0)),
+                Some((transport(0, 0.0), consts::DEFAULT_LEVEL)),
                 SessionFrame::new(START),
-                node.level,
                 node.shape,
                 &mut left,
                 &mut right,
@@ -847,15 +865,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_metronome_level_update_commits_only_a_level_in_its_bounds() {
+    fn a_metronome_level_change_passes_only_a_level_in_its_bounds() {
         let base = config(0.5, 0.5);
-        let set = |level| MetronomeConfigUpdate {
-            level: MetronomeConfigLevelUpdate::Set { value: level },
-            ..MetronomeConfigUpdate::default()
-        };
         for level in [f32::NAN, 0.0, 1.01] {
-            let mut updated = base;
-            let refused = updated.apply_update(set(level));
+            let refused = MetronomeConfig::check(MetronomeConfigChange::Level(level));
             assert!(
                 matches!(
                     &refused,
@@ -863,13 +876,12 @@ mod tests {
                 ),
                 "a level of {level} is refused: {refused:?}"
             );
-            assert_eq!(updated, base, "a refused level keeps the last config");
         }
         for level in [0.25, 0.5, 1.0] {
             let mut updated = base;
-            updated
-                .apply_update(set(level))
+            let change = MetronomeConfig::check(MetronomeConfigChange::Level(level))
                 .expect("a level in its bounds");
+            updated.apply_change(change);
             assert_eq!(
                 updated,
                 MetronomeConfig { level, ..base },

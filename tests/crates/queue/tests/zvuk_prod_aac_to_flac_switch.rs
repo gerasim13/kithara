@@ -7,7 +7,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -199,7 +199,11 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(test_pools())
-            .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+                    .build(),
+            )
             .build(),
     )
     .await;

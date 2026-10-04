@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::{
         flash::real_io,
         time,
@@ -149,7 +149,11 @@ async fn flac_swallow_fixture(
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+                    .build(),
+            )
             .build(),
     )
     .await;

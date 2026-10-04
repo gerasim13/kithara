@@ -21,6 +21,7 @@ use super::{
     super::graph::GraphSession, MasterRing, RingBackend, RingBackendConfig, RingBackendProbe,
     RingLayout, RingReader, RingRenderError,
 };
+use crate::session::protocol::{HostCmd, HostReply};
 
 type RingSetup =
     Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
@@ -92,6 +93,10 @@ enum RingMsg {
     Cmd {
         cmd: Cmd<TestPools>,
         reply_tx: mpsc::Sender<Reply>,
+    },
+    Host {
+        cmd: HostCmd<TestPools>,
+        reply_tx: mpsc::Sender<HostReply>,
     },
     Credit {
         blocks: usize,
@@ -191,6 +196,23 @@ impl ManualRingSession {
             return self.worker_failure();
         };
         let sent = cmd_tx.send(RingMsg::Cmd { cmd, reply_tx });
+        if sent.is_err() {
+            return self.worker_failure();
+        }
+        match reply_rx.recv() {
+            Ok(reply) => Ok(reply),
+            Err(_) => self.worker_failure(),
+        }
+    }
+
+    /// Synchronous Host command-reply bridge; call from a blocking control thread.
+    pub(crate) fn exec_host(&self, cmd: HostCmd<TestPools>) -> Result<HostReply, RingSessionError> {
+        self.ensure_available()?;
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
+            return self.worker_failure();
+        };
+        let sent = cmd_tx.send(RingMsg::Host { cmd, reply_tx });
         if sent.is_err() {
             return self.worker_failure();
         }
@@ -341,22 +363,25 @@ fn ring_session_thread(
     setup: RingSetup,
 ) {
     let mut backend_config = Some(backend_config);
-    let mut state = GraphSession::<RingBackend, TestPools>::new(move |ctx, _sample_rate| {
-        let config = backend_config
-            .take()
-            .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
-        let mut backend = RingBackend::start(ctx, config).map_err(|error| error.to_string())?;
-        match backend.render_block(0) {
-            Err(RingRenderError::NotArmed) => {
-                probe.record_pre_arm_error(RingRenderError::NotArmed);
+    let mut state = GraphSession::<RingBackend, TestPools>::with_sample_rate(
+        session_rate,
+        move |ctx, _sample_rate| {
+            let config = backend_config
+                .take()
+                .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
+            let mut backend = RingBackend::start(ctx, config).map_err(|error| error.to_string())?;
+            match backend.render_block(0) {
+                Err(RingRenderError::NotArmed) => {
+                    probe.record_pre_arm_error(RingRenderError::NotArmed);
+                }
+                Err(error) => return Err(format!("unexpected pre-arm render result: {error}")),
+                Ok(()) => return Err(String::from("pre-arm ring render was accepted")),
             }
-            Err(error) => return Err(format!("unexpected pre-arm render result: {error}")),
-            Ok(()) => return Err(String::from("pre-arm ring render was accepted")),
-        }
-        backend.arm();
-        Ok(backend)
-    });
-    let ready = bootstrap(&mut state, session_rate, setup).and_then(|()| snapshot(&mut state));
+            backend.arm();
+            Ok(backend)
+        },
+    );
+    let ready = bootstrap(&mut state, setup).and_then(|()| snapshot(&mut state));
     let is_ready = ready.is_ok();
     if ready_tx.send(ready).is_err() || !is_ready {
         return;
@@ -365,6 +390,9 @@ fn ring_session_thread(
         match message {
             RingMsg::Cmd { cmd, reply_tx } => {
                 let _ = reply_tx.send(state.exec(cmd));
+            }
+            RingMsg::Host { cmd, reply_tx } => {
+                let _ = reply_tx.send(state.exec_host(cmd));
             }
             RingMsg::Credit { blocks, reply_tx } => {
                 let _ = reply_tx.send(credit_blocks(&mut state, blocks));
@@ -376,7 +404,6 @@ fn ring_session_thread(
 
 fn bootstrap(
     state: &mut GraphSession<RingBackend, TestPools>,
-    session_rate: NonZeroU32,
     setup: RingSetup,
 ) -> Result<(), RingSessionError> {
     let player_id = match state.exec(Cmd::RegisterPlayer {
@@ -385,7 +412,6 @@ fn bootstrap(
         eq_layout: Vec::new(),
         gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
         pools: pools(),
-        sample_rate: session_rate.get(),
     }) {
         Reply::PlayerRegistered(registered) => registered.id,
         Reply::Err(error) => return Err(error.into()),
@@ -396,7 +422,6 @@ fn bootstrap(
         master_volume: 1.0,
         render_quantum_frames: None,
         response_budget_frames: NonZeroUsize::new(448),
-        sample_rate: session_rate.get(),
     }) {
         Reply::Ok => {}
         Reply::Err(error) => return Err(error.into()),

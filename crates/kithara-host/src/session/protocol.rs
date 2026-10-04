@@ -1,4 +1,5 @@
 use firewheel::FirewheelContext;
+use kithara_command::When;
 use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
@@ -6,6 +7,7 @@ pub(crate) use kithara_play::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
     SessionSampleRate,
 };
+use kithara_signal::SessionFrame;
 use kithara_sync::{
     SyncAdmission, SyncError, SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
@@ -14,6 +16,7 @@ use kithara_sync::{
 use crate::{
     PlayerMember,
     api::{HostLevel, Tap},
+    host::HostSettingsChange,
 };
 
 /// Opens the audio stream a session runs on and hands back the object that
@@ -25,11 +28,20 @@ pub(crate) type StartStreamFn<T> =
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Sync(SyncCmd),
-    ApplyMix { levels: Box<[HostLevel]> },
-    AttachOutputs { tap: Tap, outputs: OutputGroup },
-    DetachOutputs { tap: Tap },
-    SetMetronome { on: bool },
-    SetMetronomeLevel { level: f32 },
+    ApplyMix {
+        levels: Box<[HostLevel]>,
+    },
+    Configure {
+        change: HostSettingsChange,
+        at: When<SessionFrame>,
+    },
+    AttachOutputs {
+        tap: Tap,
+        outputs: OutputGroup,
+    },
+    DetachOutputs {
+        tap: Tap,
+    },
     Shutdown,
 }
 

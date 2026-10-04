@@ -9,7 +9,7 @@ use kithara::{
     decode::DecoderBackend,
     download::Downloader,
     events::EventReceiver,
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::{
         time,
         time::{Duration, Instant, timeout},
@@ -284,7 +284,13 @@ async fn local_seek_middle_hang_iters(
 
         let mut player = OfflinePlayer::new(
             HostConfig::offline(pools())
-                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .settings(
+                    HostSettings::builder()
+                        .sample_rate(
+                            NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"),
+                        )
+                        .build(),
+                )
                 .build(),
         )
         .await;

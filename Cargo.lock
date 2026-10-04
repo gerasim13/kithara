@@ -5403,6 +5403,7 @@ dependencies = [
  "firewheel-web-audio",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-command",
  "kithara-config",
  "kithara-dsp",
  "kithara-effects",
@@ -5431,6 +5432,8 @@ name = "kithara-host-tests"
 version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
+ "kithara-command",
+ "kithara-config",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",

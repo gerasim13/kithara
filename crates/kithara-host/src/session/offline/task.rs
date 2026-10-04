@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_command::Live;
 use kithara_config::Config;
 use kithara_platform::{
     sync::{Arc, mpsc, mpsc::TryRecvError},
@@ -16,13 +17,14 @@ use super::{
     super::{
         dispatch::run_host_cmd,
         protocol::{HostCmd, HostCmdMsg, HostReply},
+        queue::{HostProtocol, settle_receipts},
         state::{RootView, SessionState, ensure_ctx},
         transport,
     },
     OfflineSessionClient,
     backend::{BackendConfig, OfflineStream},
 };
-use crate::{PlayerMember, rt::SessionOutput};
+use crate::{HostSettings, PlayerMember, rt::SessionOutput};
 
 pub(crate) mod consts {
     pub(crate) const CHANNELS: usize = 2;
@@ -56,11 +58,11 @@ pub(crate) struct OfflineTaskConfig<S> {
     #[config(skip = "transferred to session output")]
     pub(crate) output: SessionOutput,
     #[config(skip = "transferred to session state")]
+    pub(crate) settings: Live<HostSettings, HostProtocol>,
+    #[config(skip = "transferred to session state")]
     pub(crate) declick_frames: NonZeroU32,
     #[config(skip = "transferred to the offline task")]
     pub(crate) max_block_frames: NonZeroU32,
-    #[config(skip = "transferred to session state")]
-    pub(crate) sample_rate: NonZeroU32,
     #[config(skip = "transferred to the offline task")]
     pub(crate) pools: PoolRegion<S>,
 }
@@ -185,11 +187,11 @@ where
 {
     let OfflineTaskConfig {
         pools,
-        sample_rate,
         max_block_frames,
         declick_frames,
         declared_latency,
         output,
+        settings,
     } = config;
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let pending = dispatcher.reserve(task_config).map_err(|error| {
@@ -221,10 +223,10 @@ where
                 state: Some(SessionState::new(
                     root,
                     root_view,
-                    sample_rate,
                     Some(max_block_frames),
                     Some(declick_frames),
                     output,
+                    settings,
                     start_stream,
                 )),
             }
@@ -243,8 +245,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     if state.ctx.is_none() {
-        ensure_ctx(state, state.sample_rate_hint)
-            .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        ensure_ctx(state).map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
     }
     let total_samples = usize::try_from(frames)
         .map_err(|_| OfflineSessionError::SampleCountOverflow)?
@@ -269,6 +270,7 @@ where
             &mut output,
         )?;
     transport::observe_commits(state)?;
+    settle_receipts(state);
     Ok(output)
 }
 

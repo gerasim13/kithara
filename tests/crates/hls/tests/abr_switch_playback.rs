@@ -9,7 +9,7 @@ use kithara::{
     events::{EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -431,7 +431,13 @@ async fn packaged_abr_switch_keeps_player_continuity(
         .expect("packaged ABR preload must complete");
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools.clone())
-            .sample_rate(NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(
+                        NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"),
+                    )
+                    .build(),
+            )
             .build(),
     )
     .await;

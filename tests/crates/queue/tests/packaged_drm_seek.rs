@@ -141,7 +141,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     let session_config = HostConfig::offline(session_pools).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(session_config.sample_rate())
+            .sample_rate(session_config.settings().sample_rate())
             .worker(worker)
             .build(),
     );

@@ -121,7 +121,7 @@ async fn build_queue(
     let session = HostConfig::offline(pools.clone()).build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
+            .sample_rate(session.settings().sample_rate())
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pools.clone()).build(),
             ))

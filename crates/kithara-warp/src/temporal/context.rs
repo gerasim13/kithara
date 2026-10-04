@@ -8,12 +8,13 @@ use crate::{SessionAnchor, SessionBeat};
 /// Immutable session position for one output subrange.
 ///
 /// The physical axis is owned by [`OutputContext`]; this type adds the musical
-/// range the same pass covers when the transport is playing.
+/// range the same pass covers once the transport has committed a tempo.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct RenderContext {
-    /// The corresponding half-open musical range when transport is playing.
+    /// The corresponding half-open musical range once the transport has
+    /// committed a tempo.
     session_beats: Option<Range<SessionBeat>>,
     /// Exact committed trajectory when supplied by the transport owner.
     trajectory: Option<SessionAnchor>,

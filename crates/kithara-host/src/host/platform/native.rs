@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
+use kithara_command::Live;
 use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
@@ -11,9 +12,9 @@ use super::{
     PlatformResult,
 };
 use crate::{
-    PlayerMember,
+    HostSettings, PlayerMember,
     rt::SessionOutput,
-    session::{HostDispatcher, RootView},
+    session::{HostDispatcher, HostProtocol, RootView},
 };
 
 type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
@@ -51,20 +52,15 @@ impl<S> Platform<S> {
     pub(in crate::host) fn realtime(
         group: GroupState<PlayerMember>,
         view: RootView,
-        sample_rate: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
         output: SessionOutput,
+        settings: Live<HostSettings, HostProtocol>,
     ) -> StartedPlatform<S>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let dispatcher = crate::session::native::spawn::<S>(
-            group,
-            view,
-            sample_rate,
-            output_block_frames,
-            output,
-        );
+        let dispatcher =
+            crate::session::native::spawn::<S>(group, view, output_block_frames, output, settings);
         (dispatcher, Self::owner())
     }
 

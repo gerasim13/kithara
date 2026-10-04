@@ -7,7 +7,7 @@ use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, thread,
@@ -219,7 +219,13 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 
         let mut player = OfflinePlayer::new(
             HostConfig::offline(pools())
-                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .settings(
+                    HostSettings::builder()
+                        .sample_rate(
+                            NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"),
+                        )
+                        .build(),
+                )
                 .build(),
         )
         .await;

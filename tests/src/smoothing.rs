@@ -10,7 +10,7 @@ use std::num::NonZeroU32;
 use kithara::{
     assets::AssetStore,
     effects::{GainDb, eq::FilterKind},
-    host::HostConfig,
+    host::{HostConfig, HostSettings},
     platform::time::{self, Duration},
     play::{
         EqBandConfig, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
@@ -112,7 +112,7 @@ pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
     let pools = pools();
     let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero");
     let session = HostConfig::offline(pools.clone())
-        .sample_rate(sample_rate)
+        .settings(HostSettings::builder().sample_rate(sample_rate).build())
         .max_block_frames(
             NonZeroU32::new(consts::BLOCK_FRAMES as u32).expect("block size is non-zero"),
         )

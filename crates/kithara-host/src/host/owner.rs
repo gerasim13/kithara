@@ -1,12 +1,12 @@
-use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
+use std::{marker::PhantomData, ops::Deref};
 
 use kithara_bufpool::HasPool;
+use kithara_command::{Live, When};
+use kithara_config::{ConfigOwner, Configure};
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-use kithara_play::{
-    PlayError, SessionBinding, SessionDispatcher, Tempo, player::PlayerControlSource,
-};
-use kithara_signal::SessionEpoch;
+use kithara_play::{PlayError, SessionBinding, SessionDispatcher, player::PlayerControlSource};
+use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_sync::{
     GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup, SyncGroupSnapshot,
     SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
@@ -17,7 +17,7 @@ use kithara_warp::{BeatGrid, BeatGridId};
 #[cfg(feature = "offline")]
 use super::offline::OfflineRuntime;
 use super::{
-    HostConfig,
+    HostConfig, HostSettings, HostSettingsChange,
     platform::{Platform, PlatformResult},
 };
 use crate::{
@@ -113,7 +113,6 @@ impl<S> SessionRuntime<S> {
 pub(super) struct SessionRoot {
     pub(super) id: BeatGridId,
     pub(super) group: GroupState<PlayerMember>,
-    pub(super) sample_rate: NonZeroU32,
     pub(super) view: RootView,
 }
 
@@ -150,7 +149,7 @@ impl<S> Host<S> {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         let attachment = player.attach_session(SessionBinding::new(
             dispatcher,
-            self.requested_sample_rate(),
+            self.settings().sample_rate(),
         ))?;
         Ok((attachment, player.control()))
     }
@@ -198,27 +197,6 @@ impl<S> Host<S> {
         self.exec_host_ok(HostCmd::DetachOutputs { tap }, "output detach")
     }
 
-    /// Switches the Host metronome; switching it off lets a sounding click finish.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when graph dispatch fails.
-    pub fn set_metronome(&self, on: bool) -> Result<(), PlayError> {
-        self.exec_host_ok(HostCmd::SetMetronome { on }, "metronome")
-    }
-
-    /// Sets the metronome level; the next click sounds at it, and a sounding
-    /// click finishes at its own.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`
-    /// unless `0 < level <= 1`, keeping the last level, or an error when
-    /// graph dispatch fails.
-    pub fn set_metronome_level(&self, level: f32) -> Result<(), PlayError> {
-        self.exec_host_ok(HostCmd::SetMetronomeLevel { level }, "metronome level")
-    }
-
     /// Restart the current output route while preserving Host-owned graph state.
     ///
     /// # Errors
@@ -230,6 +208,21 @@ impl<S> Host<S> {
         self.exec_play_ok(Cmd::InvalidateAudioRoute {
             reason: reason.into(),
         })
+    }
+
+    /// Reads the rate the output runs at as measured, beside the rate the
+    /// settings ask for.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical session cannot answer the query.
+    pub fn output_sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
+        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
+            Reply::SampleRate(sample_rate) => Ok(sample_rate),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for sample-rate query".into(),
+            )),
+        }
     }
 
     pub(super) fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
@@ -259,59 +252,21 @@ impl<S> Host<S> {
         }
     }
 
-    /// Returns the session rate used before the output device is measured.
-    #[must_use]
-    pub fn requested_sample_rate(&self) -> NonZeroU32 {
-        self.root_view.grid().axis().sample_rate()
-    }
-
-    /// Reads the current output-rate observation without exposing the lower
-    /// session handle.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
-            Reply::SampleRate(sample_rate) => Ok(sample_rate),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for sample-rate query".into(),
-            )),
-        }
-    }
-
-    pub(super) fn session_root(sample_rate: NonZeroU32) -> Result<SessionRoot, PlayError> {
+    pub(super) fn session_root(settings: HostSettings) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let group = GroupState::unavailable(
             grid_id,
-            sample_rate,
+            settings.sample_rate(),
             SessionEpoch::new(0),
             SyncMemberKind::Group,
             SyncMode::Off,
         );
-        let view = RootView::new(&group, sample_rate);
+        let view = RootView::new(&group, settings);
         Ok(SessionRoot {
-            sample_rate,
             group,
             view,
             id: grid_id,
         })
-    }
-
-    /// Move the output stream to `sample_rate`, keeping Host-owned graph state.
-    ///
-    /// # Errors
-    /// Returns an error when the session cannot restart its output at that rate.
-    pub fn set_sample_rate(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSampleRate { sample_rate })
-    }
-
-    /// Change the canonical session tempo at the next render boundary.
-    ///
-    /// # Errors
-    /// Returns an error when the Host rejects or cannot dispatch the update.
-    pub fn set_tempo(&self, tempo: Tempo) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSessionTempo { tempo })
     }
 
     pub(super) fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
@@ -345,26 +300,25 @@ where
     /// Creates one Host with its configured realtime or offline session.
     ///
     /// # Errors
-    /// Returns [`PlayError::InvalidParameter`] naming the first metronome
-    /// field out of its bounds, or an error when the session root or selected
+    /// Returns [`PlayError::InvalidParameter`] naming the first setting
+    /// out of its bounds, or an error when the session root or selected
     /// runtime cannot start.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         match config {
             HostConfig::Realtime {
-                sample_rate_hint,
                 output_block_frames,
                 limiter,
-                metronome,
+                settings,
                 ..
             } => {
-                let output = SessionOutput::new(limiter, metronome)?;
-                let root = Self::session_root(sample_rate_hint)?;
+                let settings = Live::new(settings)?;
+                let root = Self::session_root(*settings.config())?;
                 let (dispatcher, platform) = Platform::realtime(
                     root.group,
                     root.view.clone(),
-                    root.sample_rate,
                     output_block_frames,
-                    output,
+                    SessionOutput::new(limiter),
+                    settings,
                 )
                 .resolve()?;
                 Ok(Self::owner(
@@ -377,7 +331,7 @@ where
             #[cfg(feature = "offline")]
             config @ HostConfig::Offline { .. } => {
                 let platform = Platform::offline().resolve()?;
-                let root = Self::session_root(config.sample_rate())?;
+                let root = Self::session_root(config.settings())?;
                 let (dispatcher, runtime) =
                     OfflineRuntime::new(config, root.group, root.view.clone())?;
                 Ok(Self::owner(
@@ -388,6 +342,23 @@ where
                 ))
             }
         }
+    }
+}
+
+/// A change goes to the session owner, which hands it to the render graph to
+/// apply on a session frame; the settings show it once the graph confirms it.
+impl<S> Configure<HostSettingsChange> for Host<S> {
+    type At = When<SessionFrame>;
+    type Config = HostSettings;
+    type Error = PlayError;
+    type Output = ();
+
+    fn configure(&self, change: HostSettingsChange, at: Self::At) -> Result<(), PlayError> {
+        self.exec_host_ok(HostCmd::Configure { change, at }, "host settings")
+    }
+
+    fn settings(&self) -> HostSettings {
+        self.root_view.settings()
     }
 }
 
@@ -456,7 +427,8 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use kithara_signal::SessionFrame;
+    use std::num::NonZeroU32;
+
     use kithara_sync::{ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate};
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::{BeatGridStamp, MapAxis, SessionAnchor, SessionBeat};
@@ -532,11 +504,10 @@ mod tests {
     fn host_root_owns_the_configured_sample_rate() {
         let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
         let config = HostConfig::<TestPools>::builder()
-            .sample_rate_hint(sample_rate)
+            .settings(HostSettings::builder().sample_rate(sample_rate).build())
             .build();
-        let root = Host::<TestPools>::session_root(config.sample_rate()).expect("host root");
+        let root = Host::<TestPools>::session_root(config.settings()).expect("host root");
 
-        assert_eq!(root.sample_rate, sample_rate);
         assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
     }
 }

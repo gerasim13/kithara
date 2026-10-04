@@ -17,7 +17,10 @@ use std::num::NonZeroU32;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    host::{CrossfaderBus, Host, HostConfig, HostOwned, Tap, crossfader_gain, wasm},
+    host::{
+        CrossfaderBus, Host, HostConfig, HostOwned, HostSettings, HostSettingsControl, Tap,
+        crossfader_gain, wasm,
+    },
     output::OutputGroup,
     platform::{
         sync::{
@@ -109,7 +112,7 @@ fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64
             let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
             let player = PlayerImpl::new(
                 PlayerConfig::builder()
-                    .sample_rate(host.requested_sample_rate())
+                    .sample_rate(host.sample_rate())
                     .worker(worker.clone())
                     .build(),
             );
@@ -190,7 +193,7 @@ fn first_audible_sample(samples: &[f32]) -> Option<usize> {
 }
 
 fn session_is_live(host: &Host<TestPools>) -> bool {
-    host.sample_rate()
+    host.output_sample_rate()
         .is_ok_and(|rates| rates.measured == Some(rates.requested))
 }
 
@@ -217,8 +220,12 @@ fn zero_crossing_hz(mono: &[f32], sample_rate: f64) -> f64 {
 async fn live_web_audio_plays_at_session_rate() {
     init_diagnostics();
 
-    let host: Host<TestPools> = Host::new(HostConfig::builder().sample_rate_hint(RATE).build())
-        .expect("build the product web Host");
+    let host: Host<TestPools> = Host::new(
+        HostConfig::builder()
+            .settings(HostSettings::builder().sample_rate(RATE).build())
+            .build(),
+    )
+    .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
     wasm::warm_up_audio(&host).expect("warm up the audio context");
 
@@ -261,7 +268,9 @@ async fn live_web_audio_plays_at_session_rate() {
     let frames = window.len() / CHANNELS;
     let dropped = drops.load(Ordering::Relaxed);
     let stage = stage_name(stage.load(Ordering::Relaxed));
-    let rates = host.sample_rate().expect("read the session output rate");
+    let rates = host
+        .output_sample_rate()
+        .expect("read the session output rate");
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),
@@ -357,7 +366,7 @@ async fn open_deck(
 ) -> HostOwned<PlayerImpl<TestPools>> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(host.requested_sample_rate())
+            .sample_rate(host.sample_rate())
             .worker(worker.clone())
             .build(),
     );
@@ -487,8 +496,12 @@ fn tone_and_level(window: &[f32], measured: u32) -> (f64, f32) {
 async fn two_decks_in_one_host_follow_the_crossfader() {
     init_diagnostics();
 
-    let host: Host<TestPools> = Host::new(HostConfig::builder().sample_rate_hint(RATE).build())
-        .expect("build the product web Host");
+    let host: Host<TestPools> = Host::new(
+        HostConfig::builder()
+            .settings(HostSettings::builder().sample_rate(RATE).build())
+            .build(),
+    )
+    .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
     wasm::warm_up_audio(&host).expect("warm up the audio context");
 
@@ -515,7 +528,9 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     let at_b = pair.positions();
 
     let dropped = drops.load(Ordering::Relaxed);
-    let rates = host.sample_rate().expect("read the session output rate");
+    let rates = host
+        .output_sample_rate()
+        .expect("read the session output rate");
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),

@@ -26,6 +26,14 @@ impl<P: Protocol> Schedule<P> {
         self.items.insert(index, sent);
     }
 
+    /// Takes the earliest batch waiting for a moment of the clock.
+    pub(super) fn take_timed(&mut self) -> Option<Sent<P>> {
+        let timed = self
+            .items
+            .partition_point(|sent| matches!(sent.when, When::At(_)));
+        timed.checked_sub(1).map(|index| self.items.remove(index))
+    }
+
     delegate::delegate! {
         to self.items {
             #[expr($.map(|sent| sent.when))]

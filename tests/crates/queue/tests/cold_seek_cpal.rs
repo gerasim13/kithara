@@ -4,7 +4,7 @@ use kithara::{
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
-    host::{Host, HostConfig},
+    host::{Host, HostConfig, HostSettingsControl},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, time,
@@ -115,7 +115,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         let mut host = Host::new(HostConfig::builder().build())?;
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(host.requested_sample_rate())
+                .sample_rate(host.sample_rate())
                 .worker(worker)
                 .build(),
         );

@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 use super::{SendError, Sender, channel};
 use crate::{
     ChannelConfig, Inbox,
-    protocol::{Batch, Clock, Protocol, Seq, Target, When},
+    protocol::{Batch, Protocol, Seq, Target, When},
     receipt::{Outcome, Rejection},
 };
 
@@ -29,18 +29,16 @@ impl Target for Slot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Frame(u64);
 
-impl Clock for Frame {
-    fn frames_since(self, start: Self) -> Option<u64> {
-        self.0.checked_sub(start.0)
-    }
-}
-
 impl Protocol for Test {
     type Applied = ();
     type Clock = Frame;
     type Command = u32;
     type Refusal = &'static str;
     type Target = Slot;
+
+    fn frames_since(at: Frame, start: Frame) -> Option<u64> {
+        at.0.checked_sub(start.0)
+    }
 }
 
 fn pair(capacity: usize, targets: usize) -> (Sender<Test>, Inbox<Test>) {
@@ -170,6 +168,29 @@ fn a_skipped_block_returns_its_batches_late_in_time_order() {
             (second, Outcome::Rejected(Rejection::Late)),
         ]
     );
+}
+
+#[kithara::test]
+fn a_new_axis_refuses_every_timed_batch_and_keeps_the_next_ones() {
+    let (mut sender, mut inbox) = pair(3, 0);
+    let later = send(&mut sender, When::At(Frame(200)), batch(1, &[]));
+    let earlier = send(&mut sender, When::At(Frame(100)), batch(2, &[]));
+    let next = send(&mut sender, When::Next, batch(3, &[]));
+
+    inbox.refuse_timed("new axis");
+
+    let refused = || Outcome::Rejected(Rejection::Refused("new axis"));
+    assert_eq!(
+        outcomes(&mut sender),
+        [(earlier, refused()), (later, refused())]
+    );
+    send(&mut sender, When::At(Frame(150)), batch(4, &[]));
+    send(&mut sender, When::At(Frame(160)), batch(5, &[]));
+    assert_eq!(
+        run_block(&mut inbox, 128, BLOCK),
+        [(0, 3), (22, 4), (32, 5)]
+    );
+    assert_eq!(outcomes(&mut sender)[0], (next, applied(128)));
 }
 
 #[kithara::test]

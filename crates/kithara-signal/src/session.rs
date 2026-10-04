@@ -14,6 +14,17 @@ impl SessionFrame {
     pub const fn new(value: i64) -> Self {
         Self(value)
     }
+
+    /// Frames from `start` to this frame, or `None` when this frame comes
+    /// before `start`.
+    #[must_use]
+    pub const fn frames_since(self, start: Self) -> Option<u64> {
+        if self.0 < start.0 {
+            None
+        } else {
+            Some(self.0.abs_diff(start.0))
+        }
+    }
 }
 
 /// Monotonic generation of the live session-frame axis.
@@ -93,7 +104,7 @@ pub struct OutputContext {
     /// The sample rate defining [`Self::output_frames`].
     #[field(get, copy)]
     sample_rate: NonZeroU32,
-    /// The committed transport revision, including paused transport.
+    /// The committed transport revision.
     #[field(get, copy)]
     transport_revision: Option<TransportRevision>,
     /// The exact half-open session-output frame range.
@@ -204,6 +215,34 @@ mod tests {
             context()
                 .for_output_range(consts::BLOCK_FRAMES..consts::BLOCK_FRAMES + 1)
                 .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn a_frame_after_the_start_counts_frames_since_it() {
+        assert_eq!(
+            SessionFrame::new(150).frames_since(SessionFrame::new(-50)),
+            Some(200)
+        );
+        assert_eq!(
+            SessionFrame::new(7).frames_since(SessionFrame::new(7)),
+            Some(0)
+        );
+    }
+
+    #[kithara::test]
+    fn a_frame_before_the_start_is_in_the_past() {
+        assert_eq!(
+            SessionFrame::new(-1).frames_since(SessionFrame::new(0)),
+            None
+        );
+    }
+
+    #[kithara::test]
+    fn the_whole_axis_is_counted_without_overflow() {
+        assert_eq!(
+            SessionFrame::new(i64::MAX).frames_since(SessionFrame::new(i64::MIN)),
+            Some(u64::MAX)
         );
     }
 }
