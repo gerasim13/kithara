@@ -32,14 +32,18 @@ pub(crate) struct Step {
 pub(crate) struct Recording {
     #[field(get, vis = "pub(crate)")]
     steps: Vec<Step>,
-    /// What `capture` answers, by program. A lane that reads a tool's version
-    /// and compares it to a pin needs an answer to get past that check.
-    replies: BTreeMap<String, String>,
+    /// What `capture` answers, by the command prefix it names. A lane that
+    /// reads a tool's version and compares it to a pin needs an answer to get
+    /// past that check, and one tool asked two questions needs two answers.
+    replies: Vec<(Vec<String>, String)>,
 }
 
 impl Recording {
-    pub(crate) fn with_reply(mut self, program: &str, reply: &str) -> Self {
-        self.replies.insert(program.to_owned(), reply.to_owned());
+    pub(crate) fn with_reply(mut self, prefix: &[&str], reply: &str) -> Self {
+        self.replies.push((
+            prefix.iter().map(|part| (*part).to_owned()).collect(),
+            reply.to_owned(),
+        ));
         self
     }
 }
@@ -133,12 +137,26 @@ impl Process {
         true
     }
 
-    fn reply(&self, program: &str) -> Option<String> {
+    fn reply(&self, program: &str, args: &[&str]) -> Option<String> {
         let Mode::Record(recording) = &self.mode else {
             return None;
         };
         let recording = recording.lock().ok()?;
-        Some(recording.replies.get(program).cloned().unwrap_or_default())
+        let command: Vec<&str> = std::iter::once(program)
+            .chain(args.iter().copied())
+            .collect();
+        Some(
+            recording
+                .replies
+                .iter()
+                .filter(|(prefix, _)| {
+                    prefix.len() <= command.len()
+                        && prefix.iter().zip(&command).all(|(want, part)| want == part)
+                })
+                .max_by_key(|(prefix, _)| prefix.len())
+                .map(|(_, reply)| reply.clone())
+                .unwrap_or_default(),
+        )
     }
 
     pub(crate) fn command(&self, program: impl AsRef<OsStr>) -> Command {
@@ -310,7 +328,7 @@ impl Process {
     }
 
     pub(crate) fn capture(&self, program: &str, args: &[&str], label: &str) -> Result<String> {
-        if let Some(reply) = self.reply(program) {
+        if let Some(reply) = self.reply(program, args) {
             let mut command = self.command(program);
             command.args(args);
             self.record(Step::of(&command, label, &self.root));
@@ -372,7 +390,8 @@ impl Process {
     }
 
     /// Reach a state, accepting only a caller-classified refusal that proves
-    /// the state already holds.
+    /// the state already holds. Recorded rather than reached while recording:
+    /// the state is this machine's, and the lane is what the snapshot pins.
     pub(crate) fn ensure(
         &self,
         program: &str,
@@ -380,9 +399,12 @@ impl Process {
         label: &str,
         already_satisfied: impl FnOnce(&Output) -> bool,
     ) -> Result<()> {
-        let output = self
-            .command(program)
-            .args(args)
+        let mut command = self.command(program);
+        command.args(args);
+        if self.record(Step::of(&command, label, &self.root)) {
+            return Ok(());
+        }
+        let output = command
             .output()
             .with_context(|| format!("failed to start {label}"))?;
         if output.status.success() {
@@ -650,6 +672,53 @@ mod tests {
         let home = cargo_home(|name| environment.get(name).map(PathBuf::from));
 
         assert_eq!(home, Some(PathBuf::from("/cache/cargo")));
+    }
+
+    /// One tool asked two questions needs two answers: `xcrun` both creates a
+    /// simulator and reads a result bundle. The longest prefix that names the
+    /// command answers it.
+    #[test]
+    fn a_reply_answers_the_longest_command_prefix_it_names() {
+        let process = Process::recording(
+            FsPath::new("."),
+            Recording::default()
+                .with_reply(&["xcrun"], "bundle")
+                .with_reply(&["xcrun", "simctl", "create"], "device"),
+        );
+
+        let created = process
+            .capture("xcrun", &["simctl", "create", "name", "type"], "create")
+            .unwrap();
+        let read = process
+            .capture("xcrun", &["xcresulttool", "get"], "read")
+            .unwrap();
+
+        assert_eq!(created, "device");
+        assert_eq!(read, "bundle");
+    }
+
+    /// Reaching a state changes the machine like any other step, so a
+    /// recording captures it rather than running it.
+    #[test]
+    fn a_recording_captures_an_ensure_instead_of_running_it() {
+        let process = Process::recording(FsPath::new("."), Recording::default());
+
+        process
+            .ensure(
+                "kithara-command-that-does-not-exist",
+                &["state"],
+                "reach a state",
+                |_| false,
+            )
+            .unwrap();
+
+        let recorded = process.recorded().unwrap();
+        let programs: Vec<&str> = recorded
+            .steps()
+            .iter()
+            .map(|step| step.program.as_str())
+            .collect();
+        assert_eq!(programs, ["kithara-command-that-does-not-exist"]);
     }
 
     #[test]

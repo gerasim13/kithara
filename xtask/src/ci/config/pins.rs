@@ -52,6 +52,9 @@ pub(crate) struct CiPins {
     pub(crate) gitleaks_linux_amd64_sha256: String,
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
+    /// The `CoreSimulator` device type the simulator lane creates its device
+    /// from. It has to ship with `expected_xcode_version`.
+    pub(crate) ios_simulator_device_type: String,
     pub(crate) linux_base_digest: String,
     pub(crate) linux_android_image: String,
     pub(crate) linux_android_runner_image: String,
@@ -123,6 +126,10 @@ impl CiPins {
             ("geckodriver_version", self.geckodriver_version.as_str()),
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),
             ("gitleaks_version", self.gitleaks_version.as_str()),
+            (
+                "ios_simulator_device_type",
+                self.ios_simulator_device_type.as_str(),
+            ),
             ("linux_android_image", self.linux_android_image.as_str()),
             (
                 "linux_android_runner_image",

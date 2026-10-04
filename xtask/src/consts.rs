@@ -524,6 +524,11 @@ pub(crate) const SCCACHE_MISSING_UDS_CODE: Option<&str> = if cfg!(unix) {
 
 pub(crate) const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
 
+/// How `simctl delete` refuses a device that does not exist.
+pub(crate) const SIMCTL_INVALID_DEVICE: &str = "Invalid device";
+
+pub(crate) const SIMCTL_INVALID_DEVICE_EXIT: i32 = 148;
+
 /// Lanes no pipeline schedules and no fleet claims. Each one is reached by
 /// name alone and says so with empty membership, which is a declaration
 /// rather than an oversight - and naming them here is what keeps a lane
