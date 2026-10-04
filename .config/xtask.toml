@@ -1308,7 +1308,7 @@ program = "just"
 steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
 role = "gate"
 kinds = ["weekly", "quarantine"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]
@@ -1320,7 +1320,7 @@ program = "just"
 steps = [{ args = ["deps", "machete"], label = "unused manifest entries" }]
 role = "gate"
 kinds = ["weekly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 # Its own lane, and off the push gate: `cargo shear` reads what the source
@@ -1400,7 +1400,7 @@ steps = [
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 # Nightly here, not on the push gate: the full integration suite does not
@@ -1433,7 +1433,7 @@ steps = [
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 
@@ -1492,7 +1492,7 @@ steps = [
 ]
 role = "gate"
 kinds = []
-kinds_github = ["main", "branch", "nightly"]
+kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-file]
@@ -1511,7 +1511,7 @@ steps = [
 ]
 role = "gate"
 kinds = []
-kinds_github = ["main", "branch", "nightly"]
+kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-hls]
@@ -1530,7 +1530,7 @@ steps = [
 ]
 role = "gate"
 kinds = []
-kinds_github = ["main", "branch", "nightly"]
+kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-perf]
@@ -1767,6 +1767,9 @@ kinds = [
   "nightly",
   "release",
 ]
+# GitHub's own answer: a ready pull request there runs what a branch push does,
+# and a GitHub branch push has never run this lane.
+kinds_github = ["main", "nightly"]
 timeout_minutes = 15
 
 [ext.ci.lanes.linux-check]
@@ -1785,6 +1788,8 @@ kinds = [
   "nightly",
   "release",
 ]
+# GitHub's own answer, for the reason `linux-secrets` gives.
+kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-wasm]
@@ -1795,7 +1800,7 @@ tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
 role = "gate"
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 kinds = [
   "merge-request",
   "quarantine",
@@ -1812,9 +1817,11 @@ timeout_minutes = 60
 # twice in one second, and Cargo reported only "could not compile" with no
 # diagnostic, because the compiler never reached one.
 #
-# `--touched` is fail-closed: on `main`, shared configuration, and every path
-# without a reviewed domain owner it runs `workspace`. A branch only becomes
-# narrow after its path is explicitly owned by one of the lanes above.
+# The two clock lanes run one recipe and differ in the clock they ask for and
+# the directory they build in. Every kind runs the suite whole except a branch
+# push, which runs `--touched`. That is fail-closed: shared configuration and
+# every path without a reviewed domain owner run `workspace`, and a branch only
+# becomes narrow after its path is explicitly owned by one of the lanes above.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
@@ -1834,16 +1841,23 @@ steps = [
   { args = [
     "test",
     "run",
+    "--no-block=on",
+    "--profile",
+    "ci",
+    "--timings",
+  ], label = "Linux flash and no-block gate", args_by_kind = { branch = [
+    "test",
+    "run",
     "--touched",
     "--no-block=on",
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ] }, env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-doc]
@@ -1974,9 +1988,9 @@ timeout_minutes = 180
 
 # A full run carries `kithara-net`'s own tests on the Linux host under its
 # `client-host` backend only here. A branch push that touches that backend
-# runs them through the `--touched` step of `linux-test-simulated-clock`, so
-# this lane has no `branch` kind; Android runs the backend with a real
-# transport.
+# runs them through the clock lanes' `--touched` step, so this lane has no
+# `branch` kind, nor the `merge-request` kind that schedules what `branch`
+# does; Android runs the backend with a real transport.
 [ext.ci.lanes.linux-net-host]
 cache_group = "linux"
 label = "Linux"
@@ -2081,7 +2095,7 @@ program = "just"
 publishes_sources = true
 steps = [{ args = ["lint", "full"], label = "workspace lint gate" }]
 role = "gate"
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-arch]
@@ -2093,7 +2107,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["lint", "arch"], label = "architecture checks" }]
 role = "gate"
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 # The image knows which toolchain is the minimum supported one, so the version
@@ -2111,7 +2125,7 @@ steps = [
   ], label = "minimum supported toolchain", env = { RUSTUP_TOOLCHAIN = "{pin.msrv_toolchain}" } },
 ]
 role = "gate"
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 # Memory is the budget a player cannot overrun quietly: pool budgets,
@@ -2126,7 +2140,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "memory"], label = "memory budgets" }]
 role = "gate"
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 # The virtual clock collapses fixture delays, so order-of-service defects
@@ -2135,14 +2149,14 @@ timeout_minutes = 60
 # directory rather than a fixed path under `{root}` that the lease eviction
 # and reclaim machinery would not know about.
 # The rebuild check then asks cargo what the next job of this commit would build.
+# Its recipe is the simulated-clock lane's; see the note there.
 [ext.ci.lanes.linux-test-real-clock]
 cache_group = "linux"
 github_runner = "kithara-test-real"
 label = "Linux"
 freshness = "checksum"
 os = "linux"
-fetch_depth = 1
-tools = ["cargo", "just"]
+tools = ["cargo", "just", "sccache"]
 program = "just"
 artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
 steps = [
@@ -2150,17 +2164,28 @@ steps = [
     "test",
     "run",
     "--flash=off",
+    "--profile",
+    "ci",
     "--timings",
-  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
+  ], label = "real-clock suite", rebuild_check = true, args_by_kind = { branch = [
+    "test",
+    "run",
+    "--touched",
+    "--flash=off",
+    "--profile",
+    "ci",
+    "--timings",
+  ] }, env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 120
 
 # `just test` no longer carries the build tooling or the harness it is written
 # with. A `main` push and the nightly run get them whole from `linux-tooling`,
-# `linux-harness` and `linux-fixtures`; a branch push runs here the ones it
-# touched, so a change to their own sources does not wait for `main`.
+# `linux-harness` and `linux-fixtures`; a branch push or a ready pull request
+# runs here the ones it touched, so a change to their own sources does not wait
+# for `main`.
 [ext.ci.lanes.linux-support]
 cache_group = "linux"
 label = "Linux"
@@ -2180,7 +2205,7 @@ steps = [
   ], label = "support suites this push touches" },
 ]
 role = "gate"
-kinds_github = ["branch"]
+kinds_github = ["branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-usdt]
@@ -2229,7 +2254,7 @@ steps = [
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 # The repository's own analysis recipes: until now nothing ran them

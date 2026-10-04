@@ -520,6 +520,69 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
 }
 
+// A push to a branch whose pull request is ready for review runs the suite
+// whole, a draft's push only what it touched. Nothing here reacts to a pull
+// request, so the push asks: the hosted job looks the request up before any
+// job reaches the fleet, and every role reads the one kind it named instead of
+// deciding again.
+#[test]
+fn a_ready_pull_request_is_a_merge_request_pipeline() {
+    let workflow = github_workflow("ci.yml");
+    let jobs = workflow_jobs(&workflow);
+
+    let authorize = workflow_job(jobs, "authorize");
+    let outputs = mapping_field(authorize, "outputs")
+        .as_mapping()
+        .expect("authorization names outputs");
+    assert_eq!(
+        mapping_field(outputs, "kind").as_str(),
+        Some("${{ steps.kind.outputs.kind }}")
+    );
+    let step = named_step(authorize, "Name the pipeline kind");
+    assert_eq!(mapping_field(step, "id").as_str(), Some("kind"));
+    let env = mapping_field(step, "env")
+        .as_mapping()
+        .expect("the kind step reads its inputs from the environment");
+    assert_eq!(
+        mapping_field(env, "GH_TOKEN").as_str(),
+        Some("${{ github.token }}")
+    );
+    let script = mapping_field(step, "run")
+        .as_str()
+        .expect("the kind step is a script");
+    for named in [
+        "main",
+        "merge-request",
+        "branch",
+        ".draft",
+        ".parent.full_name",
+    ] {
+        assert!(
+            script.contains(named),
+            "the kind step never reads `{named}`"
+        );
+    }
+
+    let gate = workflow_job(jobs, "gate");
+    let outputs = mapping_field(gate, "outputs")
+        .as_mapping()
+        .expect("the gate hands the kind on");
+    assert_eq!(
+        mapping_field(outputs, "kind").as_str(),
+        Some("${{ needs.authorize.outputs.kind }}")
+    );
+    for name in ["lanes", "deep", "platforms", "quality"] {
+        let with = mapping_field(workflow_job(jobs, name), "with")
+            .as_mapping()
+            .unwrap_or_else(|| panic!("{name} passes inputs"));
+        assert_eq!(
+            mapping_field(with, "kind").as_str(),
+            Some("${{ needs.gate.outputs.kind }}"),
+            "role `{name}` decides the pipeline kind again"
+        );
+    }
+}
+
 // One entry reacts to every push. Optional suites belong inside that run so a
 // commit has one verdict rather than independent CI and UI results.
 #[test]
