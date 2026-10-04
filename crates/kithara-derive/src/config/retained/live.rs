@@ -1,6 +1,6 @@
-use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote};
-use syn::{Attribute, DeriveInput, Ident, Type};
+use proc_macro2::{Group, Span, TokenStream, TokenTree};
+use quote::{ToTokens, format_ident, quote};
+use syn::{Attribute, DeriveInput, Ident, Result, Type};
 
 use super::{
     control::{control, exec},
@@ -16,22 +16,24 @@ pub(super) fn expand(
     item: &DeriveInput,
     members: &[Member<'_>],
     error: Option<&Type>,
-) -> Option<TokenStream> {
+) -> Result<Option<TokenStream>> {
     let fields: Vec<(&Member<'_>, &LiveField)> = members
         .iter()
         .filter_map(|member| member.live.as_ref().map(|live| (member, live)))
         .collect();
     if error.is_none() && fields.is_empty() {
-        return None;
+        return Ok(None);
     }
     let checked = checked(item, members, error);
-    let live = (!fields.is_empty()).then(|| {
+    let live = if fields.is_empty() {
+        None
+    } else {
         let change = live(item, &fields);
-        let control = control(item, members);
-        let exec = exec(item, &fields);
-        quote! { #change #control #exec }
-    });
-    Some(quote! { #checked #live })
+        let control = control(item, members)?;
+        let exec = exec(item, &fields)?;
+        Some(quote! { #change #control #exec })
+    };
+    Ok(Some(quote! { #checked #live }))
 }
 
 /// The `cfg` attributes of a field, which every statement generated from it
@@ -46,6 +48,27 @@ pub(super) fn cfgs(attributes: &[Attribute]) -> impl Iterator<Item = &Attribute>
 /// the macro's own.
 pub(super) fn change_name(item: &DeriveInput) -> Ident {
     format_ident!("{}Change", item.ident, span = Span::call_site())
+}
+
+/// A field type with `Self` spelled as the struct `name`, for items in which
+/// `Self` names the change enum or the owner.
+pub(super) fn spelled(ty: &Type, name: &Ident) -> TokenStream {
+    respell(ty.to_token_stream(), name)
+}
+
+fn respell(tokens: TokenStream, name: &Ident) -> TokenStream {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Ident(ident) if ident == "Self" => TokenTree::Ident(name.clone()),
+            TokenTree::Group(group) => {
+                let mut respelled = Group::new(group.delimiter(), respell(group.stream(), name));
+                respelled.set_span(group.span());
+                TokenTree::Group(respelled)
+            }
+            other => other,
+        })
+        .collect()
 }
 
 fn checked(item: &DeriveInput, members: &[Member<'_>], error: Option<&Type>) -> TokenStream {
@@ -93,14 +116,14 @@ fn checked(item: &DeriveInput, members: &[Member<'_>], error: Option<&Type>) -> 
     }
 }
 
-/// The change enum and `LiveConfig`. Their locals are mixed-site, so a field
-/// check path such as `value` resolves past them.
+/// The change enum and `LiveConfig`. Their bindings carry a prefix no caller
+/// names, so neither a field check path nor a constant in scope meets them.
 fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream {
     let name = &item.ident;
     let visibility = &item.vis;
     let change = change_name(item);
-    let received = Ident::new("change", Span::mixed_site());
-    let value = Ident::new("value", Span::mixed_site());
+    let received = format_ident!("__kithara_change");
+    let value = format_ident!("__kithara_value");
     let mut variants: Vec<TokenStream> = Vec::new();
     let mut checks: Vec<TokenStream> = Vec::new();
     let mut applies: Vec<TokenStream> = Vec::new();
@@ -108,7 +131,7 @@ fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream
     for (member, live) in fields {
         let variant = &live.variant;
         let field = member.name;
-        let ty = member.ty;
+        let ty = spelled(member.ty, name);
         let payload = if member.nested {
             quote!(<#ty as ::kithara_config::LiveConfig>::Change)
         } else {

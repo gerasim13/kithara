@@ -65,6 +65,21 @@ struct Rate {
     hz: u32,
 }
 
+/// A live level beside a resource whose type names the configuration `Self`.
+#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[config(fields(value, get(copy)))]
+struct Chain {
+    #[config(live)]
+    level: u8,
+    #[config(skip = "the configuration it follows", get(ref))]
+    next: Option<&'static Self>,
+}
+
+static FIRST: Chain = Chain {
+    level: 1,
+    next: None,
+};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Moment {
     #[default]
@@ -153,6 +168,24 @@ impl Configure<StripChange> for Mixer {
 
     fn settings(&self) -> Strip {
         *self.strip.borrow()
+    }
+}
+
+/// Owns a chain whose configuration only reads.
+struct Follower(Chain);
+
+impl Configure<ChainChange> for Follower {
+    type At = Moment;
+    type Config = Chain;
+    type Error = Infallible;
+    type Output = ();
+
+    fn configure(&self, _: ChainChange, _: Moment) -> Result<(), Infallible> {
+        Ok(())
+    }
+
+    fn settings(&self) -> Chain {
+        self.0
     }
 }
 
@@ -253,4 +286,67 @@ fn exec_routes_owner_fields_to_their_method_and_the_rest_to_exec_live() {
             "live Muted(true) at 9",
         ]
     );
+}
+
+#[kithara::test]
+fn a_field_type_naming_self_reads_as_the_configuration_through_its_owner() {
+    let follower = Follower(Chain {
+        level: 2,
+        next: Some(&FIRST),
+    });
+    assert_eq!(ChainControl::next(&follower).map(Chain::level), Some(1));
+}
+
+/// Generated bodies beside constants named like their bindings.
+mod shadowed {
+    use std::f32::consts::{E as value, LN_2 as cx, PI as at, TAU as change};
+
+    use kithara_config::{Config, LiveConfig};
+    use kithara_test_utils::kithara;
+
+    use super::Tone;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Config)]
+    #[config(builder(none), fields(value, get(copy)))]
+    struct Knob {
+        #[config(live(owner))]
+        turn: f32,
+        #[config(live)]
+        glow: f32,
+        #[config(nested, live)]
+        tone: Tone,
+    }
+
+    /// Applies the shared fields to its knob and writes each change down.
+    struct Turner(Knob);
+
+    impl KnobExec<Vec<String>> for Turner {
+        type At = f32;
+        type Output = ();
+
+        fn exec_live(&mut self, knob: KnobChange, moment: f32, log: &mut Vec<String>) {
+            self.0.apply_change(knob);
+            log.push(format!("glow {} {moment}", self.0.glow()));
+        }
+
+        fn exec_turn(&mut self, turn: f32, moment: f32, log: &mut Vec<String>) {
+            log.push(format!("turn {turn} {moment}"));
+        }
+    }
+
+    #[kithara::test]
+    fn generated_bindings_ignore_constants_named_like_them() {
+        let mut turner = Turner(Knob {
+            turn: 0.0,
+            glow: 0.0,
+            tone: Tone::default(),
+        });
+        let mut log = Vec::new();
+        KnobExec::exec(&mut turner, KnobChange::Turn(value), at, &mut log);
+        KnobExec::exec(&mut turner, KnobChange::Glow(change), cx, &mut log);
+        assert_eq!(
+            log,
+            [format!("turn {value} {at}"), format!("glow {change} {cx}")]
+        );
+    }
 }

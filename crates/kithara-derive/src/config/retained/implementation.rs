@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Attribute, Data, DeriveInput, Fields, Ident, Result, Visibility};
+use syn::{Attribute, Data, DeriveInput, Fields, Ident, Result, Visibility, ext::IdentExt as _};
 
 use super::{
     field::{self, Construction, Member},
@@ -183,7 +183,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         .then(|| built_default(&item, fallible));
     let debug = options.debug.then(|| debug(&item, &members));
     let snapshot = (!options.construction).then(|| snapshot(&item, &options, &members));
-    let live = live::expand(&item, &members, error.as_ref());
+    let live = live::expand(&item, &members, error.as_ref())?;
     Ok(quote! { #builder #accessors #owner_accessors #default #debug #snapshot #live })
 }
 
@@ -213,7 +213,7 @@ fn validate_live(
     }
     if let Some(member) = members
         .iter()
-        .find(|member| member.name == "settings" || member.name == "configure")
+        .find(|member| member.name.unraw() == "settings" || member.name.unraw() == "configure")
     {
         return Err(syn::Error::new_spanned(
             member.name,
@@ -928,6 +928,48 @@ mod tests {
             ),
             (
                 quote!(
+                    struct S {
+                        #[config(value, live)]
+                        gain: u32,
+                        #[config(value, get(copy))]
+                        set_gain: u32,
+                    }
+                ),
+                "fields `gain` and `set_gain` both generate the method `set_gain`",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live(owner))]
+                        live: u32,
+                        #[config(value, live)]
+                        beat: u32,
+                    }
+                ),
+                "fields `live` and `beat` both generate the method `exec_live`",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        r#settings: u32,
+                    }
+                ),
+                "a live configuration cannot name a field settings or configure",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        level: u32,
+                        #[config(value, get(copy))]
+                        r#configure: u32,
+                    }
+                ),
+                "a live configuration cannot name a field settings or configure",
+            ),
+            (
+                quote!(
                     #[config(construction)]
                     struct S {
                         #[config(value, live)]
@@ -1000,16 +1042,19 @@ mod tests {
         ));
         assert!(expanded.contains("const OWNER_FIELDS : bool = true ;"));
         assert!(expanded.contains(
-            "RigChange :: Level (value) => :: core :: result :: Result :: Ok (RigChange :: Level (Self :: level_bounds (value) ?))"
+            "RigChange :: Level (__kithara_value) => :: core :: result :: Result :: Ok (RigChange :: Level (Self :: level_bounds (__kithara_value) ?))"
         ));
         assert!(expanded.contains(
-            "RigChange :: Gauge (value) => :: core :: result :: Result :: Ok (RigChange :: Gauge (\
-             < Gauge as :: kithara_config :: LiveConfig > :: check (value) ?))"
+            "RigChange :: Gauge (__kithara_value) => :: core :: result :: Result :: Ok (RigChange :: Gauge (\
+             < Gauge as :: kithara_config :: LiveConfig > :: check (__kithara_value) ?))"
         ));
-        assert!(expanded.contains("RigChange :: Rate (value) => :: core :: result :: Result :: Ok (RigChange :: Rate (value))"));
-        assert!(expanded.contains("RigChange :: Level (value) => self . level = value"));
+        assert!(expanded.contains("RigChange :: Rate (__kithara_value) => :: core :: result :: Result :: Ok (RigChange :: Rate (__kithara_value))"));
+        assert!(
+            expanded
+                .contains("RigChange :: Level (__kithara_value) => self . level = __kithara_value")
+        );
         assert!(expanded.contains(
-            "RigChange :: Gauge (value) => :: kithara_config :: LiveConfig :: apply_change (& mut self . gauge , value)"
+            "RigChange :: Gauge (__kithara_value) => :: kithara_config :: LiveConfig :: apply_change (& mut self . gauge , __kithara_value)"
         ));
         assert!(
             !expanded.contains("Limit ("),
