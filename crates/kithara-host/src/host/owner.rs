@@ -429,7 +429,6 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_signal::SessionFrame;
     use kithara_sync::{ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate};
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::{BeatGridStamp, MapAxis, SessionAnchor, SessionBeat};
