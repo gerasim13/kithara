@@ -1134,6 +1134,22 @@ fn a_caller_filterset_narrows_a_filtered_lane() {
     assert_eq!(args.last().map(String::as_str), Some("--timings"));
 }
 
+/// A filterset flag the caller leaves without a value is a mistyped request,
+/// not a request for the lane's whole selection.
+#[test]
+fn a_caller_filterset_flag_without_a_value_is_refused() {
+    let project = synthetic_project();
+
+    for flag in ["-E", "--filterset", "--filter-expr"] {
+        let error = command_of(&project, "loom", NextestAction::Run, &["--timings", flag])
+            .expect_err("a filterset flag without a value");
+        assert!(
+            format!("{error:#}").contains(&format!("`{flag}` needs a filterset")),
+            "{error:#}"
+        );
+    }
+}
+
 #[test]
 fn a_caller_filterset_passes_through_an_unfiltered_lane() {
     let project = synthetic_project();

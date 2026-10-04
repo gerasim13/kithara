@@ -88,7 +88,7 @@ impl ResolvedLane {
                     caller.to_vec()
                 };
                 if let Some(filter) = &nextest.filter {
-                    let (rest, filters) = split_filters(&caller);
+                    let (rest, filters) = split_filters(&caller)?;
                     command.arg("-E").arg(intersect(filter, &filters));
                     caller = rest;
                 }
@@ -215,8 +215,9 @@ fn split_at_separator(args: &[String]) -> (&[String], &[String]) {
         })
 }
 
-/// The caller's arguments without its filtersets, and those filtersets.
-fn split_filters(args: &[String]) -> (Vec<String>, Vec<String>) {
+/// The caller's arguments without its filtersets, and those filtersets. A
+/// filterset flag with no value after it is refused rather than dropped.
+fn split_filters(args: &[String]) -> Result<(Vec<String>, Vec<String>)> {
     const VALUED: [&str; 3] = ["-E", "--filterset", "--filter-expr"];
     const ATTACHED: [&str; 4] = ["--filterset=", "--filter-expr=", "-E=", "-E"];
     let mut rest = Vec::with_capacity(args.len());
@@ -224,14 +225,17 @@ fn split_filters(args: &[String]) -> (Vec<String>, Vec<String>) {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if VALUED.contains(&arg.as_str()) {
-            filters.extend(iter.next().cloned());
+            let filter = iter
+                .next()
+                .with_context(|| format!("`{arg}` needs a filterset after it"))?;
+            filters.push(filter.clone());
         } else if let Some(filter) = ATTACHED.iter().find_map(|prefix| arg.strip_prefix(prefix)) {
             filters.push(filter.to_owned());
         } else {
             rest.push(arg.clone());
         }
     }
-    (rest, filters)
+    Ok((rest, filters))
 }
 
 /// The lane's filter narrowed by the union of the caller's filtersets.
