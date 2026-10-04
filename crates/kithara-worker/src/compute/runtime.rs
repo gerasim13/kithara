@@ -257,6 +257,7 @@ mod tests {
             let steps = self.steps.clone();
             let ran = Arc::clone(&self.ran);
             let admitted = self.context.submit_compute((), move |_, ()| {
+                kithara_platform::thread::sleep(Duration::from_millis(20));
                 steps
                     .send(Step::Ran {
                         compute: current_thread_id(),
@@ -290,7 +291,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(tokio, browser, flash(false))]
+    #[kithara::test(tokio, browser)]
     async fn compute_job_runs_off_the_dispatcher_thread_and_wakes_it() {
         let worker = Worker::new(WorkerConfig::new().with_owned_pool(OwnedPoolConfig::new(
             NonZeroUsize::MIN,

@@ -87,6 +87,34 @@ where
     }
 }
 
+/// Capture platform context before queueing work onto a reusable thread pool.
+///
+/// Ambient work reserves quiescence credit while queued and running. The closure
+/// restores the pool thread's context on completion, including unwinding.
+#[track_caller]
+pub fn wrap_pool_task<F, R>(f: F) -> impl FnOnce() -> R + Send + 'static
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    use crate::flash::system::credit::{self, DedicatedSlot, Participant};
+
+    let origin = Location::caller();
+    let ambient = crate::flash::ambient_snapshot();
+    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
+    move || {
+        let _ambient = crate::flash::set_ambient_for_spawn(ambient);
+        credit::reset_credit();
+        if let Some(slot) = slot {
+            let _pacer = slot.claim_pooled();
+            f()
+        } else {
+            let _exit = Participant::unreserved();
+            f()
+        }
+    }
+}
+
 #[track_caller]
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
