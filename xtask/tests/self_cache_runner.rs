@@ -533,9 +533,12 @@ fn ci_public_just_runner_announces_a_wait_for_the_build_target_lease() -> Result
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+/// Every platform leases the target the bootstrap builds in, and none opens a
+/// target slot of its own for it: a slot named after the job is never handed to
+/// another, so each job left one behind for the cleaner to find.
+#[cfg(unix)]
 #[test]
-fn ci_public_just_runner_leases_the_bootstrap_before_mac_environment_setup() -> Result<()> {
+fn ci_public_just_runner_leases_the_bootstrap_before_environment_setup() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.install_fake_transport()?;
     let cache = fixture._temp.path().join("cache");
@@ -559,13 +562,23 @@ fn ci_public_just_runner_leases_the_bootstrap_before_mac_environment_setup() -> 
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
     wait_for_file(&ready, &mut child)?;
-    let target = cache.join("bootstrap/review/target-Darwin-arm64-0");
+    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
+    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
+    let target = cache.join(format!(
+        "bootstrap/review/target-{}-{}-0",
+        system.trim(),
+        arch.trim()
+    ));
     let lease = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(target.join(".kithara-job-lease"))?;
 
     assert!(FileLock::try_exclusive(lease).is_err());
+    assert!(
+        !cache.join("target-slots").exists(),
+        "the bootstrap opened a target slot of its own"
+    );
     fs::write(release, [])?;
     assert_success(&child.wait_with_output()?);
     Ok(())

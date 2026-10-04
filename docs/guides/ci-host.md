@@ -299,17 +299,19 @@ is the whole answer.
 
 `build_cache_size` caps one cache and cannot see whether the volume has room:
 two checkouts each under a 100 GB cap held 183 GB between them while every pass
-reported nothing freed and jobs were already refused. Under `Aggressive` or
-`Reject` the pass also reclaims what the volume is short of the soft floor,
-evicting past the cap. What its sweeps cannot show:
+reported nothing freed and jobs were already refused. Warm builds are the last
+rung: when stale trees, the Docker build cache and the guest trim still leave
+the volume at `Aggressive` or worse, the pass reclaims what it is short of the
+soft floor, evicting past the cap. What its sweeps cannot show:
 
 - The Linux guest's `/var/lib/docker` data disk is not mounted `discard` as its
   root is, so deleted layers stay allocated in a sparse file this volume pays
-  for; every cleanup trims the `colima_profile` instance, whatever the pressure.
+  for; every cleanup holds Docker's build cache to `docker_build_cache_size` and
+  trims the `colima_profile` instance, whatever the pressure.
 - A cache namespace that stops being written to goes invisible rather than
   stale, leaving a retired tool's store behind; `cache_namespaces` lists the
   live ones and cleanup takes the rest whole. A namespace with an owner belongs
-  there even when it is quiet: `target-slots` holds every Linux job's
+  there even when it is quiet: `target-slots` holds every GitLab job's
   `CARGO_TARGET_DIR` and the build-cache budget evicts it one slot at a time.
   An installed profile carries the list verbatim, so adding a name reaches a
   running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
