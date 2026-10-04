@@ -24,6 +24,7 @@ stretch-glide = ["kithara-warp/stretch-glide"]
 [dependencies]
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
+kithara-command = { workspace = true }
 kithara-effects = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }

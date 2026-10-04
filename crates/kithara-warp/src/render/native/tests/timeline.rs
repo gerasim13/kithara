@@ -8,7 +8,7 @@ use num_traits::ToPrimitive;
 use super::{
     StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced, renderer, spec,
 };
-use crate::{GridSegment, RegionPlan, Warp, WarpConfig, consts};
+use crate::{GridSegment, RegionPlan, SpeedCurve, Warp, WarpConfig, consts};
 
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
@@ -69,7 +69,7 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
     let mut fx = Warp::new((), &config).renderer(spec(), crate::test_pools::pools());
     let pools = fx.pools.clone();
     fx.prepare(spec());
-    controls.set_speed(4.0);
+    fx.set_speed(SpeedCurve::Constant(4.0), 1);
     let mut source_frame = 0_u64;
     let mut output_frames = 0;
     for _ in 0..400 {
@@ -77,7 +77,7 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
         let mut input = chunk(&pools, &[0.25; 256]);
         input.meta.frame_offset = source_frame;
         let frames = fx
-            .prepare_quantum(input.meta, 128)
+            .prepare_quantum(input.meta, 128, usize::MAX)
             .expect("a continuous ramp keeps accepting source quanta")
             .get();
         input.samples.truncate(frames * usize::from(consts::CH));
@@ -423,7 +423,7 @@ fn live_unity_transition_drains_active_backend_tail(
         "completed tail releases the held source frontier"
     );
 
-    reference_controls.set_speed(1.0);
+    reference.set_speed(SpeedCurve::Constant(1.0), 1);
     let mut reference_unity = chunk(&pools, &source[split..]);
     reference_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let reference_unity = render_serviced(&mut reference, reference_unity)
@@ -442,7 +442,7 @@ fn live_unity_transition_drains_active_backend_tail(
     assert_eq!(live_active.frames(), reference_active.frames());
     assert_eq!(live.rendered_source_end(), Some(held_frontier));
 
-    live_controls.set_speed(1.0);
+    live.set_speed(SpeedCurve::Constant(1.0), 1);
     let mut live_unity = chunk(&pools, &source[split..]);
     live_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let unity_ptr = live_unity.samples.as_ptr();
@@ -676,8 +676,8 @@ fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
     let controls = StretchControls::new(1.0);
     let mut fx = renderer(Arc::clone(&controls));
     fx.applied_speed = moving_target_renderer().applied_speed;
-    controls.set_speed(1.25);
-    let target = controls.rate_target();
+    fx.set_speed(SpeedCurve::Constant(1.25), 1);
+    let target = fx.rate;
     let expected_speed = fx
         .preview_speed(target.speed(), 128)
         .expect("non-empty block");
@@ -686,7 +686,7 @@ fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
         frames: 128,
         ..Default::default()
     };
-    fx.prepare_quantum(meta, 128)
+    fx.prepare_quantum(meta, 128, usize::MAX)
         .expect("manual span is plannable");
     let prepared = fx.prepared_quantum.expect("quantum was prepared");
 

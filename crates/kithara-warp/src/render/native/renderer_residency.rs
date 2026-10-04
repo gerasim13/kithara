@@ -4,7 +4,7 @@ use kithara_stretch::{ElasticError, ElasticLatency, ElasticRequest};
 use num_traits::ToPrimitive;
 
 use super::{
-    renderer::{PreparedQuantum, WarpRenderer},
+    renderer::{PreparedQuantum, RateTarget, WarpRenderer},
     renderer_projection::ProjectedQuantum,
 };
 use crate::WarpPlan;
@@ -13,7 +13,7 @@ use crate::WarpPlan;
 pub(super) struct ResidentRequest {
     pub(super) prime: Option<(u64, usize, ElasticRequest)>,
     pub(super) projection: ProjectedQuantum,
-    pub(super) rate: crate::temporal::RateTarget,
+    pub(super) rate: RateTarget,
     pub(super) source_end: u64,
     pub(super) source_start: u64,
 }

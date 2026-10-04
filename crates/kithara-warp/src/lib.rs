@@ -36,7 +36,7 @@ pub use segment::{
 };
 pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-    RenderPublisher, RenderReader, RenderSnapshot, StretchControls,
+    RenderPublisher, RenderReader, RenderSnapshot, SpeedCurve, StretchControls,
 };
 #[cfg(any(
     feature = "stretch-signalsmith",

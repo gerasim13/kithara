@@ -50,6 +50,10 @@ pub struct PlayWorkerConfig<S> {
     #[config(value, builder(default = consts::CAPACITY))]
     #[field(get, copy)]
     pub(crate) capacity: NonZeroUsize,
+    /// Batches one track's render lane holds in flight: speed changes the
+    /// player sent and the lane has not yet executed.
+    #[config(value, builder(default = consts::LANE_CAPACITY))]
+    pub(crate) lane_capacity: NonZeroUsize,
     /// Parent cancellation token for this playback dispatcher lifetime. Not a
     /// document key: the caller owns the token tree.
     #[config(skip = "composed into the playback cancel scope", patch(skip))]
@@ -89,6 +93,17 @@ mod tests {
 
         assert_eq!(config.wait_timeout, Duration::from_millis(4));
         assert_eq!(config.capacity.get(), 3);
+    }
+
+    #[kithara::test(native)]
+    fn a_document_lane_capacity_sizes_every_render_lane() {
+        let patch: PlayWorkerConfigPatch = serde_yaml_ng::from_str("lane_capacity: 256\n")
+            .expect("a valid playback-worker document");
+        let mut config = PlayWorkerConfig::builder(pools()).build();
+
+        config.apply(patch);
+
+        assert_eq!(config.lane_capacity.get(), 256);
     }
 
     #[kithara::test(native, flash(false))]

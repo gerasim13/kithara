@@ -178,6 +178,8 @@ where
     }
 
     /// Select the next source span that fits the configured output quantum.
+    /// A quantum at the renderer's own speed renders at most `output_limit`
+    /// output frames; a projected quantum follows its plan.
     ///
     /// # Errors
     /// Returns pending activation or the geometry/engine admission error.
@@ -185,6 +187,7 @@ where
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
+        output_limit: usize,
     ) -> Result<FrameCount, crate::WarpRenderError> {
         if let Some(prepared) = self.prepared_quantum {
             return if prepared.source_start == meta.frame_offset {
@@ -219,7 +222,7 @@ where
                 return Err(error.into());
             }
         };
-        let rate = self.controls.rate_target();
+        let rate = self.rate;
         let preview_frames = self
             .render_quantum_frames
             .map_or(remaining, NonZeroUsize::get)
@@ -242,6 +245,7 @@ where
                     Self::meta_at_frame(meta, frame_offset),
                     remaining,
                     speed,
+                    output_limit,
                 )?;
                 let frames = prefix
                     .checked_add(active_frames)

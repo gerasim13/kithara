@@ -14,9 +14,9 @@ use kithara_platform::sync::Arc;
     feature = "stretch-glide"
 ))]
 use kithara_stretch::{BackendCapabilities, StretchKind};
-use portable_atomic::AtomicU64;
+use portable_atomic::AtomicF32;
 
-use super::{RateTarget, RegionPlan};
+use super::RegionPlan;
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -36,7 +36,7 @@ struct EngineControls {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct StretchControls {
-    target: AtomicU64,
+    speed: AtomicF32,
     region_plan: ArcSwapOption<RegionPlan>,
     #[cfg(any(
         feature = "stretch-signalsmith",
@@ -56,7 +56,7 @@ impl StretchControls {
     #[must_use]
     pub fn new(speed: f32) -> Arc<Self> {
         Arc::new(Self {
-            target: AtomicU64::new(RateTarget::pack(speed.max(Self::MIN_SPEED), 0)),
+            speed: AtomicF32::new(speed.max(Self::MIN_SPEED)),
             region_plan: ArcSwapOption::const_empty(),
             #[cfg(any(
                 feature = "stretch-signalsmith",
@@ -70,28 +70,14 @@ impl StretchControls {
         })
     }
 
-    pub(crate) fn rate_target(&self) -> RateTarget {
-        RateTarget::unpack(self.target.load(Ordering::Acquire))
-    }
-
-    pub fn set_speed(&self, speed: f32) -> u64 {
-        let speed = speed.max(Self::MIN_SPEED);
-        let mut revision = 0;
-        let _ = self
-            .target
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                revision = RateTarget::revision_from(current).wrapping_add(1);
-                if revision == 0 {
-                    revision = 1;
-                }
-                Some(RateTarget::pack(speed, revision))
-            });
-        u64::from(revision)
+    pub fn set_speed(&self, speed: f32) {
+        self.speed
+            .store(speed.max(Self::MIN_SPEED), Ordering::Release);
     }
 
     #[must_use]
     pub fn speed(&self) -> f32 {
-        self.rate_target().speed()
+        self.speed.load(Ordering::Acquire)
     }
 
     delegate::delegate! {
@@ -155,7 +141,6 @@ mod backend {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::sync::Mutex;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -194,38 +179,5 @@ mod tests {
         controls.set_speed(1.0);
         controls.set_speed(input);
         assert!((controls.speed() - StretchControls::MIN_SPEED).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
-    fn concurrent_rate_publications_keep_one_coherent_revision_order() {
-        let controls = StretchControls::new(1.0);
-        let published = Mutex::new(Vec::new());
-
-        std::thread::scope(|scope| {
-            for writer in 0..4_u16 {
-                let controls = &controls;
-                let published = &published;
-                scope.spawn(move || {
-                    for step in 0..64_u16 {
-                        let speed = f32::from(writer * 64 + step + 1) / 100.0;
-                        let revision = controls.set_speed(speed);
-                        published
-                            .lock()
-                            .push((revision, speed.max(StretchControls::MIN_SPEED)));
-                    }
-                });
-            }
-        });
-
-        let mut published = std::mem::take(&mut *published.lock());
-        published.sort_unstable_by_key(|(revision, _)| *revision);
-        assert_eq!(published.len(), 256);
-        assert!(
-            published
-                .windows(2)
-                .all(|pair| pair[0].0.checked_add(1) == Some(pair[1].0))
-        );
-        let latest = published.last().copied().expect("fixture publishes rates");
-        assert_eq!(controls.rate_target().speed(), latest.1);
     }
 }

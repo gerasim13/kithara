@@ -5,11 +5,12 @@ use std::{
 
 use kithara_audio::{Audio, ResamplerBackend};
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_command::{ChannelConfig, channel};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
-use kithara_render::WarpSource;
+use kithara_render::{LaneProtocol, WarpSource};
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
 use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskError, Worker, WorkerConfig};
@@ -23,6 +24,8 @@ use super::{
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
 struct WorkerOwner<S> {
+    /// Sizes of the channel each registered track's render lane gets.
+    lane: ChannelConfig,
     dispatcher: Dispatcher,
     pools: PoolRegion<S>,
     base: Worker,
@@ -46,6 +49,7 @@ impl<S> PlayWorker<S> {
             capacity,
             fairness_yield_interval,
             idle_timeout,
+            lane_capacity,
             pools,
             slow_tick_threshold,
             task_burst,
@@ -75,6 +79,7 @@ impl<S> PlayWorker<S> {
             .build();
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
+            lane: ChannelConfig::builder().capacity(lane_capacity).build(),
             dispatcher,
             pools,
             base,
@@ -159,6 +164,7 @@ where
         let prepared =
             Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
+        let (lane_sender, inbox) = channel::<LaneProtocol>(self.0.lane);
         let prepared = prepared.map(|audio, source| {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
@@ -169,6 +175,7 @@ where
                 drain,
                 spec,
                 self.pools().clone(),
+                inbox,
             );
             (warp, source)
         });
@@ -199,6 +206,7 @@ where
         Ok(RegisteredAudio::new(
             audio,
             TrackLease::new(self.clone(), task),
+            lane_sender,
         ))
     }
 

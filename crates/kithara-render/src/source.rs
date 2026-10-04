@@ -2,13 +2,16 @@ use std::ops::ControlFlow;
 
 use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep, WaitingReason};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_command::Inbox;
 use kithara_effects::{
     AudioEffect, EffectDrain, EffectDrainStep, apply_effects, held_source_frames, reset_effects,
 };
 use kithara_platform::sync::Arc;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_stream::SeekObserve;
 use kithara_warp::WarpRenderError;
+
+use crate::{LaneProtocol, lane::Lane};
 
 #[derive(Clone, Copy)]
 enum DrainState {
@@ -44,6 +47,7 @@ pub struct WarpSource<T, S> {
     drain_state: DrainState,
     drain: EffectDrain,
     discontinuity: Option<SourceDiscontinuity>,
+    lane: Lane,
     pending_input: Option<PendingInput>,
     prepared_frames: Option<usize>,
     render_input: Option<SampleBuffer>,
@@ -64,7 +68,8 @@ where
     S: HasPool<f32>,
 {
     /// Builds the stage over a decoded source, its Warp renderer, and the
-    /// effect chain with the drain that flushes it.
+    /// effect chain with the drain that flushes it; `inbox` brings the lane
+    /// commands it executes at frames of its output.
     pub fn new(
         source: T,
         warp: kithara_warp::WarpRenderer<S>,
@@ -72,6 +77,7 @@ where
         drain: EffectDrain,
         spec: AudioSpec,
         pools: PoolRegion<S>,
+        inbox: Inbox<LaneProtocol>,
     ) -> Self {
         let discontinuity = source.discontinuity();
         let seek = source.seek_observe();
@@ -84,6 +90,7 @@ where
             discontinuity,
             spec,
             pools,
+            lane: Lane::new(inbox),
             drain_state: DrainState::Open,
             reset_epoch: None,
             pending_input: None,
@@ -130,7 +137,7 @@ where
         }) else {
             return;
         };
-        let frames = match self.warp.prepare_quantum(meta, remaining) {
+        let frames = match self.prepare_quantum(meta, remaining) {
             Ok(frames) => frames,
             Err(WarpRenderError::PendingActivation) => return,
             Err(WarpRenderError::Preroll { frames }) => {
@@ -389,7 +396,8 @@ where
         })
     }
 
-    fn fetch(&self, data: AudioChunk, epoch: u64) -> Fetch<AudioChunk> {
+    fn fetch(&mut self, data: AudioChunk, epoch: u64) -> Fetch<AudioChunk> {
+        self.lane.advance(data.frames());
         let source_end = self.warp.rendered_source_end().map(|(frame, sample_rate)| {
             SourceEnd::new(
                 frame.saturating_sub(held_source_frames(&self.effects)),
@@ -400,6 +408,18 @@ where
             Some(source_end) => Fetch::rendered(data, epoch, source_end),
             None => Fetch::data(data, epoch),
         }
+    }
+
+    /// Executes the lane batches due at its cursor, then prepares the quantum
+    /// that starts there, ending it at the next batch's frame.
+    fn prepare_quantum(
+        &mut self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+    ) -> Result<FrameCount, WarpRenderError> {
+        self.lane.execute_due(&mut self.warp);
+        self.warp
+            .prepare_quantum(meta, remaining, self.lane.output_limit())
     }
 
     fn prepare_renderers(&mut self, spec: AudioSpec) {
@@ -417,6 +437,7 @@ where
     }
 
     fn render(&mut self, chunk: AudioChunk, epoch: u64) -> Option<Fetch<AudioChunk>> {
+        self.lane.execute_due(&mut self.warp);
         let chunk = match self.warp.render(chunk) {
             ControlFlow::Continue(output) => output,
             ControlFlow::Break(input) => {
@@ -644,7 +665,6 @@ where
                 if data.spec() == self.spec
                     && self.prepared_frames.is_none()
                     && self
-                        .warp
                         .prepare_quantum(data.meta, data.frames())
                         .is_ok_and(|frames| frames.get() == data.frames())
                 {
@@ -707,6 +727,7 @@ mod tests {
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
     use kithara_bufpool::PoolRegion;
+    use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
     use kithara_platform::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -720,9 +741,10 @@ mod tests {
         bufpool::{TestPools, pools, pools_with_budget},
         kithara,
     };
-    use kithara_warp::{StretchControls, StretchKind};
+    use kithara_warp::{SpeedCurve, StretchControls, StretchKind};
 
     use super::*;
+    use crate::{LaneCommand, LaneFrame, LaneProtocol};
 
     fn flush_deferred<S>(source: &mut S)
     where
@@ -730,6 +752,11 @@ mod tests {
     {
         let _ = source.prepare_deferred();
         source.finish_deferred();
+    }
+
+    /// The inbox of a lane no player sends to.
+    fn idle_inbox() -> Inbox<LaneProtocol> {
+        channel::<LaneProtocol>(ChannelConfig::builder().build()).1
     }
 
     fn source_stage<T>(
@@ -763,7 +790,15 @@ mod tests {
         let renderer = warp.renderer(spec, pools.clone());
         let drain = EffectDrain::new(effects.len(), pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        WarpSource::new(source, renderer, effects, drain, spec, pools.clone())
+        WarpSource::new(
+            source,
+            renderer,
+            effects,
+            drain,
+            spec,
+            pools.clone(),
+            idle_inbox(),
+        )
     }
 
     struct RawSource {
@@ -1379,7 +1414,8 @@ mod tests {
         let effects = Vec::new();
         let drain = EffectDrain::new(effects.len(), &pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let mut source = WarpSource::new(raw, renderer, effects, drain, spec, pools.clone());
+        let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+        let mut source = WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox);
 
         let initial = source.step_track();
         assert!(matches!(
@@ -1395,7 +1431,8 @@ mod tests {
             flush_deferred(&mut source);
         }
 
-        controls.set_speed(1.0);
+        lane.send(When::Next, speed_batch(1.0))
+            .expect("the lane channel has room");
         let transition = source.step_track();
         assert!(matches!(
             &transition,
@@ -1582,7 +1619,15 @@ mod tests {
         };
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
         let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
-        let mut source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone());
+        let mut source = WarpSource::new(
+            raw,
+            renderer,
+            Vec::new(),
+            drain,
+            spec,
+            pools.clone(),
+            idle_inbox(),
+        );
         let mut produced = 0;
         for _ in 0..128 {
             flush_deferred(&mut source);
@@ -1699,7 +1744,15 @@ mod tests {
         let effects = Vec::new();
         let drain = EffectDrain::new(effects.len(), &target_pools)
             .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let mut source = WarpSource::new(raw, renderer, effects, drain, spec, target_pools.clone());
+        let mut source = WarpSource::new(
+            raw,
+            renderer,
+            effects,
+            drain,
+            spec,
+            target_pools.clone(),
+            idle_inbox(),
+        );
 
         for _ in 0..3 {
             flush_deferred(&mut source);
@@ -1826,5 +1879,167 @@ mod tests {
         assert_eq!(steps.load(Ordering::Acquire), 3);
         assert_eq!(flushes.load(Ordering::Acquire), 3);
         assert_eq!(resets.load(Ordering::Acquire), 1);
+    }
+
+    /// One emitted chunk on the lane axis and the source span it renders.
+    struct Emitted {
+        lane_start: u64,
+        source_start: u64,
+        revision: u64,
+    }
+
+    fn speed_batch(speed: f32) -> Batch<LaneProtocol> {
+        Batch {
+            basis: Vec::new(),
+            commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(speed))],
+        }
+    }
+
+    /// A lane over constant source audio at unity speed, with the player end
+    /// of its channel.
+    fn speed_lane(
+        pools: &PoolRegion<TestPools>,
+        quarter: &[f32],
+    ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
+        const FRAMES: u32 = 4096;
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let chunks = (0..3_u32)
+            .map(|index| chunk_with_frames(pools, spec, u64::from(index * FRAMES), FRAMES, quarter))
+            .collect();
+        let raw = RawSource {
+            chunks,
+            head: Arc::new(AtomicU64::new(0)),
+            seek: Arc::new(SeekState::new()),
+        };
+        let (lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+        let config = kithara_warp::WarpConfig::builder()
+            .render_quantum_frames(NonZeroUsize::new(256).expect("test quantum is non-zero"))
+            .build();
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let drain =
+            EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
+        let source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox);
+        (source, lane)
+    }
+
+    /// Steps the lane from output frame `from` until it emitted `until`.
+    fn emit(source: &mut WarpSource<RawSource, TestPools>, from: u64, until: u64) -> Vec<Emitted> {
+        let mut emitted = Vec::new();
+        let mut cursor = from;
+        for _ in 0..512 {
+            if cursor >= until {
+                return emitted;
+            }
+            match source.step_track() {
+                TrackStep::Produced(Fetch::Data { data, .. }) => {
+                    emitted.push(Emitted {
+                        lane_start: cursor,
+                        source_start: data.meta.frame_offset,
+                        revision: data.meta.render_revision,
+                    });
+                    cursor += u64::from(data.meta.frames);
+                }
+                TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+                _ => panic!("the lane must keep rendering until frame {until}"),
+            }
+            flush_deferred(source);
+        }
+        panic!("the lane stalled at frame {cursor} before {until}");
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "stretch-signalsmith")]
+    fn a_speed_batch_applies_on_its_lane_frame(quarter: Vec<f32>) {
+        const AT: u64 = 1_000;
+        let pools = pools();
+        let (mut source, mut lane) = speed_lane(&pools, &quarter);
+        let seq = lane
+            .send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            .expect("the lane has room for one batch");
+
+        let emitted = emit(&mut source, 0, AT + 2_000);
+
+        let boundary = emitted
+            .iter()
+            .position(|chunk| chunk.lane_start == AT)
+            .expect("a quantum starts on the batch's frame");
+        assert!(
+            emitted[..boundary].iter().all(|chunk| chunk.revision == 0),
+            "frames before the batch render under the initial speed"
+        );
+        assert!(
+            emitted[boundary..]
+                .iter()
+                .all(|chunk| chunk.revision == seq.get()),
+            "frames from the batch on render under it"
+        );
+        let outcomes = lane
+            .receipts()
+            .map(|receipt| {
+                let seq = receipt.seq();
+                let (outcome, _) = receipt.into();
+                (seq, outcome)
+            })
+            .collect::<Vec<(_, Outcome<LaneProtocol>)>>();
+        assert!(
+            matches!(
+                outcomes.as_slice(),
+                [(applied, Outcome::Applied { at: LaneFrame(AT), .. })] if *applied == seq
+            ),
+            "the receipt names the batch's frame: {outcomes:?}"
+        );
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "stretch-signalsmith")]
+    fn a_batch_for_a_rendered_lane_frame_comes_back_late(quarter: Vec<f32>) {
+        let pools = pools();
+        let (mut source, mut lane) = speed_lane(&pools, &quarter);
+        let _ = emit(&mut source, 0, 1_000);
+
+        lane.send(When::At(LaneFrame(500)), speed_batch(1.25))
+            .expect("the lane has room for one batch");
+        let emitted = emit(&mut source, 1_000, 2_000);
+
+        assert!(
+            emitted.iter().all(|chunk| chunk.revision == 0),
+            "a late batch renders nothing"
+        );
+        let outcomes = lane
+            .receipts()
+            .map(|receipt| <(Outcome<LaneProtocol>, _)>::from(receipt).0)
+            .collect::<Vec<_>>();
+        assert!(
+            matches!(outcomes.as_slice(), [Outcome::Rejected(Rejection::Late)]),
+            "a rendered frame answers late: {outcomes:?}"
+        );
+    }
+
+    #[kithara::test]
+    #[cfg(feature = "stretch-signalsmith")]
+    fn a_speed_change_continues_the_source_at_the_new_step(quarter: Vec<f32>) {
+        const AT: u64 = 1_000;
+        const SPEED: f64 = 1.25;
+        let pools = pools();
+        let (mut source, mut lane) = speed_lane(&pools, &quarter);
+        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            .expect("the lane has room for one batch");
+
+        let emitted = emit(&mut source, 0, AT + 4_000);
+
+        for chunk in &emitted {
+            let expected = if chunk.lane_start < AT {
+                chunk.lane_start
+            } else {
+                let stretched = (chunk.lane_start - AT) as f64 * SPEED;
+                AT + stretched.round() as u64
+            };
+            assert!(
+                chunk.source_start.abs_diff(expected) <= 1,
+                "lane frame {} renders source frame {}, not {expected}",
+                chunk.lane_start,
+                chunk.source_start
+            );
+        }
     }
 }

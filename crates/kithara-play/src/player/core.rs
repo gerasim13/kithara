@@ -12,7 +12,7 @@ use super::{
     PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
-    state::{ItemQueue, PlayerPhase, TrackGrid},
+    state::{ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
@@ -65,6 +65,8 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) staging: SyncStaging,
     /// Geometry this player publishes for the track it holds.
     pub(crate) track_grid: TrackGrid,
+    /// Render lanes of the tracks the processor holds.
+    pub(crate) lanes: TrackLanes,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -139,10 +141,16 @@ impl<S> PlayerRuntime<S> {
             );
         }
         let src = Arc::clone(item.player_resource.src());
-        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
-            item_id: item.item_id,
-            resource: Box::new(item.player_resource),
-        });
+        let loaded = self
+            .send_to_slot(PlayerCmd::LoadTrack {
+                item_id: item.item_id,
+                resource: Box::new(item.player_resource),
+            })
+            .is_ok();
+        if loaded && let Some(lane) = item.lane {
+            let speed = self.core.config.warp.stretch().speed();
+            self.core.lanes.load(item.item_id, lane, speed);
+        }
         Ok(Some((item.item_id, src, item.duration_seconds)))
     }
 

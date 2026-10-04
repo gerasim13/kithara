@@ -6,9 +6,11 @@ use kithara_audio::{
     SeekOutcome,
 };
 use kithara_bufpool::HasPool;
+use kithara_command::Sender;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration, tokio::task};
+use kithara_render::LaneProtocol;
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
@@ -117,6 +119,8 @@ pub struct Resource {
     #[field(get = event_bus)]
     bus: EventBus,
     priority: Option<TrackPriority>,
+    /// Player end of the render lane of a reader opened on a play worker.
+    lane: Option<Sender<LaneProtocol>>,
     render_publisher: Option<RenderPublisher>,
     #[field(with)]
     playback_rate: PlaybackRate,
@@ -238,6 +242,7 @@ impl Resource {
             priority: None,
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
+            lane: None,
             render_publisher: None,
             staging: None,
             beat_grid: Arc::default(),
@@ -270,12 +275,16 @@ impl Resource {
         let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
             detail: "registered Warp publisher was already taken",
         })?;
+        let lane = audio.take_lane().ok_or(DecodeError::InvalidData {
+            detail: "registered render lane was already taken",
+        })?;
         let mut resource = Self::from_reader(audio, Some(src))
             .with_playback_rate(PlaybackRate::for_warp(warp_controls));
         if let Err(error) = resource.preload().await {
             warn!(src = %resource.src, %error, "resource preload failed");
         }
         resource.priority = Some(priority);
+        resource.lane = Some(lane);
         resource.render_publisher = Some(render_publisher);
         Ok(resource)
     }
@@ -364,6 +373,10 @@ impl Resource {
         if let Some(publisher) = &self.render_publisher {
             publisher.publish(context, frontier);
         }
+    }
+
+    pub(crate) fn take_lane(&mut self) -> Option<Sender<LaneProtocol>> {
+        self.lane.take()
     }
 
     pub(crate) fn render_reader(&self) -> Option<RenderReader> {

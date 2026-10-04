@@ -1,7 +1,7 @@
 use kithara_test_fixtures::unit_fixtures::{warp_pair, warp_sine};
 
 use super::*;
-use crate::consts;
+use crate::{SpeedCurve, consts};
 
 #[kithara::test]
 fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
@@ -29,7 +29,7 @@ fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
         };
         assert_eq!(
             renderer
-                .prepare_quantum(meta, 4096)
+                .prepare_quantum(meta, 4096, usize::MAX)
                 .expect("covered quantum")
                 .get(),
             192
@@ -90,7 +90,7 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
         let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
         input.meta.frame_offset = source_start;
         renderer
-            .prepare_quantum(input.meta, input.frames())
+            .prepare_quantum(input.meta, input.frames(), usize::MAX)
             .expect("prepared");
         let output = renderer
             .render_quantum(input)
@@ -142,7 +142,7 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
                 ..Default::default()
             };
             let frames = renderer
-                .prepare_quantum(meta, 4096)
+                .prepare_quantum(meta, 4096, usize::MAX)
                 .expect("prepared")
                 .get();
             let mut input = chunk(
@@ -214,7 +214,7 @@ fn a_future_projection_retains_the_active_producer_until_activation() {
         let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
         input.meta.frame_offset = source_start;
         renderer
-            .prepare_quantum(input.meta, input.frames())
+            .prepare_quantum(input.meta, input.frames(), usize::MAX)
             .expect("prepared");
         if source_start == 0 {
             let future = WarpPlan::new(first.map().clone(), SessionFrame::new(256))
@@ -240,14 +240,14 @@ fn a_future_projection_retains_the_active_producer_until_activation() {
 #[kithara::test]
 fn commit_keeps_callback_context_separate_from_output_identity() {
     let controls = StretchControls::new(1.0);
-    let output_rate = controls.rate_target();
     let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("test Warp owns its publisher");
     let mut renderer = warp.renderer(spec(), pools());
+    let output_rate = renderer.rate;
     let output_map = crate::WarpMapRevision::first();
     let callback_map = output_map.checked_next().expect("fixture map advances");
-    controls.set_speed(2.0);
+    renderer.set_speed(SpeedCurve::Constant(2.0), 1);
     let callback_context = RenderContext::new_linear(
         OutputContext::new(
             SessionFrame::new(1_000)..SessionFrame::new(2_000),
@@ -339,7 +339,7 @@ fn adoption_frontier_reports_only_committed_pcm() {
             .is_none()
     );
     renderer
-        .prepare_quantum(input.meta, input.frames())
+        .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("initial quantum is prepared");
     renderer
         .render_quantum(input)
@@ -386,7 +386,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
     };
 
     let frames = renderer
-        .prepare_quantum(meta, input_frames)
+        .prepare_quantum(meta, input_frames, usize::MAX)
         .expect("crossing source quantum is split");
 
     assert_eq!(frames.get(), 16);
@@ -403,7 +403,7 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     let input = chunk(&pools, &samples);
 
     renderer
-        .prepare_quantum(input.meta, input.frames())
+        .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("current plan accepts the source quantum");
     slot.install(Some(Arc::new(crate::mock::projected_plan(
         60.0,
@@ -461,7 +461,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let first = chunk(&pools, &[0.0; 32]);
     assert_eq!(
         renderer
-            .prepare_quantum(first.meta, first.frames())
+            .prepare_quantum(first.meta, first.frames(), usize::MAX)
             .expect("prefix is prepared")
             .get(),
         16
@@ -491,7 +491,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let mut second = chunk(&pools, &[0.0; 64]);
     second.meta.frame_offset = 16;
     renderer
-        .prepare_quantum(second.meta, second.frames())
+        .prepare_quantum(second.meta, second.frames(), usize::MAX)
         .expect("activation source is revisited");
     let second = renderer
         .render_quantum(second)
@@ -523,7 +523,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     bridge.meta.frame_offset = 48;
     assert_eq!(
         renderer
-            .prepare_quantum(bridge.meta, bridge.frames())
+            .prepare_quantum(bridge.meta, bridge.frames(), usize::MAX)
             .expect("continuous source bridge")
             .get(),
         32
@@ -546,6 +546,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .prepare_quantum(
             before_future_activation.meta,
             before_future_activation.frames(),
+            usize::MAX,
         )
         .expect("quantum before future activation is prepared");
     let before_future_activation = renderer
@@ -584,7 +585,7 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
     renderer.prepare(spec());
     let input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
     let count = renderer
-        .prepare_quantum(input.meta, input.frames())
+        .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("projected span");
     assert_eq!(count.get(), input.frames());
     let original = input.samples.as_ptr();
@@ -610,13 +611,13 @@ fn an_unprojected_renderer_starts_at_the_manual_target() {
     let controls = StretchControls::new(2.0);
     let renderer = renderer(Arc::clone(&controls));
     let speed = renderer
-        .preview_speed(controls.rate_target().speed(), 1)
+        .preview_speed(controls.speed(), 1)
         .expect("initial manual speed");
     assert!(
-        (speed - controls.rate_target().speed()).abs() <= f32::EPSILON,
+        (speed - controls.speed()).abs() <= f32::EPSILON,
         "an unprojected item starts at {}, not at the manual target {}",
         speed,
-        controls.rate_target().speed()
+        controls.speed()
     );
 }
 
@@ -648,7 +649,7 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(warp_sine: Vec<f32>) 
         ..AudioChunkInfo::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, 128)
+        .prepare_quantum(meta, 128, usize::MAX)
         .expect("next source span is plannable")
         .get();
     meta.frames = u32::try_from(frames).expect("source span fits u32");
@@ -706,7 +707,7 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
         ..AudioChunkInfo::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, warp_sine.len() / 2 - initial_frames)
+        .prepare_quantum(meta, warp_sine.len() / 2 - initial_frames, usize::MAX)
         .expect("distant transition is plannable")
         .get();
     assert!(
@@ -747,7 +748,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
             ..AudioChunkInfo::default()
         };
         let frames = renderer
-            .prepare_quantum(meta, 4096)
+            .prepare_quantum(meta, 4096, usize::MAX)
             .expect("projected quantum")
             .get();
         let mut input = chunk(
@@ -776,7 +777,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
         ..AudioChunkInfo::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, 4096)
+        .prepare_quantum(meta, 4096, usize::MAX)
         .expect("new backend resumes without seeking or reanchoring")
         .get();
     let mut input = chunk(
@@ -821,7 +822,7 @@ fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
     input.meta.frame_offset = 1;
     assert!(
         renderer
-            .prepare_quantum(input.meta, input.frames())
+            .prepare_quantum(input.meta, input.frames(), usize::MAX)
             .is_err()
     );
     let pointer = input.samples.as_ptr();
@@ -911,7 +912,7 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
                 ..AudioChunkInfo::default()
             };
             let frames = renderer
-                .prepare_quantum(meta, 128 - source)
+                .prepare_quantum(meta, 128 - source, usize::MAX)
                 .expect("covered short recording is renderable without invented geometry")
                 .get();
             let mut input = chunk(
@@ -1008,7 +1009,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
             ..AudioChunkInfo::default()
         };
         let frames = renderer
-            .prepare_quantum(meta, 4096)
+            .prepare_quantum(meta, 4096, usize::MAX)
             .expect("mapped request")
             .get();
         let mut input = chunk(&renderer.pools, &vec![0.25; frames * 2]);
@@ -1063,7 +1064,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     let mut input = chunk(&renderer.pools, &[0.5; 128]);
     input.meta.frame_offset = admitted;
     renderer
-        .prepare_quantum(input.meta, input.frames())
+        .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("manual request");
     let output = renderer
         .render_quantum(input)
@@ -1121,7 +1122,7 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
                 .expect("pending storage")
                 .is_empty()
         );
-        controls.set_speed(2.0);
+        renderer.set_speed(SpeedCurve::Constant(2.0), 1);
         let cue = origin + 34;
         let meta = AudioChunkInfo {
             spec: spec(),
@@ -1129,7 +1130,7 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
             ..AudioChunkInfo::default()
         };
         let frames = renderer
-            .prepare_quantum(meta, 128)
+            .prepare_quantum(meta, 128, usize::MAX)
             .expect("activation")
             .get();
         assert!(frames > 128, "partial history still primes native latency");

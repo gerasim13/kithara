@@ -5,7 +5,7 @@ use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_test_macros as kithara;
 
-use crate::{RenderReader, RenderSnapshot, WarpConfig, WarpPlanSlot, WarpRenderError};
+use crate::{RenderReader, RenderSnapshot, SpeedCurve, WarpConfig, WarpPlanSlot, WarpRenderError};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -57,7 +57,8 @@ where
         self.projected = self.plan.load().is_some();
     }
 
-    /// Select the next source span that fits the output quantum.
+    /// Select the next source span: at most `output_limit` frames, since this
+    /// target renders one output frame per source frame.
     ///
     /// # Errors
     /// Rejects empty source and projections unavailable on this target.
@@ -65,11 +66,13 @@ where
         &mut self,
         _meta: AudioChunkInfo,
         remaining: usize,
+        output_limit: usize,
     ) -> Result<FrameCount, WarpRenderError> {
         if self.projected {
             return Err(WarpRenderError::UnsupportedProjection);
         }
-        self.prepared = (remaining > 0).then_some(remaining);
+        let frames = remaining.min(output_limit);
+        self.prepared = (frames > 0).then_some(frames);
         self.prepared
             .map(FrameCount::new)
             .ok_or(WarpRenderError::EmptySource)
@@ -187,6 +190,9 @@ where
         self.rendered_source_end = None;
     }
 
+    /// This target renders at unity, so no speed changes what it renders.
+    pub const fn set_speed(&mut self, _curve: SpeedCurve, _revision: u64) {}
+
     /// Whether a live transition still owns buffered samples.
     #[must_use]
     pub const fn transition_pending(&self) -> bool {
@@ -262,7 +268,9 @@ mod tests {
         };
         assert!(!renderer.requires_staging());
         assert!(!renderer.transition_pending());
-        renderer.prepare_quantum(meta, 1).expect("manual quantum");
+        renderer
+            .prepare_quantum(meta, 1, usize::MAX)
+            .expect("manual quantum");
         let input = AudioChunk::new(meta, sample_buffer(&pools, &warp_pair));
         let output = renderer
             .render_quantum(input)
@@ -281,7 +289,7 @@ mod tests {
             ))));
         renderer.prepare(spec);
         assert!(matches!(
-            renderer.prepare_quantum(meta, 1),
+            renderer.prepare_quantum(meta, 1, usize::MAX),
             Err(WarpRenderError::UnsupportedProjection)
         ));
         assert_eq!(renderer.rendered_source_end(), Some((1, spec.sample_rate)));
@@ -294,7 +302,9 @@ mod tests {
 
         config.plan().install(None);
         renderer.prepare(spec);
-        renderer.prepare_quantum(meta, 1).expect("manual restored");
+        renderer
+            .prepare_quantum(meta, 1, usize::MAX)
+            .expect("manual restored");
         let output = renderer
             .render_quantum(rejected)
             .continue_value()

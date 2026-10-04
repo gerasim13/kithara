@@ -438,7 +438,7 @@ where
             return ControlFlow::Break(chunk);
         }
         if self.projection.active.is_some() || self.projection.selected.is_some() {
-            let frames = self.prepare_quantum(chunk.meta, chunk.frames());
+            let frames = self.prepare_quantum(chunk.meta, chunk.frames(), usize::MAX);
             if !frames.is_ok_and(|frames| frames.get() == chunk.frames()) {
                 return ControlFlow::Break(chunk);
             }
@@ -446,7 +446,7 @@ where
         }
         let snapshot = self.context.load();
         self.prepared_quantum = None;
-        let rate = self.controls.rate_target();
+        let rate = self.rate;
         let speed = match self.preview_speed(rate.speed(), chunk.frames().max(1)) {
             Ok(speed) => speed,
             Err(error) => {

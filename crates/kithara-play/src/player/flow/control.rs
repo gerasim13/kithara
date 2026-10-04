@@ -11,7 +11,6 @@ use crate::{
         SlotId,
     },
     error::PlayError,
-    player::state::phase::PlayerPhaseKind,
 };
 
 impl<S> PlayerRuntime<S> {
@@ -98,10 +97,7 @@ impl<S> PlayerRuntime<S> {
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
         let target = self.core.config.set_default_rate(rate);
-        self.core.config.warp.stretch().set_speed(target);
-        if self.phase_kind() == PlayerPhaseKind::Playing {
-            self.set_rate(target);
-        }
+        self.set_rate(target);
     }
 
     /// Set EQ gain for a band in dB.
@@ -151,24 +147,26 @@ impl<S> PlayerRuntime<S> {
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
         let target = rate.max(StretchControls::MIN_SPEED);
-        let revision = self.core.config.warp.stretch().set_speed(target);
+        self.core.config.warp.stretch().set_speed(target);
         let snapshot = self
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
-        if let Some(snapshot) = snapshot {
-            kithara::probe_event!(
-                rate_requested,
-                request_revision = revision,
-                target_rate_bits = target.to_bits(),
-                session_epoch = u64::from(snapshot.context().output().session_epoch()),
-                transport_revision = snapshot
-                    .context()
-                    .output()
-                    .transport_revision()
-                    .map_or(0, u64::from),
-                session_frame = i64::from(snapshot.context().output().output_frames().end)
-            );
-        }
+        self.core.lanes.set_speed(target, |seq| {
+            if let Some(snapshot) = &snapshot {
+                kithara::probe_event!(
+                    rate_requested,
+                    request_revision = seq.get(),
+                    target_rate_bits = target.to_bits(),
+                    session_epoch = u64::from(snapshot.context().output().session_epoch()),
+                    transport_revision = snapshot
+                        .context()
+                        .output()
+                        .transport_revision()
+                        .map_or(0, u64::from),
+                    session_frame = i64::from(snapshot.context().output().output_frames().end)
+                );
+            }
+        });
         self.core.config.worker.wake();
     }
 

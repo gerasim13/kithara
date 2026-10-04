@@ -16,9 +16,33 @@ use super::{
     renderer_target::PreparedTarget,
 };
 use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
-    WarpCursor, WarpPlanSlot, consts, temporal::RateTarget,
+    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, StretchControls,
+    WarpConfig, WarpCursor, WarpPlanSlot, consts,
 };
+
+/// The speed a renderer renders at and the revision that set it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RateTarget {
+    speed: f32,
+    revision: u64,
+}
+
+impl RateTarget {
+    fn new(speed: f32, revision: u64) -> Self {
+        Self {
+            speed: speed.max(StretchControls::MIN_SPEED),
+            revision,
+        }
+    }
+
+    pub(super) const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    pub(super) const fn speed(self) -> f32 {
+        self.speed
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
@@ -59,6 +83,9 @@ pub struct WarpRenderer<S> {
     pub(super) activation_scratch: Option<SampleBuffer>,
     /// Renderer-owned applied speed. Shared controls contain only the target.
     pub(super) applied_speed: Option<SmoothedParam>,
+    /// Speed the last [`Self::set_speed`] set, with the revision stamped on
+    /// every chunk rendered toward it.
+    pub(super) rate: RateTarget,
     pub(super) committed: Option<RenderSnapshot>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
@@ -186,6 +213,7 @@ where
                 )
             }),
             applied_pitch: f64::NAN,
+            rate: RateTarget::new(speed, 0),
             active: false,
             output_remainder: 0.0,
             pending_source: target.pending_source,
@@ -228,7 +256,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     #[must_use]
     pub fn accepts_input(&self) -> bool {
         !self.transition_pending()
-            && (self.unity_passthrough(self.controls.speed())
+            && (self.unity_passthrough(self.rate.speed())
                 || (self.engine.is_some()
                     && self.pending_source.is_some()
                     && self.scratch.is_some()))
@@ -504,9 +532,19 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rebuild_pending = true;
     }
 
+    /// Render from the next prepared quantum on at the speed `curve` holds,
+    /// stamping `revision` on every chunk rendered toward it. A quantum
+    /// prepared before is dropped, so the next one is planned at this speed.
+    pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) {
+        match curve {
+            SpeedCurve::Constant(speed) => self.rate = RateTarget::new(speed, revision),
+        }
+        self.prepared_quantum = None;
+    }
+
     pub(super) fn snap_speed(&mut self) {
         if let Some(applied) = self.applied_speed.as_mut() {
-            applied.set_value(self.controls.speed());
+            applied.set_value(self.rate.speed());
             applied.reset_to_target();
         }
         self.prepared_quantum = None;

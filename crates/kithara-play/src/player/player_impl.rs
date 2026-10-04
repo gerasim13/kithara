@@ -23,7 +23,7 @@ use crate::{
     player::{
         PlayerConfig, PlayerControl,
         staging::SyncStaging,
-        state::{ItemQueue, PlayerPhase, TrackGrid},
+        state::{ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
     },
     worker::EngineLoad,
 };
@@ -128,6 +128,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             start_position: Mutex::default(),
             items: ItemQueue::new(bus),
             track_grid,
+            lanes: TrackLanes::default(),
         };
         Self {
             grid_id,

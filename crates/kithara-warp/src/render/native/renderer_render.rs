@@ -243,6 +243,7 @@ where
         meta: AudioChunkInfo,
         remaining: usize,
         speed: f32,
+        output_limit: usize,
     ) -> Result<usize, ElasticError> {
         if remaining == 0 {
             return Err(ElasticError::EmptySource);
@@ -254,7 +255,8 @@ where
         {
             return Ok(self
                 .render_quantum_frames
-                .map_or(remaining, |frames| remaining.min(frames.get())));
+                .map_or(remaining, |frames| remaining.min(frames.get()))
+                .min(output_limit));
         }
 
         let channels = usize::from(self.spec.channels.max(1));
@@ -276,10 +278,13 @@ where
             .as_ref()
             .map(|engine| engine.capabilities())
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        let output_limit = self.render_quantum_frames.map_or_else(
-            || capabilities.max_output_frames(),
-            |frames| capabilities.max_output_frames().min(frames.get()),
-        );
+        let output_limit = self
+            .render_quantum_frames
+            .map_or_else(
+                || capabilities.max_output_frames(),
+                |frames| capabilities.max_output_frames().min(frames.get()),
+            )
+            .min(output_limit);
         let source_limit = Self::source_block_limit(stretch, capabilities, output_limit)?;
         let pending_frames = self.pending_frames(channels);
         let available =
