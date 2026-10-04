@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::{iter, num::NonZeroU32, ops::Range};
 
 use firewheel::node::{ProcInfo, ProcStore};
 use kithara_command::{Due, Inbox};
@@ -23,17 +23,36 @@ pub(super) struct TransportFrame {
 }
 
 /// The transport's half of the Host queue: the settings as the render graph
-/// applied them, the beat anchor they put on the render clock, and the inbox
-/// the session owner sends changes through.
+/// applied them, the beat anchor they put on the render clock, both split at
+/// the frames of the block the changes applied on, and the inbox the session
+/// owner sends changes through.
 pub(crate) struct TransportState {
     inbox: Inbox<HostProtocol>,
-    settings: HostSettings,
-    anchor: Option<SessionAnchor>,
+    /// The spans of the block rendering now that end where a later one
+    /// starts, in frame order. Storage holds one per batch the inbox can have
+    /// in flight, so the audio thread never grows it.
+    closed: Vec<Span>,
+    /// The span the block rendering now ends in; the next block starts in it.
+    current: Span,
     boundary: Option<SessionFrame>,
     reanchor_beat: Option<SessionBeat>,
     revision: TransportRevision,
     snapshot: Option<SessionTransportSnapshot>,
     session_grid: SessionGridGeneration,
+}
+
+/// The settings and the beat anchor the render graph applies from one frame
+/// of a block on.
+#[derive(Clone, Copy, Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, vis = "pub(crate)")]
+pub(crate) struct Span {
+    /// Frames from the block start to the span's first frame.
+    offset: usize,
+    #[field(get(copy))]
+    settings: HostSettings,
+    /// None until the transport anchors the beats on a stream.
+    #[field(get(copy))]
+    anchor: Option<SessionAnchor>,
 }
 
 /// What one due batch leaves behind once every command of it applied.
@@ -93,12 +112,25 @@ pub(crate) fn converge_transport_restart(
     result
 }
 
-/// The Host settings as the render graph applied them for the block
-/// rendering now; none until the transport is installed.
-pub(crate) fn applied_settings(store: &ProcStore) -> Option<HostSettings> {
-    store
-        .try_get::<TransportState>()
-        .map(|state| state.settings)
+/// Every span of the block of `frames` frames rendering now, in frame order,
+/// with the block frames it covers; none until the transport is installed.
+pub(crate) fn applied_spans(
+    store: &ProcStore,
+    frames: usize,
+) -> Option<impl Iterator<Item = (Range<usize>, Span)> + Clone + '_> {
+    store.try_get::<TransportState>().map(move |state| {
+        let spans = state
+            .closed
+            .iter()
+            .copied()
+            .chain(iter::once(state.current));
+        let ends = spans
+            .clone()
+            .skip(1)
+            .map(|span| span.offset)
+            .chain(iter::once(frames));
+        spans.zip(ends).map(|(span, end)| (span.offset..end, span))
+    })
 }
 
 fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessError> {
@@ -116,16 +148,22 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 }
 
 impl TransportState {
-    pub(crate) const fn new(
+    /// A transport whose inbox holds up to `capacity` batches in flight.
+    pub(crate) fn new(
         inbox: Inbox<HostProtocol>,
         settings: HostSettings,
         session_grid: SessionGridGeneration,
+        capacity: usize,
     ) -> Self {
         Self {
             inbox,
-            settings,
             session_grid,
-            anchor: None,
+            closed: Vec::with_capacity(capacity),
+            current: Span {
+                offset: 0,
+                settings,
+                anchor: None,
+            },
             boundary: None,
             reanchor_beat: None,
             revision: TransportRevision::first(),
@@ -136,7 +174,7 @@ impl TransportState {
     /// Puts the beat anchor on the first block of a stream: session beat 0 on
     /// a fresh transport, the beat a restart stopped on otherwise.
     fn anchor_block(&mut self, info: &ProcInfo) -> Result<(), TransportProcessError> {
-        if self.anchor.is_some() {
+        if self.current.anchor.is_some() {
             return Ok(());
         }
         let beat = match self.reanchor_beat.take() {
@@ -146,28 +184,29 @@ impl TransportState {
         let anchor = Self::build_anchor(
             SessionFrame::new(info.clock_samples.0),
             beat,
-            self.settings.tempo(),
+            self.current.settings.tempo(),
             info.sample_rate,
         )?;
         let revision = self.session_grid.next_revision()?;
-        self.anchor = Some(anchor);
+        self.current.anchor = Some(anchor);
         self.boundary = None;
         self.session_grid.commit_revision(revision);
         Ok(())
     }
 
-    /// Applies the batches due inside the block in time order. A batch
-    /// applies whole or not at all: its commands stage on copies, and only a
-    /// batch whose every command staged moves the transport. Only a batch
-    /// that re-anchors the beats takes a new transport revision. A block that
-    /// does not follow the last one refuses every tempo change due in it with
-    /// `continuity`'s error, since no beat anchor is known on its frames; a
-    /// metronome or ducking change applies in any block.
+    /// Applies the batches due inside the block in time order, each from its
+    /// frame on. A batch applies whole or not at all: its commands stage on
+    /// copies, and only a batch whose every command staged opens a span on
+    /// its frame. Only a batch that re-anchors the beats takes a new
+    /// transport revision. A block that does not follow the last one refuses
+    /// every tempo change due in it with `continuity`'s error, since no beat
+    /// anchor is known on its frames; a metronome or ducking change applies
+    /// in any block.
     fn apply_due(&mut self, info: &ProcInfo, continuity: Result<(), TransportProcessError>) {
         let Self {
             inbox,
-            settings,
-            anchor,
+            closed,
+            current,
             revision,
             session_grid,
             ..
@@ -175,19 +214,32 @@ impl TransportState {
         inbox.drain();
         let start = SessionFrame::new(info.clock_samples.0);
         while let Some(due) = inbox.next_due(start, info.frames) {
-            let staged = Self::stage(&due, *settings, *anchor, continuity).and_then(|staged| {
-                if !staged.retargeted {
-                    return Ok((staged, *revision, None));
-                }
-                let next = revision
-                    .checked_next()
-                    .ok_or(TransportProcessError::RevisionExhausted)?;
-                Ok((staged, next, Some(session_grid.next_revision()?)))
-            });
+            let staged = Self::stage(&due, current.settings, current.anchor, continuity).and_then(
+                |staged| {
+                    if !staged.retargeted {
+                        return Ok((staged, *revision, None));
+                    }
+                    let next = revision
+                        .checked_next()
+                        .ok_or(TransportProcessError::RevisionExhausted)?;
+                    Ok((staged, next, Some(session_grid.next_revision()?)))
+                },
+            );
             match staged {
                 Ok((staged, next, grid)) => {
-                    *settings = staged.settings;
-                    *anchor = staged.anchor;
+                    let offset = due.offset();
+                    if offset > current.offset {
+                        debug_assert!(
+                            closed.len() < closed.capacity(),
+                            "a block opens one span per batch in flight"
+                        );
+                        closed.push(*current);
+                    }
+                    *current = Span {
+                        offset,
+                        settings: staged.settings,
+                        anchor: staged.anchor,
+                    };
                     *revision = next;
                     if let Some(grid) = grid {
                         session_grid.commit_revision(grid);
@@ -224,7 +276,7 @@ impl TransportState {
         target: SessionGridGeneration,
         settings: HostSettings,
     ) -> Result<SessionGridGeneration, TransportProcessError> {
-        self.settings = settings;
+        self.current.settings = settings;
         let target_stamp = target.stamp()?;
         let current_stamp = self.session_grid.stamp()?;
         if current_stamp.grid_id() != target_stamp.grid_id() {
@@ -251,16 +303,21 @@ impl TransportState {
     }
 
     fn process(&mut self, info: &ProcInfo) -> Result<TransportFrame, TransportProcessError> {
+        self.closed.clear();
+        self.current.offset = 0;
         self.anchor_block(info)?;
         let continuity = self.validate_frame(info);
         self.apply_due(info, continuity);
         continuity?;
-        let anchor = self.anchor.ok_or(TransportProcessError::InvalidBeatRange)?;
+        let anchor = self
+            .current
+            .anchor
+            .ok_or(TransportProcessError::InvalidBeatRange)?;
         let (frames, beats) = Self::block_span(anchor, info)?;
         self.boundary = Some(frames.end);
         self.snapshot = Some(SessionTransportSnapshot::new(
             beats.end,
-            self.settings.tempo(),
+            self.current.settings.tempo(),
             self.revision,
             anchor,
             self.session_grid.stamp()?,
@@ -286,7 +343,7 @@ impl TransportState {
         if generation.is_err() {
             self.reanchor_beat = None;
         }
-        self.anchor = None;
+        self.current.anchor = None;
         self.boundary = None;
         generation
     }
@@ -357,7 +414,7 @@ impl TransportState {
     }
 
     fn validate_frame(&self, info: &ProcInfo) -> Result<(), TransportProcessError> {
-        if let Some(anchor) = self.anchor
+        if let Some(anchor) = self.current.anchor
             && anchor.sample_rate() != info.sample_rate
         {
             return Err(TransportProcessError::FrameDiscontinuity);

@@ -12,7 +12,7 @@ use firewheel::{
     },
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
-use kithara_config::ConfigOwner;
+use kithara_config::{Config, ConfigOwner};
 use kithara_platform::time::Duration;
 use kithara_play::rt::{install_render_context, read_render_context};
 use kithara_signal::{SessionEpoch, SessionFrame};
@@ -24,7 +24,7 @@ use super::{
     commit::{SessionGridGeneration, TransportObservation, TransportProcessError},
     node::SessionTransportProcessor,
     process::{
-        TransportObservationInput, TransportState, applied_settings, converge_transport_restart,
+        TransportObservationInput, TransportState, applied_spans, converge_transport_restart,
         process_transport,
     },
 };
@@ -99,7 +99,8 @@ fn proc_extra() -> (
     );
     let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
-    let (queue, inbox) = channel(ChannelConfig::builder().build());
+    let config = ChannelConfig::builder().build();
+    let (queue, inbox) = channel(config);
     let mut store = ProcStore::with_capacity(3);
     assert!(install_render_context(&mut store).is_ok());
     assert!(
@@ -107,7 +108,8 @@ fn proc_extra() -> (
             .insert(TransportState::new(
                 inbox,
                 HostSettings::default(),
-                session_grid
+                session_grid,
+                config.values().capacity.get(),
             ))
             .is_ok()
     );
@@ -552,7 +554,10 @@ fn reserved_route_restart_promotes_a_change_rendered_before_stop() {
                 .revision()
     );
 
-    let settings = applied_settings(&extra.store).expect("the transport is installed");
+    let settings = applied_spans(&extra.store, consts::TRANSPORT_BLOCK_FRAMES)
+        .and_then(Iterator::last)
+        .map(|(_, span)| span.settings())
+        .expect("the transport is installed");
     let converged = converge_transport_restart(&mut extra.store, reserved, settings)
         .expect("the reserved restart accepts a newer revision in its target epoch");
     assert_eq!(converged, stopped);

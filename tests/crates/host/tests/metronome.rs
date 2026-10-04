@@ -7,7 +7,7 @@ use kithara::{
     effects::LimiterConfig,
     host::{
         HostConfig, HostSettings, HostSettingsChange, HostSettingsControl, MetronomeConfig,
-        MetronomeConfigControl, Tap,
+        MetronomeConfigChange, MetronomeConfigControl, Tap,
     },
     play::{PlayError, Tempo},
     signal::{AudioSpec, SessionFrame},
@@ -131,6 +131,16 @@ mod consts {
     /// How far a click may fall from a beat spacing worked out in fractional
     /// frames: the grid rounds every beat to a whole frame.
     pub(super) const BEAT_ROUNDING_FRAMES: f64 = 1.0;
+    /// Frames after Host beat 1 a timed change lands on: inside the block of
+    /// that beat at [`BLOCK_FRAMES`], with the beat at 120 BPM.
+    pub(super) const AFTER_BEAT_FRAMES: u64 = 50;
+    /// Frames between two tempo changes due in one block: longer than
+    /// [`TEMPO_SMOOTH_FRAMES`], so the first settles before the second.
+    pub(super) const BETWEEN_CHANGES_FRAMES: u64 = 300;
+    /// The tempo the first of two changes in one block moves to.
+    pub(super) const FIRST_CHANGE_BPM: f64 = 60.0;
+    /// The tempo the second of two changes in one block moves to.
+    pub(super) const SECOND_CHANGE_BPM: f64 = 180.0;
 }
 
 /// One click the output tap sounded: the first frame it sounds on, how many
@@ -285,6 +295,25 @@ async fn metronome_host(
     host.with(|host| host.metronome().set_enabled(true))
         .await
         .expect("metronome on");
+    (host, tap)
+}
+
+/// An offline Host at [`consts::SAMPLE_RATE`] with no deck, counting the
+/// tempo a Host never given one counts, its metronome off, and an output tap
+/// holding `frames` frames from the first block.
+async fn counting_host(frames: u64) -> (OfflineHostHarness<TestPools>, TapProbe) {
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+    let config = HostConfig::offline(pools())
+        .settings(HostSettings::builder().sample_rate(rate).build())
+        .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
+        .build();
+    let host = OfflineHostHarness::new(config)
+        .await
+        .expect("offline Host without a deck");
+    let tap = host
+        .attach_tap(Tap::Output, capacity(frames))
+        .await
+        .expect("output tap");
     (host, tap)
 }
 
@@ -1114,18 +1143,7 @@ fn beat_frames_at(bpm: f64) -> f64 {
 #[kithara::test(tokio)]
 async fn a_take_switches_the_metronome_on_halves_its_level_and_moves_the_tempo_on_a_frame() {
     let block = u64::from(consts::BLOCK_FRAMES);
-    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
-    let config = HostConfig::offline(pools())
-        .settings(HostSettings::builder().sample_rate(rate).build())
-        .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES).expect("test block size"))
-        .build();
-    let host = OfflineHostHarness::new(config)
-        .await
-        .expect("offline Host without a deck");
-    let mut tap = host
-        .attach_tap(Tap::Output, capacity(16 * consts::TAKE_BEAT_FRAMES))
-        .await
-        .expect("output tap");
+    let (host, mut tap) = counting_host(16 * consts::TAKE_BEAT_FRAMES).await;
     let mut artifact =
         AudioArtifactTap::from_env(&artifact_label(), consts::SAMPLE_RATE, consts::CHANNELS)
             .expect("listening artifact");
@@ -1219,6 +1237,103 @@ async fn a_take_switches_the_metronome_on_halves_its_level_and_moves_the_tempo_o
             .all(|spacing| (spacing - moved_beat).abs() <= consts::BEAT_ROUNDING_FRAMES),
         "clicks after the move count 128 BPM: {spacings:?}"
     );
+}
+
+/// The session frame `frame` as a moment of the render clock.
+fn at_frame(frame: u64) -> When<SessionFrame> {
+    When::At(SessionFrame::new(
+        i64::try_from(frame).expect("a test frame fits the session clock"),
+    ))
+}
+
+/// A metronome switched on for a frame after a beat, inside that beat's
+/// block, stays silent on the beat and sounds from the next one.
+#[kithara::test(tokio)]
+async fn a_metronome_switched_on_at_a_frame_inside_a_block_stays_silent_before_it() {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let (host, mut tap) = counting_host(4 * consts::TAKE_BEAT_FRAMES).await;
+    host.render_forward(block).await;
+    let counted = host.session_grid().await;
+    let beat = beat_frame(&counted, 1);
+    let on = beat + consts::AFTER_BEAT_FRAMES;
+    assert_eq!(
+        beat / block,
+        on / block,
+        "the beat and the switch share a block"
+    );
+    let at = at_frame(on);
+    host.with(move |host| {
+        host.configure(
+            HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
+            at,
+        )
+    })
+    .await
+    .expect("a frame ahead is reachable");
+
+    let end = beat_frame(&counted, 3) + consts::CLICK_FRAMES;
+    host.render_forward(end - host.position()).await;
+    let take = tap.drain();
+    host.close().await;
+
+    assert_eq!(tap.drops(), 0, "the tap keeps every frame");
+    assert_clicks_on(
+        &clicks(&take),
+        &host_beats(&counted, on..end - consts::CLICK_FRAMES + 1),
+    );
+}
+
+/// Two tempo changes due in the block of beat 1, after it, leave the click
+/// of that beat on the frame the tempo before them put it on; beats 2 and 3
+/// follow the second change.
+#[kithara::test(tokio)]
+async fn two_tempo_changes_inside_one_block_keep_the_click_before_them_on_its_beat() {
+    let block = u64::from(consts::BLOCK_FRAMES);
+    let (host, mut tap) = counting_host(4 * consts::TAKE_BEAT_FRAMES).await;
+    host.with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
+    host.render_forward(block).await;
+    let counted = host.session_grid().await;
+    let beat = beat_frame(&counted, 1);
+    let first = beat + consts::AFTER_BEAT_FRAMES;
+    let second = first + consts::BETWEEN_CHANGES_FRAMES;
+    assert_eq!(
+        beat / block,
+        second / block,
+        "the beat and both changes share a block"
+    );
+    let (slow, fast) = (
+        Tempo::new(consts::FIRST_CHANGE_BPM).expect("first tempo"),
+        Tempo::new(consts::SECOND_CHANGE_BPM).expect("second tempo"),
+    );
+    let (first_at, second_at) = (at_frame(first), at_frame(second));
+    host.with(move |host| {
+        host.configure(HostSettingsChange::Tempo(slow), first_at)?;
+        host.configure(HostSettingsChange::Tempo(fast), second_at)
+    })
+    .await
+    .expect("frames ahead are reachable");
+
+    host.render_forward(second + block - host.position()).await;
+    let committed = host.session_grid().await;
+    let last = beat_frame(&committed, 3);
+    host.render_forward(last + consts::CLICK_FRAMES - host.position())
+        .await;
+    let take = tap.drain();
+    host.close().await;
+
+    assert_eq!(tap.drops(), 0, "the tap keeps every frame");
+    let beats: Vec<(u64, bool)> = host_beats(&counted, 0..first)
+        .into_iter()
+        .chain((2..=3).map(|ordinal| {
+            (
+                beat_frame(&committed, ordinal),
+                ordinal % consts::BEATS_PER_BAR == 0,
+            )
+        }))
+        .collect();
+    assert_clicks_on(&clicks(&take), &beats);
 }
 
 #[kithara::test(tokio)]

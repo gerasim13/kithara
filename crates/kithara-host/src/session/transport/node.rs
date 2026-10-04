@@ -6,6 +6,7 @@ use firewheel::{
     },
 };
 use kithara_command::{ChannelConfig, Sender, channel};
+use kithara_config::Config;
 use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
 use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
@@ -28,13 +29,19 @@ pub(crate) fn install(
 ) -> Result<TransportControl, &'static str> {
     let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
-    let (queue, inbox) = channel(ChannelConfig::builder().build());
+    let config = ChannelConfig::builder().build();
+    let (queue, inbox) = channel(config);
     let store = ctx
         .proc_store_mut()
         .ok_or("session transport store is unavailable while the stream is running")?;
     install_render_context(store)?;
     store
-        .insert(TransportState::new(inbox, settings, session_grid))
+        .insert(TransportState::new(
+            inbox,
+            settings,
+            session_grid,
+            config.values().capacity.get(),
+        ))
         .map_err(|_| "session transport state store slot already exists")?;
     store
         .insert(TransportObservationInput::new(observation_input))

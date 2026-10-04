@@ -5,14 +5,16 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     events::TrackId,
-    host::{HostConfig, HostOwned, HostSettings},
+    host::{HostConfig, HostOwned, HostSettings, HostSettingsChange},
     platform::time::{self, Duration},
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
         SessionDuckingMode,
     },
-    signal::AudioSpec,
+    signal::{AudioSpec, SessionFrame},
 };
+use kithara_command::When;
+use kithara_config::Configure;
 use kithara_integration_tests::offline::{OfflineHostHarness, resource_from_reader};
 use kithara_test_fixtures::{
     integration_fixtures::{
@@ -29,6 +31,9 @@ const SETTLE_BLOCKS: usize = 60;
 const MEASURE_BLOCKS: usize = 15;
 const TOL: f32 = 2.0e-3;
 const CEILING: f32 = 0.98;
+const CHANNELS: usize = 2;
+/// Frames into a block a timed ducking change lands on.
+const DUCK_OFFSET_FRAMES: u64 = 400;
 
 struct MixHarness {
     host: OfflineHostHarness<TestPools>,
@@ -300,6 +305,46 @@ async fn session_mix_does_not_mirror_player_content_volume(constant_four: &'stat
         "session mix must not mirror player content volume"
     );
     harness.close().await;
+}
+
+/// Ducking set for a frame inside a block leaves every frame of the block
+/// before it as it was and lowers the output after it.
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+async fn ducking_set_for_a_frame_inside_a_block_leaves_the_frames_before_it_alone(
+    constant_four: &'static [u8],
+) {
+    let harness = MixHarness::new(1).await;
+    harness.play(&[constant_four]).await;
+    let steady = harness.steady().await;
+    let undocked = steady[steady.len() - 1];
+    let start = harness.host.position();
+    let duck = start + u64::from(harness.host.max_block_frames().get()) + DUCK_OFFSET_FRAMES;
+    let at = When::At(SessionFrame::new(
+        i64::try_from(duck).expect("a test frame fits the session clock"),
+    ));
+    harness
+        .host
+        .with(move |host| host.configure(HostSettingsChange::Ducking(SessionDuckingMode::Hard), at))
+        .await
+        .expect("a frame ahead is reachable");
+    let mut take = Vec::new();
+    while harness.host.position() < duck + BLOCK_FRAMES as u64 {
+        take.extend(harness.render_block().await);
+    }
+    harness.close().await;
+
+    let cut = usize::try_from(duck - start).expect("frames rendered") * CHANNELS;
+    assert_eq!(
+        take[..cut].iter().position(|sample| *sample != undocked),
+        None,
+        "the frames before the duck keep the undocked {undocked}"
+    );
+    assert!(
+        take[cut + CHANNELS..]
+            .iter()
+            .all(|sample| *sample < undocked),
+        "the output falls after the duck's frame"
+    );
 }
 
 /// Ducking lowers the whole session output, deeper for `Hard` than `Soft`, and

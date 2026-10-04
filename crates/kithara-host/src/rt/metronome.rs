@@ -19,7 +19,10 @@ use kithara_test_utils::kithara;
 use kithara_warp::{SessionAnchor, SessionBeat};
 use num_traits::ToPrimitive;
 
-use crate::{PlayError, session::applied_settings};
+use crate::{
+    PlayError,
+    session::{Span, applied_spans},
+};
 
 mod consts {
     use kithara_platform::time::Duration;
@@ -454,19 +457,22 @@ impl AudioNodeProcessor for MetronomeProcessor {
         buffers: ProcBuffers,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let beats = applied_settings(&extra.store)
-            .map(|settings| settings.metronome())
-            .filter(MetronomeConfig::enabled)
-            .and_then(|config| {
-                read_render_context(&extra.store, info)
-                    .ok()
-                    .and_then(|context| context.trajectory().copied())
-                    .map(|trajectory| (trajectory, config.level()))
-            });
-        if beats.is_none() && !self.metronome.sounding() {
+        let frames = info.frames;
+        let timed = read_render_context(&extra.store, info).is_ok();
+        let beats = |span: Span| {
+            let config = span.settings().metronome();
+            span.anchor()
+                .filter(|_| timed && config.enabled())
+                .map(|anchor| (anchor, config.level()))
+        };
+        let spans = applied_spans(&extra.store, frames);
+        if !self.metronome.sounding()
+            && !spans
+                .clone()
+                .is_some_and(|mut spans| spans.any(|(_, span)| beats(span).is_some()))
+        {
             return ProcessStatus::Bypass;
         }
-        let frames = info.frames;
         let ([in_left, in_right, ..], [out_left, out_right, ..]) =
             (buffers.inputs, buffers.outputs)
         else {
@@ -482,13 +488,35 @@ impl AudioNodeProcessor for MetronomeProcessor {
         };
         out_left.copy_from_slice(in_left);
         out_right.copy_from_slice(in_right);
-        self.metronome.render(
-            beats,
-            SessionFrame::new(info.clock_samples.0),
-            self.shape,
-            out_left,
-            out_right,
-        );
+        let start = info.clock_samples.0;
+        let Some(spans) = spans else {
+            self.metronome.render(
+                None,
+                SessionFrame::new(start),
+                self.shape,
+                out_left,
+                out_right,
+            );
+            return ProcessStatus::OutputsModified;
+        };
+        for (range, span) in spans {
+            let from = i64::try_from(range.start)
+                .ok()
+                .and_then(|offset| start.checked_add(offset));
+            if let (Some(from), Some(left), Some(right)) = (
+                from,
+                out_left.get_mut(range.clone()),
+                out_right.get_mut(range),
+            ) {
+                self.metronome.render(
+                    beats(span),
+                    SessionFrame::new(from),
+                    self.shape,
+                    left,
+                    right,
+                );
+            }
+        }
         ProcessStatus::OutputsModified
     }
 }

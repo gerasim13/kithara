@@ -531,7 +531,7 @@ mod tests {
         host::HostSettingsChange,
         rt::MetronomeConfigChange,
         session::{
-            applied_settings,
+            applied_spans,
             graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, SessionState, TapSlot, add_graph_node},
@@ -1728,7 +1728,8 @@ mod tests {
                 .ctx
                 .as_mut()
                 .and_then(FirewheelContext::proc_store_mut)
-                .and_then(|store| applied_settings(store)),
+                .and_then(|store| applied_spans(store, 1)?.last())
+                .map(|(_, span)| span.settings()),
             Some(host),
             "the restart seeds the render copy with the settings the Host reads"
         );

@@ -23,7 +23,7 @@ pub(crate) use protocol::{
 pub(crate) use queue::HostProtocol;
 pub(crate) use state::RootView;
 pub use transport::TransportEvent;
-pub(crate) use transport::applied_settings;
+pub(crate) use transport::{Span, applied_spans};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::{
     bridge_duration_secs, bridge_is_playing, bridge_position_secs, bridge_process_calls,

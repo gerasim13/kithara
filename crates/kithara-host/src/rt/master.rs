@@ -11,7 +11,7 @@ use firewheel::{
 use kithara_dsp::param::{DEFAULT_SMOOTH_SECONDS, MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_test_utils::kithara;
 
-use crate::{api::SessionDuckingMode, session::applied_settings};
+use crate::{api::SessionDuckingMode, session::applied_spans};
 
 mod consts {
     /// A ducking gain lies between silence and unity.
@@ -19,9 +19,10 @@ mod consts {
 }
 
 /// The first stage of the session output: it lowers the mix by the ducking
-/// the Host settings the render graph applied carry. The gain moves to each
-/// new ducking along a 62 ms curve that settles at the finest step the
-/// filter supports, so neither the change nor its end steps the signal.
+/// the Host settings the render graph applied carry, from the frame each
+/// applied on. The gain moves to each new ducking along a 62 ms curve that
+/// settles at the finest step the filter supports, so neither the change nor
+/// its end steps the signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MasterNode;
 
@@ -56,10 +57,10 @@ struct MasterProcessor {
 }
 
 impl MasterProcessor {
-    /// The gain moving to `ducking`, which starts at it on the first block.
+    /// The gain, which starts at `ducking` on the first block.
     fn gain(&mut self, ducking: SessionDuckingMode) -> &mut SmoothedParam {
         let sample_rate = self.sample_rate;
-        let gain = self.gain.get_or_insert_with(|| {
+        self.gain.get_or_insert_with(|| {
             SmoothedParam::new(
                 ducking.gain(),
                 consts::GAIN_SPAN,
@@ -69,9 +70,7 @@ impl MasterProcessor {
                 },
                 sample_rate,
             )
-        });
-        gain.set_value(ducking.gain());
-        gain
+        })
     }
 }
 
@@ -90,22 +89,34 @@ impl AudioNodeProcessor for MasterProcessor {
         buffers: ProcBuffers,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let Some(ducking) = applied_settings(&extra.store).map(|settings| settings.ducking())
+        let frames = info.frames;
+        let Some(spans) = applied_spans(&extra.store, frames) else {
+            return ProcessStatus::Bypass;
+        };
+        let duckings = spans.map(|(range, span)| (range, span.settings().ducking()));
+        let (Some((_, first)), Some((_, last))) =
+            (duckings.clone().next(), duckings.clone().last())
         else {
             return ProcessStatus::Bypass;
         };
-        let gain = self.gain(ducking);
+        let gain = self.gain(first);
         if info
             .in_silence_mask
             .all_channels_silent(ChannelCount::STEREO.get() as usize)
         {
+            gain.set_value(last.gain());
             gain.reset_to_target();
             return ProcessStatus::ClearAllOutputs;
         }
-        if ducking == SessionDuckingMode::Off && gain.has_settled() {
-            return ProcessStatus::Bypass;
+        if duckings
+            .clone()
+            .all(|(_, ducking)| ducking == SessionDuckingMode::Off)
+        {
+            gain.set_value(SessionDuckingMode::Off.gain());
+            if gain.has_settled() {
+                return ProcessStatus::Bypass;
+            }
         }
-        let frames = info.frames;
         let ([in_left, in_right, ..], [out_left, out_right, ..]) =
             (buffers.inputs, buffers.outputs)
         else {
@@ -119,15 +130,26 @@ impl AudioNodeProcessor for MasterProcessor {
         ) else {
             return ProcessStatus::Bypass;
         };
-        for (((out_left, out_right), in_left), in_right) in out_left
-            .iter_mut()
-            .zip(out_right.iter_mut())
-            .zip(in_left)
-            .zip(in_right)
-        {
-            let gain = gain.next_smoothed();
-            *out_left = in_left * gain;
-            *out_right = in_right * gain;
+        for (range, ducking) in duckings {
+            gain.set_value(ducking.gain());
+            let (Some(in_left), Some(in_right), Some(out_left), Some(out_right)) = (
+                in_left.get(range.clone()),
+                in_right.get(range.clone()),
+                out_left.get_mut(range.clone()),
+                out_right.get_mut(range),
+            ) else {
+                continue;
+            };
+            for (((out_left, out_right), in_left), in_right) in out_left
+                .iter_mut()
+                .zip(out_right.iter_mut())
+                .zip(in_left)
+                .zip(in_right)
+            {
+                let gain = gain.next_smoothed();
+                *out_left = in_left * gain;
+                *out_right = in_right * gain;
+            }
         }
         gain.settle();
         ProcessStatus::OutputsModified
