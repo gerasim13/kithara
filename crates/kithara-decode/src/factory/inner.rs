@@ -692,7 +692,10 @@ fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFor
     matches!(
         (codec, container),
         (AudioCodec::Pcm, Some(ContainerFormat::Wav))
-            | (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
+            | (
+                AudioCodec::Mp3,
+                Some(ContainerFormat::MpegAudio | ContainerFormat::Wav)
+            )
             | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
             | (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
