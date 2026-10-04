@@ -694,6 +694,22 @@ prefix_args = [
   "test-release",
 ]
 
+[test.lanes.render]
+program = "cargo"
+default_backend = "none"
+owns = ["crates/kithara-render/"]
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-render",
+  "--cargo-profile",
+  "test-release",
+]
+# kithara-render steps its stage synchronously, so no test waits on a clock the
+# virtual one could drive, and its only package declares neither toggle.
+undeclared_toggles = ["flash", "no-block"]
+
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.

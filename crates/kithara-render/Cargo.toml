@@ -1,0 +1,47 @@
+[package]
+name = "kithara-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Producer-side render stage: decoded audio through Warp and effects before the play ring."
+keywords = ["audio", "playback", "render", "timestretch", "realtime"]
+categories = ["multimedia::audio"]
+
+[features]
+default = ["symphonia", "client-reqwest", "tls-rustls", "stretch-signalsmith"]
+# Decoder and HTTP backend forwarding: `kithara-audio` builds only with one of each.
+symphonia = ["kithara-audio/symphonia"]
+client-reqwest = ["kithara-audio/client-reqwest"]
+client-wreq = ["kithara-audio/client-wreq"]
+tls-rustls = ["kithara-audio/tls-rustls"]
+tls-native = ["kithara-audio/tls-native"]
+stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
+stretch-bungee = ["kithara-warp/stretch-bungee"]
+stretch-glide = ["kithara-warp/stretch-glide"]
+
+[dependencies]
+kithara-audio = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
+kithara-effects = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
+kithara-stream = { workspace = true, default-features = false }
+kithara-warp = { workspace = true, default-features = false, features = ["render"] }
+
+delegate = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-beat = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
+
+[lints]
+workspace = true

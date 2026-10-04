@@ -5638,6 +5638,7 @@ dependencies = [
  "kithara-output",
  "kithara-platform",
  "kithara-play",
+ "kithara-render",
  "kithara-signal",
  "kithara-stream",
  "kithara-sync",
@@ -5755,6 +5756,24 @@ dependencies = [
  "ringbuf",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-render"
+version = "0.0.1-alpha5"
+dependencies = [
+ "delegate",
+ "kithara-audio",
+ "kithara-beat",
+ "kithara-bufpool",
+ "kithara-effects",
+ "kithara-platform",
+ "kithara-signal",
+ "kithara-stream",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
 ]
 
 [[package]]

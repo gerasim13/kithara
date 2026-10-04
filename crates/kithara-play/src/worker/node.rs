@@ -924,6 +924,7 @@ mod tests {
         sync::{Arc, Mutex},
         time::Duration,
     };
+    use kithara_render::WarpSource;
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{
         PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState, Stream,
@@ -937,7 +938,7 @@ mod tests {
     use super::*;
     use crate::{
         test_pools::{Pools, pools, sample_buffer},
-        worker::{EngineLoad, WarpSource},
+        worker::EngineLoad,
     };
 
     pub(super) async fn prepared_node<S>(

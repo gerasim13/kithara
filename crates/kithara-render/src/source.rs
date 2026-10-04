@@ -38,7 +38,7 @@ struct PendingInput {
 }
 
 /// The sole producer-side Warp/effect stage before the play output ring.
-pub(crate) struct WarpSource<T, S> {
+pub struct WarpSource<T, S> {
     seek: Arc<dyn SeekObserve>,
     spec: AudioSpec,
     drain_state: DrainState,
@@ -63,7 +63,9 @@ where
     T: AudioSource<Chunk = AudioChunk>,
     S: HasPool<f32>,
 {
-    pub(crate) fn new(
+    /// Builds the stage over a decoded source, its Warp renderer, and the
+    /// effect chain with the drain that flushes it.
+    pub fn new(
         source: T,
         warp: kithara_warp::WarpRenderer<S>,
         effects: Vec<Box<dyn AudioEffect>>,
@@ -210,7 +212,7 @@ where
 
     /// Where a lane entering its plan must start decoding: the renderer's
     /// entry source as a position in the source's own timeline.
-    pub(crate) fn entry_position(&self) -> Option<kithara_platform::time::Duration> {
+    pub fn entry_position(&self) -> Option<kithara_platform::time::Duration> {
         let entry = self.warp.entry_source()?;
         self.spec.duration_for(entry).ok()
     }
@@ -714,11 +716,13 @@ mod tests {
     use kithara_test_fixtures::play_fixtures::{
         half, negative_half, negative_quarter, quarter, three_quarter,
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools, pools_with_budget},
+        kithara,
+    };
     use kithara_warp::{StretchControls, StretchKind};
 
     use super::*;
-    use crate::test_pools::{TestPools, pools, pools_with_budget};
 
     fn flush_deferred<S>(source: &mut S)
     where

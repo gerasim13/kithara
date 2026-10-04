@@ -63,9 +63,9 @@ webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
-stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
-stretch-bungee = ["kithara-warp/stretch-bungee"]
-stretch-glide = ["kithara-warp/stretch-glide"]
+stretch-signalsmith = ["kithara-render/stretch-signalsmith", "kithara-warp/stretch-signalsmith"]
+stretch-bungee = ["kithara-render/stretch-bungee", "kithara-warp/stretch-bungee"]
+stretch-glide = ["kithara-render/stretch-glide", "kithara-warp/stretch-glide"]
 usdt = [
     "kithara-effects/usdt",
     "kithara-test-utils/usdt",
@@ -106,6 +106,7 @@ kithara-hls = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-sync = { workspace = true, default-features = false }
