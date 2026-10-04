@@ -58,7 +58,6 @@ pub(crate) fn nextest_list(
         test,
         &LaneChoice {
             backend,
-            features: &[],
             lane: &test.default_lane,
             toggles: LaneToggles {
                 flash,

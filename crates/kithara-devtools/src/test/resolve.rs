@@ -12,10 +12,8 @@ use super::{
 };
 use crate::common::project::{TestCargoOptions, TestCommandConfig, TestRunner};
 
-/// What a caller asks of one lane: the lane, its backend, its toggles, and
-/// features a stress mode adds to the lane's own.
+/// What a caller asks of one lane: the lane, its backend and its toggles.
 pub(crate) struct LaneChoice<'a> {
-    pub(crate) features: &'a [String],
     pub(crate) backend: &'a str,
     pub(crate) lane: &'a str,
     pub(crate) toggles: LaneToggles,
@@ -43,8 +41,7 @@ pub(crate) fn resolve(test: &TestCommandConfig, choice: &LaneChoice<'_>) -> Resu
         .lanes
         .get(choice.lane)
         .with_context(|| format!("test lane `{}` is not configured", choice.lane))?;
-    let mut features = lane_features(test, lane, choice.toggles, choice.backend)?;
-    features.extend(choice.features.iter().cloned());
+    let features = lane_features(test, lane, choice.toggles, choice.backend)?;
     Ok(ResolvedLane {
         env: lane.env.clone(),
         backend: choice.backend.to_owned(),

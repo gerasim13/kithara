@@ -238,7 +238,6 @@ default_modes = [
   "rtsan-hls",
 ]
 lane = "workspace"
-backend = "wreq"
 nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
 default_filter = "all()"
@@ -310,7 +309,7 @@ direct_markers = [
 source_excludes = ["kithara-test-macros/", "kithara-test-utils/src/test/"]
 
 [stress.modes.reproduction-flash-on]
-features = ["flash"]
+flash = true
 
 # Reproduction lanes set no RUST_LOG: a run-wide one used to override the
 # per-test `tracing(...)` annotations and silence exactly the verdict lines the
@@ -343,7 +342,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 # cancellation, and everything else decided by ORDER are invisible to the lane
 # above, however many times it repeats.
 [stress.modes.reproduction-flash-off]
-features = []
+flash = false
 
 [stress.modes.reproduction-flash-off.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -364,7 +363,8 @@ KITHARA_HANG_DUMP_DIR = "hang"
 # measures poll duration, and a real clock's scheduling noise would report the
 # machine's load as the code's fault.
 [stress.modes.reproduction-no-block]
-features = ["flash", "no-block"]
+flash = true
+no_block = true
 
 [stress.modes.reproduction-no-block.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -411,7 +411,7 @@ command = ["just", "test", "rtsan-hls"]
 owns_repeats = true
 
 [stress.modes.diagnostic]
-features = ["flash"]
+flash = true
 
 [stress.modes.diagnostic.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -426,7 +426,8 @@ RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queu
 KITHARA_HANG_DUMP_DIR = "hang"
 
 [stress.modes.diagnostic-no-block]
-features = ["flash", "no-block"]
+flash = true
+no_block = true
 
 [stress.modes.diagnostic-no-block.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -444,7 +445,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 KITHARA_NO_BLOCK_LOG = "no-block.log"
 
 [stress.modes.diagnostic-backtrace]
-features = ["flash"]
+flash = true
 
 [stress.modes.diagnostic-backtrace.set_env]
 KITHARA_FLASH_SYNC_BT = "1"
@@ -460,7 +461,8 @@ RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queu
 KITHARA_HANG_DUMP_DIR = "hang"
 
 [stress.modes.diagnostic-full]
-features = ["flash", "no-block"]
+flash = true
+no_block = true
 
 [stress.modes.diagnostic-full.set_env]
 KITHARA_FLASH_SYNC_BT = "1"

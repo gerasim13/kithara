@@ -139,7 +139,6 @@ pub(in crate::stress) struct PolicySnapshot {
     pub(in crate::stress) raw_path_env: BTreeMap<String, String>,
     pub(in crate::stress) set_env: BTreeMap<String, String>,
     pub(in crate::stress) evidence: StressEvidenceConfig,
-    pub(in crate::stress) features: Vec<String>,
     pub(in crate::stress) remove_env: Vec<String>,
 }
 
@@ -410,12 +409,6 @@ impl Manifest {
         mismatches: &mut Vec<ProvenanceMismatch>,
     ) {
         compare_debug(
-            "policy.features",
-            &self.policy.features,
-            &expected.policy.features,
-            mismatches,
-        );
-        compare_debug(
             "policy.remove_env",
             &self.policy.remove_env,
             &expected.policy.remove_env,
@@ -569,17 +562,6 @@ impl Manifest {
 }
 
 fn validate_policy(policy: &PolicySnapshot) -> Result<()> {
-    let mut features = BTreeSet::new();
-    for feature in &policy.features {
-        ensure!(
-            !feature.trim().is_empty(),
-            "manifest policy contains an empty feature"
-        );
-        ensure!(
-            features.insert(feature.as_str()),
-            "manifest policy contains duplicate feature {feature:?}"
-        );
-    }
     let mut removed = BTreeSet::new();
     for key in &policy.remove_env {
         validate_env_key(key)?;
@@ -810,7 +792,6 @@ mod tests {
 
     fn policy() -> PolicySnapshot {
         PolicySnapshot {
-            features: vec!["snapshot-clock".to_owned()],
             remove_env: vec!["LEGACY_SETTING".to_owned()],
             set_env: BTreeMap::from([
                 ("OUTPUT_STYLE".to_owned(), "compact".to_owned()),
@@ -911,7 +892,6 @@ mod tests {
         };
         lane.features = vec!["alternate".to_owned()];
         expected.policy = PolicySnapshot {
-            features: vec!["blocking-census".to_owned()],
             remove_env: vec!["DEPRECATED_SETTING".to_owned()],
             set_env: BTreeMap::from([("TRACE_LEVEL".to_owned(), "quiet".to_owned())]),
             raw_path_env: BTreeMap::from([(
@@ -940,7 +920,6 @@ mod tests {
             "config.pressure_schema",
             "config.workflow_job_timeout_minutes",
             "runner",
-            "policy.features",
             "policy.remove_env",
             "policy.set_env",
             "policy.raw_path_env",

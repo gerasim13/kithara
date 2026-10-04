@@ -167,7 +167,6 @@ fn stress_config_owns_generic_modes_environment_and_artifacts() {
 [stress]
 default_modes = ["baseline"]
 lane = "workspace"
-backend = "http"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -194,7 +193,7 @@ report = "report.md"
 remove = ["OLD_TRACE"]
 
 [stress.modes.baseline]
-features = ["snapshot-clock"]
+flash = true
 
 [stress.modes.baseline.set_env]
 TRACE_LEVEL = "warn"
@@ -219,9 +218,67 @@ features = []
 
     assert_eq!(config.stress.nextest_profile, "repeated");
     assert_eq!(config.stress.max_count, 10);
-    assert_eq!(mode.features, ["snapshot-clock"]);
+    assert_eq!(mode.flash, Some(true));
     assert_eq!(mode.set_env["TRACE_LEVEL"], "warn");
     assert_eq!(mode.raw_path_env["CAPTURE_DIR"], "captures");
+}
+
+/// A mode's toggles are asked of a test lane. A mode that runs its own command
+/// has no lane to ask, so a toggle there would be recorded and do nothing.
+#[test]
+fn a_stress_mode_that_runs_a_command_cannot_ask_for_a_toggle() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[stress]
+default_modes = ["probe"]
+lane = "workspace"
+nextest_config = "config/runner.toml"
+nextest_profile = "repeated"
+default_filter = "all()"
+default_count = 1
+max_count = 1
+test_threads = "1"
+max_test_threads = 1
+build_dir = "target-stress"
+raw_output = "target/evidence"
+report_output = "target/report.md"
+workflow_job_timeout_minutes = 60
+
+[stress.artifacts]
+attempts = "attempts.json"
+subject_junit = "target/runner/junit.xml"
+inventory = "inventory.json"
+junit = "junit.xml"
+log = "runner.log"
+manifest = "manifest.json"
+pressure = "pressure.jsonl"
+report = "report.md"
+
+[stress.modes.probe]
+command = ["probe", "run"]
+attempt_junit = "probe/junit.xml"
+flash = true
+
+[test]
+default_lane = "workspace"
+default_backend = "http"
+
+[test.lanes.workspace]
+cargo.workspace = true
+
+[test.net_backends.http]
+features = []
+"#,
+    );
+
+    let error = ProjectConfig::load(temp.path()).expect_err("a toggled command mode fails");
+
+    assert!(
+        format!("{error:#}").contains("runs a command, so its toggles reach nothing"),
+        "{error:#}"
+    );
 }
 
 #[test]
@@ -233,7 +290,6 @@ fn stress_envelope_policy_requires_an_envelope_artifact() {
 [stress]
 default_modes = ["baseline"]
 lane = "workspace"
-backend = "http"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -291,7 +347,6 @@ fn a_stress_config_must_name_the_directory_it_builds_into() {
 [stress]
 default_modes = ["baseline"]
 lane = "workspace"
-backend = "http"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -470,7 +525,6 @@ fn a_stress_lane_cannot_name_its_own_profile_or_thread_count() {
 [stress]
 default_modes = ["baseline"]
 lane = "workspace"
-backend = "http"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -497,7 +551,7 @@ report = "report.md"
 remove = ["OLD_TRACE"]
 
 [stress.modes.baseline]
-features = ["snapshot-clock"]
+flash = true
 
 [stress.modes.baseline.set_env]
 TRACE_LEVEL = "warn"

@@ -56,7 +56,6 @@ pub(crate) fn run(params: &MatrixParams, project: &ProjectConfig) -> Result<()> 
             let resolved = resolve(
                 &project.test,
                 &LaneChoice {
-                    features: &[],
                     backend: &lane.backend,
                     lane: &project.test.default_lane,
                     toggles: LaneToggles {

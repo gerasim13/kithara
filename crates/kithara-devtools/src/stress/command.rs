@@ -30,7 +30,7 @@ use crate::{
     consts, lease,
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
-    test::{LaneChoice, LaneToggles, resolve},
+    test::{resolve, toggled},
     verdict::{ChildFailure, NotClean},
 };
 
@@ -143,7 +143,7 @@ impl<'a> ReportExpectation<'a> {
     /// Derives what the lane should have been from the same place the lane
     /// itself did.
     ///
-    /// The runner is not passed in. A lane records the runner `lane_runner`
+    /// The runner is not passed in. A lane records the runner `unit_runner`
     /// gave it, so anything else the report expects is a second opinion about
     /// the same question, and the two disagree exactly where the lanes differ
     /// most — a command lane runs its own command and would read as evidence
@@ -162,7 +162,7 @@ impl<'a> ReportExpectation<'a> {
             mode,
             filter,
             count,
-            runner: lane_runner(project, config, mode)?,
+            runner: unit_runner(project, mode, &config.lane)?,
         })
     }
 }
@@ -275,32 +275,25 @@ fn validate_lane_directory(lane: &str) -> Result<()> {
     Ok(())
 }
 
-/// What a lane actually invokes, in the shape the manifest records.
+/// What one mode of one lane actually invokes, in the shape the manifest
+/// records.
 ///
-/// A command lane is described by its own words rather than by the project's
+/// A command mode is described by its own words rather than by the project's
 /// test runner, so that its manifest names what really ran and the reporter
-/// can verify it the same way it verifies any other lane.
-fn lane_runner(
+/// can verify it the same way it verifies any other mode. A lane mode asks the
+/// lane for its toggles and nothing else: the lane resolves on its own backend
+/// and keeps off a toggle none of its packages declares, exactly as
+/// `just test run --lane` would.
+fn unit_runner(
     project: &ProjectConfig,
-    config: &StressConfig,
     mode: &StressModeConfig,
+    lane: &str,
 ) -> Result<StressRunner> {
     if !mode.command.is_empty() {
         return Ok(StressRunner::Command(mode.command.clone()));
     }
-    resolve(
-        &project.test,
-        &LaneChoice {
-            features: &mode.features,
-            backend: &config.backend,
-            lane: &config.lane,
-            toggles: LaneToggles {
-                flash: false,
-                no_block: false,
-            },
-        },
-    )
-    .map(|lane| StressRunner::Lane(Box::new(lane)))
+    let choice = toggled(&project.test, lane, mode.flash, mode.no_block)?;
+    resolve(&project.test, &choice).map(|lane| StressRunner::Lane(Box::new(lane)))
 }
 
 /// Records one exit code per attempt, in order.
@@ -433,7 +426,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         "subject",
     )?;
     let subject_junit = subject_junit(&subject_root, config);
-    let runner = lane_runner(&ctx.config, config, mode)?;
+    let runner = unit_runner(&ctx.config, mode, &config.lane)?;
     let commanded = !mode.command.is_empty();
     let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
     let _build_lease = lease::hold(&build);
@@ -547,7 +540,6 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
 
 fn policy_snapshot(config: &StressConfig, mode: &StressModeConfig) -> PolicySnapshot {
     PolicySnapshot {
-        features: mode.features.clone(),
         remove_env: config.environment.remove.clone(),
         set_env: mode.set_env.clone(),
         raw_path_env: mode.raw_path_env.clone(),
@@ -1383,7 +1375,10 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
-    use crate::common::project::StressEnvironmentConfig;
+    use crate::common::project::{
+        StressEnvironmentConfig, TestCargoOptions, TestCommandConfig, TestFlashConfig,
+        TestLaneConfig, TestNetBackendConfig, TestNoBlockConfig,
+    };
 
     /// A lane the run launches once per repeat.
     fn per_repeat_mode() -> StressModeConfig {
@@ -1404,10 +1399,99 @@ mod tests {
     fn command_lane_config() -> (StressConfig, StressModeConfig) {
         let config = StressConfig {
             lane: "workspace".to_owned(),
-            backend: "wreq".to_owned(),
             ..StressConfig::default()
         };
         (config, per_repeat_mode())
+    }
+
+    /// A project with a lane on the project's backend, a lane on a backend of
+    /// its own whose packages carry no flash, and a lane whose detector is on
+    /// by default.
+    fn lanes_project() -> ProjectConfig {
+        let lane = |package: &str| TestLaneConfig {
+            cargo: TestCargoOptions {
+                packages: vec![package.to_owned()],
+                ..TestCargoOptions::default()
+            },
+            ..TestLaneConfig::default()
+        };
+        let mut project = ProjectConfig::default();
+        project.test = TestCommandConfig {
+            lanes: BTreeMap::from([
+                ("product".to_owned(), lane("product")),
+                (
+                    "tools".to_owned(),
+                    TestLaneConfig {
+                        default_backend: Some("local".to_owned()),
+                        undeclared_toggles: vec![consts::FLASH_TOGGLE.to_owned()],
+                        ..lane("tools")
+                    },
+                ),
+                (
+                    "detector".to_owned(),
+                    TestLaneConfig {
+                        default_no_block: Some(true),
+                        ..lane("detector")
+                    },
+                ),
+            ]),
+            net_backends: BTreeMap::from([
+                ("http".to_owned(), TestNetBackendConfig::default()),
+                (
+                    "local".to_owned(),
+                    TestNetBackendConfig {
+                        features: vec!["tools/local".to_owned()],
+                    },
+                ),
+            ]),
+            default_backend: "http".to_owned(),
+            default_lane: "product".to_owned(),
+            nextest_config: ".config/nextest.toml".to_owned(),
+            flash: TestFlashConfig {
+                features: vec!["virtual-time".to_owned()],
+                default: true,
+            },
+            no_block: TestNoBlockConfig {
+                features: vec!["nb-detect".to_owned()],
+                default: false,
+            },
+            ..TestCommandConfig::default()
+        };
+        project
+    }
+
+    /// A mode names the clock and the detector it is about; the rest of the
+    /// lane stays the lane's. Forcing one backend on every lane built a
+    /// backend half of them do not declare, and appending the mode's features
+    /// raw handed a lane a toggle none of its packages has.
+    #[test]
+    fn a_mode_runs_each_lane_on_its_own_backend_and_toggles() {
+        let project = lanes_project();
+        let mode = StressModeConfig {
+            flash: Some(true),
+            ..StressModeConfig::default()
+        };
+        let resolved =
+            |lane: &str| match unit_runner(&project, &mode, lane).expect("a lane mode resolves") {
+                StressRunner::Lane(lane) => (lane.backend, lane.features),
+                StressRunner::Command(_) => panic!("a lane mode runs its lane"),
+            };
+
+        assert_eq!(
+            resolved("product"),
+            ("http".to_owned(), vec!["virtual-time".to_owned()])
+        );
+        assert_eq!(
+            resolved("tools"),
+            ("local".to_owned(), vec!["tools/local".to_owned()])
+        );
+        assert_eq!(
+            resolved("detector"),
+            (
+                "http".to_owned(),
+                vec!["nb-detect".to_owned(), "virtual-time".to_owned()]
+            )
+        );
     }
 
     /// The report has to expect the command the lane was told to run. Expecting

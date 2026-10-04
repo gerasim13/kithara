@@ -734,7 +734,6 @@ pub struct StressConfig {
     pub evidence: StressEvidenceConfig,
     #[config(nested)]
     pub render: StressRenderBudgets,
-    pub backend: String,
     /// The directory a lane builds into, relative to the checkout it builds.
     ///
     /// A stress run that inherits `CARGO_TARGET_DIR` builds into whatever
@@ -821,7 +820,15 @@ pub struct StressModeConfig {
     /// The run launches the command and reads what it leaves behind. Empty
     /// means the lane runs the configured test runner and is measured per test.
     pub command: Vec<String>,
-    pub features: Vec<String>,
+    /// The clock this mode asks every lane for; unset keeps each lane's own.
+    ///
+    /// A mode is a question about one toggle, not a feature list: a lane whose
+    /// packages declare no such toggle keeps it off, and the rest of the lane
+    /// — its backend, its own features — stays what the lane says it is.
+    pub flash: Option<bool>,
+    /// The blocking detector this mode asks every lane for; unset keeps each
+    /// lane's own.
+    pub no_block: Option<bool>,
     /// Whether the command performs the run's repeats itself.
     ///
     /// A command that runs its tests under nextest can be handed the count
@@ -914,7 +921,6 @@ impl StressConfig {
     /// run overwrite the first and report half of what it did.
     pub(crate) fn validate(&self) -> Result<()> {
         require_value("stress.lane", &self.lane)?;
-        require_value("stress.backend", &self.backend)?;
         require_value("stress.nextest_config", &self.nextest_config)?;
         require_value("stress.nextest_profile", &self.nextest_profile)?;
         require_value("stress.default_filter", &self.default_filter)?;
@@ -1061,16 +1067,9 @@ impl StressConfig {
         Ok(())
     }
 
-    /// A command lane selects nothing through the test runner, so features meant for that runner
+    /// A command lane selects nothing through the test runner, so toggles meant for that runner
     /// would be read by no one; this is stated rather than silently ignored.
     fn validate_mode(name: &str, mode: &StressModeConfig) -> Result<()> {
-        let mut features = BTreeSet::new();
-        for feature in &mode.features {
-            require_value(&format!("stress.modes.{name}.features"), feature)?;
-            if !features.insert(feature) {
-                bail!("stress mode `{name}` contains duplicate feature `{feature}`");
-            }
-        }
         for key in mode.set_env.keys() {
             require_env_key(&format!("stress.modes.{name}.set_env"), key)?;
             if mode.raw_path_env.contains_key(key) {
@@ -1089,8 +1088,8 @@ impl StressConfig {
         if let Some(path) = &mode.attempt_junit {
             validate_relative_path(&format!("stress.modes.{name}.attempt_junit"), path)?;
         }
-        if !mode.command.is_empty() && !mode.features.is_empty() {
-            bail!("stress mode `{name}` runs a command, so its features reach nothing");
+        if !mode.command.is_empty() && (mode.flash.is_some() || mode.no_block.is_some()) {
+            bail!("stress mode `{name}` runs a command, so its toggles reach nothing");
         }
         Ok(())
     }
@@ -1254,12 +1253,6 @@ impl ProjectConfig {
                      `stress.test_threads`; a lane with its own profile, its own thread count \
                      or a `cargo test` runner cannot carry them",
                     self.stress.lane
-                );
-            }
-            if !self.test.net_backends.contains_key(&self.stress.backend) {
-                bail!(
-                    "stress.backend `{}` is not configured under test.net_backends",
-                    self.stress.backend
                 );
             }
         }

@@ -153,35 +153,25 @@ pub(super) fn toggle(
 fn lane_toggles(
     config: &TestCommandConfig,
     lane: &TestLaneConfig,
-    request: Option<&TestRequest>,
+    flash: Option<bool>,
+    no_block: Option<bool>,
 ) -> LaneToggles {
     LaneToggles {
         flash: toggle(
             consts::FLASH_TOGGLE,
-            request.and_then(|request| request.flash),
+            flash,
             lane.default_flash,
             lane,
             config.flash.default,
         ),
         no_block: toggle(
             consts::NO_BLOCK_TOGGLE,
-            request.and_then(|request| request.no_block),
+            no_block,
             lane.default_no_block,
             lane,
             config.no_block.default,
         ),
     }
-}
-
-fn backend_name<'a>(
-    config: &'a TestCommandConfig,
-    lane: &'a TestLaneConfig,
-    request: Option<&'a TestRequest>,
-) -> &'a str {
-    request
-        .and_then(|request| request.net_backend.as_deref())
-        .or(lane.default_backend.as_deref())
-        .unwrap_or(&config.default_backend)
 }
 
 pub(super) fn lane_features(
@@ -220,14 +210,43 @@ pub(super) fn requested<'a>(
     lane_name: &'a str,
     request: Option<&'a TestRequest>,
 ) -> Result<LaneChoice<'a>> {
+    choice(
+        test,
+        lane_name,
+        request.and_then(|request| request.net_backend.as_deref()),
+        request.and_then(|request| request.flash),
+        request.and_then(|request| request.no_block),
+    )
+}
+
+/// What a lane runs with when a caller asks only for its toggles: the lane's
+/// own backend, and the same toggle rule a request follows, so a toggle the
+/// lane does not declare stays off and an unset one keeps the lane's default.
+pub(crate) fn toggled<'a>(
+    test: &'a TestCommandConfig,
+    lane_name: &'a str,
+    flash: Option<bool>,
+    no_block: Option<bool>,
+) -> Result<LaneChoice<'a>> {
+    choice(test, lane_name, None, flash, no_block)
+}
+
+fn choice<'a>(
+    test: &'a TestCommandConfig,
+    lane_name: &'a str,
+    backend: Option<&'a str>,
+    flash: Option<bool>,
+    no_block: Option<bool>,
+) -> Result<LaneChoice<'a>> {
     let lane = test
         .lanes
         .get(lane_name)
         .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
     Ok(LaneChoice {
-        features: &[],
-        backend: backend_name(test, lane, request),
+        backend: backend
+            .or(lane.default_backend.as_deref())
+            .unwrap_or(&test.default_backend),
         lane: lane_name,
-        toggles: lane_toggles(test, lane, request),
+        toggles: lane_toggles(test, lane, flash, no_block),
     })
 }

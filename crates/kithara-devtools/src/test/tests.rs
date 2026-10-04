@@ -550,7 +550,6 @@ fn the_inventory_lists_the_same_selection_the_run_builds() {
     let resolved = resolve(
         &project.test,
         &LaneChoice {
-            features: &[],
             backend: "http",
             lane: "workspace",
             toggles: LaneToggles {
