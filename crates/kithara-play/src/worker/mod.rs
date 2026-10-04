@@ -7,7 +7,7 @@ mod scheduler;
 mod staged;
 mod track;
 
-pub use core::PlayWorker;
+pub use core::{LoadRefusal, PlayWorker};
 
 pub use config::{PlayWorkerConfig, PlayWorkerConfigPatch};
 pub use load::{EngineLoad, EngineLoadSnapshot};

@@ -55,7 +55,7 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|error| panic!("open {path}: {error}"));
     audio

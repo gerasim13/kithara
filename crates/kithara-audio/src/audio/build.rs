@@ -477,6 +477,7 @@ where
         .map_err(|error| DecodeError::Io {
             source: IoError::other(error),
         })?;
+    kithara::probe_event!(source_opened);
     probe(stream).await
 }
 

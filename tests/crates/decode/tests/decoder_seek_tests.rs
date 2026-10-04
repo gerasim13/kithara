@@ -53,7 +53,7 @@ async fn open_test_mp3(
         .maybe_events(events)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    worker.open(config).await.unwrap()
+    worker.load(config).await.unwrap()
 }
 
 /// Nonblocking re-poll loop: these tests are browser-portable (async body,

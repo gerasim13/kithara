@@ -55,7 +55,7 @@ pub use resource::{
 };
 pub use rt::{PlayerNode, StreamShape};
 pub use worker::{
-    EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
-    RegisteredAudio, ServiceClass, TrackConfig,
+    EngineLoad, EngineLoadSnapshot, LoadRefusal, PlayWorker, PlayWorkerConfig,
+    PlayWorkerConfigPatch, RegisteredAudio, ServiceClass, TrackConfig,
 };
 mod consts;

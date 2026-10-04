@@ -270,7 +270,7 @@ impl Resource {
         crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
     {
         let warp_controls = Arc::clone(config.warp().stretch());
-        let mut audio = worker.open(config).await?;
+        let mut audio = worker.load(config).await?;
         let priority = audio.priority();
         let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
             detail: "registered Warp publisher was already taken",

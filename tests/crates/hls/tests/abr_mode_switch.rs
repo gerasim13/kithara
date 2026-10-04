@@ -674,7 +674,7 @@ async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
 
     let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
@@ -815,7 +815,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
 
     let mut stalled_requests = HashSet::new();
     let mut saw_load_slow = false;
@@ -970,7 +970,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .events(bus1)
         .media_info(wav_info.clone())
         .build();
-    let mut audio1 = worker.open(config1).await.expect("track 1");
+    let mut audio1 = worker.load(config1).await.expect("track 1");
 
     let t1_samples = spawn_blocking(move || read_to_eof(&mut audio1))
         .await
@@ -1007,7 +1007,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .events(bus2)
         .media_info(wav_info.clone())
         .build();
-    let mut audio2 = worker.open(config2).await.expect("track 2");
+    let mut audio2 = worker.load(config2).await.expect("track 2");
 
     let t2_samples = spawn_blocking(move || read_to_eof(&mut audio2))
         .await
@@ -1043,7 +1043,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .events(bus3)
         .media_info(wav_info)
         .build();
-    let mut audio3 = worker.open(config3).await.expect("track 1 replay");
+    let mut audio3 = worker.load(config3).await.expect("track 1 replay");
 
     let t3_samples = spawn_blocking(move || read_to_eof(&mut audio3))
         .await
@@ -1132,7 +1132,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
 
     let total = spawn_blocking(move || read_to_eof(&mut audio))
         .await
@@ -1219,7 +1219,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let audio = worker.open(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     // Warm up a couple of segments so the reader is past the boundary
     // commit gate, then trigger a Manual switch via the handle. The
@@ -1354,7 +1354,7 @@ async fn runtime_cross_codec_manual_switch_no_hang(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
-    let audio = worker.open(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     // Warmup: read until enough AAC samples are produced (state target, not a
     // wall-clock deadline). The outer test timeout is the only backstop.
@@ -1489,7 +1489,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
-    let audio = worker.open(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     // Tiny warmup read on the blocking pool so the current-thread runtime
     // remains free to drive the peer prefetch.
@@ -1616,7 +1616,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
-    let audio = worker.open(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     let (audio, warmup_samples) =
         read_until_samples_blocking(audio, 8_192, "eof-race manual warmup").await;
@@ -1748,7 +1748,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
         .media_info(wav_info)
         .audio_buffer_chunks(4)
         .build();
-    let audio = worker.open(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     // Tiny warmup on the blocking pool so the peer is actually pumping while
     // the current-thread runtime remains free to drive downloader tasks.
@@ -1910,7 +1910,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let audio = worker.open(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     // Read until the reader itself enters segment 1. The read pump runs on the
     // blocking pool so it cannot park the current-thread runtime that drives
@@ -2016,7 +2016,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
-    let audio = worker.open(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     // Warmup on v=0 (AAC).
     let (mut audio, warmup_total) =
@@ -2161,7 +2161,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 .build(),
         )
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
 
     // Reader cadence is driven by decoded sample targets, not wall-clock
     // deadlines. Slower scheduling may add `Pending` and delay the outer test
@@ -2423,7 +2423,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
                 .build(),
         )
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
 
     // Phase 1 — play V0 long enough that reader_pos is past seg 6
     // (the seek target ≈ 37 s lands in seg 6). The blocking read

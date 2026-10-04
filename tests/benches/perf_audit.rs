@@ -188,7 +188,7 @@ fn bench_gapless_trim(c: &mut Criterion) {
                     .build();
                 let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
                 let mut audio = worker
-                    .open(config)
+                    .load(config)
                     .await
                     .unwrap_or_else(|e| panic!("audio init failed: {e}"));
                 let mut buf = [0.0_f32; 8_192];
@@ -230,7 +230,7 @@ async fn analyze_track(
         .hint("mp3".to_owned())
         .build();
     let reader = play_worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;

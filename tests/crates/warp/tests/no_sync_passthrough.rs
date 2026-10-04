@@ -404,7 +404,7 @@ async fn render_passthrough(
     );
     let target_stretch = stretch_controls(stretch);
     let mut target_audio = worker
-        .open(audio_config(source, target_stretch, Vec::new()))
+        .load(audio_config(source, target_stretch, Vec::new()))
         .await
         .expect("target audio construction");
     wait_for_preload(&target_audio).await;
@@ -412,7 +412,7 @@ async fn render_passthrough(
 
     let mut load_audio = if with_load {
         let mut audio = worker
-            .open(audio_config(
+            .load(audio_config(
                 source,
                 stretch_controls(None),
                 vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
