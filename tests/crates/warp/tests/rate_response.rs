@@ -11,7 +11,7 @@ use kithara::{
     play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, Transition},
     stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig},
-    warp::{StretchControls, StretchKind, WarpConfig},
+    warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     audio_artifact::write_audio_artifact,
@@ -295,10 +295,9 @@ async fn playing_queue(
     case: ResponseCase,
     response_source: PathBuf,
 ) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
-    let stretch = StretchControls::new(1.0);
-    stretch.set_backend(backend);
     let warp = WarpConfig::builder()
-        .stretch(stretch)
+        .speed(1.0)
+        .backend(backend)
         .backends(backends)
         .source_block_frames(
             NonZeroUsize::new(case.source_block_frames).expect("case source block is non-zero"),

@@ -1,6 +1,12 @@
 use kithara_config::Config;
 use kithara_render::LaneCommand;
-use kithara_warp::{SpeedCurve, StretchControls, StretchKind};
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use kithara_warp::StretchKind;
+use kithara_warp::{MIN_SPEED, SpeedCurve, WarpConfig};
 
 use crate::PlayError;
 
@@ -16,16 +22,50 @@ pub(crate) struct TrackSettings {
     speed: f32,
     /// Whether the pitch stays put at any speed; only a backend with keylock
     /// keeps it.
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[config(live)]
     keylock: bool,
     /// The time-stretch backend that renders the track.
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[config(live)]
     backend: StretchKind,
 }
 
+impl TrackSettings {
+    /// `base` for the renderer of a track that starts where these settings
+    /// stand. A build without a time-stretch backend renders every speed
+    /// through `base` unchanged.
+    pub(crate) fn warp(self, base: &WarpConfig) -> WarpConfig {
+        #[cfg(any(
+            feature = "stretch-signalsmith",
+            feature = "stretch-bungee",
+            feature = "stretch-glide"
+        ))]
+        {
+            base.starting_at(self.speed, self.keylock, self.backend)
+        }
+        #[cfg(not(any(
+            feature = "stretch-signalsmith",
+            feature = "stretch-bungee",
+            feature = "stretch-glide"
+        )))]
+        {
+            base.clone()
+        }
+    }
+}
+
 /// A speed is finite and no slower than the slowest speed the renderer plays.
 fn check_speed(speed: f32) -> Result<f32, PlayError> {
-    if speed.is_finite() && speed >= StretchControls::MIN_SPEED {
+    if speed.is_finite() && speed >= MIN_SPEED {
         Ok(speed)
     } else {
         Err(PlayError::InvalidParameter {
@@ -39,7 +79,17 @@ impl From<TrackSettingsChange> for LaneCommand {
     fn from(change: TrackSettingsChange) -> Self {
         match change {
             TrackSettingsChange::Speed(speed) => Self::SetSpeed(SpeedCurve::Constant(speed)),
+            #[cfg(any(
+                feature = "stretch-signalsmith",
+                feature = "stretch-bungee",
+                feature = "stretch-glide"
+            ))]
             TrackSettingsChange::Keylock(on) => Self::SetKeylock(on),
+            #[cfg(any(
+                feature = "stretch-signalsmith",
+                feature = "stretch-bungee",
+                feature = "stretch-glide"
+            ))]
             TrackSettingsChange::Backend(kind) => Self::SetBackend(kind),
         }
     }

@@ -399,7 +399,7 @@ mod tests {
     #[kithara::test]
     fn config_stretch_defaults_to_unity() {
         let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!((config.warp.stretch().speed() - 1.0).abs() < f32::EPSILON);
+        assert!((config.warp.speed() - 1.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

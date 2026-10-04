@@ -35,10 +35,11 @@ fn entered_plan(host_rate: NonZeroU32) -> WarpPlan {
     feature = "stretch-glide"
 ))]
 fn entered_renderer(plan: WarpPlan, backend: StretchKind, keylock: bool) -> WarpRenderer {
-    let controls = StretchControls::new(1.0);
-    controls.set_backend(backend);
-    controls.set_keylock(keylock);
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .speed(1.0)
+        .backend(backend)
+        .keylock(keylock)
+        .build();
     let entered = config.entering(Arc::new(plan));
     let mut renderer = Warp::new((), &entered).renderer(spec(), pools());
     renderer.prepare(spec());
@@ -238,7 +239,7 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
 
 #[kithara::test]
 fn a_renderer_without_an_entered_plan_names_no_entry_source() {
-    let (mut renderer, _) = projection::planned_renderer(StretchControls::new(1.0));
+    let (mut renderer, _) = projection::planned_renderer(WarpConfig::builder().speed(1.0).build());
     renderer.prepare(spec());
     assert_eq!(renderer.entry_source(), None);
     let input = source_span(&renderer, 0, 16);

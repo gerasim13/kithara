@@ -209,10 +209,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        StretchControls,
-        test_pools::{pools, sample_buffer},
-    };
+    use crate::test_pools::{pools, sample_buffer};
 
     #[kithara::test]
     fn renderer_preserves_samples_exactly(warp_pair: Vec<f32>) {
@@ -224,9 +221,7 @@ mod tests {
         meta.frame_offset = 41;
         let input = AudioChunk::new(meta, sample_buffer(&pools, &warp_pair));
         let input_ptr = input.samples.as_ptr();
-        let config = WarpConfig::builder()
-            .stretch(StretchControls::new(1.5))
-            .build();
+        let config = WarpConfig::builder().speed(1.5).build();
         let mut renderer = WarpRenderer::new(
             &config,
             crate::RenderPublisher::default().reader(),

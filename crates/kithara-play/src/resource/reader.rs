@@ -14,8 +14,7 @@ use kithara_render::LaneProtocol;
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{
-    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, StretchControls,
-    supports_playback_rate,
+    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, supports_playback_rate,
 };
 use tracing::warn;
 
@@ -139,22 +138,25 @@ struct CancelGuard(Option<CancelToken>);
 /// Cancels before dropping the reader; tuple fields drop in declaration order.
 struct ReaderOwner(CancelGuard, Box<dyn AudioReader>);
 
+/// Media seconds a reader consumes per output second.
 enum PlaybackRate {
+    /// Its own tempo: no renderer changes its speed.
     Fixed,
-    Warp(Arc<StretchControls>),
+    /// The speed its renderer was last asked for.
+    Warp(f32),
 }
 
 impl PlaybackRate {
-    fn apply(&self, requested: f32) -> f32 {
-        if let Self::Warp(controls) = self {
-            controls.set_speed(requested);
+    fn apply(&mut self, requested: f32) -> f32 {
+        if let Self::Warp(rate) = self {
+            *rate = requested;
         }
-        self.into()
+        f32::from(&*self)
     }
 
-    fn for_warp(controls: Arc<StretchControls>) -> Self {
+    fn for_warp(speed: f32) -> Self {
         if supports_playback_rate() {
-            Self::Warp(controls)
+            Self::Warp(speed)
         } else {
             Self::Fixed
         }
@@ -165,7 +167,7 @@ impl From<&PlaybackRate> for f32 {
     fn from(rate: &PlaybackRate) -> Self {
         match rate {
             PlaybackRate::Fixed => 1.0,
-            PlaybackRate::Warp(controls) => controls.speed(),
+            PlaybackRate::Warp(rate) => *rate,
         }
     }
 }
@@ -206,7 +208,7 @@ impl Resource {
         Self::open(config, None).await
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+    pub(crate) fn apply_playback_rate(&mut self, rate: f32) -> f32 {
         self.playback_rate.apply(rate)
     }
 
@@ -269,7 +271,7 @@ impl Resource {
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
         crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
     {
-        let warp_controls = Arc::clone(config.warp().stretch());
+        let speed = config.warp().speed();
         let mut audio = worker.load(config).await?;
         let priority = audio.priority();
         let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
@@ -278,8 +280,8 @@ impl Resource {
         let lane = audio.take_lane().ok_or(DecodeError::InvalidData {
             detail: "registered render lane was already taken",
         })?;
-        let mut resource = Self::from_reader(audio, Some(src))
-            .with_playback_rate(PlaybackRate::for_warp(warp_controls));
+        let mut resource =
+            Self::from_reader(audio, Some(src)).with_playback_rate(PlaybackRate::for_warp(speed));
         if let Err(error) = resource.preload().await {
             warn!(src = %resource.src, %error, "resource preload failed");
         }
@@ -647,12 +649,12 @@ mod tests {
 
     fn warped_player_resource(
         pools: &PoolRegion<TestPools>,
-        controls: &Arc<StretchControls>,
+        speed: f32,
         src: &str,
         samples: Vec<f32>,
     ) -> Box<PlayerResource> {
         let resource = Resource::from_reader(EofReader::with_frames(samples), None)
-            .with_playback_rate(PlaybackRate::for_warp(Arc::clone(controls)));
+            .with_playback_rate(PlaybackRate::for_warp(speed));
         PlayerResource::new(resource, Arc::from(src), pools)
             .map_or_else(|error| panic!("test player resource: {error}"), Box::new)
     }
@@ -705,29 +707,24 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn playback_rate_reports_only_a_real_warp_control() {
-        let fixed = Resource::from_reader(EofReader::default(), None);
+        let mut fixed = Resource::from_reader(EofReader::default(), None);
         assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
         assert_eq!(fixed.playback_rate(), 1.0);
 
-        let controls = StretchControls::new(1.0);
-        let warped = Resource::from_reader(EofReader::default(), None)
-            .with_playback_rate(PlaybackRate::for_warp(Arc::clone(&controls)));
-        if supports_playback_rate() {
-            assert_eq!(warped.apply_playback_rate(1.5), 1.5);
-            assert!((controls.speed() - 1.5).abs() < f32::EPSILON);
-            controls.set_speed(1.25);
-            assert_eq!(warped.playback_rate(), 1.25);
+        let mut warped = Resource::from_reader(EofReader::default(), None)
+            .with_playback_rate(PlaybackRate::for_warp(1.25));
+        let (built, applied) = if supports_playback_rate() {
+            (1.25, 1.5)
         } else {
-            assert_eq!(warped.apply_playback_rate(1.5), 1.0);
-            assert!((controls.speed() - 1.0).abs() < f32::EPSILON);
-            controls.set_speed(1.25);
-            assert_eq!(warped.playback_rate(), 1.0);
-        }
+            (1.0, 1.0)
+        };
+        assert_eq!(warped.playback_rate(), built);
+        assert_eq!(warped.apply_playback_rate(1.5), applied);
+        assert_eq!(warped.playback_rate(), applied);
     }
 
     #[kithara::test(native, flash(false))]
-    fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(half: Vec<f32>) {
-        let controls = StretchControls::new(1.0);
+    fn a_loaded_track_takes_the_processor_rate(half: Vec<f32>) {
         let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
         let (inputs, mut control) = slot_channels(SharedEq::new(0));
@@ -754,7 +751,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &first, half.clone()),
+                resource: warped_player_resource(&pools, 1.0, &first, half.clone()),
                 item_id: first_id,
             })
             .expect("load first track");
@@ -773,7 +770,10 @@ mod tests {
         process_block(&mut processor, &mut extra);
         let _ = rate_notifications(&mut control);
 
-        controls.set_speed(1.5);
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::SetRate(1.5))
+            .expect("set the slot rate");
         let first_position = processor
             .track(first_id)
             .expect("first track loaded")
@@ -801,7 +801,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&pools, &controls, &next, half),
+                resource: warped_player_resource(&pools, 1.0, &next, half),
                 item_id: next_id,
             })
             .expect("load next track");
@@ -813,11 +813,9 @@ mod tests {
                 epoch: 0,
             }))
             .expect("fade in next track");
-        assert_eq!(controls.speed(), 1.5);
 
         process_block(&mut processor, &mut extra);
 
-        assert_eq!(controls.speed(), 1.5);
         assert_eq!(processor.playback().rate.load(), effective_rate);
         assert_eq!(
             processor

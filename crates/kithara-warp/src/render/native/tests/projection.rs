@@ -8,7 +8,7 @@ fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
     use crate::mock;
 
     let config = WarpConfig::builder()
-        .stretch(StretchControls::new(2.0))
+        .speed(2.0)
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
     config.plan().install(Some(Arc::new(mock::projected_plan(
@@ -50,7 +50,7 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
 
     let config = WarpConfig::builder()
-        .stretch(StretchControls::new(2.0))
+        .speed(2.0)
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
     let revision = WarpMapRevision::first()
@@ -180,7 +180,7 @@ fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
     let plan = Arc::new(WarpPlan::new(map, SessionFrame::new(0)).expect("activation"));
     let mut frontiers = Vec::new();
     for partitions in [vec![441], vec![1; 441], vec![147; 3]] {
-        let mut renderer = renderer(StretchControls::new(1.0));
+        let mut renderer = renderer(WarpConfig::builder().speed(1.0).build());
         renderer.projection.active = Some(Arc::clone(&plan));
         renderer.projection.cursor = Some(plan.activation());
         renderer.rendered_source_end = Some((100, spec().sample_rate));
@@ -239,8 +239,7 @@ fn a_future_projection_retains_the_active_producer_until_activation() {
 
 #[kithara::test]
 fn commit_keeps_callback_context_separate_from_output_identity() {
-    let controls = StretchControls::new(1.0);
-    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let config = WarpConfig::builder().speed(1.0).build();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("test Warp owns its publisher");
     let mut renderer = warp.renderer(spec(), pools());
@@ -279,13 +278,12 @@ fn commit_keeps_callback_context_separate_from_output_identity() {
 }
 
 fn planned_renderer_with_publisher(
-    controls: Arc<StretchControls>,
+    config: WarpConfig,
 ) -> (
     WarpRenderer,
     Arc<crate::WarpPlanSlot>,
     crate::RenderPublisher,
 ) {
-    let config = WarpConfig::builder().stretch(controls).build();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let output = OutputContext::new(
@@ -317,17 +315,14 @@ fn planned_renderer_with_publisher(
     )
 }
 
-pub(super) fn planned_renderer(
-    controls: Arc<StretchControls>,
-) -> (WarpRenderer, Arc<crate::WarpPlanSlot>) {
-    let (renderer, slot, _) = planned_renderer_with_publisher(controls);
+pub(super) fn planned_renderer(config: WarpConfig) -> (WarpRenderer, Arc<crate::WarpPlanSlot>) {
+    let (renderer, slot, _) = planned_renderer_with_publisher(config);
     (renderer, slot)
 }
 
 #[kithara::test]
 fn adoption_frontier_reports_only_committed_pcm() {
-    let controls = StretchControls::new(1.0);
-    let (mut renderer, _) = planned_renderer(controls);
+    let (mut renderer, _) = planned_renderer(WarpConfig::builder().speed(1.0).build());
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &[0.0; 256]);
 
@@ -371,8 +366,7 @@ fn adoption_frontier_reports_only_committed_pcm() {
 #[case::one_worker_quantum(120)]
 #[case::multiple_worker_quanta(384)]
 fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_frames: usize) {
-    let controls = StretchControls::new(1.0);
-    let (mut renderer, slot) = planned_renderer(controls);
+    let (mut renderer, slot) = planned_renderer(WarpConfig::builder().speed(1.0).build());
     let map = crate::mock::projected_plan(60.0, 60.0, spec().sample_rate)
         .map()
         .clone();
@@ -394,9 +388,8 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
 
 #[kithara::test]
 fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(false);
-    let (mut renderer, slot) = planned_renderer(controls);
+    let (mut renderer, slot) =
+        planned_renderer(WarpConfig::builder().speed(1.0).keylock(false).build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let samples = vec![0.25; 128 * usize::from(consts::CH)];
@@ -422,8 +415,7 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
 
 #[kithara::test]
 fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
-    let controls = StretchControls::new(1.0);
-    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let config = WarpConfig::builder().speed(1.0).build();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let mut renderer = warp.renderer(spec(), pools());
@@ -575,8 +567,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
 
 #[kithara::test]
 fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
-    let controls = StretchControls::new(1.0);
-    let (mut renderer, slot) = planned_renderer(controls);
+    let (mut renderer, slot) = planned_renderer(WarpConfig::builder().speed(1.0).build());
     slot.install(Some(Arc::new(crate::mock::projected_plan(
         120.0,
         180.0,
@@ -608,26 +599,27 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
 
 #[kithara::test]
 fn an_unprojected_renderer_starts_at_the_manual_target() {
-    let controls = StretchControls::new(2.0);
-    let renderer = renderer(Arc::clone(&controls));
+    let target = 2.0;
+    let renderer = renderer(WarpConfig::builder().speed(target).build());
     let speed = renderer
-        .preview_speed(controls.speed(), 1)
+        .preview_speed(target, 1)
         .expect("initial manual speed");
     assert!(
-        (speed - controls.speed()).abs() <= f32::EPSILON,
-        "an unprojected item starts at {}, not at the manual target {}",
-        speed,
-        controls.speed()
+        (speed - target).abs() <= f32::EPSILON,
+        "an unprojected item starts at {speed}, not at the manual target {target}"
     );
 }
 
 #[kithara::test]
 #[cfg(feature = "stretch-signalsmith")]
 fn entering_a_unity_grid_preserves_the_next_source_samples(warp_sine: Vec<f32>) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(false);
-    controls.set_backend(kithara_stretch::StretchKind::Signalsmith);
-    let (mut renderer, slot) = planned_renderer(controls);
+    let (mut renderer, slot) = planned_renderer(
+        WarpConfig::builder()
+            .speed(1.0)
+            .keylock(false)
+            .backend(kithara_stretch::StretchKind::Signalsmith)
+            .build(),
+    );
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let first_frames = 32;
@@ -678,10 +670,13 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
     #[case] backend: kithara_stretch::StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(false);
-    controls.set_backend(backend);
-    let (mut renderer, slot) = planned_renderer(controls);
+    let (mut renderer, slot) = planned_renderer(
+        WarpConfig::builder()
+            .speed(1.0)
+            .keylock(false)
+            .backend(backend)
+            .build(),
+    );
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let initial_frames = 4_096;
@@ -730,10 +725,13 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
 #[kithara::test]
 #[cfg(feature = "stretch-signalsmith")]
 fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(kithara_stretch::StretchKind::Signalsmith);
-    let (mut renderer, slot) = planned_renderer(Arc::clone(&controls));
+    let (mut renderer, slot) = planned_renderer(
+        WarpConfig::builder()
+            .speed(1.0)
+            .keylock(true)
+            .backend(kithara_stretch::StretchKind::Signalsmith)
+            .build(),
+    );
     slot.install(Some(Arc::new(crate::mock::projected_plan(
         120.0,
         180.0,
@@ -806,9 +804,8 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
 
 #[kithara::test]
 fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
-    let controls = StretchControls::new(4.0);
-    controls.set_keylock(false);
-    let (mut renderer, slot) = planned_renderer(controls);
+    let (mut renderer, slot) =
+        planned_renderer(WarpConfig::builder().speed(4.0).keylock(false).build());
     let input = chunk(&renderer.pools, &[0.25, 0.25]);
     assert!(render_serviced(&mut renderer, input).is_none());
     assert_eq!(renderer.pending_frames(2), 1);
@@ -883,11 +880,10 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
         256
     };
     for quantum in [17, 64] {
-        let controls = StretchControls::new(1.0);
-        controls.set_keylock(true);
-        controls.set_backend(backend);
         let config = WarpConfig::builder()
-            .stretch(controls)
+            .speed(1.0)
+            .keylock(true)
+            .backend(backend)
             .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
             .build();
         let plan = crate::mock::plan_over(
@@ -951,7 +947,7 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
 
 #[kithara::test]
 fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
-    let mut renderer = renderer(StretchControls::new(1.0));
+    let mut renderer = renderer(WarpConfig::builder().speed(1.0).build());
     let resident = renderer.residency.as_mut().expect("resident source window");
     let meta = AudioChunkInfo {
         spec: spec(),
@@ -985,11 +981,10 @@ fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
 fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     #[case] backend: kithara_stretch::StretchKind,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
     let config = WarpConfig::builder()
-        .stretch(controls)
+        .speed(1.0)
+        .keylock(true)
+        .backend(backend)
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
     config
@@ -1088,11 +1083,10 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
 ) {
     let mut outputs = Vec::new();
     for origin in [0_u64, 10_000] {
-        let controls = StretchControls::new(1.0);
-        controls.set_keylock(true);
-        controls.set_backend(backend);
         let config = WarpConfig::builder()
-            .stretch(Arc::clone(&controls))
+            .speed(1.0)
+            .keylock(true)
+            .backend(backend)
             .render_quantum_frames(NonZero::new(32).expect("quantum"))
             .build();
         let mut renderer = Warp::new((), &config).renderer(spec(), pools());
@@ -1160,9 +1154,7 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
 #[kithara::test]
 fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     let pools = pools();
-    let config = WarpConfig::builder()
-        .stretch(StretchControls::new(1.0))
-        .build();
+    let config = WarpConfig::builder().speed(1.0).build();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("test Warp owns its publisher");
     let mut renderer = warp.renderer(spec(), pools.clone());

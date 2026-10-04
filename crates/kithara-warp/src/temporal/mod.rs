@@ -1,12 +1,10 @@
 mod context;
-mod controls;
 mod curve;
 mod frontier;
 mod live;
 mod region;
 
 pub use context::RenderContext;
-pub use controls::StretchControls;
 pub use curve::SpeedCurve;
 pub use frontier::PresentationFrontier;
 #[cfg(any(

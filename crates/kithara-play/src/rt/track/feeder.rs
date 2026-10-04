@@ -125,8 +125,8 @@ impl PlayerResource {
         })
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
+    pub(crate) fn apply_playback_rate(&mut self, rate: f32) -> f32 {
+        self.resource.get_mut().apply_playback_rate(rate)
     }
 
     /// Cached span in seconds: how much of the source is on disk and needs no

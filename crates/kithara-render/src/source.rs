@@ -741,7 +741,7 @@ mod tests {
         bufpool::{TestPools, pools, pools_with_budget},
         kithara,
     };
-    use kithara_warp::{SpeedCurve, StretchControls, StretchKind};
+    use kithara_warp::{SpeedCurve, StretchKind};
 
     use super::*;
     use crate::{LaneCommand, LaneFrame, LaneProtocol, consts};
@@ -1397,15 +1397,14 @@ mod tests {
             head: Arc::clone(&head),
             seek: Arc::clone(&seek),
         };
-        let controls = StretchControls::new(0.5);
-        controls.set_keylock(true);
-        controls.set_backend(backend);
         let render_quantum_frames = usize::try_from(ACTIVE_FRAMES)
             .expect("test quantum fits usize")
             .saturating_mul(2)
             .saturating_add(1);
         let config = kithara_warp::WarpConfig::builder()
-            .stretch(Arc::clone(&controls))
+            .speed(0.5)
+            .keylock(true)
+            .backend(backend)
             .render_quantum_frames(
                 NonZeroUsize::new(render_quantum_frames).expect("test quantum is non-zero"),
             )
@@ -1599,11 +1598,10 @@ mod tests {
         );
         let map = WarpMap::projected(asset, session, alignment, WarpMapRevision::first())
             .expect("projected geometry");
-        let controls = StretchControls::new(1.0);
-        controls.set_keylock(true);
-        controls.set_backend(StretchKind::Signalsmith);
         let config = kithara_warp::WarpConfig::builder()
-            .stretch(Arc::clone(&controls))
+            .speed(1.0)
+            .keylock(true)
+            .backend(StretchKind::Signalsmith)
             .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
             .build();
         config.plan().install(Some(Arc::new(
@@ -1733,11 +1731,10 @@ mod tests {
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
         };
-        let controls = StretchControls::new(0.5);
-        controls.set_keylock(true);
-        controls.set_backend(backend);
         let config = kithara_warp::WarpConfig::builder()
-            .stretch(controls)
+            .speed(0.5)
+            .keylock(true)
+            .backend(backend)
             .build();
         let target_pools = pools_with_budget(0);
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
@@ -1906,7 +1903,7 @@ mod tests {
         pools: &PoolRegion<TestPools>,
         quarter: &[f32],
     ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
-        lane_over(pools, 3, |_| quarter, StretchControls::new(1.0))
+        lane_over(pools, 3, |_| quarter, 1.0, (StretchKind::default(), false))
     }
 
     /// A lane over `signal` at unity speed, rendered by `backend` with keylock
@@ -1916,25 +1913,25 @@ mod tests {
         (backend, keylock): (StretchKind, bool),
         signal: &[f32],
     ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
-        let controls = StretchControls::new(1.0);
-        controls.set_keylock(keylock);
-        controls.set_backend(backend);
         let chunks = signal.len() / (2 * consts::LANE_CHUNK_FRAMES as usize);
         lane_over(
             pools,
             u32::try_from(chunks).expect("test chunk count fits u32"),
             |index| &signal[index as usize * 2 * consts::LANE_CHUNK_FRAMES as usize..],
-            controls,
+            1.0,
+            (backend, keylock),
         )
     }
 
     /// A lane over `chunks` source chunks of [`consts::LANE_CHUNK_FRAMES`] frames, the
-    /// `index`th copied from the front of `samples(index)`.
+    /// `index`th copied from the front of `samples(index)`, starting at `speed` on
+    /// `backend`, with keylock when `keylock`.
     fn lane_over<'a>(
         pools: &PoolRegion<TestPools>,
         chunks: u32,
         samples: impl Fn(u32) -> &'a [f32],
-        controls: Arc<StretchControls>,
+        speed: f32,
+        (backend, keylock): (StretchKind, bool),
     ) -> (WarpSource<RawSource, TestPools>, Sender<LaneProtocol>) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let chunks = (0..chunks)
@@ -1955,7 +1952,9 @@ mod tests {
         };
         let (lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let config = kithara_warp::WarpConfig::builder()
-            .stretch(controls)
+            .speed(speed)
+            .keylock(keylock)
+            .backend(backend)
             .render_quantum_frames(NonZeroUsize::new(256).expect("test quantum is non-zero"))
             .build();
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
@@ -2096,7 +2095,13 @@ mod tests {
     fn a_speed_batch_lands_on_its_frame_from_any_speed(quarter: Vec<f32>) {
         const AT: u64 = 1_000;
         let pools = pools();
-        let (mut source, mut lane) = lane_over(&pools, 3, |_| &quarter, StretchControls::new(0.8));
+        let (mut source, mut lane) = lane_over(
+            &pools,
+            3,
+            |_| &quarter,
+            0.8,
+            (StretchKind::default(), false),
+        );
         lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
             .expect("the lane has room for one batch");
 

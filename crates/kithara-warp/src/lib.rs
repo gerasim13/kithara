@@ -36,7 +36,7 @@ pub use segment::{
 };
 pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-    RenderPublisher, RenderReader, RenderSnapshot, SpeedCurve, StretchControls,
+    RenderPublisher, RenderReader, RenderSnapshot, SpeedCurve,
 };
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -49,3 +49,4 @@ pub use warp::{
     WarpPlan, WarpPlanError, WarpPlanSlot, supports_playback_rate,
 };
 mod consts;
+pub use consts::MIN_SPEED;

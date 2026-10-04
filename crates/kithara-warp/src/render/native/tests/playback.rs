@@ -3,15 +3,15 @@ use std::{
     num::{NonZero, NonZeroU32, NonZeroUsize},
 };
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
 use super::{
-    StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
-    render_serviced, renderer, spec,
+    WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer,
+    spec,
 };
 use crate::{SpeedCurve, Warp, WarpConfig, consts, test_pools::pools};
 
@@ -45,10 +45,9 @@ fn source_span_is_planned_from_the_output_quantum(
     #[case] speed: f32,
     #[case] expected_source_frames: usize,
 ) {
-    let controls = StretchControls::new(speed);
-    controls.set_backend(backend);
     let config = WarpConfig::builder()
-        .stretch(controls)
+        .speed(speed)
+        .backend(backend)
         .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
@@ -71,11 +70,10 @@ fn live_activation_primes_from_passthrough_history(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
     let config = WarpConfig::builder()
-        .stretch(Arc::clone(&controls))
+        .speed(1.0)
+        .keylock(true)
+        .backend(backend)
         .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
@@ -142,8 +140,7 @@ fn live_activation_primes_from_passthrough_history(
 
 #[kithara::test]
 fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
-    let controls = StretchControls::new(1.0);
-    let mut renderer = renderer(Arc::clone(&controls));
+    let mut renderer = renderer(WarpConfig::builder().speed(1.0).build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &warp_sine[..128 * 2]);
@@ -170,17 +167,23 @@ fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
 }
 
 fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
-    let controls = StretchControls::new(speed);
-    controls.set_keylock(true);
-    controls.set_backend(kind);
-    renderer(controls)
+    renderer(
+        WarpConfig::builder()
+            .speed(speed)
+            .keylock(true)
+            .backend(kind)
+            .build(),
+    )
 }
 
 pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
-    let controls = StretchControls::new(speed);
-    controls.set_keylock(false);
-    controls.set_backend(kind);
-    renderer(controls)
+    renderer(
+        WarpConfig::builder()
+            .speed(speed)
+            .keylock(false)
+            .backend(kind)
+            .build(),
+    )
 }
 
 fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
@@ -361,7 +364,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
 ) {
     const SOURCE_START: u64 = 10_000;
 
-    let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
+    let mut renderer = keylocked(backend, consts::MIN_SPEED);
     let source_frames = renderer.source_block_frames.get();
     let pools = renderer.pools.clone();
     let source = warp_sine[..(source_frames) * 2].to_vec();
@@ -527,10 +530,13 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(
+        WarpConfig::builder()
+            .speed(1.0)
+            .keylock(true)
+            .backend(backend)
+            .build(),
+    );
     let pools = fx.pools.clone();
     let block = warp_sine[..(4096) * 2].to_vec();
     let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
@@ -561,10 +567,13 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
-    let controls = StretchControls::new(0.5);
-    controls.set_keylock(false);
-    controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(
+        WarpConfig::builder()
+            .speed(0.5)
+            .keylock(false)
+            .backend(backend)
+            .build(),
+    );
     let pools = fx.pools.clone();
     let block = warp_sine[..(4096) * 2].to_vec();
 

@@ -19,14 +19,13 @@ use kithara::{
     audio::{AudioConfig, AudioRead, ReadOutcome},
     file::{File, FileConfig},
     platform::{
-        sync::Arc,
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
     play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
-    warp::{StretchControls, Warp, WarpConfig, WarpRenderer},
+    warp::{Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools};
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
@@ -488,14 +487,15 @@ fn bench_stretch_process(c: &mut Criterion) {
     group.throughput(frame_throughput(consts::STRETCH_FRAMES));
 
     for &backend in StretchKind::all() {
-        let controls = StretchControls::new(0.8);
-        controls.set_backend(backend);
-        controls.set_keylock(true);
+        let config = WarpConfig::builder()
+            .speed(0.8)
+            .backend(backend)
+            .keylock(true)
+            .build();
         let backend_label = backend.to_string().to_ascii_lowercase();
         group.bench_function(format!("{backend_label}_ratio_1_25"), |b| {
             b.iter_batched(
                 || {
-                    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
                     let warp = Warp::new((), &config);
                     let renderer = warp.renderer(spec, pools.clone());
                     let chunk = make_chunk(&pools, &pcm);

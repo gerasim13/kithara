@@ -19,7 +19,7 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     signal::AudioChunk,
     stream::Stream,
-    warp::{StretchControls, StretchKind, WarpConfig},
+    warp::{StretchKind, WarpConfig},
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::audio_artifact::write_audio_artifact;
@@ -337,21 +337,24 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
     }
 }
 
-fn stretch_controls(stretch: Option<(StretchKind, f32)>) -> Arc<StretchControls> {
+/// The Warp configuration of a deck at unity, or at `speed` on a keylocked
+/// `backend`.
+fn warp_config(stretch: Option<(StretchKind, f32)>) -> WarpConfig {
     stretch.map_or_else(
-        || StretchControls::new(1.0),
+        || WarpConfig::builder().build(),
         |(backend, speed)| {
-            let controls = StretchControls::new(speed);
-            controls.set_backend(backend);
-            controls.set_keylock(true);
-            controls
+            WarpConfig::builder()
+                .speed(speed)
+                .backend(backend)
+                .keylock(true)
+                .build()
         },
     )
 }
 
 fn audio_config(
     source: &[u8],
-    stretch: Arc<StretchControls>,
+    warp: WarpConfig,
     effects: Vec<Box<dyn AudioEffect>>,
 ) -> TrackConfig<MemStream, NoResamplerBackend> {
     let stream = MemStreamConfig {
@@ -363,7 +366,7 @@ fn audio_config(
         .hint("wav".to_owned())
         .build();
     TrackConfig::for_audio(audio)
-        .warp(WarpConfig::builder().stretch(stretch).build())
+        .warp(warp)
         .effects(effects)
         .build()
 }
@@ -402,9 +405,8 @@ async fn render_passthrough(
             .cancel(CancelToken::never())
             .build(),
     );
-    let target_stretch = stretch_controls(stretch);
     let mut target_audio = worker
-        .load(audio_config(source, target_stretch, Vec::new()))
+        .load(audio_config(source, warp_config(stretch), Vec::new()))
         .await
         .expect("target audio construction");
     wait_for_preload(&target_audio).await;
@@ -414,7 +416,7 @@ async fn render_passthrough(
         let mut audio = worker
             .load(audio_config(
                 source,
-                stretch_controls(None),
+                warp_config(None),
                 vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
             ))
             .await
@@ -516,11 +518,10 @@ async fn render_passthrough(
 /// tick-and-render pair must not outrun the decode worker.
 #[kithara::flash(true)]
 async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
-    let stretch = stretch_controls(stretch);
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+            .warp(warp_config(stretch))
             .build(),
         SAMPLE_RATE,
     )

@@ -5,9 +5,7 @@ use kithara_test_fixtures::unit_fixtures::{warp_constant, warp_sine};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{
-    StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced, renderer, spec,
-};
+use super::{WarpRenderer, chunk, f64_of, flush_serviced, render_serviced, renderer, spec};
 use crate::{GridSegment, RegionPlan, SpeedCurve, Warp, WarpConfig, consts};
 
 fn finish_unity_transition(
@@ -45,11 +43,10 @@ fn mean_square(samples: &[f32]) -> f64 {
 #[kithara::test]
 #[cfg(feature = "stretch-signalsmith")]
 fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
-    let controls = StretchControls::new(2.0);
-    controls.set_keylock(true);
-    controls.set_backend(StretchKind::Signalsmith);
     let config = WarpConfig::builder()
-        .stretch(Arc::clone(&controls))
+        .speed(2.0)
+        .keylock(true)
+        .backend(StretchKind::Signalsmith)
         .rate_smooth_frames(std::num::NonZeroUsize::new(882).expect("non-zero ramp"))
         .backends(
             kithara_stretch::ElasticBackendConfig::builder()
@@ -157,19 +154,22 @@ fn one_frame_regions_accumulate_into_one_portable_request(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 1, 0.125),
-            GridSegment::new(1, 2, 0.25),
-            GridSegment::new(2, 3, 0.125),
-            GridSegment::new(3, 4, 0.5),
-        ])
-        .expect("one-frame regions are ordered and non-empty"),
-    )));
-    let mut fx = renderer(controls);
+    let mut fx = renderer(
+        WarpConfig::builder()
+            .speed(1.0)
+            .keylock(true)
+            .backend(backend)
+            .region_plan(Arc::new(
+                RegionPlan::new(vec![
+                    GridSegment::new(0, 1, 0.125),
+                    GridSegment::new(1, 2, 0.25),
+                    GridSegment::new(2, 3, 0.125),
+                    GridSegment::new(3, 4, 0.5),
+                ])
+                .expect("one-frame regions are ordered and non-empty"),
+            ))
+            .build(),
+    );
     let pools = fx.pools.clone();
     let source = warp_sine[..(4) * 2].to_vec();
 
@@ -209,18 +209,21 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 1, 1.0),
-            GridSegment::new(1, 2, 0.75),
-            GridSegment::new(2, 3, 0.25),
-        ])
-        .expect("fixture regions are contiguous"),
-    )));
-    let mut fx = renderer(controls);
+    let mut fx = renderer(
+        WarpConfig::builder()
+            .speed(1.0)
+            .keylock(true)
+            .backend(backend)
+            .region_plan(Arc::new(
+                RegionPlan::new(vec![
+                    GridSegment::new(0, 1, 1.0),
+                    GridSegment::new(1, 2, 0.75),
+                    GridSegment::new(2, 3, 0.25),
+                ])
+                .expect("fixture regions are contiguous"),
+            ))
+            .build(),
+    );
     let pools = fx.pools.clone();
     let source = warp_sine[..(3) * 2].to_vec();
     let mut first = chunk(&pools, &source[..2 * usize::from(consts::CH)]);
@@ -268,27 +271,27 @@ fn rendered_source_frontier_excludes_pending_source(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    let mut fx = renderer(Arc::clone(&controls));
-    let pools = fx.pools.clone();
-    let source_latency = fx
+    let probe = renderer(WarpConfig::builder().keylock(true).backend(backend).build());
+    let source_latency = probe
         .engine
         .as_ref()
         .expect("compiled backend is available")
         .capabilities()
         .latency()
         .source_frames();
-    assert!(source_latency <= fx.source_block_frames.get());
-    controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(
-            u64::try_from(source_latency).expect("source latency fits u64") + 1,
-            u64::try_from(source_latency).expect("source latency fits u64") + 2,
-            0.25,
-        )])
-        .expect("fixture region is valid"),
-    )));
+    assert!(source_latency <= probe.source_block_frames.get());
+    let latency = u64::try_from(source_latency).expect("source latency fits u64");
+    let mut fx = renderer(
+        WarpConfig::builder()
+            .keylock(true)
+            .backend(backend)
+            .region_plan(Arc::new(
+                RegionPlan::new(vec![GridSegment::new(latency + 1, latency + 2, 0.25)])
+                    .expect("fixture region is valid"),
+            ))
+            .build(),
+    );
+    let pools = fx.pools.clone();
 
     let source = warp_sine[..(source_latency + 2) * 2].to_vec();
     let split = source_latency * usize::from(consts::CH);
@@ -317,20 +320,20 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
-    )));
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(
+        WarpConfig::builder()
+            .speed(1.0 / 0.75)
+            .keylock(true)
+            .backend(backend)
+            .build(),
+    );
     let pools = fx.pools.clone();
     let source = warp_sine[..(3) * 2].to_vec();
     let mut pending = chunk(&pools, &source[..usize::from(consts::CH)]);
     pending.meta.end_timestamp = Duration::from_millis(10);
     assert!(render_serviced(&mut fx, pending).is_none());
 
-    controls.set_region_plan(None);
+    fx.set_speed(SpeedCurve::Constant(1.0), 1);
     let mut unity = chunk(
         &pools,
         &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
@@ -384,10 +387,13 @@ fn live_unity_transition_drains_active_backend_tail(
     let source = warp_constant;
     let split = ACTIVE_FRAMES * usize::from(consts::CH);
 
-    let reference_controls = StretchControls::new(0.5);
-    reference_controls.set_keylock(true);
-    reference_controls.set_backend(backend);
-    let mut reference = renderer(Arc::clone(&reference_controls));
+    let mut reference = renderer(
+        WarpConfig::builder()
+            .speed(0.5)
+            .keylock(true)
+            .backend(backend)
+            .build(),
+    );
     let pools = reference.pools.clone();
     let reference_active = render_serviced(&mut reference, chunk(&pools, &source[..split]))
         .expect("non-unity span emits samples");
@@ -430,11 +436,10 @@ fn live_unity_transition_drains_active_backend_tail(
         .expect("unity span follows the drained tail");
     assert_eq!(&reference_unity.samples[..], &source[split..]);
 
-    let live_controls = StretchControls::new(0.5);
-    live_controls.set_keylock(true);
-    live_controls.set_backend(backend);
     let live_config = WarpConfig::builder()
-        .stretch(Arc::clone(&live_controls))
+        .speed(0.5)
+        .keylock(true)
+        .backend(backend)
         .build();
     let mut live = Warp::new((), &live_config).renderer(spec(), pools.clone());
     let live_active = render_serviced(&mut live, chunk(&pools, &source[..split]))
@@ -522,13 +527,13 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     warp_sine: Vec<f32>,
 ) {
     let source = warp_sine[..(3) * 2].to_vec();
-    let reference_controls = StretchControls::new(1.0);
-    reference_controls.set_keylock(true);
-    reference_controls.set_backend(backend);
-    reference_controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 1, 2.0)]).expect("fixture region is valid"),
-    )));
-    let mut reference = renderer(Arc::clone(&reference_controls));
+    let mut reference = renderer(
+        WarpConfig::builder()
+            .speed(0.5)
+            .keylock(true)
+            .backend(backend)
+            .build(),
+    );
     let pools = reference.pools.clone();
     let reference_first = render_serviced(
         &mut reference,
@@ -536,7 +541,7 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     )
     .expect("the no-debt span emits two frames");
     assert_eq!(reference_first.frames(), 2);
-    reference_controls.set_region_plan(None);
+    reference.set_speed(SpeedCurve::Constant(1.0), 1);
     let mut reference_unity = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     reference_unity.meta.frame_offset = 2;
     let reference_transition = render_serviced(&mut reference, reference_unity)
@@ -547,30 +552,17 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     reference_samples.extend_from_slice(&reference_tail);
     reference_samples.extend_from_slice(&reference_unity.samples);
 
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 1, 1.6),
-            GridSegment::new(1, 2, 0.25),
-        ])
-        .expect("fixture regions are contiguous"),
-    )));
-    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let config = WarpConfig::builder()
+        .speed(1.0 / 1.6)
+        .keylock(true)
+        .backend(backend)
+        .build();
     let mut fx = Warp::new((), &config).renderer(spec(), pools.clone());
     let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(consts::CH)]))
-        .expect("the first span rounds to two frames");
+        .expect("the first span rounds 1.6 frames up to two");
     assert_eq!(first.frames(), 2);
 
-    let mut debt = chunk(
-        &pools,
-        &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
-    );
-    debt.meta.frame_offset = 1;
-    assert!(render_serviced(&mut fx, debt).is_none());
-
-    controls.set_region_plan(None);
+    fx.set_speed(SpeedCurve::Constant(1.0), 1);
     let mut unity = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     unity.meta.frame_offset = 2;
     let transition = render_serviced(&mut fx, unity).expect("the debt transition starts its tail");
@@ -599,19 +591,19 @@ fn reset_discards_pending_span_before_new_timeline(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
-    )));
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(
+        WarpConfig::builder()
+            .speed(1.0 / 0.75)
+            .keylock(true)
+            .backend(backend)
+            .build(),
+    );
     let pools = fx.pools.clone();
     let source = warp_sine[..(2) * 2].to_vec();
     assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(consts::CH)])).is_none());
 
     fx.reset();
-    controls.set_region_plan(None);
+    fx.set_speed(SpeedCurve::Constant(1.0), 1);
     fx.prepare(spec());
     let mut landed = chunk(&pools, &source[usize::from(consts::CH)..]);
     landed.meta.frame_offset = 100;
@@ -627,7 +619,7 @@ fn reset_discards_pending_span_before_new_timeline(
 fn moving_target_renderer() -> WarpRenderer {
     use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 
-    let mut fx = renderer(StretchControls::new(1.0));
+    let mut fx = renderer(WarpConfig::builder().speed(1.0).build());
     fx.applied_speed = Some(SmoothedParam::new(
         1.0,
         consts::SPEED_SMOOTHING_SPAN,
@@ -673,8 +665,7 @@ fn a_settled_target_keeps_its_exact_multiplier() {
 
 #[kithara::test]
 fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
-    let controls = StretchControls::new(1.0);
-    let mut fx = renderer(Arc::clone(&controls));
+    let mut fx = renderer(WarpConfig::builder().speed(1.0).build());
     fx.applied_speed = moving_target_renderer().applied_speed;
     fx.set_speed(SpeedCurve::Constant(1.25), 1);
     let target = fx.rate;

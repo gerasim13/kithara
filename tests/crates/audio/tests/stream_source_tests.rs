@@ -12,7 +12,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo, SeekEpoch, Stream},
-    warp::{StretchControls, StretchKind, WarpConfig},
+    warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
@@ -133,11 +133,14 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .hint("wav".to_owned())
         .build();
-    let controls = StretchControls::new(0.5);
-    controls.set_backend(backend);
-    controls.set_keylock(true);
     let config = TrackConfig::for_audio(audio)
-        .warp(WarpConfig::builder().stretch(controls).build())
+        .warp(
+            WarpConfig::builder()
+                .speed(0.5)
+                .backend(backend)
+                .keylock(true)
+                .build(),
+        )
         .build();
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

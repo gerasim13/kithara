@@ -12,7 +12,7 @@ use kithara::{
     platform::time::{self, Duration, Instant},
     play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, Transition},
-    warp::{StretchControls, StretchKind, WarpConfig},
+    warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
@@ -96,13 +96,16 @@ async fn playing_deck(
     temp_dir: &TestTempDir,
     backend: StretchKind,
 ) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
-    let stretch = StretchControls::new(START_SPEED);
-    stretch.set_backend(backend);
-    stretch.set_keylock(true);
     let harness = OfflinePlayer::with_options(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .warp(WarpConfig::builder().stretch(stretch).build())
+            .warp(
+                WarpConfig::builder()
+                    .speed(START_SPEED)
+                    .backend(backend)
+                    .keylock(true)
+                    .build(),
+            )
             .build(),
         session(),
     )

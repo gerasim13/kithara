@@ -255,8 +255,6 @@ where
             self.projection.cursor = None;
             self.projection.output_frames = 0;
         }
-        self.sync_plan();
-
         if spec.sample_rate != self.spec.sample_rate
             && let Some(applied) = self.applied_speed.as_mut()
         {

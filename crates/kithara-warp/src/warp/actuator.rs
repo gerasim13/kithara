@@ -1,4 +1,3 @@
-use kithara_platform::sync::Arc;
 #[cfg(feature = "render")]
 use {
     kithara_bufpool::{HasPool, PoolRegion},
@@ -6,17 +5,16 @@ use {
 };
 
 use super::WarpConfig;
+use crate::RenderPublisher;
 #[cfg(feature = "render")]
 use crate::RenderReader;
 #[cfg(feature = "render")]
 use crate::WarpRenderer;
-use crate::{RenderPublisher, StretchControls};
 
 /// Resident warp actuator around one decoded-audio source.
 ///
 /// The wrapper remains present in identity and future synchronized modes. It
-/// owns the live temporal controls that the playback layer composes into its
-/// resident DSP path.
+/// holds the configuration its worker-side renderer is built from.
 #[derive(Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
@@ -30,7 +28,7 @@ pub struct Warp<S> {
 }
 
 impl<S> Warp<S> {
-    /// Wraps `source` with the configured live temporal controls.
+    /// Wraps `source` with the configuration its renderer is built from.
     #[must_use]
     pub fn new(source: S, config: &WarpConfig) -> Self {
         let publisher = RenderPublisher::default();
@@ -55,12 +53,6 @@ impl<S> Warp<S> {
         WarpRenderer::new(&self.config, self.reader.clone(), spec, pools)
     }
 
-    /// Live temporal controls shared with the resident Warp lane.
-    #[must_use]
-    pub fn stretch(&self) -> &Arc<StretchControls> {
-        self.config.stretch()
-    }
-
     /// Takes the sole callback-side publisher paired with this resident Warp.
     #[must_use]
     pub fn take_publisher(&mut self) -> Option<RenderPublisher> {
@@ -81,16 +73,5 @@ mod tests {
         warp.source_mut().push(2);
 
         assert_eq!(warp.source(), &[1, 2]);
-    }
-
-    #[kithara::test]
-    fn controls_are_shared_with_the_resident_lane() {
-        let stretch = StretchControls::new(1.0);
-        let config = WarpConfig::builder().stretch(Arc::clone(&stretch)).build();
-        let warp = Warp::new((), &config);
-
-        warp.stretch().set_speed(1.25);
-
-        assert!((stretch.speed() - 1.25).abs() < f32::EPSILON);
     }
 }

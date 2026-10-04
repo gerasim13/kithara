@@ -10,7 +10,7 @@ use kithara::{
         rubato::RubatoBackend,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
-    warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
+    warp::{StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools_with};
 use kithara_test_fixtures::integration_fixtures::{
@@ -37,12 +37,18 @@ fn eager_pools(initial_buffers: usize, initial_capacity: usize) -> Pools {
     )
 }
 
+/// A renderer starting at `speed` on keylocked `kind`.
 fn warp_renderer(
-    controls: kithara::platform::sync::Arc<StretchControls>,
+    speed: f32,
+    kind: StretchKind,
     spec: AudioSpec,
     pools: Pools,
 ) -> WarpRenderer<TestPools> {
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .speed(speed)
+        .backend(kind)
+        .keylock(true)
+        .build();
     Warp::new((), &config).renderer(spec, pools)
 }
 
@@ -302,10 +308,7 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut effect, first, second) = permit_alloc(|| {
-        let controls = StretchControls::new(0.5);
-        controls.set_keylock(true);
-        controls.set_backend(kind);
-        let mut effect = warp_renderer(controls, spec, pools.clone());
+        let mut effect = warp_renderer(0.5, kind, spec, pools.clone());
         effect.prepare(spec);
         let first = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
         let second = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
@@ -360,10 +363,7 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut maximum, input) = permit_alloc(|| {
-        let controls = StretchControls::new(0.05);
-        controls.set_keylock(true);
-        controls.set_backend(kind);
-        let mut maximum = warp_renderer(controls, spec, pools.clone());
+        let mut maximum = warp_renderer(0.05, kind, spec, pools.clone());
         maximum.prepare(spec);
         let input = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
         (maximum, input)
@@ -382,10 +382,7 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(
     });
 
     let (mut pending, input) = permit_alloc(|| {
-        let controls = StretchControls::new(2.0);
-        controls.set_keylock(true);
-        controls.set_backend(kind);
-        let mut pending = warp_renderer(controls, spec, pools.clone());
+        let mut pending = warp_renderer(2.0, kind, spec, pools.clone());
         pending.prepare(spec);
         let input = make_chunk(&pools, 1, 2, &allocation_ramp);
         (pending, input)

@@ -10,7 +10,6 @@ use tracing::{debug, warn};
 
 use super::{
     PlayerConfig,
-    config::TrackSettings,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
     state::{ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
@@ -149,13 +148,7 @@ impl<S> PlayerRuntime<S> {
             })
             .is_ok();
         if loaded && let Some(lane) = item.lane {
-            let stretch = self.core.config.warp.stretch();
-            let settings = TrackSettings::builder()
-                .speed(stretch.speed())
-                .keylock(stretch.keylock())
-                .backend(stretch.backend())
-                .build();
-            self.core.lanes.load(item.item_id, lane, settings);
+            self.core.lanes.load(item.item_id, lane);
         }
         Ok(Some((item.item_id, src, item.duration_seconds)))
     }
@@ -318,6 +311,7 @@ mod tests {
         thread,
     };
     use kithara_test_utils::kithara;
+    use kithara_warp::MIN_SPEED;
 
     use super::{super::PlayerImpl, *};
     use crate::{
@@ -627,7 +621,7 @@ mod tests {
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
-        assert!((player.core.config.warp.stretch().speed() - 0.75).abs() < f32::EPSILON);
+        assert!((player.core.lanes.next().speed() - 0.75).abs() < f32::EPSILON);
         assert_eq!(player.rate(), 0.0);
     }
 
@@ -636,27 +630,17 @@ mod tests {
         let player = player();
         player.set_rate(2.0);
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert!((player.core.config.warp.stretch().speed() - 2.0).abs() < f32::EPSILON);
+        assert!((player.core.lanes.next().speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
-    fn timestretch_is_address_stable_across_play_pause() {
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(mock::SAMPLE_RATE)
-                .worker(worker())
-                .session(mock::session())
-                .build(),
-        );
-        let ptr_before = Arc::as_ptr(player.core.config.warp.stretch());
-        player.play();
-        player.pause();
-        player.play();
-        let ptr_after = Arc::as_ptr(player.core.config.warp.stretch());
-        assert_eq!(
-            ptr_before, ptr_after,
-            "timestretch controls must stay address-stable across transitions"
-        );
+    #[case(0.0)]
+    #[case(-1.0)]
+    #[case(f32::NAN)]
+    fn a_rate_under_the_floor_requests_the_slowest_speed(#[case] rate: f32) {
+        let player = player();
+        player.set_rate(rate);
+        assert!((player.core.lanes.next().speed() - MIN_SPEED).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
