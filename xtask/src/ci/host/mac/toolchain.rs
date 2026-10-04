@@ -247,21 +247,10 @@ impl<'a> ToolchainInstaller<'a> {
         let cargo = home.join(".cargo/bin/cargo");
         for (package, version) in &self.config.pins.cargo_tools {
             let mut command = self.process.command(&cargo);
-            command.args(["install", "--locked"]);
-            if package == "cargo-geiger" {
-                command.args([
-                    "--git",
-                    "https://github.com/gerasim13/cargo-geiger",
-                    "--rev",
-                    &self.config.pins.cargo_geiger_rev,
-                    package,
-                ]);
-            } else {
-                command.args(["--version", version, package]);
-            }
             command
                 .env("CARGO_HOME", home.join(".cargo"))
-                .env("RUSTUP_HOME", home.join(".rustup"));
+                .env("RUSTUP_HOME", home.join(".rustup"))
+                .args(["install", "--locked", "--version", version, package]);
             self.process
                 .run_command(&mut command, "install pinned Cargo tool")?;
         }

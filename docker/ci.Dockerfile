@@ -8,7 +8,7 @@ ARG AST_GREP_VERSION
 ARG CARGO_CRAP_VERSION
 ARG CARGO_DENY_VERSION
 ARG CARGO_FUZZ_VERSION
-ARG CARGO_GEIGER_REV
+ARG CARGO_GEIGER_VERSION
 ARG CARGO_HACK_VERSION
 ARG CARGO_LLVM_COV_VERSION
 ARG CARGO_MACHETE_VERSION
@@ -184,8 +184,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_CRAP_VERSION}" cargo-crap \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_DENY_VERSION}" cargo-deny \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_FUZZ_VERSION}" cargo-fuzz \
- && cargo install --root "${CARGO_INSTALL_ROOT}" --locked \
-      --git https://github.com/gerasim13/cargo-geiger --rev "${CARGO_GEIGER_REV}" cargo-geiger \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_GEIGER_VERSION}" cargo-geiger \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
