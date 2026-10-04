@@ -53,8 +53,7 @@ pub use gapless::{
     SilenceTrimParams, probe_mp4_gapless,
 };
 pub use traits::{
-    ChunkRetire, Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, DropChunks,
-    InputReadOutcome,
+    Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
 pub use types::{BlenderProfile, DecoderTrackInfo, GaplessProfile, TrackMetadata};
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]

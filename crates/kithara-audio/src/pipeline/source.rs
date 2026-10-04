@@ -1,5 +1,4 @@
 use arc_swap::ArcSwap;
-use kithara_decode::DropChunks;
 use kithara_events::DeferredBus;
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioChunk;
@@ -607,7 +606,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
 
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
         if std::mem::take(&mut self.pending_seek_cleanup)
-            && let Some(generation) = self.decode.notify_seek(&DropChunks)
+            && let Some(generation) = self.decode.notify_seek()
         {
             self.retired.push(generation);
         }

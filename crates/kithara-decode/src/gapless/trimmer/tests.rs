@@ -20,8 +20,8 @@ use kithara_test_utils::kithara;
 
 use super::GaplessTrimmer;
 use crate::{
-    DropChunks, GaplessInfo, GaplessTailCompensation, consts,
-    gapless::heuristic::SilenceTrimParams, test_pools::pools,
+    GaplessInfo, GaplessTailCompensation, consts, gapless::heuristic::SilenceTrimParams,
+    test_pools::pools,
 };
 
 fn sample_buffer(values: &[f32]) -> SampleBuffer {
@@ -247,7 +247,7 @@ fn notify_seek_resets_leading_only(trim_ramp: Vec<f32>) {
     });
 
     assert!(trimmer.push(chunk(spec, 0, 64, &trim_ramp)).is_empty());
-    trimmer.notify_seek(&DropChunks);
+    trimmer.notify_seek();
 
     assert!(trimmer.push(chunk(spec, 64, 128, &trim_ramp)).is_empty());
 
@@ -542,7 +542,7 @@ fn silence_trim_seek_disables_leading_only(trim_silence: Vec<f32>, trim_seek: Ve
             .push(silent_chunk(spec, 0, 128, &trim_silence))
             .is_empty()
     );
-    trimmer.notify_seek(&DropChunks);
+    trimmer.notify_seek();
 
     assert!(trimmer.push(custom_chunk(spec, 128, trim_seek)).is_empty());
 

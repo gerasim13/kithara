@@ -8,8 +8,8 @@ use std::{
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_bufpool::PoolConfig;
 use kithara_decode::{
-    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DropChunks,
-    GaplessInfo, GaplessMode, GaplessProfile,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
+    GaplessMode, GaplessProfile,
 };
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
@@ -2409,7 +2409,7 @@ fn a_seek_releases_its_buffered_chunks_off_rt(route_pcm: RoutePcm) {
     }
     assert!(generation.has_output(), "fixture staged nothing to flush");
 
-    generation.notify_seek(&DropChunks);
+    generation.notify_seek();
 
     assert!(!generation.has_output());
 }
