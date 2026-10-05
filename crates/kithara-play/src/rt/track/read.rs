@@ -119,6 +119,7 @@ impl PlayerTrack {
 
         let TrackReadContext { sink, range } = ctx;
         let range_len = range.len();
+        self.gate.apply(scratch_bufs, range.clone());
         self.fade
             .mix_range(scratch_bufs, mix_bufs, range, range_len);
         Self::check_notifications(
@@ -212,6 +213,7 @@ impl PlayerTrack {
         let block_frames = range.len();
         let mix_range = range.start..range.start + frames;
 
+        self.gate.apply(scratch_bufs, mix_range.clone());
         self.fade
             .mix_range(scratch_bufs, mix_bufs, mix_range, frames);
         Self::check_notifications(

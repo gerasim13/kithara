@@ -1,6 +1,7 @@
 mod core;
 mod fade;
 mod feeder;
+mod gate;
 mod read;
 mod sink;
 mod triggers;

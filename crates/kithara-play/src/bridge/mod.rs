@@ -11,8 +11,8 @@ pub use metrics::{RtMetrics, RtMetricsSnapshot};
 pub use mix::{DeckMixSettings, DeckMixSettingsChange};
 pub use playback::{PlaybackShared, PlaybackSnapshot};
 pub use protocol::{
-    DeckPart, DeckProtocol, PlaybackFault, PlayerNotification, TrackPlaybackStopReason, TrackState,
-    TrackTransition,
+    DeckApplied, DeckPart, DeckProtocol, PlaybackFault, PlayerNotification,
+    TrackPlaybackStopReason, TrackState, TrackTransition,
 };
 
 pub use crate::session::{

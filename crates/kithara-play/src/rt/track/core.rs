@@ -1,13 +1,14 @@
 use std::num::NonZeroU32;
 
 use bon::bon;
+use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-use crate::{CrossfadeSettings, bridge::TrackState, worker::ServiceClass};
+use super::{PlayerResource, fade::TrackFade, gate::TrackGate, triggers::TrackTriggers};
+use crate::{CrossfadeSettings, bridge::TrackState, consts::DEFAULT_DECLICK, worker::ServiceClass};
 
 /// Per-track state in the processor arena.
 ///
@@ -18,6 +19,7 @@ use crate::{CrossfadeSettings, bridge::TrackState, worker::ServiceClass};
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
     pub(super) fade: TrackFade,
+    pub(super) gate: TrackGate,
     #[field(get, copy)]
     pub(super) item_id: TrackId,
     #[field(get, copy)]
@@ -79,6 +81,13 @@ impl PlayerTrack {
         /// planted after earlier seeks starts level with them, not behind.
         #[builder(default)]
         seek_epoch: u64,
+        /// The ramp of the track's start and stop.
+        #[builder(default = DEFAULT_DECLICK)]
+        declick: SmootherConfig,
+        /// Whether the track is held stopped: it stays silent through a `play()` or a fade until
+        /// it is started.
+        #[builder(default)]
+        stopped: bool,
     ) -> Self {
         let observed_duration = resource.duration();
         let track = Self {
@@ -90,6 +99,7 @@ impl PlayerTrack {
             state_dirty: false,
             triggers: TrackTriggers::default(),
             fade: TrackFade::new(crossfade, sample_rate),
+            gate: TrackGate::new(!stopped, declick, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
@@ -132,6 +142,67 @@ impl PlayerTrack {
         self.ended_at_eof = false;
     }
 
+    /// Let the track sound from the next frame it renders, ramped in from silence; a track that
+    /// was not playing plays from where it stands.
+    pub fn start(&mut self) {
+        if !self.state.is_playing() {
+            self.steer_gate(false);
+            self.play();
+        }
+        self.steer_gate(true);
+    }
+
+    /// Ramp the track out from the next frame it renders. Once silent it is not read, so it holds
+    /// its position until it is started again.
+    pub fn stop(&mut self) {
+        self.steer_gate(false);
+    }
+
+    /// Ramp the track in or out from the next frame it renders; a track that does not play moves
+    /// at once, since nothing of it sounds.
+    pub(crate) fn steer_gate(&mut self, started: bool) {
+        self.gate.steer(started);
+        if !self.state.is_playing() {
+            self.gate.snap();
+        }
+    }
+
+    delegate::delegate! {
+        to self.resource {
+            /// Cached span in seconds: how much of the source is on disk.
+            #[must_use]
+            pub fn cached_span(&self) -> f64;
+            /// Decoded-ahead frontier in seconds.
+            #[must_use]
+            pub fn decoded_frontier(&self) -> f64;
+            /// Current visible (post-gapless-trim) duration in seconds.
+            #[must_use]
+            #[expr(observed_duration(self.observed_duration, $))]
+            pub fn duration(&self) -> f64;
+            /// Control-plane handle used to begin this track's seeks off the audio thread.
+            #[must_use]
+            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            pub(crate) fn render_reader(&self) -> Option<RenderReader>;
+            /// Source identifier.
+            #[must_use]
+            pub fn src(&self) -> &Arc<str>;
+            /// Effective media seconds consumed per output second.
+            #[must_use]
+            pub(crate) fn playback_rate(&self) -> f32;
+            /// Apply a playback-rate target directly to this track's Warp controls.
+            #[call(apply_playback_rate)]
+            pub fn set_playback_rate(&mut self, rate: f32);
+        }
+        to self.gate {
+            /// Move the track's ramp to where it is steered at once.
+            #[call(snap)]
+            pub(crate) fn snap_gate(&mut self);
+            /// Whether the track has ramped out: it is silent and not read.
+            #[call(is_shut)]
+            pub(crate) fn is_stopped(&self) -> bool;
+        }
+    }
+
     /// Current media position in seconds.
     ///
     /// Tracks `served_media_frames / sample_rate` — i.e. what has actually
@@ -161,6 +232,7 @@ impl PlayerTrack {
     pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.resource.set_host_sample_rate(sample_rate);
         self.fade.update_sample_rate(sample_rate);
+        self.gate.update_sample_rate(sample_rate);
         self.sample_rate = sample_rate.get();
     }
 
@@ -181,8 +253,8 @@ impl PlayerTrack {
         }
     }
 
-    /// Instantly stop (silent, finished state).
-    pub fn stop(&mut self) {
+    /// Instantly finish (silent, finished state).
+    pub fn finish(&mut self) {
         self.set_state(TrackState::Finished);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
         self.fade.stop(sample_rate);
@@ -192,34 +264,6 @@ impl PlayerTrack {
     fn update_service_class(&self, state: TrackState) {
         self.resource
             .set_service_class(service_class_for_state(state));
-    }
-
-    delegate::delegate! {
-        to self.resource {
-            /// Cached span in seconds: how much of the source is on disk.
-            #[must_use]
-            pub fn cached_span(&self) -> f64;
-            /// Decoded-ahead frontier in seconds.
-            #[must_use]
-            pub fn decoded_frontier(&self) -> f64;
-            /// Current visible (post-gapless-trim) duration in seconds.
-            #[must_use]
-            #[expr(observed_duration(self.observed_duration, $))]
-            pub fn duration(&self) -> f64;
-            /// Control-plane handle used to begin this track's seeks off the audio thread.
-            #[must_use]
-            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
-            pub(crate) fn render_reader(&self) -> Option<RenderReader>;
-            /// Source identifier.
-            #[must_use]
-            pub fn src(&self) -> &Arc<str>;
-            /// Effective media seconds consumed per output second.
-            #[must_use]
-            pub(crate) fn playback_rate(&self) -> f32;
-            /// Apply a playback-rate target directly to this track's Warp controls.
-            #[call(apply_playback_rate)]
-            pub fn set_playback_rate(&mut self, rate: f32);
-        }
     }
 }
 

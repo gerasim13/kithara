@@ -154,7 +154,7 @@ async fn track_state_transitions(
         TrackStateScenario::Play => track.play(),
         TrackStateScenario::StopAfterPlay => {
             track.play();
-            track.stop();
+            track.finish();
         }
     }
     assert_eq!(track.state(), expected_state);
@@ -330,7 +330,7 @@ async fn read_outcome_matches_track_state(
 
     match scenario {
         ReadOutcomeScenario::Playing => track.play(),
-        ReadOutcomeScenario::Finished => track.stop(),
+        ReadOutcomeScenario::Finished => track.finish(),
     }
 
     let outcome = track.read(

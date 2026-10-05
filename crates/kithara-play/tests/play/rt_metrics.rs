@@ -104,7 +104,7 @@ fn peak(rendered: &[f32]) -> f32 {
 fn render_loaded_blocks(resource: Box<PlayerResource>, blocks: usize) -> (DeckMixer, Vec<f32>) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, resource);
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     pump(&mut processor, 1);
 
     if let Some(track) = processor.track_mut(item_id) {
@@ -162,7 +162,7 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
 fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let outgoing = load(&mut control, healthy_track(constant_half, "outgoing.mp3"));
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     control
         .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id: outgoing,
@@ -335,7 +335,7 @@ fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
 fn a_block_larger_than_declared_is_clamped_not_grown(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, healthy_track(constant_half, "ok.mp3"));
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     pump(&mut processor, 1);
     if let Some(track) = processor.track_mut(item_id) {
         track.play();

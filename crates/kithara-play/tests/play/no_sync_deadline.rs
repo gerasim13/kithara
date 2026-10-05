@@ -103,7 +103,7 @@ fn load_tracks(
             },
         );
     }
-    send(control, DeckPart::Start);
+    send(control, DeckPart::StartAll);
     render_block(processor, out_l, out_r);
 
     for (src, item_id) in &tracks {

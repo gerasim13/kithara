@@ -712,6 +712,6 @@ mod tests {
     #[kithara::test]
     fn send_to_slot_without_a_slot_is_an_error() {
         let player = player();
-        assert!(player.send_to_slot(DeckPart::Stop).is_err());
+        assert!(player.send_to_slot(DeckPart::StopAll).is_err());
     }
 }

@@ -14,6 +14,7 @@ use firewheel::{
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::{Inbox, Step};
+use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_signal::SessionFrame;
@@ -25,8 +26,8 @@ use ringbuf::{HeapProd, traits::Producer};
 use super::{DeckMixerConfig, context::read_render_context, track::PlayerTrack};
 use crate::{
     bridge::{
-        DeckMixSettings, DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification, TrackState,
-        TrackTransition,
+        DeckApplied, DeckMixSettings, DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification,
+        TrackState, TrackTransition,
     },
     rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
     session::SessionError,
@@ -63,6 +64,8 @@ pub(super) struct Deck {
     pub(super) prefetch_duration: f32,
     /// Media seconds every track consumes per output second.
     pub(super) rate: f32,
+    /// The ramp every track starts and stops with.
+    pub(super) declick: SmootherConfig,
     trash_tx: HeapProd<PlayerTrack>,
     /// Last effective rate successfully delivered to the control thread.
     last_notified_rate: f32,
@@ -177,10 +180,11 @@ impl DeckMixer {
         let mut leading = None;
         inbox.run_block(start, frames, |step| match step {
             Step::Due(mut due) => {
+                let mut applied = DeckApplied::default();
                 for part in due.commands_mut().drain(..) {
-                    deck.apply(part);
+                    deck.apply(part, &mut applied);
                 }
-                due.apply(());
+                due.apply(applied);
             }
             Step::Run(range) => {
                 deck.cleanup_finished_tracks();
@@ -220,6 +224,7 @@ impl DeckMixer {
                 mix,
                 prefetch_duration: 0.0,
                 rate: 1.0,
+                declick: config.declick(),
                 tracks: TrackSlots::new(config.slots()),
                 tracks_transitions: VecDeque::with_capacity(config.slots().get()),
             },
@@ -277,7 +282,7 @@ impl Deck {
         }
 
         if self.tracks.len() == 0 || retain.is_some() {
-            self.playback.playing.store(false, Ordering::SeqCst);
+            self.set_playing(false);
         }
     }
 
@@ -345,7 +350,6 @@ impl Deck {
         buffers: &mut ProcBuffers,
         range: Range<usize>,
     ) -> (bool, Option<(f64, f64)>) {
-        let is_playing = self.playback.playing.load(Ordering::SeqCst);
         self.render.render_range(
             context,
             RenderTargets {
@@ -356,7 +360,6 @@ impl Deck {
             },
             buffers,
             range,
-            is_playing,
         )
     }
 

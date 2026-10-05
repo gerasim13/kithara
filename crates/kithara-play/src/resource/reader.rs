@@ -760,7 +760,7 @@ mod tests {
                 epoch: 0,
             }))
             .expect("fade in first track");
-        control.send(DeckPart::Start).expect("start playback");
+        control.send(DeckPart::StartAll).expect("start playback");
         process_block(&mut processor, &mut extra);
         let _ = rate_notifications(&mut control);
 

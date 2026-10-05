@@ -23,11 +23,11 @@ where
 {
     fn apply_playback(&self, playback: SelectionPlayback) {
         if playback == SelectionPlayback::Play {
-            let _ = self.send_to_slot(DeckPart::Start);
+            let _ = self.send_to_slot(DeckPart::StartAll);
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            let _ = self.send_to_slot(DeckPart::Stop);
+            let _ = self.send_to_slot(DeckPart::StopAll);
             self.enter_paused();
         }
     }
@@ -85,7 +85,7 @@ where
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        let _ = self.send_to_slot(DeckPart::Stop);
+        let _ = self.send_to_slot(DeckPart::StopAll);
         self.enter_paused();
         debug!(phase = ?self.phase_kind(), "pause");
     }
@@ -114,7 +114,7 @@ where
             warn!(%error, "failed to allocate track playback buffers");
             false
         });
-        let _ = self.send_to_slot(DeckPart::Start);
+        let _ = self.send_to_slot(DeckPart::StartAll);
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);

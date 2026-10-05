@@ -13,7 +13,7 @@ pub struct DeckMixerConfig {
     /// matters least. Default: 4.
     #[config(builder(default = DEFAULT_DECK_SLOTS))]
     slots: NonZeroUsize,
-    /// The ramp that opens the deck's output on start and closes it on pause. Default: 5 ms.
+    /// The ramp that lets a track into the mix on start and takes it out on stop. Default: 5 ms.
     #[config(builder(default = DEFAULT_DECLICK))]
     declick: SmootherConfig,
 }

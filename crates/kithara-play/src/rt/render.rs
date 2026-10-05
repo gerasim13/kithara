@@ -5,10 +5,7 @@ use std::{
 
 use firewheel::node::ProcBuffers;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_dsp::{
-    fade::FadeCurve,
-    param::{Mix, MixDSP, SmoothedParam, SmootherConfig},
-};
+use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
@@ -40,21 +37,19 @@ pub(crate) struct RenderTargets<'a> {
 }
 
 pub(crate) struct RenderPass {
-    gate: MixDSP,
     /// The deck's output gain, ramped to each new target from the frame it is set on.
     gain: SmoothedParam,
-    scratch_bufs: [SampleBuffer; Self::SCRATCH_BUF_COUNT],
+    scratch_bufs: [SampleBuffer; Self::MIN_STEREO],
     range_tracks: RangeTracks,
+    /// Set until the first range renders, which moves every ramp to its target at once.
     priming: bool,
     capacity: usize,
 }
 
 impl RenderPass {
-    const GATE_CURVE: FadeCurve = FadeCurve::Linear;
     /// A deck's gain runs from silence to unity.
     const GAIN_SPAN: f32 = 1.0;
     const MIN_STEREO: usize = 2;
-    const SCRATCH_BUF_COUNT: usize = 4;
 
     pub(crate) fn new<S>(
         pools: &PoolRegion<S>,
@@ -76,19 +71,13 @@ impl RenderPass {
             range_tracks: RangeTracks::new(config.slots()),
             capacity: 0,
             priming: true,
-            gate: MixDSP::new(
-                Mix::FULLY_WET,
-                Self::GATE_CURVE,
-                config.declick(),
-                shape.sample_rate,
-            ),
         };
         pass.resize(shape.max_block_frames.get().as_());
         pass
     }
 
-    /// Render the active tracks over `range` of the block into the same frames of the output
-    /// buffers.
+    /// Render the playing, unstopped tracks over `range` of the block into the same frames of the
+    /// output buffers.
     ///
     /// Frames are clamped rather than grown, since growing a pooled buffer here would allocate on
     /// the audio thread; frames past the clamp are already silence-filled.
@@ -98,7 +87,6 @@ impl RenderPass {
         targets: RenderTargets<'_>,
         buffers: &mut ProcBuffers,
         range: Range<usize>,
-        is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
         let mut playback_started = false;
         let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
@@ -113,22 +101,25 @@ impl RenderPass {
 
         let frames = range.end.min(self.capacity);
         let start = range.start.min(frames);
-
-        if !self.steer_gate(is_playing) {
+        let tracks = targets.tracks;
+        if self.priming {
+            self.priming = false;
+            for (_, track) in tracks.iter_mut() {
+                track.snap_gate();
+            }
+            self.gain.reset_to_target();
+        }
+        self.range_tracks.refill(tracks);
+        if self.range_tracks.active.is_empty() {
+            self.gain.reset_to_target();
             return (false, None);
         }
 
-        let (read, bus) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
-        let (read_buf0, read_buf1) = read.split_at_mut(1);
-        let (bus_buf0, bus_buf1) = bus.split_at_mut(1);
-        let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
-        let mut bus_bufs = [&mut bus_buf0[0][..frames], &mut bus_buf1[0][..frames]];
-        for ch_buffer in &mut bus_bufs {
-            ch_buffer[start..].fill(0.0);
-        }
-        let tracks = targets.tracks;
+        let [read_buf0, read_buf1] = &mut self.scratch_bufs;
+        let mut read_bufs = [&mut read_buf0[..frames], &mut read_buf1[..frames]];
+        let (out_left, out_right) = buffers.outputs.split_at_mut(1);
+        let mut bus_bufs = [&mut out_left[0][..frames], &mut out_right[0][..frames]];
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
-        self.range_tracks.refill(tracks);
         let RangeTracks {
             loaded: loaded_tracks,
             active: active_tracks,
@@ -235,48 +226,19 @@ impl RenderPass {
             }
         }
 
-        let (out_left, out_right) = buffers.outputs.split_at_mut(1);
-        self.gate.mix_dry_into_wet_stereo(
-            &bus_bufs[0][start..],
-            &bus_bufs[1][start..],
-            &mut out_left[0][start..frames],
-            &mut out_right[0][start..frames],
-            frames - start,
-        );
-        self.apply_gain(
-            &mut out_left[0][start..frames],
-            &mut out_right[0][start..frames],
-        );
+        let [bus_left, bus_right] = &mut bus_bufs;
+        self.apply_gain(&mut bus_left[start..], &mut bus_right[start..]);
 
         (playback_started, leading_outcome_pos_dur)
     }
 
-    /// Moves the pause gate toward `is_playing`. Returns `false` when the deck renders silence:
-    /// paused with the gate settled closed, where the gain snaps to its target as well.
-    fn steer_gate(&mut self, is_playing: bool) -> bool {
-        self.gate.set_mix(
-            if is_playing {
-                Mix::FULLY_DRY
-            } else {
-                Mix::FULLY_WET
-            },
-            Self::GATE_CURVE,
-        );
-        if self.priming {
-            self.priming = false;
-            self.gate.reset_to_target();
-            self.gain.reset_to_target();
+    delegate::delegate! {
+        to self.gain {
+            /// Ramp the deck's output gain to `gain` from the next frame rendered.
+            #[call(set_value)]
+            pub(crate) fn set_gain(&mut self, gain: f32);
+            pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32);
         }
-        if !is_playing && self.gate.has_settled() {
-            self.gain.reset_to_target();
-            return false;
-        }
-        true
-    }
-
-    /// Ramp the deck's output gain to `gain` from the next frame rendered.
-    pub(crate) fn set_gain(&mut self, gain: f32) {
-        self.gain.set_value(gain);
     }
 
     fn apply_gain(&mut self, left: &mut [f32], right: &mut [f32]) {
@@ -311,11 +273,6 @@ impl RenderPass {
         }
         self.capacity = capacity;
     }
-
-    pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.gate.update_sample_rate(sample_rate);
-        self.gain.update_sample_rate(sample_rate);
-    }
 }
 
 /// The deck's tracks as one range sees them, in lists sized to the deck's slots so a range never
@@ -323,7 +280,8 @@ impl RenderPass {
 struct RangeTracks {
     /// Every held track and its state as the range begins, in slot order.
     loaded: Vec<(TrackSlot, TrackState)>,
-    /// The playing tracks: their index in `loaded`, their slot, and whether they lead.
+    /// The playing tracks that are not stopped: their index in `loaded`, their slot, and whether
+    /// they lead.
     active: Vec<ActiveTrackEntry>,
     /// Whether the track at each index of `loaded` is playing.
     active_slots: Vec<bool>,
@@ -347,11 +305,11 @@ impl RangeTracks {
             .extend(tracks.iter().map(|(slot, track)| (slot, track.state())));
         self.active.clear();
         self.active.extend(
-            self.loaded
+            tracks
                 .iter()
                 .enumerate()
-                .filter(|(_, (_, state))| state.is_playing())
-                .map(|(loaded_idx, (slot, state))| (loaded_idx, *slot, state.is_leading())),
+                .filter(|(_, (_, track))| track.state().is_playing() && !track.is_stopped())
+                .map(|(loaded_idx, (slot, track))| (loaded_idx, slot, track.state().is_leading())),
         );
         self.active_slots.clear();
         self.active_slots.resize(self.loaded.len(), false);

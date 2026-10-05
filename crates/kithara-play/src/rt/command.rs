@@ -7,7 +7,7 @@ use super::{
     processor::Deck,
     track::{PlayerResource, PlayerTrack},
 };
-use crate::bridge::{DeckPart, PlayerNotification, TrackState, TrackTransition};
+use crate::bridge::{DeckApplied, DeckPart, PlayerNotification, TrackState, TrackTransition};
 
 impl Deck {
     fn apply_fade_duration(&mut self, duration: f32) {
@@ -47,7 +47,7 @@ impl Deck {
                     track.play();
                 }
                 TrackState::FadingOut => {
-                    track.stop();
+                    track.finish();
                 }
                 TrackState::Finished if track.ended_at_eof() && seconds < track.duration() => {
                     track.seek(seconds);
@@ -58,7 +58,16 @@ impl Deck {
             }
         }
         if revived {
-            self.playback.playing.store(true, Ordering::SeqCst);
+            self.set_playing(true);
+        }
+    }
+
+    /// Starts or stops every held track with the deck's transport; tracks attached later follow
+    /// it.
+    pub(super) fn set_playing(&mut self, playing: bool) {
+        self.playback.playing.store(playing, Ordering::SeqCst);
+        for (_, track) in self.tracks.iter_mut() {
+            track.steer_gate(playing);
         }
     }
 
@@ -67,15 +76,15 @@ impl Deck {
             self.unload_slot(slot);
         }
         self.tracks_transitions.clear();
-        self.playback.playing.store(false, Ordering::SeqCst);
+        self.set_playing(false);
         self.playback.position.store(0.0);
         self.playback.frontier.store(0.0);
         self.playback.cached.store(0.0);
         self.playback.duration.store(0.0);
     }
 
-    /// Applies one part of a due batch.
-    pub(super) fn apply(&mut self, part: DeckPart) {
+    /// Applies one part of a due batch, noting in `applied` what the batch reports.
+    pub(super) fn apply(&mut self, part: DeckPart, applied: &mut DeckApplied) {
         match part {
             DeckPart::Attach { resource, item_id } => {
                 self.load_track(resource, item_id);
@@ -107,11 +116,22 @@ impl Deck {
             } => {
                 self.apply_seek(seconds, seek_epoch);
             }
-            DeckPart::Start => {
-                self.playback.playing.store(true, Ordering::SeqCst);
+            DeckPart::Start { item_id } => {
+                if let Some(track) = self.tracks.get_mut(item_id) {
+                    track.start();
+                }
             }
-            DeckPart::Stop => {
-                self.playback.playing.store(false, Ordering::SeqCst);
+            DeckPart::Stop { item_id } => {
+                if let Some(track) = self.tracks.get_mut(item_id) {
+                    applied.stopped_at = Some(track.position());
+                    track.stop();
+                }
+            }
+            DeckPart::StartAll => {
+                self.set_playing(true);
+            }
+            DeckPart::StopAll => {
+                self.set_playing(false);
             }
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
@@ -205,6 +225,8 @@ impl Deck {
             .crossfade(self.crossfade)
             .prefetch_duration(self.prefetch_duration)
             .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))
+            .declick(self.declick)
+            .stopped(!self.playback.playing.load(Ordering::SeqCst))
             .build(resource);
         track.set_playback_rate(self.rate);
 

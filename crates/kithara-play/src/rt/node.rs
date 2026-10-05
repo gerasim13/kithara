@@ -160,8 +160,8 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case(crate::bridge::DeckPart::Stop)]
-    #[case(crate::bridge::DeckPart::Start)]
+    #[case(crate::bridge::DeckPart::StopAll)]
+    #[case(crate::bridge::DeckPart::StartAll)]
     #[case(crate::bridge::DeckPart::SetFadeDuration(0.25))]
     fn player_node_with_inputs(#[case] part: crate::bridge::DeckPart) {
         let (node, mut control) = make_node();
@@ -186,7 +186,7 @@ mod tests {
                 .next_due(kithara_signal::SessionFrame::default(), 1)
                 .map(|due| {
                     let parts = due.commands().len();
-                    due.apply(());
+                    due.apply(crate::bridge::DeckApplied::default());
                     parts
                 })
         };

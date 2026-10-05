@@ -174,11 +174,11 @@ async fn start_and_stop_switch_a_loaded_deck() {
         })
         .ok();
 
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     block(&mut processor);
     assert!(processor.playback().playing.load(AtomicOrdering::SeqCst));
 
-    control.send(DeckPart::Stop).ok();
+    control.send(DeckPart::StopAll).ok();
     block(&mut processor);
     assert!(!processor.playback().playing.load(AtomicOrdering::SeqCst));
 }
@@ -473,7 +473,7 @@ async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
     block(&mut processor);
 
     if let Some(track) = processor.track_mut(item_id) {
-        track.stop();
+        track.finish();
     }
 
     block(&mut processor);
@@ -499,7 +499,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
             item_id: long_id,
         })
         .ok();
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     block(&mut processor);
 
     processor
@@ -547,7 +547,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
             item_id: preload_id,
         })
         .ok();
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     block(&mut processor);
 
     processor
@@ -602,7 +602,7 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
             })
             .ok();
     }
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     block(&mut processor);
     processor
         .track_mut(leading_id)
@@ -657,7 +657,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
             item_id: successor_id,
         })
         .ok();
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     block(&mut processor);
     processor
         .track_mut(leading_id)
@@ -706,7 +706,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
             item_id: preload_id,
         })
         .ok();
-    control.send(DeckPart::Start).ok();
+    control.send(DeckPart::StartAll).ok();
     block(&mut processor);
 
     processor

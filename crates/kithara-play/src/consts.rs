@@ -64,7 +64,7 @@ pub(crate) const DEFAULT_DECK_SLOTS: NonZeroUsize = match NonZeroUsize::new(4) {
     None => unreachable!(),
 };
 
-/// The ramp of a deck's pause gate: 5 ms.
+/// The ramp a track starts and stops with: 5 ms.
 pub(crate) const DEFAULT_DECLICK: SmootherConfig = SmootherConfig {
     smooth_seconds: 0.005,
     settle_ratio: DEFAULT_SETTLE_RATIO,

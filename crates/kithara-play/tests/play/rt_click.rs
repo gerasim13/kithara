@@ -12,8 +12,13 @@ use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     Resource, SharedEq,
-    bridge::{DeckMixSettingsChange, DeckPart, SlotControl, TrackTransition, slot_channels},
-    rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
+    bridge::{
+        DeckApplied, DeckMixSettingsChange, DeckPart, SlotControl, TrackTransition, slot_channels,
+    },
+    rt::{
+        DeckMixer, DeckMixerConfig, StreamShape,
+        track::{PlayerResource, PlayerTrack},
+    },
 };
 use kithara_signal::{AudioSpec, FaderValue, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
@@ -133,7 +138,7 @@ fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
 fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, DeckPart::Start);
+    push(&mut control, DeckPart::StartAll);
     block(&mut processor);
     start(&mut processor, item_id);
 
@@ -144,7 +149,7 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
         last(&playing)
     );
 
-    push(&mut control, DeckPart::Stop);
+    push(&mut control, DeckPart::StopAll);
     let paused = pump(&mut processor, SETTLE_BLOCKS);
 
     let step = max_step(&across(&playing, &paused));
@@ -169,16 +174,16 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
 fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, DeckPart::Start);
+    push(&mut control, DeckPart::StartAll);
     block(&mut processor);
     start(&mut processor, item_id);
     pump(&mut processor, WARMUP_BLOCKS);
 
-    push(&mut control, DeckPart::Stop);
+    push(&mut control, DeckPart::StopAll);
     let paused = pump(&mut processor, SETTLE_BLOCKS);
     assert!(last(&paused) == 0.0, "the pause settled at silence");
 
-    push(&mut control, DeckPart::Start);
+    push(&mut control, DeckPart::StartAll);
     let resumed = pump(&mut processor, SETTLE_BLOCKS);
 
     let step = max_step(&across(&paused, &resumed));
@@ -213,7 +218,7 @@ fn a_start_inside_a_block_sounds_from_its_frame(constant_half: &'static [u8]) {
             When::At(at),
             Batch {
                 basis: Vec::new(),
-                commands: vec![DeckPart::Start],
+                commands: vec![DeckPart::StartAll],
             },
         )
         .expect("the deck channel has room");
@@ -238,6 +243,125 @@ fn a_start_inside_a_block_sounds_from_its_frame(constant_half: &'static [u8]) {
     );
 }
 
+/// Two media positions read off one clock agree to well under a frame.
+const SAME_POSITION: f64 = 1.0e-9;
+
+fn seconds(frames: usize) -> f64 {
+    f64::from(u32::try_from(frames).expect("a frame count fits the clock")) / f64::from(SAMPLE_RATE)
+}
+
+fn position(processor: &DeckMixer, item_id: TrackId) -> f64 {
+    processor
+        .track(item_id)
+        .map(PlayerTrack::position)
+        .expect("the deck holds the track")
+}
+
+#[kithara::test]
+fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
+    constant_half: &'static [u8],
+    constant_quarter: &'static [u8],
+) {
+    let (mut processor, mut control) = processor();
+    let first = load(&mut control, "a.mp3", constant_half);
+    let second = load(&mut control, "b.mp3", constant_quarter);
+    push(&mut control, DeckPart::Start { item_id: first });
+    push(&mut control, DeckPart::Start { item_id: second });
+    let both = pump(&mut processor, WARMUP_BLOCKS);
+    let mixed = TEST_PCM_DEFAULT_VALUE + SECOND_LEVEL;
+    assert!(
+        (last(&both) - mixed).abs() < EXACT,
+        "both started tracks sound ({})",
+        last(&both)
+    );
+    let before = position(&processor, first);
+
+    let origin = i64::try_from(BLOCK_FRAMES).expect("a block fits the clock");
+    let offset = BLOCK_FRAMES / 2;
+    let at = SessionFrame::new(origin + i64::try_from(offset).expect("an offset fits the clock"));
+    let seq = control
+        .deck
+        .send(
+            When::At(at),
+            Batch {
+                basis: Vec::new(),
+                commands: vec![DeckPart::Stop { item_id: first }],
+            },
+        )
+        .expect("the deck channel has room");
+    let (stopping, _) = block_from(&mut processor, SessionFrame::new(origin));
+
+    assert!(
+        stopping[..offset]
+            .iter()
+            .all(|sample| (*sample - mixed).abs() < EXACT),
+        "both tracks sound up to the frame the stop applies on"
+    );
+    assert!(
+        stopping[offset] < mixed,
+        "the stopped track's share falls from the frame the stop applies on"
+    );
+    let answer = control
+        .deck
+        .receipts()
+        .find(|receipt| receipt.seq() == seq)
+        .expect("the stop is answered in the block it applies in");
+    let expected = before + seconds(offset);
+    assert!(
+        matches!(
+            answer.outcome(),
+            Outcome::Applied {
+                at: applied,
+                data: DeckApplied { stopped_at: Some(stopped_at) },
+            } if *applied == at && (*stopped_at - expected).abs() < SAME_POSITION
+        ),
+        "the stop is applied at its frame and reports where the track stood on it \
+         ({expected}): {:?}",
+        answer.outcome()
+    );
+
+    let stopped = pump(&mut processor, SETTLE_BLOCKS);
+    let ramp = [stopping, stopped.clone()].concat();
+    let step = max_step(&across(&both, &ramp));
+    assert!(
+        step <= MAX_STEP,
+        "a stop ramps its track out, it does not cut it (step {step})"
+    );
+    assert!(
+        ramp.iter().all(|sample| *sample >= SECOND_LEVEL - EXACT),
+        "the other track keeps sounding through the stop"
+    );
+    assert!(
+        (last(&stopped) - SECOND_LEVEL).abs() < EXACT,
+        "the other track sounds alone once the ramp has run out ({})",
+        last(&stopped)
+    );
+    let held = position(&processor, first);
+    pump(&mut processor, SETTLE_BLOCKS);
+    assert!(
+        (position(&processor, first) - held).abs() < SAME_POSITION,
+        "a stopped track is not read once its ramp has run out"
+    );
+
+    push(&mut control, DeckPart::Start { item_id: first });
+    let resumed = pump(&mut processor, SETTLE_BLOCKS);
+    let step = max_step(&across(&stopped, &resumed));
+    assert!(
+        step <= MAX_STEP,
+        "a start ramps its track in, it does not step it (step {step})"
+    );
+    assert!(
+        (last(&resumed) - mixed).abs() < EXACT,
+        "the restarted track sounds with the other again ({})",
+        last(&resumed)
+    );
+    assert!(
+        (position(&processor, first) - (held + seconds(SETTLE_BLOCKS * BLOCK_FRAMES))).abs()
+            < SAME_POSITION,
+        "the restarted track plays on from where it held"
+    );
+}
+
 /// Half the fader, a quarter of the amplitude: the deck sounds at the square of its volume.
 const HALF_FADER_GAIN: f32 = 0.25;
 
@@ -253,7 +377,7 @@ fn half_volume() -> DeckPart {
 fn a_volume_change_inside_a_block_moves_the_gain_from_its_frame(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, DeckPart::Start);
+    push(&mut control, DeckPart::StartAll);
     block(&mut processor);
     start(&mut processor, item_id);
     let unity = pump(&mut processor, WARMUP_BLOCKS);
@@ -315,7 +439,7 @@ fn a_volume_change_inside_a_block_moves_the_gain_from_its_frame(constant_half: &
 fn a_muted_deck_is_silent_at_any_volume_and_unmutes_to_it(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, DeckPart::Start);
+    push(&mut control, DeckPart::StartAll);
     block(&mut processor);
     start(&mut processor, item_id);
     let unity = pump(&mut processor, WARMUP_BLOCKS);
@@ -350,7 +474,7 @@ fn fading_in(constant_half: &'static [u8]) -> (DeckMixer, SlotControl, Vec<f32>,
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, DeckPart::SetFadeDuration(FADE_SECONDS));
-    push(&mut control, DeckPart::Start);
+    push(&mut control, DeckPart::StartAll);
     push(
         &mut control,
         DeckPart::Fade(TrackTransition::FadeIn {
@@ -532,7 +656,7 @@ fn a_track_started_without_a_crossfade_is_instant(
     let (mut processor, mut control) = processor();
     let first_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, DeckPart::SetFadeDuration(0.0));
-    push(&mut control, DeckPart::Start);
+    push(&mut control, DeckPart::StartAll);
     block(&mut processor);
     start(&mut processor, first_id);
 

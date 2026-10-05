@@ -470,7 +470,7 @@ mod tests {
             .expect("the slot must carry playback state");
         playback.position.store(62.3);
         playback.duration.store(64.295);
-        while player.send_to_slot(DeckPart::Start).is_ok() {}
+        while player.send_to_slot(DeckPart::StartAll).is_ok() {}
 
         player.commit_next(1).expect("commit_next must succeed");
 
@@ -553,7 +553,7 @@ mod tests {
     fn select_third_with_its_load_refused(player: &PlayerImpl<TestPools>) {
         for _ in 0..30 {
             player
-                .send_to_slot(DeckPart::Stop)
+                .send_to_slot(DeckPart::StopAll)
                 .expect("fixture leaves room for the setting and the withdrawal");
         }
         let _ = player.select_item(2, SelectionPlayback::Play);
@@ -663,7 +663,7 @@ mod tests {
     #[kithara::test]
     fn a_successor_whose_cancel_the_ring_refused_is_reported_when_stitched_in_later() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
-        while player.send_to_slot(DeckPart::Stop).is_ok() {}
+        while player.send_to_slot(DeckPart::StopAll).is_ok() {}
         player.unarm_next();
         assert!(
             !audio_thread
@@ -709,7 +709,7 @@ mod tests {
     #[kithara::test]
     fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
-        while player.send_to_slot(DeckPart::Stop).is_ok() {}
+        while player.send_to_slot(DeckPart::StopAll).is_ok() {}
         player.unarm_next();
         audio_thread.take_commands();
         player.arm_next(2).expect("re-arm accepted");

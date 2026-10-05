@@ -102,7 +102,7 @@ fn load_tracks(processor: &mut DeckMixer, control: &mut SlotControl, pools: &Poo
             },
         );
     }
-    send(control, DeckPart::Start);
+    send(control, DeckPart::StartAll);
     let frames = block_frames();
     render_block(processor, &mut vec![0.0; frames], &mut vec![0.0; frames]);
 

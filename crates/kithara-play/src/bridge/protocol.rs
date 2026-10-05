@@ -17,7 +17,7 @@ use crate::rt::track::PlayerResource;
 pub enum DeckProtocol {}
 
 impl Protocol for DeckProtocol {
-    type Applied = ();
+    type Applied = DeckApplied;
     type Clock = SessionFrame;
     type Command = DeckPart;
     type Refusal = Infallible;
@@ -26,6 +26,14 @@ impl Protocol for DeckProtocol {
     fn frames_since(at: SessionFrame, start: SessionFrame) -> Option<u64> {
         at.frames_since(start)
     }
+}
+
+/// What a deck reports of a batch it applied.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DeckApplied {
+    /// The media position, in seconds, the track the batch stopped stood at on the frame the
+    /// batch applied on.
+    pub stopped_at: Option<f64>,
 }
 
 /// One change a deck applies on its audio thread.
@@ -48,10 +56,15 @@ pub enum DeckPart {
     Fade(TrackTransition),
     /// Seek active tracks to the given position in seconds.
     Seek { seconds: f64, seek_epoch: u64 },
-    /// Let the deck's output sound from this frame on.
-    Start,
-    /// Fade the deck's output to silence from this frame on.
-    Stop,
+    /// Let a held track sound from this frame on, ramped in over the deck's declick.
+    Start { item_id: TrackId },
+    /// Ramp a held track out from this frame on; once silent it is not read, so it holds its
+    /// position until a later `Start`.
+    Stop { item_id: TrackId },
+    /// Start every held track, and every track attached after, from this frame on.
+    StartAll,
+    /// Stop every held track, and attach later tracks stopped, from this frame on.
+    StopAll,
     /// Change how loud the deck sounds from this frame on.
     Mix(DeckMixSettingsChange),
     /// Update the fade duration.
@@ -85,8 +98,10 @@ impl fmt::Debug for DeckPart {
                 .field("seconds", seconds)
                 .field("seek_epoch", seek_epoch)
                 .finish(),
-            Self::Start => f.write_str("Start"),
-            Self::Stop => f.write_str("Stop"),
+            Self::Start { item_id } => f.debug_struct("Start").field("item_id", item_id).finish(),
+            Self::Stop { item_id } => f.debug_struct("Stop").field("item_id", item_id).finish(),
+            Self::StartAll => f.write_str("StartAll"),
+            Self::StopAll => f.write_str("StopAll"),
             Self::Mix(change) => f.debug_tuple("Mix").field(change).finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),

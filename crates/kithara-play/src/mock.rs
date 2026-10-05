@@ -121,7 +121,7 @@ impl SessionMock {
                 .run_block(kithara_signal::SessionFrame::default(), 1, |step| {
                     if let kithara_command::Step::Due(mut due) = step {
                         commands.append(due.commands_mut());
-                        due.apply(());
+                        due.apply(crate::bridge::DeckApplied::default());
                     }
                 });
         }
