@@ -125,7 +125,7 @@ fn manual_cut_and_rotation_publish_exact_independent_parts(record_labels: Vec<f3
 
     assert_eq!(report.frames, 9);
     assert_eq!(report.parts, 3);
-    let parts = parts.0.lock();
+    let parts = parts.0.lock().clone();
     assert_eq!(parts.len(), 3);
     assert_eq!(wav_samples(&parts[0]), [1.0, 101.0, 2.0, 102.0, 3.0, 103.0]);
     assert_eq!(

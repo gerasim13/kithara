@@ -305,29 +305,31 @@ fn bench_analysis_worker(c: &mut Criterion) {
     ));
     let source_frames = assert_complete_analysis(&analysis_worker, &warm);
 
-    let mut group = c.benchmark_group("audit_analysis_worker");
-    group.sampling_mode(SamplingMode::Flat);
-    group.sample_size(20);
-    group.warm_up_time(Duration::from_secs(1));
-    group.measurement_time(Duration::from_secs(4));
-    group.throughput(Throughput::Elements(source_frames));
+    {
+        let mut group = c.benchmark_group("audit_analysis_worker");
+        group.sampling_mode(SamplingMode::Flat);
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_secs(1));
+        group.measurement_time(Duration::from_secs(4));
+        group.throughput(Throughput::Elements(source_frames));
 
-    group.bench_function("decode_waveform_and_beat_to_settled", |b| {
-        b.iter_with_large_drop(|| {
-            let progress = rt.block_on(analyze_track(
-                &analysis_worker,
-                &play_worker,
-                black_box(&file_path),
-                &store,
-                &pools,
-                &token,
-            ));
-            assert_complete_analysis(&analysis_worker, &progress);
-            black_box(progress)
+        group.bench_function("decode_waveform_and_beat_to_settled", |b| {
+            b.iter_with_large_drop(|| {
+                let progress = rt.block_on(analyze_track(
+                    &analysis_worker,
+                    &play_worker,
+                    black_box(&file_path),
+                    &store,
+                    &pools,
+                    &token,
+                ));
+                assert_complete_analysis(&analysis_worker, &progress);
+                black_box(progress)
+            });
         });
-    });
 
-    group.finish();
+        group.finish();
+    }
 
     let chunk_frames = NonZeroU64::new(
         u64::from(warm.analysis().source_sample_rate().get()) * consts::ANALYSIS_CHUNK_SECONDS,

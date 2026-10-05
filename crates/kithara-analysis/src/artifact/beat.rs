@@ -156,6 +156,35 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
     }
 }
 
+fn write_marks(w: &mut Writer<'_>, frames: &[u64], confidence: &[Option<f32>]) {
+    w.write_len(frames.len());
+    for (frame, confidence) in frames.iter().zip(confidence.iter()) {
+        w.write_u64(*frame);
+        w.write_u32(u32::from(confidence.is_some()));
+        w.write_f32(confidence.unwrap_or(0.0));
+    }
+}
+
+fn read_marks(r: &mut Reader<'_>) -> Result<Vec<MarkedBeat>, BlobError> {
+    let count = r.read_len()?;
+    let mut out: Vec<MarkedBeat> = Vec::with_capacity(count.min(MAX_PREALLOC));
+    for _ in 0..count {
+        let frame = r.read_u64()?;
+        let present = r.read_u32()?;
+        let confidence = r.read_f32()?;
+        let confidence = match present {
+            0 => None,
+            1 => Some(confidence),
+            _ => return Err(BlobError::Corrupt),
+        };
+        if confidence.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {
+            return Err(BlobError::Corrupt);
+        }
+        out.push((frame, confidence));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod bytes_tests {
     use kithara_platform::sync::Arc;
@@ -285,33 +314,4 @@ mod bytes_tests {
         trailing.push(0);
         assert!(corrupt(&trailing), "trailing garbage");
     }
-}
-
-fn write_marks(w: &mut Writer<'_>, frames: &[u64], confidence: &[Option<f32>]) {
-    w.write_len(frames.len());
-    for (frame, confidence) in frames.iter().zip(confidence.iter()) {
-        w.write_u64(*frame);
-        w.write_u32(u32::from(confidence.is_some()));
-        w.write_f32(confidence.unwrap_or(0.0));
-    }
-}
-
-fn read_marks(r: &mut Reader<'_>) -> Result<Vec<MarkedBeat>, BlobError> {
-    let count = r.read_len()?;
-    let mut out: Vec<MarkedBeat> = Vec::with_capacity(count.min(MAX_PREALLOC));
-    for _ in 0..count {
-        let frame = r.read_u64()?;
-        let present = r.read_u32()?;
-        let confidence = r.read_f32()?;
-        let confidence = match present {
-            0 => None,
-            1 => Some(confidence),
-            _ => return Err(BlobError::Corrupt),
-        };
-        if confidence.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {
-            return Err(BlobError::Corrupt);
-        }
-        out.push((frame, confidence));
-    }
-    Ok(out)
 }

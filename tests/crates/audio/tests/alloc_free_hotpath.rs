@@ -158,7 +158,7 @@ fn build_resampler(pools: &Pools, source_rate: u32, target_rate: u32) -> impl Re
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
-fn build_glide(pools: &Pools) -> impl Resampler + ResamplerControl {
+fn build_glide(pools: &Pools) -> impl ResamplerControl {
     let settings = ResamplerSettings::builder()
         .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
         .mode(ResamplerMode::VariableRatio {

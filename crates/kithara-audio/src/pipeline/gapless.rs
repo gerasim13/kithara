@@ -123,6 +123,43 @@ fn tail_compensation(
         .filter(|_| !codec.is_some_and(AudioCodec::transform_padded))
 }
 
+fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {
+    let frames = profile.default_priming_frames();
+    if frames == 0 {
+        GaplessTrimmer::disabled()
+    } else {
+        GaplessTrimmer::codec_priming(frames, profile.spec().sample_rate.get())
+    }
+}
+
+/// Returns the PCM duration downstream of exact metadata trim.
+///
+/// Heuristic trim keeps the raw duration until EOF reconciles the timeline.
+#[must_use]
+pub(crate) fn visible_duration(
+    raw: Option<Duration>,
+    profile: GaplessProfile,
+    mode: GaplessMode,
+) -> Option<Duration> {
+    let raw = raw?;
+    if matches!(mode, GaplessMode::Disabled) {
+        return Some(raw);
+    }
+    let Some(info) = profile.gapless() else {
+        return Some(raw);
+    };
+    let trim_frames = info.leading_frames.saturating_add(info.trailing_frames);
+    if trim_frames == 0 {
+        return Some(raw);
+    }
+
+    let trim = profile
+        .spec()
+        .duration_for(trim_frames)
+        .unwrap_or(Duration::from_nanos(u64::MAX));
+    Some(raw.saturating_sub(trim))
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_signal::AudioChunkInfo;
@@ -163,41 +200,4 @@ mod tests {
         stage.prepare_deferred();
         assert!(stage.retired_pending.is_empty());
     }
-}
-
-fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {
-    let frames = profile.default_priming_frames();
-    if frames == 0 {
-        GaplessTrimmer::disabled()
-    } else {
-        GaplessTrimmer::codec_priming(frames, profile.spec().sample_rate.get())
-    }
-}
-
-/// Returns the PCM duration downstream of exact metadata trim.
-///
-/// Heuristic trim keeps the raw duration until EOF reconciles the timeline.
-#[must_use]
-pub(crate) fn visible_duration(
-    raw: Option<Duration>,
-    profile: GaplessProfile,
-    mode: GaplessMode,
-) -> Option<Duration> {
-    let raw = raw?;
-    if matches!(mode, GaplessMode::Disabled) {
-        return Some(raw);
-    }
-    let Some(info) = profile.gapless() else {
-        return Some(raw);
-    };
-    let trim_frames = info.leading_frames.saturating_add(info.trailing_frames);
-    if trim_frames == 0 {
-        return Some(raw);
-    }
-
-    let trim = profile
-        .spec()
-        .duration_for(trim_frames)
-        .unwrap_or(Duration::from_nanos(u64::MAX));
-    Some(raw.saturating_sub(trim))
 }

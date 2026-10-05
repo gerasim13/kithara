@@ -75,10 +75,7 @@ async fn audio_file_mp3_decodes_with_duration(
         },
         delivery: Delivery::Range,
     });
-    let url = match suffix {
-        Some(s) => handle.child_url(s),
-        None => handle.url(),
-    };
+    let url = suffix.map_or_else(|| handle.url(), |s| handle.child_url(s));
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.clone().into())

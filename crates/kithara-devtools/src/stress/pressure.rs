@@ -610,9 +610,8 @@ mod tests {
             proc_path: temp.path().join("missing-proc"),
         };
 
-        let error = match Sampler::start_with_context(&path, context) {
-            Ok(_) => panic!("missing proc root must fail startup"),
-            Err(error) => error,
+        let Err(error) = Sampler::start_with_context(&path, context) else {
+            panic!("missing proc root must fail startup");
         };
         let contents = fs::read_to_string(path).expect("read pressure artifact");
         let record = serde_json::from_str::<Value>(contents.trim()).expect("parse end record");

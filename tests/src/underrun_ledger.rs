@@ -167,6 +167,7 @@ mod tests {
         ]);
 
         let ledger = UnderrunLedger::from_probes(&trace.events());
+        drop(trace);
 
         assert_eq!(ledger.unparsed, 0);
         assert_eq!(ledger.events[0].silence(), 1_028..1_128);
@@ -192,6 +193,7 @@ mod tests {
         ]);
 
         let ledger = UnderrunLedger::from_probes(&trace.events());
+        drop(trace);
 
         assert!(ledger.events.is_empty());
         assert_eq!(ledger.unparsed, 1);
@@ -211,6 +213,7 @@ mod tests {
         );
 
         let ledger = UnderrunLedger::from_probes(&trace.events());
+        drop(trace);
 
         assert_eq!(ledger, UnderrunLedger::default());
     }
@@ -226,6 +229,7 @@ mod tests {
         ]);
 
         let ledger = UnderrunLedger::from_probes(&trace.events());
+        drop(trace);
 
         assert!(ledger.events[0].silence().is_empty());
     }
@@ -239,6 +243,7 @@ mod tests {
             ("available_frames", 64),
         ]);
         let ledger = UnderrunLedger::from_probes(&trace.events());
+        drop(trace);
 
         assert_eq!(ledger.unparsed, 0);
         assert_eq!(

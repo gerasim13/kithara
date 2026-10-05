@@ -1,3 +1,4 @@
+use firewheel::Volume;
 pub use kithara_events::{SlotId, TrackId};
 
 /// How far the whole session output is lowered under a competing sound.
@@ -11,13 +12,13 @@ pub enum SessionDuckingMode {
 }
 
 impl SessionDuckingMode {
-    /// Session-output gain represented by this ducking policy.
+    /// The fader volume this ducking policy sets the session output to.
     #[must_use]
-    pub const fn gain(self) -> f32 {
+    pub const fn volume(self) -> Volume {
         match self {
-            Self::Off => 1.0,
-            Self::Soft => 0.4,
-            Self::Hard => 0.2,
+            Self::Off => Volume::UNITY_GAIN,
+            Self::Soft => Volume::Linear(0.4),
+            Self::Hard => Volume::Linear(0.2),
         }
     }
 }

@@ -298,7 +298,14 @@ fn module_root<'a>(ui: &'a CompiledUi, instance: &str) -> &'a ExpandedNode {
     root
 }
 
-fn cells(node: &ExpandedNode, axis: MeasureAxis) -> Vec<((f32, Option<f32>), &ExpandedNode)> {
+/// The room a cell stands in: from a threshold, and below a ceiling when one
+/// is set.
+type Band = (f32, Option<f32>);
+
+/// A test's rewrite of one shipped package file's text.
+type Edit = fn(&str) -> String;
+
+fn cells(node: &ExpandedNode, axis: MeasureAxis) -> Vec<(Band, &ExpandedNode)> {
     let (ExpandedNode::Row {
         measure, children, ..
     }
@@ -324,14 +331,14 @@ fn cells(node: &ExpandedNode, axis: MeasureAxis) -> Vec<((f32, Option<f32>), &Ex
         .collect()
 }
 
-fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option<f32>), &'a str)> {
+fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<(Band, &'a str)> {
     cells(bar, MeasureAxis::Width)
         .into_iter()
         .map(|(band, cell)| (band, cell_id(ui, cell)))
         .collect()
 }
 
-fn root_cells(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &CompiledNode)> {
+fn root_cells(ui: &CompiledUi) -> Vec<(Band, &CompiledNode)> {
     let CompiledNode::Split {
         measure, children, ..
     } = &ui.root
@@ -349,11 +356,7 @@ fn root_cells(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &CompiledNode)> {
         .collect()
 }
 
-fn standing<'a>(
-    ui: &'a CompiledUi,
-    cells: &[((f32, Option<f32>), &'a CompiledNode)],
-    room: f32,
-) -> Vec<&'a str> {
+fn standing<'a>(ui: &'a CompiledUi, cells: &[(Band, &'a CompiledNode)], room: f32) -> Vec<&'a str> {
     let mut out: Vec<&str> = cells
         .iter()
         .filter(|((from, until), _)| *from <= room && until.is_none_or(|until| room < until))
@@ -363,7 +366,7 @@ fn standing<'a>(
     out
 }
 
-fn standing_height(cells: &[((f32, Option<f32>), &CompiledNode)], room: f32) -> f32 {
+fn standing_height(cells: &[(Band, &CompiledNode)], room: f32) -> f32 {
     cells
         .iter()
         .filter(|((from, until), _)| *from <= room && until.is_none_or(|until| room < until))
@@ -1747,7 +1750,7 @@ fn a_manifest_on_disk_answers_before_the_one_this_build_embeds() {
     );
 }
 
-fn edited_package(edits: &[(&str, fn(&str) -> String)]) -> tempfile::TempDir {
+fn edited_package(edits: &[(&str, Edit)]) -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("a temporary package root");
     for (path, edit) in edits {
         let shipped = super::package::embedded()

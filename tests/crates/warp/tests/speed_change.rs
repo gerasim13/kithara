@@ -187,6 +187,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         time::sleep(period.saturating_sub(started.elapsed())).await;
     }
     let opened = trace.events_of("source_opened").len();
+    drop(trace);
     let underruns = harness
         .metrics()
         .underruns()

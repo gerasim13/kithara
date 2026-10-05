@@ -1011,6 +1011,8 @@ mod native {
             }),
             "queued task cancellation probe"
         );
+        #[cfg(feature = "usdt")]
+        drop(trace);
         assert_eq!(
             received
                 .recv_timeout(Instant::now() + default_timeout())

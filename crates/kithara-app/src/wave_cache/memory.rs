@@ -187,7 +187,7 @@ pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{num::NonZeroU32, ops::Range};
 
     use ::kithara::platform::sync::Arc;
     /// The test macro import shadows the `kithara` crate name; use absolute path.
@@ -279,9 +279,16 @@ mod tests {
             .coverage(coverage)
             .fingerprint(fp())
             .maybe_waveform(waveform)
-            .maybe_beat(
-                beat.map(|grid| BeatSnapshot::new(grid, BeatState::Provisional, vec![100..150])),
-            )
+            .maybe_beat(beat.map(|grid| {
+                BeatSnapshot::new(
+                    grid,
+                    BeatState::Provisional,
+                    vec![Range {
+                        start: 100,
+                        end: 150,
+                    }],
+                )
+            }))
             .build()
     }
 

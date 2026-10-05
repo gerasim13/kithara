@@ -13,7 +13,7 @@ Brief description of the changes.
 ## Checklist
 
 - [ ] `cargo fmt --all --check` passes
-- [ ] `cargo clippy --workspace -- -D warnings` passes
+- [ ] `just check clippy` passes
 - [ ] Tests added/updated
 - [ ] No `unwrap()`/`expect()` in production code
 - [ ] Documentation updated (if applicable)
