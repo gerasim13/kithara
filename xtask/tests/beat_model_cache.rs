@@ -103,7 +103,9 @@ impl Fixture {
             .env("KITHARA_BEAT_MODEL_CACHE", &self.cache)
             .env(
                 "KITHARA_TEST_MODEL_URL",
-                reqwest::Url::from_file_path(&self.source).expect("local model source URL").as_str(),
+                reqwest::Url::from_file_path(&self.source)
+                    .expect("local model source URL")
+                    .as_str(),
             )
             .env(
                 "KITHARA_TEST_MODEL_HASH",
@@ -118,7 +120,11 @@ impl Fixture {
     }
 
     fn resolve(&self, out: &Path) -> String {
-        stdout(self.command("resolve", out).output().expect("resolve model"))
+        stdout(
+            self.command("resolve", out)
+                .output()
+                .expect("resolve model"),
+        )
     }
 
     fn cached_path(&self) -> PathBuf {
@@ -145,8 +151,14 @@ fn embedded_path(output: &str) -> PathBuf {
 
 fn assert_owned_snapshot(output: &str, out: &Path, cache: &Path) -> PathBuf {
     let embedded = embedded_path(output);
-    assert!(embedded.starts_with(out), "embed path must be owned by OUT_DIR: {embedded:?}");
-    assert_eq!(fs::read(&embedded).expect("owned model snapshot"), consts::BYTES);
+    assert!(
+        embedded.starts_with(out),
+        "embed path must be owned by OUT_DIR: {embedded:?}"
+    );
+    assert_eq!(
+        fs::read(&embedded).expect("owned model snapshot"),
+        consts::BYTES
+    );
     for path in output
         .lines()
         .filter_map(|line| line.strip_prefix("cargo::rerun-if-changed="))
@@ -170,7 +182,10 @@ fn an_existing_corrupt_source_is_never_named_to_the_compiler() {
 
     let output = fixture.resolve(&fixture.out);
 
-    assert!(output.contains("cargo::error="), "corruption must be rejected: {output}");
+    assert!(
+        output.contains("cargo::error="),
+        "corruption must be rejected: {output}"
+    );
     assert!(!output.contains("cargo::rustc-env=KITHARA_TEST_EMBED_MODEL="));
 }
 
@@ -202,10 +217,15 @@ fn a_corrupt_source_placed_by_another_lock_holder_is_validated() {
     }
     fs::write(fixture.cached_path(), consts::CORRUPT).expect("another holder places corruption");
     drop(lock);
-    reader.read_to_string(&mut output).expect("model validation output");
+    reader
+        .read_to_string(&mut output)
+        .expect("model validation output");
     assert!(child.wait().expect("contender exit").success());
 
-    assert!(output.contains("model-accepted=false"), "lock does not validate bytes: {output}");
+    assert!(
+        output.contains("model-accepted=false"),
+        "lock does not validate bytes: {output}"
+    );
     assert!(output.contains("cargo::error="));
 }
 
@@ -214,13 +234,19 @@ fn a_fetched_model_has_a_stable_owned_snapshot_on_the_next_resolution() {
     let fixture = Fixture::new();
     let first = fixture.resolve(&fixture.out);
     let embedded = assert_owned_snapshot(&first, &fixture.out, &fixture.cache);
-    let modified = fs::metadata(&embedded).expect("owned snapshot metadata").modified().expect("mtime");
+    let modified = fs::metadata(&embedded)
+        .expect("owned snapshot metadata")
+        .modified()
+        .expect("mtime");
 
     let second = fixture.resolve(&fixture.out);
 
     assert_eq!(embedded_path(&second), embedded);
     assert_eq!(
-        fs::metadata(&embedded).expect("unchanged snapshot metadata").modified().expect("mtime"),
+        fs::metadata(&embedded)
+            .expect("unchanged snapshot metadata")
+            .modified()
+            .expect("mtime"),
         modified,
         "an unchanged model does not replace its owned snapshot"
     );
@@ -240,7 +266,10 @@ fn relocation_materializes_identical_bytes_in_the_new_owned_out_dir() {
 
     let copy = assert_owned_snapshot(&second, &relocated, &fixture.cache);
     assert_ne!(copy, original);
-    assert_eq!(fs::read(copy).expect("relocated bytes"), fs::read(original).expect("original bytes"));
+    assert_eq!(
+        fs::read(copy).expect("relocated bytes"),
+        fs::read(original).expect("original bytes")
+    );
 }
 
 #[test]
@@ -249,12 +278,24 @@ fn the_default_source_cache_survives_temporary_directory_relocation() {
     let mut command = fixture.command("cache-dir", &fixture.out);
     command.env_remove("KITHARA_BEAT_MODEL_CACHE");
     let first = stdout(command.output().expect("default persistent cache"));
-    let first = first.lines().find_map(|line| line.strip_prefix("model-cache=")).expect("cache path");
+    let first = first
+        .lines()
+        .find_map(|line| line.strip_prefix("model-cache="))
+        .expect("cache path");
     assert!(!Path::new(first).starts_with(&fixture.temporary));
     let other_temp = fixture.temporary.with_file_name("other-temporary");
     fs::create_dir_all(&other_temp).expect("relocated temporary directory");
-    command.env("TMPDIR", &other_temp).env("TMP", &other_temp).env("TEMP", &other_temp);
+    command
+        .env("TMPDIR", &other_temp)
+        .env("TMP", &other_temp)
+        .env("TEMP", &other_temp);
     let second = stdout(command.output().expect("relocated default cache"));
-    let second = second.lines().find_map(|line| line.strip_prefix("model-cache=")).expect("cache path");
-    assert_eq!(first, second, "OS temporary cleanup does not move the source cache");
+    let second = second
+        .lines()
+        .find_map(|line| line.strip_prefix("model-cache="))
+        .expect("cache path");
+    assert_eq!(
+        first, second,
+        "OS temporary cleanup does not move the source cache"
+    );
 }
