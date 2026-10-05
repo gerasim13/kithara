@@ -321,15 +321,15 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     #[case] superseding: Start,
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
-    let (control_built, control_opened, control, control_closed) = {
+    let (control_built, control_opened, control, control_trace, control_closed) = {
         let control = STAGED_BESIDE_PLAYBACK_CONTROL;
         let mut harness =
             ProductHarness::new_for_block(control, &sources, cue, Audible::Deck(0), BLOCK_FRAMES)
                 .await;
         let built = Window::read(&harness, control);
         let opened = open_window(&mut harness, control).await;
-        let pcm = render_frames(&mut harness, control, LISTEN_FRAMES).await;
-        (built, opened, pcm, Window::read(&harness, control))
+        let (pcm, trace) = render_window(&mut harness, control, None).await;
+        (built, opened, pcm, trace, Window::read(&harness, control))
     };
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
@@ -363,7 +363,7 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         case.id(),
     );
     let candidate_opened = open_window(&mut harness, case).await;
-    let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
+    let (candidate, _) = render_window(&mut harness, case, Some(&control_trace)).await;
     let candidate_closed = Window::read(&harness, case);
     let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(
@@ -455,6 +455,56 @@ impl fmt::Display for Window {
         }?;
         write!(formatter, ", playing {}", self.playing)
     }
+}
+
+/// Renders the measured window a block at a time, recording where the deck
+/// stood after each, and stops on the first block whose reading parts from a
+/// reference trace.
+///
+/// A playing deck advances by the frames rendered into it, and the control's
+/// close measures exactly that: it ends on its opening plus the whole window.
+/// Its own trace therefore says the same thing block by block, which is what
+/// makes it worth comparing against - a measurement, not a tolerance someone
+/// picked.
+///
+/// Stopping on the block that parts, rather than at the close, is the point of
+/// keeping the trace at all. Only a failing attempt writes a dump, and the
+/// flight ring inside one holds a fraction of a second of probes; a loss first
+/// named six seconds after it happened has already fallen out of the ring that
+/// would have shown it happen.
+async fn render_window(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    reference: Option<&[Window]>,
+) -> (Vec<f32>, Vec<Window>) {
+    let blocks = LISTEN_FRAMES.div_ceil(BLOCK_FRAMES);
+    let mut pcm = Vec::with_capacity(LISTEN_FRAMES * usize::from(CHANNELS));
+    let mut trace = Vec::with_capacity(blocks);
+    while trace.len() < blocks {
+        let rendered = pcm.len() / usize::from(CHANNELS);
+        let step = (LISTEN_FRAMES - rendered).min(BLOCK_FRAMES);
+        pcm.extend_from_slice(&render_frames(harness, case, step).await);
+        let here = Window::read(harness, case);
+        if let Some(&expected) = reference.and_then(|side| side.get(trace.len())) {
+            assert_eq!(
+                here,
+                expected,
+                "{}: the deck stopped keeping up with the window on block {} of \
+                 {blocks}, {} frames in. Both sides render the same blocks into \
+                 a playing deck, so both advance by what was rendered, and the \
+                 control's own trace is that statement measured rather than \
+                 assumed. A deck that parts from it here is the displacement \
+                 the comparison at the close can only report second-hand, as \
+                 two windows opening apart or as audio read from the wrong \
+                 place",
+                case.id(),
+                trace.len() + 1,
+                rendered + step,
+            );
+        }
+        trace.push(here);
+    }
+    (pcm, trace)
 }
 
 /// Renders whole blocks until the deck has reached [`WINDOW_LEAD_FRAMES`], and
