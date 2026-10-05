@@ -1,17 +1,10 @@
-//! Vector DSP kernels over planar `f32` slices.
-//!
-//! The layout functions match `fast_interleave` for `f32`; the channel-major
-//! ones address every plane of one strided slice, so no channel count needs a
-//! slice of plane references. The build target picks the backend: Accelerate
-//! on Apple, `fearless_simd` at the SIMD level the CPU reports elsewhere.
-//! Kernels never allocate, never panic and never sanitize implicitly.
-//! `filter` holds biquad cascades with a silence rule that keeps denormals out.
-//! `interp` reads a window at fractional positions with one of four methods
-//! and places the positions of a rate ramp. `spectrum` takes the real FFT of
-//! a Hann-windowed frame, reads the magnitude and phase of its bins and
-//! autocorrelates a frame (the `spectrum` feature). `sum_squares` reduces a
-//! slice to the sum of its squares; `downmix` averages the channels of each
-//! interleaved frame.
+//! Allocation-free, panic-free vector DSP over planar `f32`, without implicit
+//! sanitization. Layout kernels match `fast_interleave`; strided channel-major
+//! operations need no plane-reference slices. Apple uses Accelerate; other targets
+//! select `fearless_simd` by CPU capability. `filter` supplies denormal-safe biquads,
+//! `interp` supplies fractional sampling and rate ramps, and feature-gated
+//! `spectrum` supplies Hann-windowed real FFT, bin magnitude/phase and
+//! autocorrelation. `sum_squares` reduces energy; `downmix` averages channels.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,

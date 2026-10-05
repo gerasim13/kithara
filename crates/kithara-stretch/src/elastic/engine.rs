@@ -18,20 +18,15 @@ pub trait ElasticEngine: Send + 'static {
     /// Immutable limits, latency and rate window of this engine.
     fn capabilities(&self) -> ElasticCapabilities;
 
-    /// Writes the next portion of terminal buffered audio into caller-owned storage.
-    ///
-    /// The caller chooses the non-empty whole-frame storage capacity and repeats
-    /// until the returned [`ElasticDrain`] is complete. Every incomplete step
-    /// writes a non-empty contiguous tail portion no larger than that capacity;
-    /// an active drain reports completion together with its final non-empty
-    /// portion. Fresh, reset and already-completed engines return an empty
+    /// Drains terminal audio into caller-owned non-empty whole-frame storage.
+    /// Repeat until [`ElasticDrain`] is complete. Incomplete steps write a non-empty
+    /// contiguous tail within capacity; the final active step completes with its
+    /// last non-empty portion. Fresh, reset or completed engines return an empty
     /// completed step until [`prime`](Self::prime) or [`process`](Self::process).
     ///
     /// # Errors
-    /// While a drain is active, returns [`ElasticError`] when `output` is empty,
-    /// does not contain a whole number of interleaved frames, or when sizing a
-    /// span overflows. An inactive drain returns an empty completed step without
-    /// accessing `output`.
+    /// An active drain returns [`ElasticError`] for empty or partial-frame output
+    /// or span overflow. An inactive drain completes without accessing `output`.
     fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError>;
 
     /// Allocates and initializes an engine for a fixed preparation shape,
@@ -45,19 +40,15 @@ pub trait ElasticEngine: Send + 'static {
         Self: Sized,
         S: HasPool<f32>;
 
-    /// Clears prior stream state, absorbs source history and lookahead, then
-    /// renders one latency-sized warmup span into caller-owned discard storage.
-    ///
-    /// `source_lookahead` contains exactly the declared source latency starting
-    /// at the audible cue; `source` follows it at the rate named by `request`.
-    /// Source passed to the next [`process`](Self::process) follows `source`,
-    /// while its first output resumes at the start of `source_lookahead` after
-    /// the engine latency has been absorbed.
+    /// Clears stream state, absorbs history/lookahead, and renders one latency-sized
+    /// warmup span into caller-owned discard storage. `source_lookahead` holds exactly
+    /// the declared source latency from the audible cue; `source` follows it at the
+    /// request's rate. The next [`process`](Self::process) input follows `source`,
+    /// while its first output starts at the lookahead cue after latency is absorbed.
     ///
     /// # Errors
-    /// Returns [`ElasticError`] when the warmup request does not match the
-    /// declared latency, when a buffer length does not match the request, or
-    /// when the rate is outside the declared envelope.
+    /// Returns [`ElasticError`] for a request not matching declared latency,
+    /// buffer lengths not matching the request, or a rate outside the envelope.
     fn prime(
         &mut self,
         request: ElasticRequest,
@@ -67,22 +58,17 @@ pub trait ElasticEngine: Send + 'static {
         discarded_output: &mut [f32],
     ) -> Result<(), ElasticError>;
 
-    /// Renders exactly `request.output_frames()` interleaved output frames
-    /// while admitting exactly `request.source_frames()` interleaved source frames.
-    /// `request.output_source_frames()` describes the source advance of the audible
-    /// interval. A projected caller may admit future source for a delayed pipeline
-    /// while naming the current audible advance separately. Cue-anchored engines
-    /// schedule that audible span; input-driven pipelines retain their native delay.
-    /// This does not change buffer lengths or add an independent rate control.
-    /// Across this and any immediately adjacent calls, a changed ratio must
-    /// affect emitted audio within `capabilities().latency().output_frames()`
-    /// frames. Engines must not add software-buffering delay beyond their
-    /// declared native latency.
+    /// Renders exactly `request.output_frames()` interleaved frames and admits
+    /// exactly `request.source_frames()`. `output_source_frames()` separately names
+    /// the audible source advance: projected callers can admit future source for a
+    /// delayed pipeline. Cue-anchored engines schedule that span; input-driven ones
+    /// retain native delay, without changing lengths or adding a rate control.
+    /// A ratio change affects emitted audio within one declared output latency,
+    /// including across adjacent calls; no extra software buffering delay is allowed.
     ///
     /// # Errors
-    /// Returns [`ElasticError`] when the request is outside the prepared
-    /// limits or the declared rate envelope, when a buffer length does not
-    /// match the request, or when the engine renders a different span.
+    /// Returns [`ElasticError`] for prepared-limit/rate-envelope violations,
+    /// length mismatches or a differently rendered span.
     fn process(
         &mut self,
         request: ElasticRequest,

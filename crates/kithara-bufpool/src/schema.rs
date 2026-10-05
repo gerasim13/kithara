@@ -1,5 +1,8 @@
 use crate::{PoolKey, region::PoolSlot};
 
+#[cfg(doctest)]
+mod contracts;
+
 /// Compile-time evidence that a schema contains `K`.
 pub trait HasPool<K>
 where
@@ -10,62 +13,16 @@ where
     fn __slot(&self) -> &PoolSlot<K>;
 }
 
-/// Declare a closed set of explicitly configured typed pools.
-///
-/// Every generated setter is required. Bon's typestate builder makes missing,
-/// duplicate, and unknown registrations compile-time errors.
+/// Declare typed pools; every registered key must be configured exactly once.
 ///
 /// ```
 /// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-///
-/// pool_schema! {
-///     pub ExamplePools {
-///         bytes: u8,
-///         samples: f32,
-///     }
-/// }
-///
+/// pool_schema! { pub ExamplePools { bytes: u8, samples: f32 } }
 /// let config = || PoolConfig::builder().max_buffers(32).build();
 /// let pools = ExamplePools::builder(OverallBudget(1024))
-///     .bytes(config())
-///     .samples(config())
-///     .build()
-///     .unwrap();
+///     .bytes(config()).samples(config()).build().unwrap();
 /// assert_eq!(pools.get::<u8>().len(), 0);
 /// assert_eq!(pools.get_with_len::<f32>(4).unwrap().len(), 4);
-/// ```
-///
-/// ```compile_fail
-/// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-/// pool_schema! { pub MissingPools { bytes: u8, samples: f32 } }
-/// let config = PoolConfig::builder().max_buffers(8).build();
-/// let _ = MissingPools::builder(OverallBudget(64)).bytes(config).build();
-/// ```
-///
-/// ```compile_fail
-/// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-/// pool_schema! { pub DuplicatePools { bytes: u8 } }
-/// let config = || PoolConfig::builder().max_buffers(8).build();
-/// let _ = DuplicatePools::builder(OverallBudget(64))
-///     .bytes(config())
-///     .bytes(config());
-/// ```
-///
-/// ```compile_fail
-/// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-/// pool_schema! { pub KnownPools { bytes: u8 } }
-/// let config = PoolConfig::builder().max_buffers(8).build();
-/// let _ = KnownPools::builder(OverallBudget(64)).samples(config);
-/// ```
-///
-/// ```compile_fail
-/// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-/// pool_schema! { pub BytePools { bytes: u8 } }
-/// let pools = BytePools::builder(OverallBudget(64))
-///     .bytes(PoolConfig::builder().max_buffers(8).build())
-///     .build()
-///     .unwrap();
-/// let _ = pools.get::<f32>();
 /// ```
 #[macro_export]
 macro_rules! pool_schema {

@@ -325,26 +325,10 @@ impl Registry {
         }
     }
 
-    /// Single tick: poll peers, process urgent, then demand with throttle.
-    ///
-    /// New peer registrations, queued ABR ticks, and the nearest ABR deadline
-    /// are handled inside `poll_fn` rather than competing `select!` arms. This
-    /// guarantees that `process()` runs to completion: no readiness source can
-    /// drop `tick()` mid-batch and lose unspawned `FetchCmd`s.
-    ///
-    /// The deadline future completes once while the closure runs on every
-    /// wakeup of this tick, so the elapsed flag latches rather than re-polling
-    /// it. A deadline the controller then declines to tick on — its peer was
-    /// cancelled while the loop slept — leaves the loop parked with that future
-    /// finished, and resuming it panics the downloader out from under every
-    /// peer it serves.
-    ///
-    /// Returns a [`FetchProgress`] describing whether fetch work moved
-    /// forward this tick. Idle returns are possible when `poll_fn` is
-    /// woken by `fetch_waker` (an in-flight fetch completed elsewhere)
-    /// but no new peer/command activity occurred; the downloader
-    /// watchdog uses this signal to avoid false panics during quiet
-    /// periods.
+    /// Poll registrations and ABR readiness inside `poll_fn`, then process urgent and throttled demand.
+    /// No competing select arm may drop a batch and lose unspawned commands' completion callbacks.
+    /// Latch an elapsed ABR deadline: re-polling its completed future after peer cancellation would panic.
+    /// Returns [`FetchProgress`] so quiet completion wakes cannot trigger the downloader watchdog.
     pub(super) async fn tick(
         &mut self,
         inner: &DownloaderInner,

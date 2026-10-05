@@ -261,19 +261,8 @@ where
             #[call(read_cached_position)]
             pub fn position_seconds(&self) -> Option<f64>;
 
-            /// Seek within the currently-playing track.
-            ///
-            /// Seek-hang detection is not handled here: the audio pipeline's
-            /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
-            /// `Stream::read`, `decode_next_chunk`) already panics with a
-            /// stacktrace and context dump when no progress is observed. Adding
-            /// a second Queue-level watchdog would just duplicate those panics.
-            ///
-            /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
-            /// `Landed` with the requested target (the actual landed position is
-            /// reconciled by the worker after applying the seek; this call returns
-            /// the optimistic outcome) or `PastEof` if the target is beyond the
-            /// known track duration.
+            /// Seek the playing track; returns an optimistic `Landed` target or known-duration `PastEof`.
+            /// The worker reconciles actual landing, and the audio pipeline owns seek-hang detection.
             ///
             /// # Errors
             /// Returns [`QueueError::Play`] if the player reports a seek failure.

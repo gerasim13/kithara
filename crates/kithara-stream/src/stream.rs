@@ -97,19 +97,9 @@ impl StreamSeekPastEof {
     }
 }
 
-/// Typed payload of an `io::Error` (kind [`ErrorKind::Interrupted`])
-/// emitted by `impl Read for Stream` when the underlying source could
-/// not satisfy the read this call. Both `SeekPending` and
-/// `NotReady`/`Retry` surface as `Interrupted` so demuxers (notably
-/// Symphonia's fragmented MP4 reader) treat the pause as a transient
-/// cooperative interruption and let `kithara-decode::is_seek_pending_io`
-/// classify the failure correctly — the previous `WouldBlock` mapping
-/// was treated as a hard "would block" by Symphonia's seek path and
-/// corrupted the demuxer cursor on partial reads. Carries the
-/// [`PendingReason`] verbatim plus a snapshot of source/timeline state
-/// at the wrap site, so callers downcasting from `io::Error` recover
-/// both *what* stalled and *why* without having to instrument their
-/// own decoder.
+/// Typed [`ErrorKind::Interrupted`] payload carrying [`PendingReason`] and a source/timeline snapshot.
+/// `SeekPending` and `NotReady`/`Retry` use `Interrupted` so fragmented-MP4 treats partial reads
+/// as cooperative pauses; callers downcast the payload instead of matching error messages.
 #[derive(Debug, Clone, Copy, derive_more::Display)]
 #[display(
     "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing}"
@@ -512,22 +502,13 @@ impl<T: StreamType> Stream<T> {
         }
     }
 
-    /// Map a single [`Self::try_read`] probe to the `std::io::Read`
-    /// contract **without blocking**: a not-ready range surfaces as an
-    /// `Interrupted`/`Other` `io::Error` carrying the typed
-    /// [`StreamPending`]/[`VariantChangeError`] payload immediately.
-    ///
-    /// This is the real-time worker read path — the audio worker maps
-    /// the `Interrupted`/`WouldBlock` error to `DemuxOutcome::Pending`
-    /// and parks in the scheduler. Direct `Read + Seek` consumers go
-    /// through the blocking [`Read::read`] adapter instead.
+    /// Map one non-blocking [`Self::try_read`] probe to `std::io::Read` for the worker to park.
+    /// Direct consumers use blocking [`Read::read`]; retired sessions return immediately without
+    /// waking an obsolete peer, leaving rebuild and peer arming to the new owner.
     ///
     /// # Errors
-    ///
-    /// Returns the source's `io::Error` for genuine failures, an
-    /// `Interrupted` error carrying [`StreamPending`] for transient
-    /// backpressure / seek-pending, and `Other(VariantChangeError)` at a
-    /// variant boundary.
+    /// Propagates source errors; `Interrupted` carries [`StreamPending`] or `SessionRetired`,
+    /// and `Other` carries [`VariantChangeError`] at a variant boundary.
     pub fn probe_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.try_read(buf) {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
@@ -548,9 +529,6 @@ impl<T: StreamType> Stream<T> {
             Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                 Err(IoError::other(VariantChangeError))
             }
-            // No peer wake: the session that owned this read is gone, so
-            // there is nothing left to plan against it. The caller rebuilds
-            // and the new owner arms its own peer.
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
                 Err(IoError::new(ErrorKind::Interrupted, reason))
             }
@@ -644,6 +622,8 @@ impl<T: StreamType> Read for Stream<T> {
     /// On an evicted `Retry` range, wakes the peer to trigger a re-fetch and re-loops, so the next
     /// attempt parks in the event-driven `wait_range`. Each re-aim starts a fresh source wait, so
     /// only this loop can see that nothing arrives: returning is its only progress.
+    /// Retired sessions return without waiting or peer wake: nobody owns that session's bytes,
+    /// and only a rebuilt owner can arm the replacement peer.
     #[kithara::flash(true)]
     #[kithara::hang_watchdog(timeout = consts::READ_HANG_TIMEOUT)]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -664,8 +644,6 @@ impl<T: StreamType> Read for Stream<T> {
                 Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                     return Err(IoError::other(VariantChangeError));
                 }
-                // Retirement never resolves by waiting: looping here would
-                // block on a session nobody owns any more.
                 Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
                     return Err(IoError::new(ErrorKind::Interrupted, reason));
                 }

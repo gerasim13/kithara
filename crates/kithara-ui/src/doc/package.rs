@@ -39,19 +39,13 @@ pub struct PackageDoc {
 }
 
 impl PackageDoc {
-    /// The file this package puts behind `role`, once that file agrees it is
-    /// that screen.
-    ///
-    /// The manifest says which file stands for a role and the document says
-    /// which screen it is; a package whose two answers disagree has a typo in
-    /// one of them, and reading only the manifest would compile the wrong
-    /// screen without a word. Only the envelope is parsed here, and the
-    /// resolver has already read the text the compile will parse in full.
+    /// Resolves the file for `role` and checks its screen envelope agrees with the
+    /// manifest, preventing a manifest typo from silently compiling another screen.
+    /// Only the envelope is parsed; the resolver has already read the text later
+    /// compiled in full.
     ///
     /// # Errors
-    /// Returns [`UiDocError`] when the package answers for no such screen, when
-    /// the file behind it cannot be read, or when that file names another
-    /// screen.
+    /// Returns [`UiDocError`] for an absent role, unreadable file or mismatched screen.
     pub fn screen(
         &self,
         resolver: &dyn SourceResolver,

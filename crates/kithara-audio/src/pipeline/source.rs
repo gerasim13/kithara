@@ -80,19 +80,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// frame, so the rebuilt decoder relabels its first chunk at this point. See
     /// `execute_recreation`.
     pub(crate) resume: ResumeCursor,
-    /// `(seek_epoch, target)` of the most recent applied seek.
-    /// `committed_position` lags `target` until the seek's first
-    /// (trim-aligned) chunk is consumed: the decoder lands at the
-    /// containing segment's start and trims forward, so
-    /// `commit_seek_landed` records the segment boundary, not the
-    /// requested instant. A variant-switch recreate firing inside that
-    /// window must resume at the real target, not at the lagging
-    /// committed boundary — otherwise playback rewinds to the segment
-    /// start. Tagged with the seek epoch so a later seek (especially a
-    /// backward one) never resumes against a stale forward target. See
-    /// `execute_recreation`.
-    /// Decode generations displaced on the produce core. They are dropped
-    /// from `finish_deferred`, outside the forbid-blocking region.
+    /// Decode generations displaced on the produce core and dropped by `finish_deferred` off-core.
+    /// One checked step can retire both active and incoming generations without freeing them on-core.
     pub(crate) retired: Vec<DecoderGeneration>,
     pending_seek_cleanup: bool,
     pub(crate) seek_engine: SeekEngine,
@@ -151,7 +140,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             variant_control,
             state: Track::<Decoding>::new(()).erase(),
             emit: None,
-            // One checked step can replace active and discard incoming.
             retired: Vec::with_capacity(2),
             pending_seek_cleanup: false,
         }

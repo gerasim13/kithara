@@ -124,22 +124,12 @@ where
     crate::backend::thread::spawn(propagated(f, Location::caller()))
 }
 
-/// Under `flash`, a cooperative yield must relinquish the quiescence engine:
-/// a busy-poll loop spinning on `std::thread::yield_now` keeps the thread counted
-/// as running, so the virtual clock can never advance past it — and a loop bounded
-/// by a virtual-time deadline then livelocks (it waits for time its own spinning
-/// prevents). The sim path parks the thread as a yield-waiter so the clock can
-/// advance, then wakes it on the next advance to re-check. Off the sim path
-/// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
-/// behaviour is unchanged. See `crate::flash::system::yield_until_advance`.
-///
-/// A DEDICATED participant takes the sim path even where the callstack itself
-/// is not a flash region. Its credit is what holds the clock still, and
-/// [`credit::DedicatedSlot::claim_pooled`](crate::flash::system::credit) states
-/// the term it is held on: an engine park releases it. A pooled
-/// `spawn_blocking` closure inherits the ambient gate and the credit but never
-/// pushes an active region, so `flash_enabled()` alone would hand the one
-/// thread that can freeze the engine the one yield that cannot thaw it.
+/// Cooperatively yields by engine-parking flash or dedicated participants until
+/// the next clock advance; real-time scopes otherwise use an OS yield.
+/// OS yielding leaves running credit held, so virtual-deadline busy loops would
+/// freeze the clock they need to advance. Dedicated pooled closures hold that
+/// credit even without an active flash region; `flash_enabled()` alone would
+/// select the OS path for the thread capable of freezing the engine.
 #[inline]
 pub fn yield_now() {
     if crate::flash::flash_enabled() || crate::flash::ctx::dedicated() {

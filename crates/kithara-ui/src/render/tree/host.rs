@@ -5379,7 +5379,7 @@ mod tests {
                 );
             }
 
-            // The window renders the document afresh on every event.
+            /// The window renders the document afresh on every event.
             fn refresh(&mut self, _ui: &CompiledUi, _reads: &DropReads) {}
         }
 

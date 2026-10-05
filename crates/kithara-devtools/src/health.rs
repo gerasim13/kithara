@@ -226,21 +226,10 @@ fn manifest_of(metadata: &Metadata, package: &str) -> Result<String> {
         .with_context(|| format!("no workspace package named `{package}`"))
 }
 
-/// The checks with no job of their own.
-///
-/// This list used to open with the fast ratchets - format, Clippy, ast-grep,
-/// the xtask lints, typos - and close with the whole test suite and the
-/// doc-tests, every one of which the push gate had already run against the same
-/// commit before the nightly report started. Repeating them cost the run its
-/// bulk and told it nothing: `just lint full` owns the ratchets, `just test all`
-/// owns the suite, the `similarity` and `architecture` jobs beside this one own
-/// duplication and orphans.
-///
-/// What is left is what nothing else runs, or what health runs differently on
-/// purpose: the powerset here keeps dev-dependencies where `just deps hack`
-/// drops them, and semver compares against `origin/main` where `just deps
-/// semver` compares against the commit before. Both differences are stated at
-/// the stage below.
+/// Checks not already owned by push-gate ratchets, tests, similarity or
+/// architecture jobs. Repeating those on the same commit adds no evidence.
+/// Health's powerset retains dev-dependencies, unlike `deps hack`; its semver
+/// comparison uses `origin/main`, unlike `deps semver`'s preceding commit.
 fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
     let Resolved {
         machete_paths,

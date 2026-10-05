@@ -30,20 +30,11 @@ pub trait AudioRead {
         Duration::from_secs(0)
     }
 
-    /// Read the next decoded chunk with full metadata.
-    ///
-    /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
-    /// Decoder / channel failures surface as `Err(DecodeError)`.
-    /// Discards any partially-consumed chunk from previous
-    /// [`AudioRead::read`] calls.
-    ///
-    /// Default implementation reports immediate natural EOF — readers
-    /// without chunk-level support shouldn't be polled this way.
+    /// Read a decoded chunk with metadata, discarding any partially consumed [`AudioRead::read`] chunk.
+    /// Returns a chunk or natural EOF; the default reports immediate EOF without chunk-level support.
     ///
     /// # Errors
-    ///
-    /// Returns `Err(DecodeError)` for terminal producer failures, same
-    /// semantics as [`Self::read`].
+    /// Returns terminal producer failures with the same semantics as [`Self::read`].
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
@@ -53,19 +44,11 @@ pub trait AudioRead {
     /// Get current playback position.
     fn position(&self) -> Duration;
 
-    /// Read interleaved audio samples.
-    ///
-    /// After `preload()`, returns immediately from buffered data
-    /// without blocking. The returned [`ReadOutcome`] distinguishes a
-    /// productive read from natural EOF; `count` is interleaved
-    /// samples, so `count / channels` frames. Decoder / channel
-    /// failures surface as `Err(DecodeError)`.
+    /// Read interleaved samples from buffered data without blocking after preload.
+    /// [`ReadOutcome`] distinguishes data from natural EOF; count is samples, or count/channels frames.
     ///
     /// # Errors
-    ///
-    /// Returns `Err(DecodeError)` for terminal producer failures:
-    /// closed audio channel, decoder fault, or backend error. The error
-    /// is one-way — once returned, subsequent reads continue to fail.
+    /// Terminal decoder, channel or backend failures persist on subsequent reads.
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
 
     /// Read deinterleaved (planar) audio samples.
@@ -146,20 +129,11 @@ pub trait SeekBegin: Send + Sync {
 /// Decoded-audio control operations and runtime knobs.
 #[kithara::mock(api = AudioControlMock)]
 pub trait AudioControl {
-    /// Preload initial chunks into internal buffers.
-    ///
-    /// After calling this, subsequent `read()` / `read_planar()` /
-    /// `next_chunk()` return immediately from buffered data without
-    /// blocking. `Err(DecodeError)` is reserved for setup failures
-    /// (e.g. the producer channel closed during preload). Natural EOF
-    /// encountered during preload is **not** surfaced here — the
-    /// subsequent `read` / `next_chunk` will return `Eof`.
+    /// Buffer startup chunks for immediate `read`, `read_planar` and `next_chunk` calls.
+    /// Natural EOF, including an empty stream, succeeds here and is reported by the subsequent read.
     ///
     /// # Errors
-    ///
-    /// Returns `Err(DecodeError)` only on terminal setup failure
-    /// (closed audio channel, backend error). Successful preload always
-    /// returns `Ok(())` even if the stream contains no data.
+    /// Returns only terminal setup failures, including a closed audio channel or backend error.
     fn preload(&mut self) -> Result<(), DecodeError> {
         Ok(())
     }

@@ -22,19 +22,11 @@ pub struct Lease {
     _lock: FileLock,
 }
 
-/// Claims `directory` until the returned guard drops.
-///
-/// The lock is shared, so several holders coexist: a run and the harness
-/// invocations it spawns. A reclaim asks for the same file exclusively, which
-/// is the only request a shared holder refuses, and backs off while one is
-/// alive.
-///
-/// Returns `None` when the claim cannot be made. A lease that cannot be taken
-/// only restores the behaviour from before there was one, which is no reason to
-/// refuse the work it would have protected.
-///
-/// The result has to be bound: dropping it on the spot releases the claim
-/// immediately, which reads at the call site as holding one.
+/// Claims `directory` until the bound guard drops. Shared claims let a run and
+/// its child harnesses coexist while refusing an exclusive reclaim.
+/// Returns `None` when a claim fails: the lease is optional protection and
+/// failure restores the prior behaviour rather than refusing the work.
+/// Bind the result; dropping it immediately releases the claim.
 #[must_use]
 pub fn hold(directory: &Path) -> Option<Lease> {
     fs::create_dir_all(directory).ok()?;

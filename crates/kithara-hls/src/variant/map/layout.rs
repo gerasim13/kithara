@@ -79,40 +79,15 @@ where
             .or_else(|| self.layout.find_at_offset(byte_offset, &self.segments))
     }
 
-    /// True when a layout reset would change nothing worth a re-mint:
-    /// canonical full-range geometry with every served size exact, and
-    /// nothing parked behind a seek tail. A live tail alone does not force
-    /// the reset — against a canonical table it freezes nothing (every
-    /// settle already landed) and only helps the EOF gate — so fully-cached
-    /// segment-aware seeks keep skipping the O(N) rebuild. Gates both
-    /// [`HlsCoord::prepare_for_seek`]'s reset call (a fully-cached seek
-    /// must not touch the layout at all) and the re-mint in
-    /// [`Self::reset_layout_to_full_range`]. The emptiness check is load
-    /// bearing, not belt-and-braces: a revision settle of an already-exact
-    /// size (DRM plaintext length over a byterange seed) parks while the
-    /// size atom stays exact, so the layout still reads canonical and only
-    /// this check forces the re-mint that lands it. Takes the
-    /// `deferred_prefix` mutex — off-RT callers only.
+    /// Whether full-range, exact geometry has no deferred prefix and needs no layout re-mint.
+    /// A live seek tail alone changes nothing, but even an already-exact size can have a parked revision.
+    /// Gates seek reset and [`Self::reset_layout_to_full_range`]; locks deferred state, so off-RT only.
     pub(crate) fn layout_seek_invariant(&self) -> bool {
         self.layout.is_canonical_complete(&self.segments)
             && self.seek.deferred_prefix.lock().is_empty()
     }
 
-    /// Replace the per-variant fetch queue with `[from_seg .. num_segments)`
-    /// (plus `Init` if applicable). Does NOT cancel in-flight fetches —
-    /// dedup is handled at `dispatch` time via the `Downloading` state.
-    /// `dispatch` skips `Downloading` and `Loaded` entries without burning
-    /// budget, so the queue can safely include them.
-    ///
-    /// Cancellation is reserved for variant deactivation
-    /// ([`cancel`](Self::cancel) / teardown) — there we really want to
-    /// abandon the variant's in-flight work; the freshly activated variant
-    /// has its own cancel token. Seek / eviction never need to cancel,
-    /// they only need to reseed the queue.
-    ///
-    /// Callers: seek (`seek_to`), ABR variant flip
-    /// (`activate_at_segment`), eviction of an active-variant resource,
-    /// and the initial peer activation.
+    /// Number of media segments in this variant, saturated to `u32::MAX`.
     #[must_use]
     pub(crate) fn num_segments(&self) -> u32 {
         u32::try_from(self.segments.len()).unwrap_or(u32::MAX)

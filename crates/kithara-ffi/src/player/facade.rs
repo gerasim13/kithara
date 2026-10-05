@@ -88,20 +88,13 @@ impl AudioPlayer {
         self.inner.eq_gain(band)
     }
 
-    /// Insert an item into the queue.
-    ///
-    /// Registers the item's URL + caller-supplied preferences with the
-    /// Queue, which starts loading in the background and emits
-    /// `TrackStatusChanged` events through the player's event stream.
-    ///
-    /// `after == None` places the item at the head (position 0),
-    /// mirroring the iOS `AudioPlayerProtocol.insert(_:after:)` contract.
-    /// Use [`Self::append`] for AVQueuePlayer-style append.
+    /// Inserts a URL and caller preferences, starts background queue loading, and
+    /// emits `TrackStatusChanged` through the player event stream.
+    /// `after == None` inserts at position 0, matching iOS
+    /// `AudioPlayerProtocol.insert(_:after:)`; [`Self::append`] appends instead.
     ///
     /// # Errors
-    ///
-    /// Returns [`FfiError::InvalidArgument`] if `after` is not currently
-    /// in the queue, or if the item's URL is malformed.
+    /// Returns [`FfiError::InvalidArgument`] for an absent `after` item or malformed URL.
     #[cfg_attr(
         all(),
         expect(

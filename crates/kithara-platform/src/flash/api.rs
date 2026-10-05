@@ -150,19 +150,13 @@ impl Drop for FlashYield {
     }
 }
 
-/// Cooperative async yield. Like the stateful sync primitives (Condvar/Notify/
-/// mpsc/oneshot, which latch the ambient gate at construction), this keys on
-/// [`flash_ambient`], NOT [`flash_enabled`] — consulted per call, since a yield
-/// has no cross-thread signal partner to disagree with:
-/// engine-backed ([`FlashYield`]) only inside a flash-eligible (ambient) test,
-/// and a real `tokio::task::yield_now` otherwise. A `yield_now`'s resolution
-/// comes from an engine clock advance, whose grant requires `active_async == 0`;
-/// in a flash(false) test the surrounding task's other primitives are REAL, so it
-/// keeps its `active_async` slot across the yield, and an engine-backed yield can
-/// never be granted (a circular dependency — `active_async` never hits zero while
-/// the only `.await` blocking the task is the yield). Gating on ambient keeps the
-/// flash BUILD behavior-transparent for ambient=false (flash(false) tests AND
-/// production), exactly as the stateful-primitive ambient gate does.
+/// Cooperatively yields through [`FlashYield`] only when [`flash_ambient`] is
+/// true, otherwise through real `tokio::task::yield_now`. Unlike stateful
+/// primitives, yield has no signal partner and can consult ambient per call.
+/// Engine resolution requires `active_async == 0`; a flash(false) task retains
+/// its active slot through real primitives, so an engine yield there would
+/// wait forever on its own credit. The ambient gate keeps flash(false) tests
+/// and production behaviour-transparent.
 pub fn yield_now() -> Yield {
     if flash_ambient() {
         Yield::Flash(FlashYield {

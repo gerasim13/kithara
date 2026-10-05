@@ -20,10 +20,9 @@ unsafe extern "C" {
 /// reports as unmeasured rather than as zero.
 #[must_use]
 pub fn allocated_bytes() -> Option<u64> {
-    // SAFETY: `MTLCreateSystemDefaultDevice` returns either null or a device
-    // owned by the caller, which `Retained::from_raw` takes over and releases
-    // on drop. `currentAllocatedSize` is a property of `MTLDevice` returning
-    // `NSUInteger`, read here as `usize`.
+    // SAFETY: MTLCreateSystemDefaultDevice returns null or a caller-owned MTLDevice,
+    // retained/released by Retained::from_raw. Its currentAllocatedSize property
+    // returns NSUInteger, read here as usize.
     unsafe {
         let device = Retained::from_raw(MTLCreateSystemDefaultDevice())?;
         let bytes: usize = msg_send![&*device, currentAllocatedSize];

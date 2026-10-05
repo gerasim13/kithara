@@ -14,20 +14,9 @@ use crate::{
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{MmapDriver, MmapResource, ResourceRead};
 
-/// Unified resource: disk (mmap) or memory backend.
-///
-/// Every variant wraps its inner in an [`AtomicChunked`] decorator.
-/// Fresh segment writes use the decorator in **atomic** mode (writes
-/// land at `<canonical>.tmp`, atomic-renamed on commit); re-opens of
-/// already-committed files and memory-backed inners use it in
-/// **passthrough** mode (no atomicity, zero overhead beyond the Arc).
-/// Uniform wrapping means every code path that observes a
-/// `StorageResource` sees the same atomic-on-commit guarantees, and
-/// no caller can accidentally bypass the protection.
-///
-/// `Arc` makes the variants cheaply cloneable, matching the original
-/// `Resource<D>` contract — the previous direct-`Resource` enum was
-/// also Clone via internal `Arc<DriverState>`.
+/// Cloneable disk/memory resource, uniformly wrapped in [`AtomicChunked`].
+/// Fresh segment writes use tmp-and-rename atomic commits; committed reopens and memory
+/// use passthrough mode, so callers cannot bypass the selected commit protection.
 #[derive(Clone, Debug)]
 pub enum StorageResource {
     /// File-backed mmap resource (atomic or passthrough decorator).

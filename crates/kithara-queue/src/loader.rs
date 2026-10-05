@@ -130,22 +130,9 @@ where
         self.player.prepare_config(config).map_err(QueueError::from)
     }
 
-    /// Load a [`Resource`] from a prepared config, attaching the observer
-    /// left for this track when there is one. Caller is responsible
-    /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
-    ///
-    /// A load that failed on something the network can answer later is not a
-    /// verdict on the track: while the selection wants it the ask repeats, so a
-    /// track chosen during an outage plays when connectivity returns instead of
-    /// waiting to be chosen a second time. An HLS segment already gets exactly
-    /// this — a transient failure returns its slot to the pool and the next
-    /// dispatch asks again.
-    ///
-    /// Nothing here polls for the network's state: each ask spends the
-    /// downloader's own retry budget before returning, which is what paces the
-    /// repeat, and the per-track cancel ends it the moment the selection moves
-    /// on. An attempt nobody selected gives up instead, so it never holds its
-    /// lane permit against a network that is not answering.
+    /// Load a [`Resource`] with its track observer; the caller replaces the item and publishes Loaded.
+    /// Selected tracks repeat reachability failures while wanted, paced by the downloader's retry budget
+    /// and ended by per-track cancellation. Unselected prefetch failures release their lane instead.
     #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn load(&self, id: TrackId, config: ResourceConfig<S>) -> Result<Resource, QueueError> {
         let slow_watcher =
@@ -333,25 +320,9 @@ where
     }
 }
 
-/// Whether a failed load is worth asking for again as it stands.
-///
-/// Two conditions, both required.
-///
-/// Someone must be waiting: `selected` comes from the attempt record, not
-/// from the lane the attempt was spawned into. Selecting a track whose
-/// background prefetch is already running does not move that attempt to
-/// another lane, so the lane says nothing about who is waiting.
-///
-/// And the failure must be one a later ask can answer, which is
-/// [`NetError::can_answer_later`]'s question — the same one an HLS segment
-/// slot asks about its own re-dispatch. It is read off the typed `NetError`
-/// the load carries down its source chain: never a message match, and never a
-/// verdict read back off the bus, which another task publishes and so is not
-/// there yet when the load returns. A failure with no network cause at all
-/// (an unparseable container, a codec the build does not carry) is never
-/// asked again — connectivity does not change that answer — and neither is a
-/// transfer that stopped delivering, which is the verdict
-/// `stalled_master_playlist_fails_load` pins.
+/// Retry only when the attempt record says selected and its typed network cause can answer later.
+/// The spawn lane cannot identify current demand; error chains, not messages or asynchronous bus events,
+/// provide the verdict. Parser/codec failures and stalled transfers are never connectivity retries.
 fn can_answer_later(error: &(dyn StdError + 'static), selected: bool) -> bool {
     if !selected {
         return false;

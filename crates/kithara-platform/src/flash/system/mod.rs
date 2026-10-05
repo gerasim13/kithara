@@ -1,19 +1,9 @@
-//! Flash engine internals. [`FlashInner`] (`inner.rs`) is the SINGLE owner of
-//! all engine state: the virtual clock ([`inner::Clock`]), the one
-//! lock-protected scheduler core ([`inner::Core`], split into
-//! [`inner::Registry`] + [`inner::Scheduler`] data) and the real-I/O pacer
-//! (`pace::Pacer`, with its lazily-spawned eternal thread holding a strong
-//! `Arc` to its OWN instance). The process engine is the lazily created
-//! [`FLASH`] instance.
-//!
-//! Engine methods are instance-addressed (`&self` on `FlashInner`); nothing
-//! below `FlashInner` reaches for the [`FLASH`] global, so local instances
-//! behave identically. Everything outside `system/` consumes the thin free-fn
-//! forwards of [`forward`] (each one `FLASH.method(...)`), re-exported below.
-//!
-//! The pure-scheduler tests in `flash/tests.rs` run on LOCAL instances
-//! (`FlashInner::new_arc`, cfg(test)) — only the primitive-path tests (and
-//! production) drive the global [`FLASH`] through the forwards.
+//! [`FlashInner`] owns the virtual clock, locked scheduler core (registry and
+//! scheduler), and real-I/O pacer; the lazy process instance is [`FLASH`].
+//! The pacer's lazy eternal thread retains its own instance through an `Arc`.
+//! Instance methods never reach for the global, so local scheduler tests and the
+//! process engine behave identically. Outside this module, [`forward`] delegates
+//! to the global; primitive-path tests and production use those forwards.
 
 /// Participant credit accounting (dedicated pacers, bridged waits, blocking
 /// pacer bracket) split out of the scheduler — see `credit.rs`.

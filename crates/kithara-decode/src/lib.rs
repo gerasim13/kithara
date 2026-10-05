@@ -1,16 +1,9 @@
 #![deny(unsafe_code)]
 #![cfg_attr(all(test, rtsan, not(rtsan_standalone)), feature(sanitize))]
 
-//! # Kithara Decode
+//! Audio decoding through Symphonia, Apple AudioToolbox or Android MediaCodec.
+//! Use [`DecoderFactory`] to select a backend from media information.
 //!
-//! Audio decoding library with pluggable backends.
-//!
-//! Provides generic decoder infrastructure supporting Symphonia (software),
-//! Apple `AudioToolbox`, and Android `MediaCodec` backends.
-//!
-//! ## Usage
-//!
-//! Use [`DecoderFactory`] for runtime codec selection:
 //! ```ignore
 //! use kithara_decode::{DecoderFactory, DecoderConfig};
 //!

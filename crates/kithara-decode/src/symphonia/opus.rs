@@ -17,7 +17,7 @@ use symphonia_core::{
 /// Libopus decodes packets; the composed pipeline owns container head/tail trim.
 pub(in crate::symphonia) struct OpusDecoder {
     params: AudioCodecParameters,
-    // Symphonia requires Sync; codec operations retain exclusive access.
+    /// Symphonia requires Sync; codec operations retain exclusive access.
     decoder: Mutex<opus::Decoder>,
     output: AudioBuffer<f32>,
     pcm: Vec<f32>,
@@ -26,6 +26,7 @@ pub(in crate::symphonia) struct OpusDecoder {
 }
 
 impl OpusDecoder {
+    /// Allocate output for Opus's maximum packet duration: 120 ms at 48 kHz.
     fn new(params: &AudioCodecParameters) -> Result<Self> {
         let channels = params
             .channels
@@ -52,7 +53,6 @@ impl OpusDecoder {
         decoder
             .set_gain(i32::from(gain))
             .map_err(|_| Error::DecodeError("opus: output gain rejected"))?;
-        // An Opus packet contains at most 120 ms of audio at 48 kHz.
         let frames = 5_760;
         let count = channels.count();
         Ok(Self {

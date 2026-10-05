@@ -80,19 +80,10 @@ where
         patch(skip)
     )]
     pub keys: KeyOptions,
-    /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
-    /// compression) for the HTTP client built when no [`downloader`] is
-    /// injected. Ignored when [`downloader`] is provided — the injected
-    /// downloader already carries its own client. Defaults to
-    /// [`NetOptions::default`]; lower the `inactivity_timeout` to bound a
-    /// withheld-body fetch sooner (the net resilient body owns the stall
-    /// and retries, then settles the segment terminally).
-    ///
-    /// A document cannot name this: an embedder that reaches a document also
-    /// injects a downloader, so the value would configure nothing. It carries
-    /// `patch(skip)` for that reason.
-    ///
-    /// [`downloader`]: HlsConfig::downloader
+    /// HTTP options for the client built when no [`downloader`](HlsConfig::downloader) is supplied.
+    /// An injected downloader owns its client and ignores these options; defaults are [`NetOptions::default`].
+    /// Documents skip this wiring because embedders inject a downloader. Its resilient body owns
+    /// inactivity timeout and retries, including terminal settlement of a withheld-body fetch.
     #[config(skip = "transferred to the HTTP client", builder(default), patch(skip))]
     #[debug(skip)]
     pub net_options: NetOptions,

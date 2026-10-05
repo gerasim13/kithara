@@ -32,6 +32,7 @@ struct EncodeTarget {
 }
 
 impl EncodeTarget {
+    /// Built-in Vorbis needs experimental compliance in the encoder options.
     fn from_request(request: &BytesEncodeRequest<'_>) -> EncodeResult<Self> {
         let explicit = request.bit_rate;
         let codec_default = request.target.default_bit_rate();
@@ -99,7 +100,6 @@ impl EncodeTarget {
                 )),
                 option_pairs: &[("compression_level", "5")],
             },
-            // FFmpeg's built-in Vorbis encoder requires experimental compliance.
             BytesEncodeTarget::Vorbis => Self {
                 codec: Id::VORBIS,
                 ext: "ogg",

@@ -2242,7 +2242,7 @@ mod tests {
         #[case] backend: StretchKind,
     ) {
         const ENGAGE: u64 = 1_024;
-        // At 0.8 the 3075 frames from ENGAGE play 2460 source frames whole.
+        /// At 0.8 the 3075 frames from ENGAGE play 2460 source frames whole.
         const AT: u64 = 4_099;
         const SETTLE: u64 = 16_384;
         const WINDOW: usize = 4_096;
@@ -2320,7 +2320,7 @@ mod tests {
         #[case] to: (StretchKind, bool),
     ) {
         const ENGAGE: u64 = 1_024;
-        // At 1.25 the 3072 frames from ENGAGE play 3840 source frames whole.
+        /// At 1.25 the 3072 frames from ENGAGE play 3840 source frames whole.
         const AT: u64 = 4_096;
         const SETTLE: u64 = 16_384;
         const WINDOW: usize = 4_096;

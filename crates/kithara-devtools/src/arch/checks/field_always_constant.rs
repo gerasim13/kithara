@@ -79,22 +79,12 @@ fn emit(idx: &WorkspaceStructIndex, min_call_sites: usize, out: &mut Vec<Violati
     }
 }
 
-/// Return the shared expression string when *every* site assigns the same
-/// expression to `field`. `None` if expressions differ, the field is missing
-/// from any site, or there are no sites.
-///
-/// Two no-information patterns are filtered out:
-///
-/// 1. Shorthand `X { field }` desugars to `X { field: field }` — every site
-///    "agrees" textually but the value really comes from a same-named local.
-/// 2. Trivial defaults — `T::default()`, `Default::default()`, `Vec::new()`,
-///    `HashMap::new()`, `HashSet::new()`, bare `PhantomData`. These mean "no
-///    per-site value", and flagging them just nags the caller to write
-///    `..Default::default()`, which the caller may already have a reason not
-///    to do (e.g. the type has no `Default` for the rest of its fields).
-///    `PhantomData` specifically is never "foldable into a constant" — it
-///    carries a type parameter for compile-time phase/variance tracking, not
-///    a runtime value.
+/// Returns the expression shared by every assignment to `field`, or `None`
+/// for differing expressions, missing fields, or no sites. Shorthand fields
+/// carry local values despite textual agreement, so they are excluded.
+/// Trivial defaults carry no per-site information; requiring struct update
+/// syntax would be invalid for types without `Default`. `PhantomData` tracks
+/// type parameters and variance rather than a foldable runtime value.
 fn constant_value(field: &str, sites: &[&LiteralSite]) -> Option<String> {
     let mut shared: Option<&str> = None;
     for site in sites {

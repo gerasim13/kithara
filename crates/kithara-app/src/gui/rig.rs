@@ -127,6 +127,8 @@ impl Rig {
         assert_eq!(update(&mut self.ui, message).units(), 0);
     }
 
+    /// Uses an offline host because broadcast/window tests need a measured stream,
+    /// without depending on a device.
     #[cfg(feature = "broadcast")]
     pub(crate) fn on_air() -> Self {
         use kithara::worker::{Worker, WorkerConfig};
@@ -138,7 +140,6 @@ impl Rig {
         )
         .cancel(config.shutdown.child())
         .build();
-        // The broadcast/window contract needs a measured stream, not a device.
         let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
         Self::with_host(&config, host, Broadcaster::new(broadcast))

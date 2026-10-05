@@ -112,19 +112,9 @@ impl BatchGroup {
         self.entries.is_empty()
     }
 
-    /// Spawn the live FIFO prefix that fits the current concurrency capacity,
-    /// return the remaining entries to the registry, and deliver-cancel dead
-    /// entries. The registry can then admit newly urgent work before revisiting
-    /// the pending demand tail.
-    ///
-    /// Returns the number of fetches actually spawned (cancelled cmds don't
-    /// count), so
-    /// [`Registry::tick`](super::registry::Registry::tick) can treat a non-zero
-    /// dispatch as forward progress for the hang watchdog.
-    ///
-    /// The `batch_size` / `first_request_id` probe values are written as
-    /// `name = expr`: the macro emits them only with the `usdt` feature, so
-    /// ordinary production builds do not evaluate the metric expressions.
+    /// Spawn the live FIFO prefix admitted by capacity, requeue its tail and cancel dead entries.
+    /// Returns actual spawns as watchdog progress, allowing newly urgent work ahead of the demand tail.
+    /// Probe metrics use `name = expr` so builds without `usdt` never evaluate those expressions.
     #[kithara::flash(true)]
     #[kithara::probe(
         batch_size = self.entries.len(),

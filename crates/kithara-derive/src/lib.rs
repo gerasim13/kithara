@@ -52,24 +52,31 @@ pub fn phase(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///
 /// `checked` and `Deserialize` refuse out-of-range values; the optional
 /// `clamp` flag adds a clamping `From` and requires a declared default.
-///
-/// ```compile_fail
-/// #[derive(kithara_derive::Ranged)]
-/// #[ranged(min = 0, max = 100)]
-/// struct Share(u8);
-/// let share = Share::from(101u8);
-/// ```
-///
-/// ```compile_fail
-/// #[derive(kithara_derive::Ranged)]
-/// #[ranged(min = 1.0, max = 1000.0)]
-/// struct Tempo(f64);
-/// let tempo = Tempo::default();
-/// ```
 #[cfg(feature = "ranged")]
 #[proc_macro_derive(Ranged, attributes(ranged))]
 pub fn ranged(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     ranged::expand(input)
+}
+
+#[cfg(all(doctest, feature = "ranged"))]
+mod ranged_contracts {
+    /// Unchecked conversion requires an explicitly clamping declaration.
+    /// ```compile_fail
+    /// #[derive(kithara_derive::Ranged)]
+    /// #[ranged(min = 0, max = 100)]
+    /// struct Share(u8);
+    /// let share = Share::from(101u8);
+    /// ```
+    mod rejects_implicit_from {}
+
+    /// Default construction requires a declared default value.
+    /// ```compile_fail
+    /// #[derive(kithara_derive::Ranged)]
+    /// #[ranged(min = 1.0, max = 1000.0)]
+    /// struct Tempo(f64);
+    /// let tempo = Tempo::default();
+    /// ```
+    mod rejects_undeclared_default {}
 }
 
 /// Implements a complete structural conversion between two product models.

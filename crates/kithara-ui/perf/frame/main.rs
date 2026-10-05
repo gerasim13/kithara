@@ -345,6 +345,8 @@ struct Reading {
 /// Measures one frame per control on each host. It records durations and makes
 /// no claim about them: the comparison this feeds is between the two hosts on
 /// the same machine, and a threshold here would judge the machine.
+/// An unavailable GPU host stays unmeasured: a software fallback would report
+/// Vis/Shader costs without running those passes.
 #[kithara::test]
 #[case("iced", Host::Immediate)]
 #[case("vello", Host::Retained)]
@@ -353,8 +355,6 @@ fn ui_frame_perf(#[case] label: &'static str, #[case] host: Host) {
     let backend = match Backend::try_from(host) {
         Ok(backend) => backend,
         Err(error) => {
-            // Falling back to the software rasteriser here would report times
-            // for the Vis and Shader passes without running them.
             let notice = format!("{label}: NOT MEASURED, no host to measure it on: {error}");
             println!("{notice}");
             eprintln!("{notice}");
@@ -369,6 +369,7 @@ fn ui_frame_perf(#[case] label: &'static str, #[case] host: Host) {
     audit(label, &readings);
 }
 
+/// Excludes the first frame's mount, layout and shaping-cache setup from frame cost.
 fn measure(backend: &Backend) -> Vec<Reading> {
     let geometry = backend.geometry();
     let mut readings = Vec::with_capacity(consts::SCENARIOS.len());
@@ -377,8 +378,6 @@ fn measure(backend: &Backend) -> Vec<Reading> {
         let reads = Rc::new(CensusReads::default());
         let rect = laid_out_rect(&fixture, &reads, &geometry);
         let mut driver = driver(backend, &fixture, Rc::clone(&reads));
-        // The first frame carries the mount, the layout and the shaping caches.
-        // Measuring it would measure the setup instead of the frame.
         let _warm = driver.frame();
         let steps = scenario.interaction.steps(rect);
         let size = hotpath::measure_block!(scenario.name, {
@@ -464,6 +463,8 @@ fn audit(label: &str, readings: &[Reading]) {
     );
 }
 
+/// Geometry alone cannot prove a gesture landed. A host with neither receipts nor
+/// a scheduled frame measured an idle redraw instead of the declared gesture.
 fn miss(reading: &Reading) -> Option<String> {
     let rect = reading.rect;
     let viewport = Rect {
@@ -491,9 +492,6 @@ fn miss(reading: &Reading) -> Option<String> {
             consts::HEIGHT
         ));
     }
-    // Geometry says the point is on the control. This says the host agrees: a
-    // gesture that neither published anything nor asked for another frame
-    // reached nothing, and its row is an idle redraw wearing a drag's name.
     (reading.gestured && reading.receipts == 0 && !reading.scheduled)
         .then(|| format!("the host saw nothing at {:?} in {rect:?}", reading.points))
 }

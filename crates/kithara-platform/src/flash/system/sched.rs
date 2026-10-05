@@ -575,20 +575,14 @@ impl FlashInner {
         (token, adv, wait)
     }
 
-    /// Register an ASYNC cooperative-yield waiter (sim `tokio::task::yield_now`).
-    /// Parks the task as a yield-waiter (woken on the next clock advance), then runs
-    /// the advance rule and returns its id + granted flag + the [`WakeBatch`] the caller
-    /// fires (mirroring the sibling `register_*_async` registers). This is the sim
-    /// analogue of a real `yield_now`: real time passes while a task yields, so here
-    /// the task releases its `active_async` slot (the spawn gate does so when the
-    /// yield future returns Pending) and the virtual clock is free to advance to the
-    /// next event. Still NO resolve-at-once: the waiter is inserted parked, and the
-    /// returned advance only GRANTS it on a quiescent edge (`active == active_async
-    /// == 0`) — under a participated poll the task is still running (`active_async >
-    /// 0`) so the advance is a no-op and the gate park does the real advance, exactly
-    /// as before. The grant (here, the lone-yield rescue, or a later clock advance)
-    /// sets `granted` and the waker re-polls. The fired advance unwedges a
-    /// genuinely-quiescent non-participated `block_on` whose only `.await` is a yield.
+    /// Registers an async yield waiter parked until a quiescent clock advance and
+    /// returns its ID, grant flag and [`WakeBatch`] for the caller to fire.
+    /// Pending yield releases the task's `active_async` slot through the spawn gate;
+    /// resolution requires `active == active_async == 0` and is never immediate.
+    /// During a participated poll the advance is a no-op until the gate parks.
+    /// An initial advance, lone-yield rescue or later advance grants and re-polls;
+    /// firing the batch also releases a quiescent non-participated `block_on` whose
+    /// only await is this yield.
     pub(in crate::flash) fn register_yield_async(
         &self,
         waker: Waker,

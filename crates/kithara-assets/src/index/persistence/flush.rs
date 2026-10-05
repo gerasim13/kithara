@@ -269,20 +269,10 @@ impl std::fmt::Debug for FlushHub {
     }
 }
 
-/// Eagerly flush a single index source. Pins and the LRU index are
-/// crash-safety state — a pinned resource must be durable immediately
-/// so a crash can't lose it and let the resource be evicted — so their
-/// mutators flush synchronously here rather than deferring to the
-/// debounced [`FlushHub`] worker. The worker instead serves the
-/// frequently-rewritten availability index, which wakes it via
-/// [`FlushHub::signal`].
-///
-/// Marks the source dirty before flushing: `Flushable::flush` clears
-/// the flag on success, so a failed flush leaves `dirty == true` and
-/// the next cycle retries.
+/// Flush pin/LRU crash-safety state synchronously so a crash cannot lose a live pin.
+/// Marks dirty first and leaves it set on failure; availability uses the debounced [`FlushHub`].
 ///
 /// # Errors
-///
 /// Propagates the underlying flush error.
 pub(crate) fn flush_sync(source: &dyn Flushable) -> AssetsResult<()> {
     source.dirty().store(true, Ordering::Release);

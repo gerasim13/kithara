@@ -71,21 +71,12 @@ fn composite(over: Rgba, under: Rgba) -> Rgba {
     }
 }
 
-/// One column of the waveform: the three bands share a width and nest by
-/// level, each drawn from the vertical centre over the previous one.
-///
-/// The column's horizontal edges are snapped to whole pixels, because they are
-/// a grid rather than a measurement. A bar landing on a half pixel costs an
-/// area-sampling backend the gap after it: each of the three bands covers that
-/// column about half, and three of those composite to `1-(1-0.5)^3`, which is
-/// opaque enough to read as bar. The height is deliberately left alone — it
-/// carries the level, and rounding it would quantise the signal.
-///
-/// Snapping breaks its ties in one direction rather than away from zero, so a
-/// column left of the box's origin lands on the same grid as one right of it.
-/// A zoomed hero wave is laid out from the track's origin, which sits far off
-/// the left edge, and a tie that flipped direction at zero would cost that one
-/// column its gap.
+/// Draws three nested, centre-aligned bands for one waveform column.
+/// Horizontal edges snap to whole pixels: half-pixel grid coverage composites
+/// three half-covered bands to `1-(1-0.5)^3`, obscuring the following gap.
+/// Height remains unsnapped because rounding would quantise the signal level.
+/// Ties snap in one direction across zero so columns from a far-left track origin
+/// share the same grid and retain their gaps.
 pub(crate) fn draw_column(
     list: &mut DrawListBuilder,
     bounds: Rect,

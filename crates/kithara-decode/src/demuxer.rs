@@ -54,20 +54,11 @@ pub(crate) trait Demuxer: Send {
         Ok(())
     }
 
-    /// Seek the demuxer to `target` time.
-    ///
-    /// `priming` carries the codec's pre-roll requirements — packets/frames
-    /// the demuxer should back off before `target` so the codec layer can
-    /// decode-and-discard warm-up data. Demuxers that do not support
-    /// byte-accurate pre-roll (Android, Apple `AudioFile`) may ignore the
-    /// field and return `PrerollHint::NotNeeded`.
-    ///
-    /// Returns the actual landing point — `Landed { landed_at }` for a
-    /// successful seek, `PastEof { duration }` when the target lies
-    /// beyond the stream's known length.
+    /// Seek to `target`, backing off by `priming` for codec warm-up when supported.
+    /// Android and Apple AudioFile may ignore pre-roll and return `PrerollHint::NotNeeded`.
+    /// Returns the actual landing point or `PastEof` beyond the known extent.
     ///
     /// # Errors
-    ///
     /// Surfaces parser-level seek failures verbatim.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome>;
 

@@ -122,21 +122,13 @@ impl fmt::Display for Report {
     }
 }
 
-/// Compares two capture sets page by page, writing a difference mask per page
-/// into `masks`.
-///
-/// It is only meaningful when both sets were photographed at the same
-/// geometry: each set records its own in `frame.txt`, and a mismatch is
-/// refused, because two hosts scaled differently can be made to agree or
-/// disagree at will.
-///
-/// A budget turns the numbers into a gate: the file names a per-page
-/// allowance, and a page over its allowance — or missing from either set —
-/// fails the run. Without one this only reports.
+/// Compares capture sets page by page and writes masks into `masks`.
+/// Both sets must record identical geometry in `frame.txt`; different host scales
+/// can manufacture agreement or disagreement. A budget gates each page's allowance
+/// and fails missing or over-budget pages; without it, comparison only reports.
 ///
 /// # Errors
-/// Fails when a set has no recorded geometry, the two disagree on it, a page
-/// cannot be read, or a mask cannot be written.
+/// Fails for absent/mismatched geometry, unreadable pages or unwritable masks.
 pub fn compare(
     left: &Path,
     right: &Path,

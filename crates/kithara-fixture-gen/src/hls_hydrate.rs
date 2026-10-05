@@ -702,9 +702,9 @@ mod tests {
     /// download can abandon a request it has given up on, and the knock that
     /// stops the edge carries nothing at all.
     fn request_head(stream: &mut TcpStream) -> Option<String> {
-        // Bounds the wait on one head. A loopback client sends a head in one
-        // write, so this only ends a wait on a connection the download opened
-        // and then abandoned, which would otherwise never end.
+        /// Bounds the wait on one head. A loopback client sends a head in one
+        /// write, so this only ends a wait on a connection the download opened
+        /// and then abandoned, which would otherwise never end.
         const HEAD_WAIT: Duration = Duration::from_secs(10);
 
         stream

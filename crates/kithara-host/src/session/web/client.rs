@@ -119,6 +119,9 @@ thread_local! {
     static WASM_SESSION_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Retains output for the session lifetime. Browser output requires a user gesture,
+/// and closing its AudioContext on idle is irreversible: later contexts remain
+/// suspended and their render callbacks never run.
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
@@ -140,10 +143,6 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         settings,
         start_stream_web_audio,
     );
-    // A browser unlocks its output through a user gesture and can never resume
-    // a closed `AudioContext`: releasing the device on idle is irreversible, so
-    // every later context stays suspended and the render callback never runs
-    // again. This session holds its device for as long as it lives.
     session.retains_output = true;
     let state = Arc::new(Mutex::new(Some(session)));
     init_bridge_state();

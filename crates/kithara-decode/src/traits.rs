@@ -42,19 +42,10 @@ pub enum InputReadOutcome {
 /// without rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderSeekOutcome {
-    /// Decoder is now parked at `landed_at` / `landed_frame` /
-    /// `landed_byte`. All three come from the decoder's own state
-    /// and refer to the *same* point. `landed_byte`, when present,
-    /// is the absolute byte offset in the underlying source where
-    /// the next packet body begins — the pipeline plugs it into
-    /// `Stream::seek` so we never recompute byte offsets from
-    /// `frame × bytes_per_frame` heuristics on the consumer side.
-    /// `None` is reserved for the rare case where the decoder
-    /// successfully seeked but cannot expose a packet-aligned byte
-    /// offset (e.g. `AudioFile` on a streaming MP3 whose seek-table
-    /// is not yet built). For those, the pipeline relies on the
-    /// producer-side `Stream::byte_position` updated by the
-    /// decoder's own `Read::seek` calls — no extra arithmetic.
+    /// Successful seek coordinates from one decoder state, all naming the same landing point.
+    /// `landed_byte` is the absolute next-packet body offset; the pipeline uses it without
+    /// frame/byte heuristics. If unavailable (such as an unbuilt streaming MP3 seek table),
+    /// the producer's decoder-driven `Read::seek` updates `Stream::byte_position` instead.
     Landed {
         landed_at: Duration,
         landed_frame: u64,
