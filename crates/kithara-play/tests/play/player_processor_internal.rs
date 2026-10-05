@@ -224,7 +224,7 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
 }
 
 #[kithara::test(tokio)]
-async fn fade_in_switches_public_snapshot_without_render() {
+async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not() {
     let (mut processor, mut control) = make_processor();
     let first_src: Arc<str> = Arc::from("first.mp3");
     let second_src: Arc<str> = Arc::from("second.mp3");
