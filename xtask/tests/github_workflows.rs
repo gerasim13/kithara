@@ -1893,7 +1893,10 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
     let jobs = workflow_jobs(&workflow);
     let authorize = workflow_job(jobs, "authorize");
-    assert_eq!(mapping_field(authorize, "runs-on").as_str(), Some("ubuntu-latest"));
+    assert_eq!(
+        mapping_field(authorize, "runs-on").as_str(),
+        Some("ubuntu-latest")
+    );
     assert_eq!(
         mapping_field(authorize, "steps")
             .as_sequence()
