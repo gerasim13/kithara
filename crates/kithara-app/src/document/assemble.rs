@@ -5,11 +5,12 @@ use kithara::{
     assets::{FlushHub, FlushPolicy},
     bufpool::PoolError,
     download::{Downloader, DownloaderConfig},
-    net::{HttpClient, NetOptions},
+    net::{HttpClient, NetOptions, NetOptionsPatch},
     platform::{CancelToken, thread, tokio::runtime::Handle},
     play::PlayWorkerConfig,
     worker::{OwnedPoolConfig, Worker, WorkerConfig},
 };
+use kithara_config::Config as _;
 
 use super::{Config, PolicyError};
 use crate::{
@@ -73,8 +74,10 @@ impl AppConfig {
         let broadcast = AppBroadcastConfig::default();
         let mut net = NetOptions::builder().build();
         net.apply(document.net());
-        net.is_insecure |= is_insecure;
-        let should_accept_invalid_certs = net.is_insecure;
+        let should_accept_invalid_certs = net.values().is_insecure || is_insecure;
+        let mut net_override = NetOptionsPatch::default();
+        net_override.is_insecure = Some(should_accept_invalid_certs);
+        net.apply(net_override);
         let mut downloader_config =
             DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child()))
                 .build();

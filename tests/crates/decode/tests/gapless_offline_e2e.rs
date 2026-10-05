@@ -79,10 +79,7 @@ const APPLE_FUSED_DEFICIT_SEGMENTS: usize = 1;
 const SINE_HZ: f64 = 480.0;
 
 fn silence_trim_with_trailing() -> GaplessMode {
-    GaplessMode::SilenceTrim(SilenceTrimParams {
-        trim_trailing: true,
-        ..Default::default()
-    })
+    GaplessMode::SilenceTrim(SilenceTrimParams::builder().trim_trailing(true).build())
 }
 
 fn expected_visible_frames(encoder_delay: u32, trailing_delay: u32) -> usize {

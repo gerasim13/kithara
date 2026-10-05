@@ -14,17 +14,16 @@ use serde::{Deserialize, Deserializer};
 
 use super::{
     OnInvalidatedFn,
+    chain::StoreChain,
     handle::{AssetStore, AssetStoreInner, StoreBackendInner},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::backend::{DiskAssetDeleter, DiskAssetStore, indexed_path};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::decorator::ByteRecorder;
 use crate::{
     backend::{AssetDeleter, MemAssetDeleter, MemAssetStore, MemStoreSetup},
     decorator::{
-        CachedAssets, EvictAssets, EvictDeps, EvictionEvents, EvictionRouter, LeaseAssets,
-        LeaseEvents, ProcessingAssets,
+        Assets, ByteRecorder, CachedAssets, Capabilities, EvictAssets, EvictDeps, EvictionEvents,
+        EvictionRouter, LeaseAssets, LeaseEvents, ProcessingAssets,
     },
     index::{
         AvailabilityIndex, FlushHub, FlushPolicy, PendingResourceIndex, ResourceTransactionIndex,
@@ -177,6 +176,35 @@ where
         AssetStoreConfig::for_pools(pools)
     }
 
+    fn decorate_backend<A>(
+        inner: Arc<A>,
+        deps: EvictDeps<S>,
+        on_invalidated: Option<OnInvalidatedFn>,
+        volatile: bool,
+    ) -> StoreChain<A, S>
+    where
+        A: Assets,
+    {
+        let records_bytes = inner.capabilities().contains(Capabilities::EVICT);
+        let config = Arc::clone(&deps.config);
+        let cancel = deps.cancel.clone();
+        let pins = deps.pins.clone();
+        let events = LeaseEvents::new(config.event_bus.clone());
+        let evict = Arc::new(EvictAssets::new(inner, deps));
+        let byte_recorder = records_bytes.then(|| Arc::clone(&evict) as Arc<dyn ByteRecorder>);
+        let processing = Arc::new(ProcessingAssets::new(
+            Arc::clone(&evict),
+            Arc::clone(&config),
+        ));
+        let cached = Arc::new(CachedAssets::with_policy(
+            processing,
+            config,
+            on_invalidated,
+            volatile,
+        ));
+        LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, events, pins)
+    }
+
     /// Open a ready-to-use asset store.
     ///
     /// The pending-resource index, eviction router, and memory-cache invalidation hook are
@@ -250,39 +278,24 @@ where
                 deleter: Arc::clone(&deleter),
             },
         ));
-        let evict = Arc::new(EvictAssets::new(
-            mem,
-            EvictDeps {
-                lru,
-                deleter,
-                config: Arc::clone(&config),
-                cancel: cancel.clone(),
-                events: EvictionEvents::new(event_bus.clone()),
-                pins: pins.clone(),
-            },
-        ));
-        let processing_assets = Arc::new(ProcessingAssets::new(
-            Arc::clone(&evict),
-            Arc::clone(&config),
-        ));
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
         let on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
             availability_for_hook.remove(key);
             eviction_for_hook.route(key);
         });
-        let cached = Arc::new(CachedAssets::with_policy(
-            processing_assets,
-            Arc::clone(&config),
+        let store = Self::decorate_backend(
+            mem,
+            EvictDeps {
+                lru,
+                deleter,
+                config: Arc::clone(&config),
+                cancel,
+                events: EvictionEvents::new(event_bus),
+                pins,
+            },
             Some(on_invalidated),
             true,
-        ));
-        let store = LeaseAssets::with_byte_recorder(
-            cached,
-            cancel,
-            None,
-            LeaseEvents::new(event_bus),
-            pins,
         );
 
         Self::new_handle(AssetStoreInner {
@@ -363,35 +376,18 @@ where
         Arc::clone(&config),
     ));
     let base = Arc::clone(&disk);
-    let evict = Arc::new(EvictAssets::new(
+    let store = AssetStore::<S>::decorate_backend(
         disk,
         EvictDeps {
             lru,
             deleter,
-            config: Arc::clone(&config),
-            cancel: cancel.clone(),
-            events: EvictionEvents::new(event_bus.clone()),
-            pins: pins.clone(),
+            config,
+            cancel,
+            events: EvictionEvents::new(event_bus),
+            pins,
         },
-    ));
-    let processing_assets = Arc::new(ProcessingAssets::new(
-        Arc::clone(&evict),
-        Arc::clone(&config),
-    ));
-    let cached = Arc::new(CachedAssets::with_policy(
-        processing_assets,
-        config,
         None,
         false,
-    ));
-    let byte_recorder: Option<Arc<dyn ByteRecorder>> =
-        Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
-    let store = LeaseAssets::with_byte_recorder(
-        cached,
-        cancel,
-        byte_recorder,
-        LeaseEvents::new(event_bus),
-        pins,
     );
 
     StoreBackendInner::Disk {

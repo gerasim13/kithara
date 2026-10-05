@@ -1,61 +1,30 @@
-#[cfg(feature = "symphonia")]
-use std::io::{Read, Seek};
 use std::{
     io::ErrorKind,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use kithara_platform::{sync::Arc, time::Duration};
-#[cfg(feature = "symphonia")]
-use kithara_stream::ContainerFormat;
-use kithara_stream::{
-    AudioCodec, NotReadyCause, PendingReason, PrerollHint, StreamPending, StreamSeekPastEof,
-};
+use kithara_stream::{AudioCodec, PendingReason, PrerollHint};
 use kithara_test_utils::kithara;
 #[cfg(feature = "symphonia")]
-use symphonia_core::formats::FormatOptions;
+use symphonia_core::codecs::audio::AudioCodecParameters;
 #[cfg(all(test, feature = "symphonia"))]
 use symphonia_core::packet::Packet;
 use symphonia_core::{
-    codecs::{
-        CodecParameters,
-        audio::{
-            AudioCodecId, AudioCodecParameters,
-            well_known::{
-                CODEC_ID_AAC, CODEC_ID_ADPCM_G722, CODEC_ID_ADPCM_G726, CODEC_ID_ADPCM_G726LE,
-                CODEC_ID_ADPCM_IMA_QT, CODEC_ID_ADPCM_IMA_WAV, CODEC_ID_ADPCM_MS, CODEC_ID_ALAC,
-                CODEC_ID_FLAC, CODEC_ID_MP3, CODEC_ID_OPUS, CODEC_ID_PCM_ALAW, CODEC_ID_PCM_F32BE,
-                CODEC_ID_PCM_F32BE_PLANAR, CODEC_ID_PCM_F32LE, CODEC_ID_PCM_F32LE_PLANAR,
-                CODEC_ID_PCM_F64BE, CODEC_ID_PCM_F64BE_PLANAR, CODEC_ID_PCM_F64LE,
-                CODEC_ID_PCM_F64LE_PLANAR, CODEC_ID_PCM_MULAW, CODEC_ID_PCM_S8,
-                CODEC_ID_PCM_S8_PLANAR, CODEC_ID_PCM_S16BE, CODEC_ID_PCM_S16BE_PLANAR,
-                CODEC_ID_PCM_S16LE, CODEC_ID_PCM_S16LE_PLANAR, CODEC_ID_PCM_S24BE,
-                CODEC_ID_PCM_S24BE_PLANAR, CODEC_ID_PCM_S24LE, CODEC_ID_PCM_S24LE_PLANAR,
-                CODEC_ID_PCM_S32BE, CODEC_ID_PCM_S32BE_PLANAR, CODEC_ID_PCM_S32LE,
-                CODEC_ID_PCM_S32LE_PLANAR, CODEC_ID_PCM_U8, CODEC_ID_PCM_U8_PLANAR,
-                CODEC_ID_PCM_U16BE, CODEC_ID_PCM_U16BE_PLANAR, CODEC_ID_PCM_U16LE,
-                CODEC_ID_PCM_U16LE_PLANAR, CODEC_ID_PCM_U24BE, CODEC_ID_PCM_U24BE_PLANAR,
-                CODEC_ID_PCM_U24LE, CODEC_ID_PCM_U24LE_PLANAR, CODEC_ID_PCM_U32BE,
-                CODEC_ID_PCM_U32BE_PLANAR, CODEC_ID_PCM_U32LE, CODEC_ID_PCM_U32LE_PLANAR,
-                CODEC_ID_VORBIS,
-            },
-        },
-    },
-    errors::{Error as SymphoniaError, SeekErrorKind},
-    formats::{FormatReader, SeekMode, SeekTo, Track, TrackType},
+    codecs::CodecParameters,
+    errors::Error as SymphoniaError,
+    formats::{FormatReader, SeekMode, SeekTo, TrackType},
     units::{Duration as SymphoniaDuration, Time, TimeBase, Timestamp},
 };
 
-#[cfg(feature = "symphonia")]
-use crate::symphonia::{
-    config::SymphoniaConfig,
-    probe::{ReaderBootstrap, new_direct, probe_with_seek},
+use super::{
+    error::{classify_seek_err, pending_reason, resume_point_is_past_the_end},
+    packets::Packets,
+    track::{build_track_info, time_to_duration},
 };
 use crate::{
-    codec::CodecPriming,
+    CodecPriming, DecodeError, DecodeResult,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
-    error::{DecodeError, DecodeResult},
-    symphonia::packets::Packets,
 };
 
 /// Demuxer adapter over Symphonia's [`FormatReader`].
@@ -94,18 +63,6 @@ pub(crate) struct SymphoniaDemuxer {
     /// read-ahead strand (see `next_frame` / `reseek_to_resume`).
     resume_ts: i64,
     track_id: u32,
-}
-
-/// Inputs to [`SymphoniaDemuxer::open_file`] besides the reader: the
-/// format `hint` (file extension), an explicit `container` format that
-/// skips probing when known, the bootstrap `byte_len_handle`, and an
-/// optional `byte_map` over the underlying source.
-#[cfg(feature = "symphonia")]
-pub(crate) struct FileOpen {
-    pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
-    pub(crate) byte_map: Option<Arc<dyn kithara_stream::ByteMap>>,
-    pub(crate) container: Option<ContainerFormat>,
-    pub(crate) hint: Option<String>,
 }
 
 impl SymphoniaDemuxer {
@@ -164,46 +121,6 @@ impl SymphoniaDemuxer {
             resume_pending: None,
             prepared: None,
         })
-    }
-
-    /// Build a demuxer for a file-like source: probe the container if
-    /// no [`ContainerFormat`] hint is provided, otherwise wire the
-    /// matching reader directly. Returns a [`SymphoniaDemuxer`] plus the
-    /// bootstrap byte-length handle (so the factory can keep updating it
-    /// across the decoder's lifetime).
-    ///
-    /// # Errors
-    ///
-    /// Surfaces probe-side errors verbatim ([`DecodeError::Backend`])
-    /// and missing-track errors ([`DecodeError::ProbeFailed`]).
-    #[cfg(feature = "symphonia")]
-    pub(crate) fn open_file<R>(source: R, open: FileOpen) -> DecodeResult<(Self, Arc<AtomicU64>)>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        let FileOpen {
-            hint,
-            container,
-            byte_len_handle,
-            byte_map,
-        } = open;
-        let config = SymphoniaConfig::builder()
-            .maybe_byte_len_handle(byte_len_handle)
-            .maybe_hint(hint)
-            .build();
-        let format_opts = FormatOptions::default();
-        let bootstrap: ReaderBootstrap = if let Some(container) = container {
-            new_direct(source, &config, container, format_opts)?
-        } else {
-            probe_with_seek(source, &config, format_opts, false)?
-        };
-        let len_handle = bootstrap.byte_len_handle.clone();
-        let demuxer = Self::from_reader_with_layout(
-            bootstrap.format_reader,
-            Some(bootstrap.byte_pos_handle),
-            byte_map,
-        )?;
-        Ok((demuxer, len_handle))
     }
 
     fn ts_to_duration(&self, ts: Timestamp) -> Duration {
@@ -417,209 +334,6 @@ impl SymphoniaDemuxer {
     pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::GaplessInfo>) {
         self.track_info.gapless = gapless;
     }
-}
-
-fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> DecodeResult<TrackInfo> {
-    const DEFAULT_CHANNEL_COUNT: u16 = 2;
-
-    let codec = map_codec_id(codec_params.codec);
-    let sample_rate = codec_params
-        .sample_rate
-        .ok_or_else(|| DecodeError::InvalidData {
-            detail: "missing sample rate",
-        })?;
-    let channels = codec_params
-        .channels
-        .as_ref()
-        .map_or(DEFAULT_CHANNEL_COUNT, |c| {
-            u16::try_from(c.count()).unwrap_or(DEFAULT_CHANNEL_COUNT)
-        });
-    let extra_data = codec_params
-        .extra_data
-        .as_ref()
-        .map(|d| d.to_vec())
-        .unwrap_or_default();
-    let duration = calculate_track_duration(track, codec);
-
-    Ok(TrackInfo {
-        codec,
-        duration,
-        extra_data,
-        channels,
-        sample_rate,
-        gapless: (codec == AudioCodec::Opus).then_some(crate::GaplessInfo {
-            leading_frames: u64::from(track.delay.unwrap_or(0)),
-            trailing_frames: u64::from(track.padding.unwrap_or(0)),
-        }),
-    })
-}
-
-/// MPEG track metadata excludes LAME trim; downstream trimming requires its raw PCM extent.
-fn calculate_track_duration(track: &Track, codec: AudioCodec) -> Option<Duration> {
-    let mut num_frames = track.num_frames?;
-    if codec == AudioCodec::Mp3 {
-        num_frames = num_frames
-            .checked_add(u64::from(track.delay.unwrap_or(0)))?
-            .checked_add(u64::from(track.padding.unwrap_or(0)))?;
-    }
-    let time_base = track.time_base?;
-    let time = time_base.calc_time(Timestamp::new(
-        i64::try_from(num_frames).unwrap_or(i64::MAX),
-    ))?;
-    Some(time_to_duration(time))
-}
-
-fn time_to_duration(time: Time) -> Duration {
-    let (seconds, nanos) = time.parts();
-    Duration::new(seconds.cast_unsigned(), nanos)
-}
-
-/// Map a symphonia codec id to our [`AudioCodec`] enum. Unknown ids fall
-/// back to [`AudioCodec::Pcm`] / [`AudioCodec::Adpcm`] when the id sits
-/// inside the corresponding well-known range so PCM/ADPCM tracks still
-/// surface a usable [`TrackInfo`]. The matching codec wiring uses
-/// [`SymphoniaDemuxer::native_params`] for the actual decoder build.
-const fn map_codec_id(id: AudioCodecId) -> AudioCodec {
-    match id {
-        CODEC_ID_AAC => AudioCodec::AacLc,
-        CODEC_ID_FLAC => AudioCodec::Flac,
-        CODEC_ID_MP3 => AudioCodec::Mp3,
-        CODEC_ID_ALAC => AudioCodec::Alac,
-        CODEC_ID_OPUS => AudioCodec::Opus,
-        CODEC_ID_VORBIS => AudioCodec::Vorbis,
-        other if is_pcm_codec_id(other) => AudioCodec::Pcm,
-        other if is_adpcm_codec_id(other) => AudioCodec::Adpcm,
-        _ => AudioCodec::Pcm,
-    }
-}
-
-const fn is_pcm_codec_id(id: AudioCodecId) -> bool {
-    matches!(
-        id,
-        CODEC_ID_PCM_S32LE
-            | CODEC_ID_PCM_S32LE_PLANAR
-            | CODEC_ID_PCM_S32BE
-            | CODEC_ID_PCM_S32BE_PLANAR
-            | CODEC_ID_PCM_S24LE
-            | CODEC_ID_PCM_S24LE_PLANAR
-            | CODEC_ID_PCM_S24BE
-            | CODEC_ID_PCM_S24BE_PLANAR
-            | CODEC_ID_PCM_S16LE
-            | CODEC_ID_PCM_S16LE_PLANAR
-            | CODEC_ID_PCM_S16BE
-            | CODEC_ID_PCM_S16BE_PLANAR
-            | CODEC_ID_PCM_S8
-            | CODEC_ID_PCM_S8_PLANAR
-            | CODEC_ID_PCM_U32LE
-            | CODEC_ID_PCM_U32LE_PLANAR
-            | CODEC_ID_PCM_U32BE
-            | CODEC_ID_PCM_U32BE_PLANAR
-            | CODEC_ID_PCM_U24LE
-            | CODEC_ID_PCM_U24LE_PLANAR
-            | CODEC_ID_PCM_U24BE
-            | CODEC_ID_PCM_U24BE_PLANAR
-            | CODEC_ID_PCM_U16LE
-            | CODEC_ID_PCM_U16LE_PLANAR
-            | CODEC_ID_PCM_U16BE
-            | CODEC_ID_PCM_U16BE_PLANAR
-            | CODEC_ID_PCM_U8
-            | CODEC_ID_PCM_U8_PLANAR
-            | CODEC_ID_PCM_F32LE
-            | CODEC_ID_PCM_F32LE_PLANAR
-            | CODEC_ID_PCM_F32BE
-            | CODEC_ID_PCM_F32BE_PLANAR
-            | CODEC_ID_PCM_F64LE
-            | CODEC_ID_PCM_F64LE_PLANAR
-            | CODEC_ID_PCM_F64BE
-            | CODEC_ID_PCM_F64BE_PLANAR
-            | CODEC_ID_PCM_ALAW
-            | CODEC_ID_PCM_MULAW
-    )
-}
-
-const fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
-    matches!(
-        id,
-        CODEC_ID_ADPCM_G722
-            | CODEC_ID_ADPCM_G726
-            | CODEC_ID_ADPCM_G726LE
-            | CODEC_ID_ADPCM_MS
-            | CODEC_ID_ADPCM_IMA_WAV
-            | CODEC_ID_ADPCM_IMA_QT
-    )
-}
-
-/// The typed payload behind `Interrupted` is lost by the time it reaches here, so only its variant
-/// name can be logged.
-fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
-    match err {
-        SymphoniaError::SeekError(SeekErrorKind::OutOfRange) => DecodeError::SeekOutOfRange {
-            detail: "seek target past indexed sample range",
-        },
-        SymphoniaError::IoError(io_err)
-            if io_err.get_ref().is_some_and(
-                <dyn std::error::Error + Send + Sync + 'static>::is::<StreamSeekPastEof>,
-            ) =>
-        {
-            DecodeError::SeekOutOfRange {
-                detail: "seek past end of stream",
-            }
-        }
-        SymphoniaError::IoError(e) if e.kind() == ErrorKind::UnexpectedEof => {
-            DecodeError::SeekOutOfRange {
-                detail: "seek hit unexpected end of stream",
-            }
-        }
-        SymphoniaError::IoError(io_err)
-            if matches!(
-                io_err.kind(),
-                ErrorKind::Interrupted | ErrorKind::WouldBlock
-            ) || io_err.get_ref().is_some_and(|src| {
-                src.downcast_ref::<PendingReason>()
-                    .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
-            }) =>
-        {
-            tracing::debug!(error = ?io_err, "demuxer seek interrupted");
-            DecodeError::Interrupted
-        }
-        _ => DecodeError::SeekFailed {
-            detail: "symphonia seek failed",
-        },
-    }
-}
-
-/// Whether a failed resume re-seek means the source has nothing left to read.
-///
-/// `resume_ts` is the end of the last cleanly emitted packet, and a
-/// packet-quantised reader reports a full packet duration even for a
-/// truncated final packet — so once the last frame is out, the resume point
-/// can sit past the end of the source. A reader publishes a length only once
-/// every segment size is exact, so "past the published end" is a final
-/// answer rather than a not-ready boundary: there is no stranded packet to
-/// re-read and the stream ends, the way [`Demuxer::seek`] reports
-/// `PastEof` instead of failing.
-const fn resume_point_is_past_the_end(failure: &DecodeError) -> bool {
-    matches!(failure, DecodeError::SeekOutOfRange { .. })
-}
-
-fn pending_reason(error: &SymphoniaError) -> Option<PendingReason> {
-    let SymphoniaError::IoError(error) = error else {
-        return None;
-    };
-    if !matches!(error.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) {
-        return None;
-    }
-    Some(
-        error
-            .get_ref()
-            .and_then(|source| {
-                source
-                    .downcast_ref::<StreamPending>()
-                    .map(StreamPending::reason)
-                    .or_else(|| source.downcast_ref::<PendingReason>().copied())
-            })
-            .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending)),
-    )
 }
 
 const fn mdct_packet_frames(codec: AudioCodec) -> u32 {

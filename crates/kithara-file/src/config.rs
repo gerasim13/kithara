@@ -38,64 +38,64 @@ where
         patch(skip),
         get(ref)
     )]
-    pub src: FileSrc,
+    pub(crate) src: FileSrc,
     /// Shared asset store used by local and remote sources.
     #[config(
         skip = "retained asset store handle has no patch representation",
         patch(skip)
     )]
-    pub store: AssetStore<S>,
+    pub(crate) store: AssetStore<S>,
     /// Poll interval while a sibling `AssetStore` instance holds the
     /// atomic-chunked tmp for this file's canonical path. The default is short
     /// enough that the observed ~67 ms race window in
     /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
     /// enough not to busy-spin a tokio worker.
     #[config(value, builder(default = Duration::from_millis(10)), patch(humantime))]
-    pub tmp_claim_poll_interval: Duration,
+    pub(crate) tmp_claim_poll_interval: Duration,
     /// Event bus (optional - if not provided, one is created internally).
     #[config(skip = "transferred to the file event bus", builder(name = events), patch(skip))]
-    pub bus: Option<EventBus>,
+    pub(crate) bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
     #[config(skip = "composed into the file cancel scope", patch(skip))]
-    pub cancel: Option<CancelToken>,
+    pub(crate) cancel: Option<CancelToken>,
     /// Optional cache discriminator.
     #[config(skip = "transferred to the asset scope", patch(skip))]
-    pub discriminator: Option<String>,
+    pub(crate) discriminator: Option<String>,
     /// Shared downloader (created lazily if not provided).
     #[config(
         skip = "retained downloader handle has no patch representation",
         patch(skip)
     )]
     #[debug(skip)]
-    pub downloader: Option<Downloader>,
+    pub(crate) downloader: Option<Downloader>,
     /// Explicit source-extension hint used before the URL-path extension.
     #[config(skip = "consumed by the codec probe")]
-    pub extension: Option<String>,
+    pub(crate) extension: Option<String>,
     /// Additional HTTP headers to include in all requests.
     #[config(
         skip = "retained request headers have no patch representation",
         patch(skip),
         get(ref)
     )]
-    pub headers: Option<Headers>,
+    pub(crate) headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     #[config(value)]
-    pub look_ahead_bytes: Option<u64>,
+    pub(crate) look_ahead_bytes: Option<u64>,
     /// Buffer-pool facade shared with storage and fallback transport.
     #[config(
         skip = "retained buffer pools have no patch representation",
         patch(skip)
     )]
-    pub pools: PoolRegion<S>,
+    pub(crate) pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[config(value, builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY))]
-    pub event_channel_capacity: usize,
+    pub(crate) event_channel_capacity: usize,
     /// Ring depth for the decode-core to shell reader-event hand-off. A decode
     /// pass emits at most one progress event per decoded chunk, so the default
     /// bounds the worst-case post-seek skip burst without blocking the decode
     /// core.
     #[config(value, builder(default = 256), get(copy))]
-    pub reader_event_capacity: usize,
+    pub(crate) reader_event_capacity: usize,
 }
 
 #[cfg(test)]
@@ -314,6 +314,17 @@ mod document_tests {
         config.apply(patch);
 
         assert_eq!(config.tmp_claim_poll_interval, Duration::from_millis(25));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_sets_the_consumed_codec_extension() {
+        let patch: FileConfigPatch =
+            serde_yaml_ng::from_str("extension: wav\n").expect("the document types");
+        let mut config = config();
+
+        config.apply(patch);
+
+        assert_eq!(config.extension.as_deref(), Some("wav"));
     }
 
     /// The per-call wiring is not reachable from a document: naming it is

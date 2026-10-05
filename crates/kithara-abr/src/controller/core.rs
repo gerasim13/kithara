@@ -44,27 +44,27 @@ impl AbrPeerId {
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[config(builder(default = consts::BANDWIDTH_EMIT_MIN_INTERVAL), patch(humantime))]
-    pub bandwidth_emit_min_interval: Duration,
+    pub(crate) bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
     #[config(builder(default = consts::BUFFER_EMIT_MIN_DELTA), patch(humantime))]
-    pub buffer_emit_min_delta: Duration,
+    pub(crate) buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
     #[config(builder(default = consts::BUFFER_EMIT_MIN_INTERVAL), patch(humantime))]
-    pub buffer_emit_min_interval: Duration,
+    pub(crate) buffer_emit_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
     #[config(builder(default = consts::MIN_BUFFER_FOR_UP_SWITCH), patch(humantime))]
-    pub min_buffer_for_up_switch: Duration,
+    pub(crate) min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
     #[config(builder(default = consts::MIN_SWITCH_INTERVAL), patch(humantime))]
-    pub min_switch_interval: Duration,
+    pub(crate) min_switch_interval: Duration,
     /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
     /// sample still reaches the estimator; this bounds only how often the
     /// raw per-fetch rate is published to the bus.
     #[config(builder(default = consts::THROUGHPUT_SAMPLE_MIN_INTERVAL), patch(humantime))]
-    pub throughput_sample_min_interval: Duration,
+    pub(crate) throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
     #[config(builder(default = consts::URGENT_DOWNSWITCH_BUFFER), patch(humantime))]
-    pub urgent_downswitch_buffer: Duration,
+    pub(crate) urgent_downswitch_buffer: Duration,
     /// Optional parent cancellation token for the controller scope.
     ///
     /// `Some` derives a child scope from the supplied parent; `None` gives the
@@ -73,21 +73,21 @@ pub struct AbrSettings {
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
     #[config(skip = "seeded into the estimator", builder(required, default = Some(consts::INITIAL_THROUGHPUT_BPS)))]
-    pub initial_throughput_bps: Option<u64>,
+    pub(crate) initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
-    pub max_bandwidth_bps: Option<u64>,
+    pub(crate) max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
     #[config(builder(default = consts::BANDWIDTH_EMIT_MIN_DELTA_RATIO))]
-    pub bandwidth_emit_min_delta_ratio: f64,
+    pub(crate) bandwidth_emit_min_delta_ratio: f64,
     /// Hysteresis ratio for down-switch.
     #[config(builder(default = consts::DOWN_HYSTERESIS_RATIO))]
-    pub down_hysteresis_ratio: f64,
+    pub(crate) down_hysteresis_ratio: f64,
     /// Safety factor applied to the throughput estimate before comparing.
     #[config(builder(default = consts::THROUGHPUT_SAFETY_FACTOR))]
-    pub throughput_safety_factor: f64,
+    pub(crate) throughput_safety_factor: f64,
     /// Hysteresis ratio for up-switch.
     #[config(builder(default = consts::UP_HYSTERESIS_RATIO))]
-    pub up_hysteresis_ratio: f64,
+    pub(crate) up_hysteresis_ratio: f64,
 }
 
 /// Shared per-player ABR controller.
