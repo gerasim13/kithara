@@ -329,8 +329,8 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     harness.close().await;
 }
 
-/// cf>0: queue.tick observes `HandoverRequested`, calls `commit_next`,
-/// the two tracks overlap in the crossfade window and PCM mid-track-B
+/// cf>0: queue.tick sees the crossfade window open and commits the
+/// successor, the two tracks overlap in the crossfade window and PCM mid-track-B
 /// must show track B's value.
 #[kithara::test(tokio)]
 async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
@@ -400,6 +400,68 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
         queue.current_index(),
         Some(1),
         "queue.current_index must advance to track B after crossfade commit"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+/// A crossfade lasts its duration in session time at any playback speed, so the
+/// queue starts it that long before the outgoing track's end on the session clock:
+/// at speed 2 a 1.5 s track ends 0.75 s after its onset, and the incoming track
+/// rises from 0.75 s − d on, not from where `d` media seconds remain.
+#[kithara::test(tokio)]
+async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end() {
+    const TRACK_SECS: f64 = 1.5;
+    const SPEED: f32 = 2.0;
+    const CROSSFADE_SECS: f32 = 0.3;
+    const TRACK_A_VALUE: f32 = 0.10;
+    /// Two blocks of tick lateness, plus the fade's first 5 % before the incoming
+    /// track clears the outgoing level by half.
+    const TOLERANCE_FRAMES: usize = 2 * BLOCK_FRAMES + 662;
+
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .crossfade_duration(CROSSFADE_SECS)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(queue_config(&harness, CROSSFADE_SECS)))
+        .await;
+
+    let a = assets::constant_wav_quiet_1_5s();
+    let id_a = append_loaded(&harness, &queue, &a).await;
+    let b = assets::constant_wav_loud_1_5s();
+    let _ = append_loaded(&harness, &queue, &b).await;
+    harness.run(&queue, |q| q.set_default_rate(SPEED)).await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select track A");
+
+    let pcm = render_loop(&queue, &harness, MAX_BLOCKS).await;
+
+    let onset = first_onset_frame(&pcm, 0.005)
+        .expect("track A must produce non-silence within the render budget");
+    let session_frames = |secs: f64| {
+        num_traits::cast::<f64, usize>(f64::from(SAMPLE_RATE) * secs).unwrap_or(usize::MAX)
+    };
+    let a_end = onset + session_frames(TRACK_SECS / f64::from(SPEED));
+    let fade_start = a_end - session_frames(f64::from(CROSSFADE_SECS));
+    let channels = usize::from(CHANNELS);
+    let rise = pcm
+        .chunks_exact(channels)
+        .skip(onset)
+        .position(|frame| frame.iter().any(|s| s.abs() > TRACK_A_VALUE * 1.5))
+        .map(|offset| onset + offset)
+        .expect("the incoming track must rise above the outgoing level");
+
+    assert!(
+        rise.abs_diff(fade_start) <= TOLERANCE_FRAMES,
+        "the incoming track must rise from {CROSSFADE_SECS} s of session time before the \
+         outgoing end: expected frame ≈ {fade_start}, got {rise} (onset {onset}, end {a_end})"
     );
     drop(queue);
     harness.close().await;

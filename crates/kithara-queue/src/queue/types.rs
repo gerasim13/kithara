@@ -228,13 +228,21 @@ pub(super) enum Placement {
     At(usize),
 }
 
-/// Current playback position and total duration in seconds, bundled
-/// so the `should_arm_crossfade` signature does not put 3 consecutive
-/// raw float parameters at the API boundary.
+/// The current track's position and duration in media seconds and the rate
+/// it plays at, in media seconds per session second.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PlaybackTime {
     pub(crate) dur: f64,
     pub(crate) pos: f64,
+    pub(crate) rate: f64,
+}
+
+impl PlaybackTime {
+    /// Session seconds until the track ends at its current rate; `None` while
+    /// it does not advance.
+    fn remaining_session_seconds(self) -> Option<f64> {
+        (self.rate > 0.0).then(|| (self.dur - self.pos) / self.rate)
+    }
 }
 
 /// Decide whether `Queue::tick` should arm the pre-end advance.
@@ -243,7 +251,8 @@ pub(crate) struct PlaybackTime {
 /// - `crossfade > 0` (no pre-arm without crossfade — natural-EOF advance is
 ///   handled via [`PlayerEvent::ItemDidPlayToEnd`] instead), AND
 /// - `time.pos` and `time.dur` are positive (track has meaningful position + duration), AND
-/// - remaining playtime is below `crossfade` seconds, AND
+/// - the track advances, and it ends within `crossfade` session seconds — the
+///   time the fade lasts at any rate — AND
 /// - we haven't already armed for this track this play-through.
 pub(crate) fn should_arm_crossfade(
     time: PlaybackTime,
@@ -251,11 +260,12 @@ pub(crate) fn should_arm_crossfade(
     current_id: TrackId,
     armed_for: CrossfadeArm,
 ) -> bool {
-    let PlaybackTime { pos, dur } = time;
     crossfade > 0.0
-        && dur > 0.0
-        && pos > 0.0
-        && dur - pos <= f64::from(crossfade)
+        && time.dur > 0.0
+        && time.pos > 0.0
+        && time
+            .remaining_session_seconds()
+            .is_some_and(|remaining| remaining <= f64::from(crossfade))
         && !armed_for.is_armed_for(current_id)
 }
 

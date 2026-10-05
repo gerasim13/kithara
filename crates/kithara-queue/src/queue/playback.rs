@@ -34,8 +34,8 @@ where
     }
 
     /// Start the next-track crossfade ahead of end-of-track when the
-    /// remaining playtime drops below the configured crossfade window,
-    /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
+    /// session time left at the current rate drops below the configured
+    /// crossfade window, so the two tracks actually overlap. `ItemDidPlayToEnd` alone
     /// fires after the first track is already silent — too late for a
     /// real crossfade.
     fn maybe_arm_crossfade(&self) {
@@ -49,7 +49,8 @@ where
             return;
         };
         let armed_for = self.read_armed_for();
-        let time = super::types::PlaybackTime { dur, pos };
+        let rate = f64::from(self.player.rate());
+        let time = super::types::PlaybackTime { dur, pos, rate };
         if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
             return;
         }
@@ -411,53 +412,75 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::remaining_equals_crossfade(157.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, true)]
-    #[case::remaining_below_crossfade(160.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, true)]
-    #[case::far_from_end(100.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, false)]
+    #[case::remaining_equals_crossfade(157.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, true)]
+    #[case::remaining_below_crossfade(160.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, true)]
+    #[case::far_from_end(100.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, false)]
+    #[case::double_speed_halves_the_session_time_left(
+        152.0,
+        162.0,
+        2.0,
+        5.0,
+        CrossfadeArm::Disarmed,
+        true
+    )]
+    #[case::double_speed_media_tail_is_not_yet_due(
+        150.0,
+        162.0,
+        2.0,
+        5.0,
+        CrossfadeArm::Disarmed,
+        false
+    )]
+    #[case::half_speed_media_tail_is_too_long(
+        158.0,
+        162.0,
+        0.5,
+        5.0,
+        CrossfadeArm::Disarmed,
+        false
+    )]
+    #[case::stopped_track_never_arms(161.0, 162.0, 0.0, 5.0, CrossfadeArm::Disarmed, false)]
     #[case::already_armed_for_same_track(
         160.0,
         162.0,
+        1.0,
         5.0,
-        TrackId(1),
         CrossfadeArm::armed(TrackId(1)),
         false
     )]
     #[case::armed_for_different_track_still_arms(
         160.0,
         162.0,
+        1.0,
         5.0,
-        TrackId(1),
         CrossfadeArm::armed(TrackId(0)),
         true
     )]
     #[case::crossfade_zero_at_tail_no_pre_arm(
         161.9,
         162.0,
+        1.0,
         0.0,
-        TrackId(1),
         CrossfadeArm::Disarmed,
         false
     )]
-    #[case::crossfade_zero_quiet_middle(
-        161.0,
-        162.0,
-        0.0,
-        TrackId(1),
-        CrossfadeArm::Disarmed,
-        false
-    )]
-    #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, false)]
-    #[case::zero_duration_rejected(10.0, 0.0, 5.0, TrackId(1), CrossfadeArm::Disarmed, false)]
+    #[case::zero_position_rejected(0.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, false)]
+    #[case::zero_duration_rejected(10.0, 0.0, 1.0, 5.0, CrossfadeArm::Disarmed, false)]
     fn should_arm_crossfade_cases(
         #[case] pos: f64,
         #[case] dur: f64,
+        #[case] rate: f64,
         #[case] crossfade: f32,
-        #[case] current_id: TrackId,
         #[case] armed_for: CrossfadeArm,
         #[case] expected: bool,
     ) {
         assert_eq!(
-            should_arm_crossfade(PlaybackTime { dur, pos }, crossfade, current_id, armed_for),
+            should_arm_crossfade(
+                PlaybackTime { dur, pos, rate },
+                crossfade,
+                TrackId(1),
+                armed_for
+            ),
             expected
         );
     }
