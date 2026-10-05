@@ -1,6 +1,7 @@
-#[cfg(any(feature = "iced", feature = "masonry"))]
-mod host;
 pub(crate) mod wave;
+
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use crate::widgets as host;
 
 #[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) use host::{
