@@ -1,5 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
+mod rubato_checkpoint;
+
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::analysis_beat_fixtures::archive_tone;
