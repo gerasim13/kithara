@@ -188,7 +188,7 @@ pub(crate) struct RunArgs {
     )]
     kind: PipelineKind,
     /// Narrow nextest-backed test steps to this expression. Unlike the global
-    /// KITHARA_TEST_FILTER environment value, this requires a test lane.
+    /// `KITHARA_TEST_FILTER` environment value, this requires a test lane.
     #[arg(long)]
     test_filter: Option<String>,
     /// Packaging profile from `ext.release.packages`. Defaults to the strict
