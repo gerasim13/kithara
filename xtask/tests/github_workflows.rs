@@ -1892,10 +1892,23 @@ fn mutation_suites_run_only_when_asked_for() {
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
     let jobs = workflow_jobs(&workflow);
+    let authorize = workflow_job(jobs, "authorize");
+    assert_eq!(mapping_field(authorize, "runs-on").as_str(), Some("ubuntu-latest"));
+    assert_eq!(
+        mapping_field(authorize, "steps")
+            .as_sequence()
+            .expect("authorization steps are a sequence")
+            .len(),
+        1
+    );
     let fan_out = ["gate", "platforms", "deep", "mutants", "quality"];
 
     for (name, job) in jobs {
         let name = name.as_str().expect("a dispatcher job name is a string");
+        if name == "authorize" {
+            continue;
+        }
+        assert!(job_needs(job).contains("authorize"), "`{name}` bypasses authorization");
         if fan_out.contains(&name) {
             continue;
         }
