@@ -1,12 +1,6 @@
 use kithara_config::Config;
 use kithara_render::LaneCommand;
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use kithara_warp::StretchKind;
-use kithara_warp::{MIN_SPEED, SpeedCurve, WarpConfig};
+use kithara_warp::{MIN_SPEED, SpeedCurve, StretchKind, WarpConfig};
 
 use crate::PlayError;
 
@@ -22,44 +16,18 @@ pub(crate) struct TrackSettings {
     speed: f32,
     /// Whether the pitch stays put at any speed; only a backend with keylock
     /// keeps it.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     #[config(live)]
     keylock: bool,
     /// The time-stretch backend that renders the track.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     #[config(live)]
     backend: StretchKind,
 }
 
 impl TrackSettings {
     /// `base` for the renderer of a track that starts where these settings
-    /// stand. A build without a time-stretch backend renders every speed
-    /// through `base` unchanged.
+    /// stand.
     pub(crate) fn warp(self, base: &WarpConfig) -> WarpConfig {
-        #[cfg(any(
-            feature = "stretch-signalsmith",
-            feature = "stretch-bungee",
-            feature = "stretch-glide"
-        ))]
-        {
-            base.starting_at(self.speed, self.keylock, self.backend)
-        }
-        #[cfg(not(any(
-            feature = "stretch-signalsmith",
-            feature = "stretch-bungee",
-            feature = "stretch-glide"
-        )))]
-        {
-            base.clone()
-        }
+        base.starting_at(self.speed, self.keylock, self.backend)
     }
 }
 
@@ -79,17 +47,7 @@ impl From<TrackSettingsChange> for LaneCommand {
     fn from(change: TrackSettingsChange) -> Self {
         match change {
             TrackSettingsChange::Speed(speed) => Self::SetSpeed(SpeedCurve::Constant(speed)),
-            #[cfg(any(
-                feature = "stretch-signalsmith",
-                feature = "stretch-bungee",
-                feature = "stretch-glide"
-            ))]
             TrackSettingsChange::Keylock(on) => Self::SetKeylock(on),
-            #[cfg(any(
-                feature = "stretch-signalsmith",
-                feature = "stretch-bungee",
-                feature = "stretch-glide"
-            ))]
             TrackSettingsChange::Backend(kind) => Self::SetBackend(kind),
         }
     }
@@ -97,11 +55,13 @@ impl From<TrackSettingsChange> for LaneCommand {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara_command::{ChannelConfig, Inbox, Live, LiveError, Sender, When, channel};
     use kithara_config::ConfigOwner;
     use kithara_render::{LaneCommand, LaneFrame, LaneProtocol};
     use kithara_test_utils::kithara;
-    use kithara_warp::{SpeedCurve, StretchKind};
+    use kithara_warp::{SpeedCurve, StretchKind, WarpConfig};
 
     use super::{TrackSettings, TrackSettingsChange};
     use crate::PlayError;
@@ -178,6 +138,28 @@ mod tests {
             LaneCommand::from(TrackSettingsChange::Backend(backend)),
             LaneCommand::SetBackend(sent) if sent == backend
         ));
+    }
+
+    #[kithara::test]
+    fn a_track_starts_with_live_warp_settings() {
+        let quantum = NonZeroUsize::new(64).expect("fixture quantum is non-zero");
+        let base = WarpConfig::builder()
+            .speed(1.25)
+            .render_quantum_frames(quantum)
+            .build();
+        let backend = StretchKind::default();
+        let settings = TrackSettings::builder()
+            .speed(0.8)
+            .keylock(true)
+            .backend(backend)
+            .build();
+
+        let warp = settings.warp(&base);
+
+        assert!((warp.speed() - 0.8).abs() < f32::EPSILON);
+        assert!(warp.keylock());
+        assert_eq!(warp.backend(), backend);
+        assert_eq!(warp.render_quantum_frames(), Some(quantum));
     }
 
     #[kithara::test]

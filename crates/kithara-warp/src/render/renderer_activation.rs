@@ -177,6 +177,13 @@ where
         {
             return Err(crate::WarpRenderError::NeedsService);
         }
+        if !self.requires_staging()
+            && (self.plan.is_some()
+                || self.projection.selected.is_some()
+                || self.projection.active.is_some())
+        {
+            return Err(crate::WarpRenderError::UnsupportedProjection);
+        }
         if let Some(prepared) = self.continue_resident_projection(meta, remaining)? {
             self.prepared_quantum = Some(prepared);
             return Ok(FrameCount::new(prepared.frames));

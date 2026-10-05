@@ -3,18 +3,8 @@ use std::num::NonZeroUsize;
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use kithara_stretch::StretchKind;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
 use kithara_stretch::{
-    ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError,
+    ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError, StretchKind,
 };
 
 use crate::{RegionPlan, WarpPlan, WarpPlanSlot, consts};
@@ -41,11 +31,6 @@ pub struct WarpConfig {
     speed: f32,
     /// Whether a renderer built from this configuration starts on a
     /// pitch-preserving engine, where its backend has one.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     #[config(
         skip = "construction value the render lane changes live",
         builder(default),
@@ -54,11 +39,6 @@ pub struct WarpConfig {
     )]
     keylock: bool,
     /// Stretch engine a renderer built from this configuration starts on.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     #[config(
         skip = "construction value the render lane changes live",
         builder(default),
@@ -70,16 +50,8 @@ pub struct WarpConfig {
     /// applies over source frames.
     #[config(skip = "shared immutable region plan", get(ref), patch(skip))]
     region_plan: Option<Arc<RegionPlan>>,
-    /// Preparation geometry each compiled stretch backend is built with. Not
-    /// the backend selection: which engine runs is the render lane's, while
-    /// this is the geometry the selected engine is prepared with, read again
-    /// on every rebuild. Only a build that compiles
-    /// a stretch backend has it, so a document naming it under a build that
-    /// has none is refused rather than silently ignored.
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
+    /// Backend preparation geometry, independent of compiled engine choices.
+    /// The render lane owns backend selection.
     #[config(nested, builder(default), get(copy), patch(nested, fallible))]
     backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
@@ -114,11 +86,7 @@ impl WarpConfig {
         }
     }
 
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
+    #[cfg(feature = "render")]
     pub(crate) const fn enters_plan(&self) -> bool {
         self.entering
     }
@@ -126,11 +94,6 @@ impl WarpConfig {
     /// A copy whose renderer starts at `speed` on `backend`, keylocked where
     /// `keylock`: where a track's render lane stands when it opens, before
     /// the lane's first command.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     #[must_use]
     pub fn starting_at(&self, speed: f32, keylock: bool, backend: StretchKind) -> Self {
         Self {
@@ -171,10 +134,6 @@ mod tests {
     /// Backend geometry merges one engine at a time: a patch naming only
     /// Signalsmith must leave Bungee's built value standing, or a document
     /// tuning one engine would reset the other.
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
     #[kithara::test]
     fn a_patch_naming_one_backend_leaves_the_other_standing() {
         use kithara_stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig};
@@ -212,10 +171,6 @@ mod tests {
         );
     }
 
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
     #[kithara::test]
     fn rejected_backend_geometry_keeps_the_entire_warp_config() {
         let mut config = WarpConfig::builder().build();

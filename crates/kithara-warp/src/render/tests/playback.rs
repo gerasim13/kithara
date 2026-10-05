@@ -1,21 +1,67 @@
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 use std::{
     collections::HashSet,
-    num::{NonZero, NonZeroU32, NonZeroUsize},
+    num::{NonZero, NonZeroUsize},
 };
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 use kithara_platform::time::Duration;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 use kithara_signal::{AudioChunkInfo, AudioSpec};
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 use kithara_stretch::StretchKind;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
-use super::{
-    WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer,
-    spec,
-};
-use crate::{SpeedCurve, Warp, WarpConfig, consts, test_pools::pools};
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use super::{WarpRenderer, dominant_bin, expected_bin, flush_serviced, render_serviced};
+use super::{chunk, renderer, spec};
+use crate::{SpeedCurve, WarpConfig};
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use crate::{Warp, consts, test_pools::pools};
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
+#[cfg_attr(
+    feature = "stretch-glide",
+    case::glide_slow(StretchKind::Glide, 0.5, 15)
+)]
+#[cfg_attr(
+    feature = "stretch-glide",
+    case::glide_unity(StretchKind::Glide, 1.0, 32)
+)]
+#[cfg_attr(
+    feature = "stretch-glide",
+    case::glide_fast(StretchKind::Glide, 2.0, 63)
+)]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith_slow(StretchKind::Signalsmith, 0.5, 15)
@@ -60,6 +106,7 @@ fn source_span_is_planned_from_the_output_quantum(
     assert_eq!(frames.get(), expected_source_frames);
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -166,6 +213,11 @@ fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
     assert_eq!(output.meta.render_revision, 2);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(
         &WarpConfig::builder()
@@ -176,6 +228,11 @@ fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     )
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(
         &WarpConfig::builder()
@@ -186,6 +243,11 @@ pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
     )
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     let pools = fx.pools.clone();
     let mut out: Vec<f32> = Vec::new();
@@ -218,10 +280,16 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     (out, tail_frames)
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 pub(super) fn render(fx: &mut WarpRenderer, input: &[f32]) -> Vec<f32> {
     render_with_tail(fx, input).0
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn run_keylocked_with_tail(
     warp_sine: &[f32],
     kind: StretchKind,
@@ -232,6 +300,11 @@ fn run_keylocked_with_tail(
     render_with_tail(&mut keylocked(kind, speed), &input)
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 fn run_vinyl(warp_sine: &[f32], kind: StretchKind, speed: f32, in_frames: usize) -> Vec<f32> {
     let input = warp_sine[..(in_frames) * 2].to_vec();
     render(&mut vinyl(kind, speed), &input)
@@ -239,6 +312,7 @@ fn run_vinyl(warp_sine: &[f32], kind: StretchKind, speed: f32, in_frames: usize)
 
 /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
 /// Shared across every compiled-in backend.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn assert_half_speed_contract(warp_sine: &[f32], kind: StretchKind) {
     let channels = usize::from(consts::CH);
     let in_frames = usize::try_from(consts::SR).unwrap() * 2; // 2 s
@@ -275,6 +349,7 @@ fn assert_half_speed_contract(warp_sine: &[f32], kind: StretchKind) {
     );
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn assert_unity_contract(warp_sine: &[f32], kind: StretchKind) {
     let in_frames = usize::try_from(consts::SR).unwrap() * 2;
     let input = warp_sine[..(in_frames) * 2].to_vec();
@@ -282,6 +357,7 @@ fn assert_unity_contract(warp_sine: &[f32], kind: StretchKind) {
     assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -293,6 +369,7 @@ fn half_speed_and_unity_contracts(#[case] backend: StretchKind, warp_sine: Vec<f
     assert_unity_contract(&warp_sine, backend);
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -338,7 +415,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(
         renderer.rendered_source_end(),
         Some((
             expected_frame,
-            NonZeroU32::new(consts::SR).expect("test sample rate is non-zero"),
+            NonZero::new(consts::SR).expect("test sample rate is non-zero"),
         )),
         "rendered progress excludes source still retained by the backend"
     );
@@ -352,6 +429,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(
     );
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -413,7 +491,13 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
+#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -464,6 +548,7 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
 }
 
 /// Key-lock on above unity: speed shortens duration while pitch holds.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -493,9 +578,15 @@ fn keylocked_double_speed_preserves_pitch(#[case] backend: StretchKind, warp_sin
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 /// Key-lock off is vinyl mode: speed changes duration and pitch in the
 /// stretch slot, with no resampler-rate handoff.
 #[kithara::test]
+#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -523,6 +614,7 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
     );
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -560,6 +652,7 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
 
 /// Flipping key-lock mid-stream switches from vinyl pitch shift to
 /// pitch-preserving stretch - no reload.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",

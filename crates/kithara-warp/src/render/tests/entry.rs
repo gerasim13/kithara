@@ -1,3 +1,8 @@
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 use std::num::{NonZero, NonZeroU32};
 
 use kithara_signal::AudioChunk;
@@ -9,7 +14,13 @@ use kithara_signal::AudioChunk;
 use kithara_stretch::StretchKind;
 
 use super::*;
-use crate::{WarpPlan, WarpRenderError, consts, mock};
+use crate::WarpRenderError;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use crate::{WarpPlan, consts, mock};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -84,8 +95,8 @@ fn admit_history(renderer: &mut WarpRenderer, entry: u64, cue: u64) {
         .expect("history continues from the entry source");
 }
 
-#[kithara::test]
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
+#[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith_keylocked(consts::SR, StretchKind::Signalsmith, true)
@@ -168,6 +179,9 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(#[case] backend: StretchKind) {
+    const ALTERNATING_CHUNKS: [usize; 2] = [1_023, 1];
+    const CHUNK_PAIRS: usize = 64;
+    const LAG_FRAMES: u64 = 16 * 1024;
     let plan = entered_plan(spec().sample_rate);
     let cue = plan.activation().source();
     let mut renderer = entered_renderer(plan, backend, true);
@@ -178,10 +192,10 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(#[case] back
 
     let mut position = cue;
     let mut audible = None;
-    for chunk_frames in consts::ALTERNATING_CHUNKS
+    for chunk_frames in ALTERNATING_CHUNKS
         .iter()
         .cycle()
-        .take(consts::ALTERNATING_CHUNKS.len() * consts::CHUNK_PAIRS)
+        .take(ALTERNATING_CHUNKS.len() * CHUNK_PAIRS)
     {
         let mut remaining = *chunk_frames;
         while remaining > 0 {
@@ -206,13 +220,13 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(#[case] back
     }
     let audible = audible.expect("the slowed projection presents PCM");
     assert!(
-        audible + consts::LAG_FRAMES >= position,
+        audible + LAG_FRAMES >= position,
         "the audible source stalled at {audible} while {position} was decoded"
     );
 }
 
-#[kithara::test]
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
+#[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith, true)
