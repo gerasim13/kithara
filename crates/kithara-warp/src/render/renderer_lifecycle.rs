@@ -420,6 +420,9 @@ where
 
     /// Drain one buffered output chunk after source EOF or a transition.
     pub fn flush(&mut self) -> Option<AudioChunk> {
+        if !self.requires_staging() {
+            return None;
+        }
         let snapshot = self.context.load();
         if self.reprime_pending {
             self.retire_for_reprime();
@@ -487,7 +490,10 @@ where
     /// Returns the original input when it requires splitting into prepared
     /// quanta. The caller retains the unconsumed suffix between operations.
     pub fn render(&mut self, mut chunk: AudioChunk) -> ControlFlow<AudioChunk, Option<AudioChunk>> {
-        if self.transition_pending() {
+        if self.transition_pending() || self.engine_outdated() {
+            return ControlFlow::Break(chunk);
+        }
+        if !self.requires_staging() && self.plan.is_some() {
             return ControlFlow::Break(chunk);
         }
         if self.projection.active.is_some() || self.projection.selected.is_some() {

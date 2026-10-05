@@ -272,7 +272,9 @@ fn ensure_build_len(
         .map_err(|err| ResamplerBuildError::BackendBuild {
             backend,
             detail: err.to_string(),
-        })
+        })?;
+    buffer.shrink_to_fit();
+    Ok(())
 }
 
 fn low_pass_cutoff(sample_rate: f64, ratio: f64) -> f64 {
