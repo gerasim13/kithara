@@ -35,7 +35,7 @@ impl SharedStage {
         args.extend(scope.flags_for(self.scope_tool()));
         match self {
             Self::FmtCheck => args.push("--check".to_owned()),
-            Self::Clippy => args.extend(strings(&["--", "-D", "warnings"])),
+            Self::Clippy => args.extend(strings(&["--all-targets", "--", "-D", "warnings"])),
             _ => {}
         }
         StageCommand { program, args }
@@ -63,7 +63,7 @@ impl SharedStage {
     pub(crate) fn health_command(self) -> StageCommand {
         let args = match self {
             Self::FmtCheck => strings(&["xtask", "format", "--check"]),
-            Self::Clippy => strings(&["clippy", "--workspace", "--", "-D", "warnings"]),
+            Self::Clippy => strings(&["xtask", "clippy"]),
             Self::AstGrep => strings(&["xtask", "ast-grep"]),
             Self::Lint => strings(&["xtask", "lint"]),
             Self::Typos => strings(&["xtask", "typos"]),

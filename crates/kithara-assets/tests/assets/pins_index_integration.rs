@@ -52,7 +52,7 @@ fn pins_index_bad_state_returns_default(
         }
     }
 
-    let idx = PinsIndex::open(&base).unwrap();
+    let idx = PinsIndex::open(&base);
     let pins = idx.load();
 
     assert!(
@@ -84,22 +84,22 @@ fn pins_index_roundtrip(
 
     let loaded = match read_back {
         ReadBack::SameIndex => {
-            let idx = PinsIndex::open(&disk_asset_store).unwrap();
+            let idx = PinsIndex::open(&disk_asset_store);
             idx.store(&pins).unwrap();
             idx.load()
         }
         ReadBack::NewIndex => {
-            let idx = PinsIndex::open(&disk_asset_store).unwrap();
+            let idx = PinsIndex::open(&disk_asset_store);
             idx.store(&pins).unwrap();
-            PinsIndex::open(&disk_asset_store).unwrap().load()
+            PinsIndex::open(&disk_asset_store).load()
         }
         ReadBack::NewStore => {
             let cancel = CancelToken::never();
             let base = DiskAssetStore::new(temp_dir.path(), cancel.clone());
-            let idx = PinsIndex::open(&base).unwrap();
+            let idx = PinsIndex::open(&base);
             idx.store(&pins).unwrap();
             let reopened = DiskAssetStore::new(temp_dir.path(), cancel);
-            PinsIndex::open(&reopened).unwrap().load()
+            PinsIndex::open(&reopened).load()
         }
     };
 
@@ -118,13 +118,13 @@ fn pins_index_concurrent_updates_handled_correctly(
     let _dir = temp_dir.path();
     let base = disk_asset_store;
 
-    let idx1 = PinsIndex::open(&base).unwrap();
+    let idx1 = PinsIndex::open(&base);
     let pins1: HashSet<String> = (0..asset_count)
         .map(|i| format!("asset-{}", i + 1))
         .collect();
     idx1.store(&pins1).unwrap();
 
-    let idx2 = PinsIndex::open(&base).unwrap();
+    let idx2 = PinsIndex::open(&base);
     let loaded1 = idx2.load();
     assert_eq!(loaded1, pins1);
 
@@ -133,7 +133,7 @@ fn pins_index_concurrent_updates_handled_correctly(
         .collect();
     idx2.store(&pins2).unwrap();
 
-    let idx3 = PinsIndex::open(&base).unwrap();
+    let idx3 = PinsIndex::open(&base);
     let loaded2 = idx3.load();
     assert_eq!(loaded2, pins2);
 }

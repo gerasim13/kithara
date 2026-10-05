@@ -106,7 +106,7 @@ fn leaf_icon_action_captures_its_payload_without_selecting_or_dragging_the_row()
     let column = TableColumn::new("reaction", "", TableColumnStyle::Icon, 34.0, false).with_write(
         crate::module::BindingRef::Command {
             id: crate::ids::EndpointId("row.activate".to_owned()),
-            with: Default::default(),
+            with: BTreeMap::new(),
         },
     );
     let paint = TablePaint::new(

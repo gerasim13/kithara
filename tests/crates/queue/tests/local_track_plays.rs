@@ -80,10 +80,9 @@ fn drain_latest_position(rx: &mut EventReceiver<TestEvent>) -> Option<f64> {
     loop {
         match rx.try_recv().map(|env| env.event) {
             Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                latest = Some(position_ms as f64 / 1000.0);
+                latest = Some(Duration::from_millis(position_ms).as_secs_f64());
             }
-            Ok(_) => {}
-            Err(TryRecvError::Lagged(_)) => {}
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
         }
     }
@@ -97,7 +96,7 @@ async fn receive_progress(
     loop {
         match rx.recv().await.map(|env| env.event) {
             Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                return Ok(position_ms as f64 / 1000.0);
+                return Ok(Duration::from_millis(position_ms).as_secs_f64());
             }
             Ok(_) => {}
             Err(RecvError::Lagged(_)) => {

@@ -118,14 +118,14 @@ pub(super) struct PinsIndex {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PinsIndex {
-    pub(super) fn open<A: Assets>(assets: &A) -> AssetsResult<Self> {
+    pub(super) fn open<A: Assets>(assets: &A) -> Self {
         let path = assets.root_dir().join("_index").join("pins.bin");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create the pins index directory");
         }
-        Ok(Self {
+        Self {
             inner: InnerPinsIndex::with_persist_at(path, pools().get::<u8>()),
-        })
+        }
     }
 
     pub(super) fn load(&self) -> HashSet<String> {

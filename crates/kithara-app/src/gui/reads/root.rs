@@ -99,7 +99,7 @@ mod tests {
         effects::GainDb,
         platform::{time::Duration, tokio::runtime::Handle},
         prelude::TrackMetadata,
-        ui::render::{ReadValue, Reads, Walk},
+        ui::render::{ReadValue, Reads, TableCell, Walk},
     };
     use iced::Size;
     use image::ImageFormat;
@@ -599,7 +599,7 @@ mod tests {
                 .cells()
                 .iter()
                 .find(|cell| cell.id() == "bpm")
-                .map(|cell| cell.value()),
+                .map(TableCell::value),
             Some(&::kithara::ui::render::TableValue::Text("128.00".into()))
         );
     }

@@ -187,7 +187,7 @@ fn live_activation_primes_from_passthrough_history(
 
 #[kithara::test]
 fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
-    let mut renderer = renderer(WarpConfig::builder().speed(1.0).build());
+    let mut renderer = renderer(&WarpConfig::builder().speed(1.0).build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &warp_sine[..128 * 2]);
@@ -220,7 +220,7 @@ fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
 ))]
 fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(speed)
             .keylock(true)
             .backend(kind)
@@ -235,7 +235,7 @@ fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
 ))]
 pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(speed)
             .keylock(false)
             .backend(kind)
@@ -623,7 +623,7 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0)
             .keylock(true)
             .backend(backend)
@@ -661,7 +661,7 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(0.5)
             .keylock(false)
             .backend(backend)

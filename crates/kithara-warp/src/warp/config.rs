@@ -175,8 +175,10 @@ mod tests {
     fn rejected_backend_geometry_keeps_the_entire_warp_config() {
         let mut config = WarpConfig::builder().build();
         let previous_source_limit = config.source_block_frames();
-        let mut patch = WarpConfigPatch::default();
-        patch.source_block_frames = NonZeroUsize::new(64);
+        let mut patch = WarpConfigPatch {
+            source_block_frames: NonZeroUsize::new(64),
+            ..WarpConfigPatch::default()
+        };
         patch.backends.signalsmith.block_frames = NonZeroUsize::new(16);
         patch.backends.signalsmith.interval_frames = NonZeroUsize::new(32);
 

@@ -12,6 +12,7 @@ use kithara::{
     platform::{
         sync::Arc,
         time::{self, Duration},
+        tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig},
 };
@@ -162,7 +163,7 @@ async fn idle_prefetch_is_capped(
     // root subscriber here — the real signal that prefetch is or is not
     // still running.
     let bus = EventBus::new(8192);
-    let mut rx = bus.subscribe();
+    let mut rx = bus.subscribe::<TestEvent>();
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
@@ -198,22 +199,12 @@ async fn idle_prefetch_is_capped(
     // quiescent. Under flash the window collapses to ~0 wall while the
     // virtual clock advances to the deadline whenever nothing is runnable.
     const SETTLE_WINDOW: Duration = Duration::from_secs(3);
-    loop {
-        match time::timeout(SETTLE_WINDOW, rx.recv())
-            .await
-            .map(|r| r.map(|env| env.event))
-        {
-            // A downloader event arrived inside the window: still active,
-            // keep waiting. Lagged is also "events are flowing".
-            Ok(Ok(TestEvent::Downloader(_)))
-            | Ok(Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
-            // Non-downloader event: ignore, keep waiting for quiescence.
-            Ok(Ok(_)) => {}
-            // Bus closed or the settle window elapsed with no event:
-            // prefetch has gone quiescent.
-            Ok(Err(kithara::platform::tokio::sync::broadcast::error::RecvError::Closed))
-            | Err(_) => break,
-        }
+    // An event arrived inside the window — a downloader one means prefetch
+    // is still active, any other is ignored — or Lagged, which also means
+    // "events are flowing": keep waiting. The bus closing or the settle
+    // window elapsing with no event means prefetch has gone quiescent.
+    while let Ok(Ok(_) | Err(RecvError::Lagged(_))) = time::timeout(SETTLE_WINDOW, rx.recv()).await
+    {
     }
 
     let files = count_files_recursive(temp_dir.path());
