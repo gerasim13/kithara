@@ -86,6 +86,11 @@ where
             .is_some_and(|seg| seg.state().is_failed())
     }
 
+    /// A declared unsized init reserves the addressable prefix even after a terminal failure.
+    pub(in crate::variant) fn init_prefix_is_unsized(&self) -> bool {
+        self.has_init() && self.init_size() == 0 && self.served_from() == 0
+    }
+
     /// Read `range` of the init segment into `dst` via the [`Segment`]
     /// cascade. `Ok(None)` when there is no init or its bytes are not on disk
     /// yet.
