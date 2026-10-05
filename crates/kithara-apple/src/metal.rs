@@ -8,6 +8,7 @@
 
 use objc2::{msg_send, rc::Retained, runtime::AnyObject};
 
+#[link(name = "Metal", kind = "framework")]
 unsafe extern "C" {
     /// The process's default Metal device, retained, or null on a machine that
     /// offers none.
