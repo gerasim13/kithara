@@ -249,9 +249,6 @@ impl DeckMixer {
 }
 
 impl Deck {
-    /// Minimum position (seconds) before seeking is allowed on fade-in.
-    pub(super) const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
-
     /// Clean up finished tracks, dropping `playing` once none is audible.
     ///
     /// When cleanup would empty the slot set after the queue plays out, keeps the track that

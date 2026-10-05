@@ -33,8 +33,8 @@ where
     }
 
     /// Place the freshly-loaded track at the position handed over before it
-    /// existed. Must follow [`Self::start_playback`]: a fade-in re-bases a
-    /// track that is past its head, which would undo the seek.
+    /// existed. Must follow [`Self::start_playback`]: a seek moves only a track
+    /// that is fading in or playing.
     fn apply_start_position(&self) {
         let Some(target) = self.core.start_position.lock().take() else {
             return;

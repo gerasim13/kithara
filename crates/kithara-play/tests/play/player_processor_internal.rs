@@ -428,42 +428,6 @@ async fn a_deck_holds_as_many_tracks_as_its_config_gives_it_slots(
 }
 
 #[kithara::test(tokio)]
-async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]) {
-    let (mut processor, mut control) = make_processor();
-    let item_id = TrackId::allocate();
-
-    control
-        .send(DeckPart::Attach {
-            resource: create_mock_player_resource(constant_half, "track1.mp3"),
-            item_id,
-        })
-        .ok();
-    block(&mut processor);
-
-    if let Some(track) = processor.track_mut(item_id) {
-        track.seek(12.0);
-        assert!(track.position() >= 11.9);
-    } else {
-        panic!("track must be loaded");
-    }
-
-    control
-        .send(DeckPart::Fade(TrackTransition::FadeIn {
-            item_id,
-            settings: kithara_play::CrossfadeSettings::default(),
-            epoch: 0,
-        }))
-        .ok();
-    block(&mut processor);
-
-    if let Some(track) = processor.track(item_id) {
-        assert!(track.position() <= 0.001);
-    } else {
-        panic!("track must remain loaded");
-    }
-}
-
-#[kithara::test(tokio)]
 async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
 

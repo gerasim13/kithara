@@ -188,9 +188,6 @@ impl Deck {
                         settings, epoch, ..
                     } => {
                         changed_src = Some(Arc::clone(track.src()));
-                        if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
-                            track.seek(0.0);
-                        }
                         track.fade_in(*settings);
                         playback.adopt(*epoch, track.position(), track.duration());
                     }

@@ -538,6 +538,7 @@ fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'stat
         "the fade-out is still falling ({level})"
     );
 
+    let reached = position(&processor, item_id);
     push(
         &mut control,
         DeckPart::Fade(TrackTransition::FadeIn {
@@ -553,6 +554,11 @@ fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'stat
         step <= MAX_STEP,
         "a cancelled fade-out fades back in from the gain it reached, not from silence \
          (step {step})"
+    );
+    assert!(
+        (position(&processor, item_id) - (reached + seconds(reversed.len()))).abs() < SAME_POSITION,
+        "a fade-in does not seek: the track plays on from {reached} s, now at {} s",
+        position(&processor, item_id)
     );
     assert!(
         (last(&reversed) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
