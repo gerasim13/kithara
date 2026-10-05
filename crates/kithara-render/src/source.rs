@@ -122,7 +122,7 @@ where
         if self.quantum_failed {
             return;
         }
-        if !self.warp.requires_staging() || self.prepared_frames.is_some() {
+        if self.prepared_frames.is_some() {
             return;
         }
         let Some((meta, remaining)) = self.pending_input.as_ref().and_then(|pending| {
@@ -436,24 +436,6 @@ where
         }
     }
 
-    fn render(&mut self, chunk: AudioChunk, epoch: u64) -> Option<Fetch<AudioChunk>> {
-        self.lane.execute_due(&mut self.warp);
-        let chunk = match self.warp.render(chunk) {
-            ControlFlow::Continue(output) => output,
-            ControlFlow::Break(input) => {
-                self.retired_input = Some(input);
-                self.quantum_failed = true;
-                return None;
-            }
-        };
-        if self.warp.transition_pending() {
-            self.drain_state = DrainState::LiveWarp(epoch);
-        }
-        let chunk = chunk?;
-        let output = apply_effects(&mut self.effects, chunk)?;
-        Some(self.fetch(output, epoch))
-    }
-
     fn render_full_quantum(&mut self) -> Option<TrackStep<AudioChunk>> {
         let frames = self.prepared_frames?;
         (self.staged_frames() == frames).then(|| self.render_staged(frames))
@@ -550,25 +532,6 @@ where
         reset_effects(&mut self.effects);
     }
 
-    fn step_direct(&mut self) -> TrackStep<AudioChunk> {
-        match self.source.step_track() {
-            TrackStep::Produced(Fetch::Data { data, epoch, .. }) => self
-                .render(data, epoch)
-                .map_or(TrackStep::StateChanged, TrackStep::Produced),
-            TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
-            TrackStep::Eof => {
-                self.begin_drain(self.source.decode_epoch());
-                TrackStep::StateChanged
-            }
-            TrackStep::StateChanged => {
-                self.sync_discontinuity();
-                TrackStep::StateChanged
-            }
-            TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-            TrackStep::Failed => TrackStep::Failed,
-        }
-    }
-
     fn sync_discontinuity(&mut self) {
         let next = self.source.discontinuity();
         let revision_changed = next.as_ref().map(SourceDiscontinuity::revision)
@@ -637,9 +600,6 @@ where
         }
         if let Some(step) = self.drain_step() {
             return step;
-        }
-        if !self.warp.requires_staging() {
-            return self.step_direct();
         }
         if let Some(step) = self.render_whole_pending() {
             return step;
@@ -734,17 +694,43 @@ mod tests {
     };
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
-    use kithara_test_fixtures::play_fixtures::{
-        half, negative_half, negative_quarter, quarter, three_quarter,
-    };
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    use kithara_test_fixtures::play_fixtures::half;
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    use kithara_test_fixtures::play_fixtures::{negative_half, three_quarter};
+    use kithara_test_fixtures::play_fixtures::{negative_quarter, quarter};
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    use kithara_test_utils::bufpool::pools_with_budget;
     use kithara_test_utils::{
-        bufpool::{TestPools, pools, pools_with_budget},
+        bufpool::{TestPools, pools},
         kithara,
     };
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    use kithara_warp::WarpCapabilities;
     use kithara_warp::{SpeedCurve, StretchKind};
 
     use super::*;
     use crate::{LaneCommand, LaneFrame, LaneProtocol, consts};
+
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    fn keylock_backends() -> impl Iterator<Item = StretchKind> {
+        StretchKind::all()
+            .iter()
+            .copied()
+            .filter(|backend| backend.capabilities().contains(WarpCapabilities::KEYLOCK))
+    }
 
     fn flush_deferred<S>(source: &mut S)
     where
@@ -1132,6 +1118,11 @@ mod tests {
         )
     }
 
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test(native)]
     #[case::q16(16)]
     #[case::q32(32)]
@@ -1356,128 +1347,131 @@ mod tests {
         assert_eq!(&data.samples[..], &second_samples);
     }
 
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     #[kithara::test]
-    #[cfg_attr(
-        feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
-    )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
-        #[case] backend: StretchKind,
         half: Vec<f32>,
         quarter: Vec<f32>,
         three_quarter: Vec<f32>,
     ) {
-        const ACTIVE_FRAMES: u32 = 4096;
-        const UNITY_FRAMES: u32 = 4096;
-        const SENTINEL_FRAMES: u32 = 4096;
+        for backend in keylock_backends() {
+            const ACTIVE_FRAMES: u32 = 4096;
+            const UNITY_FRAMES: u32 = 4096;
+            const SENTINEL_FRAMES: u32 = 4096;
 
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pools = pools();
-        let first_active_end = u64::from(ACTIVE_FRAMES);
-        let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
-        let sentinel_end = first_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
+            let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+            let pools = pools();
+            let first_active_end = u64::from(ACTIVE_FRAMES);
+            let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
+            let sentinel_end = first_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
 
-        let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, &quarter);
-        let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, &half);
-        let sentinel = chunk_with_frames(
-            &pools,
-            spec,
-            first_unity_end,
-            SENTINEL_FRAMES,
-            &three_quarter,
-        );
-        let sentinel_ptr = sentinel.samples.as_ptr();
-        let sentinel_samples = sentinel.samples.to_vec();
+            let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, &quarter);
+            let first_unity =
+                chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, &half);
+            let sentinel = chunk_with_frames(
+                &pools,
+                spec,
+                first_unity_end,
+                SENTINEL_FRAMES,
+                &three_quarter,
+            );
+            let sentinel_ptr = sentinel.samples.as_ptr();
+            let sentinel_samples = sentinel.samples.to_vec();
 
-        let head = Arc::new(AtomicU64::new(0));
-        let seek = Arc::new(SeekState::new());
-        let raw = RawSource {
-            chunks: VecDeque::from([first_active, first_unity, sentinel]),
-            head: Arc::clone(&head),
-            seek: Arc::clone(&seek),
-        };
-        let render_quantum_frames = usize::try_from(ACTIVE_FRAMES)
-            .expect("test quantum fits usize")
-            .saturating_mul(2)
-            .saturating_add(1);
-        let config = kithara_warp::WarpConfig::builder()
-            .speed(0.5)
-            .keylock(true)
-            .backend(backend)
-            .render_quantum_frames(
-                NonZeroUsize::new(render_quantum_frames).expect("test quantum is non-zero"),
-            )
-            .build();
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-        let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &pools)
-            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
-        let mut source = WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox);
-
-        let initial = source.step_track();
-        assert!(matches!(
-            &initial,
-            TrackStep::Produced(_) | TrackStep::StateChanged
-        ));
-        assert_eq!(head.load(Ordering::Acquire), first_active_end);
-        flush_deferred(&mut source);
-        if matches!(&initial, TrackStep::StateChanged) {
-            let TrackStep::Produced(_) = source.step_track() else {
-                panic!("the first active quantum must render");
+            let head = Arc::new(AtomicU64::new(0));
+            let seek = Arc::new(SeekState::new());
+            let raw = RawSource {
+                chunks: VecDeque::from([first_active, first_unity, sentinel]),
+                head: Arc::clone(&head),
+                seek: Arc::clone(&seek),
             };
+            let render_quantum_frames = usize::try_from(ACTIVE_FRAMES)
+                .expect("test quantum fits usize")
+                .saturating_mul(2)
+                .saturating_add(1);
+            let config = kithara_warp::WarpConfig::builder()
+                .speed(0.5)
+                .keylock(true)
+                .backend(backend)
+                .render_quantum_frames(
+                    NonZeroUsize::new(render_quantum_frames).expect("test quantum is non-zero"),
+                )
+                .build();
+            let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+            let effects = Vec::new();
+            let drain = EffectDrain::new(effects.len(), &pools)
+                .unwrap_or_else(|error| panic!("test effect drain: {error}"));
+            let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+            let mut source =
+                WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox);
+
+            let initial = source.step_track();
+            assert!(matches!(
+                &initial,
+                TrackStep::Produced(_) | TrackStep::StateChanged
+            ));
+            assert_eq!(head.load(Ordering::Acquire), first_active_end);
             flush_deferred(&mut source);
-        }
-
-        lane.send(When::Next, speed_batch(1.0))
-            .expect("the lane channel has room");
-        let transition = source.step_track();
-        assert!(matches!(
-            &transition,
-            TrackStep::Produced(_) | TrackStep::StateChanged
-        ));
-        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
-        flush_deferred(&mut source);
-        if matches!(&transition, TrackStep::StateChanged) {
-            let TrackStep::Produced(_) = source.step_track() else {
-                panic!("active-to-unity transition must emit its first tail quantum");
-            };
-        }
-        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
-        assert!(source.warp.transition_pending());
-
-        assert_eq!(
-            seek.begin(kithara_platform::time::Duration::from_secs(1)),
-            1
-        );
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
-        assert!(!source.warp.transition_pending());
-
-        flush_deferred(&mut source);
-        let resumed = source.step_track();
-        let resumed = match resumed {
-            TrackStep::Produced(fetch) => fetch,
-            TrackStep::StateChanged => {
-                flush_deferred(&mut source);
-                let TrackStep::Produced(fetch) = source.step_track() else {
-                    panic!("playback must resume with the post-seek source chunk");
+            if matches!(&initial, TrackStep::StateChanged) {
+                let TrackStep::Produced(_) = source.step_track() else {
+                    panic!("the first active quantum must render");
                 };
-                fetch
+                flush_deferred(&mut source);
             }
-            _ => panic!("playback must resume with the post-seek source chunk"),
-        };
-        let Fetch::Data { data, .. } = resumed else {
-            panic!("playback must resume with post-seek audio data");
-        };
-        assert_eq!(head.load(Ordering::Acquire), sentinel_end);
-        assert_eq!(data.samples.as_ptr(), sentinel_ptr);
-        assert_eq!(&data.samples[..], &sentinel_samples);
+
+            lane.send(When::Next, speed_batch(1.0))
+                .expect("the lane channel has room");
+            let transition = source.step_track();
+            assert!(matches!(
+                &transition,
+                TrackStep::Produced(_) | TrackStep::StateChanged
+            ));
+            assert_eq!(head.load(Ordering::Acquire), first_unity_end);
+            flush_deferred(&mut source);
+            if matches!(&transition, TrackStep::StateChanged) {
+                let TrackStep::Produced(_) = source.step_track() else {
+                    panic!("active-to-unity transition must emit its first tail quantum");
+                };
+            }
+            assert_eq!(head.load(Ordering::Acquire), first_unity_end);
+            assert!(source.warp.transition_pending());
+
+            assert_eq!(
+                seek.begin(kithara_platform::time::Duration::from_secs(1)),
+                1
+            );
+            assert!(matches!(source.step_track(), TrackStep::StateChanged));
+            assert_eq!(head.load(Ordering::Acquire), first_unity_end);
+            assert!(!source.warp.transition_pending());
+
+            flush_deferred(&mut source);
+            let resumed = source.step_track();
+            let resumed = match resumed {
+                TrackStep::Produced(fetch) => fetch,
+                TrackStep::StateChanged => {
+                    flush_deferred(&mut source);
+                    let TrackStep::Produced(fetch) = source.step_track() else {
+                        panic!("playback must resume with the post-seek source chunk");
+                    };
+                    fetch
+                }
+                _ => panic!("playback must resume with the post-seek source chunk"),
+            };
+            let Fetch::Data { data, .. } = resumed else {
+                panic!("playback must resume with post-seek audio data");
+            };
+            assert_eq!(head.load(Ordering::Acquire), sentinel_end);
+            assert_eq!(data.samples.as_ptr(), sentinel_ptr);
+            assert_eq!(&data.samples[..], &sentinel_samples);
+        }
     }
 
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test(native)]
-    #[cfg(feature = "stretch-signalsmith")]
     async fn rejected_staged_quantum_retains_both_owning_buffers(quarter: Vec<f32>) {
         const FRAMES: usize = 64;
         #[kithara::allow_block]
@@ -1713,48 +1707,52 @@ mod tests {
         assert!(!source.quantum_failed);
     }
 
-    #[kithara::test]
-    #[cfg_attr(
+    #[cfg(any(
         feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
-    )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn unavailable_warp_target_fails_before_pulling_source(
-        #[case] backend: StretchKind,
-        quarter: Vec<f32>,
-    ) {
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let source_pools = pools();
-        let head = Arc::new(AtomicU64::new(0));
-        let raw = RawSource {
-            chunks: VecDeque::from([chunk(&source_pools, spec, 0, &quarter)]),
-            head: Arc::clone(&head),
-            seek: Arc::new(SeekState::new()),
-        };
-        let config = kithara_warp::WarpConfig::builder()
-            .speed(0.5)
-            .keylock(true)
-            .backend(backend)
-            .build();
-        let target_pools = pools_with_budget(0);
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
-        let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &target_pools)
-            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let mut source = WarpSource::new(
-            raw,
-            renderer,
-            effects,
-            drain,
-            spec,
-            target_pools.clone(),
-            idle_inbox(),
-        );
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    #[kithara::test]
+    fn unavailable_warp_target_fails_before_pulling_source(quarter: Vec<f32>) {
+        for backend in StretchKind::all()
+            .iter()
+            .copied()
+            .filter(|backend| backend.capabilities().contains(WarpCapabilities::RATE))
+        {
+            let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+            let source_pools = pools();
+            let head = Arc::new(AtomicU64::new(0));
+            let raw = RawSource {
+                chunks: VecDeque::from([chunk(&source_pools, spec, 0, &quarter)]),
+                head: Arc::clone(&head),
+                seek: Arc::new(SeekState::new()),
+            };
+            let config = kithara_warp::WarpConfig::builder()
+                .speed(0.5)
+                .keylock(true)
+                .backend(backend)
+                .build();
+            let target_pools = pools_with_budget(0);
+            let renderer =
+                kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
+            let effects = Vec::new();
+            let drain = EffectDrain::new(effects.len(), &target_pools)
+                .unwrap_or_else(|error| panic!("test effect drain: {error}"));
+            let mut source = WarpSource::new(
+                raw,
+                renderer,
+                effects,
+                drain,
+                spec,
+                target_pools.clone(),
+                idle_inbox(),
+            );
 
-        for _ in 0..3 {
-            flush_deferred(&mut source);
-            assert!(matches!(source.step_track(), TrackStep::Failed));
-            assert_eq!(head.load(Ordering::Acquire), 0);
+            for _ in 0..3 {
+                flush_deferred(&mut source);
+                assert!(matches!(source.step_track(), TrackStep::Failed));
+                assert_eq!(head.load(Ordering::Acquire), 0);
+            }
         }
     }
 
@@ -1908,6 +1906,7 @@ mod tests {
 
     /// A lane over `signal` at unity speed, rendered by `backend` with keylock
     /// when `keylock`.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     fn stretch_lane(
         pools: &PoolRegion<TestPools>,
         (backend, keylock): (StretchKind, bool),
@@ -1992,7 +1991,6 @@ mod tests {
     }
 
     #[kithara::test]
-    #[cfg(feature = "stretch-signalsmith")]
     fn a_speed_batch_applies_on_its_lane_frame(quarter: Vec<f32>) {
         const AT: u64 = 1_000;
         let pools = pools();
@@ -2003,6 +2001,12 @@ mod tests {
 
         let emitted = emit(&mut source, 0, AT + 2_000);
 
+        if StretchKind::default().capabilities().is_empty() {
+            for chunk in &emitted {
+                assert_eq!(chunk.source_start, chunk.lane_start);
+                assert_eq!(&chunk.samples[..], &quarter[..chunk.samples.len()]);
+            }
+        }
         let boundary = emitted
             .iter()
             .position(|chunk| chunk.lane_start == AT)
@@ -2035,7 +2039,6 @@ mod tests {
     }
 
     #[kithara::test]
-    #[cfg(feature = "stretch-signalsmith")]
     fn a_batch_for_a_rendered_lane_frame_comes_back_late(quarter: Vec<f32>) {
         let pools = pools();
         let (mut source, mut lane) = speed_lane(&pools, &quarter);
@@ -2059,8 +2062,12 @@ mod tests {
         );
     }
 
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test]
-    #[cfg(feature = "stretch-signalsmith")]
     fn a_speed_change_continues_the_source_at_the_new_step(quarter: Vec<f32>) {
         const AT: u64 = 1_000;
         const SPEED: f64 = 1.25;
@@ -2090,8 +2097,12 @@ mod tests {
     /// A quantum at a speed other than unity cannot end on an arbitrary frame
     /// by rounding whole source frames; the lane still lands it on the
     /// batch's frame, so the batch applies there.
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test]
-    #[cfg(feature = "stretch-signalsmith")]
     fn a_speed_batch_lands_on_its_frame_from_any_speed(quarter: Vec<f32>) {
         const AT: u64 = 1_000;
         let pools = pools();
@@ -2119,6 +2130,7 @@ mod tests {
 
     /// A stereo linear chirp, 220 Hz to 1760 Hz: every source frame sounds a
     /// frequency of its own, so audio rendered from another frame decorrelates.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     fn chirp(frames: usize) -> Vec<f32> {
         let rate = 44_100.0_f64;
         let span = frames as f64 / rate;
@@ -2134,6 +2146,7 @@ mod tests {
     }
 
     /// The left channel the lane emitted, indexed by lane frame.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     fn lane_pcm(emitted: &[Emitted]) -> Vec<f32> {
         emitted
             .iter()
@@ -2143,6 +2156,7 @@ mod tests {
 
     /// The offset of `rendered` within `reference` around `center` that
     /// correlates best, within `reach` frames, and that correlation.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     fn alignment(rendered: &[f32], reference: &[f32], center: usize, reach: usize) -> (i64, f64) {
         let energy = |samples: &[f32]| {
             samples
@@ -2173,6 +2187,7 @@ mod tests {
     /// A stereo 440 Hz sine at half scale: a keylock engine keeps its pitch at
     /// any speed, so its output moves between two samples by at most the
     /// sine's own step.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     fn sine(frames: usize) -> Vec<f32> {
         (0..frames)
             .flat_map(|frame| {
@@ -2187,231 +2202,385 @@ mod tests {
     /// still fades out fades from what sounds on its frame, so the output
     /// never jumps: no step between two samples exceeds three times the
     /// sine's largest step.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     #[kithara::test]
-    #[cfg_attr(
-        feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
-    )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn a_speed_change_within_a_tail_fade_fades_from_what_sounds(#[case] backend: StretchKind) {
-        const ENGAGE: u64 = 1_024;
-        const FIRST: u64 = 4_099;
-        const SECOND: u64 = FIRST + 512;
-        const SETTLE: u64 = 16_384;
-        let largest_step = (std::f64::consts::TAU * 440.0 / 44_100.0 * 0.5) as f32;
-        let signal = sine(12 * consts::LANE_CHUNK_FRAMES as usize);
-        let pools = pools();
-        let (mut source, mut lane) = stretch_lane(&pools, (backend, true), &signal);
-        for (at, speed) in [(ENGAGE, 0.8), (FIRST, 1.25), (SECOND, 0.94)] {
-            lane.send(When::At(LaneFrame(at)), speed_batch(speed))
-                .expect("the lane has room for each change");
+    fn a_speed_change_within_a_tail_fade_fades_from_what_sounds() {
+        for backend in keylock_backends() {
+            const ENGAGE: u64 = 1_024;
+            const FIRST: u64 = 4_099;
+            const SECOND: u64 = FIRST + 512;
+            const SETTLE: u64 = 16_384;
+            let largest_step = (std::f64::consts::TAU * 440.0 / 44_100.0 * 0.5) as f32;
+            let signal = sine(12 * consts::LANE_CHUNK_FRAMES as usize);
+            let pools = pools();
+            let (mut source, mut lane) = stretch_lane(&pools, (backend, true), &signal);
+            for (at, speed) in [(ENGAGE, 0.8), (FIRST, 1.25), (SECOND, 0.94)] {
+                lane.send(When::At(LaneFrame(at)), speed_batch(speed))
+                    .expect("the lane has room for each change");
+            }
+
+            let pcm = lane_pcm(&emit(&mut source, 0, SECOND + SETTLE));
+
+            let (frame, step) = pcm[FIRST as usize - 256..(SECOND + SETTLE) as usize]
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).abs())
+                .enumerate()
+                .fold((0, 0.0_f32), |worst, (offset, step)| {
+                    if step > worst.1 {
+                        (offset, step)
+                    } else {
+                        worst
+                    }
+                });
+            assert!(
+                step <= 3.0 * largest_step,
+                "{backend:?}: the output jumps {step:.3} at lane frame {} (the sine steps at most \
+                 {largest_step:.3}); changes at {FIRST} and {SECOND}",
+                FIRST as usize - 256 + frame,
+            );
         }
-
-        let pcm = lane_pcm(&emit(&mut source, 0, SECOND + SETTLE));
-
-        let (frame, step) = pcm[FIRST as usize - 256..(SECOND + SETTLE) as usize]
-            .windows(2)
-            .map(|pair| (pair[1] - pair[0]).abs())
-            .enumerate()
-            .fold((0, 0.0_f32), |worst, (offset, step)| {
-                if step > worst.1 {
-                    (offset, step)
-                } else {
-                    worst
-                }
-            });
-        assert!(
-            step <= 3.0 * largest_step,
-            "{backend:?}: the output jumps {step:.3} at lane frame {} (the sine steps at most \
-             {largest_step:.3}); changes at {FIRST} and {SECOND}",
-            FIRST as usize - 256 + frame,
-        );
     }
 
     /// A keylock engine that changes speed on lane frame X renders from X on
     /// what an engine started at X's source frame with the new speed renders:
     /// the change lands on its frame and the source does not jump. The old
     /// engine's tail fades out within `SETTLE` frames.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     #[kithara::test]
-    #[cfg_attr(
-        feature = "stretch-signalsmith",
-        case::signalsmith(StretchKind::Signalsmith)
-    )]
-    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn a_keylock_speed_change_renders_on_as_an_engine_started_on_its_frame(
-        #[case] backend: StretchKind,
-    ) {
-        const ENGAGE: u64 = 1_024;
-        /// At 0.8 the 3075 frames from ENGAGE play 2460 source frames whole.
-        const AT: u64 = 4_099;
-        const SETTLE: u64 = 16_384;
-        const WINDOW: usize = 4_096;
-        const REACH: usize = 2_048;
-        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
-        let pools = pools();
-        let (mut changed, mut lane) = stretch_lane(&pools, (backend, true), &signal);
-        lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(0.8))
-            .expect("the lane has room for the engaging batch");
-        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
-            .expect("the lane has room for the change");
-        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
-        let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
+    fn a_keylock_speed_change_renders_on_as_an_engine_started_on_its_frame() {
+        for backend in keylock_backends() {
+            const ENGAGE: u64 = 1_024;
+            /// At 0.8 the 3075 frames from ENGAGE play 2460 source frames whole.
+            const AT: u64 = 4_099;
+            const SETTLE: u64 = 16_384;
+            const WINDOW: usize = 4_096;
+            const REACH: usize = 2_048;
+            let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+            let pools = pools();
+            let (mut changed, mut lane) = stretch_lane(&pools, (backend, true), &signal);
+            lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(0.8))
+                .expect("the lane has room for the engaging batch");
+            lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+                .expect("the lane has room for the change");
+            let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
+            let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
 
-        let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
-        fresh
-            .send(When::At(LaneFrame(cue)), speed_batch(1.25))
-            .expect("the lane has room for the start");
-        let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+            let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
+            fresh
+                .send(When::At(LaneFrame(cue)), speed_batch(1.25))
+                .expect("the lane has room for the start");
+            let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
-        let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
-        let (offset, correlation) = alignment(
-            rendered,
-            &lane_pcm(&reference),
-            (cue + SETTLE) as usize,
-            REACH,
-        );
-        assert!(
-            offset == 0 && correlation > 0.95,
-            "{backend:?}: after the change at lane frame {AT} (source {cue}) the lane \
-             renders {offset} frames off a fresh engine, correlation {correlation:.3}"
-        );
+            let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+            let (offset, correlation) = alignment(
+                rendered,
+                &lane_pcm(&reference),
+                (cue + SETTLE) as usize,
+                REACH,
+            );
+            assert!(
+                offset == 0 && correlation > 0.95,
+                "{backend:?}: after the change at lane frame {AT} (source {cue}) the lane \
+                 renders {offset} frames off a fresh engine, correlation {correlation:.3}"
+            );
+        }
     }
 
     /// A batch that changes the engine on lane frame X renders from X on what
     /// the new engine started at X's source frame renders: the engine changes
     /// on its frame, the source does not jump, and the receipt names X. The
     /// old engine's tail fades out within `SETTLE` frames.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     #[kithara::test]
-    #[cfg_attr(
-        feature = "stretch-signalsmith",
-        case::keylock_signalsmith(
-            (StretchKind::Signalsmith, false),
-            LaneCommand::SetKeylock(true),
-            (StretchKind::Signalsmith, true)
-        )
-    )]
-    #[cfg_attr(
-        feature = "stretch-bungee",
-        case::keylock_bungee(
-            (StretchKind::Bungee, false),
-            LaneCommand::SetKeylock(true),
-            (StretchKind::Bungee, true)
-        )
-    )]
-    #[cfg_attr(
-        all(feature = "stretch-signalsmith", feature = "stretch-bungee"),
-        case::bungee_to_signalsmith(
-            (StretchKind::Bungee, true),
-            LaneCommand::SetBackend(StretchKind::Signalsmith),
-            (StretchKind::Signalsmith, true)
-        )
-    )]
-    #[cfg_attr(
-        all(feature = "stretch-signalsmith", feature = "stretch-bungee"),
-        case::signalsmith_to_bungee(
-            (StretchKind::Signalsmith, true),
-            LaneCommand::SetBackend(StretchKind::Bungee),
-            (StretchKind::Bungee, true)
-        )
-    )]
-    fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame(
-        #[case] from: (StretchKind, bool),
-        #[case] command: LaneCommand,
-        #[case] to: (StretchKind, bool),
-    ) {
-        const ENGAGE: u64 = 1_024;
-        /// At 1.25 the 3072 frames from ENGAGE play 3840 source frames whole.
-        const AT: u64 = 4_096;
-        const SETTLE: u64 = 16_384;
-        const WINDOW: usize = 4_096;
-        const REACH: usize = 2_048;
-        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
-        let pools = pools();
-        let (mut changed, mut lane) = stretch_lane(&pools, from, &signal);
-        lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(1.25))
-            .expect("the lane has room for the engaging batch");
-        let seq = lane
-            .send(When::At(LaneFrame(AT)), command_batch(command))
-            .expect("the lane has room for the change");
-        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
-        let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
+    fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame() {
+        for backend in keylock_backends() {
+            for next in keylock_backends() {
+                let (from, command) = if backend == next {
+                    ((backend, false), LaneCommand::SetKeylock(true))
+                } else {
+                    ((backend, true), LaneCommand::SetBackend(next))
+                };
+                let to = (next, true);
+                const ENGAGE: u64 = 1_024;
+                /// At 1.25 the 3072 frames from ENGAGE play 3840 source frames whole.
+                const AT: u64 = 4_096;
+                const SETTLE: u64 = 16_384;
+                const WINDOW: usize = 4_096;
+                const REACH: usize = 2_048;
+                let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+                let pools = pools();
+                let (mut changed, mut lane) = stretch_lane(&pools, from, &signal);
+                lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(1.25))
+                    .expect("the lane has room for the engaging batch");
+                let seq = lane
+                    .send(When::At(LaneFrame(AT)), command_batch(command))
+                    .expect("the lane has room for the change");
+                let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
+                let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
 
-        let (mut started, mut fresh) = stretch_lane(&pools, to, &signal);
-        fresh
-            .send(When::At(LaneFrame(cue)), speed_batch(1.25))
-            .expect("the lane has room for the start");
-        let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+                let (mut started, mut fresh) = stretch_lane(&pools, to, &signal);
+                fresh
+                    .send(When::At(LaneFrame(cue)), speed_batch(1.25))
+                    .expect("the lane has room for the start");
+                let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
-        let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
-        let (offset, correlation) = alignment(
-            rendered,
-            &lane_pcm(&reference),
-            (cue + SETTLE) as usize,
-            REACH,
-        );
-        assert!(
-            offset == 0 && correlation > 0.95,
-            "{command:?}: after the change at lane frame {AT} (source {cue}) the lane \
-             renders {offset} frames off a fresh {to:?} engine, correlation {correlation:.3}"
-        );
-        assert!(
-            lane.receipts().any(|receipt| receipt.seq() == seq
-                && matches!(
-                    receipt.outcome(),
-                    Outcome::Applied {
-                        at: LaneFrame(AT),
-                        ..
-                    }
-                )),
-            "the change's receipt names its frame"
-        );
+                let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+                let (offset, correlation) = alignment(
+                    rendered,
+                    &lane_pcm(&reference),
+                    (cue + SETTLE) as usize,
+                    REACH,
+                );
+                assert!(
+                    offset == 0 && correlation > 0.95,
+                    "{command:?}: after the change at lane frame {AT} (source {cue}) the lane \
+                     renders {offset} frames off a fresh {to:?} engine, correlation {correlation:.3}"
+                );
+                assert!(
+                    lane.receipts().any(|receipt| receipt.seq() == seq
+                        && matches!(
+                            receipt.outcome(),
+                            Outcome::Applied {
+                                at: LaneFrame(AT),
+                                ..
+                            }
+                        )),
+                    "the change's receipt names its frame"
+                );
+            }
+        }
     }
 
     /// An engine batch and a speed batch on the same lane frame X of a lane at
     /// unity render from X on what the new engine started at X with the new
     /// speed renders: the old engine never renders the new speed.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    #[kithara::test]
+    fn an_engine_and_a_speed_batch_on_one_frame_engage_the_new_engine() {
+        for backend in keylock_backends() {
+            const AT: u64 = 4_096;
+            const SETTLE: u64 = 16_384;
+            const WINDOW: usize = 4_096;
+            const REACH: usize = 2_048;
+            let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+            let pools = pools();
+            let (mut changed, mut lane) = stretch_lane(&pools, (backend, false), &signal);
+            lane.send(
+                When::At(LaneFrame(AT)),
+                command_batch(LaneCommand::SetKeylock(true)),
+            )
+            .expect("the lane has room for the engine change");
+            lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+                .expect("the lane has room for the speed change");
+            let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
+
+            let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
+            fresh
+                .send(When::At(LaneFrame(AT)), speed_batch(1.25))
+                .expect("the lane has room for the start");
+            let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
+
+            let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+            let (offset, correlation) = alignment(
+                rendered,
+                &lane_pcm(&reference),
+                (AT + SETTLE) as usize,
+                REACH,
+            );
+            assert!(
+                offset == 0 && correlation > 0.95,
+                "{backend:?}: after keylock and speed at lane frame {AT} the lane renders \
+                 {offset} frames off a fresh keylock engine, correlation {correlation:.3}"
+            );
+        }
+    }
+    #[cfg(feature = "stretch-identity")]
+    #[kithara::test]
+    fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: Vec<f32>) {
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
+        let pools = pools();
+        let chunks = [
+            chunk_with_frames(&pools, spec, 0, 64, &quarter),
+            chunk_with_frames(&pools, spec, 64, 64, &quarter),
+        ];
+        let pointers = chunks.each_ref().map(|chunk| chunk.samples.as_ptr());
+        let raw = RawSource {
+            chunks: VecDeque::from(chunks),
+            head: Arc::new(AtomicU64::new(0)),
+            seek: Arc::new(SeekState::new()),
+        };
+        let config = kithara_warp::WarpConfig::builder()
+            .backend(StretchKind::Identity)
+            .speed(0.5)
+            .keylock(true)
+            .render_quantum_frames(NonZeroUsize::new(16).expect("quantum"))
+            .build();
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
+        let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+        let mut source =
+            WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox);
+        for (index, pointer) in pointers.into_iter().enumerate() {
+            if index == 1 {
+                lane.send(
+                    When::Next,
+                    Batch {
+                        basis: Vec::new(),
+                        commands: vec![
+                            LaneCommand::SetSpeed(SpeedCurve::Constant(2.0)),
+                            LaneCommand::SetKeylock(false),
+                        ],
+                    },
+                )
+                .expect("the lane has room");
+            }
+            let TrackStep::Produced(Fetch::Data {
+                data, source_end, ..
+            }) = source.step_track()
+            else {
+                panic!("Identity emits each original chunk immediately");
+            };
+            assert_eq!(data.samples.as_ptr(), pointer);
+            assert_eq!(data.spec(), spec);
+            assert_eq!(data.frames(), 64);
+            assert_eq!(&*data.samples, &quarter[..128]);
+            assert_eq!(
+                data.meta.frame_offset,
+                u64::try_from(index).expect("index") * 64
+            );
+            assert_eq!(
+                source_end,
+                Some(SourceEnd::new(
+                    u64::try_from(index + 1).expect("index") * 64,
+                    spec.sample_rate,
+                ))
+            );
+            assert!(!source.warp.requires_staging());
+            flush_deferred(&mut source);
+        }
+        let mut ended = false;
+        for _ in 0..8 {
+            match source.step_track() {
+                TrackStep::StateChanged => flush_deferred(&mut source),
+                TrackStep::Eof => {
+                    ended = true;
+                    break;
+                }
+                _ => panic!("Identity owns no tail and finishes without failure"),
+            }
+        }
+        assert!(ended, "Identity reaches EOF");
+    }
+
+    #[cfg(all(
+        feature = "stretch-identity",
+        any(
+            feature = "stretch-signalsmith",
+            feature = "stretch-bungee",
+            feature = "stretch-glide"
+        )
+    ))]
     #[kithara::test]
     #[cfg_attr(
         feature = "stretch-signalsmith",
         case::signalsmith(StretchKind::Signalsmith)
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-    fn an_engine_and_a_speed_batch_on_one_frame_engage_the_new_engine(
+    #[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
+    fn scheduled_identity_native_changes_preserve_the_decoded_suffix(
         #[case] backend: StretchKind,
+        quarter: Vec<f32>,
     ) {
-        const AT: u64 = 4_096;
-        const SETTLE: u64 = 16_384;
-        const WINDOW: usize = 4_096;
-        const REACH: usize = 2_048;
-        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+        const ENGAGE: u64 = 1_000;
+        const RETURN: u64 = 2_000;
+        // A scheduled 2x landing rounds 1,999 source frames to 1,000 output frames.
+        const RATE_SOURCE_FRAMES: u64 = 1_999;
         let pools = pools();
-        let (mut changed, mut lane) = stretch_lane(&pools, (backend, false), &signal);
-        lane.send(
-            When::At(LaneFrame(AT)),
-            command_batch(LaneCommand::SetKeylock(true)),
-        )
-        .expect("the lane has room for the engine change");
-        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
-            .expect("the lane has room for the speed change");
-        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
-
-        let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
-        fresh
-            .send(When::At(LaneFrame(AT)), speed_batch(1.25))
-            .expect("the lane has room for the start");
-        let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
-
-        let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
-        let (offset, correlation) = alignment(
-            rendered,
-            &lane_pcm(&reference),
-            (AT + SETTLE) as usize,
-            REACH,
+        let (mut source, mut lane) =
+            lane_over(&pools, 3, |_| &quarter, 2.0, (StretchKind::Identity, false));
+        let first = lane
+            .send(
+                When::At(LaneFrame(ENGAGE)),
+                command_batch(LaneCommand::SetBackend(backend)),
+            )
+            .expect("the lane has room");
+        let second = lane
+            .send(
+                When::At(LaneFrame(RETURN)),
+                command_batch(LaneCommand::SetBackend(StretchKind::Identity)),
+            )
+            .expect("the lane has room");
+        let expected_output =
+            u64::from(3 * consts::LANE_CHUNK_FRAMES) - RATE_SOURCE_FRAMES + (RETURN - ENGAGE);
+        let emitted = emit(&mut source, 0, expected_output);
+        let actual_frames = emitted
+            .iter()
+            .map(|chunk| chunk.samples.len() / 2)
+            .sum::<usize>();
+        assert_eq!(
+            actual_frames,
+            usize::try_from(expected_output).expect("output frames")
+        );
+        for chunk in &emitted {
+            let expected_source = if chunk.lane_start < ENGAGE {
+                chunk.lane_start
+            } else if chunk.lane_start < RETURN {
+                ENGAGE + (chunk.lane_start - ENGAGE) * 2
+            } else {
+                chunk.lane_start + RATE_SOURCE_FRAMES - (RETURN - ENGAGE)
+            };
+            if (ENGAGE..RETURN).contains(&chunk.lane_start) {
+                assert!(
+                    chunk.source_start.abs_diff(expected_source) <= 1,
+                    "backend changes preserve source position at lane frame {}: {} vs {expected_source}",
+                    chunk.lane_start,
+                    chunk.source_start
+                );
+            } else {
+                assert_eq!(chunk.source_start, expected_source);
+            }
+            if chunk.lane_start >= RETURN {
+                assert!(
+                    chunk.samples.iter().all(|sample| *sample == quarter[0]),
+                    "the held Identity suffix remains unchanged"
+                );
+            }
+        }
+        assert_eq!(
+            source.source.head.load(Ordering::Acquire),
+            u64::from(3 * consts::LANE_CHUNK_FRAMES)
         );
         assert!(
-            offset == 0 && correlation > 0.95,
-            "{backend:?}: after keylock and speed at lane frame {AT} the lane renders \
-             {offset} frames off a fresh keylock engine, correlation {correlation:.3}"
+            source.pending_input.is_none(),
+            "every decoded suffix was consumed"
         );
+        assert_eq!(
+            source.warp.rendered_source_end().map(|(frame, _)| frame),
+            Some(u64::from(3 * consts::LANE_CHUNK_FRAMES))
+        );
+        let mut ended = false;
+        for _ in 0..8 {
+            match source.step_track() {
+                TrackStep::StateChanged => flush_deferred(&mut source),
+                TrackStep::Eof => {
+                    ended = true;
+                    break;
+                }
+                _ => panic!("the complete Identity suffix leaves no output tail"),
+            }
+        }
+        assert!(ended, "the complete source reaches EOF");
+        let outcomes = lane
+            .receipts()
+            .map(|receipt| {
+                let seq = receipt.seq();
+                let (outcome, _) = receipt.into();
+                (seq, outcome)
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(outcomes.as_slice(), [
+            (engage, Outcome::Applied { at: LaneFrame(ENGAGE), .. }),
+            (identity, Outcome::Applied { at: LaneFrame(RETURN), .. }),
+        ] if *engage == first && *identity == second));
     }
 }

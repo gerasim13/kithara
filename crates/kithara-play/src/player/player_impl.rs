@@ -110,13 +110,8 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             config.abr = Some(AbrController::new(abr_settings));
         }
 
-        let settings = TrackSettings::builder().speed(config.default_rate());
-        #[cfg(any(
-            feature = "stretch-signalsmith",
-            feature = "stretch-bungee",
-            feature = "stretch-glide"
-        ))]
-        let settings = settings
+        let settings = TrackSettings::builder()
+            .speed(config.default_rate())
             .keylock(config.warp.keylock())
             .backend(config.warp.backend());
         let lanes = TrackLanes::new(settings.build());

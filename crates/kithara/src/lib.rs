@@ -179,14 +179,8 @@ pub mod storage {
 pub use kithara_test_macros::{
     allow_block, fixture, mock, no_block, rtsan_forbid_blocking, test, test_utils_flash as flash,
 };
-#[cfg(all(
-    feature = "warp",
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
-pub use kithara_warp::StretchKind;
 #[cfg(feature = "warp")]
-pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError};
+pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
 
 #[cfg(feature = "mock")]
 pub mod mock {
@@ -247,14 +241,8 @@ pub mod prelude {
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
     #[cfg(feature = "stretch")]
     pub use kithara_stretch::{ElasticConfig, ElasticEngine, StretchKind as StretchEngineKind};
-    #[cfg(all(
-        feature = "warp",
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    pub use kithara_warp::StretchKind;
     #[cfg(feature = "warp")]
-    pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError};
+    pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
     #[cfg(feature = "waveform")]
     pub use kithara_waveform::{Bucket, Waveform};
 }

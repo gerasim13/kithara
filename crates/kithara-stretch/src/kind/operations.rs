@@ -12,6 +12,8 @@ impl StretchKind {
             Self::Bungee,
             #[cfg(feature = "stretch-glide")]
             Self::Glide,
+            #[cfg(feature = "stretch-identity")]
+            Self::Identity,
         ]
     }
 
@@ -25,6 +27,8 @@ impl StretchKind {
             Self::Bungee => BackendCapabilities::RATE.union(BackendCapabilities::KEYLOCK),
             #[cfg(feature = "stretch-glide")]
             Self::Glide => BackendCapabilities::RATE,
+            #[cfg(feature = "stretch-identity")]
+            Self::Identity => BackendCapabilities::empty(),
         }
     }
 }

@@ -13,6 +13,7 @@ pub use drain::ElasticDrain;
 
 mod engine;
 pub use engine::ElasticEngine;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 pub(crate) use engine::PitchScale;
 
 mod error;
