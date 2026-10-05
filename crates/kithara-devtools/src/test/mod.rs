@@ -6,6 +6,8 @@ mod selection;
 #[cfg(test)]
 pub(crate) mod repository_tests;
 #[cfg(test)]
+mod ignored_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use command::run;

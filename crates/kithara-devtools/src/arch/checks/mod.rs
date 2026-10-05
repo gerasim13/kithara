@@ -24,6 +24,8 @@ pub(crate) mod generic_param_count;
 pub(crate) mod god_module;
 pub(crate) mod god_struct;
 pub(crate) mod god_trait;
+#[cfg(test)]
+mod ignore_owner_tests;
 pub(crate) mod max_nesting;
 pub(crate) mod mixed_entities;
 pub(crate) mod module_fan_out;

@@ -1,0 +1,10 @@
+[package]
+name = "nextest-ignored-contract"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[[test]]
+name = "ignored"
+path = "ignored.rs"
