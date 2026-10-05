@@ -35,10 +35,11 @@ fn entered_plan(host_rate: NonZeroU32) -> WarpPlan {
     feature = "stretch-glide"
 ))]
 fn entered_renderer(plan: WarpPlan, backend: StretchKind, keylock: bool) -> WarpRenderer {
-    let controls = StretchControls::new(1.0);
-    controls.set_backend(backend);
-    controls.set_keylock(keylock);
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .speed(1.0)
+        .backend(backend)
+        .keylock(keylock)
+        .build();
     let entered = config.entering(Arc::new(plan));
     let mut renderer = Warp::new((), &entered).renderer(spec(), pools());
     renderer.prepare(spec());
@@ -69,7 +70,7 @@ fn admit_history(renderer: &mut WarpRenderer, entry: u64, cue: u64) {
         return;
     }
     let landing = source_span(renderer, entry, history + 256);
-    let preroll = renderer.prepare_quantum(landing.meta, landing.frames());
+    let preroll = renderer.prepare_quantum(landing.meta, landing.frames(), usize::MAX);
     let Err(WarpRenderError::Preroll { frames }) = preroll else {
         panic!("audio before the activation is history, got {preroll:?}");
     };
@@ -135,7 +136,7 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
         renderer.prepare(spec());
         let at = source_span(&renderer, position, 1024);
         let frames = renderer
-            .prepare_quantum(at.meta, at.frames())
+            .prepare_quantum(at.meta, at.frames(), usize::MAX)
             .expect("the entered source continues")
             .get();
         let mut input = source_span(&renderer, position, frames);
@@ -186,7 +187,7 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(#[case] back
             renderer.prepare(spec());
             let at = source_span(&renderer, position, remaining);
             let frames = renderer
-                .prepare_quantum(at.meta, remaining)
+                .prepare_quantum(at.meta, remaining, usize::MAX)
                 .expect("the entered source continues")
                 .get();
             let mut input = source_span(&renderer, position, frames);
@@ -224,7 +225,7 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
     let cue = plan.activation().source();
     let mut renderer = entered_renderer(plan, backend, keylock);
     let late = source_span(&renderer, cue + 1, 256);
-    let refused = renderer.prepare_quantum(late.meta, late.frames());
+    let refused = renderer.prepare_quantum(late.meta, late.frames(), usize::MAX);
     assert!(
         matches!(
             refused,
@@ -238,7 +239,7 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
 
 #[kithara::test]
 fn a_renderer_without_an_entered_plan_names_no_entry_source() {
-    let (mut renderer, _) = projection::planned_renderer(StretchControls::new(1.0));
+    let (mut renderer, _) = projection::planned_renderer(WarpConfig::builder().speed(1.0).build());
     renderer.prepare(spec());
     assert_eq!(renderer.entry_source(), None);
     let input = source_span(&renderer, 0, 16);

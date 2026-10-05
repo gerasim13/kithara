@@ -40,6 +40,13 @@ pub(crate) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16)
     None => unreachable!(),
 };
 
+/// A lane executes only while it renders, so a paused or backpressured deck
+/// keeps every speed change sent to it in flight.
+pub(crate) const LANE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(128) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
 pub(crate) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
     Some(value) => value,
     None => unreachable!(),

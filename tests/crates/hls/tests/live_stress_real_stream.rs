@@ -156,7 +156,7 @@ async fn build_live_audio(
         .events(EventBus::default())
         .build();
     worker
-        .open(
+        .load(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
@@ -241,7 +241,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = worker
-        .open(
+        .load(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
@@ -348,7 +348,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         )
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("audio creation");
+    let mut audio = worker.load(config).await.expect("audio creation");
     #[cfg(target_arch = "wasm32")]
     let _ = audio.preload();
 
@@ -577,7 +577,7 @@ async fn live_real_stream_seek_resume_native(
         .build();
 
     let mut audio = worker
-        .open(
+        .load(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
@@ -700,7 +700,7 @@ async fn live_stress_real_stream_seek_read_cache(
         .build();
 
     let mut audio = worker
-        .open(
+        .load(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
@@ -917,7 +917,7 @@ async fn live_ephemeral_small_cache_playback(
         .build();
 
     let mut audio = worker
-        .open(
+        .load(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
@@ -1022,7 +1022,7 @@ async fn live_ephemeral_small_cache_seek_stress(
             )
             .block_on_underrun(true)
             .build();
-        let mut audio = worker.open(config).await.expect("audio creation");
+        let mut audio = worker.load(config).await.expect("audio creation");
         info!(label, "Warmup: reading initial chunks");
         spawn_blocking(move || {
             let _ = audio.preload();

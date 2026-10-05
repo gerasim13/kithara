@@ -125,8 +125,8 @@ impl PlayerResource {
         })
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
+    pub(crate) fn apply_playback_rate(&mut self, rate: f32) -> f32 {
+        self.resource.get_mut().apply_playback_rate(rate)
     }
 
     /// Cached span in seconds: how much of the source is on disk and needs no
@@ -438,10 +438,7 @@ mod tests {
             span.take(4),
             SourceSpan::new(100, 112, rate, 4).map(|span| span.with_render_revision(7))
         );
-        assert_eq!(
-            span.source.map(kithara_signal::SourceSpan::start),
-            Some(112)
-        );
+        assert_eq!(span.source.map(SourceSpan::start), Some(112));
         assert_eq!(
             span.take(6),
             SourceSpan::new(112, 130, rate, 6).map(|span| span.with_render_revision(7))

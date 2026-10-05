@@ -44,7 +44,7 @@ let audio_config = AudioConfig::for_stream(hls_config)
     .build();
 
 let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-let mut audio = worker.open(audio_config).await?;
+let mut audio = worker.load(audio_config).await?;
 ```
 
 ## Key Types

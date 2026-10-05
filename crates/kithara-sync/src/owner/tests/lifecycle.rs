@@ -239,7 +239,7 @@ fn leaving_the_timeline_releases_every_host_synced_descendant() {
 
     let released = transition(free_at(&mut root, 96_000));
 
-    let deck_grid = nested(&root, &[deck_id], kithara_warp::BeatGrid::snapshot);
+    let deck_grid = nested(&root, &[deck_id], BeatGrid::snapshot);
     assert!(matches!(deck_grid.state(), BeatGridState::Unavailable(_)));
     assert_eq!(
         nested(&root, &[deck_id], super::super::state::GroupState::mode),

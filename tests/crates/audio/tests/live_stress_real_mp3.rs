@@ -227,7 +227,7 @@ fn phase5_revisit_seeks(audio: &mut TestAudio, seek_positions: &[f64], random_op
 )]
 #[cfg_attr(
     target_arch = "wasm32",
-    ignore = "PlayWorker::open bootstrap hangs in wasm-bindgen headless runner"
+    ignore = "PlayWorker::load bootstrap hangs in wasm-bindgen headless runner"
 )]
 #[cfg_attr(not(target_arch = "wasm32"), case::mmap(false))]
 #[case::ephemeral(true)]
@@ -259,7 +259,7 @@ async fn live_stress_real_mp3_seek_read_cache(
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker
-        .open(
+        .load(
             AudioConfig::<File<TestPools>>::for_stream(file_config)
                 .hint(("mp3").to_string())
                 .block_on_underrun(true)

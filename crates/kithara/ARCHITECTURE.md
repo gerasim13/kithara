@@ -145,8 +145,8 @@ features keep their existing convenience: `file` also selects `assets` and
 `storage`; stretch backend features select `stretch`. For
 advanced control — multi-slot engine, crossfade, EQ — reach into
 `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The
-speed-control type `StretchControls` is re-exported even when no stretch backend
-is compiled; the flat `StretchKind` re-export and
+slowest playing speed, `kithara::play::MIN_SPEED`, is re-exported even when no
+stretch backend is compiled; the flat `StretchKind` re-export and
 `kithara::warp::WarpRenderer` are gated on a native stretch backend.
 The facade re-exports the test attribute macros; their expansions resolve
 through `kithara-test-utils`, which the test crate depends on.

@@ -50,6 +50,12 @@ pub(crate) const FRAME_COUNT: u64 = 48_000;
 #[cfg(test)]
 pub(crate) const BLOCK_FRAMES: usize = 480;
 
+/// Lowest supported media seconds consumed per output second.
+///
+/// This already asks the backend for a 20x stretch; lower values collapse
+/// quality without providing a useful playback mode.
+pub const MIN_SPEED: f32 = 0.05;
+
 pub(crate) const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
     Some(frames) => frames,
     None => unreachable!(),

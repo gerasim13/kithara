@@ -418,10 +418,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 output_start: start,
                 end: plan.map().reanchor(source_end, end),
             }),
-            rate: self.controls.rate_target(),
+            rate: self.rate,
             speed,
             active_frames: frames,
             frames,
+            landing_frames: None,
         })
     }
 
@@ -621,7 +622,6 @@ mod tests {
         assert_eq!(prepared.frames, 192);
         renderer.projection.active = Some(plan);
         renderer.prepared_quantum = Some(prepared);
-        renderer.controls.set_speed(2.0);
         assert_eq!(
             renderer
                 .prepare_terminal_quantum(meta, 96)

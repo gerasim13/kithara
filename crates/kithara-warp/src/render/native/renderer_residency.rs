@@ -4,7 +4,7 @@ use kithara_stretch::{ElasticError, ElasticLatency, ElasticRequest};
 use num_traits::ToPrimitive;
 
 use super::{
-    renderer::{PreparedQuantum, WarpRenderer},
+    renderer::{PreparedQuantum, RateTarget, WarpRenderer},
     renderer_projection::ProjectedQuantum,
 };
 use crate::WarpPlan;
@@ -13,7 +13,7 @@ use crate::WarpPlan;
 pub(super) struct ResidentRequest {
     pub(super) prime: Option<(u64, usize, ElasticRequest)>,
     pub(super) projection: ProjectedQuantum,
-    pub(super) rate: crate::temporal::RateTarget,
+    pub(super) rate: RateTarget,
     pub(super) source_end: u64,
     pub(super) source_start: u64,
 }
@@ -24,6 +24,9 @@ pub(super) struct SourceResidency {
     pub(super) end: Option<u64>,
     pub(super) prepared: Option<ResidentRequest>,
     pub(super) replacement: SampleBuffer,
+    /// The tail a retiring engine drains into, with what still fades out of
+    /// `replacement` blended in; it becomes `replacement` once complete.
+    pub(super) next_replacement: SampleBuffer,
     pub(super) samples: SampleBuffer,
     pub(super) primed: bool,
     pub(super) start: i64,
@@ -87,9 +90,42 @@ impl SourceResidency {
         Ok(())
     }
 
+    /// Fade `output` in from the retired engine's tail, continuing where the
+    /// previous output left the fade.
+    pub(super) fn blend_replacement(
+        &mut self,
+        output: &mut [f32],
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let available = self
+            .replacement
+            .len()
+            .saturating_sub(self.replacement_offset);
+        let blend_samples = output.len().min(available);
+        let total_frames = self.replacement.len() / channels;
+        for (offset, sample) in output[..blend_samples].iter_mut().enumerate() {
+            let index = self.replacement_offset + offset;
+            let mix = (index / channels + 1)
+                .to_f32()
+                .ok_or(ElasticError::SampleCountOverflow)?
+                / total_frames
+                    .max(1)
+                    .to_f32()
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+            *sample = self.replacement[index].mul_add(1.0 - mix, *sample * mix);
+        }
+        self.replacement_offset += blend_samples;
+        if self.replacement_offset == self.replacement.len() {
+            self.replacement.clear();
+            self.replacement_offset = 0;
+        }
+        Ok(())
+    }
+
     pub(super) fn clear(&mut self) {
         self.samples.clear();
         self.replacement.clear();
+        self.next_replacement.clear();
         self.replacement_offset = 0;
         self.start = 0;
         self.offset = 0;
@@ -144,6 +180,7 @@ impl SourceResidency {
             history_frames,
             samples: pools.get::<f32>(),
             replacement: pools.get::<f32>(),
+            next_replacement: pools.get::<f32>(),
             replacement_offset: 0,
             start: 0,
             offset: 0,
@@ -154,6 +191,7 @@ impl SourceResidency {
         for (buffer, frames) in [
             (&mut residency.samples, resident_frames),
             (&mut residency.replacement, replacement_frames),
+            (&mut residency.next_replacement, replacement_frames),
         ] {
             let length = buffer.len();
             buffer
@@ -289,6 +327,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             activation: None,
             projection: Some(projection),
             rate: request.rate,
+            landing_frames: None,
         }))
     }
 
@@ -593,6 +632,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             activation: None,
             projection: Some(projection),
             rate: request.rate,
+            landing_frames: None,
         })
     }
 

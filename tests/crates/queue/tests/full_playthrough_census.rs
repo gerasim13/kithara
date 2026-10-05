@@ -42,6 +42,7 @@ use kithara_integration_tests::{
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{
+    SignalAsset,
     asset::Asset,
     assets,
     hls_fixtures::frame_samples,
@@ -105,6 +106,7 @@ enum Origin {
     /// sit either side of it. That is the seam a playlist crosses when it
     /// leaves a segmented stream for a file on a music server.
     RemoteMp3,
+    RemoteSignal(SignalAsset),
 }
 
 /// Every track streamed as HLS.
@@ -132,6 +134,9 @@ impl Origin {
             Self::LocalFlac | Self::RemoteFlac | Self::RemoteMp3 => {
                 frames_from_secs(NOMINAL_TRACK_SECS)
             }
+            Self::RemoteSignal(asset) => {
+                frames_from_secs(if asset.ext() == "ape" { 3.0 } else { 6.0 })
+            }
             Self::Hls => {
                 let requested = usize::try_from(frames_from_secs(SEGMENT_SECS))
                     .expect("a segment carries a positive number of frames");
@@ -147,7 +152,7 @@ impl Origin {
     /// Whether this origin's bytes arrive over HTTP.
     const fn needs_server(self) -> bool {
         match self {
-            Self::Hls | Self::RemoteFlac | Self::RemoteMp3 => true,
+            Self::Hls | Self::RemoteFlac | Self::RemoteMp3 | Self::RemoteSignal(_) => true,
             Self::LocalFlac => false,
         }
     }
@@ -213,6 +218,13 @@ async fn track_src(
     pattern: PcmPattern,
 ) -> ResourceSrc {
     match origin {
+        Origin::RemoteSignal(asset) => ResourceSrc::parse(
+            server
+                .expect("a signal fixture requires a server")
+                .signal(asset)
+                .as_str(),
+        )
+        .expect("valid signal URL"),
         Origin::Hls => {
             let created = server
                 .expect("the HLS leg runs against a server")
@@ -280,7 +292,11 @@ impl Census {
     }
 }
 
-async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
+async fn build_queue(
+    sources: Vec<ResourceSrc>,
+    origins: [Origin; 3],
+    seam: Seam,
+) -> Option<Census> {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(seam.crossfade_seconds())
@@ -300,16 +316,61 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 
     let mut tracks = Vec::with_capacity(sources.len());
-    for source in sources {
+    let mut rejected = 0;
+    for (source, origin) in sources.into_iter().zip(origins) {
         let mut events = queue.subscribe();
         let id = harness
             .run(&queue, move |control| control.append(source.to_string()))
             .await
             .expect("append census track through the production loader");
-        wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE)
-            .await
-            .expect("the census track loads");
+        let loaded = wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE).await;
+        let rejection = match origin {
+            Origin::RemoteSignal(asset) => {
+                kithara_integration_tests::fixtures::android_fixture_rejection(asset)
+            }
+            _ => None,
+        };
+        match (rejection, loaded) {
+            (Some((expected, _)), Err(error)) => {
+                assert_eq!(
+                    error,
+                    format!("track entered Failed: resource error: {expected}")
+                );
+                assert!(matches!(
+                    queue
+                        .track(id)
+                        .expect("rejected track remains visible")
+                        .status,
+                    kithara::queue::TrackStatus::Failed(_)
+                ));
+                rejected += 1;
+            }
+            (Some((_, false)), Ok(())) => panic!("MediaCodec-only fixture unexpectedly loaded"),
+            (_, Err(error)) => panic!("the census track must load: {error}"),
+            (_, Ok(())) => {}
+        }
         tracks.push(id);
+    }
+    if rejected > 0 {
+        assert_eq!(
+            rejected,
+            tracks.len(),
+            "the rejection census must reject every track"
+        );
+        assert!(
+            queue.current().is_none(),
+            "a rejected track must not become current"
+        );
+        assert!(
+            harness
+                .render(BLOCK_FRAMES)
+                .await
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        drop(queue);
+        harness.close().await;
+        return None;
     }
     harness
         .run(&queue, {
@@ -320,11 +381,11 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
         .await
         .expect("select the first loaded track");
 
-    Census {
+    Some(Census {
         harness,
         queue,
         tracks,
-    }
+    })
 }
 
 /// Pace each block so the decode worker runs between them; without the yield
@@ -514,13 +575,17 @@ struct Take {
     ordered: Vec<(u64, Active)>,
 }
 
-async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &TestTempDir) -> Take {
+async fn census_provenance(
+    prepared: PreparedTracks,
+    seam: Seam,
+    _temp_dir: &TestTempDir,
+) -> Option<Take> {
     let PreparedTracks {
         server: _server,
         origins,
         sources,
     } = prepared;
-    let census = build_queue(sources, seam).await;
+    let census = build_queue(sources, origins, seam).await?;
     let trace = usdt_trace::scope();
     let (rendered, log) = play_to_the_end(&census).await;
     let records = trace.events_of("render");
@@ -629,7 +694,7 @@ async fn census_provenance(prepared: PreparedTracks, seam: Seam, _temp_dir: &Tes
     );
 
     census.close().await;
-    Take { rendered, ordered }
+    Some(Take { rendered, ordered })
 }
 
 /// The oracles that read the rendered audio rather than the probe: each
@@ -689,7 +754,9 @@ fn census_acoustics(take: &Take) {
 }
 
 async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir) {
-    let take = census_provenance(prepared, seam, temp_dir).await;
+    let take = census_provenance(prepared, seam, temp_dir)
+        .await
+        .expect("supported census produces a take");
     census_acoustics(&take);
 }
 
@@ -733,10 +800,80 @@ async fn a_queue_plays_every_track_end_to_end(
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-#[case::gapless(Seam::Gapless)]
-#[case::crossfaded(Seam::Crossfade)]
-async fn an_mpeg_queue_serves_every_track_whole(#[case] seam: Seam, temp_dir: TestTempDir) {
-    let _ = census_provenance(prepare_tracks(MPEG_QUEUE).await, seam, &temp_dir).await;
+#[case::gapless(MPEG_QUEUE, Seam::Gapless)]
+#[case::crossfaded(MPEG_QUEUE, Seam::Crossfade)]
+#[case::profile_flac_flac_192000_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_192000_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_192000_2ch_24bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_192000_2ch_24bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_22050_1ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_22050_1ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_22050_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_22050_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_44100_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_44100_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_44100_2ch_24bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_44100_2ch_24bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_48000_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_48000_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_48000_2ch_24bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_48000_2ch_24bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_88200_2ch_24bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_88200_2ch_24bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_96000_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_96000_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_flac_flac_96000_2ch_24bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT); 3], Seam::Gapless)]
+#[case::profile_flac_flac_96000_2ch_24bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT); 3], Seam::Crossfade)]
+#[case::profile_mp3_libmp3lame_11025_1ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH); 3], Seam::Gapless)]
+#[case::profile_mp3_libmp3lame_11025_1ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH); 3], Seam::Crossfade)]
+#[case::profile_mp3_libmp3lame_22050_1ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH); 3], Seam::Gapless)]
+#[case::profile_mp3_libmp3lame_22050_1ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH); 3], Seam::Crossfade)]
+#[case::profile_mp3_libmp3lame_32000_2ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH); 3], Seam::Gapless)]
+#[case::profile_mp3_libmp3lame_32000_2ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH); 3], Seam::Crossfade)]
+#[case::profile_mp3_libmp3lame_44100_1ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH); 3], Seam::Gapless)]
+#[case::profile_mp3_libmp3lame_44100_1ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH); 3], Seam::Crossfade)]
+#[case::profile_mp3_libmp3lame_44100_2ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH); 3], Seam::Gapless)]
+#[case::profile_mp3_libmp3lame_44100_2ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH); 3], Seam::Crossfade)]
+#[case::profile_mp3_libmp3lame_48000_1ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH); 3], Seam::Gapless)]
+#[case::profile_mp3_libmp3lame_48000_1ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH); 3], Seam::Crossfade)]
+#[case::profile_mp3_libmp3lame_48000_2ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH); 3], Seam::Gapless)]
+#[case::profile_mp3_libmp3lame_48000_2ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH); 3], Seam::Crossfade)]
+#[case::profile_m4a_aac_44100_2ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_M4A_AAC_44100_2CH); 3], Seam::Gapless)]
+#[case::profile_m4a_aac_44100_2ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_M4A_AAC_44100_2CH); 3], Seam::Crossfade)]
+#[case::profile_m4a_alac_44100_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_m4a_alac_44100_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_ogg_vorbis_44100_2ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH); 3], Seam::Gapless)]
+#[case::profile_ogg_vorbis_44100_2ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH); 3], Seam::Crossfade)]
+#[case::profile_opus_libopus_48000_2ch_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH); 3], Seam::Gapless)]
+#[case::profile_opus_libopus_48000_2ch_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH); 3], Seam::Crossfade)]
+#[case::profile_aiff_pcm_s16be_44100_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_aiff_pcm_s16be_44100_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_wav_pcm_f32le_192000_2ch_32bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT); 3], Seam::Gapless)]
+#[case::profile_wav_pcm_f32le_192000_2ch_32bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT); 3], Seam::Crossfade)]
+#[case::profile_wav_pcm_s16le_192000_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_wav_pcm_s16le_192000_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_wav_pcm_s16le_44100_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_wav_pcm_s16le_44100_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_wav_pcm_s24le_44100_2ch_24bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT); 3], Seam::Gapless)]
+#[case::profile_wav_pcm_s24le_44100_2ch_24bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT); 3], Seam::Crossfade)]
+#[case::profile_wav_pcm_s32le_192000_2ch_32bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT); 3], Seam::Gapless)]
+#[case::profile_wav_pcm_s32le_192000_2ch_32bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT); 3], Seam::Crossfade)]
+#[case::profile_ape_multiframe_44100_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT); 3], Seam::Gapless)]
+#[case::profile_ape_multiframe_44100_2ch_16bit_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT); 3], Seam::Crossfade)]
+#[case::profile_tagged_flac_id3_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_TAGGED_FLAC_ID3); 3], Seam::Gapless)]
+#[case::profile_tagged_flac_id3_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_TAGGED_FLAC_ID3); 3], Seam::Crossfade)]
+#[case::profile_tagged_mp3_id3_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_TAGGED_MP3_ID3); 3], Seam::Gapless)]
+#[case::profile_tagged_mp3_id3_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_TAGGED_MP3_ID3); 3], Seam::Crossfade)]
+#[case::profile_tagged_wave_mp3_id3_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3); 3], Seam::Gapless)]
+#[case::profile_tagged_wave_mp3_id3_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3); 3], Seam::Crossfade)]
+#[case::alac_silence_tail_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_ALAC_SILENCE_TAIL); 3], Seam::Gapless)]
+#[case::alac_silence_tail_crossfade([Origin::RemoteSignal(SignalAsset::PROFILE_ALAC_SILENCE_TAIL); 3], Seam::Crossfade)]
+async fn an_encoded_queue_serves_every_track_whole(
+    #[case] origins: [Origin; 3],
+    #[case] seam: Seam,
+    temp_dir: TestTempDir,
+) {
+    let _ = census_provenance(prepare_tracks(origins).await, seam, &temp_dir).await;
 }
 
 struct PreparedTracks {

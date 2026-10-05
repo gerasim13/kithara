@@ -116,7 +116,7 @@ async fn startup_issues_no_eager_size_probe_storm(
     // decode ahead of the counter read so both construction-time and startup
     // read-time probes are visible.
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

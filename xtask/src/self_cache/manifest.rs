@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     env, fs,
+    io::ErrorKind,
     path::{Component, Path, PathBuf},
 };
 
@@ -161,6 +162,17 @@ impl CacheManifest {
             return Ok(Freshness::Stale);
         }
         let normalized = normalize_config(config)?;
+        for relative in &self.package_roots {
+            if let Err(error) = checked_input(root, relative) {
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == ErrorKind::NotFound)
+                {
+                    return Ok(Freshness::Stale);
+                }
+                return Err(error);
+            }
+        }
         let source_stamp = source_stamp(
             root,
             &self.package_roots,
@@ -545,6 +557,49 @@ handler = "format-edited-paths"
         let loaded = XtaskCacheConfig::load(&root)?;
 
         assert_eq!(manifest.freshness(&root, &loaded)?, Freshness::Current);
+        Ok(())
+    }
+
+    #[test]
+    fn removed_package_roots_are_stale_but_required_new_inputs_are_errors() -> Result<()> {
+        let (_temp, root, config) = fixture()?;
+        let retired = PathBuf::from("crates/retired");
+        fs::create_dir_all(root.join(&retired))?;
+        let roots = vec![retired.clone(), PathBuf::from("xtask")];
+        let manifest = CacheManifest::from_roots(&root, &config, roots.clone())?;
+        fs::remove_dir_all(root.join(&retired))?;
+
+        assert_eq!(manifest.freshness(&root, &config)?, Freshness::Stale);
+        assert!(CacheManifest::from_roots(&root, &config, roots).is_err());
+        let current = CacheManifest::from_roots(&root, &config, vec![PathBuf::from("xtask")])?;
+        let config = XtaskCacheConfig {
+            extra_inputs: vec![retired],
+            ..config
+        };
+        assert!(current.freshness(&root, &config).is_err());
+        assert!(CacheManifest::from_roots(&root, &config, vec![PathBuf::from("xtask")]).is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_or_symlinked_package_roots_are_errors() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let (_temp, root, config) = fixture()?;
+        let retired = PathBuf::from("crates/retired");
+        fs::create_dir_all(root.join(&retired))?;
+        let manifest = CacheManifest::from_roots(&root, &config, vec![retired.clone()])?;
+        fs::remove_dir_all(root.join("crates"))?;
+        fs::write(root.join("crates"), "not a directory")?;
+        assert!(manifest.freshness(&root, &config).is_err());
+        fs::remove_file(root.join("crates"))?;
+        symlink(root.join("xtask"), root.join("crates"))?;
+        assert!(manifest.freshness(&root, &config).is_err());
+        fs::remove_file(root.join("crates"))?;
+        fs::create_dir(root.join("crates"))?;
+        symlink(root.join("absent"), root.join(retired))?;
+        assert!(manifest.freshness(&root, &config).is_err());
         Ok(())
     }
 

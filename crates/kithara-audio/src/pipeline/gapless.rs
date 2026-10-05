@@ -1,6 +1,5 @@
 use kithara_decode::{
-    ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTailCompensation,
-    GaplessTrimmer,
+    GaplessMode, GaplessOutput, GaplessProfile, GaplessTailCompensation, GaplessTrimmer,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::AudioChunk;
@@ -83,14 +82,10 @@ impl GaplessStage {
         next
     }
 
-    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
+    pub(crate) fn notify_seek(&mut self) {
         self.retired_pending.clear();
-        if let Some(pending) = self.pending.take() {
-            for chunk in pending {
-                retire.retire(chunk);
-            }
-        }
-        self.trimmer.notify_seek(retire);
+        self.pending = None;
+        self.trimmer.notify_seek();
     }
 
     /// Feed one decoded chunk into the trimmer.

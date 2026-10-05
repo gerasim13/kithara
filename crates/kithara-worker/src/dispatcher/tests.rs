@@ -666,10 +666,10 @@ mod native {
 
     impl Task for BackpressureCountingTask {
         fn tick(&mut self) -> TickResult {
+            self.ticks.fetch_add(1, Ordering::Relaxed);
             if let Some(first_tick) = self.first_tick.take() {
                 first_tick.send(()).ok();
             }
-            self.ticks.fetch_add(1, Ordering::Relaxed);
             TickResult::Backpressured
         }
     }
@@ -914,8 +914,7 @@ mod native {
         assert!(
             observed <= ceiling,
             "backpressured task ran {observed} times in {window:?} despite a {PARK_BUDGET:?} \
-             park budget, above the {ceiling} that window allows",
-            PARK_BUDGET = consts::PARK_BUDGET
+             park budget, above the {ceiling} that window allows"
         );
     }
 

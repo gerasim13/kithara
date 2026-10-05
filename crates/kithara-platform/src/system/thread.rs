@@ -1,3 +1,5 @@
+/// Native pool tasks need no additional platform context.
+pub use std::convert::identity as wrap_pool_task;
 use std::sync::atomic::Ordering;
 pub use std::time::Duration;
 

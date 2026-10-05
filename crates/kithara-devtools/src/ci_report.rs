@@ -3,6 +3,7 @@ use std::{
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use anyhow::{Context, Result};
@@ -21,10 +22,31 @@ pub struct CiReportArgs {
     /// Directory holding the quality artifacts of one run.
     #[arg(long, value_name = "DIR")]
     pub artifacts: PathBuf,
+    /// Commit whose versioned artifacts to read; defaults to the checkout HEAD.
+    #[arg(long, value_name = "SHA")]
+    pub revision: Option<String>,
 }
 
 pub(crate) fn run(args: &CiReportArgs, ctx: &Ctx) -> Result<()> {
-    let report = render(&args.artifacts, &ctx.config)?;
+    let revision = if let Some(revision) = &args.revision {
+        revision.clone()
+    } else {
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&ctx.root)
+            .output()
+            .context("resolve report revision")?;
+        anyhow::ensure!(output.status.success(), "cannot resolve report revision");
+        String::from_utf8(output.stdout)
+            .context("decode report revision")?
+            .trim()
+            .to_owned()
+    };
+    anyhow::ensure!(
+        revision.len() >= 12 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "report revision must be a commit SHA with at least 12 hex digits"
+    );
+    let report = render(&args.artifacts, &ctx.config, &revision[..12])?;
     let target = ctx.root.join("target");
     fs::create_dir_all(&target).with_context(|| format!("create {}", target.display()))?;
     let output = target.join("consolidated-quality-report.md");
@@ -40,24 +62,27 @@ pub(crate) fn run(args: &CiReportArgs, ctx: &Ctx) -> Result<()> {
 /// by nobody - the collector waited for three of the five jobs and rendered
 /// what those three left. A measurement taken, uploaded and never opened is
 /// the same cost as one that was never taken.
-fn render(artifacts: &Path, config: &ProjectConfig) -> Result<String> {
+fn render(artifacts: &Path, config: &ProjectConfig, revision: &str) -> Result<String> {
     let budgets = &config.ci_report;
     let mut out = String::new();
-    out.push_str(&assessment(artifacts)?);
+    out.push_str(&assessment(artifacts, revision)?);
     out.push_str(&health(artifacts, health_report_name(&config.health)?)?);
-    out.push_str(&coverage_risk(artifacts, budgets.crap_rows)?);
+    out.push_str(&coverage_risk(artifacts, budgets.crap_rows, revision)?);
     out.push_str(&type_cohesion(
         artifacts,
         config.quality.render.summary_rows,
+        revision,
     )?);
-    out.push_str(&architecture(artifacts, budgets.top_contours)?);
-    out.push_str(&duplication(artifacts, budgets.similarity_rows)?);
+    out.push_str(&architecture(artifacts, budgets.top_contours, revision)?);
+    out.push_str(&duplication(artifacts, budgets.similarity_rows, revision)?);
     Ok(out)
 }
 
-fn type_cohesion(artifacts: &Path, rows: usize) -> Result<String> {
+fn type_cohesion(artifacts: &Path, rows: usize, revision: &str) -> Result<String> {
     let Some(assessment) = find(artifacts, &|path| {
-        named(path, "assessment.json") && under(path, consts::ASSESSMENT_DIRECTORY)
+        named(path, "assessment.json")
+            && under(path, consts::ASSESSMENT_DIRECTORY)
+            && at_revision(path, revision)
     })?
     else {
         return Ok(missing(
@@ -81,9 +106,11 @@ fn health_report_name(config: &HealthConfig) -> Result<&str> {
 /// The assessment's own headline, read from the manifest it publishes for
 /// exactly this purpose. The document behind it is far too long for a step
 /// summary, so this says where it is rather than carrying it.
-fn assessment(artifacts: &Path) -> Result<String> {
+fn assessment(artifacts: &Path, revision: &str) -> Result<String> {
     let Some(manifest) = find(artifacts, &|path| {
-        named(path, consts::ASSESSMENT_MANIFEST) && under(path, consts::ASSESSMENT_DIRECTORY)
+        named(path, consts::ASSESSMENT_MANIFEST)
+            && under(path, consts::ASSESSMENT_DIRECTORY)
+            && at_revision(path, revision)
     })?
     else {
         return Ok(missing("Repository assessment", "quality-assessment"));
@@ -108,13 +135,18 @@ fn assessment(artifacts: &Path) -> Result<String> {
     Ok(out)
 }
 
-fn duplication(artifacts: &Path, rows: usize) -> Result<String> {
+fn duplication(artifacts: &Path, rows: usize, revision: &str) -> Result<String> {
     let (report, flattened) = if let Some(report) = find(artifacts, &|path| {
-        named(path, consts::SIMILARITY_REPORT) && under(path, consts::SIMILARITY_ARTIFACT)
+        named(path, consts::SIMILARITY_REPORT)
+            && under(path, consts::SIMILARITY_ARTIFACT)
+            && at_revision(path, revision)
     })? {
         (report, false)
     } else {
-        let Some(report) = find(artifacts, &|path| named(path, consts::SIMILARITY_REPORT))? else {
+        let Some(report) = find(artifacts, &|path| {
+            named(path, consts::SIMILARITY_REPORT) && at_revision(path, revision)
+        })?
+        else {
             return Ok(missing("Duplication", "similarity-report"));
         };
         (report, true)
@@ -173,9 +205,11 @@ fn health(artifacts: &Path, report_name: &str) -> Result<String> {
     Ok(format!("\n## Workspace health\n\n{}\n", body.trim()))
 }
 
-fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
+fn coverage_risk(artifacts: &Path, rows: usize, revision: &str) -> Result<String> {
     let Some(report) = find(artifacts, &|path| {
-        named(path, consts::CRAP_REPORT) && parent_named(path, consts::CRAP_DIRECTORY)
+        named(path, consts::CRAP_REPORT)
+            && parent_named(path, consts::CRAP_DIRECTORY)
+            && at_revision(path, revision)
     })?
     else {
         return Ok(missing("Coverage risk (CRAP)", "coverage-risk"));
@@ -190,8 +224,11 @@ fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
     Ok(out)
 }
 
-fn architecture(artifacts: &Path, top_contours: usize) -> Result<String> {
-    let Some(metrics) = find(artifacts, &|path| named(path, consts::METRICS))? else {
+fn architecture(artifacts: &Path, top_contours: usize, revision: &str) -> Result<String> {
+    let Some(metrics) = find(artifacts, &|path| {
+        named(path, consts::METRICS) && at_revision(path, revision)
+    })?
+    else {
         return Ok(missing("Architecture complexity", "architecture"));
     };
     let text = read(&metrics)?;
@@ -280,6 +317,19 @@ fn under(path: &Path, name: &str) -> bool {
     })
 }
 
+/// Versioned artifact directories contain the commit, optionally followed by
+/// the assessment's dirty-content suffix.
+fn at_revision(path: &Path, revision: &str) -> bool {
+    path.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|name| {
+            name == revision
+                || name.strip_prefix(revision).is_some_and(|tail| {
+                    tail.starts_with("-dirty-") || tail.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+        })
+    })
+}
+
 fn parent_named(path: &Path, name: &str) -> bool {
     path.parent()
         .and_then(Path::file_name)
@@ -299,16 +349,25 @@ fn find(root: &Path, accept: &impl Fn(&Path) -> bool) -> Result<Option<PathBuf>>
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| format!("walk {}", root.display()))?;
     entries.sort();
+    let mut selected: Option<PathBuf> = None;
     for entry in &entries {
-        if entry.is_dir() {
-            if let Some(found) = find(entry, accept)? {
-                return Ok(Some(found));
+        let candidate = if entry.is_dir() {
+            find(entry, accept)?
+        } else {
+            accept(entry).then(|| entry.clone())
+        };
+        if let Some(candidate) = candidate {
+            if let Some(previous) = &selected {
+                anyhow::bail!(
+                    "ambiguous report artifacts: {} and {}",
+                    previous.display(),
+                    candidate.display()
+                );
             }
-        } else if accept(entry) {
-            return Ok(Some(entry.clone()));
+            selected = Some(candidate);
         }
     }
-    Ok(None)
+    Ok(selected)
 }
 
 #[cfg(test)]
@@ -329,12 +388,19 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let artifacts = temp.path().join("artifacts");
         write(
-            &artifacts.join("coverage-risk/cargo-crap/report.md"),
+            &artifacts.join("coverage-risk/abc123def456/cargo-crap/report.md"),
             "## 3 function(s) exceed CRAP threshold 30\n\n| | CRAP | CC | Cov % | Function | Location |\n|---|---:|---:|---:|---|---|\n| high | 35.48 | 28 | 78.79 | prepare_planned_variant_reader | prepare.rs:22 |\n",
         );
         let ctx = Ctx::new(temp.path().to_path_buf(), ProjectConfig::default());
 
-        run(&CiReportArgs { artifacts }, &ctx).expect("write consolidated report");
+        run(
+            &CiReportArgs {
+                artifacts,
+                revision: Some("abc123def456".to_owned()),
+            },
+            &ctx,
+        )
+        .expect("write consolidated report");
 
         let report = fs::read_to_string(temp.path().join("target/consolidated-quality-report.md"))
             .expect("read consolidated report");
@@ -395,7 +461,7 @@ mod tests {
             &rows,
         );
 
-        let report = coverage_risk(temp.path(), 5).expect("coverage-risk section");
+        let report = coverage_risk(temp.path(), 5, "rev").expect("coverage-risk section");
 
         assert!(!report.contains("| row 6 |"));
     }
@@ -408,7 +474,7 @@ mod tests {
             "| a |\n| b |\n| c |\n",
         );
 
-        let report = coverage_risk(temp.path(), 1).expect("coverage-risk section");
+        let report = coverage_risk(temp.path(), 1, "rev").expect("coverage-risk section");
 
         assert!(report.contains("coverage-risk` artifact"));
     }
@@ -418,7 +484,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         write(&temp.path().join("similarity/report.md"), "duplication\n");
 
-        let report = coverage_risk(temp.path(), 10).expect("coverage-risk section");
+        let report = coverage_risk(temp.path(), 10, "rev").expect("coverage-risk section");
 
         assert!(report.contains("No `coverage-risk` artifact"));
     }
@@ -438,7 +504,7 @@ mod tests {
             }"#,
         );
 
-        let report = architecture(temp.path(), 10).expect("architecture section");
+        let report = architecture(temp.path(), 10, "rev").expect("architecture section");
         let rows: Vec<&str> = report
             .lines()
             .filter(|line| line.starts_with("| `crates/"))
@@ -455,7 +521,7 @@ mod tests {
             r#"{"architecture_complexity_index": 15.6, "contours": {}}"#,
         );
 
-        let report = architecture(temp.path(), 10).expect("architecture section");
+        let report = architecture(temp.path(), 10, "rev").expect("architecture section");
 
         assert!(report.contains("- Architecture complexity index: 15.6"));
     }
@@ -485,7 +551,7 @@ mod tests {
     fn a_missing_artifact_is_stated_rather_than_dropped() {
         let temp = tempdir().expect("tempdir");
 
-        let report = render(temp.path(), &ProjectConfig::default()).expect("report");
+        let report = render(temp.path(), &ProjectConfig::default(), "rev").expect("report");
 
         assert!(report.contains("No `health-report` artifact in this run."));
     }
@@ -525,11 +591,75 @@ mod tests {
             &temp.path().join("quality-lab/rev/cargo-crap/report.md"),
             "| function | CRAP |\n| parse | 12 |\n",
         );
-        let report = render(temp.path(), &ProjectConfig::default()).expect("report");
+        let report = render(temp.path(), &ProjectConfig::default(), "rev").expect("report");
         assert!(report.contains("## Type cohesion (LCOM4)"));
         assert!(report.contains("demo::Pair"));
         assert!(report.contains("`read` (a); `write` (b)"));
         assert!(report.contains("| parse | 12 |"));
+    }
+
+    #[test]
+    fn assessment_uses_the_requested_commit_among_archived_revisions() {
+        let temp = tempdir().expect("directory");
+        for (revision, verdict) in [("4117c7b0c7ae", "healthy"), ("faa609bf6ad5", "refactor")] {
+            write(
+                &temp.path().join(format!(
+                    "quality-assessment/{revision}-dirty-content/product-standard/manifest.json"
+                )),
+                &format!(r#"{{"revision":"{revision}","verdict":"{verdict}"}}"#),
+            );
+        }
+        let report = assessment(temp.path(), "faa609bf6ad5").expect("current assessment");
+        assert!(report.contains("Revision: faa609bf6ad5"), "{report}");
+        assert!(report.contains("Verdict: refactor"), "{report}");
+        assert!(!report.contains("4117c7b0c7ae"), "{report}");
+    }
+
+    #[test]
+    fn assessment_does_not_substitute_another_commit_when_requested_one_is_missing() {
+        let temp = tempdir().expect("directory");
+        write(
+            &temp
+                .path()
+                .join("quality-assessment/4117c7b0c7ae/product-standard/manifest.json"),
+            r#"{"revision":"4117c7b0c7ae","verdict":"healthy"}"#,
+        );
+        let report = assessment(temp.path(), "faa609bf6ad5").expect("missing assessment");
+        assert!(
+            report.contains("No `quality-assessment` artifact"),
+            "{report}"
+        );
+        assert!(!report.contains("Verdict: healthy"), "{report}");
+    }
+
+    #[test]
+    fn multiple_assessments_for_the_requested_commit_are_rejected() {
+        let temp = tempdir().expect("directory");
+        for profile in ["product-standard", "product-deep"] {
+            write(
+                &temp.path().join(format!(
+                    "quality-assessment/faa609bf6ad5/{profile}/manifest.json"
+                )),
+                "{}",
+            );
+        }
+        let error = assessment(temp.path(), "faa609bf6ad5").expect_err("ambiguous evidence");
+        assert!(
+            error.to_string().contains("ambiguous report artifacts"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn revision_selection_accepts_full_sha_paths_and_rejects_prefix_lookalikes() {
+        assert!(at_revision(
+            Path::new("quality-lab/faa609bf6ad5f9790ba119fe1d7cb59ee0c2b1db/cargo-crap/report.md"),
+            "faa609bf6ad5"
+        ));
+        assert!(!at_revision(
+            Path::new("quality-lab/faa609bf6ad5-old/cargo-crap/report.md"),
+            "faa609bf6ad5"
+        ));
     }
 
     #[test]
@@ -542,7 +672,7 @@ mod tests {
             r#"{"verdict": "healthy", "status": "complete", "revision": "abc1234"}"#,
         );
 
-        let report = assessment(temp.path()).expect("assessment section");
+        let report = assessment(temp.path(), "abc123def456").expect("assessment section");
 
         assert!(report.contains("Verdict: healthy"), "{report}");
         assert!(report.contains("Revision: abc1234"), "{report}");
@@ -558,7 +688,7 @@ mod tests {
             r#"{"verdict": "healthy"}"#,
         );
 
-        let report = assessment(temp.path()).expect("assessment section");
+        let report = assessment(temp.path(), "abc123def456").expect("assessment section");
 
         assert!(report.contains("Depth: unavailable"), "{report}");
     }
@@ -571,7 +701,7 @@ mod tests {
             "# duplication\n\n| pair | score |\n",
         );
 
-        let report = duplication(temp.path(), 10).expect("duplication section");
+        let report = duplication(temp.path(), 10, "abc1234").expect("duplication section");
 
         assert!(report.contains("| pair | score |"), "{report}");
     }
@@ -584,7 +714,7 @@ mod tests {
             "# Behavioral similarity\n\n- Candidates: 42\n",
         );
 
-        let report = duplication(temp.path(), 10).expect("duplication section");
+        let report = duplication(temp.path(), 10, "abc1234").expect("duplication section");
 
         assert!(report.contains("Candidates: 42"), "{report}");
     }
@@ -593,11 +723,11 @@ mod tests {
     fn duplication_section_does_not_read_the_crap_report() {
         let temp = tempdir().expect("tempdir");
         write(
-            &temp.path().join("coverage-risk/cargo-crap/report.md"),
+            &temp.path().join("coverage-risk/rev/cargo-crap/report.md"),
             "coverage risk\n",
         );
 
-        let report = duplication(temp.path(), 10).expect("duplication section");
+        let report = duplication(temp.path(), 10, "abc1234").expect("duplication section");
 
         assert!(
             report.contains("No `similarity-report` artifact"),
@@ -613,7 +743,7 @@ mod tests {
             "one\ntwo\nthree\n",
         );
 
-        let report = duplication(temp.path(), 2).expect("duplication section");
+        let report = duplication(temp.path(), 2, "abc1234").expect("duplication section");
 
         assert!(report.contains("Truncated here"), "{report}");
     }
@@ -626,7 +756,7 @@ mod tests {
             "# Behavioral similarity\n\n```mermaid\nflowchart LR\n    c0[\"a\"]\n```\n\n## Candidates\n",
         );
 
-        let report = duplication(temp.path(), 4).expect("duplication section");
+        let report = duplication(temp.path(), 4, "abc1234").expect("duplication section");
 
         assert_eq!(
             report.matches("```").count() % 2,

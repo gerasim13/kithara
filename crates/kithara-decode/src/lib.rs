@@ -17,6 +17,8 @@
 //! let decoder = DecoderFactory::create_from_media_info(source, &media_info, config)?;
 //! ```
 
+#[cfg(feature = "ape")]
+mod ape;
 mod codec;
 mod composed;
 mod demuxer;
@@ -26,7 +28,6 @@ mod fmp4;
 mod gapless;
 mod mp4;
 mod resampled;
-mod retire;
 #[cfg(symphonia_demuxer)]
 mod symphonia;
 #[cfg(test)]
@@ -51,7 +52,6 @@ pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
     SilenceTrimParams, probe_mp4_gapless,
 };
-pub use retire::{ChunkRetire, DropChunks};
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };

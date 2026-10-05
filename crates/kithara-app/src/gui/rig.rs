@@ -150,12 +150,7 @@ impl Rig {
                     crate::state::UiState::new(&queue),
                 ));
                 states.push(Arc::clone(&state));
-                crate::state::test_fixture::controller_on(
-                    queue,
-                    Arc::clone(&deck.timestretch),
-                    deck.cancel_child(),
-                    state,
-                )
+                crate::state::test_fixture::controller_on(queue, deck.cancel_child(), state)
             },
         );
         rig.states = states;
@@ -205,7 +200,6 @@ impl Rig {
         Self::build(config, host, broadcast, analysis.clone(), |deck| {
             StateController::new(
                 deck.queue.control().clone(),
-                Arc::clone(&deck.timestretch),
                 deck.cancel_child(),
                 analysis.clone(),
             )

@@ -185,7 +185,7 @@ async fn hls_seek_near_end_skips_prefix(
     // emitted `AudioEvent::PlaybackProgress` with a non-zero position. This
     // is the discriminating gate: `HlsEvent::SegmentReadStart` only proves
     // the stream layer is reading (it can fire during the up-front blocking
-    // preparation in `PlayWorker::open`, before the processor has the track in a playing
+    // preparation in `PlayWorker::load`, before the processor has the track in a playing
     // state). The seek path runs through the processor —
     // `apply_seek` only forwards `track.seek` for tracks in
     // `FadingIn`/`Playing`, and only that path reaches `Audio::seek ->

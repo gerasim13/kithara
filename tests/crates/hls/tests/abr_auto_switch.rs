@@ -144,7 +144,7 @@ async fn abr_auto_switch_during_playback(
         .media_info(wav_info)
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>>");
 

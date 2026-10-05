@@ -649,6 +649,15 @@ owns = ["crates/kithara-warp/", "tests/crates/warp/"]
 cargo.packages = ["kithara-warp", "kithara-warp-tests"]
 cargo.profile = "test-release"
 
+[test.lanes.render]
+default_backend = "none"
+owns = ["crates/kithara-render/"]
+cargo.packages = ["kithara-render"]
+cargo.profile = "test-release"
+# kithara-render steps its stage synchronously, so no test waits on a clock the
+# virtual one could drive, and its only package declares neither toggle.
+undeclared_toggles = ["flash", "no-block"]
+
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.
@@ -2680,9 +2689,8 @@ kinds = [
 ]
 timeout_minutes = 60
 
-# The off-flash suite owns its own checksum target directory: the two gates
-# differ by feature, and sharing one directory makes each run rebuild what the
-# other just replaced.
+# The off-flash suite owns a separate lane slot because its feature set differs
+# from the flash gate. Keep nextest reports at that slot's exposed target root.
 [ext.ci.lanes.apple-test-flash-off]
 cache_group = "macos"
 label = "Apple"
@@ -2702,7 +2710,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off" } },
+  ], label = "Apple flash-off gate" },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

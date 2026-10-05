@@ -7,8 +7,8 @@ use std::{
 };
 
 use kithara_decode::{
-    BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderSeekOutcome, GaplessMode, GaplessProfile,
+    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome,
+    GaplessMode, GaplessProfile,
 };
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::MediaInfo;
@@ -254,15 +254,13 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
+    pub(crate) fn notify_seek(&mut self) {
         self.finished = false;
         self.source_exhausted = false;
         self.exhaustion_observed = false;
         self.holdback = None;
-        self.gapless.notify_seek(retire);
-        for chunk in self.staged.drain(..) {
-            retire.retire(chunk);
-        }
+        self.gapless.notify_seek();
+        self.staged.clear();
     }
 
     pub(crate) const fn observe_exhaustion(&mut self) {
@@ -435,7 +433,7 @@ pub(super) fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFai
 mod tests {
     use std::{cell::Cell, num::NonZeroU32};
 
-    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo, GaplessTailCompensation};
+    use kithara_decode::{DecoderSeekOutcome, GaplessInfo, GaplessTailCompensation};
     use kithara_platform::time::Duration;
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::PrerollHint;
@@ -907,7 +905,7 @@ mod tests {
         generation.finish();
         assert!(generation.is_finished());
 
-        generation.notify_seek(&DropChunks);
+        generation.notify_seek();
 
         assert!(!generation.is_finished());
     }
