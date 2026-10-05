@@ -1,7 +1,6 @@
-use std::{fs, path::Path};
-
 #[cfg(unix)]
 use std::process::Command;
+use std::{fs, path::Path};
 
 use serde_yaml_ng::Value;
 
@@ -111,8 +110,17 @@ fn a_direct_lane_uses_catalog_metadata_without_the_heavy_role_queue() {
             .unwrap()
             .contains(".depth")
     );
-    for field in ["LANE_ARTIFACT_NAME", "LANE_ARTIFACT_PATH", "LANE_ARTIFACT_WHEN"] {
-        assert!(jobs["run"]["env"][field].as_str().unwrap().contains(".artifact."));
+    for field in [
+        "LANE_ARTIFACT_NAME",
+        "LANE_ARTIFACT_PATH",
+        "LANE_ARTIFACT_WHEN",
+    ] {
+        assert!(
+            jobs["run"]["env"][field]
+                .as_str()
+                .unwrap()
+                .contains(".artifact.")
+        );
     }
 }
 
@@ -135,7 +143,10 @@ fn focused_evidence_preserves_the_harness_log_and_junit_on_failure() {
 
 #[test]
 fn self_hosted_admission_checks_the_current_actor_pair_before_scheduling() {
-    for (name, jobs) in [("lane.yml", vec!["select", "run"]), ("run.yml", vec!["select"])] {
+    for (name, jobs) in [
+        ("lane.yml", vec!["select", "run"]),
+        ("run.yml", vec!["select"]),
+    ] {
         let source = workflow(name);
         for job in jobs {
             let admission = source["jobs"][job]["if"].as_str().unwrap();
@@ -177,7 +188,10 @@ fn self_hosted_admission_checks_the_current_actor_pair_before_scheduling() {
 #[test]
 fn hosted_authorization_accepts_legal_branches_and_rejects_main_review_or_all() {
     let lane = workflow("lane.yml");
-    let authorization = step(&lane["jobs"]["authorize"], "Validate repository owner and request");
+    let authorization = step(
+        &lane["jobs"]["authorize"],
+        "Validate repository owner and request",
+    );
     assert_eq!(
         authorization["env"]["DEFAULT_BRANCH"].as_str(),
         Some("${{ github.event.repository.default_branch }}")
@@ -187,7 +201,13 @@ fn hosted_authorization_accepts_legal_branches_and_rejects_main_review_or_all() 
         for (requested, kind, reference, accepted, reason) in [
             ("linux-tooling", "nightly", "refs/heads/review", true, ""),
             ("linux-tooling", "main", "refs/heads/main", true, ""),
-            ("all", "nightly", "refs/heads/review", false, "name one lane"),
+            (
+                "all",
+                "nightly",
+                "refs/heads/review",
+                false,
+                "name one lane",
+            ),
             (
                 "linux-tooling",
                 "main",
@@ -234,7 +254,10 @@ fn hosted_authorization_accepts_legal_branches_and_rejects_main_review_or_all() 
 #[test]
 fn hosted_authorization_preserves_runner_label_schema_validation() {
     let lane = workflow("lane.yml");
-    let authorization = step(&lane["jobs"]["authorize"], "Validate repository owner and request");
+    let authorization = step(
+        &lane["jobs"]["authorize"],
+        "Validate repository owner and request",
+    );
     let script = authorization["run"].as_str().unwrap();
     for labels in ["invalid-json", "[]", "{}", "[1]", "[\"\"]"] {
         let output = Command::new("bash")
