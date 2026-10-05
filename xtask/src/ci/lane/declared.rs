@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     path::PathBuf,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +12,7 @@ use toml::Value;
 use tracing::warn;
 
 use crate::{
+    child,
     ci::{
         cache::snapshot, config::CiPins, environment::CacheTrust, lane_build::LaneBuild,
         process::Process, run::PipelineKind,
@@ -36,6 +37,9 @@ pub(crate) fn run(
     kind: PipelineKind,
     claim: Option<&LaneBuild>,
 ) -> Result<()> {
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(u64::from(lane.timeout_minutes) * 60))
+        .context("declared CI lane deadline exceeds the monotonic clock range")?;
     let kind = kind_name(kind);
     if let Some(reason) = lane.kinds_refused.get(&kind) {
         bail!("{reason}");
@@ -73,6 +77,11 @@ pub(crate) fn run(
     if !process.is_recording() {
         restore_source_layer(process, tools);
     }
+    let cancel = if process.is_recording() {
+        None
+    } else {
+        Some(child::Cancel::install()?)
+    };
     for step in &lane.steps {
         let role = step.program.as_deref().unwrap_or(&lane.program);
         let program = if role == consts::SELF_PROGRAM {
@@ -90,9 +99,11 @@ pub(crate) fn run(
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
         let vars = step_vars(lane, step, process, pins)?;
-        process.run_command(
+        process.run_command_until(
             process.command(&program).args(&args).envs(&vars),
             &step.label,
+            deadline,
+            cancel.as_ref(),
         )?;
         if step.rebuild_check {
             rebuild_check(process, claim, &program, &args, &vars, &step.label)?;

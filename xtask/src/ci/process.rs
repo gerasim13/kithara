@@ -4,7 +4,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{Read as _, Seek as _},
     path::{Path as FsPath, PathBuf},
-    process::{Child, Command, Output},
+    process::{Child, Command, ExitStatus, Output},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::verdict::ChildFailure;
 use tracing::{debug, info, warn};
 
-use crate::consts;
+use crate::{child, consts};
 
 /// One thing a lane asked the executor to do, captured instead of done. The
 /// snapshot built from these is what says a lane still resolves to the command
@@ -186,17 +186,55 @@ impl Process {
     }
 
     pub(crate) fn run_command(&self, command: &mut Command, label: &str) -> Result<()> {
+        self.run_command_with(command, label, |command| {
+            command
+                .status()
+                .with_context(|| format!("failed to start {label}"))
+        })
+    }
+
+    /// Run an owned step within the lane's remaining budget.
+    pub(crate) fn run_command_until(
+        &self,
+        command: &mut Command,
+        label: &str,
+        deadline: Instant,
+        cancel: Option<&child::Cancel>,
+    ) -> Result<()> {
+        self.run_command_with(command, label, |command| {
+            child::check(cancel)?;
+            if Instant::now() >= deadline {
+                bail!("owned command exceeded its deadline");
+            }
+            let mut child = child::spawn(command)?;
+            child::supervise(
+                &mut child,
+                cancel,
+                Some(deadline.saturating_duration_since(Instant::now())),
+            )
+        })
+    }
+
+    fn run_command_with(
+        &self,
+        command: &mut Command,
+        label: &str,
+        wait: impl FnOnce(&mut Command) -> Result<ExitStatus>,
+    ) -> Result<()> {
         if self.record(Step::of(command, label, &self.root)) {
             return Ok(());
         }
         info!(step = label, root = %self.root.display(), "starting");
         let started = Instant::now();
-        let status = command
-            .status()
-            .with_context(|| format!("failed to start {label}"))?;
+        let status = wait(command);
         let elapsed = started.elapsed();
-        self.time(label, elapsed, status.success());
+        self.time(
+            label,
+            elapsed,
+            status.as_ref().is_ok_and(ExitStatus::success),
+        );
         info!(step = label, seconds = elapsed.as_secs_f64(), "done");
+        let status = status.with_context(|| format!("running {label}"))?;
         if !status.success() {
             return Err(ChildFailure::inherited(label.to_owned(), status.code()));
         }
