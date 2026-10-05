@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
 
 use firewheel::node::ProcBuffers;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
@@ -71,16 +71,17 @@ impl RenderPass {
         pass
     }
 
-    /// Render audio for all active tracks into the output buffers.
+    /// Render the active tracks over `range` of the block into the same frames of the output
+    /// buffers.
     ///
     /// Frames are clamped rather than grown, since growing a pooled buffer here would allocate on
     /// the audio thread; frames past the clamp are already silence-filled.
-    pub(crate) fn render_audio(
+    pub(crate) fn render_range(
         &mut self,
         context: Option<&RenderContext>,
         targets: RenderTargets<'_>,
         buffers: &mut ProcBuffers,
-        frames: usize,
+        range: Range<usize>,
         is_playing: bool,
     ) -> (bool, Option<(f64, f64)>) {
         let mut playback_started = false;
@@ -91,10 +92,11 @@ impl RenderPass {
         }
 
         for ch_buffer in buffers.outputs.iter_mut() {
-            ch_buffer[..frames].fill(0.0);
+            ch_buffer[range.clone()].fill(0.0);
         }
 
-        let frames = frames.min(self.capacity);
+        let frames = range.end.min(self.capacity);
+        let start = range.start.min(frames);
 
         self.gate.set_mix(
             if is_playing {
@@ -118,7 +120,7 @@ impl RenderPass {
         let mut read_bufs = [&mut read_buf0[0][..frames], &mut read_buf1[0][..frames]];
         let mut bus_bufs = [&mut bus_buf0[0][..frames], &mut bus_buf1[0][..frames]];
         for ch_buffer in &mut bus_bufs {
-            ch_buffer.fill(0.0);
+            ch_buffer[start..].fill(0.0);
         }
         let tracks = targets.tracks;
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
@@ -149,7 +151,13 @@ impl RenderPass {
 
             let mut read_outcome = {
                 let Some(outcome) = tracks.at_mut(*track_handle).map(|track| {
-                    track.render(context, &mut read_bufs, &mut bus_bufs, 0..frames, &mut sink)
+                    track.render(
+                        context,
+                        &mut read_bufs,
+                        &mut bus_bufs,
+                        start..frames,
+                        &mut sink,
+                    )
                 }) else {
                     continue;
                 };
@@ -162,7 +170,7 @@ impl RenderPass {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
 
-                let mut handover = initial_handover(&read_outcome);
+                let mut handover = next_handover(&read_outcome, start);
 
                 for (next_idx, (_, next_handle, next_is_leading)) in
                     active_tracks.iter().enumerate()
@@ -235,11 +243,11 @@ impl RenderPass {
 
         let (out_left, out_right) = buffers.outputs.split_at_mut(1);
         self.gate.mix_dry_into_wet_stereo(
-            bus_bufs[0],
-            bus_bufs[1],
-            &mut out_left[0][..frames],
-            &mut out_right[0][..frames],
-            frames,
+            &bus_bufs[0][start..],
+            &bus_bufs[1][start..],
+            &mut out_left[0][start..frames],
+            &mut out_right[0][start..frames],
+            frames - start,
         );
 
         (playback_started, leading_outcome_pos_dur)
@@ -263,14 +271,6 @@ impl RenderPass {
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.gate.update_sample_rate(sample_rate);
-    }
-}
-
-const fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
-    match read_outcome {
-        TrackReadOutcome::Partial { frames, .. } => Some(Handover { offset: *frames }),
-        TrackReadOutcome::Eof | TrackReadOutcome::Failed(_) => Some(Handover { offset: 0 }),
-        TrackReadOutcome::Full { .. } => None,
     }
 }
 

@@ -158,7 +158,7 @@ mod wire {
         Ok,
         PlayerRegistered(RegisteredPlayer),
         SessionTransport(SessionTransportSnapshot),
-        SlotAllocated(AllocatedSlot),
+        SlotAllocated(Box<AllocatedSlot>),
         SampleRate(SessionSampleRate),
         StreamShape(Option<StreamShape>),
         Err(SessionError),
@@ -330,7 +330,7 @@ mod handle {
 
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
             match self.exec_ok(Cmd::AllocateSlot { player_id })? {
-                Reply::SlotAllocated(allocated) => Ok(allocated),
+                Reply::SlotAllocated(allocated) => Ok(*allocated),
                 _ => Err(PlayError::Internal(
                     "unexpected reply for session allocate slot".into(),
                 )),

@@ -131,7 +131,6 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
     use crate::{
@@ -159,19 +158,37 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case(crate::bridge::PlayerCmd::SetPaused(true))]
-    #[case(crate::bridge::PlayerCmd::SetPaused(false))]
-    #[case(crate::bridge::PlayerCmd::SetFadeDuration(0.25))]
-    fn player_node_with_inputs(#[case] cmd: crate::bridge::PlayerCmd) {
+    #[case(crate::bridge::DeckPart::Stop)]
+    #[case(crate::bridge::DeckPart::Start)]
+    #[case(crate::bridge::DeckPart::SetFadeDuration(0.25))]
+    fn player_node_with_inputs(#[case] part: crate::bridge::DeckPart) {
         let (node, mut control) = make_node();
         assert!(node.active);
 
-        control.cmd_tx.try_push(cmd).ok();
+        control
+            .deck
+            .send(
+                kithara_command::When::Next,
+                kithara_command::Batch {
+                    basis: Vec::new(),
+                    commands: vec![part],
+                },
+            )
+            .expect("the deck channel has room");
         let received = {
             let mut guard = node.inputs.lock();
-            (*guard).as_mut().and_then(|inputs| inputs.cmd_rx.try_pop())
+            let inputs = (*guard).as_mut().expect("inputs not yet taken");
+            inputs.deck.drain();
+            inputs
+                .deck
+                .next_due(kithara_signal::SessionFrame::default(), 1)
+                .map(|due| {
+                    let parts = due.commands().len();
+                    due.apply(());
+                    parts
+                })
         };
-        assert!(received.is_some());
+        assert_eq!(received, Some(1));
     }
 
     #[kithara::test]

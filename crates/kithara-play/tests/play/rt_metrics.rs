@@ -12,13 +12,12 @@ use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{
     Resource, SharedEq,
-    bridge::{PlayerCmd, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
+    bridge::{DeckPart, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
     rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioSpec, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::{bufpool::pools, kithara};
-use ringbuf::traits::Producer;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: u32 = 128;
@@ -81,13 +80,12 @@ fn boxed(resource: Resource, src: &str) -> Box<PlayerResource> {
 
 fn load(control: &mut SlotControl, resource: Box<PlayerResource>) -> TrackId {
     let item_id = TrackId::allocate();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack { resource, item_id })
-        .ok();
+    control.send(DeckPart::Attach { resource, item_id }).ok();
     item_id
 }
 
+/// Renders `blocks` blocks on a clock that stands still: every part sent applies on the next
+/// block, whatever frame it starts on.
 fn pump(processor: &mut PlayerNodeProcessor, blocks: usize) -> Vec<f32> {
     let mut out_l = vec![0.0f32; block_len()];
     for _ in 0..blocks {
@@ -98,7 +96,7 @@ fn pump(processor: &mut PlayerNodeProcessor, blocks: usize) -> Vec<f32> {
             inputs: &inputs,
             outputs: &mut outputs,
         };
-        let _ = processor.render_audio(&mut buffers, block_len(), true);
+        processor.render_block(SessionFrame::default(), &mut buffers, block_len());
     }
 
     out_l
@@ -114,8 +112,8 @@ fn render_loaded_blocks(
 ) -> (PlayerNodeProcessor, Vec<f32>) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, resource);
-    control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    pump(&mut processor, 1);
 
     if let Some(track) = processor.track_mut(item_id) {
         track.play();
@@ -172,16 +170,15 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
 fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let outgoing = load(&mut control, healthy_track(constant_half, "outgoing.mp3"));
-    control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
+    control.send(DeckPart::Start).ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+        .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id: outgoing,
             settings: crossfade(0.0),
             epoch: 0,
         }))
         .ok();
-    processor.drain_commands();
+    pump(&mut processor, 1);
 
     let before = peak(&pump(&mut processor, CROSSFADE_BLOCKS));
     assert!(
@@ -191,14 +188,13 @@ fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: 
 
     let incoming = load(&mut control, faulty_track("incoming.mp3", Fault::Stall));
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+        .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id: incoming,
             settings: crossfade(CROSSFADE_SECONDS),
             epoch: 0,
         }))
         .ok();
-    processor.drain_commands();
+    pump(&mut processor, 1);
 
     let during = peak(&pump(&mut processor, CROSSFADE_BLOCKS));
 
@@ -228,7 +224,7 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
         &mut control,
         boxed(Resource::from_reader(reader, None), "split.mp3"),
     );
-    processor.drain_commands();
+    pump(&mut processor, 1);
 
     if let Some(track) = processor.track_mut(item_id) {
         track.seek(30.0);
@@ -328,14 +324,14 @@ fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
     for idx in 0..PlayerNodeProcessor::MAX_TRACKS {
         let src = format!("track-{idx}.mp3");
         let item_id = load(&mut control, healthy_track(constant_half, &src));
-        processor.drain_commands();
+        pump(&mut processor, 1);
         if let Some(track) = processor.track_mut(item_id) {
             track.play();
         }
     }
 
     load(&mut control, healthy_track(constant_half, "newcomer.mp3"));
-    processor.drain_commands();
+    pump(&mut processor, 1);
 
     assert!(
         metrics(&processor).evicted_playing() > 0,
@@ -347,7 +343,8 @@ fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
 fn a_block_larger_than_declared_is_clamped_not_grown(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, healthy_track(constant_half, "ok.mp3"));
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    pump(&mut processor, 1);
     if let Some(track) = processor.track_mut(item_id) {
         track.play();
     }
@@ -365,7 +362,7 @@ fn a_block_larger_than_declared_is_clamped_not_grown(constant_half: &'static [u8
         outputs: &mut outputs,
     };
 
-    let (rendered, _) = processor.render_audio(&mut buffers, oversized, true);
+    let rendered = processor.render_block(SessionFrame::default(), &mut buffers, oversized);
 
     assert!(rendered, "the declared part of the block still renders");
     assert!(

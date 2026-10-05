@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{collections::BTreeMap, num::NonZeroU32, sync::atomic::Ordering};
+use std::{collections::BTreeMap, num::NonZeroU32};
 
 use firewheel::node::ProcBuffers;
 use kithara_audio::mock::TestPcmReader;
@@ -8,17 +8,16 @@ use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     Resource, SharedEq,
-    bridge::{PlayerCmd, SlotControl, slot_channels},
+    bridge::{DeckPart, SlotControl, slot_channels},
     rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioSpec, SessionFrame};
 use kithara_test_fixtures::{integration_fixtures::deadline_tracks, signal::peak};
 use kithara_test_utils::{
     bufpool::pools,
     kithara,
     test::usdt::{self, ProbeEvent},
 };
-use ringbuf::traits::Producer;
 
 mod consts {
     pub(super) const BLOCK_FRAMES: [u32; 4] = [128, 256, 512, 1_024];
@@ -67,8 +66,8 @@ fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
     )
 }
 
-fn send(control: &mut SlotControl, cmd: PlayerCmd) {
-    if control.cmd_tx.try_push(cmd).is_err() {
+fn send(control: &mut SlotControl, part: DeckPart) {
+    if control.send(part).is_err() {
         panic!("no-SYNC deadline command ring must accept setup commands");
     }
 }
@@ -78,6 +77,7 @@ fn load_tracks(
     control: &mut SlotControl,
     count: usize,
     deadline_tracks: [&'static [u8]; 4],
+    (out_l, out_r): (&mut [f32], &mut [f32]),
 ) -> f32 {
     let pools = pools();
     let tracks: Vec<(Arc<str>, TrackId)> = (0..count)
@@ -99,7 +99,7 @@ fn load_tracks(
         );
         send(
             control,
-            PlayerCmd::LoadTrack {
+            DeckPart::Attach {
                 resource: Box::new(
                     PlayerResource::new(resource, Arc::clone(src), &pools)
                         .expect("player resource fits the test pool budget"),
@@ -108,8 +108,8 @@ fn load_tracks(
             },
         );
     }
-    send(control, PlayerCmd::SetPaused(false));
-    processor.drain_commands();
+    send(control, DeckPart::Start);
+    render_block(processor, out_l, out_r);
 
     for (src, item_id) in &tracks {
         match processor.track_mut(*item_id) {
@@ -120,24 +120,17 @@ fn load_tracks(
     expected_sample
 }
 
-fn render_block(
-    processor: &mut PlayerNodeProcessor,
-    control: &SlotControl,
-    out_l: &mut [f32],
-    out_r: &mut [f32],
-) {
+/// Renders one block on a clock that stands still: every part `send` sends applies on the next
+/// block, whatever frame it starts on.
+fn render_block(processor: &mut PlayerNodeProcessor, out_l: &mut [f32], out_r: &mut [f32]) {
     let frames = out_l.len();
-    let is_playing = control.playback.playing.load(Ordering::SeqCst);
     let inputs: [&[f32]; 0] = [];
     let mut outputs = [out_l, out_r];
     let mut buffers = ProcBuffers {
         inputs: &inputs,
         outputs: &mut outputs,
     };
-
-    processor.drain_commands();
-    processor.cleanup_finished_tracks();
-    let _ = processor.render_audio(&mut buffers, frames, is_playing);
+    processor.render_block(SessionFrame::default(), &mut buffers, frames);
 }
 
 fn assert_all_tracks_contributed(
@@ -200,20 +193,26 @@ fn assert_each_walk_covers_the_block(recorded: &[ProbeEvent], block_frames: u32,
 
 fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4]) {
     let (mut processor, mut control) = processor(block_frames);
-    let expected_sample = load_tracks(&mut processor, &mut control, tracks, deadline_tracks);
+    let frames = usize::try_from(block_frames).expect("block frames fit usize");
+    let mut out_l = vec![0.0_f32; frames];
+    let mut out_r = vec![0.0_f32; frames];
+    let expected_sample = load_tracks(
+        &mut processor,
+        &mut control,
+        tracks,
+        deadline_tracks,
+        (&mut out_l, &mut out_r),
+    );
     assert_eq!(
         processor.track_count(),
         tracks,
         "deadline cell must load exactly {tracks} active track(s)"
     );
 
-    let frames = usize::try_from(block_frames).expect("block frames fit usize");
-    let mut out_l = vec![0.0_f32; frames];
-    let mut out_r = vec![0.0_f32; frames];
     let metrics_before = control.playback.metrics().snapshot();
 
     for _ in 0..consts::WARMUP_BLOCKS {
-        render_block(&mut processor, &control, &mut out_l, &mut out_r);
+        render_block(&mut processor, &mut out_l, &mut out_r);
     }
     assert!(
         peak(&out_l).max(peak(&out_r)) > 0.0,
@@ -225,7 +224,7 @@ fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4])
     for _ in 0..consts::MEASURED_BLOCKS / consts::CENSUS_BLOCKS {
         let trace = usdt::scope();
         for _ in 0..consts::CENSUS_BLOCKS {
-            render_block(&mut processor, &control, &mut out_l, &mut out_r);
+            render_block(&mut processor, &mut out_l, &mut out_r);
             assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
             assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
         }

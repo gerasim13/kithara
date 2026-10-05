@@ -1,9 +1,9 @@
-use std::{mem, num::NonZeroUsize};
+use std::{mem, num::NonZeroUsize, ops::Range};
 
 use kithara_platform::{thread, tokio::sync::oneshot};
 use kithara_test_utils::kithara;
 
-use super::{SendError, Sender, channel};
+use super::{SendError, Sender, Step, channel};
 use crate::{
     ChannelConfig, Inbox,
     protocol::{Batch, Protocol, Seq, Target, When},
@@ -147,6 +147,69 @@ fn the_next_moment_bounds_a_block_the_executor_sizes() {
     send(&mut sender, When::Next, batch(3, &[]));
     inbox.drain();
     assert_eq!(inbox.frames_until_due(Frame(4)), Some(0));
+}
+
+/// What an executor saw while it rendered one block through its inbox.
+#[derive(Debug, PartialEq, Eq)]
+enum Seen {
+    Run(Range<usize>),
+    Due(usize, u32),
+}
+
+fn render(inbox: &mut Inbox<Test>, start: u64, frames: usize) -> Vec<Seen> {
+    let mut seen = Vec::new();
+    inbox.run_block(Frame(start), frames, |step| match step {
+        Step::Run(range) => seen.push(Seen::Run(range)),
+        Step::Due(due) => {
+            seen.extend(
+                due.commands()
+                    .iter()
+                    .map(|&command| Seen::Due(due.offset(), command)),
+            );
+            due.apply(());
+        }
+    });
+    seen
+}
+
+#[kithara::test]
+fn a_block_renders_up_to_each_due_batch_and_applies_it_at_its_frame() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    send(&mut sender, When::At(Frame(140)), batch(1, &[]));
+    send(&mut sender, When::At(Frame(110)), batch(2, &[]));
+    send(&mut sender, When::Next, batch(3, &[]));
+
+    assert_eq!(
+        render(&mut inbox, 100, BLOCK),
+        [
+            Seen::Due(0, 3),
+            Seen::Run(0..10),
+            Seen::Due(10, 2),
+            Seen::Run(10..40),
+            Seen::Due(40, 1),
+            Seen::Run(40..BLOCK),
+        ]
+    );
+    assert_eq!(outcomes(&mut sender).len(), 3, "every due batch answered");
+}
+
+#[kithara::test]
+fn a_block_before_the_next_moment_renders_whole_and_leaves_it_waiting() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let end = Frame(u64::try_from(BLOCK).expect("the block fits the clock"));
+    send(&mut sender, When::At(end), batch(1, &[]));
+
+    assert_eq!(render(&mut inbox, 0, BLOCK), [Seen::Run(0..BLOCK)]);
+    assert!(outcomes(&mut sender).is_empty(), "the batch still waits");
+    assert_eq!(
+        render(&mut inbox, 0, 0),
+        [],
+        "an empty block renders nothing"
+    );
+    assert_eq!(
+        render(&mut inbox, end.0, BLOCK),
+        [Seen::Due(0, 1), Seen::Run(0..BLOCK)]
+    );
 }
 
 #[kithara::test]
@@ -303,6 +366,22 @@ fn the_executor_returns_resources_inside_the_batch() {
     let receipt = sender.receipts().next().expect("the receipt arrives");
     let (_, returned): Parts = receipt.into();
     assert_eq!(returned.commands, [99]);
+}
+
+#[kithara::test]
+fn the_executor_takes_commands_out_of_the_batch() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    send(&mut sender, When::Next, batch(7, &[]));
+    inbox.drain();
+
+    let mut due = inbox.next_due(Frame(0), BLOCK).expect("the batch is due");
+    let taken: Vec<_> = due.commands_mut().drain(..).collect();
+    due.apply(());
+
+    assert_eq!(taken, [7]);
+    let receipt = sender.receipts().next().expect("the receipt arrives");
+    let (_, returned): Parts = receipt.into();
+    assert!(returned.commands.is_empty());
 }
 
 #[kithara::test]

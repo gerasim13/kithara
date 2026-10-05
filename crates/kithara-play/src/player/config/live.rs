@@ -5,7 +5,7 @@ use kithara_warp::MIN_SPEED;
 use super::PlayerConfig;
 use crate::{
     api::{PlayerEvent, SlotId},
-    bridge::PlayerCmd,
+    bridge::DeckPart,
     error::PlayError,
 };
 
@@ -51,10 +51,10 @@ impl<S> PlayerConfig<S> {
     pub(crate) fn set_crossfade_duration(
         &self,
         seconds: f32,
-        send: impl FnOnce(PlayerCmd) -> Result<(), PlayError>,
+        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
     ) -> Result<(), PlayError> {
         let clamped = seconds.max(0.0);
-        match send(PlayerCmd::SetFadeDuration(clamped)) {
+        match send(DeckPart::SetFadeDuration(clamped)) {
             Ok(()) | Err(PlayError::NoActiveSlot) => {}
             Err(error) => return Err(error),
         }
@@ -87,10 +87,10 @@ impl<S> PlayerConfig<S> {
     pub(crate) fn set_prefetch_duration(
         &self,
         seconds: f32,
-        send: impl FnOnce(PlayerCmd) -> Result<(), PlayError>,
+        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
     ) -> Result<(), PlayError> {
         let clamped = seconds.max(0.0);
-        match send(PlayerCmd::SetPrefetchDuration(clamped)) {
+        match send(DeckPart::SetPrefetchDuration(clamped)) {
             Ok(()) | Err(PlayError::NoActiveSlot) => {}
             Err(error) => return Err(error),
         }

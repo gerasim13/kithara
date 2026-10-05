@@ -9,7 +9,7 @@ pub use eq::SharedEq;
 pub use metrics::{RtMetrics, RtMetricsSnapshot};
 pub use playback::{PlaybackShared, PlaybackSnapshot};
 pub use protocol::{
-    PlaybackFault, PlayerCmd, PlayerNotification, TrackPlaybackStopReason, TrackState,
+    DeckPart, DeckProtocol, PlaybackFault, PlayerNotification, TrackPlaybackStopReason, TrackState,
     TrackTransition,
 };
 

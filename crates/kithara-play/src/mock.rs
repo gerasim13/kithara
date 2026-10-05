@@ -6,7 +6,7 @@ use std::{
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
 #[cfg(test)]
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::Producer;
 
 pub use crate::api::equalizer::EqualizerMock;
 use crate::{
@@ -47,7 +47,7 @@ impl<S> SessionDispatcher<S> for SessionMock {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                 let (inputs, control) = slot_channels(SharedEq::new(10));
                 self.nodes.lock().push(inputs);
-                Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+                Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }
             Cmd::QuerySampleRate => {
                 Reply::SampleRate(SessionSampleRate::new(None, self.sample_rate.get()))
@@ -114,10 +114,16 @@ impl SessionMock {
 
     /// Everything the audio threads of the allocated slots were sent, in order.
     #[cfg(test)]
-    pub(crate) fn take_commands(&self) -> Vec<crate::bridge::PlayerCmd> {
+    pub(crate) fn take_commands(&self) -> Vec<crate::bridge::DeckPart> {
         let mut commands = Vec::new();
         for node in self.nodes.lock().iter_mut() {
-            commands.extend(node.cmd_rx.pop_iter());
+            node.deck
+                .run_block(kithara_signal::SessionFrame::default(), 1, |step| {
+                    if let kithara_command::Step::Due(mut due) = step {
+                        commands.append(due.commands_mut());
+                        due.apply(());
+                    }
+                });
         }
         commands
     }

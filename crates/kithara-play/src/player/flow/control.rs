@@ -10,7 +10,7 @@ use crate::{
         InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
         SlotId,
     },
-    bridge::PlayerCmd,
+    bridge::DeckPart,
     error::PlayError,
 };
 
@@ -170,7 +170,7 @@ impl<S> PlayerRuntime<S> {
             warn!(%error, rate, "rate refused");
             return;
         }
-        match self.send_to_slot(PlayerCmd::SetRate(target)) {
+        match self.send_to_slot(DeckPart::SetRate(target)) {
             Ok(()) | Err(PlayError::NoActiveSlot) => {}
             Err(error) => warn!(?error, rate = target, "rate not sent to the processor"),
         }

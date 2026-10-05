@@ -1,16 +1,16 @@
 use kithara_events::TrackId;
 use kithara_platform::sync::{Arc, atomic::Ordering};
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::Producer;
 use smallvec::SmallVec;
 
 use super::{
     TrackSlot,
-    processor::PlayerNodeProcessor,
+    processor::{Deck, PlayerNodeProcessor},
     track::{PlayerResource, PlayerTrack},
 };
-use crate::bridge::{PlayerCmd, PlayerNotification, TrackState, TrackTransition};
+use crate::bridge::{DeckPart, PlayerNotification, TrackState, TrackTransition};
 
-impl PlayerNodeProcessor {
+impl Deck {
     fn apply_fade_duration(&mut self, duration: f32) {
         self.crossfade.duration = duration;
     }
@@ -64,7 +64,7 @@ impl PlayerNodeProcessor {
     }
 
     fn clear_all_tracks(&mut self) {
-        let loaded: SmallVec<[TrackSlot; Self::MAX_TRACKS]> =
+        let loaded: SmallVec<[TrackSlot; PlayerNodeProcessor::MAX_TRACKS]> =
             self.tracks.iter().map(|(slot, _)| slot).collect();
         for slot in loaded {
             self.unload_slot(slot);
@@ -77,53 +77,53 @@ impl PlayerNodeProcessor {
         self.playback.duration.store(0.0);
     }
 
-    /// Drain all pending commands from the channel.
-    pub fn drain_commands(&mut self) {
-        while let Some(cmd) = self.cmd_rx.try_pop() {
-            match cmd {
-                PlayerCmd::LoadTrack { resource, item_id } => {
-                    self.load_track(resource, item_id);
+    /// Applies one part of a due batch.
+    pub(super) fn apply(&mut self, part: DeckPart) {
+        match part {
+            DeckPart::Attach { resource, item_id } => {
+                self.load_track(resource, item_id);
+            }
+            DeckPart::Detach { item_id } => {
+                if let Some(slot) = self.tracks.slot_of(item_id) {
+                    self.unload_slot(slot);
                 }
-                PlayerCmd::UnloadTrack { item_id } => {
-                    if let Some(slot) = self.tracks.slot_of(item_id) {
-                        self.unload_slot(slot);
-                    }
+            }
+            DeckPart::Withdraw { item_id } => {
+                if self
+                    .tracks
+                    .get(item_id)
+                    .is_some_and(|track| track.state() == TrackState::Preloading)
+                    && let Some(slot) = self.tracks.slot_of(item_id)
+                {
+                    self.unload_slot(slot);
                 }
-                PlayerCmd::CancelPreload { item_id } => {
-                    if self
-                        .tracks
-                        .get(item_id)
-                        .is_some_and(|track| track.state() == TrackState::Preloading)
-                        && let Some(slot) = self.tracks.slot_of(item_id)
-                    {
-                        self.unload_slot(slot);
-                    }
-                }
-                PlayerCmd::Clear => {
-                    self.clear_all_tracks();
-                }
-                PlayerCmd::Transition(transition) => {
-                    self.handle_transition(transition);
-                }
-                PlayerCmd::Seek {
-                    seconds,
-                    seek_epoch,
-                } => {
-                    self.apply_seek(seconds, seek_epoch);
-                }
-                PlayerCmd::SetPaused(paused) => {
-                    let playing = !paused;
-                    self.playback.playing.store(playing, Ordering::SeqCst);
-                }
-                PlayerCmd::SetFadeDuration(duration) => {
-                    self.apply_fade_duration(duration);
-                }
-                PlayerCmd::SetPrefetchDuration(duration) => {
-                    self.apply_prefetch_duration(duration);
-                }
-                PlayerCmd::SetRate(rate) => {
-                    self.apply_rate(rate);
-                }
+            }
+            DeckPart::Clear => {
+                self.clear_all_tracks();
+            }
+            DeckPart::Fade(transition) => {
+                self.handle_transition(transition);
+            }
+            DeckPart::Seek {
+                seconds,
+                seek_epoch,
+            } => {
+                self.apply_seek(seconds, seek_epoch);
+            }
+            DeckPart::Start => {
+                self.playback.playing.store(true, Ordering::SeqCst);
+            }
+            DeckPart::Stop => {
+                self.playback.playing.store(false, Ordering::SeqCst);
+            }
+            DeckPart::SetFadeDuration(duration) => {
+                self.apply_fade_duration(duration);
+            }
+            DeckPart::SetPrefetchDuration(duration) => {
+                self.apply_prefetch_duration(duration);
+            }
+            DeckPart::SetRate(rate) => {
+                self.apply_rate(rate);
             }
         }
     }

@@ -493,11 +493,11 @@ mod tests {
     use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::kithara;
     use kithara_warp::{Warp, WarpConfig};
-    use ringbuf::traits::{Consumer, Producer};
+    use ringbuf::traits::Consumer;
 
     use super::*;
     use crate::{
-        bridge::{PlayerCmd, PlayerNotification, SharedEq, TrackTransition, slot_channels},
+        bridge::{DeckPart, PlayerNotification, SharedEq, TrackTransition, slot_channels},
         consts,
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
         test_pools::{TestPools, pools},
@@ -749,30 +749,24 @@ mod tests {
         let first: Arc<str> = Arc::from("first");
         let first_id = TrackId::allocate();
         control
-            .cmd_tx
-            .try_push(PlayerCmd::LoadTrack {
+            .send(DeckPart::Attach {
                 resource: warped_player_resource(&pools, 1.0, &first, half.clone()),
                 item_id: first_id,
             })
             .expect("load first track");
         control
-            .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            .send(DeckPart::Fade(TrackTransition::FadeIn {
                 item_id: first_id,
                 settings: crate::CrossfadeSettings::default(),
                 epoch: 0,
             }))
             .expect("fade in first track");
-        control
-            .cmd_tx
-            .try_push(PlayerCmd::SetPaused(false))
-            .expect("start playback");
+        control.send(DeckPart::Start).expect("start playback");
         process_block(&mut processor, &mut extra);
         let _ = rate_notifications(&mut control);
 
         control
-            .cmd_tx
-            .try_push(PlayerCmd::SetRate(1.5))
+            .send(DeckPart::SetRate(1.5))
             .expect("set the slot rate");
         let first_position = processor
             .track(first_id)
@@ -799,15 +793,13 @@ mod tests {
         let next: Arc<str> = Arc::from("next");
         let next_id = TrackId::allocate();
         control
-            .cmd_tx
-            .try_push(PlayerCmd::LoadTrack {
+            .send(DeckPart::Attach {
                 resource: warped_player_resource(&pools, 1.0, &next, half),
                 item_id: next_id,
             })
             .expect("load next track");
         control
-            .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+            .send(DeckPart::Fade(TrackTransition::FadeIn {
                 item_id: next_id,
                 settings: crate::CrossfadeSettings::default(),
                 epoch: 0,

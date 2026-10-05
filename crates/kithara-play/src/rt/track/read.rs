@@ -155,7 +155,7 @@ impl PlayerTrack {
     /// Finalize the track at its natural end — unless the control thread has
     /// already published a seek this track has not been re-based onto yet.
     ///
-    /// The publish happens before the matching `PlayerCmd::Seek` is sent, so a
+    /// The publish happens before the matching `DeckPart::Seek` is sent, so a
     /// newer `published_seek_epoch` means the user left this position while the
     /// render block was in flight. Ending the track there would hand the queue a
     /// `ItemDidPlayToEnd` for a position nobody is at, and the queue would

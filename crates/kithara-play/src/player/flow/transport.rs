@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{CrossfadeSettings, PlayerStatus, SelectionPlayback, TrackId},
-    bridge::{PlayerCmd, TrackTransition},
+    bridge::{DeckPart, TrackTransition},
     error::PlayError,
 };
 
@@ -23,11 +23,11 @@ where
 {
     fn apply_playback(&self, playback: SelectionPlayback) {
         if playback == SelectionPlayback::Play {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+            let _ = self.send_to_slot(DeckPart::Start);
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+            let _ = self.send_to_slot(DeckPart::Stop);
             self.enter_paused();
         }
     }
@@ -59,7 +59,7 @@ where
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
-    /// in `PlayerResource`, and sends `LoadTrack` + `FadeIn` to the processor.
+    /// in `PlayerResource`, and sends `Attach` + `FadeIn` to the processor.
     ///
     /// `false` means the slot held no resource, so nothing reached the
     /// processor and the item is not current.
@@ -85,7 +85,7 @@ where
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+        let _ = self.send_to_slot(DeckPart::Stop);
         self.enter_paused();
         debug!(phase = ?self.phase_kind(), "pause");
     }
@@ -107,14 +107,14 @@ where
             return;
         }
 
-        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
-        let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        let _ = self.send_to_slot(PlayerCmd::SetRate(rate));
+        let _ = self.send_to_slot(DeckPart::SetFadeDuration(self.crossfade_duration()));
+        let _ = self.send_to_slot(DeckPart::SetPrefetchDuration(self.prefetch_duration()));
+        let _ = self.send_to_slot(DeckPart::SetRate(rate));
         let loaded = self.load_current_item().unwrap_or_else(|error| {
             warn!(%error, "failed to allocate track playback buffers");
             false
         });
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+        let _ = self.send_to_slot(DeckPart::Start);
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
@@ -173,7 +173,7 @@ where
 
         self.core.engine.begin_slot_seek(slot_id, target);
 
-        if let Err(err) = self.send_to_slot(PlayerCmd::Seek {
+        if let Err(err) = self.send_to_slot(DeckPart::Seek {
             seek_epoch,
             seconds: target_secs,
         }) {
@@ -248,8 +248,8 @@ where
         self.ensure_engine_started()?;
         self.ensure_slot()?;
 
-        let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        let _ = self.send_to_slot(PlayerCmd::SetRate(self.core.lanes.next().speed()));
+        let _ = self.send_to_slot(DeckPart::SetPrefetchDuration(self.prefetch_duration()));
+        let _ = self.send_to_slot(DeckPart::SetRate(self.core.lanes.next().speed()));
 
         if armed_for_index {
             self.commit_next(index)?;
@@ -291,7 +291,7 @@ where
             return;
         };
         let led = playback.lead(duration_seconds, |epoch| {
-            self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
+            self.send_to_slot(DeckPart::Fade(TrackTransition::FadeIn {
                 item_id,
                 settings,
                 epoch,

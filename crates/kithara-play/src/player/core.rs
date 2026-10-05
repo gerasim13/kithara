@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
-    bridge::PlayerCmd,
+    bridge::DeckPart,
     engine::EngineImpl,
     error::PlayError,
     resource::Resource,
@@ -75,7 +75,7 @@ pub(crate) struct PlayerCore<S> {
 /// When `play()` is called, the engine is lazily started and a slot is
 /// allocated. The current queue item is taken out of the queue, wrapped in
 /// [`PlayerResource`](crate::rt::track::PlayerResource), and sent
-/// to the processor via `PlayerCmd::LoadTrack`.
+/// to the processor via `DeckPart::Attach`.
 ///
 /// Internally the player is a phase-split typestate: `phase` is a typed
 /// `Mutex<PlayerPhase>` carrying the slot / ABR handle / armed-next, while
@@ -142,7 +142,7 @@ impl<S> PlayerRuntime<S> {
         }
         let src = Arc::clone(item.player_resource.src());
         let loaded = self
-            .send_to_slot(PlayerCmd::LoadTrack {
+            .send_to_slot(DeckPart::Attach {
                 item_id: item.item_id,
                 resource: Box::new(item.player_resource),
             })
@@ -184,7 +184,7 @@ impl<S> PlayerRuntime<S> {
         self.set_status(PlayerStatus::Unknown);
         *self.core.start_position.lock() = None;
         let slot = self.slot();
-        let _ = self.send_to_slot(PlayerCmd::Clear);
+        let _ = self.send_to_slot(DeckPart::Clear);
 
         if self.core.engine.is_running() {
             if let Some(slot) = slot
@@ -316,7 +316,7 @@ mod tests {
     use super::{super::PlayerImpl, *};
     use crate::{
         PlayWorker, PlayWorkerConfig,
-        bridge::PlayerCmd,
+        bridge::DeckPart,
         mock,
         player::{PlayerConfig, PlayerConfigPatch},
         resource::{ResourceConfig, ResourceSrc},
@@ -712,6 +712,6 @@ mod tests {
     #[kithara::test]
     fn send_to_slot_without_a_slot_is_an_error() {
         let player = player();
-        assert!(player.send_to_slot(PlayerCmd::SetPaused(true)).is_err());
+        assert!(player.send_to_slot(DeckPart::Stop).is_err());
     }
 }

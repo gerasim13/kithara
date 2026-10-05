@@ -16,7 +16,7 @@ mod live;
 mod protocol;
 mod receipt;
 
-pub use channel::{Due, Inbox, SendError, Sender, channel};
+pub use channel::{Due, Inbox, SendError, Sender, Step, channel};
 pub use config::ChannelConfig;
 pub use live::{Live, LiveError, SettledChange};
 pub use protocol::{Batch, Protocol, Seq, Target, When};

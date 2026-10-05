@@ -6,6 +6,6 @@ mod sender;
 mod tests;
 
 pub use self::{
-    inbox::{Due, Inbox},
+    inbox::{Due, Inbox, Step},
     sender::{SendError, Sender, channel},
 };

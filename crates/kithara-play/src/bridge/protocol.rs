@@ -1,33 +1,56 @@
-use std::fmt;
+use std::{convert::Infallible, fmt};
 
 use kithara_audio::DecodeErrorKind;
+use kithara_command::Protocol;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
+use kithara_signal::SessionFrame;
 
 use crate::rt::track::PlayerResource;
 
-/// Commands sent from the main thread to the processor.
-pub enum PlayerCmd {
-    /// Load a track into the processor arena.
-    LoadTrack {
+/// Types a deck's audio thread speaks: its parts, its clock and its answers.
+///
+/// Batches name no target and the deck refuses none, so every batch due
+/// inside a block applies.
+#[derive(Debug)]
+pub enum DeckProtocol {}
+
+impl Protocol for DeckProtocol {
+    type Applied = ();
+    type Clock = SessionFrame;
+    type Command = DeckPart;
+    type Refusal = Infallible;
+    type Target = Infallible;
+
+    fn frames_since(at: SessionFrame, start: SessionFrame) -> Option<u64> {
+        at.frames_since(start)
+    }
+}
+
+/// One change a deck applies on its audio thread.
+pub enum DeckPart {
+    /// Put a track into the deck.
+    Attach {
         resource: Box<PlayerResource>,
         item_id: TrackId,
     },
-    /// Unload a track by its queue-item identity.
-    UnloadTrack { item_id: TrackId },
-    /// Unload a track only while it is still preloading. The audio thread may
+    /// Take a track out of the deck by its queue-item identity.
+    Detach { item_id: TrackId },
+    /// Take a track out only while it is still preloading. The audio thread may
     /// have stitched it in at the end of the leading track before reading
     /// this; a promoted track keeps playing.
-    CancelPreload { item_id: TrackId },
-    /// Unload every track from the arena and reset the position/duration
+    Withdraw { item_id: TrackId },
+    /// Take every track out of the deck and reset the position/duration
     /// snapshot to zero. Sent when the queue is explicitly cleared.
     Clear,
-    /// Add a track transition (fade in / fade out).
-    Transition(TrackTransition),
+    /// Start a track's fade in or out.
+    Fade(TrackTransition),
     /// Seek active tracks to the given position in seconds.
     Seek { seconds: f64, seek_epoch: u64 },
-    /// Set the paused state.
-    SetPaused(bool),
+    /// Let the deck's output sound from this frame on.
+    Start,
+    /// Fade the deck's output to silence from this frame on.
+    Stop,
     /// Update the fade duration.
     SetFadeDuration(f32),
     /// Update the prefetch lead time.
@@ -36,24 +59,21 @@ pub enum PlayerCmd {
     SetRate(f32),
 }
 
-impl fmt::Debug for PlayerCmd {
+impl fmt::Debug for DeckPart {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LoadTrack { item_id, resource } => f
-                .debug_struct("LoadTrack")
+            Self::Attach { item_id, resource } => f
+                .debug_struct("Attach")
                 .field("item_id", item_id)
                 .field("src", resource.src())
                 .finish_non_exhaustive(),
-            Self::UnloadTrack { item_id } => f
-                .debug_struct("UnloadTrack")
-                .field("item_id", item_id)
-                .finish(),
-            Self::CancelPreload { item_id } => f
-                .debug_struct("CancelPreload")
+            Self::Detach { item_id } => f.debug_struct("Detach").field("item_id", item_id).finish(),
+            Self::Withdraw { item_id } => f
+                .debug_struct("Withdraw")
                 .field("item_id", item_id)
                 .finish(),
             Self::Clear => f.write_str("Clear"),
-            Self::Transition(t) => f.debug_tuple("Transition").field(t).finish(),
+            Self::Fade(t) => f.debug_tuple("Fade").field(t).finish(),
             Self::Seek {
                 seconds,
                 seek_epoch,
@@ -62,7 +82,8 @@ impl fmt::Debug for PlayerCmd {
                 .field("seconds", seconds)
                 .field("seek_epoch", seek_epoch)
                 .finish(),
-            Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
+            Self::Start => f.write_str("Start"),
+            Self::Stop => f.write_str("Stop"),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
             Self::SetRate(rate) => f.debug_tuple("SetRate").field(rate).finish(),

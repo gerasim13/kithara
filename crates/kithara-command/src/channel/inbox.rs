@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, ops::Range};
 
 use ringbuf::{
     HeapCons, HeapProd,
@@ -52,13 +52,22 @@ pub struct Due<'inbox, P: Protocol> {
     /// Targets the batch shifts, as judged.
     #[field(get)]
     basis: Vec<(P::Target, Option<Seq>)>,
-    /// Commands to apply; the executor swaps the resources it releases into
-    /// them.
-    #[field(get, get_mut)]
+    /// Commands to apply. The executor moves the resources it takes out of
+    /// them, or swaps the ones it releases into them; the receipt returns
+    /// what is left, with the vector's allocation, to the sender.
+    #[field(get, get_mut(deref = false))]
     commands: Vec<P::Command>,
     /// Frames from the block start to the batch's moment.
     #[field(get)]
     offset: usize,
+}
+
+/// One stretch of a block an executor renders through [`Inbox::run_block`].
+pub enum Step<'inbox, P: Protocol> {
+    /// Frames of the block, from its start, that no due batch splits.
+    Run(Range<usize>),
+    /// A batch due at the frame the stretches before it ended on.
+    Due(Due<'inbox, P>),
 }
 
 /// Where a moment falls against a block it does not come after.
@@ -152,6 +161,32 @@ impl<P: Protocol> Inbox<P> {
                 outcome: Outcome::Rejected(rejection),
                 batch: sent.batch,
             });
+        }
+    }
+
+    /// Walks the block of `frames` frames starting at `start` in frame order,
+    /// for an executor that renders between batches: each batch due inside
+    /// the block comes to `step` at the frame it applies on, after the
+    /// stretch of frames before it and before the stretch after it. Batches
+    /// that come late or stale are answered on the way, as by
+    /// [`Inbox::next_due`].
+    pub fn run_block<F>(&mut self, start: P::Clock, frames: usize, mut step: F)
+    where
+        F: FnMut(Step<'_, P>),
+    {
+        self.drain();
+        let mut reached = 0;
+        while reached < frames {
+            let until = self
+                .frames_until_due(start)
+                .and_then(|due| usize::try_from(due).ok())
+                .map_or(frames, |due| due.min(frames));
+            if until > reached {
+                step(Step::Run(reached..until));
+                reached = until;
+            } else if let Some(due) = self.next_due(start, frames) {
+                step(Step::Due(due));
+            }
         }
     }
 

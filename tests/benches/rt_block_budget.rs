@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
+use std::{hint::black_box, num::NonZeroU32};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
@@ -12,14 +12,13 @@ use kithara::{
     },
     play::{
         Resource, SharedEq,
-        bridge::{PlayerCmd, SlotControl, slot_channels},
+        bridge::{DeckPart, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
-    signal::AudioSpec,
+    signal::{AudioSpec, SessionFrame},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, pools};
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
-use ringbuf::traits::Producer;
 
 mod consts {
     pub(super) const BLOCK_FRAMES: u32 = 128;
@@ -71,9 +70,9 @@ fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
     )
 }
 
-fn send(control: &mut SlotControl, cmd: PlayerCmd) {
-    if control.cmd_tx.try_push(cmd).is_err() {
-        panic!("bench command ring full");
+fn send(control: &mut SlotControl, part: DeckPart) {
+    if control.send(part).is_err() {
+        panic!("bench deck channel full");
     }
 }
 
@@ -99,7 +98,7 @@ fn load_tracks(
         );
         send(
             control,
-            PlayerCmd::LoadTrack {
+            DeckPart::Attach {
                 resource: Box::new(
                     PlayerResource::new(resource, Arc::clone(src), pools)
                         .expect("bench player resource fits the pool budget"),
@@ -108,8 +107,9 @@ fn load_tracks(
             },
         );
     }
-    send(control, PlayerCmd::SetPaused(false));
-    processor.drain_commands();
+    send(control, DeckPart::Start);
+    let frames = block_frames();
+    render_block(processor, &mut vec![0.0; frames], &mut vec![0.0; frames]);
 
     for (item_id, src) in &tracks {
         match processor.track_mut(*item_id) {
@@ -119,14 +119,13 @@ fn load_tracks(
     }
 }
 
+/// Renders one block on a clock that stands still: every part sent applies at its start.
 fn render_block(
     processor: &mut PlayerNodeProcessor,
-    control: &SlotControl,
     out_l: &mut [f32],
     out_r: &mut [f32],
 ) -> Duration {
     let frames = out_l.len();
-    let is_playing = control.playback.playing.load(Ordering::SeqCst);
     let inputs: [&[f32]; 0] = [];
     let mut outputs = [out_l, out_r];
     let mut buffers = ProcBuffers {
@@ -135,9 +134,7 @@ fn render_block(
     };
 
     let start = Instant::now();
-    processor.drain_commands();
-    processor.cleanup_finished_tracks();
-    let outcome = processor.render_audio(&mut buffers, frames, is_playing);
+    let outcome = processor.render_block(SessionFrame::default(), &mut buffers, frames);
     let elapsed = start.elapsed();
 
     black_box(outcome);
@@ -157,19 +154,14 @@ fn measure(tracks: usize) -> Measurement {
     let mut out_r = vec![0.0_f32; frames];
 
     for _ in 0..consts::WARMUP_BLOCKS {
-        render_block(&mut processor, &control, &mut out_l, &mut out_r);
+        render_block(&mut processor, &mut out_l, &mut out_r);
     }
 
     let before = control.playback.metrics().snapshot();
     let mut durations = Vec::with_capacity(consts::MEASURED_BLOCKS);
     let mut peak = 0.0_f32;
     for _ in 0..consts::MEASURED_BLOCKS {
-        durations.push(render_block(
-            &mut processor,
-            &control,
-            &mut out_l,
-            &mut out_r,
-        ));
+        durations.push(render_block(&mut processor, &mut out_l, &mut out_r));
         peak = peak.max(peak_of(&out_l));
         black_box(&out_l);
     }

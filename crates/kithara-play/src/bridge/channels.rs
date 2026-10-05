@@ -1,4 +1,7 @@
+use std::num::NonZeroUsize;
+
 use kithara_audio::SeekBegin;
+use kithara_command::{Batch, ChannelConfig, Inbox, SendError, Sender, Seq, When, channel};
 use kithara_events::TrackId;
 use kithara_output::LiveOutput;
 use kithara_platform::{
@@ -18,7 +21,7 @@ use smallvec::SmallVec;
 
 use super::PlaybackShared;
 use crate::{
-    bridge::{PlayerCmd, PlayerNotification, SharedEq},
+    bridge::{DeckPart, DeckProtocol, PlayerNotification, SharedEq},
     consts,
     rt::track::PlayerTrack,
 };
@@ -27,7 +30,7 @@ use crate::{
 #[non_exhaustive]
 pub struct NodeInputs {
     pub(crate) playback: Arc<PlaybackShared>,
-    pub(crate) cmd_rx: HeapCons<PlayerCmd>,
+    pub(crate) deck: Inbox<DeckProtocol>,
     pub(crate) notif_tx: HeapProd<PlayerNotification>,
     pub(crate) trash_tx: HeapProd<PlayerTrack>,
 }
@@ -83,7 +86,7 @@ pub struct SlotControl {
     pub playback: Arc<PlaybackShared>,
     pub notif_rx: HeapCons<PlayerNotification>,
     pub trash_rx: HeapCons<PlayerTrack>,
-    pub cmd_tx: HeapProd<PlayerCmd>,
+    pub deck: Sender<DeckProtocol>,
     pub eq: SharedEq,
     render: RenderBindings,
     seek: SeekBindings,
@@ -116,6 +119,25 @@ impl SlotControl {
         self.seek.0.push((item_id, handle));
     }
 
+    /// Sends `part` to apply at the start of the deck's next block.
+    ///
+    /// The receipts that came back since the last send are dropped first: they return the
+    /// credits, and every batch for the next block applies.
+    ///
+    /// # Errors
+    ///
+    /// Returns the batch whole when the deck's capacity of batches is in flight.
+    pub fn send(&mut self, part: DeckPart) -> Result<Seq, SendError<DeckProtocol>> {
+        self.deck.receipts().for_each(drop);
+        self.deck.send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![part],
+            },
+        )
+    }
+
     pub(crate) fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {
         self.render
             .0
@@ -146,17 +168,21 @@ impl SlotControl {
 
 #[must_use]
 pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
-    const COMMAND_CAPACITY: usize = 32;
+    const DECK_CAPACITY: NonZeroUsize = match NonZeroUsize::new(32) {
+        Some(capacity) => capacity,
+        None => unreachable!(),
+    };
     const NOTIFICATION_CAPACITY: usize = 32;
     const TRASH_CAPACITY: usize = 64;
 
-    let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(COMMAND_CAPACITY).split();
+    let (sender, inbox) =
+        channel::<DeckProtocol>(ChannelConfig::builder().capacity(DECK_CAPACITY).build());
     let (notif_tx, notif_rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_CAPACITY).split();
     let (trash_tx, trash_rx) = HeapRb::<PlayerTrack>::new(TRASH_CAPACITY).split();
     let playback = Arc::new(PlaybackShared::default());
 
     let inputs = NodeInputs {
-        cmd_rx,
+        deck: inbox,
         notif_tx,
         trash_tx,
         playback: Arc::clone(&playback),
@@ -165,7 +191,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         playback,
         notif_rx,
         trash_rx,
-        cmd_tx,
+        deck: sender,
         eq,
         seek: SeekBindings::default(),
         render: RenderBindings::default(),

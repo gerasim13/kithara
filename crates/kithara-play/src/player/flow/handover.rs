@@ -11,7 +11,7 @@ use super::super::{
 };
 use crate::{
     api::{EngineEvent, SlotId, TrackId},
-    bridge::{PlayerCmd, PlayerNotification, TrackPlaybackStopReason},
+    bridge::{DeckPart, PlayerNotification, TrackPlaybackStopReason},
     error::PlayError,
 };
 
@@ -219,10 +219,8 @@ where
     fn unload_pending(&self, pending: &PendingNext) {
         let item_id = pending.item_id;
         if pending.state.activated() {
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
-        } else if self
-            .send_to_slot(PlayerCmd::CancelPreload { item_id })
-            .is_err()
+            let _ = self.send_to_slot(DeckPart::Detach { item_id });
+        } else if self.send_to_slot(DeckPart::Withdraw { item_id }).is_err()
             && let Some(loads) = self.phase.lock().pending_loads_mut()
         {
             loads.cancel_refused(item_id);
@@ -472,7 +470,7 @@ mod tests {
             .expect("the slot must carry playback state");
         playback.position.store(62.3);
         playback.duration.store(64.295);
-        while player.send_to_slot(PlayerCmd::SetPaused(false)).is_ok() {}
+        while player.send_to_slot(DeckPart::Start).is_ok() {}
 
         player.commit_next(1).expect("commit_next must succeed");
 
@@ -524,11 +522,11 @@ mod tests {
         (player, audio_thread, ids)
     }
 
-    fn unloaded(commands: &[PlayerCmd]) -> Vec<TrackId> {
+    fn unloaded(commands: &[DeckPart]) -> Vec<TrackId> {
         commands
             .iter()
             .filter_map(|command| match command {
-                PlayerCmd::UnloadTrack { item_id } => Some(*item_id),
+                DeckPart::Detach { item_id } => Some(*item_id),
                 _ => None,
             })
             .collect()
@@ -555,7 +553,7 @@ mod tests {
     fn select_third_with_its_load_refused(player: &PlayerImpl<TestPools>) {
         for _ in 0..30 {
             player
-                .send_to_slot(PlayerCmd::SetPaused(true))
+                .send_to_slot(DeckPart::Stop)
                 .expect("fixture leaves room for the setting and the withdrawal");
         }
         let _ = player.select_item(2, SelectionPlayback::Play);
@@ -580,7 +578,7 @@ mod tests {
         let commands = audio_thread.take_commands();
         assert_eq!(unloaded(&commands), []);
         assert!(commands.iter().any(
-            |command| matches!(command, PlayerCmd::CancelPreload { item_id } if *item_id == ids[1])
+            |command| matches!(command, DeckPart::Withdraw { item_id } if *item_id == ids[1])
         ));
 
         stitch_second_in(&audio_thread, ids);
@@ -606,7 +604,7 @@ mod tests {
         assert!(
             !commands
                 .iter()
-                .any(|command| matches!(command, PlayerCmd::LoadTrack { .. })),
+                .any(|command| matches!(command, DeckPart::Attach { .. })),
             "the ring refused the selection's load"
         );
 
@@ -665,13 +663,13 @@ mod tests {
     #[kithara::test]
     fn a_successor_whose_cancel_the_ring_refused_is_reported_when_stitched_in_later() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
-        while player.send_to_slot(PlayerCmd::SetPaused(true)).is_ok() {}
+        while player.send_to_slot(DeckPart::Stop).is_ok() {}
         player.unarm_next();
         assert!(
             !audio_thread
                 .take_commands()
                 .iter()
-                .any(|command| matches!(command, PlayerCmd::CancelPreload { .. })),
+                .any(|command| matches!(command, DeckPart::Withdraw { .. })),
             "the ring refused the cancel"
         );
 
@@ -711,7 +709,7 @@ mod tests {
     #[kithara::test]
     fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
-        while player.send_to_slot(PlayerCmd::SetPaused(true)).is_ok() {}
+        while player.send_to_slot(DeckPart::Stop).is_ok() {}
         player.unarm_next();
         audio_thread.take_commands();
         player.arm_next(2).expect("re-arm accepted");

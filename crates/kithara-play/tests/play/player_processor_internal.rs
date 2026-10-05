@@ -18,12 +18,13 @@ use kithara_platform::{
 };
 use kithara_play::{
     PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
-    bridge::{PlayerCmd, SlotControl, slot_channels},
+    bridge::{DeckPart, SlotControl, slot_channels},
     rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
+use kithara_signal::SessionFrame;
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::{bufpool::pools, kithara};
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::Consumer;
 
 use crate::support::{AUDIO_SPEC, SAMPLE_RATE};
 
@@ -52,6 +53,26 @@ fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
         kithara_play::DEFAULT_GATE_SMOOTHING,
     );
     (processor, control)
+}
+
+/// Renders one block of `frames` on a clock that stands still, so every part sent so far
+/// applies at its start. Returns whether a track was read and both channels.
+fn render(processor: &mut PlayerNodeProcessor, frames: usize) -> (bool, Vec<f32>, Vec<f32>) {
+    let mut out_l = vec![99.0f32; frames];
+    let mut out_r = vec![99.0f32; frames];
+    let inputs: [&[f32]; 0] = [];
+    let mut outputs = [&mut out_l[..], &mut out_r[..]];
+    let mut buffers = ProcBuffers {
+        inputs: &inputs,
+        outputs: &mut outputs,
+    };
+    let rendered = processor.render_block(SessionFrame::default(), &mut buffers, frames);
+    (rendered, out_l, out_r)
+}
+
+/// Applies every part sent so far through one block of the deck.
+fn block(processor: &mut PlayerNodeProcessor) {
+    render(processor, MAX_BLOCK_FRAMES as usize);
 }
 
 fn create_mock_player_resource(constant_half: &'static [u8], src: &str) -> Box<PlayerResource> {
@@ -111,13 +132,12 @@ async fn load_track_propagates_host_sample_rate() {
     );
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: player_resource,
             item_id: TrackId::allocate(),
         })
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     assert_eq!(recorded.load(AtomicOrdering::Relaxed), host_rate);
 }
@@ -132,25 +152,31 @@ fn processor_renders_silence_when_no_tracks() {
 fn processor_seek_without_tracks_does_not_panic() {
     let (mut processor, mut control) = make_processor();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Seek {
+        .send(DeckPart::Seek {
             seconds: 30.0,
             seek_epoch: 1,
         })
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 }
 
-#[kithara::test]
-fn processor_set_paused_updates_playback() {
+/// An empty deck stops itself on its next block, so the deck holds a track.
+#[kithara::test(tokio)]
+async fn start_and_stop_switch_a_loaded_deck() {
     let (mut processor, mut control) = make_processor();
+    control
+        .send(DeckPart::Attach {
+            resource: create_duration_player_resource("track.mp3", Duration::from_secs(60)),
+            item_id: TrackId::allocate(),
+        })
+        .ok();
 
-    control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    block(&mut processor);
     assert!(processor.playback().playing.load(AtomicOrdering::SeqCst));
 
-    control.cmd_tx.try_push(PlayerCmd::SetPaused(true)).ok();
-    processor.drain_commands();
+    control.send(DeckPart::Stop).ok();
+    block(&mut processor);
     assert!(!processor.playback().playing.load(AtomicOrdering::SeqCst));
 }
 
@@ -160,21 +186,19 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     let item_id = TrackId::allocate();
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_duration_player_resource("track.mp3", Duration::from_secs(60)),
             item_id,
         })
         .ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+        .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id,
             settings: kithara_play::CrossfadeSettings::default(),
             epoch: 0,
         }))
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
     assert_eq!(processor.track_count(), 1);
 
     processor
@@ -183,8 +207,8 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
         .store(true, AtomicOrdering::SeqCst);
     assert_eq!(processor.playback().snapshot().duration(), 60.0);
 
-    control.cmd_tx.try_push(PlayerCmd::Clear).ok();
-    processor.drain_commands();
+    control.send(DeckPart::Clear).ok();
+    block(&mut processor);
 
     assert_eq!(
         processor.track_count(),
@@ -205,32 +229,29 @@ async fn fade_in_switches_public_snapshot_without_render() {
     let second_id = TrackId::allocate();
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
             item_id: first_id,
         })
         .ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+        .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id: first_id,
             settings: kithara_play::CrossfadeSettings::default(),
             epoch: 0,
         }))
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     assert_eq!(processor.playback().snapshot().duration(), 64.0);
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
             item_id: second_id,
         })
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     assert_eq!(
         processor.playback().snapshot().duration(),
@@ -239,14 +260,13 @@ async fn fade_in_switches_public_snapshot_without_render() {
     );
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+        .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id: second_id,
             settings: kithara_play::CrossfadeSettings::default(),
             epoch: 0,
         }))
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     assert_eq!(processor.playback().snapshot().position(), 0.0);
     assert_eq!(processor.playback().snapshot().duration(), 162.0);
@@ -259,27 +279,22 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
 
     let (mut processor, mut control) = make_processor();
     let item_id = TrackId::allocate();
+    control.send(DeckPart::Attach { resource, item_id }).ok();
+    block(&mut processor);
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack { resource, item_id })
-        .ok();
-    processor.drain_commands();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+        .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id,
             settings: kithara_play::CrossfadeSettings::default(),
             epoch: 0,
         }))
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     let playback = processor.playback().clone();
     let first = playback.next_seek_epoch();
     playback.seek_epoch.store(first, AtomicOrdering::SeqCst);
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Seek {
+        .send(DeckPart::Seek {
             seconds: 10.0,
             seek_epoch: first,
         })
@@ -287,8 +302,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
     let second = playback.next_seek_epoch();
     playback.seek_epoch.store(second, AtomicOrdering::SeqCst);
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Seek {
+        .send(DeckPart::Seek {
             seconds: 20.0,
             seek_epoch: second,
         })
@@ -296,14 +310,13 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
     let third = playback.next_seek_epoch();
     playback.seek_epoch.store(third, AtomicOrdering::SeqCst);
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Seek {
+        .send(DeckPart::Seek {
             seconds: 30.0,
             seek_epoch: third,
         })
         .ok();
 
-    processor.drain_commands();
+    block(&mut processor);
 
     // Only the current epoch re-bases the track: the two superseded commands are dropped, so the
     // media clock lands on the last target rather than replaying every one of them.
@@ -336,8 +349,7 @@ async fn processor_track_command_scenarios(
     let item_id = TrackId::allocate();
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "track1.mp3"),
             item_id,
         })
@@ -347,22 +359,18 @@ async fn processor_track_command_scenarios(
         TrackCommandScenario::LoadOnly => {}
         TrackCommandScenario::DuplicateLoad => {
             control
-                .cmd_tx
-                .try_push(PlayerCmd::LoadTrack {
+                .send(DeckPart::Attach {
                     resource: create_mock_player_resource(constant_half, "track1.mp3"),
                     item_id,
                 })
                 .ok();
         }
         TrackCommandScenario::LoadThenUnload => {
-            control
-                .cmd_tx
-                .try_push(PlayerCmd::UnloadTrack { item_id })
-                .ok();
+            control.send(DeckPart::Detach { item_id }).ok();
         }
     }
 
-    processor.drain_commands();
+    block(&mut processor);
 
     assert_eq!(processor.track_count(), expected_tracks);
     assert_eq!(processor.track(item_id).is_some(), should_contain_track);
@@ -388,13 +396,12 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
     let item_id = TrackId::allocate();
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "track1.mp3"),
             item_id,
         })
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     if let Some(track) = processor.track_mut(item_id) {
         track.seek(12.0);
@@ -404,14 +411,13 @@ async fn processor_fade_in_restarts_track_from_zero(constant_half: &'static [u8]
     }
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
+        .send(DeckPart::Fade(TrackTransition::FadeIn {
             item_id,
             settings: kithara_play::CrossfadeSettings::default(),
             epoch: 0,
         }))
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     if let Some(track) = processor.track(item_id) {
         assert!(track.position() <= 0.001);
@@ -426,17 +432,14 @@ async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
 
     let resource = create_mock_player_resource(constant_half, "track1.mp3");
     let item_id = TrackId::allocate();
-    control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack { resource, item_id })
-        .ok();
-    processor.drain_commands();
+    control.send(DeckPart::Attach { resource, item_id }).ok();
+    block(&mut processor);
 
     if let Some(track) = processor.track_mut(item_id) {
         track.stop();
     }
 
-    processor.cleanup_finished_tracks();
+    block(&mut processor);
     assert_eq!(processor.track_count(), 0);
 }
 
@@ -448,20 +451,19 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
     let frames = 1024usize;
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
         .ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "long.mp3"),
             item_id: long_id,
         })
         .ok();
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    block(&mut processor);
 
     processor
         .track_mut(short_id)
@@ -472,15 +474,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
         .expect("BUG: long track must be loaded")
         .play();
 
-    let mut out_l = vec![99.0f32; frames];
-    let mut out_r = vec![99.0f32; frames];
-    let inputs: [&[f32]; 0] = [];
-    let mut outputs = [&mut out_l[..], &mut out_r[..]];
-    let mut buffers = ProcBuffers {
-        inputs: &inputs,
-        outputs: &mut outputs,
-    };
-    let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
+    let (rendered, out_l, out_r) = render(&mut processor, frames);
 
     assert!(rendered);
     assert!(
@@ -505,35 +499,26 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
     let frames = 1024usize;
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
         .ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "preload.mp3"),
             item_id: preload_id,
         })
         .ok();
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    block(&mut processor);
 
     processor
         .track_mut(short_id)
         .expect("BUG: short track must be loaded")
         .play();
 
-    let mut out_l = vec![99.0f32; frames];
-    let mut out_r = vec![99.0f32; frames];
-    let inputs: [&[f32]; 0] = [];
-    let mut outputs = [&mut out_l[..], &mut out_r[..]];
-    let mut buffers = ProcBuffers {
-        inputs: &inputs,
-        outputs: &mut outputs,
-    };
-    let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
+    let (rendered, out_l, out_r) = render(&mut processor, frames);
 
     assert!(rendered);
     assert!(
@@ -574,28 +559,20 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
         ("preload.mp3", 60.0, preload_id),
     ] {
         control
-            .cmd_tx
-            .try_push(PlayerCmd::LoadTrack {
+            .send(DeckPart::Attach {
                 resource: create_mock_player_resource_with_duration(constant_half, src, secs),
                 item_id,
             })
             .ok();
     }
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    block(&mut processor);
     processor
         .track_mut(leading_id)
         .expect("BUG: leading track must be loaded")
         .play();
 
-    let mut out_l = vec![99.0f32; frames];
-    let mut out_r = vec![99.0f32; frames];
-    let inputs: [&[f32]; 0] = [];
-    let mut outputs = [&mut out_l[..], &mut out_r[..]];
-    let mut buffers = ProcBuffers {
-        inputs: &inputs,
-        outputs: &mut outputs,
-    };
-    let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
+    let (rendered, out_l, out_r) = render(&mut processor, frames);
 
     assert!(rendered);
     assert!(
@@ -628,8 +605,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
     let frames = 1024usize;
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource_with_duration(
                 constant_half,
                 "leading.mp3",
@@ -639,36 +615,27 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         })
         .ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "successor.mp3"),
             item_id: successor_id,
         })
         .ok();
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    block(&mut processor);
     processor
         .track_mut(leading_id)
         .expect("BUG: leading track must be loaded")
         .play();
 
-    let mut out_l = vec![0.0f32; frames];
-    let mut out_r = vec![0.0f32; frames];
-    let inputs: [&[f32]; 0] = [];
-    let mut outputs = [&mut out_l[..], &mut out_r[..]];
-    let mut buffers = ProcBuffers {
-        inputs: &inputs,
-        outputs: &mut outputs,
-    };
-    let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
+    let (rendered, ..) = render(&mut processor, frames);
     assert!(rendered, "the leading track renders");
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::CancelPreload {
+        .send(DeckPart::Withdraw {
             item_id: successor_id,
         })
         .ok();
-    processor.drain_commands();
+    block(&mut processor);
 
     assert_eq!(
         processor.track(successor_id).map(|track| track.state()),
@@ -685,27 +652,25 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
     let frames = 1024usize;
 
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
             item_id: short_id,
         })
         .ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "fading.mp3"),
             item_id: fading_id,
         })
         .ok();
     control
-        .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
+        .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "preload.mp3"),
             item_id: preload_id,
         })
         .ok();
-    processor.drain_commands();
+    control.send(DeckPart::Start).ok();
+    block(&mut processor);
 
     processor
         .track_mut(short_id)
@@ -720,15 +685,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
         .expect("BUG: fading track must remain loaded")
         .fade_out(kithara_play::CrossfadeSettings::default());
 
-    let mut out_l = vec![99.0f32; frames];
-    let mut out_r = vec![99.0f32; frames];
-    let inputs: [&[f32]; 0] = [];
-    let mut outputs = [&mut out_l[..], &mut out_r[..]];
-    let mut buffers = ProcBuffers {
-        inputs: &inputs,
-        outputs: &mut outputs,
-    };
-    let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
+    let (rendered, ..) = render(&mut processor, frames);
 
     assert!(rendered);
     assert_eq!(

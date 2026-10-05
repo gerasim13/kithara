@@ -10,13 +10,13 @@ use kithara_platform::{
 };
 use kithara_signal::FaderValue;
 use kithara_warp::RenderSnapshot;
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::Consumer;
 use tracing::{debug, info};
 
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SessionDuckingMode, SlotId},
-    bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SlotControl},
+    bridge::{DeckPart, PlaybackShared, PlayerNotification, SlotControl},
     error::PlayError,
     rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
@@ -277,22 +277,23 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    /// A resource crossing to the audio thread leaves its seek handle here, since seeking takes
-    /// locks. Bindings apply only once the command is accepted; the resource releases when it
-    /// returns as trash.
-    pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
+    /// Sends `part` to the slot's deck for its next block. A resource crossing to the audio
+    /// thread leaves its seek handle here, since seeking takes locks. Bindings apply only once the
+    /// batch is accepted; the resource releases when it returns as trash.
+    pub(crate) fn send_slot_cmd(&self, slot: SlotId, part: DeckPart) -> Result<(), PlayError> {
         let mut slots = self.slots.lock();
-        let result = match slots.get_mut(slot) {
-            Some(handle) => {
-                let bindings = match &cmd {
-                    PlayerCmd::LoadTrack { resource, item_id } => {
+        let result = slots
+            .get_mut(slot)
+            .map_or(Err(PlayError::SlotNotFound(slot)), |handle| {
+                let bindings = match &part {
+                    DeckPart::Attach { resource, item_id } => {
                         Some((*item_id, resource.seek_handle(), resource.render_reader()))
                     }
                     _ => None,
                 };
                 let result = handle
-                    .cmd_tx
-                    .try_push(cmd)
+                    .send(part)
+                    .map(drop)
                     .map_err(|_| PlayError::SlotChannelFull { slot });
                 if result.is_ok()
                     && let Some((item_id, seek, render)) = bindings
@@ -305,9 +306,7 @@ impl<S> EngineImpl<S> {
                     }
                 }
                 result
-            }
-            None => Err(PlayError::SlotNotFound(slot)),
-        };
+            });
         drop(slots);
         result
     }

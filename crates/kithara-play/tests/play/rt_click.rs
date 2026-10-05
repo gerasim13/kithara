@@ -3,21 +3,21 @@
 //! constant DC: whatever step the render adds is the transport or the fade, never the material.
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZeroU32, sync::atomic::Ordering};
+use std::num::NonZeroU32;
 
 use firewheel::node::ProcBuffers;
 use kithara_audio::mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
+use kithara_command::{Batch, Outcome, When};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     Resource, SharedEq,
-    bridge::{PlayerCmd, SlotControl, TrackTransition, slot_channels},
+    bridge::{DeckPart, SlotControl, TrackTransition, slot_channels},
     rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioSpec, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
 use kithara_test_utils::{bufpool::pools, kithara};
-use ringbuf::traits::Producer;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 128;
@@ -72,7 +72,7 @@ fn load(control: &mut SlotControl, src: &str, input: &'static [u8]) -> TrackId {
     let item_id = TrackId::allocate();
     push(
         control,
-        PlayerCmd::LoadTrack {
+        DeckPart::Attach {
             resource: track(src, input),
             item_id,
         },
@@ -80,8 +80,8 @@ fn load(control: &mut SlotControl, src: &str, input: &'static [u8]) -> TrackId {
     item_id
 }
 
-fn push(control: &mut SlotControl, cmd: PlayerCmd) {
-    control.cmd_tx.try_push(cmd).ok();
+fn push(control: &mut SlotControl, part: DeckPart) {
+    control.send(part).expect("the deck channel has room");
 }
 
 fn start(processor: &mut PlayerNodeProcessor, item_id: TrackId) {
@@ -90,20 +90,23 @@ fn start(processor: &mut PlayerNodeProcessor, item_id: TrackId) {
     }
 }
 
-fn block(processor: &mut PlayerNodeProcessor) -> (Vec<f32>, bool) {
+fn block_from(processor: &mut PlayerNodeProcessor, start: SessionFrame) -> (Vec<f32>, bool) {
     let mut out_l = vec![0.0f32; BLOCK_FRAMES];
     let mut out_r = vec![0.0f32; BLOCK_FRAMES];
-    processor.drain_commands();
-    processor.cleanup_finished_tracks();
-    let is_playing = processor.playback().playing.load(Ordering::SeqCst);
     let inputs: [&[f32]; 0] = [];
     let mut outputs = [&mut out_l[..], &mut out_r[..]];
     let mut buffers = ProcBuffers {
         inputs: &inputs,
         outputs: &mut outputs,
     };
-    let (read, _) = processor.render_audio(&mut buffers, BLOCK_FRAMES, is_playing);
+    let read = processor.render_block(start, &mut buffers, BLOCK_FRAMES);
     (out_l, read)
+}
+
+/// Renders a block on a clock that stands still: every part `push` sends applies on the next
+/// block, whatever frame it starts on.
+fn block(processor: &mut PlayerNodeProcessor) -> (Vec<f32>, bool) {
+    block_from(processor, SessionFrame::default())
 }
 
 fn pump(processor: &mut PlayerNodeProcessor, blocks: usize) -> Vec<f32> {
@@ -135,8 +138,8 @@ fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
 fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, PlayerCmd::SetPaused(false));
-    processor.drain_commands();
+    push(&mut control, DeckPart::Start);
+    block(&mut processor);
     start(&mut processor, item_id);
 
     let playing = pump(&mut processor, WARMUP_BLOCKS);
@@ -146,7 +149,7 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
         last(&playing)
     );
 
-    push(&mut control, PlayerCmd::SetPaused(true));
+    push(&mut control, DeckPart::Stop);
     let paused = pump(&mut processor, SETTLE_BLOCKS);
 
     let step = max_step(&across(&playing, &paused));
@@ -171,16 +174,16 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
 fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, PlayerCmd::SetPaused(false));
-    processor.drain_commands();
+    push(&mut control, DeckPart::Start);
+    block(&mut processor);
     start(&mut processor, item_id);
     pump(&mut processor, WARMUP_BLOCKS);
 
-    push(&mut control, PlayerCmd::SetPaused(true));
+    push(&mut control, DeckPart::Stop);
     let paused = pump(&mut processor, SETTLE_BLOCKS);
     assert!(last(&paused) == 0.0, "the pause settled at silence");
 
-    push(&mut control, PlayerCmd::SetPaused(false));
+    push(&mut control, DeckPart::Start);
     let resumed = pump(&mut processor, SETTLE_BLOCKS);
 
     let step = max_step(&across(&paused, &resumed));
@@ -195,16 +198,61 @@ fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     );
 }
 
+#[kithara::test]
+fn a_start_inside_a_block_sounds_from_its_frame(constant_half: &'static [u8]) {
+    let (mut processor, mut control) = processor();
+    let item_id = load(&mut control, "a.mp3", constant_half);
+    block(&mut processor);
+    start(&mut processor, item_id);
+    assert!(
+        pump(&mut processor, 2).iter().all(|sample| *sample == 0.0),
+        "a stopped deck stays silent"
+    );
+
+    let origin = i64::try_from(BLOCK_FRAMES).expect("a block fits the clock");
+    let offset = BLOCK_FRAMES / 2;
+    let at = SessionFrame::new(origin + i64::try_from(offset).expect("an offset fits the clock"));
+    let seq = control
+        .deck
+        .send(
+            When::At(at),
+            Batch {
+                basis: Vec::new(),
+                commands: vec![DeckPart::Start],
+            },
+        )
+        .expect("the deck channel has room");
+    let (started, _) = block_from(&mut processor, SessionFrame::new(origin));
+
+    assert!(
+        started[..offset].iter().all(|sample| *sample == 0.0),
+        "the deck is silent before the frame it starts on"
+    );
+    assert!(
+        started[offset..].iter().any(|sample| *sample > 0.0),
+        "the deck sounds from the frame it starts on"
+    );
+    let answer = control
+        .deck
+        .receipts()
+        .find(|receipt| receipt.seq() == seq)
+        .expect("the start is answered in the block it applies in");
+    assert!(
+        matches!(answer.outcome(), Outcome::Applied { at: applied, .. } if *applied == at),
+        "the start is applied at its frame"
+    );
+}
+
 fn fading_in(
     constant_half: &'static [u8],
 ) -> (PlayerNodeProcessor, SlotControl, Vec<f32>, TrackId) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
-    push(&mut control, PlayerCmd::SetPaused(false));
+    push(&mut control, DeckPart::SetFadeDuration(FADE_SECONDS));
+    push(&mut control, DeckPart::Start);
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeIn {
+        DeckPart::Fade(TrackTransition::FadeIn {
             item_id,
             settings: crossfade(FADE_SECONDS),
             epoch: 0,
@@ -227,7 +275,7 @@ fn reversing_a_fade_in_continues_from_the_gain_it_reached(constant_half: &'stati
 
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeOut {
+        DeckPart::Fade(TrackTransition::FadeOut {
             item_id,
             settings: crossfade(FADE_SECONDS),
         }),
@@ -253,7 +301,7 @@ fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'stat
 
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeOut {
+        DeckPart::Fade(TrackTransition::FadeOut {
             item_id,
             settings: crossfade(FADE_SECONDS),
         }),
@@ -267,7 +315,7 @@ fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'stat
 
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeIn {
+        DeckPart::Fade(TrackTransition::FadeIn {
             item_id,
             settings: crossfade(FADE_SECONDS),
             epoch: 0,
@@ -295,7 +343,7 @@ fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
     let seek_epoch = processor.playback().next_seek_epoch();
     push(
         &mut control,
-        PlayerCmd::Seek {
+        DeckPart::Seek {
             seconds: 5.0,
             seek_epoch,
         },
@@ -313,7 +361,7 @@ fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
 fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'static [u8]) {
     let (mut processor, mut control, fading, _) = fading_in(constant_half);
 
-    push(&mut control, PlayerCmd::SetFadeDuration(FADE_SECONDS));
+    push(&mut control, DeckPart::SetFadeDuration(FADE_SECONDS));
     let resent = pump(&mut processor, WARMUP_BLOCKS);
 
     let step = max_step(&across(&fading, &resent));
@@ -327,10 +375,7 @@ fn resending_the_crossfade_duration_does_not_snap_the_mix(constant_half: &'stati
 fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade(constant_half: &'static [u8]) {
     let (mut processor, mut control, fading, _) = fading_in(constant_half);
 
-    push(
-        &mut control,
-        PlayerCmd::SetFadeDuration(FADE_SECONDS / 10.0),
-    );
+    push(&mut control, DeckPart::SetFadeDuration(FADE_SECONDS / 10.0));
     let changed = pump(&mut processor, WARMUP_BLOCKS);
 
     let step = max_step(&across(&fading, &changed));
@@ -359,14 +404,11 @@ fn a_changed_crossfade_duration_applies_to_the_next_fade(
         last(&settled)
     );
 
-    push(
-        &mut control,
-        PlayerCmd::SetFadeDuration(FADE_SECONDS / 10.0),
-    );
+    push(&mut control, DeckPart::SetFadeDuration(FADE_SECONDS / 10.0));
     let second_id = load(&mut control, "b.mp3", constant_quarter);
     push(
         &mut control,
-        PlayerCmd::Transition(TrackTransition::FadeIn {
+        DeckPart::Fade(TrackTransition::FadeIn {
             item_id: second_id,
             settings: crossfade(FADE_SECONDS / 10.0),
             epoch: 0,
@@ -388,9 +430,9 @@ fn a_track_started_without_a_crossfade_is_instant(
 ) {
     let (mut processor, mut control) = processor();
     let first_id = load(&mut control, "a.mp3", constant_half);
-    push(&mut control, PlayerCmd::SetFadeDuration(0.0));
-    push(&mut control, PlayerCmd::SetPaused(false));
-    processor.drain_commands();
+    push(&mut control, DeckPart::SetFadeDuration(0.0));
+    push(&mut control, DeckPart::Start);
+    block(&mut processor);
     start(&mut processor, first_id);
 
     let playing = pump(&mut processor, WARMUP_BLOCKS);
@@ -401,7 +443,7 @@ fn a_track_started_without_a_crossfade_is_instant(
     );
 
     let second_id = load(&mut control, "b.mp3", constant_quarter);
-    processor.drain_commands();
+    block(&mut processor);
     start(&mut processor, second_id);
     let handover = pump(&mut processor, 1);
 

@@ -154,7 +154,7 @@ impl PlaybackShared {
         }
     }
 
-    /// Withdraw an epoch whose `PlayerCmd::Seek` never reached the processor.
+    /// Withdraw an epoch whose `DeckPart::Seek` never reached the processor.
     ///
     /// Publishing promises the processor a re-base, and a track holds its
     /// natural end while a published seek outranks it. A send that fails leaves
