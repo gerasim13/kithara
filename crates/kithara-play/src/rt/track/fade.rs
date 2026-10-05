@@ -19,6 +19,10 @@ pub(super) struct TrackFade {
     settled: bool,
     frame: u64,
     frames: u64,
+    /// Gain the current fade started from.
+    from: f32,
+    /// Gain applied to the last mixed frame.
+    gain: f32,
 }
 
 impl TrackFade {
@@ -30,6 +34,8 @@ impl TrackFade {
             frame: 0,
             frames,
             settled: frames == 0,
+            from: 0.0,
+            gain: 0.0,
         }
     }
 
@@ -81,11 +87,12 @@ impl TrackFade {
                 let frames = cast::<u64, f32>(self.frames - 1).unwrap_or(f32::MAX);
                 (frame / frames).min(1.0)
             };
-            let gains = self.settings.gains(progress);
+            let (out, into) = self.settings.gains(progress);
             let gain = match self.direction {
-                Direction::In => gains.1,
-                Direction::Out => gains.0,
+                Direction::In => (1.0 - self.from).mul_add(into, self.from),
+                Direction::Out => self.from * out,
             };
+            self.gain = gain;
             if gain == 1.0 {
                 *out_l += in_l;
                 *out_r += in_r;
@@ -103,8 +110,12 @@ impl TrackFade {
         self.frame = 1;
         self.frames = 0;
         self.settled = true;
+        self.from = 1.0;
+        self.gain = 1.0;
     }
 
+    /// Starts a fade from the gain the last mixed frame had, so a fade that
+    /// reverses another one continues from where it was instead of stepping.
     fn start(
         &mut self,
         direction: Direction,
@@ -113,6 +124,7 @@ impl TrackFade {
     ) {
         self.settings = settings;
         self.direction = direction;
+        self.from = self.gain;
         self.frame = 0;
         self.frames = Self::frames(settings.duration, sample_rate);
         self.settled = self.frames == 0;
@@ -123,6 +135,8 @@ impl TrackFade {
         self.frame = 1;
         self.frames = 0;
         self.settled = true;
+        self.from = 0.0;
+        self.gain = 0.0;
     }
 
     pub(super) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
