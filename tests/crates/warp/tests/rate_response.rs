@@ -2,6 +2,7 @@
 
 use std::{
     num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
     path::PathBuf,
 };
 
@@ -56,11 +57,55 @@ fn response_backends() -> ElasticBackendConfig {
         .build()
 }
 
-const MINIMUM: ResponseCase = ResponseCase::new(128, 4_096, 16, 1, 441, 1.0, 1, 2.0, 2, 0);
-const PRODUCT: ResponseCase = ResponseCase::new(128, 8_192, 32, 12, 441, 2.0, 2, 0.5, 0, 0);
-const EXTREME: ResponseCase = ResponseCase::new(64, 16_384, 32, 64, 441, 0.5, 0, 4.0, 3, 64);
+const MINIMUM: ResponseCase = ResponseCase {
+    callback_frames: 128,
+    source_block_frames: 4_096,
+    render_quantum_frames: NonZeroUsize::new(16),
+    smooth_frames: 1,
+    response_budget_frames: 441,
+    initial_rate: 1.0,
+    initial_tone: 1,
+    target_rate: 2.0,
+    target_tone: 2,
+    burst: 0,
+};
+const PRODUCT: ResponseCase = ResponseCase {
+    callback_frames: 128,
+    source_block_frames: 8_192,
+    render_quantum_frames: NonZeroUsize::new(32),
+    smooth_frames: 12,
+    response_budget_frames: 441,
+    initial_rate: 2.0,
+    initial_tone: 2,
+    target_rate: 0.5,
+    target_tone: 0,
+    burst: 0,
+};
+const EXTREME: ResponseCase = ResponseCase {
+    callback_frames: 64,
+    source_block_frames: 16_384,
+    render_quantum_frames: NonZeroUsize::new(32),
+    smooth_frames: 64,
+    response_budget_frames: 441,
+    initial_rate: 0.5,
+    initial_tone: 0,
+    target_rate: 4.0,
+    target_tone: 3,
+    burst: 64,
+};
 
-const RAMP: ResponseCase = ResponseCase::new(128, 8_192, 32, 882, 441, 2.0, 2, 4.0, 3, 0);
+const RAMP: ResponseCase = ResponseCase {
+    callback_frames: 128,
+    source_block_frames: 8_192,
+    render_quantum_frames: NonZeroUsize::new(32),
+    smooth_frames: 882,
+    response_budget_frames: 441,
+    initial_rate: 2.0,
+    initial_tone: 2,
+    target_rate: 4.0,
+    target_tone: 3,
+    burst: 0,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct ResponseCase {
@@ -77,32 +122,6 @@ struct ResponseCase {
 }
 
 impl ResponseCase {
-    const fn new(
-        callback_frames: usize,
-        source_block_frames: usize,
-        render_quantum_frames: usize,
-        smooth_frames: usize,
-        response_budget_frames: usize,
-        initial_rate: f32,
-        initial_tone: usize,
-        target_rate: f32,
-        target_tone: usize,
-        burst: usize,
-    ) -> Self {
-        Self {
-            callback_frames,
-            source_block_frames,
-            render_quantum_frames: NonZeroUsize::new(render_quantum_frames),
-            smooth_frames,
-            response_budget_frames,
-            initial_rate,
-            initial_tone,
-            target_rate,
-            target_tone,
-            burst,
-        }
-    }
-
     fn observation_frames(self) -> usize {
         self.response_budget_frames
             .saturating_add(self.source_block_frames.saturating_mul(2))
@@ -398,11 +417,12 @@ fn revision_probe<'a>(
         .find(|event| event.probe == name && event.field(field) == Some(revision))
 }
 
+/// `acknowledged` spans the output frames from `set_rate` to the block that
+/// applied it.
 fn assert_response(
     backend: StretchKind,
     case: ResponseCase,
-    command_frame: usize,
-    apply_frame: usize,
+    acknowledged: Range<usize>,
     revision: u64,
     samples: &[f32],
     events: &[ProbeEvent],
@@ -445,11 +465,11 @@ fn assert_response(
             case.smooth_frames
         );
     }
-    let onset = first_target_onset(samples, command_frame, case.target_tone)
+    let onset = first_target_onset(samples, acknowledged.start, case.target_tone)
         .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
     let primed = revision_probe(events, "prime_activation", "request_revision", revision)
         .map(|event| (event.field("source_frames"), event.field("output_frames")));
-    let audible = (onset + command_frame).saturating_sub(apply_frame);
+    let audible = (onset + acknowledged.start).saturating_sub(acknowledged.end);
     let responded = audible.saturating_sub(queued);
     println!(
         "rate response: {backend} smooth={} audible={audible} queued={queued} \
@@ -534,8 +554,7 @@ async fn run_case(
     assert_response(
         backend,
         case,
-        command_frame,
-        apply_frame,
+        command_frame..apply_frame,
         revision,
         &samples,
         &events,
@@ -951,6 +970,7 @@ async fn rate_multiplier_step_is_ramped_across_blocks(
         between >= 3,
         "{backend} renderer never applied an intermediate ratio: {applied:?}"
     );
+    drop(trace);
 }
 
 fn save_response_audio(

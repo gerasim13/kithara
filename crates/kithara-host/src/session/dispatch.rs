@@ -585,7 +585,9 @@ mod tests {
                     frames: self.block_frames,
                     process_timestamp: Some(bevy_platform::time::Instant::now()),
                     duration_since_stream_start: Duration::from_secs_f64(
-                        clock_samples as f64 / f64::from(TestState::DEFAULT_SAMPLE_RATE),
+                        f64::from(
+                            u32::try_from(clock_samples).expect("the fixture clock fits u32"),
+                        ) / f64::from(TestState::DEFAULT_SAMPLE_RATE),
                     ),
                     input_stream_status: StreamStatus::empty(),
                     output_stream_status: StreamStatus::empty(),

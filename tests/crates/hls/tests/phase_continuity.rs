@@ -176,7 +176,7 @@ async fn run_case_paced(
             })
             .build()
     };
-    let initial_mode = scenario.first().map_or(AbrMode::default(), |&(m, _)| m);
+    let initial_mode = scenario.first().map_or_else(AbrMode::default, |&(m, _)| m);
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(store)
         .pools(pools.clone())

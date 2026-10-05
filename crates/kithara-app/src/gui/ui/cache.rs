@@ -211,8 +211,7 @@ mod tests {
         let config = fixtures::app_config(&cancel, fixtures::memory_store());
         let mut entry = fixtures::entry(&config, queue.clone(), track_id, source);
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        let (analysis, mut requests) =
-            AnalysisHandle::channel(watch::channel(Default::default()).1);
+        let (analysis, mut requests) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
         task::spawn(listen(
             queue.clone(),
             Arc::clone(&state),

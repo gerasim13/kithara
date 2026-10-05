@@ -37,6 +37,7 @@ use kithara_test_fixtures::{
     Mp3Shape, SignalAsset, fixtures::tone_mp3, integration_fixtures::saw_segments,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
+use num_traits::AsPrimitive;
 use tracing::info;
 
 use crate::{
@@ -259,8 +260,8 @@ fn read_hls_stream_bytes(
 
 #[kithara::fixture]
 async fn open_audio_hls_server(saw_segments: &'static [u8]) -> CreatedHls {
-    let segment_duration =
-        consts::HLS_SEGMENT_SIZE as f64 / (consts::HLS_SAMPLE_RATE * consts::HLS_CHANNELS * 2.0);
+    let segment_size: f64 = consts::HLS_SEGMENT_SIZE.as_();
+    let segment_duration = segment_size / (consts::HLS_SAMPLE_RATE * consts::HLS_CHANNELS * 2.0);
     TestServerHelper::new()
         .await
         .create_hls(
@@ -1023,7 +1024,8 @@ async fn stress_offline_crossfade_no_gaps(
 
     const BLOCK: usize = 512;
     const SR: u32 = 44100;
-    let block_budget = Duration::from_secs_f64(BLOCK as f64 / f64::from(SR));
+    let block_frames: f64 = BLOCK.as_();
+    let block_budget = Duration::from_secs_f64(block_frames / f64::from(SR));
 
     let hls_server = open_audio_hls_server;
     let region = pools();
@@ -1139,7 +1141,7 @@ async fn stress_offline_crossfade_no_gaps(
             "{}: silence gap {} blocks ({:.1}ms) — audio underrun during crossfade",
             s.label,
             s.max_silence_run,
-            f64::from(s.max_silence_run) * BLOCK as f64 / f64::from(SR) * 1000.0,
+            f64::from(s.max_silence_run) * block_frames / f64::from(SR) * 1000.0,
         );
     }
     player.close().await;
@@ -1358,10 +1360,7 @@ async fn registered_mp3(
         },
         delivery: Delivery::Range,
     });
-    let url = match suffix {
-        Some(s) => handle.child_url(s),
-        None => handle.url(),
-    };
+    let url = suffix.map_or_else(|| handle.url(), |s| handle.child_url(s));
     (helper, url)
 }
 

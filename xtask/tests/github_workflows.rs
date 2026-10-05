@@ -344,9 +344,9 @@ fn assert_hosted_authorization(job: &Mapping) {
     );
 }
 
-#[test]
-fn github_ci_is_fail_closed_and_aggregates_every_job() {
-    let workflow = github_workflow("ci.yml");
+/// Both entry points of `ci.yml` take the same two inputs, and the lane
+/// selector defaults to every lane.
+fn assert_ci_entry_inputs(workflow: &Value) {
     let root = workflow.as_mapping().expect("workflow is a mapping");
     let triggers = mapping_field(root, "on")
         .as_mapping()
@@ -376,6 +376,12 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         );
         assert_eq!(mapping_field(required_lanes, "default").as_str(), Some(""));
     }
+}
+
+#[test]
+fn github_ci_is_fail_closed_and_aggregates_every_job() {
+    let workflow = github_workflow("ci.yml");
+    assert_ci_entry_inputs(&workflow);
     let concurrency = workflow_concurrency(&workflow);
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
@@ -917,6 +923,21 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         Some("read")
     );
 
+    let jobs = workflow_jobs(&workflow);
+    assert_eq!(
+        workflow_job_names(jobs),
+        BTreeSet::from([
+            "authorize".to_owned(),
+            "execute".to_owned(),
+            "report".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn stress_workflow_inputs_own_no_defaults() {
+    let workflow = github_workflow("stress.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
     let triggers = mapping_field(root, "on")
         .as_mapping()
         .expect("workflow triggers are a mapping");
@@ -946,17 +967,12 @@ fn stress_workflow_is_a_thin_fork_adapter() {
             );
         }
     }
+}
 
+#[test]
+fn stress_authorization_admits_only_the_owner_on_a_fork() {
+    let workflow = github_workflow("stress.yml");
     let jobs = workflow_jobs(&workflow);
-    assert_eq!(
-        workflow_job_names(jobs),
-        BTreeSet::from([
-            "authorize".to_owned(),
-            "execute".to_owned(),
-            "report".to_owned(),
-        ])
-    );
-
     let authorize = workflow_job(jobs, "authorize");
     assert_eq!(
         mapping_field(authorize, "runs-on").as_str(),
@@ -1005,7 +1021,12 @@ fn stress_workflow_is_a_thin_fork_adapter() {
             "stress authorization omits {contract:?}"
         );
     }
+}
 
+#[test]
+fn stress_execute_runs_the_portable_command_on_the_subject() {
+    let workflow = github_workflow("stress.yml");
+    let jobs = workflow_jobs(&workflow);
     let execute = workflow_job(jobs, "execute");
     assert_eq!(job_needs(execute), BTreeSet::from(["authorize".to_owned()]));
     let execute_guard = mapping_field(execute, "if")
@@ -1135,7 +1156,12 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         .expect("artifact identity command is a script");
     assert!(artifact_script.contains("[[ \"$UPLOAD_OUTCOME\" == success ]] || exit 1"));
     assert!(artifact_script.contains("name=stress-raw-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"));
+}
 
+#[test]
+fn stress_report_verifies_and_publishes_the_raw_evidence() {
+    let workflow = github_workflow("stress.yml");
+    let jobs = workflow_jobs(&workflow);
     let report = workflow_job(jobs, "report");
     assert_eq!(job_needs(report), BTreeSet::from(["execute".to_owned()]));
     assert_eq!(
@@ -2168,10 +2194,10 @@ fn called_workflow_inputs(name: &str) -> Option<Mapping> {
     let Some(call) = on.get("workflow_call")?.as_mapping() else {
         return Some(Mapping::new());
     };
-    match call.get("inputs") {
-        Some(inputs) => inputs.as_mapping().cloned(),
-        None => Some(Mapping::new()),
-    }
+    call.get("inputs").map_or_else(
+        || Some(Mapping::new()),
+        |inputs| inputs.as_mapping().cloned(),
+    )
 }
 
 fn local_workflow_calls() -> Vec<(String, String, String, Mapping)> {

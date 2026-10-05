@@ -30,6 +30,7 @@ use kithara_test_fixtures::hls_fixtures::{
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
 use kithara_test_utils::{TestTempDir, Xorshift64};
+use num_traits::AsPrimitive;
 use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
@@ -121,8 +122,7 @@ async fn audio_server(
         "Generated WAV data for two variants"
     );
 
-    let segment_duration = consts::D.segment_size as f64
-        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_duration_secs();
 
     TestServerHelper::new()
         .await
@@ -358,10 +358,8 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     );
 
     let total_duration = audio.duration();
-    let total_secs = total_duration
-        .map_or(consts::SEGMENT_COUNT as f64 * segment_duration * 0.9, |d| {
-            d.as_secs_f64()
-        });
+    let segments: f64 = consts::SEGMENT_COUNT.as_();
+    let total_secs = total_duration.map_or(segments * segment_duration * 0.9, |d| d.as_secs_f64());
     let max_seek_secs = (total_secs - 0.5).max(0.1);
 
     let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);

@@ -21,21 +21,6 @@ use url::Url;
 
 use crate::bufpool_ext::TestPools;
 
-/// Reproduces the bug the user keeps hitting manually: play track A, switch
-/// to B, then switch back to A. The second `select(A)` finds the track in
-/// `Consumed`, so the queue spawns a fresh loader; that loader builds a
-/// new `HlsPeer` which reads the existing committed resources from
-/// `AssetStore` but short-circuits in `HlsVariant::dispatch` via
-/// `resource_already_committed` without ever emitting the init/segment
-/// fetches that the new read path is waiting on. Result in production:
-/// `wait_range` spins until the loader budget is exhausted and the track
-/// enters `Failed("data not ready")`.
-///
-/// The DRM case adds the second moving piece: `ProcessedResource` has a
-/// `ReadinessGate` per resource that has to be re-armed for every fresh
-/// `PlayWorker::open`. If the shortcut bypasses re-arming, the new read path
-/// observes a still-closed gate and never makes progress.
-
 mod consts {
     use super::Duration;
 
@@ -141,6 +126,20 @@ async fn wait_for_current_track(
         .unwrap_or_else(|_| panic!("timeout waiting for CurrentTrackChanged({expected:?})"));
 }
 
+/// Reproduces the bug the user keeps hitting manually: play track A, switch
+/// to B, then switch back to A. The second `select(A)` finds the track in
+/// `Consumed`, so the queue spawns a fresh loader; that loader builds a
+/// new `HlsPeer` which reads the existing committed resources from
+/// `AssetStore` but short-circuits in `HlsVariant::dispatch` via
+/// `resource_already_committed` without ever emitting the init/segment
+/// fetches that the new read path is waiting on. Result in production:
+/// `wait_range` spins until the loader budget is exhausted and the track
+/// enters `Failed("data not ready")`.
+///
+/// The DRM case adds the second moving piece: `ProcessedResource` has a
+/// `ReadinessGate` per resource that has to be re-armed for every fresh
+/// `PlayWorker::open`. If the shortcut bypasses re-arming, the new read path
+/// observes a still-closed gate and never makes progress.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::plain(replay_plain().await)]
 #[case::aes128(replay_encrypted().await)]

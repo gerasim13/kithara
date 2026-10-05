@@ -109,15 +109,14 @@ async fn cold_seek_far_segment_hls_offline(
             .map(|r| r.map(|env| env.event))
         {
             Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
-                let pos_secs = position_ms as f64 / 1000.0;
+                let pos_secs = Duration::from_millis(position_ms).as_secs_f64();
                 if pos_secs > seek_target + 0.5 {
                     confirmed = true;
                     break;
                 }
             }
             Ok(Ok(_)) => {}
-            Ok(Err(_)) => break,
-            Err(_) => break,
+            Ok(Err(_)) | Err(_) => break,
         }
     }
 

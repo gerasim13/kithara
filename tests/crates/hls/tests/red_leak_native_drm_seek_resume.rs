@@ -18,6 +18,7 @@ use kithara_integration_tests::{
     hls_server::aes128_encryption,
     waits::wait_thread_count_quiesced,
 };
+use num_traits::AsPrimitive;
 use tracing::info;
 use url::Url;
 
@@ -33,7 +34,8 @@ mod consts {
 }
 
 fn media_secs() -> f64 {
-    consts::SEGMENTS as f64 * consts::SEGMENT_SECS
+    let segments: f64 = consts::SEGMENTS.as_();
+    segments * consts::SEGMENT_SECS
 }
 
 async fn next_chunk_or_timeout(

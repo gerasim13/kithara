@@ -1074,7 +1074,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("playback must resume after the seek");
     assert_eq!(
         landing.meta.segment_index,
-        Some(SEEK_SEGMENT as u32),
+        Some(u32::try_from(SEEK_SEGMENT).expect("the seek segment fits u32")),
         "the seek must land on its target segment"
     );
     assert_eq!(

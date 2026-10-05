@@ -36,6 +36,7 @@ use kithara_integration_tests::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{hls_saw_6, hls_saw_8, hls_saw_15, hls_saw_30};
 use kithara_test_utils::{TestTempDir, wait_until};
+use num_traits::AsPrimitive;
 use tracing::info;
 use url::Url;
 
@@ -44,21 +45,19 @@ use crate::common::test_defaults::SawWav;
 const D: SawWav = SawWav::DEFAULT;
 const MANUAL_GATE_SEGMENT: usize = 5;
 
-fn segment_duration_secs() -> f64 {
-    D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0)
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn wav_ladder(data: (Vec<u8>, Vec<u8>), bandwidths: Vec<u64>) -> HlsFixtureBuilder {
     let (init, pcm) = data;
+    let init = Arc::new(init);
+    let pcm = Arc::new(pcm);
     let variant_count = bandwidths.len();
     HlsFixtureBuilder::new()
         .variant_count(variant_count)
         .segments_per_variant(pcm.len() / D.segment_size)
         .segment_size(D.segment_size)
-        .segment_duration_secs(segment_duration_secs())
-        .custom_data_per_variant(vec![Arc::new(pcm); variant_count])
-        .init_data_per_variant(vec![Arc::new(init); variant_count])
+        .segment_duration_secs(D.segment_duration_secs())
+        .custom_data_per_variant(vec![pcm; variant_count])
+        .init_data_per_variant(vec![init; variant_count])
         .codecs("wav".to_string())
         .variant_bandwidths(bandwidths)
 }
@@ -95,7 +94,7 @@ async fn shared_tracks(hls_saw_15: (Vec<u8>, Vec<u8>)) -> (CreatedHls, CreatedHl
         .variant_count(2)
         .segments_per_variant(segments)
         .segment_size(D.segment_size)
-        .segment_duration_secs(segment_duration_secs())
+        .segment_duration_secs(D.segment_duration_secs())
         .custom_data_per_variant(vec![Arc::clone(&pcm); 2])
         .init_data_per_variant(vec![Arc::clone(&init); 2])
         .variant_bandwidths(vec![1_000_000, 3_000_000]);
@@ -1877,7 +1876,8 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
     // peer parked (every target seg is cached), and (the bug) wipes
     // whatever invariant lets `on_mode_changed → tick → peer.wake()`
     // reach `apply_boundary_crossing → commit_variant_switch`.
-    let seek_target_secs = segment_duration_secs() * ((segment_count / 2) as f64);
+    let half: f64 = (segment_count / 2).as_();
+    let seek_target_secs = D.segment_duration_secs() * half;
     audio
         .seek(Duration::from_secs_f64(seek_target_secs))
         .expect("seek must succeed");

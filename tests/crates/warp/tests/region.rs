@@ -3,13 +3,13 @@ use std::num::NonZero;
 use kithara::{
     platform::sync::Arc,
     signal::{
-        AudioChunk, AudioChunkInfo, AudioSpec, OutputContext, SessionEpoch, SessionFrame,
-        TransportRevision,
+        AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, OutputContext,
+        SessionEpoch, SessionFrame, TransportRevision,
     },
     stretch::StretchKind,
     warp::{
-        GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
-        StretchControls, Warp, WarpConfig, WarpPlan,
+        GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
+        SessionAnchor, SessionBeat, StretchControls, Warp, WarpConfig, WarpMapRevision, WarpPlan,
         mock::{
             asset_grid, asset_grid_over, plan_over, plan_over_at, session_grid_spaced, spaced_plan,
         },
@@ -391,7 +391,6 @@ fn i64_of(x: usize) -> i64 {
 fn activation_keeps_the_absolute_host_frame_rounding_phase() {
     use kithara::warp::{
         Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, MapPoint, MapPosition,
-        SessionAnchor,
     };
 
     let sample_rate = NonZero::new(48_000).expect("sample rate");
@@ -450,13 +449,13 @@ fn render_on_grid(
     plan: Option<WarpPlan>,
     source: &[f32],
     session_beats: f64,
-    swap: Option<(usize, fn(u64, usize) -> WarpPlan)>,
+    swap: Option<PlanSwap>,
 ) -> Vec<f32> {
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(backend);
     let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
-    render_configured_grid(config, plan, source, session_beats, swap, None)
+    render_configured_grid(config, plan, source, Timeline::Linear(session_beats), swap)
 }
 
 #[hang_watchdog]
@@ -464,22 +463,32 @@ fn render_configured_grid(
     config: WarpConfig,
     plan: Option<WarpPlan>,
     source: &[f32],
-    session_beats: f64,
-    swap: Option<(usize, fn(u64, usize) -> WarpPlan)>,
-    trajectory: Option<kithara::warp::SessionAnchor>,
+    timeline: Timeline,
+    swap: Option<PlanSwap>,
 ) -> Vec<f32> {
-    render_configured_grid_with_updates(
-        config,
-        spec(),
-        plan,
-        source,
-        session_beats,
-        swap,
-        trajectory,
-        None,
-        &mut |_, _| None,
-    )
+    let source = InterleavedView::new(source, spec(), FrameCount::new(source.len() / CH))
+        .expect("fixture source is whole frames");
+    render_configured_grid_with_updates(config, plan, source, timeline, swap, None, &mut |_, _| {
+        None
+    })
     .samples
+}
+
+/// A plan installed mid-render: once the source reaches the frame, the
+/// function builds the plan from the source frontier and the output frame.
+type PlanSwap = (usize, fn(u64, usize) -> WarpPlan);
+
+/// A retarget installed at a source/output frontier: the session anchor, the
+/// map revision published with it, and the plan to install alongside.
+type Retarget = (SessionAnchor, WarpMapRevision, Option<WarpPlan>);
+
+/// The session timeline a render publishes before its first block.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Timeline {
+    /// Linear over this many session beats.
+    Linear(f64),
+    /// Along the trajectory this anchor starts.
+    Anchored(SessionAnchor),
 }
 
 /// A render's interleaved output and, for every chunk it presented, the
@@ -490,29 +499,21 @@ pub(crate) struct Presented {
     pub(crate) positions: Vec<(usize, u64)>,
 }
 
-/// Renders `source`, shaped by `spec`, through `plan` against a published
-/// session context, stopping once `output_frames` are rendered; `updates`
-/// may retarget the context and install that retarget's plan at any
+/// Renders `source` through `plan` against a session context published on
+/// `timeline`, stopping once `output_frames` are rendered; `updates` may
+/// retarget the context and install that retarget's plan at any
 /// source/output frontier.
 #[hang_watchdog]
 pub(crate) fn render_configured_grid_with_updates(
     config: WarpConfig,
-    spec: AudioSpec,
     plan: Option<WarpPlan>,
-    source: &[f32],
-    session_beats: f64,
-    swap: Option<(usize, fn(u64, usize) -> WarpPlan)>,
-    trajectory: Option<kithara::warp::SessionAnchor>,
+    source: InterleavedView<'_>,
+    timeline: Timeline,
+    swap: Option<PlanSwap>,
     output_frames: Option<usize>,
-    updates: &mut dyn FnMut(
-        u64,
-        usize,
-    ) -> Option<(
-        kithara::warp::SessionAnchor,
-        kithara::warp::WarpMapRevision,
-        Option<WarpPlan>,
-    )>,
+    updates: &mut dyn FnMut(u64, usize) -> Option<Retarget>,
 ) -> Presented {
+    let (source, spec) = (source.samples(), source.spec());
     let pools = pools();
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
@@ -523,14 +524,15 @@ pub(crate) fn render_configured_grid_with_updates(
         Some(TransportRevision::first()),
     )
     .expect("fixture output");
-    let context = if let Some(anchor) = trajectory {
-        RenderContext::new(output, Some(anchor)).expect("fixture trajectory context")
-    } else {
-        RenderContext::new_linear(
+    let context = match timeline {
+        Timeline::Anchored(anchor) => {
+            RenderContext::new(output, Some(anchor)).expect("fixture trajectory context")
+        }
+        Timeline::Linear(session_beats) => RenderContext::new_linear(
             output,
             Some(SessionBeat::default()..SessionBeat::new(session_beats).expect("beat")),
         )
-        .expect("fixture context")
+        .expect("fixture context"),
     };
     publisher.publish(
         &context,
@@ -618,7 +620,7 @@ pub(crate) fn render_configured_grid_with_updates(
                     continue;
                 }
                 Err(error) => panic!(
-                    "source quantum at {} with {remaining} remaining, backend {:?}, keylock={}, trajectory={trajectory:?}: {error:?}",
+                    "source quantum at {} with {remaining} remaining, backend {:?}, keylock={}, timeline={timeline:?}: {error:?}",
                     meta.frame_offset,
                     config.stretch().backend(),
                     config.stretch().keylock()
@@ -681,7 +683,7 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
     #[case] backend: StretchKind,
     warp_nominal_clicks: Vec<f32>,
 ) {
-    use kithara::warp::{BeatGridId, BeatGridRevision, BeatGridSnapshot, SessionAnchor};
+    use kithara::warp::{BeatGridId, BeatGridRevision, BeatGridSnapshot};
 
     let source_clicks = click_positions(&mono(&warp_nominal_clicks));
     assert_eq!(
@@ -728,9 +730,8 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
                     config,
                     Some(plan.clone()),
                     &warp_nominal_clicks,
-                    2.0,
+                    Timeline::Anchored(anchor),
                     None,
-                    Some(anchor),
                 );
                 let clicks = click_positions(&mono(&output));
                 assert_eq!(

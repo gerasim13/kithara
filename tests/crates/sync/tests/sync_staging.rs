@@ -8,6 +8,7 @@ use kithara::{
     warp::AssetFrame,
 };
 use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
+use num_traits::AsPrimitive;
 
 use super::{
     sync_listening::render_frames,
@@ -184,6 +185,7 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
         "{}: the owner records exactly one proven lane",
         case.id()
     );
+    drop(harness);
 }
 
 #[kithara::test(
@@ -228,6 +230,7 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
         "{}: the owner takes the cancellation of its installed preparation",
         case.id()
     );
+    drop(harness);
 }
 
 #[kithara::test(
@@ -267,6 +270,7 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
         "{}: the sounding deck keeps its slot and plays on",
         case.id()
     );
+    drop(harness);
 }
 
 #[kithara::test(
@@ -332,6 +336,7 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         "{}: staging beside the sounding lane changed what it plays",
         case.id(),
     );
+    drop(harness);
 }
 
 /// What separates two renders of the same lane, beyond where it starts.
@@ -415,10 +420,6 @@ fn level(pcm: &[f32]) -> f32 {
         return 0.0;
     }
     let sum: f64 = pcm.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a level printed into a panic message, not a signal value"
-    )]
-    let rms = (sum / pcm.len() as f64).sqrt() as f32;
-    rms
+    let len: f64 = pcm.len().as_();
+    (sum / len).sqrt().as_()
 }

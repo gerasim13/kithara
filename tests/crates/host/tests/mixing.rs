@@ -23,6 +23,7 @@ use kithara_test_fixtures::{
     signal::peak,
 };
 use kithara_test_utils::bufpool::{TestPools, pools};
+use num_traits::AsPrimitive;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -133,7 +134,8 @@ impl MixHarness {
             player.process_notifications();
         }
         let block = self.host.render(BLOCK_FRAMES).await;
-        let budget = Duration::from_secs_f64(BLOCK_FRAMES as f64 / f64::from(SAMPLE_RATE));
+        let block_frames: f64 = BLOCK_FRAMES.as_();
+        let budget = Duration::from_secs_f64(block_frames / f64::from(SAMPLE_RATE));
         time::sleep(budget).await;
         block
     }
@@ -213,7 +215,7 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum(constant_unity:
     let values = [constant_unity; 4];
     let levels = [1.0_f32; 4];
 
-    let raw = values.len() as f32;
+    let raw: f32 = values.len().as_();
     assert!(
         raw > CEILING,
         "test is vacuous: unlimited sum {raw} does not reach the ceiling {CEILING}"

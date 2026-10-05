@@ -345,8 +345,10 @@ mod document_tests {
     fn rejected_warp_geometry_preserves_player_settings() {
         let mut config = config();
         let previous_slots = config.max_slots;
-        let mut patch = PlayerConfigPatch::default();
-        patch.max_slots = Some(previous_slots + 1);
+        let mut patch = PlayerConfigPatch {
+            max_slots: Some(previous_slots + 1),
+            ..PlayerConfigPatch::default()
+        };
         patch.warp.backends.signalsmith.block_frames = NonZeroUsize::new(16);
         patch.warp.backends.signalsmith.interval_frames = NonZeroUsize::new(32);
 

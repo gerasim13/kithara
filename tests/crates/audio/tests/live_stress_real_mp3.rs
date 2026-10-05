@@ -277,7 +277,8 @@ async fn live_stress_real_mp3_seek_read_cache(
                 TestEvent::File(FileEvent::ReadProgress { .. }) => {
                     locked.read_progress_events = locked.read_progress_events.saturating_add(1);
                 }
-                TestEvent::File(FileEvent::Error { .. }) => {
+                TestEvent::File(FileEvent::Error { .. })
+                | TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => {
                     locked.errors = locked.errors.saturating_add(1);
                 }
                 TestEvent::Downloader(DownloaderEvent::RequestStarted { .. }) => {
@@ -286,9 +287,6 @@ async fn live_stress_real_mp3_seek_read_cache(
                 TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
                     locked.request_completed_events =
                         locked.request_completed_events.saturating_add(1);
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => {
-                    locked.errors = locked.errors.saturating_add(1);
                 }
                 _ => {}
             }

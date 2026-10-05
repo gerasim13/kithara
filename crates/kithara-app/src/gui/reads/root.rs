@@ -95,7 +95,7 @@ mod tests {
     use ::kithara::{
         abr::AbrMode,
         effects::GainDb,
-        ui::render::{ReadValue, Reads, Walk},
+        ui::render::{ReadValue, Reads, TableCell, Walk},
     };
     use iced::Size;
     use kithara_test_utils::kithara;
@@ -565,7 +565,7 @@ mod tests {
                 .cells()
                 .iter()
                 .find(|cell| cell.id() == "bpm")
-                .map(|cell| cell.value()),
+                .map(TableCell::value),
             Some(&::kithara::ui::render::TableValue::Text("128.00".into()))
         );
     }

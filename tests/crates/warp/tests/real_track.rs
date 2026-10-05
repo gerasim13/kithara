@@ -8,7 +8,7 @@ use kithara::{
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     platform::time::Duration,
     resampler::NoResamplerBackend,
-    signal::{AudioSpec, SessionEpoch, SessionFrame},
+    signal::{AudioSpec, FrameCount, InterleavedView, SessionEpoch, SessionFrame},
     stretch::StretchKind,
     warp::{
         Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint,
@@ -24,7 +24,7 @@ use kithara_test_fixtures::assets::by_name;
 use num_traits::ToPrimitive;
 
 use crate::{
-    region::{CH, Presented, render_configured_grid_with_updates},
+    region::{CH, Presented, Timeline, render_configured_grid_with_updates},
     test_pools::pools,
 };
 
@@ -365,12 +365,15 @@ fn render(
             .stretch(controls)
             .render_quantum_frames(NonZero::new(64).expect("quantum"))
             .build(),
-        track.spec,
         Some(initial),
-        &track.pcm[..source_end * CH],
-        0.0,
+        InterleavedView::new(
+            &track.pcm[..source_end * CH],
+            track.spec,
+            FrameCount::new(source_end),
+        )
+        .expect("decoded track is whole frames"),
+        Timeline::Anchored(anchors[0]),
         None,
-        Some(anchors[0]),
         Some(frames),
         &mut update,
     );

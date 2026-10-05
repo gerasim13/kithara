@@ -601,7 +601,7 @@ mod explorer {
                 .into_iter()
                 .map(|track| track.url)
                 .collect();
-            assert_eq!(queued, [source.clone()]);
+            assert_eq!(queued, std::slice::from_ref(&source));
             rig.until(
                 "the dropped track becomes deck A's current one",
                 Rig::DEADLINE,

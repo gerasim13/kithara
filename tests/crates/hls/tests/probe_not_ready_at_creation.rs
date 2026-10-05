@@ -29,6 +29,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{Pools, TestPools, pools},
+    test_defaults::SawWav,
 };
 use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
 use tracing::info;
@@ -42,8 +43,12 @@ const SEGMENT_COUNT: usize = 8;
 fn fixture_config(hls_header_boundary: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsFixtureBuilder {
     let mut media = hls_header_boundary;
     media.extend_from_slice(&hls_pcm_boundary);
-    let segment_duration = SEGMENT_SIZE as f64
-        / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
+    let segment_duration = SawWav {
+        sample_rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        segment_size: SEGMENT_SIZE,
+    }
+    .segment_duration_secs();
     HlsFixtureBuilder::new()
         .variant_count(1)
         .segments_per_variant(SEGMENT_COUNT)

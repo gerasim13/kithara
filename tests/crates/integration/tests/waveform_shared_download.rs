@@ -54,8 +54,7 @@ async fn serve_wav(State(state): State<CountState>) -> Response {
 fn drain_to_eof(mut audio: RegisteredAudio<Stream<File<AppPools>>, AppPools>) -> bool {
     loop {
         match audio.next_chunk() {
-            Ok(ChunkOutcome::Chunk(_)) => {}
-            Ok(ChunkOutcome::Pending { .. }) => {}
+            Ok(ChunkOutcome::Chunk(_) | ChunkOutcome::Pending { .. }) => {}
             Ok(ChunkOutcome::Eof { .. }) => return true,
             Err(_) => return false,
         }

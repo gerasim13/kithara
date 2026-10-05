@@ -110,23 +110,27 @@ impl DiagnosticContext for ProvenanceDumpContext<'_> {
     }
 
     fn dump(&self) -> String {
-        match self.switch_issue_frame {
-            Some(switch_issue_frame) => dump_with_switch(
-                self.replays,
-                self.runs,
-                self.onset_window,
-                self.b_onset_window,
-                switch_issue_frame,
-                self.current_index,
-            ),
-            None => dump(
-                self.replays,
-                self.runs,
-                self.onset_window,
-                self.b_onset_window,
-                self.current_index,
-            ),
-        }
+        self.switch_issue_frame.map_or_else(
+            || {
+                dump(
+                    self.replays,
+                    self.runs,
+                    self.onset_window,
+                    self.b_onset_window,
+                    self.current_index,
+                )
+            },
+            |switch_issue_frame| {
+                dump_with_switch(
+                    self.replays,
+                    self.runs,
+                    self.onset_window,
+                    self.b_onset_window,
+                    switch_issue_frame,
+                    self.current_index,
+                )
+            },
+        )
     }
 }
 
@@ -1531,7 +1535,7 @@ async fn render_seek_near_end_until_b_with_postroll(
                 Ok(TestEvent::Audio(AudioEvent::SeekComplete { .. }))
                     if seek_issue_frame.is_some() =>
                 {
-                    seek_complete_frame.get_or_insert(progress.rendered_frames());
+                    seek_complete_frame.get_or_insert_with(|| progress.rendered_frames());
                 }
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,

@@ -628,7 +628,7 @@ pub(crate) fn pressing_a_chevron_again_once_its_folder_opened_delivers_the_toggl
     let second = writes(&ui, &host.let_go(&ui, &reads, at), &reads);
 
     let toggle = index(TOGGLE, usize::from(FOLDER));
-    assert_eq!(first, [toggle.clone()]);
+    assert_eq!(first, std::slice::from_ref(&toggle));
     assert_eq!(second, [toggle]);
 }
 

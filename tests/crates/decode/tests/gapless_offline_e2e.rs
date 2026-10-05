@@ -1252,12 +1252,6 @@ fn ceil_scaled_frames(frames: u64, output_rate: u32, input_rate: u32) -> u64 {
     u64::try_from(scaled).unwrap_or(u64::MAX)
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    reason = "test-only signal synthesis narrows bounded sine samples to f32"
-)]
-
 fn seam_step_db(left: &[f32], stitch_frame: usize) -> f32 {
     assert!(
         (1..left.len()).contains(&stitch_frame),

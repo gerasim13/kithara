@@ -988,7 +988,10 @@ mod tests {
                 }
                 (
                     EndpointCategory::Command,
-                    "demo.cells.select" | "library.select_tree_row" | "gallery.table.select_preset",
+                    "demo.cells.select"
+                    | "library.select_tree_row"
+                    | "library.select_scope"
+                    | "gallery.table.select_preset",
                 ) => Some(&self.index),
                 (
                     EndpointCategory::Command,
@@ -1001,7 +1004,8 @@ mod tests {
                     | "demo.checkbox.toggle_off"
                     | "demo.chip.toggle_active"
                     | "demo.chip.toggle_inactive"
-                    | "gallery.table.reset_columns",
+                    | "gallery.table.reset_columns"
+                    | "eq-menu-toggle",
                 ) => Some(&self.trigger),
                 (EndpointCategory::Command, "gallery.table.toggle_column") => {
                     Some(&self.column_trigger)
@@ -1042,7 +1046,6 @@ mod tests {
                     EndpointCategory::Model,
                     "gallery.table.preset" | "library.scope" | "deck.view.zoom",
                 ) => Some(&self.scalar),
-                (EndpointCategory::Command, "library.select_scope") => Some(&self.index),
                 (EndpointCategory::Model, "library.breadcrumb" | "library.query") => {
                     Some(&self.text)
                 }
@@ -1057,7 +1060,6 @@ mod tests {
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
                     Some(&self.scoped_scalar)
                 }
-                (EndpointCategory::Command, "eq-menu-toggle") => Some(&self.trigger),
                 _ => None,
             }
         }
@@ -5209,10 +5211,10 @@ mod tests {
             }
 
             pub(super) fn session(&self) -> &DragSession {
-                self.tree
-                    .as_ref()
-                    .map(|tree| &tree.state.downcast_ref::<Root>().session)
-                    .unwrap_or_else(|| panic!("the document root must follow the drag"))
+                self.tree.as_ref().map_or_else(
+                    || panic!("the document root must follow the drag"),
+                    |tree| &tree.state.downcast_ref::<Root>().session,
+                )
             }
 
             pub(super) fn lit(&mut self, ui: &CompiledUi, reads: &DropReads) -> Vec<String> {

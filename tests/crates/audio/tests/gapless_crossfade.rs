@@ -33,14 +33,14 @@ fn synthetic_gapless_tracks_have_no_boundary_energy_dip(
 
     let first = trim_track(
         &pools,
-        gapless_sine_first,
+        &gapless_sine_first,
         spec,
         leading_frames,
         trailing_frames,
     );
     let second = trim_track(
         &pools,
-        gapless_sine_second,
+        &gapless_sine_second,
         spec,
         leading_frames,
         trailing_frames,
@@ -68,7 +68,7 @@ fn synthetic_gapless_tracks_have_no_boundary_energy_dip(
 
 fn trim_track(
     pools: &Pools,
-    samples: Vec<f32>,
+    samples: &[f32],
     spec: AudioSpec,
     leading_frames: usize,
     trailing_frames: usize,
@@ -80,7 +80,7 @@ fn trim_track(
     let mut pooled = pools
         .get_with_len::<f32>(samples.len())
         .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
-    pooled.copy_from_slice(&samples);
+    pooled.copy_from_slice(samples);
     let chunk = AudioChunk::new(
         AudioChunkInfo {
             spec,
