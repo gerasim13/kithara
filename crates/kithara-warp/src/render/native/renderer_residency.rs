@@ -24,6 +24,9 @@ pub(super) struct SourceResidency {
     pub(super) end: Option<u64>,
     pub(super) prepared: Option<ResidentRequest>,
     pub(super) replacement: SampleBuffer,
+    /// The tail a retiring engine drains into, with what still fades out of
+    /// `replacement` blended in; it becomes `replacement` once complete.
+    pub(super) next_replacement: SampleBuffer,
     pub(super) samples: SampleBuffer,
     pub(super) primed: bool,
     pub(super) start: i64,
@@ -122,6 +125,7 @@ impl SourceResidency {
     pub(super) fn clear(&mut self) {
         self.samples.clear();
         self.replacement.clear();
+        self.next_replacement.clear();
         self.replacement_offset = 0;
         self.start = 0;
         self.offset = 0;
@@ -176,6 +180,7 @@ impl SourceResidency {
             history_frames,
             samples: pools.get::<f32>(),
             replacement: pools.get::<f32>(),
+            next_replacement: pools.get::<f32>(),
             replacement_offset: 0,
             start: 0,
             offset: 0,
@@ -186,6 +191,7 @@ impl SourceResidency {
         for (buffer, frames) in [
             (&mut residency.samples, resident_frames),
             (&mut residency.replacement, replacement_frames),
+            (&mut residency.next_replacement, replacement_frames),
         ] {
             let length = buffer.len();
             buffer

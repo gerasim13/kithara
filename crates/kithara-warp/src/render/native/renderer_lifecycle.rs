@@ -643,10 +643,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Retire the running engine's tail into the replacement the re-primed
     /// engine fades from, leaving the held source in the residency.
     fn retire_for_reprime(&mut self) {
-        if let Some(resident) = self.residency.as_mut() {
-            resident.replacement.clear();
-            resident.replacement_offset = 0;
-        }
         match self.retain_projected_replacement() {
             Ok(()) => {
                 if let Some(pending) = self.pending_source.as_mut() {
@@ -664,15 +660,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
+    /// Drain the running engine's tail into the replacement the next engine
+    /// fades from. A fade still under way blends into that tail on the way, so
+    /// the next fade starts from what sounds now.
     fn retain_projected_replacement(&mut self) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels.max(1));
-        let capacity = self
-            .residency
-            .as_ref()
-            .ok_or(ElasticError::PoolCapacity)?
-            .replacement
-            .capacity()
-            / channels;
+        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        resident.next_replacement.clear();
+        let capacity = resident.next_replacement.capacity() / channels;
         let quantum = self
             .engine
             .as_ref()
@@ -690,19 +685,21 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .clear();
             let complete = self.drain_tail(channels)?;
             let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-            let output = self.scratch.as_ref().ok_or(ElasticError::PoolCapacity)?;
-            if resident.replacement.len() + output.len() > resident.replacement.capacity() {
+            let output = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
+            if resident.next_replacement.len() + output.len() > resident.next_replacement.capacity()
+            {
                 return Err(ElasticError::PoolCapacity);
             }
+            resident.blend_replacement(output, channels)?;
             resident
-                .replacement
+                .next_replacement
                 .try_extend_from_slice(output)
                 .map_err(|_| ElasticError::PoolCapacity)?;
-            self.scratch
-                .as_mut()
-                .ok_or(ElasticError::PoolCapacity)?
-                .clear();
+            output.clear();
             if complete {
+                mem::swap(&mut resident.replacement, &mut resident.next_replacement);
+                resident.next_replacement.clear();
+                resident.replacement_offset = 0;
                 resident.primed = false;
                 self.backend_transition_pending = false;
                 self.reprime_pending = false;

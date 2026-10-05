@@ -2170,6 +2170,64 @@ mod tests {
             )
     }
 
+    /// A stereo 440 Hz sine at half scale: a keylock engine keeps its pitch at
+    /// any speed, so its output moves between two samples by at most the
+    /// sine's own step.
+    fn sine(frames: usize) -> Vec<f32> {
+        (0..frames)
+            .flat_map(|frame| {
+                let phase = std::f64::consts::TAU * 440.0 * frame as f64 / 44_100.0;
+                let sample = (0.5 * phase.sin()) as f32;
+                [sample, sample]
+            })
+            .collect()
+    }
+
+    /// A keylock speed change that lands while the previous change's tail
+    /// still fades out fades from what sounds on its frame, so the output
+    /// never jumps: no step between two samples exceeds three times the
+    /// sine's largest step.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn a_speed_change_within_a_tail_fade_fades_from_what_sounds(#[case] backend: StretchKind) {
+        const ENGAGE: u64 = 1_024;
+        const FIRST: u64 = 4_099;
+        const SECOND: u64 = FIRST + 512;
+        const SETTLE: u64 = 16_384;
+        let largest_step = (std::f64::consts::TAU * 440.0 / 44_100.0 * 0.5) as f32;
+        let signal = sine(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let pools = pools();
+        let (mut source, mut lane) = stretch_lane(&pools, (backend, true), &signal);
+        for (at, speed) in [(ENGAGE, 0.8), (FIRST, 1.25), (SECOND, 0.94)] {
+            lane.send(When::At(LaneFrame(at)), speed_batch(speed))
+                .expect("the lane has room for each change");
+        }
+
+        let pcm = lane_pcm(&emit(&mut source, 0, SECOND + SETTLE));
+
+        let (frame, step) = pcm[FIRST as usize - 256..(SECOND + SETTLE) as usize]
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .enumerate()
+            .fold((0, 0.0_f32), |worst, (offset, step)| {
+                if step > worst.1 {
+                    (offset, step)
+                } else {
+                    worst
+                }
+            });
+        assert!(
+            step <= 3.0 * largest_step,
+            "{backend:?}: the output jumps {step:.3} at lane frame {} (the sine steps at most \
+             {largest_step:.3}); changes at {FIRST} and {SECOND}",
+            FIRST as usize - 256 + frame,
+        );
+    }
+
     /// A keylock engine that changes speed on lane frame X renders from X on
     /// what an engine started at X's source frame with the new speed renders:
     /// the change lands on its frame and the source does not jump. The old
