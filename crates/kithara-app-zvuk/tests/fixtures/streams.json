@@ -1,0 +1,41 @@
+{
+  "data": {
+    "mediaContents": [
+      {
+        "id": "1000",
+        "streamV3": {
+          "expire": "2026-10-04T15:00:00+00:00",
+          "hls": "https://media.example.invalid/1000/master.m3u8"
+        }
+      },
+      {
+        "id": "1003",
+        "streamV3": {
+          "expire": "2026-10-04T15:00:00+00:00",
+          "hls": "https://media.example.invalid/1003/master.m3u8"
+        }
+      },
+      {
+        "id": "1006",
+        "streamV3": {
+          "expire": "2026-10-04T15:00:00+00:00",
+          "hls": "https://media.example.invalid/1006/master.m3u8"
+        }
+      },
+      {
+        "id": "1008",
+        "streamV3": {
+          "expire": "2026-10-04T15:00:00+00:00",
+          "hls": "https://media.example.invalid/1008/master.m3u8"
+        }
+      },
+      {
+        "id": "1010",
+        "streamV3": {
+          "expire": "2026-10-04T15:00:00+00:00",
+          "hls": "https://media.example.invalid/1010/master.m3u8"
+        }
+      }
+    ]
+  }
+}

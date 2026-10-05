@@ -28,7 +28,8 @@ async fn app_fixture_updates_position_without_manual_ticks(
     let document = spawn_blocking(|| {
         let temp = temp_dir();
         let path = temp.path().join("app.yaml");
-        fs::write(&path, "drm:\n  providers: []\n").expect("write local configuration");
+        fs::write(&path, "sources:\n  zvuk: null\ndrm:\n  providers: []\n")
+            .expect("write local configuration");
         Config::load(Some(&path), None).expect("load configuration without DRM credentials")
     })
     .await

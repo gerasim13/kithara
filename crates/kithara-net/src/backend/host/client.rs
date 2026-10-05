@@ -22,7 +22,7 @@ use crate::{
     resumable::{Refetch, Resumed, resumable_body},
     retry::RetryNet,
     traits::Net,
-    types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec},
+    types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
 mod kithara {
@@ -207,10 +207,21 @@ impl HostNet {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let raw = self.net.inner();
+        self.with_options(self.options().clone().with_observer(observer))
+    }
+
+    /// Returns a handle with a different retry policy, sharing the host transport.
+    #[must_use]
+    pub fn with_retry_policy(&self, retry_policy: RetryPolicy) -> Self {
+        let mut options = self.options().clone();
+        options.retry_policy = retry_policy;
+        self.with_options(options)
+    }
+
+    fn with_options(&self, options: NetOptions) -> Self {
         Self::from(RawHostNet {
-            options: raw.options.with_observer(observer),
-            exchange: raw.exchange.clone(),
+            options,
+            exchange: self.net.inner().exchange.clone(),
         })
     }
 
