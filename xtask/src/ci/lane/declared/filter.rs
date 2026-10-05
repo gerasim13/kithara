@@ -27,7 +27,11 @@ pub(super) fn apply(
     expression: &str,
     project: &ProjectConfig,
 ) -> Result<bool> {
-    if role != "just" || !args.get(..2).is_some_and(|prefix| prefix == ["test", "run"]) {
+    if role != "just"
+        || !args
+            .get(..2)
+            .is_some_and(|prefix| prefix == ["test", "run"])
+    {
         return Ok(false);
     }
     let lane_name = args
@@ -77,8 +81,14 @@ fn intersect(args: &mut Vec<String>, expression: &str) -> Result<()> {
         }
     }
     if !narrowed {
-        let separator = args.iter().position(|arg| arg == "--").unwrap_or(args.len());
-        args.splice(separator..separator, ["-E".to_owned(), expression.to_owned()]);
+        let separator = args
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(args.len());
+        args.splice(
+            separator..separator,
+            ["-E".to_owned(), expression.to_owned()],
+        );
     }
     Ok(())
 }
@@ -104,9 +114,7 @@ doc = true
     #[test]
     fn a_filter_is_one_argument_and_preserves_the_declared_test_arguments() {
         let expression = "test(a) or test(b); $(touch unexpected)";
-        let mut args = ["test", "run", "--flash=off"]
-            .map(str::to_owned)
-            .to_vec();
+        let mut args = ["test", "run", "--flash=off"].map(str::to_owned).to_vec();
         assert!(apply("just", &mut args, expression, &project()).unwrap());
         assert_eq!(args[3..], ["-E", expression]);
         assert_eq!(args[2], "--flash=off");
@@ -148,7 +156,10 @@ doc = true
             assert!(apply("just", &mut args, "binary(contract)", &project()).unwrap());
             assert_eq!(args[3], "(test(first)) & (binary(contract))");
             let prefix = attached.strip_suffix("test(second)").unwrap();
-            assert_eq!(args[4], format!("{prefix}(test(second)) & (binary(contract))"));
+            assert_eq!(
+                args[4],
+                format!("{prefix}(test(second)) & (binary(contract))")
+            );
             assert_eq!(args[5], "--flash=off");
         }
     }
@@ -161,15 +172,31 @@ doc = true
         assert!(apply("just", &mut args, "test(contract)", &project()).unwrap());
         assert_eq!(
             args,
-            ["test", "run", "-E", "test(contract)", "--", "-E", "binary_argument"]
+            [
+                "test",
+                "run",
+                "-E",
+                "test(contract)",
+                "--",
+                "-E",
+                "binary_argument"
+            ]
         );
     }
 
     #[test]
     fn an_existing_filter_is_narrowed_without_touching_binary_arguments() {
-        let mut args = ["test", "run", "-E", "test(owned)", "--", "-E", "binary_argument"]
-            .map(str::to_owned)
-            .to_vec();
+        let mut args = [
+            "test",
+            "run",
+            "-E",
+            "test(owned)",
+            "--",
+            "-E",
+            "binary_argument",
+        ]
+        .map(str::to_owned)
+        .to_vec();
         assert!(apply("just", &mut args, "test(contract)", &project()).unwrap());
         assert_eq!(args[3], "(test(owned)) & (test(contract))");
         assert_eq!(args[4..], ["--", "-E", "binary_argument"]);

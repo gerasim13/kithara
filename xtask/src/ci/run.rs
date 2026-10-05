@@ -392,7 +392,10 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let lane = Lane::parse(&args.lane, &ext.ci.lanes)?;
     if let Some(expression) = args.test_filter.as_deref() {
         let declared = ext.ci.lanes.get(&args.lane).with_context(|| {
-            format!("CI lane `{}` has no nextest-backed test step to filter", args.lane)
+            format!(
+                "CI lane `{}` has no nextest-backed test step to filter",
+                args.lane
+            )
         })?;
         if !super::lane::declared::validate_filter(
             declared,
@@ -515,7 +518,15 @@ fn report_lane(
             &format!("Xcode {}", ci_config.pins.expected_xcode_version),
         ),
     );
-    let outcome = command_lane(lane, args, &process, ci_config, project, swiftpm_cache, lanes);
+    let outcome = command_lane(
+        lane,
+        args,
+        &process,
+        ci_config,
+        project,
+        swiftpm_cache,
+        lanes,
+    );
     let recorded = process
         .recorded()
         .context("a recording process keeps its recording")?;
@@ -714,7 +725,9 @@ steps = [{ args = ["lint", "gate"], label = "Apple lint gate" }]
         let error = super::execute(&args, &ctx).expect_err("lint cannot accept a test filter");
 
         assert!(
-            error.to_string().contains("has no nextest-backed test step to filter"),
+            error
+                .to_string()
+                .contains("has no nextest-backed test step to filter"),
             "the request must fail before missing pins or host configuration: {error:#}"
         );
         assert!(!checkout.path().join("target").exists());
