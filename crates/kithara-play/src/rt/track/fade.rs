@@ -185,4 +185,46 @@ mod tests {
         assert_eq!(output_l, output_r);
         assert!(fade.settled());
     }
+
+    /// Frame `i` of a fade over `n` frames sounds `gains(i / (n − 1))` of its input: the incoming
+    /// gain on the way up from silence, the outgoing one on the way down from full level.
+    #[kithara::test]
+    fn a_fade_sounds_its_crossfade_gains_frame_by_frame() {
+        const LAW_FRAMES: usize = 16;
+
+        fn sounded(fade: &mut TrackFade) -> [f32; LAW_FRAMES] {
+            let mut input_l = [1.0; LAW_FRAMES];
+            let mut input_r = [1.0; LAW_FRAMES];
+            let mut output_l = [0.0; LAW_FRAMES];
+            let mut output_r = [0.0; LAW_FRAMES];
+            fade.mix_range(
+                &mut [&mut input_l, &mut input_r],
+                &mut [&mut output_l, &mut output_r],
+                0..LAW_FRAMES,
+                LAW_FRAMES,
+            );
+            output_l
+        }
+
+        let sample_rate = NonZeroU32::new(1_000).expect("nonzero");
+        let settings = CrossfadeSettings::new(0.016, CrossfadeCurve::EqualPower, 0.7, 0.3)
+            .expect("valid settings");
+        let law = |frame: usize| {
+            let frame = cast::<usize, f32>(frame).unwrap_or(f32::MAX);
+            let last = cast::<usize, f32>(LAW_FRAMES - 1).unwrap_or(f32::MAX);
+            settings.gains(frame / last)
+        };
+        let mut fade = TrackFade::new(settings, sample_rate);
+
+        fade.fade_in(settings, sample_rate);
+        let rising = sounded(&mut fade);
+        fade.fade_out(settings, sample_rate);
+        let falling = sounded(&mut fade);
+
+        for frame in 0..LAW_FRAMES {
+            let (out, into) = law(frame);
+            assert_eq!(rising[frame], into, "fade-in frame {frame}");
+            assert_eq!(falling[frame], out, "fade-out frame {frame}");
+        }
+    }
 }
