@@ -40,6 +40,9 @@ pub(crate) struct LaneArgs {
     // over a resolution the caller owns.
     #[arg(long, value_enum)]
     kind: PipelineKind,
+    /// Narrow nextest-backed test steps to this expression.
+    #[arg(long, env = "KITHARA_TEST_FILTER")]
+    test_filter: Option<String>,
 }
 
 fn lookup<'a>(lanes: &'a BTreeMap<String, CiLaneConfig>, name: &str) -> Result<&'a CiLaneConfig> {
@@ -140,6 +143,14 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
+    if let Some(expression) = args.test_filter.as_deref()
+        && !declared::validate_filter(lane, args.kind.name(), expression, &ctx.config)?
+    {
+        bail!(
+            "CI lane `{}` has no nextest-backed test step to filter",
+            args.lane
+        );
+    }
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let (dir, cargo_dir, build) = match target(&args.lane, lane, var)? {
         Target::Slot(pool) => {
@@ -169,9 +180,10 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
             &process,
             lane,
             &pins,
-            &ctx.config.tools,
+            &ctx.config,
             args.kind,
             build.as_ref(),
+            args.test_filter.as_deref(),
         );
         if var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty()) {
             let on_github =
@@ -403,6 +415,7 @@ label = "run"
         let args = LaneArgs {
             lane: "trivial".to_owned(),
             kind: PipelineKind::Branch,
+            test_filter: None,
         };
         (ctx, args)
     }

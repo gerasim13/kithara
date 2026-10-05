@@ -7,9 +7,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::common::tools::ToolsConfig;
+use kithara_devtools::common::{project::ProjectConfig, tools::ToolsConfig};
 use toml::Value;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     child,
@@ -33,14 +33,19 @@ pub(crate) fn run(
     process: &Process,
     lane: &CiLaneConfig,
     pins: &CiPins,
-    tools: &ToolsConfig,
+    project: &ProjectConfig,
     kind: PipelineKind,
     claim: Option<&LaneBuild>,
+    test_filter: Option<&str>,
 ) -> Result<()> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(u64::from(lane.timeout_minutes) * 60))
         .context("declared CI lane deadline exceeds the monotonic clock range")?;
     let kind = kind_name(kind);
+    let tools = &project.tools;
+    if let Some(expression) = test_filter {
+        super::filter::validate(lane, &kind, expression, project)?;
+    }
     if let Some(reason) = lane.kinds_refused.get(&kind) {
         bail!("{reason}");
     }
@@ -91,13 +96,18 @@ pub(crate) fn run(
         } else {
             OsString::from(tools.program(role))
         };
-        let args = step
+        let mut args = step
             .args_by_kind
             .get(&kind)
             .unwrap_or(&step.args)
             .iter()
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
+        if let Some(expression) = test_filter
+            && super::filter::apply(role, &mut args, expression, project)?
+        {
+            info!(step = %step.label, ?program, ?args, "filtered test command");
+        }
         let vars = step_vars(lane, step, process, pins)?;
         process.run_command_until(
             process.command(&program).args(&args).envs(&vars),
@@ -439,8 +449,9 @@ mod tests {
             &process,
             lane,
             &fixture().pins,
-            &ToolsConfig::default(),
+            &ProjectConfig::default(),
             PipelineKind::Branch,
+            None,
             None,
         )
         .unwrap();
@@ -518,8 +529,9 @@ mod tests {
             &process,
             &lane,
             &fixture().pins,
-            &ToolsConfig::default(),
+            &ProjectConfig::default(),
             PipelineKind::Branch,
+            None,
             None,
         )
         .expect_err("no slot to replay");

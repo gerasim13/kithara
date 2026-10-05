@@ -9,7 +9,7 @@ use std::{
 };
 
 use axum::{Router, http::StatusCode, routing::get};
-use kithara_devtools::common::tools::ToolsConfig;
+use kithara_devtools::common::{project::ProjectConfig, tools::ToolsConfig};
 use kithara_platform::tokio::{runtime::Builder, task::spawn_blocking};
 use kithara_test_utils::TestHttpServer;
 
@@ -104,6 +104,10 @@ fn deps_deny_stall_probe() {
         "rc": { "program": root.join("missing-deps-deny-fixture-cache-client") },
     }))
     .unwrap();
+    let project = ProjectConfig {
+        tools,
+        ..ProjectConfig::default()
+    };
     let process = Process::new(
         root,
         BTreeMap::from([(OsString::from(STALL_URL), env::var_os(STALL_URL).unwrap())]),
@@ -113,8 +117,9 @@ fn deps_deny_stall_probe() {
         &process,
         lane,
         &fixture().pins,
-        &tools,
+        &project,
         PipelineKind::Quarantine,
+        None,
         None,
     )
     .expect_err("a dependency request that never receives a response must fail");
