@@ -190,9 +190,16 @@ mod tests {
             .coverage(coverage)
             .fingerprint(active())
             .maybe_waveform(waveform)
-            .maybe_beat(
-                beat.map(|grid| BeatSnapshot::new(grid, BeatState::Provisional, vec![100..150])),
-            )
+            .maybe_beat(beat.map(|grid| {
+                BeatSnapshot::new(
+                    grid,
+                    BeatState::Provisional,
+                    vec![Range {
+                        start: 100,
+                        end: 150,
+                    }],
+                )
+            }))
             .build()
     }
 
@@ -313,7 +320,10 @@ mod tests {
             .beat(BeatSnapshot::new(
                 grid(),
                 BeatState::Provisional,
-                vec![400..600],
+                vec![Range {
+                    start: 400,
+                    end: 600,
+                }],
             ))
             .build();
         let bytes = encode(&want);

@@ -24,19 +24,14 @@ fn encode_in_chunks(
 }
 
 fn chunking_does_not_change_the_encoded_stream(samples: &[f32], backend: StreamBackend) {
-    let whole = encode_in_chunks(
-        backend,
-        &samples,
-        consts::FRAMES,
-        consts::STREAM_SAMPLE_RATE,
-    );
+    let whole = encode_in_chunks(backend, samples, consts::FRAMES, consts::STREAM_SAMPLE_RATE);
     let framed = encode_in_chunks(
         backend,
         samples,
         StreamEncoder::FRAME_SAMPLES,
         consts::STREAM_SAMPLE_RATE,
     );
-    let ragged = encode_in_chunks(backend, &samples, 333, consts::STREAM_SAMPLE_RATE);
+    let ragged = encode_in_chunks(backend, samples, 333, consts::STREAM_SAMPLE_RATE);
 
     assert!(!whole.is_empty(), "encoder produced no access units");
     assert_eq!(whole, framed);
@@ -55,7 +50,7 @@ fn timestamps_start_at_zero_and_advance_by_one_frame(
     for timescale in [consts::STREAM_SAMPLE_RATE, 90_000] {
         let rescale =
             |frames: u64| frames * u64::from(timescale) / u64::from(consts::STREAM_SAMPLE_RATE);
-        let units = encode_in_chunks(backend, &samples, StreamEncoder::FRAME_SAMPLES, timescale);
+        let units = encode_in_chunks(backend, samples, StreamEncoder::FRAME_SAMPLES, timescale);
 
         let mut expected_pts = 0;
         for unit in &units {

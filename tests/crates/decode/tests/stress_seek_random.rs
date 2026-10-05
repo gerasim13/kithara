@@ -15,12 +15,56 @@ use kithara_test_utils::{TestTempDir, Xorshift64};
 use tempfile::NamedTempFile;
 use tracing::info;
 
+const SEEK_ITERATIONS: usize = 1000;
+
 #[derive(Default)]
 struct SeekStats {
     successful_reads: u64,
     total_samples_read: u64,
     channel_mismatches: u64,
     zero_reads: u64,
+}
+
+impl SeekStats {
+    /// At most three of the seeks read nothing, and none returned stereo
+    /// channels that differ.
+    fn assert_healthy(&self) {
+        let Self {
+            successful_reads,
+            total_samples_read,
+            channel_mismatches,
+            zero_reads,
+        } = *self;
+
+        info!(
+            successful_reads,
+            total_samples_read,
+            channel_mismatches,
+            zero_reads,
+            "All {} seek+read iterations done",
+            SEEK_ITERATIONS
+        );
+
+        if zero_reads > 0 {
+            tracing::warn!(zero_reads, "zero-reads detected (within tolerance of 3)");
+        }
+        assert!(
+            zero_reads <= 3,
+            "{} zero-reads out of {} (>3 tolerance) — decoder EOF race",
+            zero_reads,
+            SEEK_ITERATIONS
+        );
+        assert!(
+            successful_reads >= SEEK_ITERATIONS as u64 - 3,
+            "only {} successful reads out of {}",
+            successful_reads,
+            SEEK_ITERATIONS
+        );
+        assert_eq!(
+            channel_mismatches, 0,
+            "L/R channel data diverged {channel_mismatches} times — data corruption"
+        );
+    }
 }
 
 fn run_seek_iterations(
@@ -149,7 +193,6 @@ fn read_final_tail(
 async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTempFile) {
     const DURATION_SECS_INT: u32 = 10;
     const DURATION_SECS: f64 = DURATION_SECS_INT as f64;
-    const SEEK_ITERATIONS: usize = 1000;
 
     let cache = TestTempDir::new();
     let pools = pools();
@@ -208,41 +251,7 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
             max_seek_secs, "Generated seek positions"
         );
 
-        let SeekStats {
-            successful_reads,
-            total_samples_read,
-            channel_mismatches,
-            zero_reads,
-        } = run_seek_iterations(&mut audio, &mut buf, &seek_positions, spec);
-
-        info!(
-            successful_reads,
-            total_samples_read,
-            channel_mismatches,
-            zero_reads,
-            "All {} seek+read iterations done",
-            SEEK_ITERATIONS
-        );
-
-        if zero_reads > 0 {
-            tracing::warn!(zero_reads, "zero-reads detected (within tolerance of 3)");
-        }
-        assert!(
-            zero_reads <= 3,
-            "{} zero-reads out of {} (>3 tolerance) — decoder EOF race",
-            zero_reads,
-            SEEK_ITERATIONS
-        );
-        assert!(
-            successful_reads >= SEEK_ITERATIONS as u64 - 3,
-            "only {} successful reads out of {}",
-            successful_reads,
-            SEEK_ITERATIONS
-        );
-        assert_eq!(
-            channel_mismatches, 0,
-            "L/R channel data diverged {channel_mismatches} times — data corruption"
-        );
+        run_seek_iterations(&mut audio, &mut buf, &seek_positions, spec).assert_healthy();
 
         let final_seek_secs = total_secs - chunk_duration_secs;
         info!(final_seek_secs, "Final seek near end");

@@ -52,6 +52,9 @@ pub(crate) const CRAP_REPORT: &str = "report.md";
 pub(crate) const METRICS: &str = "metrics.json";
 pub(crate) const SIMILARITY_ARTIFACT: &str = "similarity-report";
 pub(crate) const SIMILARITY_REPORT: &str = "report.md";
+/// Where the similarity report stops listing duplicated pairs and starts
+/// listing parallel chains, the last section of the document.
+pub(crate) const PARALLEL_CHAINS: &str = "## Parallel chains";
 
 /// Where the health report stops being a verdict and starts being logs.
 pub(crate) const STAGE_DETAILS: &str = "## Stage details";

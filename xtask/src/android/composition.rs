@@ -257,7 +257,7 @@ mod tests {
             parse("kithara-decode v1|android\nkithara-mpa v1|\nsymphonia-core v1|\n").unwrap();
         compare(&product, &product).unwrap();
         let mut leaked = product.clone();
-        leaked.insert("symphonia-bundle-mp3".into(), Default::default());
+        leaked.insert("symphonia-bundle-mp3".into(), BTreeSet::new());
         assert!(compare(&product, &leaked).is_err());
     }
 

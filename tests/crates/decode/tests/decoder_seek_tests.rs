@@ -1,6 +1,6 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioEvent, AudioRead, ChunkOutcome},
+    audio::{AudioConfig, AudioControl, AudioEvent, AudioRead, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
     events::EventBus,
     file::{File, FileConfig},
@@ -1440,7 +1440,6 @@ async fn decoder_file_seek_emits_events(#[case] asset: SignalAsset, temp_dir: Te
             break;
         }
 
-        use kithara::audio::ReadOutcome;
         match decoder.read(&mut buf) {
             Ok(ReadOutcome::Pending { .. }) => {
                 decoder.preload().expect("preload must succeed");

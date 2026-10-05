@@ -29,9 +29,8 @@ fn warmup_until_first_frame(
     let mut warmup_samples = 0u64;
     while warmup_samples == 0 {
         match audio.read(buf) {
-            Ok(ReadOutcome::Pending { .. }) => break,
             Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-            Ok(ReadOutcome::Eof { .. }) => break,
+            Ok(ReadOutcome::Pending { .. } | ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("warmup decode error: {e}"),
         }
     }
@@ -228,8 +227,7 @@ async fn seek_sequence_from_log_real_stream(
         let mut buf = vec![0f32; 4096];
         loop {
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { .. }) => break,
-                Ok(ReadOutcome::Eof { .. }) => break,
+                Ok(ReadOutcome::Frames { .. } | ReadOutcome::Eof { .. }) => break,
                 Ok(ReadOutcome::Pending { .. }) => continue,
                 Err(e) => panic!("warmup read error: {e}"),
             }

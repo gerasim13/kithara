@@ -94,6 +94,7 @@ impl Read for InterruptingSource {
         let read = end - start;
         buf[..read].copy_from_slice(&state.bytes[start..end]);
         state.pos = end;
+        drop(state);
         Ok(read)
     }
 }
