@@ -66,6 +66,7 @@ resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rub
 stretch-signalsmith = ["kithara-render/stretch-signalsmith", "kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-render/stretch-bungee", "kithara-warp/stretch-bungee"]
 stretch-glide = ["kithara-render/stretch-glide", "kithara-warp/stretch-glide"]
+stretch-identity = ["kithara-render/stretch-identity", "kithara-warp/stretch-identity"]
 usdt = [
     "kithara-effects/usdt",
     "kithara-test-utils/usdt",

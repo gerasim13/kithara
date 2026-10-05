@@ -1,9 +1,11 @@
 use kithara_bufpool::HasPool;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_derive::Ranged;
 
 use super::{ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticError, ElasticRequest};
 
 /// Valid native pitch factor shared by every elastic backend.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
 #[ranged(min = 0.25, max = 4.0, default = 1.0)]
 pub(crate) struct PitchScale(f64);
@@ -103,6 +105,7 @@ pub trait ElasticEngine: Send + 'static {
     ///
     /// # Errors
     /// Returns [`ElasticError`] when `scale` is outside the common native
-    /// range `0.25..=4.0` or is not finite.
+    /// range `0.25..=4.0`, is not finite, or the selected backend does not
+    /// support the requested pitch change.
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError>;
 }
