@@ -5,7 +5,7 @@ on:
     inputs:
       scope:
         type: choice
-        options: [all, issue-327, source-gates]
+        options: [all, issue-327, issue-566, source-gates]
         default: all
       checks_revision:
         description: Immutable fork revision for format and fast lint checks
@@ -242,6 +242,9 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" > validation/controller-sha.txt
           git rev-parse HEAD | tee validation/subject-sha.txt
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Execute the frozen UI routing contract
+        if: inputs.scope == 'issue-566'
+        run: just test run --lane=tooling --net-backend=none --flash=off -p xtask -E 'test(a_ui_owned_branch_push_routes_to_the_gpu_suite_and_requires_its_verdict)' 2>&1 | tee validation/ui-routing-contract.log
       - name: Check repository fast lint gate
         run: just lint fast 2>&1 | tee validation/lint-fast.log
       - name: Check formatting and preserve any required source patch
