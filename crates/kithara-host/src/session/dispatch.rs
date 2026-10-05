@@ -1815,6 +1815,8 @@ mod tests {
     #[kithara::test]
     fn a_ducking_change_lowers_a_sounding_dc_along_a_ramp() {
         const DC: f32 = 0.25;
+        /// The share of the session output `Hard` ducking leaves: 28 dB down.
+        const HARD_DUCKED: f32 = 0.04;
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
@@ -1848,7 +1850,7 @@ mod tests {
         ));
         let after = render_left(&mut state, &mut clock, 40);
 
-        let ducked = DC * SessionDuckingMode::Hard.gain();
+        let ducked = DC * HARD_DUCKED;
         let settled = *after.last().expect("the stream rendered");
         assert!(
             (settled - ducked).abs() < 1e-4,

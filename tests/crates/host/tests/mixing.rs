@@ -5,7 +5,10 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     events::TrackId,
-    host::{HostConfig, HostOwned, HostSettings, HostSettingsChange},
+    host::{
+        HostConfig, HostOwned, HostSettings, HostSettingsChange, HostSettingsControl,
+        MetronomeConfigControl, Tap,
+    },
     platform::time::{self, Duration},
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
@@ -15,8 +18,12 @@ use kithara::{
 };
 use kithara_command::When;
 use kithara_config::Configure;
-use kithara_integration_tests::offline::{OfflineHostHarness, resource_from_reader};
+use kithara_integration_tests::{
+    audio_artifact::{AudioArtifactTap, artifact_label},
+    offline::{OfflineHostHarness, resource_from_reader},
+};
 use kithara_test_fixtures::{
+    analysis_beat_fixtures::sine_440_long,
     integration_fixtures::{
         constant_four, constant_quiet, constant_three, constant_two, constant_unity,
     },
@@ -34,6 +41,13 @@ const CEILING: f32 = 0.98;
 const CHANNELS: usize = 2;
 /// Frames into a block a timed ducking change lands on.
 const DUCK_OFFSET_FRAMES: u64 = 400;
+/// Blocks each ducking of a listening take sounds for: two bars at the
+/// 120 BPM a Host never given a tempo counts.
+const TAKE_BLOCKS: usize = 345;
+/// The share of the session output `Soft` ducking leaves: 16 dB down.
+const SOFT_DUCKED: f32 = 0.16;
+/// The share of the session output `Hard` ducking leaves: 28 dB down.
+const HARD_DUCKED: f32 = 0.04;
 
 struct MixHarness {
     host: OfflineHostHarness<TestPools>,
@@ -80,23 +94,27 @@ impl MixHarness {
     }
 
     async fn play(&self, values: &[&'static [u8]]) {
-        let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
+        self.play_readers(
+            values
+                .iter()
+                .map(|value| TestPcmReader::with_pcm(spec(), TRACK_SECS, value))
+                .collect(),
+        )
+        .await;
+    }
+
+    async fn play_readers(&self, readers: Vec<TestPcmReader>) {
         let players: Vec<_> = self
             .players
             .iter()
             .map(|player| player.control().clone())
             .collect();
-        let values = values.to_vec();
         self.host
             .run(move || {
-                for (player, value) in players.iter().zip(values) {
+                for (player, reader) in players.iter().zip(readers) {
                     player.reserve_slots(1);
                     player
-                        .replace_item(
-                            0,
-                            resource_from_reader(TestPcmReader::with_pcm(spec, TRACK_SECS, value)),
-                            TrackId::allocate(),
-                        )
+                        .replace_item(0, resource_from_reader(reader), TrackId::allocate())
                         .expect("replace player item");
                     player
                         .select_item_with_crossfade(
@@ -158,6 +176,10 @@ impl MixHarness {
         drop(players);
         host.close().await;
     }
+}
+
+fn spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"))
 }
 
 fn assert_near(actual: f32, expected: f32, what: &str) {
@@ -347,37 +369,65 @@ async fn ducking_set_for_a_frame_inside_a_block_leaves_the_frames_before_it_alon
     );
 }
 
-/// Ducking lowers the whole session output, deeper for `Hard` than `Soft`, and
-/// `Off` restores the undocked level on a playing session.
+/// Ducking lowers the whole session output to its share, `Soft` 16 dB and
+/// `Hard` 28 dB down, under the Host metronome, and `Off` restores the
+/// undocked level on a playing session.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn ducking_lowers_and_restores_the_session_output(constant_four: &'static [u8]) {
+async fn ducking_lowers_and_restores_the_session_output(sine_440_long: Vec<f32>) {
+    let segment_samples = TAKE_BLOCKS * BLOCK_FRAMES * CHANNELS;
+    let tone: Vec<f32> = sine_440_long.into_iter().step_by(CHANNELS).collect();
+    let tone_peak = peak(&tone);
     let harness = MixHarness::new(1).await;
-    harness.play(&[constant_four]).await;
-    let undocked = harness.steady_peak().await;
-    assert_near(undocked, 0.4, "undocked playback");
+    let mut master = harness
+        .host
+        .attach_tap(Tap::Master, 2 * segment_samples)
+        .await
+        .expect("master tap");
+    harness
+        .host
+        .with(|host| host.metronome().set_enabled(true))
+        .await
+        .expect("metronome on");
+    let mut artifact = AudioArtifactTap::from_env(
+        &artifact_label(),
+        SAMPLE_RATE,
+        u16::try_from(CHANNELS).expect("channel count"),
+    )
+    .expect("listening artifact");
+    harness
+        .play_readers(vec![TestPcmReader::with_samples(spec(), tone)])
+        .await;
 
     let mut levels = Vec::new();
-    for mode in [SessionDuckingMode::Soft, SessionDuckingMode::Hard] {
+    for (mode, label) in [
+        (SessionDuckingMode::Off, "off"),
+        (SessionDuckingMode::Soft, "soft"),
+        (SessionDuckingMode::Hard, "hard"),
+        (SessionDuckingMode::Off, "restored"),
+    ] {
         harness.set_ducking(mode).await;
-        levels.push(harness.steady_peak().await);
+        let mut take = Vec::with_capacity(segment_samples);
+        for _ in 0..TAKE_BLOCKS {
+            take.extend(harness.render_block().await);
+        }
+        if let Some(artifact) = artifact.as_mut() {
+            artifact.mark(label);
+            artifact.push(&take);
+        }
+        let mix = master.drain();
+        levels.push(peak(
+            &mix[mix.len() - MEASURE_BLOCKS * BLOCK_FRAMES * CHANNELS..],
+        ));
     }
-    let [soft, hard] = levels[..] else {
-        unreachable!("two ducked levels");
-    };
-    assert!(
-        soft < undocked * 0.5 && soft > 0.0,
-        "soft ducking must lower the output: undocked={undocked}, soft={soft}"
-    );
-    assert!(
-        hard < soft,
-        "hard ducking must go below soft: soft={soft}, hard={hard}"
-    );
-
-    harness.set_ducking(SessionDuckingMode::Off).await;
-    assert_near(
-        harness.steady_peak().await,
-        undocked,
-        "ducking off restores the level",
-    );
+    drop(artifact);
+    assert_eq!(master.drops(), 0, "the master tap keeps every frame");
     harness.close().await;
+
+    let [undocked, soft, hard, restored] = levels[..] else {
+        unreachable!("four ducking levels");
+    };
+    assert_near(undocked, tone_peak, "undocked playback");
+    assert_near(soft, undocked * SOFT_DUCKED, "soft ducking");
+    assert_near(hard, undocked * HARD_DUCKED, "hard ducking");
+    assert_near(restored, undocked, "ducking off restores the level");
 }
