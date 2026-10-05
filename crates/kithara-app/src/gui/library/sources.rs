@@ -14,7 +14,10 @@ mod consts {
     use kithara_app_library::Factory;
 
     /// Every library source this build can mount.
-    pub(in crate::gui) const FACTORIES: &[Factory<HttpClient>] = &[];
+    pub(in crate::gui) const FACTORIES: &[Factory<HttpClient>] = &[
+        #[cfg(feature = "zvuk")]
+        kithara_app_zvuk::Source::FACTORY,
+    ];
 }
 
 /// The sources of `factories` the document configures: each one whose entry

@@ -1,0 +1,11 @@
+(
+    id: "zvuk-en",
+    schema: "kithara.text",
+    version: 1,
+    entries: {
+        "library.source.zvuk": "Zvuk",
+        "zvuk.node.search": "Search",
+        "zvuk.node.liked": "Liked tracks",
+        "zvuk.node.playlists": "Playlists",
+    },
+)
