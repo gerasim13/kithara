@@ -8,7 +8,7 @@ use std::{
 
 use super::{
     Clock, Core, CvDesc, CvId, FlashInner, Registry, WaiterId,
-    credit::{self, WaitGuard},
+    credit::{self, HeldSlot, WaitGuard},
     gate::TaskGate,
     state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
     wake::{Token, Wake},
@@ -755,32 +755,27 @@ impl FlashInner {
         gate
     }
 
-    /// Gate completion under the `core` lock: mark `Done` and release the slot
-    /// atomically (mirrors [`FlashInner::gate_park`]'s release arm for a poll that
-    /// returned Ready).
-    pub(super) fn gate_complete(&self, state: &AtomicTaskState, id: u64) {
+    /// Gate completion under the `core` lock: mark `Done` and move the slot into
+    /// a [`HeldSlot`] for the task's joiner, atomically (the counterpart of
+    /// [`FlashInner::gate_park`]'s release arm for a poll that returned Ready).
+    pub(super) fn gate_complete(&self, state: &AtomicTaskState, id: u64) -> HeldSlot {
         let mut s = self.core.lock();
         state.store(TaskState::Done);
-        s.registry.active_async_holders.remove(&id);
         s.registry.task_diag.remove(&id);
-        let adv = s.release_async(&self.clock);
-        drop(s);
-        adv.fire();
+        s.hold_async(id)
     }
 
-    /// Gate drop under the `core` lock: swap to `Done`; release the slot iff the task
-    /// still held one (its prior state was counted — `Runnable`/`Running`/`RunningNotified`).
-    pub(super) fn gate_drop_release(&self, state: &AtomicTaskState, id: u64) {
+    /// Gate drop under the `core` lock: swap to `Done`; the slot, iff the task
+    /// still held one (its prior state was counted — `Runnable`/`Running`/
+    /// `RunningNotified`), moves into a [`HeldSlot`] for the task's joiner.
+    pub(super) fn gate_drop(&self, state: &AtomicTaskState, id: u64) -> Option<HeldSlot> {
         let mut s = self.core.lock();
         s.registry.task_diag.remove(&id);
         match state.swap(TaskState::Done) {
             TaskState::Runnable | TaskState::Running | TaskState::RunningNotified => {
-                s.registry.active_async_holders.remove(&id);
-                let adv = s.release_async(&self.clock);
-                drop(s);
-                adv.fire();
+                Some(s.hold_async(id))
             }
-            TaskState::Parked | TaskState::Done => {}
+            TaskState::Parked | TaskState::Done => None,
         }
     }
 

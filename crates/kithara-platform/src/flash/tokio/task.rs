@@ -1,12 +1,14 @@
 use std::{future::Future, panic::Location};
 
 pub use crate::{
-    backend::tokio::task::{JoinError, JoinHandle},
-    flash::yield_now,
+    backend::tokio::task::JoinError,
+    flash::{join::JoinHandle, yield_now},
 };
 use crate::{
     backend::tokio::{backend::task, runtime::Handle, task as native_task},
+    flash::join::Join,
     maybe_send::MaybeSend,
+    sync::Arc,
 };
 
 /// Spawns async work through the platform's accounting boundary. Under flash,
@@ -15,6 +17,7 @@ use crate::{
 /// [`crate::flash::with_ambient`] restores the parent's ambient snapshot per poll
 /// across worker threads. That outer wrap covers both accounting and task code.
 /// Outside simulation, delegates to native Tokio.
+/// Completed work keeps its engine credit until its waiting joiner wakes.
 #[track_caller]
 pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
 where
@@ -23,10 +26,13 @@ where
 {
     let on = crate::flash::ambient_snapshot();
     let loc = Location::caller();
-    task::spawn(crate::flash::with_ambient(
+    let join = Join::new();
+    let task = task::spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc),
-    ))
+        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc)
+            .joined(Arc::clone(&join)),
+    ));
+    JoinHandle::new(task, join)
 }
 
 /// Spawn a future on a SPECIFIC runtime [`Handle`] through the chokepoint.
@@ -43,10 +49,13 @@ where
 {
     let on = crate::flash::ambient_snapshot();
     let loc = Location::caller();
-    handle.spawn(crate::flash::with_ambient(
+    let join = Join::new();
+    let task = handle.spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc),
-    ))
+        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc)
+            .joined(Arc::clone(&join)),
+    ));
+    JoinHandle::new(task, join)
 }
 
 /// Spawns blocking work, delegating directly to Tokio outside simulation.
@@ -56,13 +65,19 @@ where
 /// cannot outrun real work. Non-ambient work remains uncounted.
 /// The parent's ambient snapshot is restored for the closure's lifetime because
 /// thread-locals do not cross the blocking pool.
+/// Completed work keeps its engine credit until its waiting joiner wakes.
 #[track_caller]
 pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    native_task::spawn_blocking(crate::flash::thread::wrap_pool_task(f))
+    let join = Join::new();
+    let task = native_task::spawn_blocking(crate::flash::thread::joined_pool_task(
+        f,
+        Some(Arc::clone(&join)),
+    ));
+    JoinHandle::new(task, join)
 }
 
 /// Spawn synchronous work without blocking an async runtime worker.
@@ -88,5 +103,10 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    handle.spawn_blocking(crate::flash::thread::wrap_pool_task(f))
+    let join = Join::new();
+    let task = handle.spawn_blocking(crate::flash::thread::joined_pool_task(
+        f,
+        Some(Arc::clone(&join)),
+    ));
+    JoinHandle::new(task, join)
 }

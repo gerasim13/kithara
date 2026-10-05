@@ -1461,6 +1461,52 @@ fn an_unjoined_task_lets_the_clock_advance_when_it_finishes() {
     assert_eq!(took, Duration::from_secs(1));
 }
 
+/// A poll of the handle that the task budget turns away registers no join
+/// wake, and a runtime that stops running drops the wake it deferred. A slot
+/// held for that poll would then have nothing to release it. Here the root
+/// task spends its budget, polls the handle once and returns while the closure
+/// is still running; the closure finishes with nobody waiting on it, and the
+/// clock must stay free.
+#[kithara::test(native, flash(false))]
+fn a_join_poll_the_budget_turns_away_holds_no_slot() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let release = Arc::new(AtomicUsize::new(0));
+    let release_in = Arc::clone(&release);
+    let body = async move {
+        let mut handle = crate::tokio::task::spawn_blocking(move || {
+            while release_in.load(Ordering::Acquire) == 0 {
+                crate::thread::yield_now();
+            }
+        });
+        std::future::poll_fn(|cx| {
+            while let std::task::Poll::Ready(spent) = tokio::task::coop::poll_proceed(cx) {
+                spent.made_progress();
+            }
+            assert!(std::pin::Pin::new(&mut handle).poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        handle
+    };
+    let handle = rt.block_on(participate(body, Location::caller()));
+    release.store(1, Ordering::Release);
+    while !handle.is_finished() {
+        thread::yield_now();
+    }
+    let start = Instant::now();
+    rt.block_on(participate(
+        crate::time::sleep(Duration::from_secs(1)),
+        Location::caller(),
+    ));
+    assert_eq!(start.elapsed(), Duration::from_secs(1));
+}
+
 /// A starved poll loop must not buy virtual time with its own backoff. A dated
 /// backoff registers a free `Timed` deadline that the engine services in
 /// isolation: each wake re-polls and re-sleeps, so a consumer whose producer is
