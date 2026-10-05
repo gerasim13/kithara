@@ -662,7 +662,7 @@ mod tests {
         // the resampler tail must be flushed, not dropped.
         let pcm = sine_440;
         let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
-        let mut detector = detector(|mono| {
+        let detector = detector(|mono| {
             assert_eq!(
                 mono.len(),
                 2 * consts::TARGET,
@@ -680,10 +680,8 @@ mod tests {
             );
             empty_raw()
         });
-        push_chunked(&mut analyzer, &pcm, 1000, &mut detector);
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        push_chunked(&mut analyzer, &pcm, 1000, &detector);
+        analyzer.snapshot(&detector, true).expect("mock detects");
     }
 
     #[kithara::test]
@@ -692,7 +690,7 @@ mod tests {
         // sample ~22050. An untrimmed resampler delay shifts it late.
         let pcm = step;
         let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
-        let mut detector = detector(|mono| {
+        let detector = detector(|mono| {
             assert_eq!(mono.len(), 2 * consts::TARGET);
             let crossing = mono
                 .iter()
@@ -705,10 +703,8 @@ mod tests {
             );
             empty_raw()
         });
-        push_chunked(&mut analyzer, &pcm, 4096, &mut detector);
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        push_chunked(&mut analyzer, &pcm, 4096, &detector);
+        analyzer.snapshot(&detector, true).expect("mock detects");
     }
 
     #[kithara::test]
@@ -716,16 +712,14 @@ mod tests {
         // L = +0.8, R = -0.8 cancels to mono silence.
         let pcm = cancelling;
         let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
-        let mut detector = detector(|mono| {
+        let detector = detector(|mono| {
             assert_eq!(mono.len(), consts::TARGET);
             let peak = mono.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
             assert!(peak < 0.05, "cancelling stereo must downmix to ~0: {peak}");
             empty_raw()
         });
-        analyzer.push_interleaved(&pcm, 2, 0, Opens::Run, &mut detector);
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        analyzer.push_interleaved(&pcm, 2, 0, Opens::Run, &detector);
+        analyzer.snapshot(&detector, true).expect("mock detects");
     }
 
     #[kithara::test]
@@ -733,14 +727,12 @@ mod tests {
         // A 22 050 Hz source needs no resampling: the detector sees the input.
         let pcm = quarter_10000;
         let mut analyzer = analyzer(22_050, BeatAnalysisConfig::<RubatoBackend>::default());
-        let mut detector = detector(|mono| {
+        let detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 10_000].as_slice());
             empty_raw()
         });
-        push_chunked(&mut analyzer, &pcm, 999, &mut detector);
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        push_chunked(&mut analyzer, &pcm, 999, &detector);
+        analyzer.snapshot(&detector, true).expect("mock detects");
     }
 
     #[kithara::test]
@@ -751,14 +743,12 @@ mod tests {
             .build();
         let pcm = quarter_4096;
         let mut analyzer = analyzer(consts::SRC, config);
-        let mut detector = detector(|mono| {
+        let detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
             empty_raw()
         });
-        analyzer.push_interleaved(&pcm, 2, 0, Opens::Run, &mut detector);
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        analyzer.push_interleaved(&pcm, 2, 0, Opens::Run, &detector);
+        analyzer.snapshot(&detector, true).expect("mock detects");
     }
 
     #[kithara::test]
@@ -772,17 +762,15 @@ mod tests {
         let pcm = quarter_132300;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
-        let mut detector = detector(move |mono| {
+        let detector = detector(move |mono| {
             seen_for_detector.lock().push(mono.len());
             assert!(mono.len() <= usize::try_from(consts::SRC).unwrap_or(0));
             empty_raw()
         });
         let mut analyzer = analyzer(consts::SRC, config);
 
-        push_chunked(&mut analyzer, &pcm, 2048, &mut detector);
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        push_chunked(&mut analyzer, &pcm, 2048, &detector);
+        analyzer.snapshot(&detector, true).expect("mock detects");
 
         let seen = seen.lock().clone();
         assert_eq!(seen.as_slice(), &[44_100, 44_100, 44_100]);
@@ -799,21 +787,19 @@ mod tests {
         let pcm = quarter_88200;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
-        let mut detector = detector(move |mono| {
+        let detector = detector(move |mono| {
             seen_for_detector.lock().push(mono.len());
             empty_raw()
         });
         let mut analyzer = analyzer(consts::SRC, config);
 
-        analyzer.push_interleaved(&pcm, 2, 0, Opens::Run, &mut detector);
+        analyzer.push_interleaved(&pcm, 2, 0, Opens::Run, &detector);
         assert_eq!(
             seen.lock().as_slice(),
             &[2 * 44_100],
             "the run is usable as soon as it reaches the minimum"
         );
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        analyzer.snapshot(&detector, true).expect("mock detects");
 
         let seen = seen.lock().clone();
         assert_eq!(
@@ -836,16 +822,16 @@ mod tests {
         let pcm = quarter_529200;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
-        let mut detector = detector(move |mono| {
+        let detector = detector(move |mono| {
             seen_for_detector.lock().push(mono.len());
             RawBeats::new(vec![BeatMark::new(0.5, 0.9)], vec![BeatMark::new(0.5, 0.9)])
         });
         let mut analyzer = analyzer(consts::SRC, config);
 
         // Three seconds: past the minimum, far short of a window.
-        analyzer.push_interleaved(&pcm[..3 * second * 2], 2, 0, Opens::Run, &mut detector);
+        analyzer.push_interleaved(&pcm[..3 * second * 2], 2, 0, Opens::Run, &detector);
         let early = analyzer
-            .snapshot(&mut detector, false)
+            .snapshot(&detector, false)
             .expect("a short run still builds a grid");
         assert!(
             !early.beats().is_empty(),
@@ -863,11 +849,9 @@ mod tests {
             2,
             u64::try_from(3 * second).unwrap_or(0),
             Opens::Run,
-            &mut detector,
+            &detector,
         );
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        analyzer.snapshot(&detector, true).expect("mock detects");
         let seen = seen.lock().clone();
         assert!(
             seen.contains(&(8 * second)),
@@ -894,11 +878,9 @@ mod tests {
                 .collect(),
         );
         let mut analyzer = analyzer(48_000, BeatAnalysisConfig::<RubatoBackend>::default());
-        let mut detector = detector(move |_| raw.clone());
-        analyzer.push_interleaved(&tenth_816000, 2, 0, Opens::Run, &mut detector);
-        let grid = analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        let detector = detector(move |_| raw.clone());
+        analyzer.push_interleaved(&tenth_816000, 2, 0, Opens::Run, &detector);
+        let grid = analyzer.snapshot(&detector, true).expect("mock detects");
 
         assert!(
             (grid.bpm() - 120.0).abs() < 1e-6,
@@ -927,14 +909,14 @@ mod tests {
         let second = usize::try_from(consts::SRC).unwrap_or(1);
         let pcm = quarter_2646000;
         let mut analyzer = analyzer(consts::SRC, config);
-        let mut detector = detector(|_| empty_raw());
+        let detector = detector(|_| empty_raw());
 
         let mut worst = 0;
         for (index, chunk) in pcm.chunks(second * 2).enumerate() {
             let at = u64::try_from(index * second).unwrap_or(0);
             analyzer.push_interleaved_deferred(chunk, 2, at, Opens::Run);
             while let Some(request) = analyzer.prepare_detection(false) {
-                analyzer.apply_detection(request.detect(&mut detector));
+                analyzer.apply_detection(request.detect(&detector));
             }
             worst = worst.max(analyzer.held_frames());
         }
@@ -961,7 +943,7 @@ mod tests {
             .build();
         let second = usize::try_from(consts::SRC).unwrap_or(1);
         let mut analyzer = analyzer(consts::SRC, config);
-        let mut detector = detector(|_| empty_raw());
+        let detector = detector(|_| empty_raw());
 
         let at = u64::try_from(second / 2).unwrap_or(0);
         analyzer.push_interleaved_deferred(&quarter_44100, 2, at, Opens::Run);
@@ -973,7 +955,7 @@ mod tests {
         let far = u64::try_from(10 * second).unwrap_or(0);
         analyzer.push_interleaved_deferred(&quarter_88200, 2, far, Opens::Run);
         while let Some(request) = analyzer.prepare_detection(false) {
-            analyzer.apply_detection(request.detect(&mut detector));
+            analyzer.apply_detection(request.detect(&detector));
         }
 
         assert!(
@@ -997,7 +979,7 @@ mod tests {
         let seconds = 60;
         let pcm = quarter_2646000;
         let mut analyzer = analyzer(consts::SRC, config);
-        let mut detector = detector(|_| empty_raw());
+        let detector = detector(|_| empty_raw());
 
         let mut taken = 0;
         let mut offers = 0;
@@ -1020,17 +1002,15 @@ mod tests {
             }
             // One window per offer: a detector that lags is what fills the hold.
             if let Some(request) = analyzer.prepare_detection(false) {
-                analyzer.apply_detection(request.detect(&mut detector));
+                analyzer.apply_detection(request.detect(&detector));
             }
         }
-        analyzer
-            .snapshot(&mut detector, true)
-            .expect("mock detects");
+        analyzer.snapshot(&detector, true).expect("mock detects");
         let track = u64::try_from(seconds * second).unwrap_or(0);
         let lost: u64 = analyzer
             .unanalysed(Some(track))
             .iter()
-            .map(|range| range.frames())
+            .map(FrameSpan::frames)
             .sum();
         assert_eq!(lost, 0, "{lost} frames were never taken");
     }
@@ -1038,14 +1018,13 @@ mod tests {
     #[kithara::test]
     fn detector_failure_propagates(tenth_4096: Vec<f32>) {
         let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
-        let mut detector =
-            Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {
-                Err(BeatDetectError::Detect {
-                    reason: "scripted".to_string(),
-                })
-            }));
-        analyzer.push_interleaved(&tenth_4096, 2, 0, Opens::Run, &mut detector);
-        assert!(analyzer.snapshot(&mut detector, true).is_err());
+        let detector = Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {
+            Err(BeatDetectError::Detect {
+                reason: "scripted".to_string(),
+            })
+        }));
+        analyzer.push_interleaved(&tenth_4096, 2, 0, Opens::Run, &detector);
+        assert!(analyzer.snapshot(&detector, true).is_err());
     }
 
     #[kithara::test]
@@ -1081,15 +1060,15 @@ mod tests {
 
         let run = |order: &[usize]| {
             let mut analyzer = analyzer(consts::SRC, config.clone());
-            let mut detector = detector(beats);
+            let detector = detector(beats);
             for index in order {
                 let Some((at, part)) = blocks.get(*index) else {
                     continue;
                 };
-                analyzer.push_interleaved(part, 2, *at, Opens::Run, &mut detector);
+                analyzer.push_interleaved(part, 2, *at, Opens::Run, &detector);
             }
             analyzer
-                .snapshot(&mut detector, true)
+                .snapshot(&detector, true)
                 .expect("mock detects")
                 .downbeats()
                 .to_vec()
@@ -1130,10 +1109,10 @@ mod tests {
             .detector_min_window_seconds(1)
             .build();
         let mut analyzer = analyzer(consts::SRC, config);
-        let mut detector = detector(|_| empty_raw());
+        let detector = detector(|_| empty_raw());
         for run in 0..4u64 {
             let at = (1 + 10 * run) * u64::from(consts::SRC);
-            let took = analyzer.push_interleaved(&quarter_176400, 2, at, Opens::Run, &mut detector);
+            let took = analyzer.push_interleaved(&quarter_176400, 2, at, Opens::Run, &detector);
             assert!(took, "a run of its own is taken while there is room");
         }
         assert!(
@@ -1147,7 +1126,7 @@ mod tests {
             2,
             15 * u64::from(consts::SRC),
             Opens::Extends,
-            &mut detector,
+            &detector,
         );
         assert!(
             took,

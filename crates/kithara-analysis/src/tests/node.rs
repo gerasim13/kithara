@@ -834,7 +834,7 @@ async fn matches_direct_waveform_analyzer_over_chunked_stream(analysis_pcm: &'st
     let mut direct = WaveformAnalyzer::new(consts::FIXTURES_SR, AnalysisParams::default(), &pools)
         .expect("waveform buffers fit the test region");
     direct
-        .push(&pools, &samples, usize::from(consts::CH), 0)
+        .push(&pools, samples, usize::from(consts::CH), 0)
         .expect("waveform buffers fit the test region");
     let want = direct.snapshot(consts::NODE_BUCKETS, Some(frames));
 
@@ -1198,21 +1198,19 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
         .recv_timeout(Instant::now() + Duration::from_secs(2))
         .expect("EOF starts the short trailing window");
     assert_eq!(node.tick(), TickResult::Backpressured);
-    {
-        let read = results.borrow_and_update();
-        let progress = read
-            .as_ref()
-            .expect("what the pass read is published when the reading ends");
-        assert!(
-            progress.analysis().is_complete(),
-            "the end of reading publishes the whole coverage: {:?}",
-            progress.analysis().missing()
-        );
-        assert!(
-            !progress.analysis().is_settled() && progress.is_resumable(),
-            "a pass still detecting is not settled: a restart resumes the detection"
-        );
-    }
+    let progress = results
+        .borrow_and_update()
+        .clone()
+        .expect("what the pass read is published when the reading ends");
+    assert!(
+        progress.analysis().is_complete(),
+        "the end of reading publishes the whole coverage: {:?}",
+        progress.analysis().missing()
+    );
+    assert!(
+        !progress.analysis().is_settled() && progress.is_resumable(),
+        "a pass still detecting is not settled: a restart resumes the detection"
+    );
     assert!(
         matches!(results.has_changed(), Ok(false)),
         "the final sender remains alive while detection runs"
@@ -1220,8 +1218,10 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
 
     release.send(()).expect("release trailing detection");
     drive_until(&mut node, || results.has_changed().is_err());
-    let read = results.borrow_and_update();
-    let progress = read.as_ref().expect("the final publication");
+    let progress = results
+        .borrow_and_update()
+        .clone()
+        .expect("the final publication");
     assert!(
         progress.analysis().is_settled(),
         "the final publication is the settled one"
@@ -1258,7 +1258,7 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
     for block in 0..3u64 {
         assert_eq!(
             producer.offer(
-                &pcm,
+                pcm,
                 super::fixtures::spec(),
                 block * u64::from(consts::FIXTURES_SR)
             ),
@@ -1300,7 +1300,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
 
     let reader = Box::new(FakeReader::chunked(
         builder.pools(),
-        &sine(
+        sine(
             analysis_pcm,
             17 * usize::try_from(consts::FIXTURES_SR).unwrap(),
         ),

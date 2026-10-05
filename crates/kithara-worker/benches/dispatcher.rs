@@ -42,30 +42,31 @@ fn bench_dispatcher(c: &mut Criterion) {
             .name("kithara-worker-bench")
             .build(),
     );
-    let mut group = c.benchmark_group("dispatcher");
-    group.sample_size(50);
-    group.throughput(Throughput::Elements(
-        u64::try_from(TICKS).expect("tick count exceeds u64"),
-    ));
+    {
+        let mut group = c.benchmark_group("dispatcher");
+        group.sample_size(50);
+        group.throughput(Throughput::Elements(
+            u64::try_from(TICKS).expect("tick count exceeds u64"),
+        ));
 
-    group.bench_function("register_wake_and_progress", |b| {
-        b.iter_batched(
-            mpsc::channel,
-            |(completed, completion)| {
-                let handle = dispatcher
-                    .register(TaskConfig::new(), move |_| Countdown::new(completed))
-                    .unwrap_or_else(|error| panic!("benchmark task was not admitted: {error}"));
-                let ticks = completion
-                    .recv()
-                    .unwrap_or_else(|error| panic!("benchmark task did not complete: {error}"));
-                assert_eq!(ticks, TICKS);
-                black_box(handle)
-            },
-            BatchSize::PerIteration,
-        );
-    });
-
-    group.finish();
+        group.bench_function("register_wake_and_progress", |b| {
+            b.iter_batched(
+                mpsc::channel,
+                |(completed, completion)| {
+                    let handle = dispatcher
+                        .register(TaskConfig::new(), move |_| Countdown::new(completed))
+                        .unwrap_or_else(|error| panic!("benchmark task was not admitted: {error}"));
+                    let ticks = completion
+                        .recv()
+                        .unwrap_or_else(|error| panic!("benchmark task did not complete: {error}"));
+                    assert_eq!(ticks, TICKS);
+                    black_box(handle)
+                },
+                BatchSize::PerIteration,
+            );
+        });
+        group.finish();
+    }
     dispatcher.shutdown();
 }
 

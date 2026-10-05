@@ -315,19 +315,17 @@ mod tests {
 
     use super::derive;
 
-    fn expansion(input: syn::DeriveInput) -> String {
-        derive(&input).expect("the input is valid").to_string()
+    fn expansion(input: &syn::DeriveInput) -> String {
+        derive(input).expect("the input is valid").to_string()
     }
 
-    fn refusal(input: syn::DeriveInput) -> String {
-        derive(&input)
-            .expect_err("the input is invalid")
-            .to_string()
+    fn refusal(input: &syn::DeriveInput) -> String {
+        derive(input).expect_err("the input is invalid").to_string()
     }
 
     #[kithara::test(native, flash(false))]
     fn a_float_field_is_guarded_against_non_finite_values() {
-        let expanded = expansion(parse_quote! {
+        let expanded = expansion(&parse_quote! {
             #[ranged(min = -24.0, max = 6.0, default = 0.0, clamp)]
             struct Probe(f32);
         });
@@ -344,7 +342,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn an_integer_field_carries_no_float_predicate() {
-        let expanded = expansion(parse_quote! {
+        let expanded = expansion(&parse_quote! {
             #[ranged(min = 0, max = 100, default = 100)]
             struct Share(u8);
         });
@@ -361,7 +359,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn without_clamp_no_conversion_into_the_type_exists() {
-        let expanded = expansion(parse_quote! {
+        let expanded = expansion(&parse_quote! {
             #[ranged(min = 0.25, max = 4.0, default = 1.0)]
             struct Scale(f64);
         });
@@ -374,7 +372,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn without_a_default_the_type_has_none() {
-        let expanded = expansion(parse_quote! {
+        let expanded = expansion(&parse_quote! {
             #[ranged(min = 1.0, max = 1_000.0)]
             struct Tempo(f64);
         });
@@ -391,7 +389,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_negated_bound_is_read_as_a_number() {
-        let expanded = expansion(parse_quote! {
+        let expanded = expansion(&parse_quote! {
             #[ranged(min = -24.0, max = 6.0, default = 0.0)]
             struct Probe(f32);
         });
@@ -405,7 +403,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_struct_with_named_fields_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0, max = 1)]
                 struct Named { value: u8 }
             })
@@ -416,7 +414,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_struct_with_two_fields_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0, max = 1)]
                 struct Pair(u8, u8);
             })
@@ -427,7 +425,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_generic_type_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0, max = 1)]
                 struct Generic<T>(T);
             })
@@ -438,7 +436,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_non_primitive_field_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0, max = 1)]
                 struct Wrapped(String);
             })
@@ -448,13 +446,13 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_missing_attribute_is_refused() {
-        assert!(refusal(parse_quote! { struct Bare(u8); }).contains("needs `#[ranged("));
+        assert!(refusal(&parse_quote! { struct Bare(u8); }).contains("needs `#[ranged("));
     }
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_key_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0, max = 1, rename = "x")]
                 struct Odd(u8);
             })
@@ -465,7 +463,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_repeated_key_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0, min = 1, max = 2)]
                 struct Twice(u8);
             })
@@ -476,7 +474,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_float_literal_on_an_integer_field_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0.0, max = 100.0)]
                 struct Share(u8);
             })
@@ -487,7 +485,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_minimum_above_the_maximum_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 10, max = 1)]
                 struct Inverted(u8);
             })
@@ -501,9 +499,9 @@ mod tests {
             parse_quote! { #[ranged(min = 9007199254740993, max = 9007199254740992)] struct Large(u64); },
             parse_quote! { #[ranged(min = -9007199254740992, max = -9007199254740993)] struct Negative(i64); },
         ] {
-            assert!(refusal(input).contains("must not exceed"));
+            assert!(refusal(&input).contains("must not exceed"));
         }
-        expansion(parse_quote! {
+        expansion(&parse_quote! {
             #[ranged(min = 0, max = 340282366920938463463374607431768211455)]
             struct Full(u128);
         });
@@ -512,7 +510,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_default_outside_the_range_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0, max = 10, default = 11)]
                 struct Outside(u8);
             })
@@ -523,7 +521,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn clamp_without_a_default_is_refused() {
         assert!(
-            refusal(parse_quote! {
+            refusal(&parse_quote! {
                 #[ranged(min = 0.0, max = 1.0, clamp)]
                 struct Homeless(f32);
             })

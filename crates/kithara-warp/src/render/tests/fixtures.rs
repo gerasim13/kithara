@@ -77,8 +77,8 @@ pub(super) fn spec() -> AudioSpec {
     }
 }
 
-pub(super) fn renderer(config: WarpConfig) -> WarpRenderer {
-    Warp::new((), &config).renderer(spec(), pools())
+pub(super) fn renderer(config: &WarpConfig) -> WarpRenderer {
+    Warp::new((), config).renderer(spec(), pools())
 }
 
 pub(super) fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {

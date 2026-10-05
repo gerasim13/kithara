@@ -4720,6 +4720,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "serial_test",
  "tempfile",
  "tracing",
@@ -5352,6 +5353,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "reqwest",
  "serial_test",
  "tempfile",
@@ -5474,6 +5476,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "serde",
  "tracing",
  "url",
@@ -5826,6 +5829,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
+ "num-traits",
 ]
 
 [[package]]
@@ -6008,6 +6012,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "serde_json",
 ]
 

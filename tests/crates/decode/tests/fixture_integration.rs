@@ -501,7 +501,7 @@ fn run_packaged_fmp4_decoder_check(
         .unwrap_or_else(|error| panic!("decode first direct chunk for packaged {label}: {error}"));
     let total_len = mp4_bytes.len();
     let mut probe_decoder =
-        DecoderFactory::create_with_probe(Cursor::new(mp4_bytes.clone()), Some("m4a"), config())
+        DecoderFactory::create_with_probe(Cursor::new(mp4_bytes), Some("m4a"), config())
             .unwrap_or_else(|error| panic!("probe packaged {label} fmp4 decode failed: {error}"));
     let probe_chunk = probe_decoder
         .next_chunk()

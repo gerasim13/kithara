@@ -104,7 +104,7 @@ mod tests {
     #[kithara::test]
     fn a_range_alone_leaves_the_extent_unknown() {
         let mut extent = Extent::default();
-        extent.deliver(&(0..0 + 1000));
+        extent.deliver(&(0..1000));
         assert_eq!(extent.frames(), None, "audio alone states no length");
 
         extent.claim(Some(Duration::from_secs(2)), rate());
@@ -119,7 +119,7 @@ mod tests {
     #[kithara::test]
     fn an_end_of_stream_at_frontier_zero_leaves_the_extent_at_the_delivered_audio() {
         let mut extent = Extent::default();
-        extent.deliver(&(0..0 + 8192));
+        extent.deliver(&(0..8192));
         extent.deliver(&(16_384..16_384 + 8192));
         assert_eq!(extent.frames(), None);
 

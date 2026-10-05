@@ -112,8 +112,7 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> CreatedHls {
     let wav_data = hls_sized_wav_three;
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
-    let segment_duration = SawWav::DEFAULT.segment_size as f64
-        / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
+    let segment_duration = SawWav::DEFAULT.segment_duration_secs();
     TestServerHelper::new()
         .await
         .create_hls(
@@ -177,9 +176,8 @@ async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: CreatedH
 
         for _ in 0..100 {
             let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(ReadOutcome::Eof { .. }) => break,
+                Ok(ReadOutcome::Pending { .. } | ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             };
             total_samples += n;
