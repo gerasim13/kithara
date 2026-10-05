@@ -171,10 +171,10 @@ fn rejected_state_change_preserves_mode_and_tempo(#[case] intent: Option<SyncInt
         .expect("local tempo");
     let tempo_before = group.tempo();
     group.next_operation = None;
-    let operation = match intent {
-        Some(intent) => sync(group.id(), intent),
-        None => tempo(group.id(), 120.0),
-    };
+    let operation = intent.map_or_else(
+        || tempo(group.id(), 120.0),
+        |intent| sync(group.id(), intent),
+    );
     let (error, _): (SyncError, SyncOperation<TestGroup>) = group
         .transact(operation)
         .expect_err("operation identities are exhausted")

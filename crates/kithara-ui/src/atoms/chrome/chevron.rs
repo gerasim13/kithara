@@ -77,7 +77,6 @@ impl ChromeChevron {
 }
 
 /// The chevron takes the cell the header gives it and marks the middle of it.
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

@@ -33,6 +33,7 @@ use kithara_integration_tests::{
     usdt_trace::{self, ProbeEvent},
 };
 use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
+use num_traits::AsPrimitive;
 use tracing::info;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -70,8 +71,9 @@ async fn gated_audio(
 ) -> (CreatedHls, SegmentGateHandle) {
     let init_segment = Arc::new(hls_header_boundary);
     let pcm = Arc::new(hls_pcm_boundary);
-    let segment_duration = SEGMENT_SIZE as f64
-        / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
+    let (segment_size, sample_bytes): (f64, f64) = (SEGMENT_SIZE.as_(), size_of::<i16>().as_());
+    let segment_duration =
+        segment_size / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * sample_bytes);
     let config = HlsFixtureBuilder::new()
         .variant_count(1)
         .segments_per_variant(SEGMENT_COUNT)

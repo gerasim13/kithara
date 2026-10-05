@@ -141,17 +141,32 @@ mod tests {
 
     #[kithara::test]
     fn a_hole_between_runs_is_a_gap() {
-        assert_eq!(gaps(&coverage(&[(0, 100), (300, 100)]), 400), [100..300]);
+        assert_eq!(
+            gaps(&coverage(&[(0, 100), (300, 100)]), 400),
+            [Range {
+                start: 100,
+                end: 300
+            }]
+        );
     }
 
     #[kithara::test]
     fn the_tail_below_the_horizon_is_a_gap() {
-        assert_eq!(gaps(&coverage(&[(0, 100)]), 250), [100..250]);
+        assert_eq!(
+            gaps(&coverage(&[(0, 100)]), 250),
+            [Range {
+                start: 100,
+                end: 250
+            }]
+        );
     }
 
     #[kithara::test]
     fn a_run_starting_past_the_start_leaves_the_head_missing() {
-        assert_eq!(gaps(&coverage(&[(50, 100)]), 150), [0..50]);
+        assert_eq!(
+            gaps(&coverage(&[(50, 100)]), 150),
+            [Range { start: 0, end: 50 }]
+        );
     }
 
     #[kithara::test]
@@ -159,16 +174,31 @@ mod tests {
         // Covered to 400, but only 200 is known to exist.
         assert!(gaps(&coverage(&[(0, 400)]), 200).is_empty());
         // A run wholly past the horizon cannot open a gap behind it.
-        assert_eq!(gaps(&coverage(&[(0, 50), (300, 100)]), 200), [50..200]);
+        assert_eq!(
+            gaps(&coverage(&[(0, 50), (300, 100)]), 200),
+            [Range {
+                start: 50,
+                end: 200
+            }]
+        );
     }
 
     #[kithara::test]
     fn a_run_straddling_the_horizon_closes_the_gap_before_it() {
         // The run starts below the horizon and ends past it, so the gap in
         // front of it stops where the run does, not at the horizon.
-        assert_eq!(gaps(&coverage(&[(0, 50), (100, 200)]), 200), [50..100]);
+        assert_eq!(
+            gaps(&coverage(&[(0, 50), (100, 200)]), 200),
+            [Range {
+                start: 50,
+                end: 100
+            }]
+        );
         // The same run with nothing before it leaves only the head missing.
-        assert_eq!(gaps(&coverage(&[(150, 100)]), 200), [0..150]);
+        assert_eq!(
+            gaps(&coverage(&[(150, 100)]), 200),
+            [Range { start: 0, end: 150 }]
+        );
     }
 
     #[kithara::test]
@@ -181,7 +211,7 @@ mod tests {
     fn an_empty_coverage_is_all_gap() {
         assert_eq!(
             gaps(&RangeSet::new(), 400),
-            [0..400],
+            [Range { start: 0, end: 400 }],
             "a pass that observed nothing is missing everything it knows of"
         );
     }

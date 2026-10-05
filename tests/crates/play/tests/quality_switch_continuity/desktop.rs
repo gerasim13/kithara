@@ -3,9 +3,14 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
     StretchKind,
-    audio::{DecoderResamplerSettings, ResamplerKind},
-    events::TrackId,
-    play::{PlaybackResamplerBackend, ResourceSrc},
+    abr::AbrHandle,
+    audio::{
+        DecoderBackend as DecoderBackendKind, DecoderEvent, DecoderResamplerSettings, ResamplerKind,
+    },
+    events::{EventReceiver, TrackId},
+    platform::{time::sleep, tokio::sync::broadcast::error::TryRecvError},
+    play::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc},
+    stream::AudioCodec,
     warp::WarpConfig,
 };
 use kithara_integration_tests::{
@@ -15,6 +20,7 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
+use num_traits::ToPrimitive;
 
 use super::*;
 

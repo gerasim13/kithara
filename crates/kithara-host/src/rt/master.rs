@@ -14,15 +14,15 @@ use kithara_test_utils::kithara;
 use crate::{api::SessionDuckingMode, session::applied_spans};
 
 mod consts {
-    /// A ducking gain lies between silence and unity.
+    /// A ducking amplitude lies between silence and unity.
     pub(super) const GAIN_SPAN: f32 = 1.0;
 }
 
-/// The first stage of the session output: it lowers the mix by the ducking
-/// the Host settings the render graph applied carry, from the frame each
-/// applied on. The gain moves to each new ducking along a 62 ms curve that
-/// settles at the finest step the filter supports, so neither the change nor
-/// its end steps the signal.
+/// The first stage of the session output: it scales the mix by the amplitude
+/// of the ducking volume the Host settings the render graph applied carry,
+/// from the frame each applied on. The amplitude moves to each new ducking
+/// along a 62 ms curve that settles at the finest step the filter supports,
+/// so neither the change nor its end steps the signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MasterNode;
 
@@ -57,12 +57,12 @@ struct MasterProcessor {
 }
 
 impl MasterProcessor {
-    /// The gain, which starts at `ducking` on the first block.
+    /// The amplitude, which starts at `ducking` on the first block.
     fn gain(&mut self, ducking: SessionDuckingMode) -> &mut SmoothedParam {
         let sample_rate = self.sample_rate;
         self.gain.get_or_insert_with(|| {
             SmoothedParam::new(
-                ducking.gain(),
+                ducking.volume().amp(),
                 consts::GAIN_SPAN,
                 SmootherConfig {
                     smooth_seconds: DEFAULT_SMOOTH_SECONDS,
@@ -104,7 +104,7 @@ impl AudioNodeProcessor for MasterProcessor {
             .in_silence_mask
             .all_channels_silent(ChannelCount::STEREO.get() as usize)
         {
-            gain.set_value(last.gain());
+            gain.set_value(last.volume().amp());
             gain.reset_to_target();
             return ProcessStatus::ClearAllOutputs;
         }
@@ -112,7 +112,7 @@ impl AudioNodeProcessor for MasterProcessor {
             .clone()
             .all(|(_, ducking)| ducking == SessionDuckingMode::Off)
         {
-            gain.set_value(SessionDuckingMode::Off.gain());
+            gain.set_value(SessionDuckingMode::Off.volume().amp());
             if gain.has_settled() {
                 return ProcessStatus::Bypass;
             }
@@ -131,7 +131,7 @@ impl AudioNodeProcessor for MasterProcessor {
             return ProcessStatus::Bypass;
         };
         for (range, ducking) in duckings {
-            gain.set_value(ducking.gain());
+            gain.set_value(ducking.volume().amp());
             let (Some(in_left), Some(in_right), Some(out_left), Some(out_right)) = (
                 in_left.get(range.clone()),
                 in_right.get(range.clone()),
