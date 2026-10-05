@@ -2330,6 +2330,53 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn failed_catalog_reads_publish_no_selection_outputs() -> anyhow::Result<()> {
+    use std::process::Command;
+
+    let workflow = github_workflow("run.yml");
+    let render = named_step(
+        workflow_job(workflow_jobs(&workflow), "select"),
+        "Render the jobs this role schedules",
+    );
+    let script = mapping_field(render, "run")
+        .as_str()
+        .expect("the selection step runs a script");
+    let temp = tempfile::tempdir()?;
+    let outputs = temp.path().join("outputs");
+    for fail_field in ["matrix", "dependent", ""] {
+        fs::write(&outputs, "")?;
+        let output = Command::new("bash")
+            .args(["-euo", "pipefail", "-c"])
+            .arg(format!(
+                r#"just() {{
+  field="${{@: -1}}"
+  if [[ "$field" = "$FAIL_FIELD" ]]; then return 73; fi
+  printf '[{{"lane":"%s"}}]\n' "$field"
+}}
+{script}"#
+            ))
+            .env("ROLE", "quality")
+            .env("KIND", "branch")
+            .env("ONLY", "all")
+            .env("FAIL_FIELD", fail_field)
+            .env("GITHUB_OUTPUT", &outputs)
+            .output()?;
+        if fail_field.is_empty() {
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                fs::read_to_string(&outputs)?,
+                "matrix=[{\"lane\":\"matrix\"}]\ndependent=[{\"lane\":\"dependent\"}]\n"
+            );
+        } else {
+            assert_eq!(output.status.code(), Some(73), "{output:?}");
+            assert_eq!(fs::read_to_string(&outputs)?, "");
+        }
+    }
+    Ok(())
+}
+
 /// `wreq` is the backend the Apple desktop app ships, and asking for it
 /// builds `BoringSSL` through cmake. The Windows guest carries neither that
 /// toolchain nor the product that would use the backend, so the lane names the

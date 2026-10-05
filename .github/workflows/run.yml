@@ -79,8 +79,10 @@ jobs:
           render() {
             just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} --field "$1"
           }
-          echo "matrix=$(render matrix)" >> "$GITHUB_OUTPUT"
-          echo "dependent=$(render dependent)" >> "$GITHUB_OUTPUT"
+          matrix=$(render matrix)
+          dependent=$(render dependent)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "dependent=$dependent" >> "$GITHUB_OUTPUT"
 
   # Every lane's verdict, not the first one's: these answer independent
   # questions and a run that stops at the first red hides the rest.
