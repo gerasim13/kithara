@@ -1346,6 +1346,37 @@ fn ambient_blocking_closure_pins_virtual_clock() {
 /// 50ms real release, opposite verdict on the sibling's 10ms virtual park.
 #[kithara::test(native, flash(false))]
 fn a_yielding_blocking_closure_releases_the_virtual_clock() {
+    let waited = park_beside_a_waiting_closure(crate::thread::yield_now);
+    assert!(
+        waited < Duration::from_millis(40),
+        "a yielding blocking closure held the virtual clock for its whole real \
+         lifetime: a 10ms deadline took {waited:?} real to fire"
+    );
+}
+
+/// The backoff twin of [`a_yielding_blocking_closure_releases_the_virtual_clock`].
+/// Async code backs off through `spawn_blocking(|| paced_backoff(..))`, and on the
+/// pooled thread that backoff was a real sleep under the closure's credit. Each
+/// step held the clock still, so a poll loop that backs off until a timed
+/// producer delivers kept the producer's own deadlines from firing. That is how
+/// `packaged_abr_switch_keeps_player_continuity` reached its 30s wall timeout
+/// with a quarter of a virtual second spent.
+#[kithara::test(native, flash(false))]
+fn a_backing_off_blocking_closure_releases_the_virtual_clock() {
+    let waited = park_beside_a_waiting_closure(|| {
+        crate::thread::paced_backoff(Duration::from_millis(1));
+    });
+    assert!(
+        waited < Duration::from_millis(40),
+        "a backing-off blocking closure held the virtual clock for its whole real \
+         lifetime: a 10ms deadline took {waited:?} real to fire"
+    );
+}
+
+/// Run an ambient `spawn_blocking` closure that loops on `wait` until a helper
+/// releases it ~50ms real later, and return the real time a 10ms virtual engine
+/// park took meanwhile.
+fn park_beside_a_waiting_closure(wait: fn()) -> Duration {
     let _g = guard();
     reset();
     let _a = ambient_scope(true);
@@ -1360,7 +1391,7 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
     let handle = crate::tokio::task::spawn_blocking(move || {
         entered_in.store(1, Ordering::Release);
         while release_in.load(Ordering::Acquire) == 0 {
-            crate::thread::yield_now();
+            wait();
         }
     });
     while entered.load(Ordering::Acquire) == 0 {
@@ -1376,11 +1407,7 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
     let waited = start.elapsed();
     releaser.join().expect("releaser thread");
     rt.block_on(handle).expect("blocking closure joined");
-    assert!(
-        waited < Duration::from_millis(40),
-        "a yielding blocking closure held the virtual clock for its whole real \
-         lifetime: a 10ms deadline took {waited:?} real to fire"
-    );
+    waited
 }
 
 /// Run `body` as the root task of a current-thread runtime, under flash, and
@@ -1514,9 +1541,10 @@ fn a_join_poll_the_budget_turns_away_holds_no_slot() {
 /// the producer's own deadlines - the `phase_continuity` wall timeout, where an
 /// async pull raced the clock 1060 virtual seconds inside a 25s budget while
 /// every producer sat parked. Routed through `spawn_blocking` the same backoff
-/// is real work in flight: it dates nothing and leaves the clock where it found
-/// it. Distinct from `ambient_blocking_closure_pins_virtual_clock`, which pins
-/// the other half - that a sibling's deadline is HELD while such a closure runs.
+/// is an undated engine yield: with no deadline to reach, it leaves the clock
+/// where it found it. Distinct from
+/// `a_backing_off_blocking_closure_releases_the_virtual_clock`, which pins the
+/// other half - that the backoff lets a sibling's deadline fire.
 #[kithara::test(native, flash(false))]
 fn a_starved_backoff_loop_does_not_advance_the_virtual_clock() {
     const STARVED_BACKOFF_STEP_MS: u64 = 1;
