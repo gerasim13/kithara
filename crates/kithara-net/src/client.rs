@@ -527,14 +527,7 @@ impl Net for RawHttp {
         #[cfg(not(target_arch = "wasm32"))]
         reject_undecoded_content_encoding(&resp, &url)?;
 
-        let mut out = Headers::default();
-        let str_pairs = resp
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str(), v)));
-        for (name, v) in str_pairs {
-            out.insert(name, v);
-        }
+        let mut out = extract_headers(&resp);
 
         if out.get("content-length").is_none() {
             let total_from_range = out
