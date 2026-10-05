@@ -113,17 +113,10 @@ _xtask-refresh:
       printf 'warning: cached xtask self-cache maintenance failed; rebuilding from source\n' >&2; \
     fi; exec just _xtask-bootstrap --force </dev/null
 
-# A cached xtask that cannot answer is rebuilt, the same as one that cannot
-# run: the entry it is reading describes some tree, and the only binary able
-# to say which is the one being replaced. Without this the pair deadlocks,
-# because a binary whose cache check errors on this checkout is never the
-# binary that stops erroring - measured on a runner shared between branches,
-# where an entry naming a crate one branch adds failed every later branch's
-# lane selection until the entry was replaced by hand.
 [no-exit-message]
 [private]
 _xtask-ready:
-    @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || { printf 'warning: cached xtask could not read its cache status; rebuilding from source\n' >&2; exec just _xtask-bootstrap --force </dev/null >/dev/null; }; case "$state" in current) ;; stale) target=$(just _xtask-self-target) || exit $?; CARGO_TARGET_DIR="$target" exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
+    @if ! just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then exec just _xtask-bootstrap </dev/null >/dev/null; fi; state=$(just _xtask-cached strict self-cache status </dev/null) || exit $?; case "$state" in current) ;; stale) target=$(just _xtask-self-target) || exit $?; CARGO_TARGET_DIR="$target" exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac
 
 # Where the self-cache builds: the checkout's own directory locally, and on
 # CI the bootstrap namespace the host cleaner owns, never a lane's directory.
