@@ -34,6 +34,10 @@ use crate::{
     verdict::{ChildFailure, NotClean},
 };
 
+#[cfg(test)]
+#[path = "subject.rs"]
+mod subject;
+
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
 pub enum StressCommand {
@@ -55,7 +59,7 @@ pub struct RunArgs {
     /// Trusted subject revision to compare with the checkout.
     #[arg(long)]
     expected_subject_sha: Option<String>,
-    /// Nextest filterset selecting tests to repeat.
+    /// Nextest filterset selecting tests to repeat; requires only lane modes.
     #[arg(long)]
     filter: Option<String>,
     /// Fresh raw evidence directory owned by this run.
@@ -83,6 +87,7 @@ pub struct ReportArgs {
     execute_result: ExecuteResult,
     #[arg(long)]
     count: Option<usize>,
+    /// Nextest filterset recorded by a run containing only lane modes.
     #[arg(long)]
     filter: Option<String>,
     /// Markdown report destination.
@@ -214,6 +219,7 @@ fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let modes = resolve_modes(&args.modes, config)?;
     let lanes = resolve_lanes(&args.lanes, config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
+    validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let root = absolute_from(
         &ctx.root,
         args.output
@@ -354,6 +360,21 @@ fn units<'a>(
     Ok(units)
 }
 
+fn validate_filter(filter: Option<&str>, default_filter: &str, units: &[Unit<'_>]) -> Result<()> {
+    let effective_filter = filter.unwrap_or(default_filter);
+    if filter.is_some() || effective_filter.trim() != "all()" {
+        for unit in units {
+            ensure!(
+                matches!(&unit.runner, StressRunner::Lane(_)),
+                "stress filtersets (--filter or stress.default_filter) cannot be applied to \
+                 command mode `{}`; select only lane modes when using a filterset",
+                unit.mode_name
+            );
+        }
+    }
+    Ok(())
+}
+
 /// What one mode actually invokes on `lane`, in the shape the manifest
 /// records.
 ///
@@ -407,7 +428,7 @@ fn write_attempts(path: &Path, codes: &[i32]) -> Result<()> {
 /// test; a command that cannot is launched once per repeat, and then an exit
 /// code per attempt is all there is to collect.
 fn run_command_lane(
-    ctx: &Ctx,
+    subject_root: &Path,
     mode: &StressModeConfig,
     paths: &Paths,
     count: usize,
@@ -420,7 +441,7 @@ fn run_command_lane(
     let report = mode
         .attempt_junit
         .as_deref()
-        .map(|path| ctx.root.join(path));
+        .map(|path| subject_root.join(path));
     let attempts = command_lane_attempts(mode, count);
     let mut codes = Vec::with_capacity(attempts);
     for attempt in 0..attempts {
@@ -433,7 +454,7 @@ fn run_command_lane(
                 .with_context(|| format!("clear command lane report {}", report.display()));
         }
         let mut command = Command::new(program);
-        command.args(arguments).current_dir(&ctx.root);
+        command.args(arguments).current_dir(subject_root);
         environment.apply(&mut command);
         if mode.owns_repeats {
             command.env(consts::REPEATS_ENV, count.to_string());
@@ -507,7 +528,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
     let subject_junit = subject_junit(&subject_root, config);
     let runner = unit.runner.clone();
     let commanded = unit.lane.is_none();
-    let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
+    let build = build_root(&subject_root, config);
     let _build_lease = lease::hold(&build);
     let spec = match &runner {
         StressRunner::Lane(lane) => Some(StressRunSpec {
@@ -565,18 +586,20 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
         (Ok(()), Ok(sampler)) => {
             let primary = spec.as_ref().map_or_else(
                 || {
-                    run_command_lane(ctx, mode, &paths, count, &environment).and_then(|codes| {
-                        write_attempts(&paths.attempts, &codes)?;
-                        let failed = codes.iter().filter(|code| **code != 0).count();
-                        if failed == 0 {
-                            Ok(())
-                        } else {
-                            Err(ChildFailure::inherited(
-                                format!("{failed} of {} attempts", codes.len()),
-                                codes.iter().copied().find(|code| *code != 0),
-                            ))
-                        }
-                    })
+                    run_command_lane(&subject_root, mode, &paths, count, &environment).and_then(
+                        |codes| {
+                            write_attempts(&paths.attempts, &codes)?;
+                            let failed = codes.iter().filter(|code| **code != 0).count();
+                            if failed == 0 {
+                                Ok(())
+                            } else {
+                                Err(ChildFailure::inherited(
+                                    format!("{failed} of {} attempts", codes.len()),
+                                    codes.iter().copied().find(|code| *code != 0),
+                                ))
+                            }
+                        },
+                    )
                 },
                 |spec| {
                     stress_run::run(spec, &subject_root, &paths.log, &|command| {
@@ -661,6 +684,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let modes = resolve_modes(&args.modes, config)?;
     let lanes = resolve_lanes(&args.lanes, config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
+    validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let filter = args
         .filter
         .clone()
@@ -1837,9 +1861,8 @@ mod tests {
                 ..StressArtifactConfig::default()
             },
         );
-        let ctx = Ctx::new(temp.path().to_path_buf(), ProjectConfig::default());
-
-        run_command_lane(&ctx, &mode, &paths, count, &environment).expect("run command lane");
+        run_command_lane(temp.path(), &mode, &paths, count, &environment)
+            .expect("run command lane");
 
         fs::read_to_string(&record)
             .expect("read recorded repeats")
