@@ -336,10 +336,6 @@ mod document_tests {
         );
     }
 
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
     #[kithara::test]
     fn rejected_warp_geometry_preserves_player_settings() {
         let mut config = config();

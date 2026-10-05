@@ -544,6 +544,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 }
 
 #[cfg(test)]
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
