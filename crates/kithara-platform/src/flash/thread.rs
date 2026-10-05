@@ -1,12 +1,15 @@
 use std::panic::Location;
 
-use crate::flash::ids::ThreadKey;
 pub use crate::{
     backend::thread::{
         Duration, JoinHandle, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
         available_parallelism, current, current_thread_id, is_main_thread, is_worker_thread, park,
     },
     common::thread_id::active_named_thread_count,
+};
+use crate::{
+    flash::{ids::ThreadKey, join::Join},
+    sync::Arc,
 };
 
 pub(crate) enum GateBackend {
@@ -97,6 +100,20 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    joined_pool_task(f, None)
+}
+
+/// [`wrap_pool_task`] for a closure whose `JoinHandle` shares `join`: the
+/// closure's exit hands its credit there.
+#[track_caller]
+pub(crate) fn joined_pool_task<F, R>(
+    f: F,
+    join: Option<Arc<Join>>,
+) -> impl FnOnce() -> R + Send + 'static
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
     use crate::flash::system::credit::{self, DedicatedSlot, Participant};
 
     let origin = Location::caller();
@@ -106,7 +123,7 @@ where
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();
         if let Some(slot) = slot {
-            let _pacer = slot.claim_pooled();
+            let _pacer = slot.claim_pooled(join);
             f()
         } else {
             let _exit = Participant::unreserved();
