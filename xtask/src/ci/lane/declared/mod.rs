@@ -1,7 +1,5 @@
 mod execution;
-#[cfg(test)]
-mod tests {
-    mod network;
-}
+mod filter;
 
 pub(crate) use execution::run;
+pub(crate) use filter::validate as validate_filter;

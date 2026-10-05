@@ -29,6 +29,10 @@ on:
           kinds that schedule it, so this is what selects them.
         required: true
         type: string
+      test-filter:
+        description: Nextest expression that narrows the selected test steps.
+        default: ''
+        type: string
       only:
         description: >-
           Space-separated lane names to run instead of the role's whole
@@ -56,6 +60,7 @@ jobs:
   # instead of a caller splitting the object in shell.
   select:
     name: Select ${{ inputs.role }} lanes
+    if: ${{ github.actor == github.repository_owner && github.triggering_actor == github.repository_owner }}
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 10
     outputs:
@@ -123,6 +128,7 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
+      test-filter: ${{ inputs.test-filter }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
@@ -149,3 +155,4 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
+      test-filter: ${{ inputs.test-filter }}
