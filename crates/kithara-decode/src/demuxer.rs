@@ -55,7 +55,7 @@ pub(crate) trait Demuxer: Send {
     }
 
     /// Seek to `target`, backing off by `priming` for codec warm-up when supported.
-    /// Android and Apple AudioFile may ignore pre-roll and return `PrerollHint::NotNeeded`.
+    /// Android and Apple `AudioFile` may ignore pre-roll and return `PrerollHint::NotNeeded`.
     /// Returns the actual landing point or `PastEof` beyond the known extent.
     ///
     /// # Errors

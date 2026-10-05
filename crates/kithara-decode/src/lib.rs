@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 #![cfg_attr(all(test, rtsan, not(rtsan_standalone)), feature(sanitize))]
 
-//! Audio decoding through Symphonia, Apple AudioToolbox or Android MediaCodec.
+//! Audio decoding through Symphonia, Apple `AudioToolbox` or Android `MediaCodec`.
 //! Use [`DecoderFactory`] to select a backend from media information.
 //!
 //! ```ignore
