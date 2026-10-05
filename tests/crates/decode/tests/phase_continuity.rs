@@ -23,8 +23,10 @@ use kithara_integration_tests::{
         seek_phase_scan, wrap_pi,
     },
 };
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara_test_fixtures::Mp3Shape;
 use kithara_test_fixtures::{
-    Mp3Shape, SignalAsset, assets::by_name, integration_fixtures::listening_reference,
+    SignalAsset, assets::by_name, integration_fixtures::listening_reference,
 };
 use kithara_test_utils::TestTempDir;
 use num_traits::AsPrimitive;
@@ -45,6 +47,7 @@ async fn served_signal(asset: SignalAsset) -> ServedSignal {
     (asset, helper, url)
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[kithara::fixture]
 async fn headerless_mp3() -> ServedSignal {
     let asset = SignalAsset::MP3_SINE440_60S_320K;
