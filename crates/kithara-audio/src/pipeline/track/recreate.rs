@@ -3,8 +3,8 @@ use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
 
 use super::{
-    AwaitingResume, Decoding, RecreatingDecoder, SeekRequested, Track, TrackFailure,
-    TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
+    AwaitingResume, Decoding, RecreatingDecoder, SeekRequested, Track, TrackFailure, TrackStep,
+    WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
     rebuild::start_recreating_decoder,
 };
 use crate::{
@@ -141,9 +141,9 @@ pub(super) fn finish_recreate_outcome<T: StreamType>(
 ) -> TrackStep<AudioChunk> {
     match outcome {
         RecreateOutcome::Done => apply_recreate_next(src, &recreate),
-        RecreateOutcome::SoftFailed => {
-            TrackStep::Failed(src.fail(TrackFailure::RecreateFailed { offset: recreate.offset }))
-        }
+        RecreateOutcome::SoftFailed => TrackStep::Failed(src.fail(TrackFailure::RecreateFailed {
+            offset: recreate.offset,
+        })),
         RecreateOutcome::NeedsSourceWait => wait_for_source_on_recreate(src, recreate),
     }
 }

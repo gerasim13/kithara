@@ -698,12 +698,8 @@ pub enum FfiPlaybackResamplerKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackFailureKind {
-    Decode {
-        kind: FfiDecodeErrorKind,
-    },
-    RecreateFailed {
-        offset: u64,
-    },
+    Decode { kind: FfiDecodeErrorKind },
+    RecreateFailed { offset: u64 },
     SourceCancelled,
     ChannelClosed,
     Render,

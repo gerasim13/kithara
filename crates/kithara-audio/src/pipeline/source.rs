@@ -29,7 +29,8 @@ use crate::{
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort},
         seek::SeekEngine,
         track::{
-            self, CurrentFsm, Decoding, Failed, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
+            self, CurrentFsm, Decoding, Failed, Track, TrackFailure, TrackStep, WaitContext,
+            WaitingReason,
         },
     },
     traits::AudioSource,
@@ -685,7 +686,9 @@ pub(crate) const fn playing_for_state(state: &CurrentFsm) -> bool {
 
 pub(crate) const fn map_track_failure_kind(failure: &TrackFailure) -> TrackFailureKind {
     match failure {
-        TrackFailure::Decode(error) => TrackFailureKind::Decode { kind: crate::map_decode_error_kind(error) },
+        TrackFailure::Decode(error) => TrackFailureKind::Decode {
+            kind: crate::map_decode_error_kind(error),
+        },
         TrackFailure::RecreateFailed { offset } => {
             TrackFailureKind::RecreateFailed { offset: *offset }
         }

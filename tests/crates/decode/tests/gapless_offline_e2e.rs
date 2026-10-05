@@ -4,7 +4,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{
-        AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
+        AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome,
+        SeekOutcome,
     },
     decode::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,

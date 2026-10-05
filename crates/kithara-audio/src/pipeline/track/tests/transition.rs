@@ -21,8 +21,8 @@ use crate::{
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
         rebuild::{
-            DecoderBuildComplete, DecoderBuildPurpose, RecreateCause, RecreateNext, RecreateOutcome,
-            RecreateState, state::BuildId,
+            DecoderBuildComplete, DecoderBuildPurpose, RecreateCause, RecreateNext,
+            RecreateOutcome, RecreateState, state::BuildId,
         },
         seek::{ResumeState, SeekContext, SeekRequest, engine::SeekTransition},
         track::{
@@ -59,7 +59,9 @@ async fn terminal_failure_is_logged_once_without_dispatch_reentry(
         failure_log_output().is_empty(),
         "the fixture must start without a track failure"
     );
-    fixture.source.update_state(Track::<Failed>::new(failure).erase());
+    fixture
+        .source
+        .update_state(Track::<Failed>::new(failure).erase());
     assert!(
         failure_log_output().is_empty(),
         "the produce core must not format diagnostics"
@@ -124,7 +126,9 @@ async fn terminal_failure_reentry_defers_one_full_diagnostic(
     #[case] detail: &str,
 ) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    fixture.source.update_state(Track::<Failed>::new(failure).erase());
+    fixture
+        .source
+        .update_state(Track::<Failed>::new(failure).erase());
     for _ in 0..2 {
         assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
         assert!(
@@ -135,8 +139,15 @@ async fn terminal_failure_reentry_defers_one_full_diagnostic(
 
     fixture.source.finish_deferred();
     let first = failure_log_output();
-    assert_eq!(first.len(), 1, "the shell must drain the failure once: {first:?}");
-    assert!(first[0].contains(detail), "the full cause must survive: {first:?}");
+    assert_eq!(
+        first.len(),
+        1,
+        "the shell must drain the failure once: {first:?}"
+    );
+    assert!(
+        first[0].contains(detail),
+        "the full cause must survive: {first:?}"
+    );
     assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
     fixture.source.finish_deferred();
     drop(fixture.source);
@@ -188,7 +199,10 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
             let CurrentFsm::Failed(handle) = &fixture.source.state else {
                 panic!("the failed recreate must install Failed");
             };
-            assert!(matches!(handle.data(), TrackFailure::RecreateFailed { offset: 8193 }));
+            assert!(matches!(
+                handle.data(),
+                TrackFailure::RecreateFailed { offset: 8193 }
+            ));
         }
         TerminalTransition::Seek => {
             let epoch = fixture.source.seek.begin(Duration::from_millis(20));
@@ -196,27 +210,45 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
                 &mut fixture.source,
                 SeekTransition::Failed {
                     request: SeekRequest {
-                        seek: SeekContext { target: Duration::from_millis(20), epoch },
+                        seek: SeekContext {
+                            target: Duration::from_millis(20),
+                            epoch,
+                        },
                         emit_request: false,
                     },
-                    error: DecodeError::SeekFailed { detail: "terminal-seek-failure" },
+                    error: DecodeError::SeekFailed {
+                        detail: "terminal-seek-failure",
+                    },
                     context: "test failed seek",
                 },
             );
             let CurrentFsm::Failed(handle) = &fixture.source.state else {
                 panic!("the failed seek transition must install Failed before reentry");
             };
-            assert!(matches!(handle.data(), TrackFailure::Decode(DecodeError::SeekFailed {
-                detail: "terminal-seek-failure"
-            })));
+            assert!(matches!(
+                handle.data(),
+                TrackFailure::Decode(DecodeError::SeekFailed {
+                    detail: "terminal-seek-failure"
+                })
+            ));
         }
     }
-    assert!(failure_log_output().is_empty(), "the transition must not emit the terminal log");
+    assert!(
+        failure_log_output().is_empty(),
+        "the transition must not emit the terminal log"
+    );
     assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
-    assert!(failure_log_output().is_empty(), "the later Failed step must not emit the terminal log");
+    assert!(
+        failure_log_output().is_empty(),
+        "the later Failed step must not emit the terminal log"
+    );
     fixture.source.finish_deferred();
     let first = failure_log_output();
-    assert_eq!(first.len(), 1, "the shell must report the actual terminal transition");
+    assert_eq!(
+        first.len(),
+        1,
+        "the shell must report the actual terminal transition"
+    );
     assert!(first[0].contains(detail), "{first:?}");
     fixture.source.finish_deferred();
     drop(fixture.source);

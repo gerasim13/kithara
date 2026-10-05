@@ -144,7 +144,10 @@ impl ChunkCursor {
                 return Ok(eof(playhead));
             }
             ConsumerPhase::Failed { source } => {
-                return Err(AudioReadError::Stream { what: "cursor read", source });
+                return Err(AudioReadError::Stream {
+                    what: "cursor read",
+                    source,
+                });
             }
             _ => {}
         }
@@ -230,7 +233,10 @@ impl ChunkCursor {
         Ok(match ring.phase {
             ConsumerPhase::AtEof => eof(playhead),
             ConsumerPhase::Failed { source } => {
-                return Err(AudioReadError::Stream { what: "cursor read", source });
+                return Err(AudioReadError::Stream {
+                    what: "cursor read",
+                    source,
+                });
             }
             ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
             _ => pending(playhead, PendingReason::Buffering),

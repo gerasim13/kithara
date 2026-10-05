@@ -13,8 +13,8 @@ use kithara_signal::AudioSpec;
 
 use super::pcm_reader::prepared_sample;
 use crate::{
-    AudioControl, AudioRead, AudioReadError, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome, SeekBegin,
-    SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ConsumerWakeMode, PendingReason,
+    ReadOutcome, SeekBegin, SeekOutcome,
 };
 
 mod consts {
@@ -155,7 +155,8 @@ impl MockReader {
             }),
             MockBehavior::Faulty(Fault::DecodeError) => Err(DecodeError::Io {
                 source: std::io::Error::other("mock decode failure"),
-            }.into()),
+            }
+            .into()),
             MockBehavior::Faulty(Fault::Stall | Fault::RefuseSeek)
             | MockBehavior::AdoptionTracking { .. }
             | MockBehavior::SeekTracking { .. }

@@ -43,7 +43,10 @@ pub enum Fetch<C> {
     /// Natural end-of-stream for an epoch.
     NaturalEof { epoch: u64 },
     /// Decoder or source failure for an epoch.
-    Failure { epoch: u64, failure: TrackFailureKind },
+    Failure {
+        epoch: u64,
+        failure: TrackFailureKind,
+    },
 }
 
 impl<C> Fetch<C> {

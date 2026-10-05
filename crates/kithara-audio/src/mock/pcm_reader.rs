@@ -5,7 +5,9 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 
-use crate::{AudioControl, AudioRead, AudioReadError, AudioSession, PendingReason, ReadOutcome, SeekOutcome};
+use crate::{
+    AudioControl, AudioRead, AudioReadError, AudioSession, PendingReason, ReadOutcome, SeekOutcome,
+};
 
 /// Expected amplitude of the default prepared PCM fixture.
 pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;

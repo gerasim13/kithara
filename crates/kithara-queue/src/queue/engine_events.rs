@@ -283,7 +283,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::PlayerBusEvent;
-
     use crate::{
         ActionAtItemEnd, QueueControl,
         event::{QueueEvent, TrackStatus},
@@ -353,9 +352,7 @@ mod tests {
     #[case::direct_io(PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::Io }))]
     #[case::output_rate(PlaybackFault::OutputRateMismatch)]
     #[case::output_range(PlaybackFault::OutputRangeUnavailable)]
-    async fn a_leading_failure_records_the_fault_the_player_reported(
-        #[case] fault: PlaybackFault,
-    ) {
+    async fn a_leading_failure_records_the_fault_the_player_reported(#[case] fault: PlaybackFault) {
         let queue = make_queue();
         let (first, second) = selected_second(&queue);
         queue.set_action_at_item_end(ActionAtItemEnd::None);
@@ -376,9 +373,11 @@ mod tests {
         };
         let published = std::iter::from_fn(|| events.try_recv().ok())
             .filter_map(|envelope| match envelope.event {
-                QueueEvent::TrackLoadFailed { id, reason, auto_skipped } => {
-                    Some((id, reason, auto_skipped))
-                }
+                QueueEvent::TrackLoadFailed {
+                    id,
+                    reason,
+                    auto_skipped,
+                } => Some((id, reason, auto_skipped)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -389,7 +388,10 @@ mod tests {
             "status and event must report the real cause without fabricating an engine failure"
         );
         assert!(
-            !matches!(queue.track(first).map(|entry| entry.status), Some(TrackStatus::Failed(_))),
+            !matches!(
+                queue.track(first).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
             "a repeated URI does not make the first entry the failed item"
         );
     }
@@ -410,10 +412,16 @@ mod tests {
                 "setup must allocate a player slot"
             );
             queue.pause();
-            assert!(queue.player.is_paused(), "setup must pause the active player");
+            assert!(
+                queue.player.is_paused(),
+                "setup must pause the active player"
+            );
             assert_eq!(queue.current().map(|entry| entry.id), Some(second));
         }
-        let before = queue.track(reported).expect("the reported entry exists").status;
+        let before = queue
+            .track(reported)
+            .expect("the reported entry exists")
+            .status;
         let mut events = queue.subscribe::<QueueEvent>();
         queue.process_player_event(&PlayerBusEvent::Player(PlayerEvent::ItemDidFail {
             item: ItemRole::Leading(TrackRef::new(
@@ -426,7 +434,10 @@ mod tests {
             }),
         }));
         assert_eq!(queue.current().map(|entry| entry.id), Some(second));
-        assert_eq!(queue.track(reported).expect("the entry survives").status, before);
+        assert_eq!(
+            queue.track(reported).expect("the entry survives").status,
+            before
+        );
         assert!(
             std::iter::from_fn(|| events.try_recv().ok())
                 .all(|envelope| !matches!(envelope.event, QueueEvent::TrackLoadFailed { .. })),

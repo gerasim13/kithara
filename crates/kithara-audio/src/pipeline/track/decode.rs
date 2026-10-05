@@ -3,20 +3,22 @@ use kithara_stream::{SourcePhase, StreamType};
 use kithara_test_utils::kithara;
 
 use super::{
-    CurrentFsm, TrackFailure, TrackStep, WaitContext, WaitState, WaitingForSource,
-    WaitingReason,
+    CurrentFsm, TrackFailure, TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason,
     phase::{Track, TrackPhase, sealed},
     rebuild::start_recreating_decoder,
 };
-use crate::{TrackFailureKind, pipeline::{
-    decode::{
-        core::{DecodeAction as CoreDecodeAction, DecodeCtx},
-        format::{FormatDecision, detect},
-        step,
+use crate::{
+    TrackFailureKind,
+    pipeline::{
+        decode::{
+            core::{DecodeAction as CoreDecodeAction, DecodeCtx},
+            format::{FormatDecision, detect},
+            step,
+        },
+        fetch::Fetch,
+        source::StreamAudioSource,
     },
-    fetch::Fetch,
-    source::StreamAudioSource,
-}};
+};
 
 /// Normal decoding — produce PCM chunks.
 #[derive(kithara_derive::Phase)]
@@ -142,9 +144,7 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
             src.update_state(Track::<AtEof>::new(()).erase());
             DecodeStep::Eof
         }
-        CoreDecodeAction::Failed(failure) => {
-            DecodeStep::Failed(src.fail(failure))
-        }
+        CoreDecodeAction::Failed(failure) => DecodeStep::Failed(src.fail(failure)),
     }
 }
 

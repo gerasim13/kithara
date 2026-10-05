@@ -14,8 +14,9 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use super::{
-    AudioControl, AudioLaneEvent, AudioRead, AudioReadError, AudioSession, ChunkOutcome, DecodeError,
-    PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome, chunk_position,
+    AudioControl, AudioLaneEvent, AudioRead, AudioReadError, AudioSession, ChunkOutcome,
+    DecodeError, PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome,
+    chunk_position,
     cursor::ChunkCursor,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer, Wait},
@@ -426,9 +427,10 @@ fn chunk_outcome(
 ) -> Result<ChunkOutcome, AudioReadError> {
     match phase {
         super::ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-        super::ConsumerPhase::Failed { source: failure } => {
-            Err(AudioReadError::Stream { what: "chunk read", source: failure })
-        }
+        super::ConsumerPhase::Failed { source: failure } => Err(AudioReadError::Stream {
+            what: "chunk read",
+            source: failure,
+        }),
         super::ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
             position,
             reason: PendingReason::SeekInProgress,

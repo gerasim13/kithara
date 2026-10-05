@@ -821,11 +821,23 @@ mod tests {
         }
     }
 
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     struct FailedSource {
         seek: Arc<SeekState>,
         failure: TrackFailureKind,
     }
 
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     impl AudioSource for FailedSource {
         type Chunk = AudioChunk;
 
@@ -838,6 +850,12 @@ mod tests {
         }
     }
 
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test(native)]
     #[cfg_attr(
         feature = "stretch-identity",
@@ -1577,7 +1595,10 @@ mod tests {
         }
         let (mut source, decoded_pointer, staged_pointer) = prepare(&quarter);
         let result = reject(&mut source).await;
-        assert!(matches!(result, TrackStep::Failed(TrackFailureKind::Render)));
+        assert!(matches!(
+            result,
+            TrackStep::Failed(TrackFailureKind::Render)
+        ));
         assert!(source.quantum_failed);
         let decoded = source
             .retired_input

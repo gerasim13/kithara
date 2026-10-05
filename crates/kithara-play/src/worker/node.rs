@@ -919,8 +919,7 @@ mod tests {
     use kithara_audio::{
         Audio, AudioConfig, AudioEvent, AudioRead, AudioSource, ChunkOutcome, Fetch,
         NoResamplerBackend, PreloadGate, PreparedAudio, SourceEnd, TrackFailureKind, TrackStep,
-        WaitingReason,
-        mock::AudioSourceMock,
+        WaitingReason, mock::AudioSourceMock,
     };
     use kithara_command::{ChannelConfig, channel};
     use kithara_effects::EffectDrain;
@@ -957,10 +956,7 @@ mod tests {
         source: S,
         capacity: usize,
         preload_chunks: usize,
-    ) -> (
-        DecoderNode<S>,
-        FileAudio,
-    )
+    ) -> (DecoderNode<S>, FileAudio)
     where
         S: AudioSource<Chunk = AudioChunk>,
     {
@@ -1028,9 +1024,7 @@ mod tests {
     #[kithara::test(native, tokio)]
     #[case::normal(false)]
     #[case::first_seek(true)]
-    async fn real_source_cancellation_survives_the_decoder_marker(
-        #[case] seek_before_read: bool,
-    ) {
+    async fn real_source_cancellation_survives_the_decoder_marker(#[case] seek_before_read: bool) {
         let cancel = cancel_token();
         let (mut node, mut audio) = real_file_node(cancel.clone()).await;
         let mut events = audio.event_bus().subscribe();
@@ -1041,26 +1035,39 @@ mod tests {
         node.recycle();
         let failures = std::iter::from_fn(|| events.try_recv().ok())
             .filter_map(|envelope| match envelope.event {
-                AudioEvent::TrackFailed { failure, seek_epoch } => Some((failure, seek_epoch)),
+                AudioEvent::TrackFailed {
+                    failure,
+                    seek_epoch,
+                } => Some((failure, seek_epoch)),
                 AudioEvent::EndOfStream { .. } => panic!("source cancellation is not natural EOF"),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(matches!(failures.as_slice(), [(TrackFailureKind::SourceCancelled, 0)]));
+        assert!(matches!(
+            failures.as_slice(),
+            [(TrackFailureKind::SourceCancelled, 0)]
+        ));
 
         if seek_before_read {
             let _ = audio.seek_handle().begin(Duration::from_millis(10));
             assert_eq!(node.seek_obs.epoch(), 1, "the terminal marker is now stale");
         }
-        let first = audio.next_chunk().expect_err("the real source emitted a failure marker");
+        let first = audio
+            .next_chunk()
+            .expect_err("the real source emitted a failure marker");
         assert!(
             first.to_string().contains("source cancelled"),
             "the reader must retain SourceCancelled through the actual node and ring: {first}"
         );
         let _ = audio.seek_handle().begin(Duration::from_millis(20));
         let mut samples = [0.0; 16];
-        let repeated = audio.read(&mut samples).expect_err("terminal failure survives another seek");
-        assert!(repeated.to_string().contains("source cancelled"), "{repeated}");
+        let repeated = audio
+            .read(&mut samples)
+            .expect_err("terminal failure survives another seek");
+        assert!(
+            repeated.to_string().contains("source cancelled"),
+            "{repeated}"
+        );
     }
 
     #[kithara::test(native, tokio)]
@@ -1070,13 +1077,18 @@ mod tests {
         drop(node);
         cancel.cancel();
         let mut samples = [0.0; 16];
-        let failure = audio.read(&mut samples).expect_err("an unmarked closed port is a failure");
+        let failure = audio
+            .read(&mut samples)
+            .expect_err("an unmarked closed port is a failure");
         let reason = failure.to_string();
         assert!(reason.contains("channel closed"), "{reason}");
         assert!(reason.contains("no failure marker"), "{reason}");
         assert!(!reason.contains("source cancelled"), "{reason}");
         let repeated = audio.next_chunk().expect_err("closure remains terminal");
-        assert!(repeated.to_string().contains("channel closed"), "{repeated}");
+        assert!(
+            repeated.to_string().contains("channel closed"),
+            "{repeated}"
+        );
     }
 
     #[kithara::test(native, tokio)]
@@ -1086,13 +1098,17 @@ mod tests {
         cancel.cancel();
         assert_eq!(node.tick(), TickResult::Done);
         let mut samples = [0.0; 16];
-        let first = audio.read(&mut samples).expect_err("the producer failure is admitted");
+        let first = audio
+            .read(&mut samples)
+            .expect_err("the producer failure is admitted");
         let first_reason = first.to_string();
         assert!(first_reason.contains("producer"), "{first_reason}");
         assert!(!first_reason.contains("channel closed"), "{first_reason}");
         let _ = audio.seek_handle().begin(Duration::from_millis(20));
         assert_eq!(node.seek_obs.epoch(), 1);
-        let after_seek = audio.read(&mut samples).expect_err("the producer remains terminal");
+        let after_seek = audio
+            .read(&mut samples)
+            .expect_err("the producer remains terminal");
         assert_eq!(
             after_seek.to_string(),
             first_reason,
@@ -1156,7 +1172,8 @@ mod tests {
             item_id: stopped_id,
             reason: TrackPlaybackStopReason::Failed(stopped_fault),
             seek_epoch,
-        }) = received.try_pop() else {
+        }) = received.try_pop()
+        else {
             panic!("the failed-end handler must publish the terminal cause");
         };
         assert_eq!(src.as_ref(), "repeated.wav");
@@ -1168,7 +1185,10 @@ mod tests {
             track.render(None, &mut scratch, &mut mix, 0..16, &mut sink),
             TrackReadOutcome::Eof
         ));
-        assert!(received.try_pop().is_none(), "the failed end must only publish once");
+        assert!(
+            received.try_pop().is_none(),
+            "the failed end must only publish once"
+        );
         assert!(
             fault.to_string().contains("source cancelled"),
             "the source cause must survive the reader, resource, and failed-end handler: {fault}"
