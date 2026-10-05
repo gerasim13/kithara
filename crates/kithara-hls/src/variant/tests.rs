@@ -837,7 +837,7 @@ fn descriptor_at_time_clamps_to_last() {
 }
 
 #[kithara::test]
-#[case::unsized(0)]
+#[case::unknown_size(0)]
 #[case::sized(256)]
 fn failed_init_prevents_loaded_media_from_satisfying_the_read(#[case] init_size: u64) {
     let ctx = test_ctx(3);
