@@ -1,8 +1,8 @@
 use crate::{
     atoms::{search::paint::paint, table::face::TableFace, tree::face::Tree as TreeFace},
     draw::{DrawList, Rect, Transform},
-    interact::{Hit, Input, Outcome},
     hosts::hosted::{SearchPlan, TablePlan, TreePlan},
+    interact::{Hit, Input, Outcome},
     render::{
         Skin,
         document::Ctx,

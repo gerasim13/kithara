@@ -11,9 +11,6 @@ pub mod skin;
 pub mod theme;
 pub mod vis;
 
-#[cfg(any(feature = "iced", feature = "masonry"))]
-use crate::hosts;
-
 pub use address::{Node, Scope, Walk};
 pub use document::{Clock, Ctx, PlacedMount, Snap};
 pub use event::{Carry, ControlAction, Published, UiEvent, WindowCommand, WindowEdge, WriteValue};
@@ -33,8 +30,8 @@ pub(crate) use {
     controls::{ChromeLeaf, Marked, Marks, Probe, chrome_leaf, header_chevron, tree_rows},
     hosts::{
         immediate::{
-            Anchored, Custom, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport, WheelSurface,
-            corner_radius, drop_outline, frame_overlay,
+            Anchored, Custom, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport,
+            WheelSurface, corner_radius, drop_outline, frame_overlay,
         },
         layer::{draw_host_layer, window_layer, window_layers},
         picker::{hosted_picker_overlay, scope_picker, sync_picker},
@@ -62,3 +59,5 @@ pub(crate) use {
 };
 
 pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, Zoom, zoom_in, zoom_out};
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use crate::hosts;

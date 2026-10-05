@@ -15,12 +15,12 @@ use crate::{
     },
     backends::replay_ordered,
     draw::{DrawListBuilder, Rect},
+    hosts::immediate::cache,
     interact::{
         CursorShape, Hover, Input, iced as iced_interact,
         recognizers::{Scalar, ScalarState, Track},
     },
     module::WaveStyle,
-    hosts::immediate::cache,
     render::{Published, Skin, Widget, controls::snapped, scalar, scalar_child},
     shaping::TextContext,
 };

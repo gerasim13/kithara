@@ -9,9 +9,9 @@ use crate::{
     },
     draw::Rect,
     engine::{Engine, Target},
+    hosts::hosted::TablePlan,
     interact::Hit,
     module::TableFrame,
-    hosts::hosted::TablePlan,
     render::Skin,
 };
 pub(super) struct TableHost {

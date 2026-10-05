@@ -89,12 +89,9 @@ mod table_projection {
         draw::{Rect, Transform},
         engine::Engine,
         expand::ControlSpec,
-        module::{TableColumn, TableColumnStyle},
         hosts::hosted::{HostedControlPlan, Resolving, TablePlan, TableProjection},
-        render::{
-            ReadValue, Reads,
-            document::probe,
-        },
+        module::{TableColumn, TableColumnStyle},
+        render::{ReadValue, Reads, document::probe},
     };
 
     struct Silent;

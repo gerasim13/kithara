@@ -39,11 +39,11 @@ use crate::{
     builtin,
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Pt, Rect, Rgba},
+    hosts::drop_fixture,
     ids::{EndpointId, SourceUri},
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     module::IconName,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    hosts::drop_fixture,
     render::{
         Carry, CarryStep, ControlAction, CustomSkin, PortalMapView, PortalTarget, Published,
         ReadValue, Reads, ScalarRange, Skin, StereoLevels, TableCell, TableRow, TreeRow, UiEvent,

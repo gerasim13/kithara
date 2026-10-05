@@ -13,10 +13,7 @@ use tracing::{Span, trace_span};
 
 use super::{custom::HostAction, picker::HostedEngine};
 use crate::{
-    backends::VelloBackend,
-    draw::replay,
-    hosts::picker::PickerMenu,
-    render::Skin,
+    backends::VelloBackend, draw::replay, hosts::picker::PickerMenu, render::Skin,
     shaping::TextContext,
 };
 

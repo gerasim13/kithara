@@ -15,18 +15,14 @@ use crate::{
     atoms::{bar::context::Context, table::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
     engine::{Descriptor, Engine, PickerSnapshot, Target, TextInputSnapshot},
+    hosts::hosted::{
+        SearchPlan, SearchProjection, TablePlan, TableProjection, TreePlan, TreeProjection,
+    },
     interact::{
         CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase,
         masonry::{pointer_button, portable_scroll},
     },
-    hosts::hosted::{
-        SearchPlan, SearchProjection, TablePlan, TableProjection, TreePlan, TreeProjection,
-    },
-    render::{
-        Carried, HostedControlPlan, Published,
-        document::Ctx,
-        event::engine_value,
-    },
+    render::{Carried, HostedControlPlan, Published, document::Ctx, event::engine_value},
 };
 
 /// One control an engine drives: what it is and where it sits.
@@ -102,11 +98,7 @@ pub(crate) struct HostedEngine {
     targets: Vec<Within<EngineTarget>>,
     #[field(get(copy), vis = "pub(in crate::hosts)")]
     owner: WidgetId,
-    #[field(
-        get(copy),
-        vis = "pub(in crate::hosts)",
-        rename = "accepts_text_input"
-    )]
+    #[field(get(copy), vis = "pub(in crate::hosts)", rename = "accepts_text_input")]
     text_input: bool,
 }
 

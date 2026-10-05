@@ -2,7 +2,6 @@
 pub(crate) use super::geometry as config;
 #[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) use super::host as config;
-
 use crate::{
     expand::Binding,
     ids::InternId,
