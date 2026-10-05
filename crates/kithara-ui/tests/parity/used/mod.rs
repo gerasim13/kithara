@@ -14,3 +14,4 @@ mod hand;
 mod press;
 mod run;
 mod stepper;
+mod switching;

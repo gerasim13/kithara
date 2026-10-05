@@ -188,9 +188,10 @@ mod library {
     use ::kithara::{
         platform::{sync::Arc, tokio::sync::mpsc},
         ui::{
-            app::{Config, Ui},
+            app::{App, Config, Ui},
             draw::{Pt, Rect},
             interact::{Input, MOUSE, PointerInput, PointerPhase},
+            render::ReadValue,
         },
     };
     use arc_swap::ArcSwap;
@@ -242,6 +243,13 @@ mod library {
             .collect()
     }
 
+    fn selected(ui: &Ui<'_, Studio>) -> Option<String> {
+        ui.app().reads(|reads| match reads.get("library.page") {
+            Some(ReadValue::Text(source)) => Some(source.to_owned()),
+            _ => None,
+        })
+    }
+
     fn row(ui: &mut Ui<'_, Studio>, row: u8, chevron: bool) -> Pt {
         let tree = laid_out(ui, "library/tree").expect("the library draws its tree");
         let skin = &ui.app().state.ui.package.skin().tree;
@@ -281,14 +289,17 @@ mod library {
     #[kithara::test(native, flash(false))]
     fn the_page_on_screen_is_the_selected_sources() {
         mounted(|ui| {
+            assert_eq!(selected(ui).as_deref(), Some("startup"));
             assert_eq!(shown(ui), ["startup"], "Startup starts selected");
 
             let explorer = row(ui, 3, false);
             press(ui, explorer);
+            assert_eq!(selected(ui).as_deref(), Some("explorer"));
             assert_eq!(shown(ui), ["explorer"]);
 
             let startup = row(ui, 1, false);
             press(ui, startup);
+            assert_eq!(selected(ui).as_deref(), Some("startup"));
             assert_eq!(shown(ui), ["startup"]);
         });
     }
