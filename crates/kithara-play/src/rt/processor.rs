@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     num::{NonZeroU32, NonZeroUsize},
     ops::Range,
     sync::atomic::Ordering,
@@ -27,7 +26,7 @@ use super::{DeckMixerConfig, context::read_render_context, track::PlayerTrack};
 use crate::{
     bridge::{
         DeckApplied, DeckMixSettings, DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification,
-        TrackState, TrackTransition,
+        TrackState,
     },
     rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
     session::SessionError,
@@ -60,7 +59,6 @@ pub(super) struct Deck {
     pub(super) sample_rate: NonZeroU32,
     pub(super) render: RenderPass,
     pub(super) tracks: TrackSlots,
-    pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
     /// Media seconds every track consumes per output second.
     pub(super) rate: f32,
@@ -226,7 +224,6 @@ impl DeckMixer {
                 rate: 1.0,
                 declick: config.declick(),
                 tracks: TrackSlots::new(config.slots()),
-                tracks_transitions: VecDeque::with_capacity(config.slots().get()),
             },
         }
     }

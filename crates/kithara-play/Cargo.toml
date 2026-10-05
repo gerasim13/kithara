@@ -165,6 +165,7 @@ unimock = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
 
+assert_no_alloc = { workspace = true }
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
 

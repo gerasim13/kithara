@@ -7,7 +7,10 @@ use super::{
     processor::Deck,
     track::{PlayerResource, PlayerTrack},
 };
-use crate::bridge::{DeckApplied, DeckPart, PlayerNotification, TrackState, TrackTransition};
+use crate::{
+    CrossfadeSettings,
+    bridge::{DeckApplied, DeckPart, PlayerNotification, TrackState, TrackTransition},
+};
 
 impl Deck {
     fn apply_fade_duration(&mut self, duration: f32) {
@@ -75,7 +78,6 @@ impl Deck {
         for slot in self.tracks.slots() {
             self.unload_slot(slot);
         }
-        self.tracks_transitions.clear();
         self.set_playing(false);
         self.playback.position.store(0.0);
         self.playback.frontier.store(0.0);
@@ -107,8 +109,17 @@ impl Deck {
             DeckPart::Clear => {
                 self.clear_all_tracks();
             }
-            DeckPart::Fade(transition) => {
-                self.handle_transition(transition);
+            DeckPart::Fade(TrackTransition::FadeIn {
+                item_id,
+                settings,
+                epoch,
+            }) => {
+                self.lead(item_id, settings, epoch);
+            }
+            DeckPart::Fade(TrackTransition::FadeOut { item_id, settings }) => {
+                if let Some(track) = self.tracks.get_mut(item_id) {
+                    track.fade_out(settings);
+                }
             }
             DeckPart::Seek {
                 seconds,
@@ -149,61 +160,31 @@ impl Deck {
         }
     }
 
-    fn handle_transition(&mut self, transition: TrackTransition) {
-        let mut leading_changed = false;
-
-        if let TrackTransition::FadeIn {
-            item_id, settings, ..
-        } = &transition
-        {
-            self.tracks_transitions.clear();
-
-            let maybe_old = self
-                .tracks
-                .iter()
-                .find_map(|(_, track)| track.state().is_leading().then(|| track.item_id()));
-
-            if let Some(old_id) = maybe_old
-                && old_id != *item_id
-            {
-                leading_changed = true;
-                self.tracks_transitions.push_back(TrackTransition::FadeOut {
-                    item_id: old_id,
-                    settings: *settings,
-                });
-            }
+    /// Makes `item_id` leading: the track that led fades out as it fades in. A fade-in for a
+    /// track the deck does not hold changes nothing.
+    fn lead(&mut self, item_id: TrackId, settings: CrossfadeSettings, epoch: u64) {
+        let Some(slot) = self.tracks.slot_of(item_id) else {
+            return;
+        };
+        let old = self
+            .tracks
+            .iter()
+            .find_map(|(_, track)| track.state().is_leading().then(|| track.item_id()))
+            .filter(|old| *old != item_id);
+        if let Some(track) = old.and_then(|old| self.tracks.get_mut(old)) {
+            track.fade_out(settings);
         }
-
-        self.tracks_transitions.push_back(transition);
-        let playback = Arc::clone(&self.playback);
-        let mut changed_src = None;
-        self.tracks_transitions.retain(|transition| {
-            let item_id = match transition {
-                TrackTransition::FadeIn { item_id, .. }
-                | TrackTransition::FadeOut { item_id, .. } => *item_id,
-            };
-            if let Some(track) = self.tracks.get_mut(item_id) {
-                match transition {
-                    TrackTransition::FadeIn {
-                        settings, epoch, ..
-                    } => {
-                        changed_src = Some(Arc::clone(track.src()));
-                        track.fade_in(*settings);
-                        playback.adopt(*epoch, track.position(), track.duration());
-                    }
-                    TrackTransition::FadeOut { settings, .. } => {
-                        track.fade_out(*settings);
-                    }
-                }
-                return false;
+        if let Some(track) = self.tracks.at_mut(slot) {
+            track.fade_in(settings);
+            self.playback
+                .adopt(epoch, track.position(), track.duration());
+            if old.is_some() {
+                self.notif_tx
+                    .try_push(PlayerNotification::Changed {
+                        src: Arc::clone(track.src()),
+                    })
+                    .ok();
             }
-            true
-        });
-
-        if leading_changed && let Some(new_src) = changed_src {
-            self.notif_tx
-                .try_push(PlayerNotification::Changed { src: new_src })
-                .ok();
         }
     }
 
