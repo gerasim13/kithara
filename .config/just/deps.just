@@ -24,7 +24,7 @@ shear:
 
 hack:
     just _xtask powerset --no-dev-deps
-    cargo check -p kithara-warp --lib --no-default-features
+    cargo check -p kithara-warp --lib --no-default-features --features stretch-identity
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith
     cargo check -p kithara-warp --lib --no-default-features --features stretch-bungee
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith,stretch-bungee

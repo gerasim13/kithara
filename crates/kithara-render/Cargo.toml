@@ -20,6 +20,7 @@ tls-native = ["kithara-audio/tls-native"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
 stretch-glide = ["kithara-warp/stretch-glide"]
+stretch-identity = ["kithara-warp/stretch-identity"]
 
 [dependencies]
 kithara-audio = { workspace = true, default-features = false }

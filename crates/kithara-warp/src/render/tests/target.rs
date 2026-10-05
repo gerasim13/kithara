@@ -9,7 +9,9 @@ use kithara_test_utils::kithara;
 use super::{WarpConfig, spec};
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use super::{chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer};
-use crate::{consts, test_pools::pools_with_budget as test_pools};
+#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use crate::consts;
+use crate::test_pools::pools_with_budget as test_pools;
 
 /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -63,7 +65,13 @@ fn live_backend_swap_continues_and_keeps_pitch(
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
+#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -110,7 +118,13 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     assert!(fx.scratch.is_some());
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
+#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

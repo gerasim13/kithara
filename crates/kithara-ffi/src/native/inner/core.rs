@@ -9,7 +9,7 @@ use kithara::{
     },
     play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::QueueConfig,
-    warp::WarpConfig,
+    warp::{StretchKind, WarpCapabilities, WarpConfig},
 };
 
 use super::resource::ResourceFactory;
@@ -24,16 +24,13 @@ use crate::{
 };
 
 /// The Warp configuration every FFI player starts its tracks on: keylocked on
-/// Apple, where a pitch-preserving backend is compiled.
+/// Apple when the selected backend preserves pitch.
 fn player_warp() -> WarpConfig {
-    let warp = WarpConfig::builder();
-    #[cfg(all(
-        feature = "apple",
-        target_vendor = "apple",
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    let warp = warp.keylock(true);
-    warp.build()
+    let keylock = cfg!(all(feature = "apple", target_vendor = "apple"))
+        && StretchKind::default()
+            .capabilities()
+            .contains(WarpCapabilities::KEYLOCK);
+    WarpConfig::builder().keylock(keylock).build()
 }
 
 /// Build the default `NetOptions`. The `dev` feature enables the
