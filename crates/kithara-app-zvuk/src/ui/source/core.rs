@@ -245,16 +245,16 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
         let Some(changed) = self.catalogue.select(node) else {
             return;
         };
-        let reload_selected = self.faults.page.is_some()
+        if self.faults.page.is_some()
             && self.active.is_none()
             && self.pending.is_none()
-            && !self.cancel.is_cancelled();
-        if changed || reload_selected {
-            if reload_selected {
-                self.faults.set(Operation::Page, None);
-            }
-            self.queue(Instant::now());
+            && !self.cancel.is_cancelled()
+        {
+            self.faults.set(Operation::Page, None);
+        } else if !changed {
+            return;
         }
+        self.queue(Instant::now());
     }
 
     /// Projects the current page state without hiding errors alongside rows.

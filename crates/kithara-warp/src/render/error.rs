@@ -22,11 +22,6 @@ pub enum WarpRenderError {
     #[error("source quantum is empty")]
     EmptySource,
     /// The selected geometry or engine cannot accept the operation.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     #[error(transparent)]
     Engine(#[from] kithara_stretch::ElasticError),
 }
