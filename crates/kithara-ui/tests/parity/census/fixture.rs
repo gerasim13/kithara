@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::LazyLock};
+use std::{borrow::Cow, collections::BTreeMap, sync::LazyLock};
 
 use kithara_ui::{
     app::{App, Config, Ui},
@@ -60,7 +60,10 @@ static TABLE_ROWS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
             ],
             false,
         )
-        .with_drag("file:///late.mp3");
+        .with_drag(Cow::Owned(BTreeMap::from([(
+            "source".to_owned(),
+            "file:///late.mp3".to_owned(),
+        )])));
         8
     ]
 });
@@ -69,6 +72,7 @@ static TREE_ROWS: [TreeRow<'static>; 8] = [TreeRow {
     label: "Late Folder",
     count: Some(8),
     expanded: Some(true),
+    page: false,
     icon: IconName::Folder,
     muted: false,
     selected: false,
@@ -135,6 +139,7 @@ impl Default for CensusRegistry {
                 ValueKind::Text,
             ),
             (EndpointCategory::Model, "library.query", ValueKind::Text),
+            (EndpointCategory::Command, "library.query", ValueKind::Text),
             (EndpointCategory::Model, "library.scope", ValueKind::Scalar),
             (EndpointCategory::Model, "library.tree", ValueKind::Tree),
             (
@@ -150,7 +155,7 @@ impl Default for CensusRegistry {
                 "library.select_scope",
                 ValueKind::Index,
             ),
-            (EndpointCategory::Command, "library.load", ValueKind::Text),
+            (EndpointCategory::Command, "library.load", ValueKind::Record),
             (
                 EndpointCategory::Command,
                 "ui.menu.toggle",

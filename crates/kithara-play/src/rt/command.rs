@@ -22,6 +22,13 @@ impl PlayerNodeProcessor {
         }
     }
 
+    fn apply_rate(&mut self, rate: f32) {
+        self.rate = rate;
+        for (_, track) in self.tracks.iter_mut() {
+            track.set_playback_rate(rate);
+        }
+    }
+
     /// Releases the natural-end hold on every loaded track in the slot, including ones this seek
     /// does not move, since the re-base is slot-wide.
     fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
@@ -114,6 +121,9 @@ impl PlayerNodeProcessor {
                 PlayerCmd::SetPrefetchDuration(duration) => {
                     self.apply_prefetch_duration(duration);
                 }
+                PlayerCmd::SetRate(rate) => {
+                    self.apply_rate(rate);
+                }
             }
         }
     }
@@ -188,13 +198,14 @@ impl PlayerNodeProcessor {
 
         resource.set_host_sample_rate(self.sample_rate);
 
-        let track = PlayerTrack::builder()
+        let mut track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
             .item_id(item_id)
             .crossfade(self.crossfade)
             .prefetch_duration(self.prefetch_duration)
             .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))
             .build(resource);
+        track.set_playback_rate(self.rate);
 
         if let Some(rejected) = self.tracks.insert(track) {
             self.discard_track(rejected);

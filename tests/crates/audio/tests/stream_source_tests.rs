@@ -12,7 +12,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo, SeekEpoch, Stream},
-    warp::{StretchControls, StretchKind, WarpConfig},
+    warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
@@ -73,7 +73,7 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_8000);
-    let audio = worker.open(config).await.expect("audio construction");
+    let audio = worker.load(config).await.expect("audio construction");
 
     let (_audio, frames) = blocking_audio(audio, read_to_eof).await;
     assert!(
@@ -132,15 +132,18 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .hint("wav".to_owned())
         .build();
-    let controls = StretchControls::new(0.5);
-    controls.set_backend(backend);
-    controls.set_keylock(true);
     let config = TrackConfig::for_audio(audio)
-        .warp(WarpConfig::builder().stretch(controls).build())
+        .warp(
+            WarpConfig::builder()
+                .speed(0.5)
+                .backend(backend)
+                .keylock(true)
+                .build(),
+        )
         .build();
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let audio = worker.open(config).await.expect("audio construction");
+    let audio = worker.load(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
     let gate = audio
         .preload_gate()
@@ -224,7 +227,7 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_132300);
-    let audio = worker.open(config).await.expect("audio construction");
+    let audio = worker.load(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
     let (audio, _initial_frames) =
@@ -291,7 +294,7 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_176400);
-    let mut audio = worker.open(config).await.expect("audio construction");
+    let mut audio = worker.load(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
     // Keep the settle reads inline so the flash rewriter retargets these
@@ -458,7 +461,7 @@ async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u
     .hint("wav".to_string())
     .build();
 
-    let audio = worker.open(config).await.expect("audio construction");
+    let audio = worker.load(config).await.expect("audio construction");
 
     let (_audio, saw_terminal) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 4096];

@@ -8,7 +8,7 @@ mod source;
 mod staging;
 
 pub use artifact::{
-    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, MAX_ARTIFACT_BYTES,
+    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
     PreparedGrid,
 };
 pub use config::ResourceConfig;

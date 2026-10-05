@@ -122,7 +122,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         )
         .expect("the pass opens");
 
-    let player = worker.open(player_cfg).await.expect("open player audio");
+    let player = worker.load(player_cfg).await.expect("open player audio");
     let player_drain = spawn_blocking(move || {
         let mut player = player;
         player.preload().expect("player preload");

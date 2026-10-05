@@ -26,6 +26,7 @@ struct Row {
     icon: IconName,
     count: Option<String>,
     expanded: Option<bool>,
+    page: bool,
     label: String,
     muted: bool,
     selected: bool,
@@ -115,15 +116,15 @@ impl Tree {
                     index,
                     Rect {
                         h: (bottom - top).max(0.0),
-                        w: if row.depth == 0 {
-                            viewport.w
-                        } else {
+                        w: if row.page {
                             skin.tree.chevron_width
-                        },
-                        x: if row.depth == 0 {
-                            viewport.x
                         } else {
+                            viewport.w
+                        },
+                        x: if row.page {
                             row.chevron_x(viewport.x, skin)
+                        } else {
+                            viewport.x
                         },
                         y: top,
                     },
@@ -139,6 +140,7 @@ impl Row {
             count: row.count.map(|count| count.to_string()),
             depth: row.depth,
             expanded: row.expanded,
+            page: row.page,
             icon: row.icon,
             label: row.label.to_owned(),
             muted: row.muted,
@@ -401,6 +403,7 @@ mod tests {
                 icon: IconName::Folder,
                 count: None,
                 expanded: Some(true),
+                page: false,
                 selected: false,
                 muted: false,
             },
@@ -410,6 +413,7 @@ mod tests {
                 icon: IconName::Playlist,
                 count: Some(2),
                 expanded: None,
+                page: false,
                 selected: true,
                 muted: false,
             },
@@ -419,6 +423,7 @@ mod tests {
                 icon: IconName::Zvuk,
                 count: None,
                 expanded: None,
+                page: false,
                 selected: false,
                 muted: true,
             },

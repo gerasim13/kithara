@@ -87,6 +87,9 @@ impl HostedControl {
                 ..
             } => rail_bounds(bounds, *style, *labelled, *metrics),
             HostedControlPlan::Picker { face, .. } => Context::placed(*face, bounds),
+            HostedControlPlan::Search(plan) => {
+                crate::atoms::search::input_bounds(bounds, plan.picture.borrow().skin())
+            }
             _ => bounds,
         }
     }
@@ -134,9 +137,11 @@ pub(super) fn append_control_targets<'a>(
     if let HostedControlPlan::Tree(plan) = &control.plan {
         let (search, rows) = tree_input_layouts(layout, plan.search_path.is_some());
         if let Some((path, layout)) = plan.search_path.as_ref().zip(search) {
+            let input =
+                crate::atoms::search::input_bounds(layout.bounds().into(), plan.picture().skin());
             targets.push(Target::new(
                 path,
-                iced_interact::hit(layout.bounds(), cursor),
+                Hit::new(cursor.position().map(Into::into), input),
             ));
         }
         if let Some(layout) = rows {
@@ -156,7 +161,11 @@ pub(super) fn append_control_targets<'a>(
         return;
     }
     if let Some(table) = &control.table {
-        table.append_targets(layout, cursor, engine, targets);
+        let actions = match &control.plan {
+            HostedControlPlan::Table(plan) => Some(&**plan),
+            _ => None,
+        };
+        table.append_targets(layout, cursor, engine, actions, targets);
     } else {
         targets.push(Target::new(
             control.path(),

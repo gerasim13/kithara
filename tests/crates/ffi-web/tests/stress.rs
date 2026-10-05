@@ -99,7 +99,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         .media_info(wav_info)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker.open(config).await.unwrap();
+    let mut audio = worker.load(config).await.unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");

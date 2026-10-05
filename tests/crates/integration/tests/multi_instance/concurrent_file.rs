@@ -39,7 +39,7 @@ async fn create_file_audio(
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<File>>")
 }

@@ -404,7 +404,7 @@ impl WasmInner {
                 reason: "playing rate must be finite".into(),
             });
         }
-        let target = rate.max(kithara::play::StretchControls::MIN_SPEED);
+        let target = rate.max(kithara::play::MIN_SPEED);
         self.try_send(WorkerCmd::SetPlayingRate(target))?;
         self.playing_rate.store(target);
         Ok(())

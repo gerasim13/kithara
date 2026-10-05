@@ -40,10 +40,12 @@ Builds `dist/` for a WebGPU browser. Serve it with cross-origin isolation
 `Cross-Origin-Embedder-Policy: require-corp`); `dist/_headers` names both for
 hosts that read it. The browser build carries `app.web.yaml` over `app.yaml`:
 no DRM providers and a playlist of cross-origin streams.
+The public browser configuration carries no catalogue account.
 
 ## Features
 
 - `gui` — desktop GUI player (iced).
+- `zvuk` — Zvuk catalogue search, liked tracks and playlists, disabled by default.
 - `lib-only` — build as a plain library (used by integration tests).
 - `beat-nn` — NN beat/downbeat detection.
 - `stretch-signalsmith` / `stretch-bungee` / `stretch-all` — time-stretch backends.

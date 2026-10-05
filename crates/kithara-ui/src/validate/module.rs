@@ -329,6 +329,7 @@ pub(super) const fn native_pass(child: &ControlNode) -> Option<&'static str> {
         ControlNode::Shader { .. } => Some("Shader"),
         ControlNode::Vis { .. } => Some("Vis"),
         ControlNode::Table { .. } => Some("Table"),
+        ControlNode::Search { .. } => Some("Search"),
         ControlNode::Tree { .. } => Some("Tree"),
         _ => None,
     }
@@ -377,6 +378,7 @@ pub(super) const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::PortalMap { id, .. }
         | ControlNode::Range { id, .. }
         | ControlNode::Table { id, .. }
+        | ControlNode::Search { id, .. }
         | ControlNode::Tree { id, .. }
         | ControlNode::ContextBar { id, .. }
         | ControlNode::Toggle { id, .. }
@@ -410,7 +412,7 @@ pub(crate) fn check_module_bindings(
         (
             doc.drop.as_ref().map(|drop| &drop.write),
             BindingSide::Write,
-            ValueKind::Text,
+            ValueKind::Record,
             "root/drop",
         ),
         (

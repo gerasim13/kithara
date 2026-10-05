@@ -53,7 +53,7 @@ async fn open_test_audio(
         .maybe_events(events)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    kithara_integration_tests::fixtures::assert_fixture_open(asset, worker.open(config).await)
+    kithara_integration_tests::fixtures::assert_fixture_open(asset, worker.load(config).await)
 }
 
 /// Nonblocking re-poll loop: these tests are browser-portable (async body,

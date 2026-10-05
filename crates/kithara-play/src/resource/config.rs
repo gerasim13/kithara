@@ -6,6 +6,7 @@ use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
 use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
 use kithara_config::Config;
+use kithara_decode::TrackMetadata;
 use kithara_download::Downloader;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
@@ -37,6 +38,11 @@ where
     /// Audio resource source (URL or local path).
     #[config(skip = "consumed to select the resource", builder(start_fn))]
     pub(crate) src: ResourceSrc,
+    /// Caller-known track metadata, held for the track's owner. The resource
+    /// reports only its decoder tags; the owner keeps these fields ahead of
+    /// them and takes from the tags only what these leave unset.
+    #[config(skip = "kept by the track's owner ahead of decoder tags")]
+    pub(crate) metadata: Option<TrackMetadata>,
     /// Initial ABR mode passed to the HLS stream.
     #[config(value, builder(default))]
     pub(crate) initial_abr_mode: AbrMode,
@@ -72,6 +78,11 @@ where
     /// Encryption key handling configuration.
     #[config(skip = "transferred to the key resolver", builder(default))]
     pub(crate) keys: KeyOptions,
+    /// Where this track's encoded cover image is read from. The cover is an
+    /// artifact of the track, read over [`Self::artifact_fetch`] beside the
+    /// audio, which never waits for it.
+    #[config(skip = "read as the track's cover artifact")]
+    pub(crate) artwork: Option<ResourceSrc>,
     /// A beat grid this track already has, as a structure the caller holds or
     /// a source its bytes are read from. Analysis fills in only what no
     /// prepared artifact covers, so a track opened with a grid here is never
@@ -399,7 +410,7 @@ mod tests {
     #[kithara::test]
     fn config_stretch_defaults_to_unity() {
         let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!((config.warp.stretch().speed() - 1.0).abs() < f32::EPSILON);
+        assert!((config.warp.speed() - 1.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

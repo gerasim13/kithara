@@ -4,9 +4,11 @@ use kithara_audio::{
     Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode, PreloadGate,
     ReadOutcome, SeekBegin, SeekOutcome,
 };
+use kithara_command::Sender;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
+use kithara_render::LaneProtocol;
 use kithara_signal::AudioSpec;
 use kithara_warp::{RenderPublisher, Warp};
 use kithara_worker::{TaskControl, TaskHandle};
@@ -52,19 +54,29 @@ impl<S> TrackLease<S> {
 /// buffers are released before the final worker owner can shut down.
 pub struct RegisteredAudio<T, S> {
     _lease: TrackLease<S>,
+    lane: Option<Sender<LaneProtocol>>,
     warp: Warp<Audio<T>>,
 }
 
 impl<T, S> RegisteredAudio<T, S> {
-    pub(super) const fn new(warp: Warp<Audio<T>>, lease: TrackLease<S>) -> Self {
+    pub(super) const fn new(
+        warp: Warp<Audio<T>>,
+        lease: TrackLease<S>,
+        lane: Sender<LaneProtocol>,
+    ) -> Self {
         Self {
             warp,
+            lane: Some(lane),
             _lease: lease,
         }
     }
 
     pub(crate) fn priority(&self) -> TrackPriority {
         self._lease.priority()
+    }
+
+    pub(crate) fn take_lane(&mut self) -> Option<Sender<LaneProtocol>> {
+        self.lane.take()
     }
 
     pub(crate) fn take_publisher(&mut self) -> Option<RenderPublisher> {

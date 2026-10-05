@@ -35,6 +35,12 @@ impl Endpoint {
 /// scalars, `Telemetry` for engine state, `Model` for host-owned UI state.
 static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.track.artwork",
+        value: ValueKind::Image,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
         category: EndpointCategory::Parameter,
         id: "source.column.width",
         value: ValueKind::Scalar,
@@ -211,7 +217,7 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.queue.load",
-        value: ValueKind::Text,
+        value: ValueKind::Record,
         scopes: Endpoint::DECK,
     },
     Endpoint {
@@ -510,7 +516,8 @@ pub(in crate::gui) fn readable_kind(id: &str) -> Option<ValueKind> {
 }
 
 struct Registration {
-    endpoint: &'static Endpoint,
+    category: EndpointCategory,
+    id: EndpointId,
     desc: EndpointDesc,
 }
 
@@ -524,7 +531,8 @@ impl Default for Registry {
         let endpoints = ENDPOINTS
             .iter()
             .map(|endpoint| Registration {
-                endpoint,
+                category: endpoint.category,
+                id: EndpointId(endpoint.id.to_owned()),
                 desc: endpoint.desc(),
             })
             .collect();
@@ -532,11 +540,25 @@ impl Default for Registry {
     }
 }
 
+impl Registry {
+    pub(in crate::gui) fn with_endpoints(
+        mut self,
+        endpoints: impl IntoIterator<Item = (EndpointCategory, EndpointId, EndpointDesc)>,
+    ) -> Self {
+        self.endpoints.extend(
+            endpoints
+                .into_iter()
+                .map(|(category, id, desc)| Registration { category, id, desc }),
+        );
+        self
+    }
+}
+
 impl EndpointRegistry for Registry {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
         self.endpoints
             .iter()
-            .find(|entry| entry.endpoint.category == category && entry.endpoint.id == id.0)
+            .find(|entry| entry.category == category && entry.id == *id)
             .map(|entry| &entry.desc)
     }
 }

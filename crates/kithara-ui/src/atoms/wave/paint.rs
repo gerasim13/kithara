@@ -249,7 +249,7 @@ mod tests {
     use crate::{
         atoms::wave::overlay::OverlayPalette,
         builtin,
-        draw::{DrawCmd, DrawList, Geom, Paint, Pt, Transform},
+        draw::{DrawCmd, DrawList, Geom, Paint, Pt},
     };
 
     #[kithara::test]
@@ -286,6 +286,7 @@ mod tests {
             cached: 0.5,
             cue_text: color(0.03),
             overlay: Some(Overlay {
+                art: None,
                 title: "Track",
                 artist: "Artist",
                 bpm: "120.00",
@@ -384,15 +385,17 @@ mod tests {
             fill_rect(commands, overlay_palette.background),
             Some(header)
         );
-        assert_eq!(
-            text_transform(commands, "Track"),
-            Some(Transform::translate(Pt {
-                x: bounds.x + overlay.padding_x + overlay.art_size + overlay.gap,
-                y: bounds.y
-                    + (header.h - (overlay.title.size + overlay.summary_gap + overlay.artist.size))
-                        / 2.0,
-            }))
-        );
+        let title = text_bounds(commands, "Track").expect("the overlay paints the title");
+        let artist = text_bounds(commands, "Artist").expect("the overlay paints the artist");
+        let summary_x = bounds.x + overlay.padding_x + overlay.art_size + overlay.gap;
+        assert_eq!(title.x, summary_x);
+        assert_eq!(artist.x, summary_x);
+        assert_eq!(artist.y, title.y + title.h + overlay.summary_gap);
+        assert!(title.y >= header.y + overlay.padding_y);
+        assert!(artist.y + artist.h <= header.y + header.h - overlay.padding_y);
+        let above = title.y - header.y;
+        let below = header.y + header.h - (artist.y + artist.h);
+        assert!((above - below).abs() <= f32::EPSILON * header.h * 4.0);
     }
 
     #[kithara::test]
@@ -610,12 +613,23 @@ mod tests {
         })
     }
 
-    fn text_transform(commands: &[DrawCmd], expected: &str) -> Option<Transform> {
+    fn text_bounds(commands: &[DrawCmd], expected: &str) -> Option<Rect> {
         commands.iter().find_map(|command| match command {
             DrawCmd::Text {
-                content, transform, ..
-            } if content == expected => Some(*transform),
-            DrawCmd::Clip { list, .. } => text_transform(list.commands(), expected),
+                content,
+                run,
+                transform,
+                ..
+            } if content == expected => {
+                let origin = transform.apply(Pt { x: 0.0, y: 0.0 });
+                Some(Rect {
+                    x: origin.x,
+                    y: origin.y,
+                    w: run.width(),
+                    h: run.height(),
+                })
+            }
+            DrawCmd::Clip { list, .. } => text_bounds(list.commands(), expected),
             _ => None,
         })
     }

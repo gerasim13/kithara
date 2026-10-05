@@ -126,6 +126,18 @@ impl ViewControl for mount::Table<'_> {
     }
 }
 
+impl ViewControl for mount::Search {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        let query = match cx.value {
+            Some(ReadValue::Text(query)) => *query,
+            _ => "",
+        };
+        Rendered::leading(crate::render::immediate::search_bar(
+            cx.path, query, cx.skin, cx.owner,
+        ))
+    }
+}
+
 impl ViewControl for mount::Tree<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(tree(cx.path, self, cx.value, cx.ctx, cx.skin, cx.owner))

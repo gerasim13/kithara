@@ -20,19 +20,18 @@ use kithara::{
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
     queue::{QueueConfig, QueueError, RepeatMode, Transition},
-    warp::{StretchControls, WarpConfig},
+    warp::{StretchKind, WarpCapabilities, WarpConfig},
 };
 
 use super::salt;
-fn player_timestretch() -> Arc<StretchControls> {
-    let controls = StretchControls::new(1.0);
-    #[cfg(all(
-        feature = "apple",
-        target_vendor = "apple",
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    controls.set_keylock(true);
-    controls
+/// The Warp configuration every FFI player starts its tracks on: keylocked on
+/// Apple when the selected backend preserves pitch.
+fn player_warp() -> WarpConfig {
+    let keylock = cfg!(all(feature = "apple", target_vendor = "apple"))
+        && StretchKind::default()
+            .capabilities()
+            .contains(WarpCapabilities::KEYLOCK);
+    WarpConfig::builder().keylock(keylock).build()
 }
 
 use crate::{
@@ -217,7 +216,7 @@ impl NativeInner {
         let queue_store = store.handle().clone();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
-            .warp(WarpConfig::builder().stretch(player_timestretch()).build())
+            .warp(player_warp())
             .cancel(player_cancel.child())
             .sample_rate(super::session::requested_sample_rate())
             .worker(worker)

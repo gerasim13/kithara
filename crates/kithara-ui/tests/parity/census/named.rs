@@ -113,6 +113,10 @@ pub(crate) const ROWS: &[Row] = &[
             .union(Gestures::WHEEL),
     },
     Row {
+        name: "Search",
+        gestures: Gestures::PRESS.union(Gestures::KEYBOARD),
+    },
+    Row {
         name: "ContextBar",
         gestures: Gestures::PRESS.union(Gestures::KEYBOARD),
     },
@@ -275,10 +279,10 @@ pub(crate) enum Stroke {
 }
 
 impl Stroke {
-    pub(crate) const fn retained(self) -> Input<'static> {
+    pub(crate) fn retained(self) -> Input<'static> {
         let (key, text) = match self {
             Self::Named(key, _) => (key, None),
-            Self::Typed(character) => (Key::Character(character), Some(character)),
+            Self::Typed(character) => (Key::character(character, None), Some(character)),
         };
         Input::KeyPressed {
             key,

@@ -16,14 +16,14 @@ pub trait ArtifactDocument: Sized {
     /// # Errors
     ///
     /// Returns why the bytes are not a document of this kind.
-    fn decode(bytes: &[u8]) -> Result<Self, String>;
+    fn decode(bytes: Vec<u8>) -> Result<Self, String>;
 }
 
 impl ArtifactDocument for BeatGridModel {
     const KIND: &'static str = "beat grid";
 
-    fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let raw: RawBeatGrid = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    fn decode(bytes: Vec<u8>) -> Result<Self, String> {
+        let raw: RawBeatGrid = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
         Self::try_from(raw).map_err(|error| error.to_string())
     }
 }
@@ -31,7 +31,26 @@ impl ArtifactDocument for BeatGridModel {
 impl ArtifactDocument for Waveform {
     const KIND: &'static str = "waveform";
 
-    fn decode(bytes: &[u8]) -> Result<Self, String> {
-        Self::try_from(bytes).map_err(|error| error.to_string())
+    fn decode(bytes: Vec<u8>) -> Result<Self, String> {
+        Self::try_from(bytes.as_slice()).map_err(|error| error.to_string())
+    }
+}
+
+/// A track's encoded cover image, kept as received: the display decodes the
+/// picture.
+#[derive(Debug)]
+pub struct Cover(Vec<u8>);
+
+impl From<Cover> for Vec<u8> {
+    fn from(cover: Cover) -> Self {
+        cover.0
+    }
+}
+
+impl ArtifactDocument for Cover {
+    const KIND: &'static str = "artwork";
+
+    fn decode(bytes: Vec<u8>) -> Result<Self, String> {
+        Ok(Self(bytes))
     }
 }

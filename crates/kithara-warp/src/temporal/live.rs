@@ -309,21 +309,13 @@ impl RenderSnapshot {
         })
     }
 
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
+    #[cfg(feature = "render")]
     pub(crate) fn bind_output_identity(mut self, revision: Option<WarpMapRevision>) -> Self {
         self.frontier = self.frontier.with_warp_map(revision);
         self
     }
 
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
+    #[cfg(feature = "render")]
     pub(crate) fn mapped(self, cursor: crate::WarpCursor) -> Self {
         Self {
             context: self.context,

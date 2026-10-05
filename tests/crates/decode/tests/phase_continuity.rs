@@ -3,10 +3,10 @@ use std::{num::NonZeroUsize, path::PathBuf};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    decode::{DecodeResult, DecoderBackend},
+    decode::DecoderBackend,
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{LoadRefusal, PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 #[cfg(all(
@@ -67,10 +67,10 @@ fn local_signal(asset: SignalAsset) -> (SignalAsset, TestTempDir, PathBuf) {
 async fn open_audio(
     mut config: AudioConfig<File<TestPools>>,
     pools: &Pools,
-) -> DecodeResult<RegisteredAudio<Stream<File<TestPools>>, TestPools>> {
+) -> Result<RegisteredAudio<Stream<File<TestPools>>, TestPools>, LoadRefusal> {
     config.consumer_wake_mode = kithara::audio::ConsumerWakeMode::ImmediateOffRt;
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    worker.open(config).await
+    worker.load(config).await
 }
 
 async fn run_case(

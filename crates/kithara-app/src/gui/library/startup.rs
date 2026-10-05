@@ -1,10 +1,9 @@
 use kithara::ui::{error::UiDocError, module::IconName, render::TableRow, text::TextDoc};
-
-use super::{
-    BranchNode, LibrarySource, PageStatus, Registration, SourcePage,
-    track::{Track, display_name},
-    worded,
+use kithara_app_library::{
+    BranchNode, LibrarySource, PageStatus, Registration, SourcePage, worded,
 };
+
+use super::track::{Track, display_name};
 
 /// The tracks the app started with, listed under Collection.
 pub(in crate::gui) struct StartupSource {
@@ -34,6 +33,7 @@ impl StartupSource {
         let label = worded(text, "library.source.startup", Self::ID)?;
         let mut startup = BranchNode::new(Self::ID, label, IconName::Playlist);
         startup.count = u32::try_from(tracks.len()).ok();
+        startup.page = true;
         let label = worded(text, "library.source.collection", Self::ID)?;
         let mut branch = BranchNode::new(Self::COLLECTION, label, IconName::Disc);
         branch.children = vec![startup];
@@ -50,7 +50,7 @@ impl LibrarySource for StartupSource {
         self.listing
             .then(|| self.tracks.get(row))
             .flatten()
-            .map(Track::analysis_key)
+            .map(Track::key)
     }
 
     fn branch(&self) -> &BranchNode {

@@ -87,9 +87,19 @@ pub(super) struct Identity {
     pub(super) path: String,
 }
 
+/// What a pressed activation publishes.
+pub(crate) enum Press {
+    /// The control's own activation.
+    Activate,
+    /// The text of the item pressed, by index; an item without one ignores the
+    /// press.
+    Texts(Vec<Option<String>>),
+}
+
 pub(crate) enum Descriptor {
     Activation {
         path: String,
+        press: Press,
     },
     Crossing {
         path: String,
@@ -157,7 +167,17 @@ pub(crate) enum Descriptor {
 
 impl Descriptor {
     pub(crate) fn activation(path: String) -> Self {
-        Self::Activation { path }
+        Self::Activation {
+            path,
+            press: Press::Activate,
+        }
+    }
+
+    pub(crate) fn text_actions(path: String, texts: Vec<Option<String>>) -> Self {
+        Self::Activation {
+            path,
+            press: Press::Texts(texts),
+        }
     }
 
     pub(crate) fn column_divider(path: String, value: f32, track: Track) -> Self {
@@ -253,7 +273,7 @@ impl Descriptor {
 
     pub(super) fn path(&self) -> &str {
         match self {
-            Self::Activation { path }
+            Self::Activation { path, .. }
             | Self::Crossing { path }
             | Self::Segmented { path, .. }
             | Self::Picker { path, .. }

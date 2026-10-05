@@ -98,7 +98,7 @@ async fn audio_file_mp3_decodes_with_duration(
         .maybe_hint(hint.map(str::to_owned))
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
 
@@ -211,7 +211,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
                 .build(),
         )
         .build();
-    let mut audio = worker.open(config).await.expect("open the streamed track");
+    let mut audio = worker.load(config).await.expect("open the streamed track");
 
     let (position, eof, waits) = spawn_blocking(move || {
         let mut buf = [0.0f32; 4096];
@@ -314,7 +314,7 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
         )
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .expect("open the headerless track");
 
@@ -348,7 +348,7 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
     );
 }
 
-/// Duration must be correct IMMEDIATELY after `PlayWorker::open` — before any
+/// Duration must be correct IMMEDIATELY after `PlayWorker::load` — before any
 /// decode calls. This is what the GUI reads to show track length.
 ///
 /// Uses throttled server: Content-Length is sent immediately but body
@@ -384,7 +384,7 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
         .maybe_hint(hint.map(String::from))
         .build();
     let audio = worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|e| panic!("creation failed for url={url} hint={hint:?}: {e}"));
 
@@ -422,7 +422,7 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &
         .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
-    let mut audio = worker.open(config).await.unwrap();
+    let mut audio = worker.load(config).await.unwrap();
 
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;

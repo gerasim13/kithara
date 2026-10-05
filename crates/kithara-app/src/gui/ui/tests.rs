@@ -7,11 +7,15 @@ use ::kithara::ui::{
     expand::{ControlSpec, ExpandedNode},
     ids::SourceUri,
     module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, ViewSet, WaveStyle},
-    render::{Clock, ControlAction, Ctx, Published, ReadValue, Reads, UiEvent, WriteValue, tree},
+    registry::{EndpointCategory, ValueKind},
+    render::{
+        Clock, ControlAction, Ctx, Published, ReadValue, Reads, UiEvent, Walk, WriteValue, tree,
+    },
     size::{Dim, SizeSpec, control_size},
     source::{SourceResolver, UiConfig},
     view::{self, ViewState},
 };
+use kithara_app_library::{Document, Endpoint, Registration, SourcePage};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -20,7 +24,10 @@ use super::{
 };
 use crate::gui::{
     library::StartupSource,
+    message::Message,
+    reads::ReadRoot,
     test_fixture::{self, Probe},
+    update::update,
 };
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
@@ -160,7 +167,7 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<String>)> {
                     ui,
                     &mut ViewState::new(),
                     &format!("{instance}/drop"),
-                    ControlAction::Text(String::new()),
+                    ControlAction::Record(test_fixture::dragged("https://example.com/a.mp3")),
                 );
                 let keys = match dropped {
                     Some(UiEvent::Write { key, .. }) => vec![key],
@@ -1569,8 +1576,9 @@ fn the_shipped_package_compiles_from_disk() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     let package =
         test_fixture::package(Some(&root)).expect("the shipped package must load from disk");
+    let runtime = test_fixture::runtime();
     drop(
-        AppUi::new(package, &UiConfig::default())
+        AppUi::new(package, &UiConfig::default(), runtime.handle().clone())
             .expect("the shipped package must compile from disk"),
     );
 }
@@ -1646,8 +1654,9 @@ fn a_write_the_screen_does_not_declare_is_named() {
 fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui-that-was-never-laid-out");
     let package = test_fixture::package(Some(&root)).expect("a package nobody laid out must load");
+    let runtime = test_fixture::runtime();
     drop(
-        AppUi::new(package, &UiConfig::default())
+        AppUi::new(package, &UiConfig::default(), runtime.handle().clone())
             .expect("a package nobody laid out must leave the build drawing"),
     );
 }
@@ -1765,7 +1774,11 @@ fn without_write(text: &str, id: &str) -> String {
 
 fn compiled_from(root: &Path) -> Result<AppUi, UiDocError> {
     let package = test_fixture::package(Some(root)).expect("the edited package must load");
-    AppUi::new(package, &UiConfig::default())
+    AppUi::new(
+        package,
+        &UiConfig::default(),
+        test_fixture::runtime().handle().clone(),
+    )
 }
 
 #[kithara::test]
@@ -1934,6 +1947,7 @@ mod answered {
             ControlAction::StepScalar(1.0),
             ControlAction::SelectIndex(0),
             ControlAction::Text(String::new()),
+            ControlAction::Record(test_fixture::dragged("https://example.com/a.mp3")),
             ControlAction::Place(Pt { x: 0.0, y: 0.0 }),
         ];
         let mut out = BTreeMap::new();
@@ -2144,35 +2158,61 @@ mod answered {
     }
 }
 
-#[kithara::test]
-fn a_source_supplies_its_own_control_tree() {
-    use ::kithara::ui::{ids::NodeId, module::ControlNode};
-
-    use crate::gui::library::{Registration, SourcePage};
-
-    let source = Registration::new(
+fn custom_search_source() -> Registration {
+    Registration::new(
         SourcePage {
             id: Probe::ID,
-            page: ControlNode::Spacer {
-                id: NodeId("custom-page".to_owned()),
-                size: None,
-                read: None,
-                write: None,
-            },
+            page: "modules/custom-search.kmodule.ron",
+            modules: vec![Document {
+                path: "modules/custom-search.kmodule.ron",
+                text: r#"(
+    schema: "kithara.module", version: 1, id: "custom-search", chrome: Plain, parameters: ["source"],
+    root: Column(id: "body", children: [
+        Text(id: "caption", label: "@probe.caption"),
+        Search(
+            id: "query",
+            read: Model(id: "source.query", with: { "source": "$source" }),
+            write: Command(id: "source.query", with: { "source": "$source" }),
+        ),
+    ]),
+)"#,
+            }],
+            texts: vec![Document {
+                path: "texts/probe.ktext.ron",
+                text: r#"(schema: "kithara.text", version: 1, id: "probe", entries: { "probe.caption": "Catalogue" })"#,
+            }],
+            endpoints: [EndpointCategory::Model, EndpointCategory::Command]
+                .into_iter()
+                .map(|category| Endpoint {
+                    category,
+                    name: "query",
+                    value: ValueKind::Text,
+                })
+                .collect(),
         },
         |text| Probe::registered("menu.module.library").0.build(text),
+    )
+}
+
+/// A gesture on a source's page reaches that source through the app's write
+/// dispatch, and the read root answers the source's read under the same scope.
+#[kithara::test]
+fn a_source_page_gesture_reaches_its_source_through_the_app_dispatch() {
+    let runtime = test_fixture::runtime();
+    let (package, library) = test_fixture::mount(None, vec![custom_search_source()])
+        .expect("the probe source mounts with its page");
+    let mut state = test_fixture::mounted(package, library, runtime.handle());
+
+    drop(update(
+        &mut state,
+        Message::Ui(Published::Gesture {
+            path: "library/pages/probe-page/query".to_owned(),
+            action: ControlAction::Text("needle".to_owned()),
+        }),
+    ));
+
+    assert_eq!(
+        Walk::new(&ReadRoot::new(&state)).get("source.query@source=probe"),
+        Some(ReadValue::Text("needle"))
     );
-    let (package, _) =
-        test_fixture::mount(None, vec![source]).expect("a source mounts without a page template");
-    for layout in LAYOUTS {
-        let ui = compile_package(&package, layout).expect("the custom source page compiles");
-        let mut found = false;
-        each_node(&ui, &mut |node| {
-            if let ExpandedNode::Control { path, spec, .. } = node {
-                found |= ui.resolve(*path).ends_with("custom-page")
-                    && matches!(spec, ControlSpec::Spacer);
-            }
-        });
-        assert!(found, "the source's node must survive package compilation");
-    }
 }

@@ -12,9 +12,7 @@ autotests = false
 ignored = ["kithara-test-utils"]
 
 [dependencies]
-# The workspace entry drops defaults; `play` builds only with a decoder and an
-# HTTP client, so the curve test names the smallest set that compiles.
-kithara = { workspace = true, features = ["dsp", "host", "play", "signal", "symphonia", "client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, features = ["dsp", "host", "play", "signal", "symphonia", "stretch-identity", "client-reqwest", "tls-rustls"] }
 kithara-test-utils = { workspace = true }
 
 [lints]

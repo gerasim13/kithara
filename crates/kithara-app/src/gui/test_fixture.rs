@@ -1,46 +1,62 @@
-use std::{cell::RefCell, path::Path, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, io::Cursor, path::Path, rc::Rc};
 
 use arc_swap::ArcSwap;
+use iced::window::Id;
+use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use kithara::{
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, tokio::sync::mpsc::UnboundedSender},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        tokio::{
+            runtime::Handle,
+            sync::mpsc::{self, UnboundedSender},
+        },
+    },
     play::{PlayWorkerConfig, policy::DomainKeyPolicy},
-    ui::{error::UiDocError, module::IconName, render::TableRow, text::TextDoc},
+    ui::{
+        error::UiDocError,
+        module::IconName,
+        render::{ReadValue, TableRow, WriteValue},
+        source::UiConfig,
+        text::TextDoc,
+    },
+};
+use kithara_app_library::{
+    BranchNode, LibrarySource, PageStatus, Playable, Registration, SourcePage, worded,
 };
 
 use super::{
+    app::Kithara,
     frontend::Boot,
-    library::{
-        BranchNode, Library, LibrarySource, PageStatus, PagesModule, Registration, SourcePage,
-        StartupSource, worded,
-    },
-    ui::package::Package,
+    library::{Library, PagesModule, StartupSource},
+    ui::{AppUi, package::Package},
 };
 use crate::{
     config::{AppConfig, AppDrm},
     engine::{EngineSnapshot, Envelope},
     pools::{self, AppStore, AppWorker, PoolsSection},
+    theme::Palette,
 };
 
 pub(super) fn config() -> AppConfig {
     let shutdown = CancelToken::root();
     let pools = pools::build(&PoolsSection::default()).expect("valid app pool policy");
     let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().build(),
-            pools.clone(),
-            shutdown.child(),
-        ))
-        .build(),
+    let net = HttpClient::new(
+        NetOptions::builder().build(),
+        pools.clone(),
+        shutdown.child(),
     );
+    let downloader = Downloader::new(DownloaderConfig::for_client(net.clone()).build());
     let store = AppStore::builder(pools)
         .backend(StorageBackend::Memory)
         .build();
     AppConfig::builder()
         .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
+        .net(net)
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker)
@@ -56,7 +72,7 @@ pub(super) fn runtime() -> kithara::platform::tokio::runtime::Runtime {
 }
 
 pub(super) fn boot(
-    runtime: &kithara::platform::tokio::runtime::Handle,
+    runtime: &Handle,
     config: &AppConfig,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,
     commands: UnboundedSender<Envelope>,
@@ -71,6 +87,9 @@ pub(super) fn boot(
         .snapshots(snapshots)
         .commands(commands)
         .runtime(runtime.clone())
+        .net(&config.net)
+        .sources(&config.sources)
+        .shutdown(&config.shutdown)
         .build()
         .expect("shipped UI compiles")
 }
@@ -79,20 +98,53 @@ pub(super) fn mount(
     root: Option<&Path>,
     registered: Vec<Registration>,
 ) -> Result<(Rc<Package>, Library), UiDocError> {
-    let package = Package::load(root, PagesModule::new(&registered).into())?;
+    let package = Package::load(root, PagesModule::new(&registered))?;
     let library = Library::new(registered, package.text())?;
     Ok((package, library))
+}
+
+/// The application mounted on `package` and `library`, with no engine behind it.
+pub(super) fn mounted(package: Rc<Package>, library: Library, runtime: &Handle) -> Kithara {
+    let (commands, _) = mpsc::unbounded_channel();
+    let boot = Boot {
+        ui: AppUi::new(package, &UiConfig::default(), runtime.clone()).expect("the UI compiles"),
+        snapshots: Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished())),
+        library,
+        #[cfg(not(target_arch = "wasm32"))]
+        picker: super::library::Explorer::registered(None, runtime.clone()).1,
+        palette: Palette::default(),
+        #[cfg(feature = "masonry")]
+        settings: UiConfig::default(),
+        commands,
+    };
+    Kithara::mounted(boot, Id::unique())
+}
+
+/// The record a library row drags onto a deck, naming the source it plays.
+pub(super) fn dragged(source: &str) -> BTreeMap<String, String> {
+    Playable::new(source.to_owned()).into()
+}
+
+/// A 4x2 cover of one `color`, encoded as `format`.
+pub(super) fn cover(color: [u8; 3], format: ImageFormat) -> Arc<Vec<u8>> {
+    let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(4, 2, Rgb(color)));
+    let mut output = Cursor::new(Vec::new());
+    image
+        .write_to(&mut output, format)
+        .expect("fixture encodes");
+    Arc::new(output.into_inner())
 }
 
 pub(super) fn package(root: Option<&Path>) -> Result<Rc<Package>, UiDocError> {
     Package::load(
         root,
-        PagesModule::new(&[StartupSource::registered(Vec::new())]).into(),
+        PagesModule::new(&[StartupSource::registered(Vec::new())]),
     )
 }
 
 /// A source only a test registers: a folder holding one more, and a leaf.
 pub(super) struct Probe {
+    query: String,
     branch: BranchNode,
     calls: Rc<RefCell<Calls>>,
 }
@@ -131,11 +183,24 @@ impl Probe {
             ],
         );
         branch.label = worded(text, label, Self::ID)?;
-        Ok(Self { branch, calls })
+        Ok(Self {
+            branch,
+            calls,
+            query: String::new(),
+        })
     }
 }
 
 impl LibrarySource for Probe {
+    fn read(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        (endpoint == "query").then_some(ReadValue::Text(&self.query))
+    }
+    fn write(&mut self, endpoint: &str, value: &WriteValue) {
+        if let ("query", WriteValue::Text(query)) = (endpoint, value) {
+            self.query.clone_from(query);
+        }
+    }
+
     fn analysis_key(&self, _row: usize) -> Option<&str> {
         None
     }

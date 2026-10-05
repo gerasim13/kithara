@@ -1,7 +1,7 @@
 use anyhow::Result;
 use syn::{
-    Attribute, Field, ImplItemFn, ItemConst, ItemFn, ItemMod, ItemStatic, ItemStruct, Local, Pat,
-    PatIdent,
+    Attribute, Expr, Field, FnArg, ImplItemFn, ItemConst, ItemFn, ItemMod, ItemStatic, ItemStruct,
+    Local, Member, Pat, PatIdent, ReceiverKind, ReturnType, Safety, Stmt, Type,
     visit::{self, Visit},
 };
 
@@ -41,7 +41,9 @@ each fallback hides another underlying failure mode.
    the choice as user-facing config; don't chain implementations.
 
 Exact identifiers listed in `retry_fallback.allowed_idents` are excluded from \
-this lexical check.
+this lexical check. Borrowed configuration setters that only clone settings, \
+assign the supplied value, and construct a handle are not execution retries; \
+their bodies remain checked.
 
 Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for a designed \
 fallback the owner's contract names: a user-facing default, optional \
@@ -149,6 +151,99 @@ fn name_is_forbidden(name: &str, cfg: &RetryFallbackConfig) -> bool {
         .any(|fragment| lower.contains(fragment.as_str()))
 }
 
+fn is_configuration_setter(method: &ImplItemFn, cfg: &RetryFallbackConfig) -> bool {
+    let signature = &method.sig;
+    if !signature.ident.to_string().starts_with("with_")
+        || signature.asyncness.is_some()
+        || signature.constness.is_some()
+        || !matches!(signature.safety, Safety::Default)
+        || signature.abi.is_some()
+        || signature.variadic.is_some()
+        || signature.inputs.len() != 2
+        || !signature.generics.params.is_empty()
+        || signature.generics.where_clause.is_some()
+    {
+        return false;
+    }
+    let (Some(FnArg::Receiver(receiver)), Some(FnArg::Typed(value))) =
+        (signature.inputs.first(), signature.inputs.last())
+    else {
+        return false;
+    };
+    if !matches!(receiver.kind, ReceiverKind::Reference(_, None, None))
+        || receiver.mutability.is_some()
+        || matches!(value.ty.as_ref(), Type::Reference(_))
+    {
+        return false;
+    }
+    let Pat::Ident(argument) = value.pat.as_ref() else {
+        return false;
+    };
+    if argument.by_ref.is_some() || argument.mutability.is_some() || argument.subpat.is_some() {
+        return false;
+    }
+    if !matches!(&signature.output, ReturnType::Type(_, ty)
+        if matches!(ty.as_ref(), Type::Path(path)
+            if path.qself.is_none() && path.path.is_ident("Self")))
+    {
+        return false;
+    }
+    let [
+        Stmt::Local(local),
+        Stmt::Expr(Expr::Assign(assign), Some(_)),
+        Stmt::Expr(Expr::MethodCall(construct), None),
+    ] = method.block.stmts.as_slice()
+    else {
+        return false;
+    };
+    let Pat::Ident(settings) = &local.pat else {
+        return false;
+    };
+    if settings.mutability.is_none()
+        || settings.by_ref.is_some()
+        || settings.subpat.is_some()
+        || !local.attrs.is_empty()
+    {
+        return false;
+    }
+    let Some(initializer) = &local.init else {
+        return false;
+    };
+    let Expr::MethodCall(clone) = initializer.expr.as_ref() else {
+        return false;
+    };
+    let Expr::MethodCall(getter) = clone.receiver.as_ref() else {
+        return false;
+    };
+    let Expr::Field(field) = assign.left.as_ref() else {
+        return false;
+    };
+    initializer.diverge.is_none()
+        && clone.method == "clone"
+        && clone.args.is_empty()
+        && clone.turbofish.is_none()
+        && getter.args.is_empty()
+        && getter.turbofish.is_none()
+        && expr_is_ident(&getter.receiver, "self")
+        && !name_is_forbidden(&getter.method.to_string(), cfg)
+        && matches!(field.member, Member::Named(_))
+        && expr_is_ident(&field.base, &settings.ident.to_string())
+        && expr_is_ident(&assign.right, &argument.ident.to_string())
+        && expr_is_ident(&construct.receiver, "self")
+        && construct.method.to_string().starts_with("with_")
+        && !name_is_forbidden(&construct.method.to_string(), cfg)
+        && construct.turbofish.is_none()
+        && construct.args.len() == 1
+        && construct
+            .args
+            .first()
+            .is_some_and(|value| expr_is_ident(value, &settings.ident.to_string()))
+}
+
+fn expr_is_ident(expr: &Expr, ident: &str) -> bool {
+    matches!(expr, Expr::Path(path) if path.qself.is_none() && path.path.is_ident(ident))
+}
+
 impl<'ast> Visit<'ast> for IdentVisitor<'_> {
     fn visit_field(&mut self, node: &'ast Field) {
         if let Some(ident) = &node.ident {
@@ -162,7 +257,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
         let name = node.sig.ident.to_string();
-        if name_is_forbidden(&name, self.cfg) {
+        if name_is_forbidden(&name, self.cfg) && !is_configuration_setter(node, self.cfg) {
             self.flag(node.sig.ident.span().start().line, &name, "fn");
         }
         visit::visit_impl_item_fn(self, node);
@@ -223,6 +318,16 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CONFIGURATION_SETTER: &str = r"
+        impl Client {
+            pub fn with_retry_policy(&self, retry_policy: RetryPolicy) -> Self {
+                let mut options = self.options().clone();
+                options.retry_policy = retry_policy;
+                self.with_options(options)
+            }
+        }
+    ";
 
     fn count_violations(source: &str) -> usize {
         count_violations_with_allowed(source, &[])
@@ -303,6 +408,94 @@ mod tests {
     fn allows_unrelated_names() {
         let src = "struct Foo { primary: u8, secondary: u8 }\nfn read() {}\n";
         assert_eq!(count_violations(src), 0);
+    }
+
+    #[test]
+    fn allows_a_borrowed_policy_configuration_method() {
+        assert_eq!(count_violations(CONFIGURATION_SETTER), 0);
+    }
+
+    #[test]
+    fn configuration_setter_is_independent_of_domain_names() {
+        let source = r"
+            impl Router {
+                fn with_fallback_url(&self, endpoint: Endpoint) -> Self {
+                    let mut settings = self.settings().clone();
+                    settings.fallback_url = endpoint;
+                    self.with_settings(settings)
+                }
+            }
+        ";
+        assert_eq!(count_violations(source), 0);
+    }
+
+    #[test]
+    fn configuration_setter_body_remains_checked() {
+        let source = CONFIGURATION_SETTER
+            .replace("let mut options", "let mut fallback_settings")
+            .replace("options.retry_policy", "fallback_settings.retry_policy")
+            .replace("with_options(options)", "with_options(fallback_settings)");
+        assert_eq!(count_violations(&source), 1);
+        let counter = CONFIGURATION_SETTER.replace(
+            "options.retry_policy = retry_policy;",
+            "let attempts = 0; options.retry_policy = retry_policy;",
+        );
+        assert_eq!(count_violations(&counter), 2);
+    }
+
+    #[test]
+    fn configuration_setter_requires_borrowed_synchronous_value_contract() {
+        for (original, replacement) in [
+            ("&self", "self"),
+            ("&self", "&mut self"),
+            ("RetryPolicy)", "&RetryPolicy)"),
+            ("RetryPolicy)", "RetryPolicy, enabled: bool)"),
+            ("-> Self", "-> Result<Self>"),
+            ("pub fn", "pub async fn"),
+            ("pub fn", "pub unsafe fn"),
+            ("with_retry_policy(", "with_retry_policy<T>("),
+        ] {
+            let source = CONFIGURATION_SETTER.replace(original, replacement);
+            assert!(count_violations(&source) > 0, "{replacement}");
+        }
+    }
+
+    #[test]
+    fn configuration_setter_rejects_execution_logic() {
+        for (original, replacement) in [
+            (
+                "options.retry_policy = retry_policy;",
+                "if ready { options.retry_policy = retry_policy; }",
+            ),
+            (
+                "options.retry_policy = retry_policy;",
+                "loop { options.retry_policy = retry_policy; break; }",
+            ),
+            (
+                "options.retry_policy = retry_policy;",
+                "let observed = 0; options.retry_policy = retry_policy;",
+            ),
+            ("self.options().clone()", "self.options().await.clone()"),
+            (
+                "options.retry_policy = retry_policy;",
+                "self.execute(); options.retry_policy = retry_policy;",
+            ),
+            ("self.options().clone()", "self.options(true).clone()"),
+            ("self.options().clone()", "self.fallback_options().clone()"),
+            ("self.with_options(options)", "self.with_retry(options)"),
+            ("self.with_options(options)", "self.execute(options)"),
+            (
+                "options.retry_policy = retry_policy",
+                "options.retry_policy = make_policy()",
+            ),
+            (
+                "self.with_options(options)",
+                "self.with_options(options, retry_policy)",
+            ),
+        ] {
+            let source = CONFIGURATION_SETTER.replace(original, replacement);
+            assert_eq!(count_violations(&source), 1, "{replacement}");
+        }
     }
 
     #[test]

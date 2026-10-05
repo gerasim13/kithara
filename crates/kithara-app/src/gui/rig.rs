@@ -127,41 +127,6 @@ impl Rig {
         assert_eq!(update(&mut self.ui, message).units(), 0);
     }
 
-    #[cfg(not(feature = "broadcast"))]
-    pub(crate) fn offline() -> Self {
-        Self::offline_with(|_| {})
-    }
-
-    #[cfg(not(feature = "broadcast"))]
-    pub(crate) fn offline_with(configure: impl FnOnce(&mut AppConfig)) -> Self {
-        let mut config = test_fixture::config();
-        configure(&mut config);
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
-            .expect("test host");
-        let mut states = Vec::new();
-        let mut rig = Self::build(
-            &config,
-            host,
-            Broadcaster::new(AppBroadcastConfig::default()),
-            AnalysisHandle::channel(watch::channel(Default::default()).1).0,
-            |deck| {
-                let queue = deck.queue.control().clone();
-                let state = Arc::new(kithara::platform::sync::Mutex::new(
-                    crate::state::UiState::new(&queue),
-                ));
-                states.push(Arc::clone(&state));
-                crate::state::test_fixture::controller_on(
-                    queue,
-                    Arc::clone(&deck.timestretch),
-                    deck.cancel_child(),
-                    state,
-                )
-            },
-        );
-        rig.states = states;
-        rig
-    }
-
     #[cfg(feature = "broadcast")]
     pub(crate) fn on_air() -> Self {
         use kithara::worker::{Worker, WorkerConfig};
@@ -205,7 +170,6 @@ impl Rig {
         Self::build(config, host, broadcast, analysis.clone(), |deck| {
             StateController::new(
                 deck.queue.control().clone(),
-                Arc::clone(&deck.timestretch),
                 deck.cancel_child(),
                 analysis.clone(),
             )
@@ -272,5 +236,45 @@ impl Rig {
             );
             thread::paced_backoff(Duration::from_millis(5));
         }
+    }
+}
+
+#[cfg(not(feature = "broadcast"))]
+impl Rig {
+    pub(crate) fn offline() -> Self {
+        Self::offline_with(|_| {})
+    }
+
+    pub(crate) fn offline_with(configure: impl FnOnce(&mut AppConfig)) -> Self {
+        let mut config = test_fixture::config();
+        configure(&mut config);
+        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+            .expect("test host");
+        let mut states = Vec::new();
+        let mut rig = Self::build(
+            &config,
+            host,
+            Broadcaster::new(AppBroadcastConfig::default()),
+            AnalysisHandle::channel(watch::channel(Default::default()).1).0,
+            |deck| {
+                let queue = deck.queue.control().clone();
+                let state = Arc::new(kithara::platform::sync::Mutex::new(
+                    crate::state::UiState::new(&queue),
+                ));
+                states.push(Arc::clone(&state));
+                crate::state::test_fixture::controller_on(queue, deck.cancel_child(), state)
+            },
+        );
+        rig.states = states;
+        rig
+    }
+
+    /// Drops a library row playing `source` on deck `deck` and applies the load.
+    pub(crate) fn drop_on(&mut self, deck: &str, source: &str) {
+        self.send(
+            &format!("deck-{deck}/drop"),
+            ControlAction::Record(test_fixture::dragged(source)),
+        );
+        self.pump();
     }
 }

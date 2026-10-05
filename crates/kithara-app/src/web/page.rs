@@ -39,6 +39,7 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     );
 
     let document = Config::load(None, None)?;
+    let runtime = kithara::platform::tokio::runtime::Handle::try_current()?;
     let app = document.app();
     let mut palette = Palette::default();
     palette.apply(app.palette);
@@ -58,15 +59,18 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     wasm::warm_up_audio(&host)?;
     let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
     let (commands, received) = mpsc::unbounded_channel();
-    let boot = Boot::builder()
-        .maybe_package(app.ui_package.as_deref())
-        .settings(&document.ui()?)
+    let ui_package = app.ui_package.clone();
+    let settings = document.ui()?;
+    let sources = document.sources().clone();
+    let builder = Boot::builder()
+        .maybe_package(ui_package.as_deref())
+        .settings(&settings)
         .tracks(document.tracks().to_vec())
         .palette(palette)
         .snapshots(Arc::clone(&snapshots))
         .commands(commands)
-        .chrome_hidden(true)
-        .build()?;
+        .runtime(runtime)
+        .chrome_hidden(true);
 
     task::spawn(pump(host, receiver, shutdown.child()));
     let (built, stopped) = worker::spawn(
@@ -81,7 +85,18 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
         .await
         .unwrap_or(Err(EngineError::Panicked))
         .map_err(FrontendError::from)
-        .and_then(|()| immediate(boot));
+        .and_then(|net| {
+            immediate(
+                builder
+                    .net(&net)
+                    .sources(&sources)
+                    .shutdown(&shutdown)
+                    .build()?,
+            )
+        });
+    if started.is_err() {
+        shutdown.cancel();
+    }
     let Err(_) = stopped.await;
     shutdown.cancel();
     started

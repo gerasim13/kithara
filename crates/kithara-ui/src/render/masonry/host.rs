@@ -516,7 +516,10 @@ where
         }
         if matches!(
             spec,
-            ControlSpec::Vis | ControlSpec::Table { .. } | ControlSpec::Tree { .. }
+            ControlSpec::Vis
+                | ControlSpec::Search
+                | ControlSpec::Table { .. }
+                | ControlSpec::Tree { .. }
         ) {
             output.watch_snapshot();
         } else if let Some(read) = read {

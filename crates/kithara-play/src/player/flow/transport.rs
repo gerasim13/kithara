@@ -96,7 +96,7 @@ where
     /// flight would mark the index current early and make a later select skip re-enqueuing the
     /// arriving resource.
     pub fn play(&self) {
-        let rate = self.core.config.warp.stretch().speed();
+        let rate = self.core.lanes.next().speed();
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -109,6 +109,7 @@ where
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
+        let _ = self.send_to_slot(PlayerCmd::SetRate(rate));
         let loaded = self.load_current_item().unwrap_or_else(|error| {
             warn!(%error, "failed to allocate track playback buffers");
             false
@@ -248,6 +249,7 @@ where
         self.ensure_slot()?;
 
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
+        let _ = self.send_to_slot(PlayerCmd::SetRate(self.core.lanes.next().speed()));
 
         if armed_for_index {
             self.commit_next(index)?;

@@ -1,6 +1,7 @@
-use std::{fs, num::NonZeroU16, path::PathBuf};
+use std::{convert::Infallible, fs, num::NonZeroU16, path::PathBuf};
 
-use axum::{Router, routing::get};
+use axum::{Router, body::Body, routing::get};
+use futures::stream;
 use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, Meter, RawBeatGrid, SCHEMA_VERSION};
 use kithara_download::{Downloader, DownloaderConfig};
 use kithara_net::{Headers, HttpClient, NetOptions};
@@ -152,6 +153,34 @@ async fn a_document_past_the_cap_is_refused_unread() {
     let audio = audio();
     let fetch = ArtifactFetch::new(&audio, None, None, None);
     let source = ArtifactSource::<Waveform>::Source(ResourceSrc::Path(path));
+
+    let error = source.load(&fetch).await.expect_err("BUG: past the cap");
+
+    assert!(
+        matches!(error, ArtifactLoadError::TooLarge { limit, .. } if limit == MAX_ARTIFACT_BYTES),
+        "{error}"
+    );
+}
+
+/// A body that declares no length is held to the cap while it streams.
+#[kithara::test(tokio)]
+async fn a_streamed_body_past_the_cap_is_refused() {
+    const CHUNK: usize = 64 * 1024;
+    let chunks = MAX_ARTIFACT_BYTES / CHUNK + 1;
+    let server = TestHttpServer::new(Router::new().route(
+        "/artifact",
+        get(move || async move {
+            Body::from_stream(stream::iter(
+                (0..chunks).map(|_| Ok::<_, Infallible>(vec![0_u8; CHUNK])),
+            ))
+        }),
+    ))
+    .await;
+    let url = server.url("/artifact");
+    let audio = audio();
+    let downloader = downloader();
+    let fetch = ArtifactFetch::new(&audio, Some(&downloader), None, None);
+    let source = ArtifactSource::<Waveform>::Source(ResourceSrc::Url(url));
 
     let error = source.load(&fetch).await.expect_err("BUG: past the cap");
 

@@ -4,7 +4,8 @@ use masonry::{
     ui_events::{
         ScrollDelta,
         keyboard::{
-            Key as MasonryKey, KeyState, KeyboardEvent, Modifiers as MasonryModifiers, NamedKey,
+            Code, Key as MasonryKey, KeyState, KeyboardEvent, Modifiers as MasonryModifiers,
+            NamedKey,
         },
         pointer::{PointerButton as MasonryPointerButton, PointerEvent},
     },
@@ -28,17 +29,18 @@ mod consts {
         (NamedKey::Escape, Key::Escape),
         (NamedKey::Home, Key::Home),
     ];
+
+    pub(super) const LETTERS: [(Code, char); 26] = crate::letters!(Code);
 }
 
 #[must_use]
 pub fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
     match event {
         TextEvent::Keyboard(event) => {
-            let key = portable_key(&event.key);
+            let key = portable_key(&event.key, event.code);
             let modifiers = portable_modifiers(event.modifiers);
             if event.state.is_down() {
-                let text = if event.is_composing || event.modifiers.ctrl() || event.modifiers.meta()
-                {
+                let text = if event.is_composing {
                     None
                 } else {
                     match &event.key {
@@ -94,15 +96,22 @@ fn keyboard_event(state: KeyState, key: Key<'_>, modifiers: Modifiers) -> TextEv
     TextEvent::Keyboard(KeyboardEvent {
         state,
         key: masonry_key(key),
+        code: masonry_code(key),
         modifiers: masonry_modifiers(modifiers),
         ..KeyboardEvent::default()
     })
 }
 
-fn portable_key(key: &MasonryKey) -> Key<'_> {
+fn portable_key(key: &MasonryKey, code: Code) -> Key<'_> {
     match key {
         MasonryKey::Character(character) if character == " " => Key::Space,
-        MasonryKey::Character(character) => Key::Character(character),
+        MasonryKey::Character(character) => Key::character(
+            character,
+            consts::LETTERS
+                .iter()
+                .find(|(lettered, _)| *lettered == code)
+                .map(|(_, letter)| *letter),
+        ),
         MasonryKey::Named(named) => {
             let Some((_, neutral)) = consts::NAMED_KEYS
                 .iter()
@@ -118,7 +127,7 @@ fn portable_key(key: &MasonryKey) -> Key<'_> {
 fn masonry_key(key: Key<'_>) -> MasonryKey {
     match key {
         Key::Space => MasonryKey::Character(" ".to_owned()),
-        Key::Character(text) => MasonryKey::Character(text.to_owned()),
+        Key::Character { text, .. } => MasonryKey::Character(text.to_owned()),
         Key::Other => MasonryKey::Named(NamedKey::Unidentified),
         named => {
             let Some((candidate, _)) = consts::NAMED_KEYS
@@ -130,6 +139,21 @@ fn masonry_key(key: Key<'_>) -> MasonryKey {
             MasonryKey::Named(*candidate)
         }
     }
+}
+
+/// The physical key a neutral key names for shortcuts, so the key survives the
+/// trip through masonry's event and back.
+fn masonry_code(key: Key<'_>) -> Code {
+    let Key::Character {
+        latin: Some(latin), ..
+    } = key
+    else {
+        return Code::Unidentified;
+    };
+    consts::LETTERS
+        .iter()
+        .find(|(_, letter)| letter.eq_ignore_ascii_case(&latin))
+        .map_or(Code::Unidentified, |(code, _)| *code)
 }
 
 #[must_use]

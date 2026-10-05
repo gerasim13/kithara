@@ -24,3 +24,4 @@ mod quality_switch_continuity;
 mod resource_regressions;
 mod seamless_queue_advance;
 mod track_replay_after_switch;
+mod worker_load;

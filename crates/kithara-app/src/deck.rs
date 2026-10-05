@@ -3,10 +3,9 @@ use kithara::effects::{GainDb, eq::EqBandConfig};
 use kithara::{
     effects::eq::generate_log_spaced_bands,
     host::{HostOwned, HostSettingsControl},
-    platform::{CancelToken, sync::Arc},
-    play::{PlayError, PlayerConfig, PlayerImpl, StretchControls},
+    platform::CancelToken,
+    play::{PlayError, PlayerConfig, PlayerImpl},
     queue::QueueConfig,
-    warp::WarpConfig,
 };
 
 use crate::{
@@ -91,33 +90,25 @@ fn midpoint(low: GainDb, high: GainDb) -> GainDb {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeckId(pub usize);
 
-/// One app deck: its own cancellation subtree, player, queue and tempo controls.
+/// One app deck: its own cancellation subtree, player and queue.
 pub struct Deck {
-    pub timestretch: Arc<StretchControls>,
     pub id: DeckId,
     pub queue: HostOwned<AppQueue>,
     cancel: CancelToken,
 }
 
 impl Deck {
-    /// Build a deck with its own player, queue and time-stretch handle, all
-    /// hanging off the app's shutdown token. Every deck joins `session`: the
+    /// Build a deck with its own player and queue, both hanging off the app's shutdown token. Every deck joins `session`: the
     /// mix batch only accepts players of one shared audio session.
     ///
     /// # Errors
     /// Returns [`PlayError`] when the Host rejects the new deck.
     pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
-        let timestretch = StretchControls::new(1.0);
         let mut player_config = PlayerConfig::builder()
             .cancel(cancel.clone())
             .eq_layout(generate_log_spaced_bands(config.eq_bands))
             .sample_rate(host.sample_rate())
-            .warp(
-                WarpConfig::builder()
-                    .stretch(Arc::clone(&timestretch))
-                    .build(),
-            )
             .worker(config.worker.clone())
             .build();
         player_config
@@ -135,12 +126,7 @@ impl Deck {
         let queue = AppQueue::new(queue_config);
         let queue = host.insert(queue)?;
 
-        Ok(Self {
-            timestretch,
-            id,
-            queue,
-            cancel,
-        })
+        Ok(Self { id, queue, cancel })
     }
 
     #[cfg(any(test, feature = "gui"))]
@@ -324,16 +310,10 @@ mod tests {
         parent: &CancelToken,
     ) -> Deck {
         let cancel = parent.child();
-        let timestretch = StretchControls::new(1.0);
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .cancel(cancel.clone())
                 .sample_rate(host.sample_rate())
-                .warp(
-                    WarpConfig::builder()
-                        .stretch(Arc::clone(&timestretch))
-                        .build(),
-                )
                 .worker(worker.clone())
                 .build(),
         );
@@ -344,12 +324,7 @@ mod tests {
                 .build(),
         );
         let queue = host.insert(queue).expect("host accepts the test deck");
-        Deck {
-            timestretch,
-            id,
-            queue,
-            cancel,
-        }
+        Deck { id, queue, cancel }
     }
 
     fn worker() -> AppWorker {

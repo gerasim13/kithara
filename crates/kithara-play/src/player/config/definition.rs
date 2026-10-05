@@ -168,11 +168,10 @@ pub struct PlayerConfig<S> {
     /// are configured once in [`crate::PlayWorkerConfig`].
     #[config(skip = "injected playback worker", patch(skip))]
     pub(crate) worker: PlayWorker<S>,
-    /// Per-deck Warp resources and live temporal controls. A document reaches
-    /// them under `player.warp:`; the live [`StretchControls`] handle inside
-    /// is shared with the deck and the UI and is not a document key.
-    ///
-    /// [`StretchControls`]: kithara_warp::StretchControls
+    /// Per-deck Warp resources. A document reaches them under `player.warp:`.
+    /// Every track the deck takes starts on their keylock and backend, at the
+    /// deck's default rate rather than their speed; its render lane changes
+    /// all three from then on.
     #[config(
         nested,
         builder(default = WarpConfig::builder().build()),
@@ -337,10 +336,6 @@ mod document_tests {
         );
     }
 
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
     #[kithara::test]
     fn rejected_warp_geometry_preserves_player_settings() {
         let mut config = config();

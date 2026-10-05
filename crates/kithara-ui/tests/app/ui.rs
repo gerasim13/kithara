@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cell::Cell,
     collections::BTreeMap,
     env,
@@ -257,7 +258,11 @@ struct Typed {
 impl Reads for Typed {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
-        (id == "fixture.tree").then_some(ReadValue::Tree(&[]))
+        match id {
+            "fixture.tree" => Some(ReadValue::Tree(&[])),
+            "fixture.query" => Some(ReadValue::Text(&self.query)),
+            _ => None,
+        }
     }
 }
 
@@ -409,14 +414,12 @@ fn focused_search<'a>(endpoints: &'a Registry, resolver: &'a MemResolver) -> Ui<
 
 fn tree_fixture() -> (Registry, MemResolver) {
     (
-        Registry::model("fixture.tree", ValueKind::Tree).with(
-            EndpointCategory::Command,
-            "fixture.query",
-            ValueKind::Text,
-        ),
+        Registry::model("fixture.tree", ValueKind::Tree)
+            .with(EndpointCategory::Model, "fixture.query", ValueKind::Text)
+            .with(EndpointCategory::Command, "fixture.query", ValueKind::Text),
         one_control(
             r#"Tree(id: "control", size: (w: Fill, h: Fill), read: Model(id: "fixture.tree"),
-                write_query: Command(id: "fixture.query"))"#,
+                query: Model(id: "fixture.query"), write_query: Command(id: "fixture.query"))"#,
         ),
     )
 }
@@ -570,12 +573,46 @@ fn a_typed_character_reaches_a_focused_retained_text_field() {
     let mut ui = focused_search(&endpoints, &resolver);
 
     ui.input(Input::KeyPressed {
-        key: Key::Character("a"),
+        key: Key::character("a", None),
         modifiers: Modifiers::default(),
         text: Some("a"),
     });
 
     assert_eq!(ui.app().query, "a");
+}
+
+#[kithara::test]
+fn a_shortcut_typed_on_another_layout_edits_a_focused_retained_text_field() {
+    let typed = |text| Input::KeyPressed {
+        key: Key::character(text, None),
+        modifiers: Modifiers::default(),
+        text: Some(text),
+    };
+    let (endpoints, resolver) = tree_fixture();
+    let mut ui = focused_search(&endpoints, &resolver);
+    for input in [
+        typed("a"),
+        typed("b"),
+        Input::KeyPressed {
+            key: Key::character("\u{444}", Some('a')),
+            modifiers: Modifiers::new(
+                false,
+                !cfg!(target_os = "macos"),
+                cfg!(target_os = "macos"),
+                false,
+            ),
+            text: None,
+        },
+        Input::KeyPressed {
+            key: Key::Backspace,
+            modifiers: Modifiers::default(),
+            text: None,
+        },
+    ] {
+        ui.input(input);
+    }
+
+    assert_eq!(ui.app().query, "");
 }
 
 #[kithara::test]
@@ -594,12 +631,12 @@ fn a_key_release_does_not_repeat_text_input() {
     let (endpoints, resolver) = tree_fixture();
     let mut ui = focused_search(&endpoints, &resolver);
     ui.input(Input::KeyPressed {
-        key: Key::Character("a"),
+        key: Key::character("a", None),
         modifiers: Modifiers::default(),
         text: Some("a"),
     });
     ui.input(Input::KeyReleased {
-        key: Key::Character("a"),
+        key: Key::character("a", None),
         modifiers: Modifiers::default(),
     });
 
@@ -1803,8 +1840,9 @@ static TRACKS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
     ["One", "Two", "Three"]
         .into_iter()
         .map(|title| {
-            TableRow::new(vec![TableCell::text("title", title)], false)
-                .with_drag(format!("file:///{title}.mp3"))
+            TableRow::new(vec![TableCell::text("title", title)], false).with_drag(Cow::Owned(
+                BTreeMap::from([("source".to_owned(), format!("file:///{title}.mp3"))]),
+            ))
         })
         .collect()
 });
@@ -1839,7 +1877,7 @@ fn carry_endpoints() -> Registry {
     Registry::model("fixture.tracks", ValueKind::Table).with(
         EndpointCategory::Command,
         "fixture.load",
-        ValueKind::Text,
+        ValueKind::Record,
     )
 }
 
