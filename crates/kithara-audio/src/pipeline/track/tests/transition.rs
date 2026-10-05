@@ -8,7 +8,7 @@ use kithara_stream::{
     VariantReaderPlan, VariantTransition, VariantTransitionId,
 };
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{flight, kithara};
 
 use super::rebuild::{
     RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
@@ -28,6 +28,80 @@ use crate::{
     },
     traits::{AudioSource, AudioSourceExt},
 };
+
+#[kithara::test(native, tokio, tracing("warn"))]
+#[case::decode_shell(
+    TrackFailure::Decode(DecodeError::InvalidData { detail: "terminal-log-contract" }),
+    "terminal-log-contract",
+    false
+)]
+#[case::decode_drop(
+    TrackFailure::Decode(DecodeError::InvalidData { detail: "terminal-log-contract" }),
+    "terminal-log-contract",
+    true
+)]
+#[case::recreate_shell(TrackFailure::RecreateFailed { offset: 8193 }, "8193", false)]
+#[case::recreate_drop(TrackFailure::RecreateFailed { offset: 8193 }, "8193", true)]
+#[case::cancel_shell(TrackFailure::SourceCancelled, "source cancelled", false)]
+#[case::cancel_drop(TrackFailure::SourceCancelled, "source cancelled", true)]
+async fn terminal_failure_is_logged_once_without_dispatch_reentry(
+    route_pcm: RoutePcm,
+    #[case] failure: TrackFailure,
+    #[case] detail: &str,
+    #[case] teardown_only: bool,
+) {
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    assert!(
+        failure_log_output().is_empty(),
+        "the fixture must start without a track failure"
+    );
+    fixture.source.update_state(Track::<Failed>::new(failure).erase());
+    assert!(
+        failure_log_output().is_empty(),
+        "the produce core must not format diagnostics"
+    );
+    if teardown_only {
+        drop(fixture.source);
+    } else {
+        fixture.source.finish_deferred();
+        let first = failure_log_output();
+        assert_eq!(
+            first.len(),
+            1,
+            "a shell pass must record the terminal failure: {first:?}"
+        );
+        fixture.source.finish_deferred();
+        assert_eq!(
+            failure_log_output(),
+            first,
+            "a second shell pass must not repeat the failure"
+        );
+        drop(fixture.source);
+        assert_eq!(
+            failure_log_output(),
+            first,
+            "teardown must not repeat the shell's failure log"
+        );
+    }
+
+    let logged = failure_log_output();
+    assert_eq!(logged.len(), 1, "the failure is recorded once: {logged:?}");
+    assert!(
+        logged[0].contains(detail),
+        "the original failure detail must survive: {logged:?}"
+    );
+    assert!(
+        !logged[0].contains(" (x"),
+        "the failure must not carry a folded repeat count: {logged:?}"
+    );
+}
+
+fn failure_log_output() -> Vec<String> {
+    flight::tail()
+        .into_iter()
+        .filter(|line| line.contains("track failed:"))
+        .collect()
+}
 
 fn incoming_plan() -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
