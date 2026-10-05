@@ -412,21 +412,33 @@ mod tests {
     #[test]
     fn the_ui_scope_uses_the_repository_owners_and_shared_paths() {
         let root = crate::test::repository_tests::root();
-        let project = crate::common::project::ProjectConfig::load(&root)
-            .expect("load repository config");
+        let project =
+            crate::common::project::ProjectConfig::load(&root).expect("load repository config");
         let test = &project.test;
         let ui = scope(&["ui"]);
         for path in test.lanes["ui"].owns.iter().chain(&test.shared_paths) {
             assert_eq!(
-                select(&test.lanes, &test.shared_paths, &test.default_lane, &ui, &[path]),
+                select(
+                    &test.lanes,
+                    &test.shared_paths,
+                    &test.default_lane,
+                    &ui,
+                    &[path]
+                ),
                 vec![whole("ui")],
                 "the UI scope must cover {path}"
             );
         }
         for path in ["crates/kithara-audio/src/lib.rs", "docs/README.md"] {
             assert!(
-                select(&test.lanes, &test.shared_paths, &test.default_lane, &ui, &[path])
-                    .is_empty(),
+                select(
+                    &test.lanes,
+                    &test.shared_paths,
+                    &test.default_lane,
+                    &ui,
+                    &[path]
+                )
+                .is_empty(),
                 "the UI scope does not own {path}"
             );
         }
