@@ -11,7 +11,7 @@ use crate::{
     engine::{Engine, Target},
     interact::Hit,
     module::TableFrame,
-    render::Skin,
+    render::{Skin, hosted::TablePlan},
 };
 pub(super) struct TableHost {
     skin: Skin,
@@ -57,11 +57,14 @@ impl TableHost {
         }
     }
 
+    /// Appends the table's targets, with a target for each pressable cell of
+    /// `actions` under the cursor.
     pub(super) fn append_targets<'a>(
         &'a self,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         engine: Option<&Engine>,
+        actions: Option<&'a TablePlan>,
         targets: &mut Vec<Target<'a>>,
     ) {
         let bounds: Rect = layout.bounds().into();
@@ -112,6 +115,15 @@ impl TableHost {
                 &self.row_target,
                 Hit::new(point, empty_bounds(bounds)),
             )),
+        }
+        if let Some(actions) = actions {
+            actions.append_action_targets(
+                bounds,
+                point,
+                &self.columns,
+                (horizontal, vertical),
+                targets,
+            );
         }
         let dividers = table_dividers(bounds, &self.columns, horizontal, table);
         for (id, divider_path) in &self.divider_paths {
@@ -226,7 +238,13 @@ mod tests {
         );
         let node = Node::new(Size::new(100.0, 120.0));
         let mut targets = Vec::new();
-        host.append_targets(Layout::new(&node), Cursor::Unavailable, None, &mut targets);
+        host.append_targets(
+            Layout::new(&node),
+            Cursor::Unavailable,
+            None,
+            None,
+            &mut targets,
+        );
 
         let divider = targets
             .iter()
@@ -262,6 +280,7 @@ mod tests {
             Layout::new(&node),
             Cursor::Available(Point::new(96.0, 11.0)),
             Some(&engine),
+            None,
             &mut targets,
         );
         let now = Instant::now();
@@ -290,6 +309,7 @@ mod tests {
             Layout::new(&node),
             Cursor::Unavailable,
             Some(&engine),
+            None,
             &mut release_targets,
         );
         let watcher = release_targets

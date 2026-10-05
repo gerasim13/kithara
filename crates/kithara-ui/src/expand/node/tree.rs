@@ -243,6 +243,7 @@ pub enum ControlSpec {
         frame: TableFrame,
         width: Option<Binding>,
     },
+    Search,
     Tree {
         query: Option<Binding>,
         /// Whether the tree draws a search field: it reads or writes a query.
@@ -487,6 +488,7 @@ impl ControlSpec {
             | Self::Time
             | Self::TitleBar { .. }
             | Self::Toggle
+            | Self::Search
             | Self::Tree { .. }
             | Self::VuStereo
             | Self::VuVertical { .. }

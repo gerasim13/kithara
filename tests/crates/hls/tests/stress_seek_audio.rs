@@ -496,7 +496,7 @@ async fn stress_seek_audio_hls(
     let trace = usdt_trace::scope();
 
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

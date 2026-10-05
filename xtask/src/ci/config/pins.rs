@@ -68,6 +68,9 @@ pub(crate) struct CiPins {
     /// Build the guest macOS must report. The CI VM is built locally from the
     /// matching Apple restore image instead of pulled from a registry.
     pub(crate) macos_guest_build: String,
+    pub(crate) monkeys_audio_version: String,
+    pub(crate) monkeys_audio_source_sha256: String,
+    pub(crate) monkeys_audio_source_url: String,
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
     pub(crate) rtsan_linux_amd64_sha256: String,
@@ -140,6 +143,11 @@ impl CiPins {
             ("lockbud_rev", self.lockbud_rev.as_str()),
             ("lockbud_toolchain", self.lockbud_toolchain.as_str()),
             ("macos_guest_build", self.macos_guest_build.as_str()),
+            ("monkeys_audio_version", self.monkeys_audio_version.as_str()),
+            (
+                "monkeys_audio_source_url",
+                self.monkeys_audio_source_url.as_str(),
+            ),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("rtsan_version", self.rtsan_version.as_str()),
@@ -169,6 +177,10 @@ impl CiPins {
         {
             bail!("CI tool package names and versions must not be empty");
         }
+        self.validate_hashes()
+    }
+
+    fn validate_hashes(&self) -> Result<()> {
         for (name, digest) in [
             (
                 "actions_runner_linux_amd64_sha256",
@@ -205,6 +217,10 @@ impl CiPins {
             (
                 "geckodriver_linux_amd64_sha256",
                 self.geckodriver_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "monkeys_audio_source_sha256",
+                self.monkeys_audio_source_sha256.as_str(),
             ),
             ("git_windows_sha256", self.git_windows_sha256.as_str()),
             (

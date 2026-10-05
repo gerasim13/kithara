@@ -43,6 +43,7 @@
                     Include(id: "titlebars", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "TITLE BARS", "page": "titlebars" }),
                     Include(id: "table", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TABLE", "page": "table" }),
                     Include(id: "tree", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TREE", "page": "tree" }),
+                    Include(id: "search", source: "nav/item.kmodule.ron", with: { "icon": "Search", "label": "SEARCH", "page": "search" }),
                     Include(id: "library2", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "LIBRARY V2", "page": "library2" }),
                     Include(id: "stress", source: "nav/item.kmodule.ron", with: { "icon": "SpeakerHigh", "label": "STRESS", "page": "stress" }),
                     Include(id: "menu", source: "nav/item.kmodule.ron", with: { "icon": "Menu", "label": "MENU", "page": "menu" }),

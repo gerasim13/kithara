@@ -1,6 +1,8 @@
 #![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::fmt;
+
 use kithara::{
     platform::time::{Duration, Instant},
     signal::SessionFrame,
@@ -28,6 +30,28 @@ const CANCELLED: u64 = 4;
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Longer than a lane's ring holds, so the sounding lane has to keep decoding.
 const LISTEN_FRAMES: usize = 48_000 * 6;
+/// How far into the deck's own timeline a measured window opens.
+///
+/// A harness leaves its deck wherever its build happened to land, and that
+/// landing is not fixed: the transport warm-up renders until the renderer
+/// publishes a revision, which off the virtual clock costs one render more on
+/// a loaded host. Two harnesses compared sample by sample then open one block
+/// apart, and a whole window of the same audio read one block late is every
+/// sample differing at a matching level. Both sides render up to this lead
+/// instead, so a window opens at a point of the deck's timeline rather than at
+/// whatever its build cost. The lead only has to clear what a build leaves
+/// behind, which is a handful of blocks.
+const WINDOW_LEAD_FRAMES: u64 = (BLOCK_FRAMES * 16) as u64;
+/// How many blocks a wait for that lead may render before it reports that the
+/// deck never reached it.
+///
+/// Rendering is what moves the deck, so rendered blocks are what bound the
+/// wait. A clock cannot: under flash `Instant::now()` reads the virtual clock,
+/// and the engine fast-forwards it to the next pending deadline whenever every
+/// task is parked, so a deadline there measures the jump rather than the deck.
+/// A deck that advances reaches the lead in the blocks the lead is made of;
+/// this clears that many times over.
+const WINDOW_BLOCK_BUDGET: usize = 1024;
 /// A cue on the second beat of the Tunnel's fifth bar.
 const TUNNEL_WEAK_CUE: Start = Start::Bar { bar: 4, beat: 1 };
 /// A second Tunnel cue that supersedes the first.
@@ -297,19 +321,50 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     #[case] superseding: Start,
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
-    let control = {
+    let (control_built, control_opened, control, control_trace, control_closed) = {
         let control = STAGED_BESIDE_PLAYBACK_CONTROL;
         let mut harness =
             ProductHarness::new_for_block(control, &sources, cue, Audible::Deck(0), BLOCK_FRAMES)
                 .await;
-        render_frames(&mut harness, control, LISTEN_FRAMES).await
+        let built = Window::read(&harness, control);
+        let opened = open_window(&mut harness, control).await;
+        let (pcm, trace) = render_window(&mut harness, control, None).await;
+        (built, opened, pcm, trace, Window::read(&harness, control))
     };
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
+    let candidate_built = Window::read(&harness, case);
+    assert_eq!(
+        candidate_built,
+        control_built,
+        "{}: the two sides of this comparison differ only in the lane staged \
+         beside the sounding deck, and nothing has been staged yet, so the two \
+         builds must leave their decks on the same frame. They did not, which \
+         makes every later sample-by-sample comparison a comparison of two \
+         different points of the same timeline",
+        case.id(),
+    );
     harness.mark("staged cue, then a superseding cue");
     let superseded = prepare_cue(&mut harness, case, rate, cue).await;
+    let candidate_staged = Window::read(&harness, case);
     let successor = prepare_cue(&mut harness, case, rate, superseding).await;
-    let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
+    let candidate_superseded = Window::read(&harness, case);
+    assert_eq!(
+        (candidate_staged, candidate_superseded),
+        (candidate_built, candidate_built),
+        "{}: staging a lane beside the sounding deck moved that deck. Only a \
+         render advances a deck and neither staging call renders one, so the \
+         deck should have held the {candidate_built} its build left it on; it \
+         stood on {candidate_staged} once a lane was staged beside it and on \
+         {candidate_superseded} once that lane was superseded. This is the \
+         displacement the comparison below would otherwise report second-hand, \
+         as two windows opening apart or as audio read from the wrong place, \
+         depending only on whether it happens to cross a block boundary",
+        case.id(),
+    );
+    let candidate_opened = open_window(&mut harness, case).await;
+    let (candidate, _) = render_window(&mut harness, case, Some(&control_trace)).await;
+    let candidate_closed = Window::read(&harness, case);
     let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(
         receipts.iter().all(|receipt| receipt.rejected == INSTALLED
@@ -325,12 +380,160 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         case.id()
     );
 
-    assert_eq!(candidate.len(), control.len());
+    assert_eq!(
+        candidate.len(),
+        control.len(),
+        "{}: the two renders must cover the same window",
+        case.id(),
+    );
+    assert_eq!(
+        candidate_opened,
+        control_opened,
+        "{}: the two windows opened at different points of the deck's own \
+         timeline, so one covers audio the other has already played. The two \
+         checks above already put both decks on {candidate_built} after their \
+         builds and held them there through the staging, so what moved this \
+         one moved it inside the blocks rendered while waiting for the lead. \
+         That loop steps whole blocks, so a deck displaced within a block \
+         carries the displacement into its opening rather than losing it",
+        case.id(),
+    );
     assert_eq!(
         divergence(&candidate, &control),
         None,
-        "{}: staging beside the sounding lane changed what it plays",
+        "{}: staging beside the sounding lane changed what it plays; both \
+         windows opened on {candidate_opened} and took {LISTEN_FRAMES} frames, \
+         closing with the candidate on {candidate_closed} and the control on \
+         {control_closed}; closings that disagree put the two decks on \
+         different timelines, closings that agree put different audio on one",
         case.id(),
+    );
+}
+
+/// Where the sounding deck stood when a measured window opened or closed.
+///
+/// Two harnesses compared sample by sample have to open their window at the
+/// same point in the deck's own timeline. A divergence that starts at frame 0
+/// while both levels agree reads as that timeline being shifted, and nothing
+/// in the PCM says which side moved - the deck's own position does.
+///
+/// Read at both ends, it also separates the two ways a divergence that starts
+/// mid-window can happen. The same count of frames went into each render, so
+/// two decks that close on different positions were running their own
+/// timelines at different speeds, and two that close together were handed
+/// different audio to play on one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Window {
+    /// The deck's own position, in frames of the session it renders into.
+    /// Absent until the deck reports one.
+    frames: Option<u64>,
+    playing: bool,
+}
+
+impl Window {
+    /// Reads where the deck stands now, in the session's own frames so that
+    /// two readings compare exactly.
+    fn read(harness: &ProductHarness, case: SyncCase) -> Self {
+        let playback = harness.decks[0].playback_view();
+        let frames = playback
+            .position
+            .map(|seconds| seconds * f64::from(case.sample_rate))
+            .filter(|frames| frames.is_finite() && *frames >= 0.0)
+            .map(|frames| frames.round() as u64);
+        Self {
+            frames,
+            playing: playback.playing,
+        }
+    }
+}
+
+impl fmt::Display for Window {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.frames {
+            Some(frames) => write!(formatter, "deck 0 at frame {frames}"),
+            None => formatter.write_str("deck 0 reporting no position"),
+        }?;
+        write!(formatter, ", playing {}", self.playing)
+    }
+}
+
+/// Renders the measured window a block at a time, recording where the deck
+/// stood after each, and stops on the first block whose reading parts from a
+/// reference trace.
+///
+/// A playing deck advances by the frames rendered into it, and the control's
+/// close measures exactly that: it ends on its opening plus the whole window.
+/// Its own trace therefore says the same thing block by block, which is what
+/// makes it worth comparing against - a measurement, not a tolerance someone
+/// picked.
+///
+/// Stopping on the block that parts, rather than at the close, is the point of
+/// keeping the trace at all. Only a failing attempt writes a dump, and the
+/// flight ring inside one holds a fraction of a second of probes; a loss first
+/// named six seconds after it happened has already fallen out of the ring that
+/// would have shown it happen.
+async fn render_window(
+    harness: &mut ProductHarness,
+    case: SyncCase,
+    reference: Option<&[Window]>,
+) -> (Vec<f32>, Vec<Window>) {
+    let blocks = LISTEN_FRAMES.div_ceil(BLOCK_FRAMES);
+    let mut pcm = Vec::with_capacity(LISTEN_FRAMES * usize::from(CHANNELS));
+    let mut trace = Vec::with_capacity(blocks);
+    while trace.len() < blocks {
+        let rendered = pcm.len() / usize::from(CHANNELS);
+        let step = (LISTEN_FRAMES - rendered).min(BLOCK_FRAMES);
+        pcm.extend_from_slice(&render_frames(harness, case, step).await);
+        let here = Window::read(harness, case);
+        if let Some(&expected) = reference.and_then(|side| side.get(trace.len())) {
+            assert_eq!(
+                here,
+                expected,
+                "{}: the deck stopped keeping up with the window on block {} of \
+                 {blocks}, {} frames in. Both sides render the same blocks into \
+                 a playing deck, so both advance by what was rendered, and the \
+                 control's own trace is that statement measured rather than \
+                 assumed. A deck that parts from it here is the displacement \
+                 the comparison at the close can only report second-hand, as \
+                 two windows opening apart or as audio read from the wrong \
+                 place",
+                case.id(),
+                trace.len() + 1,
+                rendered + step,
+            );
+        }
+        trace.push(here);
+    }
+    (pcm, trace)
+}
+
+/// Renders whole blocks until the deck has reached [`WINDOW_LEAD_FRAMES`], and
+/// reports where the window opens.
+///
+/// Both sides of a comparison call this, and they open on the same frame only
+/// while both step the same grid: a render advances a deck by one block, so a
+/// side its build left further back catches up to the same first position past
+/// the lead. A side that is off that grid instead stops at the first of its own
+/// steps past the lead, which is a different frame, and the caller's assertion
+/// on the two openings is what reports it. Measured: a deck 359 frames off the
+/// block grid opened on 8551 against the other's 8192.
+async fn open_window(harness: &mut ProductHarness, case: SyncCase) -> Window {
+    for _ in 0..WINDOW_BLOCK_BUDGET {
+        let window = Window::read(harness, case);
+        if window
+            .frames
+            .is_some_and(|frames| frames >= WINDOW_LEAD_FRAMES)
+        {
+            return window;
+        }
+        let _ = harness.render(case, BLOCK_FRAMES).await;
+    }
+    panic!(
+        "{}: the deck never reached frame {WINDOW_LEAD_FRAMES} in \
+         {WINDOW_BLOCK_BUDGET} rendered blocks, the lead a measured window \
+         opens after; it stopped at {}",
+        case.id(),
+        Window::read(harness, case),
     );
 }
 

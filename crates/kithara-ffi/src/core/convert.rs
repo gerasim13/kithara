@@ -568,6 +568,7 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
                 item_id: *id,
                 status: FfiTrackStatus::from(status.clone()),
             },
+            QueueEvent::TrackMetadataChanged { .. } => return Err(NotForwarded),
             QueueEvent::CurrentTrackChanged { id } => Self::CurrentItemChanged { item_id: *id },
             QueueEvent::CurrentTrackAdvance { id, reason } => Self::CurrentItemAdvanced {
                 item_id: *id,
@@ -1347,6 +1348,10 @@ mod tests {
             let event = FfiPlayerEvent::try_from(&source).expect("event must be forwarded");
             assert!(preserves_contract(&event), "unexpected event: {event:?}");
         }
+        assert!(matches!(
+            FfiPlayerEvent::try_from(&QueueEvent::TrackMetadataChanged { id }),
+            Err(NotForwarded)
+        ));
     }
 
     #[kithara::test]

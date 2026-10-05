@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use crate::{draw::Pt, module::IconName};
 
@@ -68,6 +68,11 @@ pub struct TreeRow<'a> {
     pub icon: IconName,
     pub count: Option<u32>,
     pub expanded: Option<bool>,
+    /// Whether the row has a page of its own. A row with children and no page
+    /// opens and closes on a press anywhere on it; one with a page is selected
+    /// from its label and opened from its chevron. A row without children
+    /// selects either way.
+    pub page: bool,
     pub muted: bool,
     pub selected: bool,
     pub depth: u8,
@@ -85,6 +90,12 @@ pub struct Badge<'a> {
 #[non_exhaustive]
 pub enum TableValue<'a> {
     Empty,
+    /// A pressed icon publishes `action` through its document column's write.
+    Icon {
+        icon: IconName,
+        active: bool,
+        action: Option<Cow<'a, str>>,
+    },
     Number(u8),
     Text(Cow<'a, str>),
     Badges(&'a [Badge<'a>]),
@@ -139,15 +150,58 @@ impl<'a> TableCell<'a> {
     pub const fn value(&self) -> &TableValue<'a> {
         &self.value
     }
+
+    #[must_use]
+    pub const fn icon(id: &'a str, icon: IconName, active: bool) -> Self {
+        Self {
+            id,
+            value: TableValue::Icon {
+                icon,
+                active,
+                action: None,
+            },
+        }
+    }
+
+    /// Text an icon cell publishes through the document column's write when
+    /// pressed. Only icon cells take a press.
+    #[must_use]
+    pub fn with_action<T: Into<Cow<'a, str>>>(mut self, text: T) -> Self {
+        if let TableValue::Icon { action, .. } = &mut self.value {
+            *action = Some(text.into());
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn action(&self) -> Option<&str> {
+        match &self.value {
+            TableValue::Icon { action, .. } => action.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// One renderer-facing table row. Cells carry document column ids, so the
 /// same model can serve any declared order or subset.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub struct TableRow<'a> {
     cells: Vec<TableCell<'a>>,
-    drag: Option<Cow<'a, str>>,
+    #[field(
+        with(
+            option_set_some,
+            doc = "What the row carries out of its table, which a drop zone writes."
+        ),
+        vis = "pub"
+    )]
+    drag: Option<Cow<'a, BTreeMap<String, String>>>,
     selected: bool,
+    #[field(
+        with(doc = "Use the table's muted text colour without changing interaction data."),
+        vis = "pub"
+    )]
+    muted: bool,
 }
 
 impl<'a> TableRow<'a> {
@@ -163,19 +217,17 @@ impl<'a> TableRow<'a> {
             cells,
             drag: None,
             selected,
+            muted: false,
         }
     }
 
-    /// The row carries `data` when it is dragged out of its table, and a drop
-    /// zone that takes it writes `data`.
     #[must_use]
-    pub fn with_drag<D: Into<Cow<'a, str>>>(mut self, data: D) -> Self {
-        self.drag = Some(data.into());
-        self
+    pub fn muted(&self) -> bool {
+        self.muted
     }
 
     #[must_use]
-    pub fn drag(&self) -> Option<&str> {
+    pub fn drag(&self) -> Option<&BTreeMap<String, String>> {
         self.drag.as_deref()
     }
 
@@ -195,6 +247,7 @@ impl<'a> TableRow<'a> {
 #[non_exhaustive]
 pub enum ReadValue<'a> {
     Text(&'a str),
+    Image(&'a crate::draw::Image),
     Bool(bool),
     Scalar(f64),
     Point(Pt),

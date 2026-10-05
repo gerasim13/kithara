@@ -13,9 +13,10 @@ use kithara::ui::{
         TableCell, TableRow, TreeRow, UiEvent, WaveBucket, WaveformView,
     },
 };
+use kithara_app_library::Registration;
 
 use crate::gui::{
-    library::{Library, Registration, StartupSource},
+    library::{Library, StartupSource},
     test_fixture,
     ui::{cache::DeckLayout, endpoints::readable_kind, package::Package},
 };
@@ -83,6 +84,7 @@ impl Reads for Fixture {
             label: "Startup",
             count: Some(2),
             expanded: None,
+            page: false,
             icon: IconName::Playlist,
             muted: false,
             selected: true,

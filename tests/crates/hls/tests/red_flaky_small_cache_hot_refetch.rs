@@ -65,7 +65,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("audio creation");
+    let mut audio = worker.load(config).await.expect("audio creation");
 
     // The blocking read phase must NOT run on the test runtime thread: with
     // block_on_underrun the read parks the thread, and on the current-thread

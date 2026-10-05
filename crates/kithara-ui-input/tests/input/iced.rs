@@ -18,15 +18,18 @@ use kithara_ui_input::{
 fn key_press_and_release_preserve_key_and_all_modifiers() {
     let pressed_modifiers = IcedModifiers::ALT | IcedModifiers::LOGO;
     let released_modifiers = IcedModifiers::CTRL | IcedModifiers::SHIFT;
-    let pressed = Event::Keyboard(keyboard::Event::KeyPressed {
-        key: keyboard::Key::Character("z".into()),
-        modified_key: keyboard::Key::Character("Z".into()),
-        physical_key: Physical::Code(keyboard::key::Code::KeyZ),
-        location: Location::Standard,
-        modifiers: pressed_modifiers,
-        text: Some("z".into()),
-        repeat: false,
-    });
+    let press = |typed: &str, physical| {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: keyboard::Key::Character(typed.into()),
+            modified_key: keyboard::Key::Character(typed.into()),
+            physical_key: Physical::Code(physical),
+            location: Location::Standard,
+            modifiers: pressed_modifiers,
+            text: Some(typed.into()),
+            repeat: false,
+        })
+    };
+    let pressed = press("z", keyboard::key::Code::KeyZ);
     let released = Event::Keyboard(keyboard::Event::KeyReleased {
         key: keyboard::Key::Named(Named::Delete),
         modified_key: keyboard::Key::Named(Named::Delete),
@@ -38,10 +41,23 @@ fn key_press_and_release_preserve_key_and_all_modifiers() {
     assert!(matches!(
         input(&pressed),
         Some(Input::KeyPressed {
-            key: Key::Character("z"),
+            key: Key::Character {
+                text: "z",
+                latin: Some('z'),
+            },
             modifiers: decoded,
             text: Some("z"),
         }) if decoded == Modifiers::new(true, false, true, false)
+    ));
+    assert!(matches!(
+        input(&press("\u{444}", keyboard::key::Code::KeyA)),
+        Some(Input::KeyPressed {
+            key: Key::Character {
+                text: "\u{444}",
+                latin: Some('a'),
+            },
+            ..
+        })
     ));
     assert!(matches!(
         input(&released),

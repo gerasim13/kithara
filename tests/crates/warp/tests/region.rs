@@ -9,7 +9,7 @@ use kithara::{
     stretch::StretchKind,
     warp::{
         GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext, SessionBeat,
-        StretchControls, Warp, WarpConfig, WarpPlan,
+        Warp, WarpConfig, WarpPlan,
         mock::{
             asset_grid, asset_grid_over, plan_over, plan_over_at, session_grid_spaced, spaced_plan,
         },
@@ -75,11 +75,12 @@ fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32], frame_offset: u64) -> 
 #[hang_watchdog]
 fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     let pools = pools();
-    let controls = StretchControls::new(speed);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    controls.set_region_plan(plan.map(Arc::new));
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .speed(speed)
+        .keylock(true)
+        .backend(backend)
+        .maybe_region_plan(plan.map(Arc::new))
+        .build();
     let mut fx = Warp::new((), &config).renderer(spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
@@ -452,10 +453,11 @@ fn render_on_grid(
     session_beats: f64,
     swap: Option<(usize, fn(u64, usize) -> WarpPlan)>,
 ) -> Vec<f32> {
-    let controls = StretchControls::new(speed);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let config = WarpConfig::builder()
+        .speed(speed)
+        .keylock(true)
+        .backend(backend)
+        .build();
     render_configured_grid(config, plan, source, session_beats, swap, None)
 }
 
@@ -606,7 +608,7 @@ pub(crate) fn render_configured_grid_with_updates(
                 frames: u32::try_from(remaining).expect("fixture frames"),
                 ..Default::default()
             };
-            let planned = match fx.prepare_quantum(meta, remaining) {
+            let planned = match fx.prepare_quantum(meta, remaining, usize::MAX) {
                 Ok(frames) => frames.get(),
                 Err(kithara::warp::WarpRenderError::NeedsService) => {
                     while fx.transition_pending() {
@@ -620,8 +622,8 @@ pub(crate) fn render_configured_grid_with_updates(
                 Err(error) => panic!(
                     "source quantum at {} with {remaining} remaining, backend {:?}, keylock={}, trajectory={trajectory:?}: {error:?}",
                     meta.frame_offset,
-                    config.stretch().backend(),
-                    config.stretch().keylock()
+                    config.backend(),
+                    config.keylock()
                 ),
             };
             let start = usize::try_from(meta.frame_offset).expect("fixture source frame");
@@ -717,11 +719,10 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
         for keylock in [false, true] {
             let mut partitions = Vec::new();
             for quantum in [64, 257] {
-                let controls = StretchControls::new(2.0);
-                controls.set_keylock(keylock);
-                controls.set_backend(backend);
                 let config = WarpConfig::builder()
-                    .stretch(controls)
+                    .speed(2.0)
+                    .keylock(keylock)
+                    .backend(backend)
                     .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
                     .build();
                 let output = render_configured_grid(

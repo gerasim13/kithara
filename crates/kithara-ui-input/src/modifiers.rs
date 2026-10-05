@@ -23,6 +23,16 @@ impl Modifiers {
         self.alt
     }
 
+    /// The platform's command modifier: Command on macOS, Control elsewhere.
+    #[must_use]
+    pub const fn command(self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.logo
+        } else {
+            self.control
+        }
+    }
+
     #[must_use]
     pub const fn control(self) -> bool {
         self.control

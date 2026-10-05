@@ -371,56 +371,56 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / platforms
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / merge-request
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / quarantine
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / main
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / nightly
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / weekly
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / release
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-test / branch
   <require os> macos

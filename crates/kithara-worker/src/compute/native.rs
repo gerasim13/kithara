@@ -38,7 +38,7 @@ pub(super) struct Spawner(Arc<rayon::ThreadPool>);
 
 impl Spawner {
     pub(super) fn spawn<F: FnOnce() + Send + 'static>(self, job: F) {
-        self.0.spawn(job);
+        self.0.spawn(kithara_platform::thread::wrap_pool_task(job));
     }
 }
 

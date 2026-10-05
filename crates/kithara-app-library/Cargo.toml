@@ -1,0 +1,22 @@
+[package]
+name = "kithara-app-library"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+publish = false
+description = "The library-source contract between the application's library shell and its sources."
+
+[dependencies]
+kithara-platform = { workspace = true }
+kithara-ui = { workspace = true, default-features = false, features = ["render"] }
+
+serde = { workspace = true }
+serde_yaml_ng = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+
+[lints]
+workspace = true

@@ -4,7 +4,9 @@ use kithara_test_macros as kithara;
 use masonry::{
     accesskit::TreeUpdate,
     app::{RenderRoot, RenderRootOptions, RenderRootSignal},
-    core::{CursorIcon, ErasedAction, Handled, PointerEvent, TextEvent, WidgetId, WindowEvent},
+    core::{
+        CursorIcon, ErasedAction, Handled, PointerEvent, TextEvent, Widget, WidgetId, WindowEvent,
+    },
     kurbo::{Point, Rect as MasonryRect},
     ui_events::keyboard::{Key, NamedKey},
     vello::Scene,
@@ -212,13 +214,21 @@ where
         Ok(handled)
     }
 
-    #[cfg(feature = "capture")]
-    fn read_widget<W: masonry::core::Widget, T>(
+    fn read_widget<W: Widget, T>(
         &self,
         id: WidgetId,
         read: impl FnOnce(&W) -> Option<T>,
     ) -> Option<T> {
         read(self.root.get_widget(id)?.downcast::<W>()?.inner())
+    }
+
+    /// Whether the widget holding the keyboard takes text input, so a paste
+    /// the window reads belongs to it.
+    pub(crate) fn editing_text(&self) -> bool {
+        self.root
+            .focused_widget()
+            .and_then(|id| self.read_widget(id, |node: &Node| Some(node.accepts_text_input())))
+            == Some(true)
     }
 
     /// The colour the node `id` writes its text in right now.

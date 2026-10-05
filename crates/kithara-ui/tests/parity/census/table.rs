@@ -125,6 +125,11 @@ pub(crate) const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         r#"Tree(id: "control", read: Model(id: "library.tree"), query: Model(id: "library.query"))"#,
     ),
     (
+        "Search",
+        Paints::Yes,
+        r#"Search(id: "control", read: Model(id: "library.query"), write: Command(id: "library.query"))"#,
+    ),
+    (
         // The path in view is the strip's own reading, and the fixture never
         // bound one: a strip with no path names nothing, so it drew nothing
         // for a reason that had nothing to do with this host.

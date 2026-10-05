@@ -82,7 +82,7 @@ async fn create_hls_audio(
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }

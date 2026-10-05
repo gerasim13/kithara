@@ -832,6 +832,59 @@ fn public_status_errors_do_not_start_cargo() -> Result<()> {
 }
 
 #[test]
+fn legacy_status_errors_are_rechecked_by_the_refresh_owner() -> Result<()> {
+    for valid_config in [true, false] {
+        let fixture = Fixture::new()?;
+        assert_success(&fixture.bootstrap()?);
+        let before = fixture.active_generation()?;
+        write_executable(
+            &fixture.active_binary()?,
+            r#"#!/bin/sh
+set -eu
+case "$1 $2" in
+  'self-cache probe') exit 0 ;;
+  'self-cache status') printf 'legacy cache input was removed\n' >&2; exit 1 ;;
+  'self-cache refresh') exec "$SELF_CACHE_TEST_XTASK" "$@" ;;
+  *) exit 2 ;;
+esac
+"#,
+        )?;
+        fs::write(
+            fixture.root.join("xtask/src/main.rs"),
+            "fn main() { changed(); }\n",
+        )?;
+        write_executable(
+            &fixture.bootstrap_cargo,
+            r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
+printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
+"#,
+        )?;
+        if !valid_config {
+            fs::write(fixture.root.join(".config/xtask.toml"), "invalid TOML\n")?;
+        }
+
+        let output = fixture.just(&fixture.root, &["tooling", "xtask", "--help"], None)?;
+
+        if valid_config {
+            assert_success(&output);
+            assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: xtask"));
+            assert_ne!(fixture.active_generation()?, before);
+            assert_eq!(fs::read_to_string(&fixture.cargo_log)?.lines().count(), 1);
+            let status = fixture.cached(&["self-cache", "status"])?;
+            assert_success(&status);
+            assert_eq!(status.stdout, b"current\n");
+        } else {
+            assert!(!output.status.success());
+            assert_eq!(fixture.active_generation()?, before);
+            fixture.assert_no_tool_process();
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn concurrent_public_stale_refreshes_build_once() -> Result<()> {
     let fixture = Arc::new(Fixture::new()?);
     assert_success(&fixture.bootstrap()?);

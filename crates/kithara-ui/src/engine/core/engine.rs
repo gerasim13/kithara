@@ -119,6 +119,15 @@ impl Engine {
         }
     }
 
+    /// Whether the focused component edits text, so pasted text belongs to it.
+    pub(crate) fn editing_text(&self) -> bool {
+        self.router.focused_path().is_some_and(|path| {
+            self.components
+                .iter()
+                .any(|component| component.path() == path && component.kind() == Kind::TextInput)
+        })
+    }
+
     pub(crate) fn text_input_snapshot(&self, path: &str) -> Option<TextInputSnapshot> {
         let focused = self.router.focused_path() == Some(path);
         self.components

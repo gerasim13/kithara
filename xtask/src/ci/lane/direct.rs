@@ -579,12 +579,11 @@ label = "run"
         );
     }
 
-    /// The compiler cache keys a compilation on every `CARGO_*` variable, so a
-    /// lane that handed Cargo its slot's own path would share nothing between
-    /// slots: every slot would fill a compiler cache of its own.
+    /// Each held slot has its own physical output path. Native build tools
+    /// must see that path, even when reports are read through the checkout.
     #[cfg(unix)]
     #[test]
-    fn a_lane_hands_cargo_one_path_whichever_slot_it_builds_in() {
+    fn a_lane_hands_cargo_the_physical_path_of_the_slot_it_claimed() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let lanes = tempfile::tempdir().expect("create the fleet's build root");
         let seen = temp.path().join("seen");
@@ -622,10 +621,11 @@ label = "run"
         run_in(&args, &ctx, &fleet).expect("lane runs in the released slot");
         let (released, released_slot) = seen_by_the_step();
 
-        assert_eq!(beside, temp.path().join("target"));
-        assert_eq!(
-            released, beside,
-            "Cargo must see one path whichever slot the lane took"
+        assert_eq!(beside, beside_slot);
+        assert_eq!(released, released_slot);
+        assert_ne!(
+            beside, released,
+            "concurrent slots own separate output paths"
         );
         assert_eq!(beside_slot, fs::canonicalize(slot(1)).unwrap());
         assert_eq!(released_slot, fs::canonicalize(slot(0)).unwrap());

@@ -203,6 +203,8 @@ impl TextInputComponent {
         text: Option<&str>,
     ) -> Outcome<EngineEvent> {
         if let Some(text) = text
+            && !(modifiers.control() && !modifiers.alt())
+            && !modifiers.logo()
             && !text.is_empty()
             && text.chars().all(|character| !character.is_control())
         {
@@ -229,7 +231,7 @@ impl TextInputComponent {
             Key::Delete => self.delete(),
             Key::ArrowDown
             | Key::ArrowUp
-            | Key::Character(_)
+            | Key::Character { .. }
             | Key::Enter
             | Key::Escape
             | Key::Other
@@ -238,6 +240,9 @@ impl TextInputComponent {
     }
 
     pub(super) fn reconcile(mut self, next: Self) -> Self {
+        if self.query != next.query {
+            self.preedit = None;
+        }
         self.layout = next.layout;
         self.path = next.path;
         self.query = next.query;
@@ -318,6 +323,11 @@ impl Component for TextInputComponent {
 
     fn handle_key(&mut self, input: Input<'_>) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = match input {
+            _ if input.shortcut('a') => {
+                self.cursor.anchor = 0;
+                self.cursor.focus = self.query.len();
+                Outcome::captured()
+            }
             Input::KeyPressed {
                 key,
                 modifiers,

@@ -565,3 +565,23 @@ fn an_inverted_view_read_hides_a_block_until_its_flag_is_set() {
 
     assert_eq!([closed, opened], [true, false]);
 }
+
+#[kithara::test]
+fn search_delivers_text_by_binding_when_its_id_changes() {
+    for id in ["query", "renamed"] {
+        let node = format!(
+            r#"Search(id: "{id}", read: Model(id: "fixture.query", with: {{ "deck": "$deck" }}), write: Model(id: "fixture.query", with: {{ "deck": "$deck" }}))"#
+        );
+        assert_eq!(
+            delivers(
+                &node,
+                &format!("deck-b/{id}"),
+                &ControlAction::Text("needle".to_owned())
+            ),
+            write(
+                "fixture.query@deck=b",
+                WriteValue::Text("needle".to_owned())
+            )
+        );
+    }
+}

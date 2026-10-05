@@ -105,7 +105,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker.open(config).await.expect("create hls audio");
+    let mut audio = worker.load(config).await.expect("create hls audio");
     audio.preload().expect("preload must succeed");
     // Spawn side: the named-thread increment is eager/synchronous at each
     // `spawn_named` call site, so once `preload()` returns the count already
@@ -173,7 +173,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .build();
     let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config).build();
     let a1 = shared_worker
-        .open(config)
+        .load(config)
         .await
         .expect("open first shared-worker track");
 
@@ -185,7 +185,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .build();
     let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config2).build();
     let a2 = shared_worker
-        .open(config)
+        .load(config)
         .await
         .expect("open second shared-worker track");
 
@@ -197,7 +197,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .build();
     let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(drm_config).build();
     let a3 = shared_worker
-        .open(config)
+        .load(config)
         .await
         .expect("open third shared-worker track");
 

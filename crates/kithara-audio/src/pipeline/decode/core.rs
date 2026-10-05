@@ -8,7 +8,7 @@ use std::{
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::{
-    BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
 };
 use kithara_events::DeferredBus;
@@ -312,8 +312,8 @@ impl ActiveDecode {
     /// generation never reaches it. So the incoming half goes back for
     /// retirement, and the surviving ABR intent mints a fresh transition.
     #[must_use]
-    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) -> Option<DecoderGeneration> {
-        self.active.notify_seek(retire);
+    pub(crate) fn notify_seek(&mut self) -> Option<DecoderGeneration> {
+        self.active.notify_seek();
         self.disarm_seek_transition()
     }
 
@@ -485,7 +485,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-    use kithara_decode::{BlenderProfile, DecoderSeekOutcome, DropChunks};
+    use kithara_decode::{BlenderProfile, DecoderSeekOutcome};
     use kithara_platform::time::Duration;
     use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_stream::{
@@ -717,7 +717,7 @@ mod tests {
             .push(make_chunk(0))
             .expect("first holdback chunk is valid");
 
-        let invalidated = decode.notify_seek(&DropChunks);
+        let invalidated = decode.notify_seek();
 
         assert!(
             invalidated.is_some(),

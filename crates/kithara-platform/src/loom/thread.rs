@@ -1,4 +1,4 @@
-use core::{fmt, num::NonZeroUsize};
+use core::num::NonZeroUsize;
 
 use ::loom::sync::{
     Arc as LoomArc,

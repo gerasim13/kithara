@@ -622,6 +622,15 @@ pub enum ControlNode {
         #[serde(default)]
         write_width: Option<BindingRef>,
     },
+    Search {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+    },
     Tree {
         id: NodeId,
         #[serde(default)]
@@ -897,6 +906,7 @@ impl ControlNode {
             | Self::Sprite { read, write, .. }
             | Self::Range { read, write, .. }
             | Self::Table { read, write, .. }
+            | Self::Search { read, write, .. }
             | Self::Tree { read, write, .. }
             | Self::ContextBar { read, write, .. }
             | Self::Toggle { read, write, .. }
@@ -958,6 +968,7 @@ impl ControlNode {
             | Self::PortalMap { size, .. }
             | Self::Range { size, .. }
             | Self::Table { size, .. }
+            | Self::Search { size, .. }
             | Self::Tree { size, .. }
             | Self::ContextBar { size, .. }
             | Self::Toggle { size, .. }

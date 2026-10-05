@@ -166,7 +166,7 @@ async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: CreatedH
         .media_info(wav_info)
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

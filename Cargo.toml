@@ -7,6 +7,7 @@ members = [
     "crates/kithara-android",
     "crates/kithara-app",
     "crates/kithara-app-document",
+    "crates/kithara-app-library",
     "crates/kithara-apple",
     "crates/kithara-assets",
     "crates/kithara-audio",
@@ -39,6 +40,7 @@ members = [
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-record",
+    "crates/kithara-render",
     "crates/kithara-resampler",
     "crates/kithara-ring",
     "crates/kithara-signal",
@@ -116,6 +118,7 @@ default-members = [
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-record",
+    "crates/kithara-render",
     "crates/kithara-resampler",
     "crates/kithara-ring",
     "crates/kithara-signal",
@@ -283,6 +286,7 @@ kithara-analysis = { path = "crates/kithara-analysis", version = "0.0.1-alpha5",
 kithara-android = { path = "crates/kithara-android", version = "0.0.1-alpha5" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-app-document = { path = "crates/kithara-app-document" }
+kithara-app-library = { path = "crates/kithara-app-library" }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha5" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha5", default-features = false }
 kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha5", default-features = false }
@@ -317,6 +321,7 @@ kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha5" 
 kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha5", default-features = false }
 kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha5", default-features = false }
 kithara-record = { path = "crates/kithara-record", version = "0.0.1-alpha5", default-features = false }
+kithara-render = { path = "crates/kithara-render", version = "0.0.1-alpha5", default-features = false }
 kithara-resampler = { path = "crates/kithara-resampler", version = "0.0.1-alpha5", default-features = false }
 kithara-ring = { path = "crates/kithara-ring", version = "0.0.1-alpha5" }
 kithara-signal = { path = "crates/kithara-signal", version = "0.0.1-alpha5" }
@@ -344,6 +349,9 @@ aes = "0.9.1"
 
 # xtask tooling
 anyhow = "1"
+
+# FFI
+ape-decoder = "0.3.2"
 
 # fuzzing
 arbitrary = { version = "1", features = ["derive"] }
@@ -429,12 +437,11 @@ iced_renderer = "0.14.0"
 iced_runtime = "0.14.0"
 iced_tiny_skia = "0.14.0"
 iced_wgpu = "0.14.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 
 # Link-time registry. The kithara-test-fixtures build script enumerates what its
 # `#[kithara::asset]` definitions submit; nothing links it into a product build.
 inventory = "0.3"
-
-# FFI
 jni = "0.22"
 js-sys = "0.3"
 # Curve geometry and the SVG path grammar (kithara-ui reads authored icons
@@ -456,6 +463,7 @@ num-traits = { version = "0.2", default-features = false }
 obfstr = "0.4.5"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
+opus = "0.4.0"
 parking_lot = "0.12"
 parking_lot_core = "0.9"
 parley = { version = "0.6", default-features = false, features = ["std", "system"] }
@@ -551,6 +559,7 @@ wasm-bindgen-test = "=0.3.70"
 wasm_safe_thread = "0.1.1"
 web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageChannel", "MessageEvent", "MessagePort", "Window"] }
 web-time = "1.1"
+window_clipboard = "0.5.1"
 # Dev-only: the gallery example drives the Masonry host in a real window. iced
 # already builds this exact version, so it costs no extra compilation.
 winit = "0.30"

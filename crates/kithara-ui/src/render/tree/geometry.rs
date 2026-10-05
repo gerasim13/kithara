@@ -522,10 +522,7 @@ pub(super) fn tree_input_layouts(
 ) -> (Option<Layout<'_>>, Option<Layout<'_>>) {
     let mut children = layout.children();
     let search = if searched {
-        children
-            .next()
-            .and_then(first_child)
-            .and_then(|row| row.children().nth(1))
+        children.next().and_then(first_child)
     } else {
         None
     };

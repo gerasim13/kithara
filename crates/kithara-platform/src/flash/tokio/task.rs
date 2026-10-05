@@ -6,10 +6,6 @@ pub use crate::{
 };
 use crate::{
     backend::tokio::{backend::task, runtime::Handle, task as native_task},
-    flash::system::{
-        credit,
-        credit::{DedicatedSlot, Participant},
-    },
     maybe_send::MaybeSend,
 };
 
@@ -83,20 +79,7 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    let origin = Location::caller();
-    let ambient = crate::flash::ambient_snapshot();
-    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
-    native_task::spawn_blocking(move || {
-        let _ambient = crate::flash::set_ambient_for_spawn(ambient);
-        credit::reset_credit();
-        if let Some(slot) = slot {
-            let _pacer = slot.claim_pooled();
-            f()
-        } else {
-            let _exit = Participant::unreserved();
-            f()
-        }
-    })
+    native_task::spawn_blocking(crate::flash::thread::wrap_pool_task(f))
 }
 
 /// Spawn synchronous work without blocking an async runtime worker.
@@ -122,18 +105,5 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    let origin = Location::caller();
-    let ambient = crate::flash::ambient_snapshot();
-    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
-    handle.spawn_blocking(move || {
-        let _ambient = crate::flash::set_ambient_for_spawn(ambient);
-        credit::reset_credit();
-        if let Some(slot) = slot {
-            let _pacer = slot.claim_pooled();
-            f()
-        } else {
-            let _exit = Participant::unreserved();
-            f()
-        }
-    })
+    handle.spawn_blocking(crate::flash::thread::wrap_pool_task(f))
 }

@@ -14,7 +14,7 @@ use kithara::{
             task,
         },
     },
-    play::{BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent, StretchControls},
+    play::{BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent},
     prelude::EngineLoadSnapshot,
     queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,
@@ -54,7 +54,7 @@ impl UiState {
     pub(crate) fn new(queue: &AppQueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
-        let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
+        let track_name = tracks.first().map(caption).unwrap_or_default();
         let beat_marks = empty_marks();
         let downbeat_marks = empty_marks();
 
@@ -229,8 +229,6 @@ pub struct StateController {
     #[field(get, deref = false)]
     queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
-    #[field(get = stretch, deref = false)]
-    timestretch: Arc<StretchControls>,
     cancel: CancelToken,
     beat_clock: Mutex<BeatClockState>,
 }
@@ -240,7 +238,6 @@ impl StateController {
     /// deck or with the app.
     pub(crate) fn new(
         queue: AppQueueControl,
-        timestretch: Arc<StretchControls>,
         cancel: CancelToken,
         analysis: AnalysisHandle,
     ) -> Self {
@@ -258,7 +255,6 @@ impl StateController {
         Self {
             queue,
             state,
-            timestretch,
             cancel,
             beat_clock: Mutex::new(BeatClockState::default()),
         }
@@ -320,14 +316,12 @@ pub(crate) mod test_fixture {
     /// as the running deck has it.
     pub(crate) fn controller_on(
         queue: AppQueueControl,
-        timestretch: Arc<StretchControls>,
         cancel: CancelToken,
         state: Arc<Mutex<UiState>>,
     ) -> StateController {
         StateController {
             queue,
             state,
-            timestretch,
             cancel,
             beat_clock: Mutex::new(BeatClockState::default()),
         }
@@ -565,7 +559,7 @@ pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state:
             let mut st = state.lock();
             st.current_track_index = current_index;
             st.track_name = current_index
-                .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
+                .and_then(|idx| st.tracks.get(idx).map(caption))
                 .unwrap_or_default();
         }
         AnalysisEvent::Player(PlayerEvent::RateChanged { rate }) => {
@@ -578,6 +572,7 @@ pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state:
         AnalysisEvent::Queue(
             QueueEvent::TrackAdded { .. }
             | QueueEvent::TrackRemoved { .. }
+            | QueueEvent::TrackMetadataChanged { .. }
             | QueueEvent::TrackStatusChanged { .. },
         ) => apply_list(queue, state),
         _ => {}
@@ -592,8 +587,17 @@ fn apply_list(queue: &AppQueueControl, state: &Mutex<UiState>) {
     st.current_track_index = shown_index(current, st.current_track_index, st.tracks.len());
     st.track_name = st
         .current_track_index
-        .and_then(|idx| st.tracks.get(idx).map(|track| track.name.clone()))
+        .and_then(|idx| st.tracks.get(idx).map(caption))
         .unwrap_or_default();
+}
+
+/// A track's caption: its title when one is known, else its display name.
+fn caption(track: &TrackEntry) -> String {
+    track
+        .metadata()
+        .title
+        .clone()
+        .unwrap_or_else(|| track.name.clone())
 }
 
 fn shown_index(current: Option<usize>, shown: Option<usize>, len: usize) -> Option<usize> {
@@ -679,9 +683,9 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        BpmInfo, EngineEvent, EventReceiver, MediaTime, NonZeroU32, RangeSet, StretchControls,
-        UiState, bpm_info_from_grid, codec_label, consts::MEDIA_TIMESCALE, covered,
-        frames_to_fractions, listen, unready_ranges,
+        BpmInfo, EngineEvent, EventReceiver, MediaTime, NonZeroU32, RangeSet, UiState,
+        bpm_info_from_grid, codec_label, consts::MEDIA_TIMESCALE, covered, frames_to_fractions,
+        listen, unready_ranges,
     };
     use crate::{
         analysis::{
@@ -833,13 +837,7 @@ mod tests {
             "event mirrors preserve the deck EQ"
         );
 
-        controller_on(
-            queue.clone(),
-            StretchControls::new(1.0),
-            cancel.child(),
-            Arc::clone(&state),
-        )
-        .refresh_continuous();
+        controller_on(queue.clone(), cancel.child(), Arc::clone(&state)).refresh_continuous();
         assert_eq!(
             state.lock().abr_mode,
             None,
@@ -1033,12 +1031,7 @@ mod tests {
         let (state, requests, cancel) = deck(&queue);
         let (track_id, _source) = track(&host, 1, &tone_mp3).await;
         let tx = serve_subscribe(requests, track_id).await;
-        let controller = controller_on(
-            queue.clone(),
-            StretchControls::new(1.0),
-            cancel.child(),
-            Arc::clone(&state),
-        );
+        let controller = controller_on(queue.clone(), cancel.child(), Arc::clone(&state));
         let mut events = queue.bus().subscribe::<DjEvent>();
 
         let first = [0, 22_050, 44_100];

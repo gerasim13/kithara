@@ -1,12 +1,16 @@
 use crate::{
-    atoms::design::quad::quad,
-    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    atoms::{
+        design::quad::quad,
+        picture::sprite::{Fit, fitted},
+    },
+    draw::{DrawListBuilder, Image, Pt, Rect, Rgba, Transform},
     shaping::TextContext,
     skin::{TextRoleSkin, WaveOverlaySkin},
 };
 
 #[derive(Clone, Copy)]
 pub(crate) struct Overlay<'a> {
+    pub(crate) art: Option<&'a Image>,
     pub(crate) artist: &'a str,
     pub(crate) badge: &'a str,
     pub(crate) bpm: &'a str,
@@ -53,7 +57,7 @@ pub(crate) fn paint(
 ) {
     let header = strip(bounds, metrics);
     list.fill_rect(header, data.palette.background);
-    let summary_x = draw_art(list, text, header, metrics, data.palette);
+    let summary_x = draw_art(list, text, header, metrics, data);
     let telemetry_x = draw_telemetry(list, text, header, data, metrics);
     draw_summary(
         list,
@@ -75,7 +79,7 @@ fn draw_art(
     text: &mut TextContext,
     header: Rect,
     metrics: WaveOverlaySkin,
-    palette: OverlayPalette,
+    data: Overlay<'_>,
 ) -> f32 {
     let art = Rect {
         h: metrics.art_size,
@@ -87,10 +91,30 @@ fn draw_art(
         list,
         art,
         metrics.art_frame,
-        palette.art_background,
-        palette.art_border,
+        data.palette.art_background,
+        data.palette.art_border,
     );
-    draw_centered(list, text, "ART", art, metrics.art_label, palette.art_label);
+    if let Some(image) = data.art {
+        let border = metrics.art_frame.border_width;
+        let inner = Rect {
+            x: art.x + border,
+            y: art.y + border,
+            w: (art.w - border * 2.0).max(0.0),
+            h: (art.h - border * 2.0).max(0.0),
+        };
+        let mut picture = list.child();
+        picture.image(image.clone(), fitted(image, inner, Fit::Cover));
+        list.clip(inner, picture.finish());
+    } else {
+        draw_centered(
+            list,
+            text,
+            "ART",
+            art,
+            metrics.art_label,
+            data.palette.art_label,
+        );
+    }
     art.x + art.w + metrics.gap
 }
 
@@ -180,31 +204,27 @@ fn draw_summary(
     data: Overlay<'_>,
     metrics: WaveOverlaySkin,
 ) {
-    let total_text_height = metrics.title.size + metrics.summary_gap + metrics.artist.size;
+    let (title, title_run) = text.shape_elided(data.title, metrics.title, bounds.w);
+    let (artist, artist_run) = text.shape_elided(data.artist, metrics.artist, bounds.w);
+    let total_text_height = title_run.height() + metrics.summary_gap + artist_run.height();
     let title_y = header.y + (header.h - total_text_height) / 2.0;
     let mut clipped = list.child();
-    draw_left(
-        &mut clipped,
-        text,
-        data.title,
-        Pt {
+    clipped.text(
+        &title_run,
+        &title,
+        Transform::translate(Pt {
             x: bounds.x,
             y: title_y,
-        },
-        bounds.w,
-        metrics.title,
+        }),
         data.palette.title,
     );
-    draw_left(
-        &mut clipped,
-        text,
-        data.artist,
-        Pt {
+    clipped.text(
+        &artist_run,
+        &artist,
+        Transform::translate(Pt {
             x: bounds.x,
-            y: title_y + metrics.title.size + metrics.summary_gap,
-        },
-        bounds.w,
-        metrics.artist,
+            y: title_y + title_run.height() + metrics.summary_gap,
+        }),
         data.palette.artist,
     );
     list.clip(bounds, clipped.finish());
@@ -280,18 +300,6 @@ fn draw_centered(
     );
 }
 
-fn draw_left(
-    list: &mut DrawListBuilder,
-    text: &mut TextContext,
-    content: &str,
-    position: Pt,
-    max_width: f32,
-    role: TextRoleSkin,
-    color: Rgba,
-) {
-    draw_aligned::<false>(list, text, content, position, max_width, role, color);
-}
-
 fn draw_right(
     list: &mut DrawListBuilder,
     text: &mut TextContext,
@@ -301,23 +309,11 @@ fn draw_right(
     role: TextRoleSkin,
     color: Rgba,
 ) {
-    draw_aligned::<true>(list, text, content, position, max_width, role, color);
-}
-
-fn draw_aligned<const RIGHT: bool>(
-    list: &mut DrawListBuilder,
-    text: &mut TextContext,
-    content: &str,
-    position: Pt,
-    max_width: f32,
-    role: TextRoleSkin,
-    color: Rgba,
-) {
-    let run = text.shape(content, role, Some(max_width));
-    let x = position.x - if RIGHT { run.width() } else { 0.0 };
+    let (content, run) = text.shape_elided(content, role, max_width);
+    let x = position.x - run.width();
     list.text(
         &run,
-        content,
+        &content,
         Transform::translate(Pt { x, y: position.y }),
         color,
     );

@@ -217,7 +217,7 @@ pub use kithara_test_macros::{
 ))]
 pub use kithara_warp::StretchKind;
 #[cfg(feature = "warp")]
-pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
+pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError};
 
 #[cfg(feature = "mock")]
 pub mod mock {
@@ -285,7 +285,7 @@ pub mod prelude {
     ))]
     pub use kithara_warp::StretchKind;
     #[cfg(feature = "warp")]
-    pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
+    pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError};
     #[cfg(feature = "waveform")]
     pub use kithara_waveform::{Bucket, Waveform};
 }

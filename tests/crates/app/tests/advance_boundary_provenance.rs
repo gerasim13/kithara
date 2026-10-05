@@ -9,13 +9,12 @@ use kithara::{
     events::EventReceiver,
     hls::AbrMode,
     platform::{
-        sync::Arc,
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
-    warp::{StretchControls, WarpConfig},
+    warp::WarpConfig,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
@@ -199,11 +198,7 @@ impl CrossfadeFlavor {
             Self::Eq => builder.eq_layout(generate_log_spaced_bands(10)).build(),
             Self::EqStretch => builder
                 .eq_layout(generate_log_spaced_bands(10))
-                .warp(
-                    WarpConfig::builder()
-                        .stretch(StretchControls::new(1.0))
-                        .build(),
-                )
+                .warp(WarpConfig::builder().build())
                 .build(),
         }
     }
@@ -548,12 +543,11 @@ async fn natural_eof_advance_app_layer_crossfade_advance(
     #[case] label: &str,
 ) {
     let (_server, sources) = crossfade_tracks;
-    let timestretch = StretchControls::new(1.0);
     let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         render_sample_rate,
-        crossfade_eq_stretch_player_config(&timestretch),
+        crossfade_eq_stretch_player_config(),
     )
     .await;
 
@@ -590,12 +584,11 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
     temp_dir: TestTempDir,
 ) {
     let (_server, sources) = real_geometry_tracks;
-    let timestretch = StretchControls::new(1.0);
     let setup = setup_flac_queue_with_player_config(
         &sources,
         &temp_dir,
         RESAMPLED_RENDER_RATE,
-        crossfade_eq_stretch_player_config(&timestretch),
+        crossfade_eq_stretch_player_config(),
     )
     .await;
 
@@ -1089,15 +1082,11 @@ async fn run_crossfade_flac_case(
     setup.close().await;
 }
 
-fn crossfade_eq_stretch_player_config(timestretch: &Arc<StretchControls>) -> OfflinePlayerOptions {
+fn crossfade_eq_stretch_player_config() -> OfflinePlayerOptions {
     OfflinePlayerOptions::builder()
         .crossfade_duration(CROSSFADE_SECS)
         .eq_layout(generate_log_spaced_bands(10))
-        .warp(
-            WarpConfig::builder()
-                .stretch(Arc::clone(timestretch))
-                .build(),
-        )
+        .warp(WarpConfig::builder().build())
         .build()
 }
 

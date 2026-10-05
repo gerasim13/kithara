@@ -439,7 +439,7 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
         .as_ref()
         .map(|d| d.to_vec())
         .unwrap_or_default();
-    let duration = calculate_track_duration(track);
+    let duration = calculate_track_duration(track, codec);
 
     Ok(TrackInfo {
         codec,
@@ -447,12 +447,21 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
         extra_data,
         channels,
         sample_rate,
-        gapless: None,
+        gapless: (codec == AudioCodec::Opus).then_some(crate::GaplessInfo {
+            leading_frames: u64::from(track.delay.unwrap_or(0)),
+            trailing_frames: u64::from(track.padding.unwrap_or(0)),
+        }),
     })
 }
 
-fn calculate_track_duration(track: &Track) -> Option<Duration> {
-    let num_frames = track.num_frames?;
+/// MPEG track metadata excludes LAME trim; downstream trimming requires its raw PCM extent.
+fn calculate_track_duration(track: &Track, codec: AudioCodec) -> Option<Duration> {
+    let mut num_frames = track.num_frames?;
+    if codec == AudioCodec::Mp3 {
+        num_frames = num_frames
+            .checked_add(u64::from(track.delay.unwrap_or(0)))?
+            .checked_add(u64::from(track.padding.unwrap_or(0)))?;
+    }
     let time_base = track.time_base?;
     let time = time_base.calc_time(Timestamp::new(
         i64::try_from(num_frames).unwrap_or(i64::MAX),
@@ -573,6 +582,28 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
             tracing::debug!(error = ?io_err, "demuxer seek interrupted");
             DecodeError::Interrupted
         }
+        // Symphonia already states these in a static string, so the one it
+        // wrote travels on instead of being replaced by a generic one.
+        SymphoniaError::DecodeError(detail)
+        | SymphoniaError::Unsupported(detail)
+        | SymphoniaError::LimitError(detail) => DecodeError::SeekFailed { detail },
+        SymphoniaError::SeekError(SeekErrorKind::ForwardOnly) => DecodeError::SeekFailed {
+            detail: "a forward-only source refused a backward seek",
+        },
+        SymphoniaError::SeekError(SeekErrorKind::Unseekable) => DecodeError::SeekFailed {
+            detail: "the source cannot seek",
+        },
+        SymphoniaError::SeekError(SeekErrorKind::InvalidTrack) => DecodeError::SeekFailed {
+            detail: "the seek named a track the source does not carry",
+        },
+        SymphoniaError::ResetRequired => DecodeError::SeekFailed {
+            detail: "the seek left the reader needing a reset",
+        },
+        SymphoniaError::IoError(_) => DecodeError::SeekFailed {
+            detail: "the seek failed on an i/o error",
+        },
+        // `Error` is non-exhaustive, so a symphonia release can add a shape
+        // this match has never seen.
         _ => DecodeError::SeekFailed {
             detail: "symphonia seek failed",
         },

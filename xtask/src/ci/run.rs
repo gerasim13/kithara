@@ -1282,12 +1282,12 @@ mod tests {
         assert_eq!(
             reports,
             [
+                ".ci-artifacts/junit/apple-ios-test.xml",
+                ".ci-artifacts/junit/apple-swift-test.xml",
                 ".ci-artifacts/junit/apple-test-flash-off.xml",
                 ".ci-artifacts/junit/apple-test.xml",
                 ".ci-artifacts/junit/linux-test-simulated-clock.xml",
                 "target/nextest/ci/junit.xml",
-                "target/xcresult/ios-test.junit.xml",
-                "target/xcresult/swift-test.junit.xml",
             ]
         );
     }

@@ -198,6 +198,7 @@ fn walk_includes(
         | ControlNode::PortalMap { .. }
         | ControlNode::Range { .. }
         | ControlNode::Table { .. }
+        | ControlNode::Search { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }
         | ControlNode::Toggle { .. }

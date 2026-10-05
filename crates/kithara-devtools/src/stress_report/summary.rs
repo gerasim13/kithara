@@ -559,8 +559,9 @@ pub(crate) fn validate_inventory(json: &str) -> Result<()> {
     parse_inventory(json).map(|_| ())
 }
 
-/// A target excluded by the project's `default-filter` is inventoried with this status and none of
-/// its cases; the suite is dropped whole rather than filtered case by case.
+/// A target nextest did not list is inventoried with a skip status and none of its cases, whether
+/// the project's `default-filter` excluded it or the lane's own filter never reached its binary;
+/// the suite is dropped whole rather than filtered case by case.
 fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
     let inventory: Inventory = serde_json::from_str(json).context("parse stress inventory JSON")?;
     if inventory.rust_suites.is_empty() {
@@ -577,7 +578,7 @@ fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
         }
         match inventory.status.as_str() {
             "listed" => {}
-            "skipped-default-filter" => continue,
+            "skipped-default-filter" | "skipped" => continue,
             status => bail!("stress inventory suite `{suite}` has unsupported status `{status}`"),
         }
         for (name, case) in inventory.testcases {
@@ -2430,6 +2431,34 @@ seek landed short of the requested frame
       "testcases": {
         "unreachable": {"ignored": false, "filter-match": {"status": "matches"}}
       }
+    }
+  }
+}"#;
+
+        assert_eq!(
+            parse_inventory(json).expect("parse inventory"),
+            inventory(&["selected"])
+        );
+    }
+
+    /// A lane whose filter never reaches a package's binaries gets them back from nextest under a
+    /// bare skip, listing nothing. Rejecting that threw away every lane that had one: three units
+    /// of one round carried 146 tests each and were excluded from comparison over four such suites.
+    #[test]
+    fn a_suite_nextest_skipped_outright_contributes_no_tests() {
+        let json = r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "selected": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    },
+    "unreached::tests": {
+      "binary-id": "unreached::tests",
+      "status": "skipped",
+      "testcases": {}
     }
   }
 }"#;

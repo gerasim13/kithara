@@ -1,0 +1,16 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-search-tab",
+    chrome: Plain,
+    root: Column(
+        background: Bg,
+        size: (w: Fill, h: Fill),
+        gap: Some(12.0),
+        pad: Some(34.0),
+        children: [
+            Search(id: "query", read: Model(id: "library.query"), write: Model(id: "library.query")),
+            Text(id: "echo", style: MicroLabel, read: Model(id: "library.query"), size: (w: Fill, h: Fixed(24.0))),
+        ],
+    ),
+)

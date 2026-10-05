@@ -7,7 +7,7 @@ mod folders;
 mod listing;
 mod pages;
 mod shell;
-mod source;
+mod sources;
 mod startup;
 #[cfg(test)]
 mod tests;
@@ -18,6 +18,6 @@ pub(in crate::gui) use self::{explorer::Explorer, folders::FolderPicker};
 pub(in crate::gui) use self::{
     pages::PagesModule,
     shell::Library,
-    source::{BranchNode, LibrarySource, PageStatus, Registration, SourcePage, worded},
+    sources::{FACTORIES, configured},
     startup::StartupSource,
 };

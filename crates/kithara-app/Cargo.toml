@@ -32,7 +32,7 @@ tls-native = ["kithara/tls-native"]
 # Put the session mix on air over live HLS. Off by default; with it off the
 # bar's phase machine compiles against a packager that has no stream values.
 broadcast = ["kithara/broadcast"]
-gui = ["dep:iced", "dep:rfd", "kithara/ui-iced"]
+gui = ["dep:iced", "dep:image", "dep:rfd", "kithara/ui-iced"]
 # Draw the studio through the retained host (masonry + Vello) instead of the
 # immediate one. Both hosts read the same documents and the same state; only
 # the window and the paint pass differ.
@@ -86,6 +86,7 @@ kithara = { workspace = true, default-features = false, features = [
     "worker",
 ] }
 kithara-app-document = { workspace = true }
+kithara-app-library = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
@@ -100,6 +101,7 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 
 fieldwork = { workspace = true }
+image = { workspace = true, optional = true }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
@@ -147,7 +149,7 @@ tracing-log = { workspace = true }
 tracing-wasm = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["download", "apple", "client-wreq"] }
+kithara = { workspace = true, default-features = false, features = ["download", "apple", "opus", "ape", "client-wreq"] }
 
 [build-dependencies]
 kithara-app-document = { workspace = true }

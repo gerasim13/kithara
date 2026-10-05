@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 
-use kithara::ui::{error::UiDocError, render::TreeRow, text::TextDoc};
-
-use super::{BranchNode, LibrarySource, PageStatus, Registration, worded};
+use kithara::ui::{
+    error::UiDocError,
+    render::{TreeRow, WriteValue},
+    text::TextDoc,
+};
+use kithara_app_library::{BranchNode, LibrarySource, PageStatus, Registration, worded};
 
 /// The library shell: sources, selection, expanded nodes and page states.
 #[derive(fieldwork::Fieldwork)]
@@ -138,6 +141,13 @@ impl Library {
         }
     }
 
+    /// Hands a write the source's page declares to that source.
+    pub(in crate::gui) fn write(&mut self, id: &str, endpoint: &str, value: &WriteValue) {
+        if let Some(at) = self.index_of(id) {
+            self.sources[at].source.write(endpoint, value);
+        }
+    }
+
     pub(in crate::gui) fn page_hidden(&self, id: &str) -> Option<bool> {
         let source = self.index_of(id)?;
         Some(
@@ -223,6 +233,7 @@ impl Library {
                 icon: node.icon,
                 count: node.count,
                 expanded: (node.unlisted || !node.children.is_empty()).then_some(open),
+                page: node.page,
                 muted: false,
                 selected: self
                     .selected

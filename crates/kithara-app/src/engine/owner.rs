@@ -12,6 +12,7 @@ use kithara::{
     },
     queue::Transition,
 };
+use kithara_app_library::Playable;
 use tracing::{debug, error, info};
 
 use super::{
@@ -31,6 +32,7 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(crate) struct Engine {
+    #[field(get, vis = "pub(super)")]
     config: AppConfig,
     analysis: AnalysisHandle,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,
@@ -98,7 +100,7 @@ impl Engine {
         match envelope.command {
             Command::Deck { deck, cmd } => self.apply_deck(deck, cmd),
             Command::Mix(cmd) => self.apply_mix(cmd),
-            Command::LoadOntoDeck { deck, source } => self.load(deck, &source),
+            Command::LoadOntoDeck { deck, track } => self.load(deck, &track),
             Command::App(cmd) => self.apply_app(cmd),
         }
         self.applied_seq = envelope.seq;
@@ -173,12 +175,13 @@ impl Engine {
         self.complete_stop(elapsed);
     }
 
-    fn load(&self, id: DeckId, source: &str) {
+    fn load(&self, id: DeckId, track: &Playable) {
         let Some(deck) = self.deck(id) else {
             return;
         };
-        if let Err(e) = catalog::load_onto(deck.controller.queue(), source, &self.config) {
-            error!(source, deck = id.0, error = %e, "load onto deck failed");
+        let queue = deck.controller.queue();
+        if let Err(e) = catalog::load_onto(queue, track, &self.config) {
+            error!(source = %track.source, deck = id.0, error = %e, "load onto deck failed");
         }
     }
 

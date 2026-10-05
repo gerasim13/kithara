@@ -3,17 +3,21 @@ use std::borrow::Cow;
 use num_traits::ToPrimitive;
 
 use crate::{
-    atoms::table::{
-        BadgeLetter, ColumnLayout, Table, TableCell, TableMetrics, TableRow, TableRowData,
-        column_cells, table_body, table_content_height, table_content_width, table_dividers,
-        table_overflows, table_row_pitch, table_row_rect, table_vertical_scrollbar_rect,
+    atoms::{
+        icon::mark::Marked,
+        table::{
+            BadgeLetter, ColumnLayout, Table, TableCell, TableMetrics, TableRow, TableRowData,
+            column_cells, layout::intersect, table_body, table_content_height, table_content_width,
+            table_dividers, table_overflows, table_row_at, table_row_pitch, table_row_rect,
+            table_vertical_scrollbar_rect, table_visible_row_rect,
+        },
     },
     draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
     interact::ScrollAxis,
     module::{TableColumnStyle, TableFrame},
     render::{Carried, ReadValue, Skin},
     shaping::TextContext,
-    skin::{FrameSkin, TextRoleSkin},
+    skin::{ColorRole, FrameSkin, TextRoleSkin},
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -36,6 +40,37 @@ pub(crate) struct Drawn {
 }
 
 impl TableFace {
+    /// The icon cells of the row under `point` whose column writes: the row,
+    /// the column, the visible bounds and the text each one publishes.
+    pub(crate) fn actions_under<'a>(
+        &'a self,
+        point: Option<Pt>,
+        bounds: Rect,
+        offsets: (f32, f32),
+        columns: &'a [ColumnLayout],
+    ) -> impl Iterator<Item = (usize, usize, Rect, &'a str)> {
+        let (horizontal, vertical) = offsets;
+        let count = self.rows().len();
+        let metrics = self.metrics();
+        let under = table_row_at(point, bounds, columns, count, horizontal, vertical, metrics)
+            .and_then(|index| {
+                let visible = table_visible_row_rect(
+                    bounds, columns, count, index, horizontal, vertical, metrics,
+                )?;
+                let row = table_row_rect(bounds, columns, index, horizontal, vertical, metrics);
+                Some((index, visible, row))
+            });
+        under.into_iter().flat_map(move |(index, visible, row)| {
+            column_cells(row, columns, 0.0, metrics)
+                .enumerate()
+                .filter(|(_, (layout, _))| layout.column.write().is_some())
+                .filter_map(move |(column, (_, cell))| {
+                    let action = self.rows()[index].cell(column)?.action()?;
+                    Some((index, column, intersect(cell, visible)?, action))
+                })
+        })
+    }
+
     pub(crate) fn carried(&self, index: usize) -> Option<Carried> {
         let row = self.rows().get(index)?;
         let data = row.drag()?.to_owned();
@@ -65,6 +100,7 @@ impl TableFace {
                     row.selected,
                 )
                 .with_drag(row.drag)
+                .with_muted(row.muted)
             })
             .collect();
         Self {
@@ -207,7 +243,24 @@ impl TableFace {
                     .unwrap_or(""),
             )
         };
-        let (content, role) = match column {
+        let (content, mut role) = match column {
+            TableColumnStyle::Icon => {
+                if let Some(TableCell::Icon { icon, active, .. }) = row.cell(column_index)
+                    && let Some(mark) = icon.mark()
+                {
+                    Marked::new(mark, self.skin.button.micro_icon_size).centred(
+                        list,
+                        text,
+                        bounds,
+                        self.skin.rgba(if *active {
+                            ColorRole::Accent
+                        } else {
+                            ColorRole::Muted
+                        }),
+                    );
+                }
+                return;
+            }
             TableColumnStyle::Badge => {
                 paint_badges(
                     self,
@@ -243,6 +296,9 @@ impl TableFace {
                 table.transition_text,
             ),
         };
+        if row.muted() {
+            role.color = ColorRole::Muted;
+        }
         paint_text(
             list,
             text,
@@ -518,7 +574,7 @@ enum TextAlign {
 
 const fn aligned(style: TableColumnStyle) -> TextAlign {
     match style {
-        TableColumnStyle::Badge => TextAlign::Center,
+        TableColumnStyle::Icon | TableColumnStyle::Badge => TextAlign::Center,
         TableColumnStyle::Metric | TableColumnStyle::Mono | TableColumnStyle::Time => {
             TextAlign::Right
         }
@@ -718,6 +774,44 @@ mod tests {
 
         assert_eq!(row_bottom, Some(body.y + picture.skin.table.row_height));
         assert!(row_bottom.is_some_and(|bottom| bottom > body.y + body.h));
+    }
+
+    #[kithara::test]
+    fn a_muted_row_paints_its_text_in_the_muted_color() {
+        let (base, mut text, bounds, drawn) = fixture();
+        let row = crate::render::TableRow::new(
+            vec![crate::render::TableCell::text("title", "Unavailable")],
+            false,
+        );
+        let normal = TableFace::new(
+            vec![TableRowData::from(&row)],
+            drawn.columns.clone(),
+            &base.skin,
+            base.frame,
+        );
+        let muted = TableFace::new(
+            vec![TableRowData::from(&row.with_muted(true))],
+            drawn.columns.clone(),
+            &base.skin,
+            base.frame,
+        );
+        let commands = muted.commands(&mut text, bounds, &drawn);
+        let body = table_body(bounds, muted.metrics());
+        let color = commands
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCmd::Clip { region, list } if *region == body => {
+                    list.commands().iter().find_map(|command| match command {
+                        DrawCmd::Text { color, .. } => Some(*color),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("Row must paint its title inside the body");
+        assert_eq!(color, muted.skin.rgba(ColorRole::Muted));
+        assert_ne!(commands, normal.commands(&mut text, bounds, &drawn));
     }
 
     fn fixture() -> (TableFace, TextContext, Rect, Drawn) {

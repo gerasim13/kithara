@@ -2,10 +2,8 @@ use num_traits::ToPrimitive;
 
 use super::face::Tree;
 use crate::{
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
+    draw::{DrawList, DrawListBuilder, Pt, Rect},
     engine::TextInputSnapshot,
-    module::IconName,
-    render::Skin,
     shaping::TextContext,
 };
 
@@ -28,7 +26,14 @@ impl Tree {
         let mut list = DrawListBuilder::default();
         list.fill_rect(panel, self.skin().rgba(self.skin().tree.panel_background));
         if let Some(query) = self.query() {
-            self.paint_search(&mut list, text, bounds, query, &drawn.search);
+            crate::atoms::search::paint::paint(
+                &mut list,
+                text,
+                bounds,
+                query,
+                self.skin(),
+                &drawn.search,
+            );
         }
         self.paint_rows(
             &mut list,
@@ -66,32 +71,6 @@ impl Tree {
             .filter(|index| *index < self.row_count())
     }
 
-    fn paint_search(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        bounds: Rect,
-        query: &str,
-        snapshot: &TextInputSnapshot,
-    ) {
-        let search = Rect {
-            h: self.skin().tree.search_height.min(bounds.h.max(0.0)),
-            w: bounds.w,
-            x: bounds.x,
-            y: bounds.y,
-        };
-        let icon = Rect {
-            w: self.skin().tree.search_icon_width.min(search.w.max(0.0)),
-            ..search
-        };
-        let input = self.search_input_bounds(bounds);
-        list.fill_rect(search, self.skin().rgba(self.skin().tree.search_divider));
-        list.fill_rect(icon, self.skin().rgba(self.skin().tree.search_background));
-        list.fill_rect(input, self.skin().rgba(self.skin().tree.search_background));
-        paint_search_icon(list, text, icon, self.skin());
-        paint_query(list, text, input, query, snapshot, self.skin());
-    }
-
     pub(crate) fn rows_bounds(&self, bounds: Rect) -> Rect {
         let search = self.search_height();
         Rect {
@@ -115,124 +94,6 @@ impl Tree {
     }
 
     pub(crate) fn search_input_bounds(&self, bounds: Rect) -> Rect {
-        let divider = 1.0;
-        Rect {
-            h: self.skin().tree.search_height.min(bounds.h.max(0.0)),
-            w: (bounds.w - self.skin().tree.search_icon_width - divider).max(0.0),
-            x: bounds.x + self.skin().tree.search_icon_width + divider,
-            y: bounds.y,
-        }
+        crate::atoms::search::input_bounds(bounds, self.skin())
     }
-}
-
-fn paint_search_icon(
-    list: &mut DrawListBuilder,
-    text: &mut TextContext,
-    bounds: Rect,
-    skin: &Skin,
-) {
-    let Some(glyph) = IconName::Search.lucide_glyph() else {
-        return;
-    };
-    let content = glyph.to_string();
-    let run = text.shape_lucide(&content, skin.tree.search_icon_size);
-    list.text(
-        &run,
-        &content,
-        Transform::translate(Pt {
-            x: bounds.x + (bounds.w - run.width()) / 2.0,
-            y: bounds.y + (bounds.h - run.height()) / 2.0,
-        }),
-        skin.rgba(skin.tree.search_icon_color),
-    );
-}
-
-fn paint_query(
-    list: &mut DrawListBuilder,
-    text: &mut TextContext,
-    bounds: Rect,
-    query: &str,
-    snapshot: &TextInputSnapshot,
-    skin: &Skin,
-) {
-    let role = skin.tree.search_text;
-    let (query_run, carets) = text.shape_input(query, role);
-    let layout = crate::interact::TextInputLayout::new(
-        carets
-            .into_iter()
-            .map(|(index, x)| (index, skin.tree.search_padding_x + x)),
-        ((skin.tree.search_height - role.size) / 2.0).max(0.0),
-        role.size,
-        role.size,
-    );
-    let mut content = DrawListBuilder::default();
-    if let Some(selection) = &snapshot.selection {
-        let start = layout.x(selection.start);
-        let end = layout.x(selection.end);
-        content.fill_rect(
-            Rect {
-                h: layout.text_size(),
-                w: (end - start).abs(),
-                x: bounds.x + start.min(end),
-                y: bounds.y + (bounds.h - layout.text_size()) / 2.0,
-            },
-            skin.rgba(skin.tree.search_selection_fill),
-        );
-    }
-    let has_preedit = snapshot
-        .preedit
-        .as_ref()
-        .is_some_and(|preedit| !preedit.content.is_empty());
-    if !query.is_empty() {
-        paint_search_text(
-            &mut content,
-            &query_run,
-            query,
-            bounds,
-            skin.rgba(role.color),
-            skin,
-        );
-    } else if !has_preedit {
-        let placeholder = skin.tree_search_placeholder.as_str();
-        let run = text.shape(placeholder, role, None);
-        paint_search_text(
-            &mut content,
-            &run,
-            placeholder,
-            bounds,
-            skin.rgba(skin.tree.search_placeholder_color),
-            skin,
-        );
-    }
-    if snapshot.focused && snapshot.selection.is_none() {
-        content.fill_rect(
-            Rect {
-                h: layout.text_size(),
-                w: 1.0,
-                x: bounds.x + layout.x(snapshot.caret).floor(),
-                y: bounds.y + (bounds.h - layout.text_size()) / 2.0,
-            },
-            skin.rgba(skin.tree.search_caret_color),
-        );
-    }
-    list.clip(bounds, content.finish());
-}
-
-fn paint_search_text(
-    list: &mut DrawListBuilder,
-    run: &crate::shaping::GlyphRun,
-    content: &str,
-    bounds: Rect,
-    color: Rgba,
-    skin: &Skin,
-) {
-    list.text(
-        run,
-        content,
-        Transform::translate(Pt {
-            x: bounds.x + skin.tree.search_padding_x,
-            y: bounds.y + (bounds.h - run.height()) / 2.0,
-        }),
-        color,
-    );
 }

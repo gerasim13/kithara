@@ -19,7 +19,7 @@ use super::{
     page::{Page, studio},
     retained::Retained,
 };
-use crate::gui::ui::{cache::DeckLayout, endpoints::Registry};
+use crate::gui::ui::cache::DeckLayout;
 
 #[kithara::test]
 fn studio_capture_writes_both_hosts() {
@@ -40,9 +40,8 @@ fn capture(dir: &Path) -> Result<(), String> {
         .map_err(|error| format!("write iced draw-pools.txt: {error}"))?;
 
     let package = fixture::package()?;
-    let endpoints = Registry::default();
     let config = Config::builder()
-        .endpoints(&endpoints)
+        .endpoints(package.registry())
         .resolver(package.resolver())
         .text(package.text())
         .build();

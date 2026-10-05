@@ -283,6 +283,7 @@ async fn assert_no_barge_in(
         QueueEvent::TrackAdded { .. }
         | QueueEvent::TrackRemoved { .. }
         | QueueEvent::TrackStatusChanged { .. }
+        | QueueEvent::TrackMetadataChanged { .. }
         | QueueEvent::CurrentTrackAdvance { .. }
         | QueueEvent::TrackLoadFailed { .. }
         | QueueEvent::CrossfadeSettingsChanged { .. }

@@ -1,6 +1,6 @@
 use delegate::delegate;
 use kithara_events::EventBus;
-use kithara_warp::StretchControls;
+use kithara_warp::MIN_SPEED;
 
 use super::PlayerConfig;
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
 };
 
 impl<S> PlayerConfig<S> {
-    pub(crate) const MIN_PLAYBACK_RATE: f32 = StretchControls::MIN_SPEED;
+    pub(crate) const MIN_PLAYBACK_RATE: f32 = MIN_SPEED;
 
     pub(crate) fn normalize_live_values(&self) {
         self.default_rate

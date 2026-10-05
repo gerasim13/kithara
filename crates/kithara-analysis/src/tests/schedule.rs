@@ -259,6 +259,35 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPoo
     )
 }
 
+/// How much of the analyser's own clock a drive lets a refusing node spend
+/// before it has taken any work at all.
+///
+/// The turns this loop hands back are what the node's progress is made of:
+/// each one parks the drive, and parking is what lets the flash engine
+/// advance its clock to the analyser's next deadline. So the budget is
+/// virtual time the analyser gets to consume, not wall time the test waits -
+/// a turn count cannot stand in for it. Measured: a pass that finishes needs
+/// one such turn on a host that runs the analyser eagerly and upwards of four
+/// thousand on one that does not, while the time it asks for stays the same.
+///
+/// It bounds a stall, not a pass, so every turn that takes work restarts it.
+/// Spending it over a whole pass fails one that is still moving: a stress
+/// round on this branch gave up after 12573 refused turns in one attempt and
+/// after 1955 in another, each inside about a third of a second of real time -
+/// a spread only a pass that kept going can produce.
+const ANALYSER_BUDGET: Duration = Duration::from_secs(2);
+
+/// Why a drive stopped, so a pass that does not end says which bound it hit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Drive {
+    /// The pass ended on its own.
+    Ended,
+    /// The tick budget ran out with the pass still open.
+    Ticks { spent: usize },
+    /// The node refused work for this many turns in a row.
+    Backpressured { yields: usize },
+}
+
 struct Pass<B, S>
 where
     B: ResamplerBackend,
@@ -287,19 +316,34 @@ where
         self.log.lock().clone()
     }
 
-    async fn drive(&mut self, ticks: usize) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(2);
+    /// Ticks the node until the pass ends, the tick budget runs out, or the
+    /// node refuses work for a whole [`ANALYSER_BUDGET`] without taking any.
+    ///
+    /// The count a refusal carries is how many turns in a row it bought with
+    /// that budget, which is what says whether the node was starved or wedged.
+    async fn drive(&mut self, ticks: usize) -> Drive {
+        let mut deadline = Instant::now() + ANALYSER_BUDGET;
         let mut remaining = ticks;
+        let mut yields = 0usize;
         while remaining > 0 && !self.has_ended() {
             match self.node.tick() {
                 TickResult::Backpressured if Instant::now() < deadline => {
+                    yields = yields.saturating_add(1);
                     time::sleep(Duration::ZERO).await;
                 }
-                TickResult::Backpressured => return false,
-                _ => remaining -= 1,
+                TickResult::Backpressured => return Drive::Backpressured { yields },
+                _ => {
+                    remaining -= 1;
+                    yields = 0;
+                    deadline = Instant::now() + ANALYSER_BUDGET;
+                }
             }
         }
-        self.has_ended()
+        if self.has_ended() {
+            Drive::Ended
+        } else {
+            Drive::Ticks { spent: ticks }
+        }
     }
 
     fn has_ended(&self) -> bool {
@@ -440,7 +484,11 @@ async fn a_growing_duration_replaces_the_one_the_schedule_had(analysis_pcm: &'st
         "the first run is a fixed chunk inside the length reported so far"
     );
 
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
     assert!(
         pass.analysis().coverage().frontier() > short,
         "a larger report must be planned against, not the cached one"
@@ -485,7 +533,11 @@ async fn covering_a_track_costs_the_runs_its_chunk_divides_it_into(analysis_pcm:
         Source::new(analysis_pcm, consts::SCHEDULE_EXTENT),
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
 
     let analysis = pass.analysis();
     assert!(
@@ -531,7 +583,11 @@ async fn a_covered_opening_is_not_decoded_a_second_time(analysis_pcm: &'static [
     );
     pass.offer(0, covered);
 
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
     let decoded = decoded_at(&pass.calls());
     assert!(!decoded.is_empty(), "the rest of the track is decoded");
     assert!(
@@ -554,7 +610,11 @@ async fn a_source_with_no_length_is_decoded_in_order(analysis_pcm: &'static [f32
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
     let calls = pass.calls();
     assert!(
         targets(&calls).is_empty(),
@@ -581,7 +641,11 @@ async fn a_pass_ends_when_a_producer_covers_the_last_of_it(analysis_pcm: &'stati
     assert!(!pass.has_ended(), "half a track is not a finished pass");
 
     pass.offer(consts::SCHEDULE_EXTENT / 2, consts::SCHEDULE_EXTENT / 2);
-    assert!(pass.drive(consts::TICKS).await, "the pass ends on its own");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends on its own"
+    );
 
     let analysis = pass.analysis();
     assert!(
@@ -603,8 +667,9 @@ async fn a_source_that_over_reports_its_length_still_ends(analysis_pcm: &'static
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
-    assert!(
+    assert_eq!(
         pass.drive(consts::TICKS).await,
+        Drive::Ended,
         "a length that cannot be covered must not hold a pass open"
     );
     let analysis = pass.analysis();
@@ -658,7 +723,11 @@ async fn a_snapping_source_has_its_gaps_closed_rather_than_halved(analysis_pcm: 
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
     let analysis = pass.analysis();
     assert!(
         analysis.is_complete(),
@@ -683,8 +752,9 @@ async fn a_source_that_snaps_out_of_its_own_gaps_still_finishes(analysis_pcm: &'
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
 
-    assert!(
+    assert_eq!(
         pass.drive(consts::TICKS).await,
+        Drive::Ended,
         "a pass that cannot reach a gap must end rather than keep asking"
     );
     let analysis = pass.analysis();
@@ -707,7 +777,11 @@ async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk(analysis_pcm:
         Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).flooring(FLOOR),
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
 
     assert_eq!(
         pass.analysis().missing(),
@@ -729,7 +803,11 @@ async fn a_pass_with_nothing_left_to_reach_is_settled(analysis_pcm: &'static [f3
         Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).flooring(FLOOR),
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
 
     let analysis = pass.analysis();
     assert!(
@@ -748,8 +826,9 @@ async fn a_pass_its_reader_cut_short_is_not_settled(analysis_pcm: &'static [f32]
         Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).failing_after(3),
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    assert!(
+    assert_eq!(
         pass.drive(consts::TICKS).await,
+        Drive::Ended,
         "the failed reader ends the pass"
     );
 
@@ -767,7 +846,11 @@ async fn a_pass_that_gave_up_still_reports_what_it_never_reached(analysis_pcm: &
         Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).snapping(88_200),
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
 
     let analysis = pass.analysis();
     let covered = analysis.coverage().frames();
@@ -834,8 +917,9 @@ async fn a_decode_error_still_publishes_what_the_pass_covered(analysis_pcm: &'st
         Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).failing_after(3),
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    assert!(
+    assert_eq!(
         pass.drive(consts::TICKS).await,
+        Drive::Ended,
         "a reader that failed ends the pass"
     );
 
@@ -861,7 +945,11 @@ async fn a_run_is_measured_from_where_it_decoded_not_where_it_asked(analysis_pcm
             .echoing(),
         scheduled(consts::SCHEDULE_WINDOW_SECONDS),
     );
-    assert!(pass.drive(consts::TICKS).await, "the pass ends");
+    assert_eq!(
+        pass.drive(consts::TICKS).await,
+        Drive::Ended,
+        "the pass ends"
+    );
 
     let lengths = run_lengths(&pass.calls());
     // A one-second schedule chunk is five decoder chunks.
@@ -887,7 +975,7 @@ mod artifacts {
             super::{analyzer::AnalyzerBuilder, beat::GridParams},
             fixtures::{Artifacts, artifacts, assert_agrees, beat_detector},
         },
-        Pass, Source, targets,
+        Drive, Pass, Source, targets,
     };
     use crate::{
         BeatAnalysisConfig, consts,
@@ -925,7 +1013,11 @@ mod artifacts {
             pass.offer(*at, *frames);
             pass.drive(2).await;
         }
-        assert!(pass.drive(consts::TICKS).await, "the pass covers the track");
+        assert_eq!(
+            pass.drive(consts::TICKS).await,
+            Drive::Ended,
+            "the pass covers the track"
+        );
 
         let analysis = pass.analysis();
         assert!(

@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell},
     ops::Range,
     rc::Rc,
 };
@@ -8,12 +8,13 @@ use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry")]
 use super::masonry::{TableSource, TableState, TreeSource, TreeState};
+use super::search::SearchPlan;
 use crate::{
     atoms::{
         bar::context::Context,
         table::{
-            ColumnLayout, TableRowData, column_layouts, column_resizable, column_resize_track,
-            empty_bounds, face::TableFace, table_content_height,
+            ColumnLayout, TableCell, TableRowData, column_layouts, column_resizable,
+            column_resize_track, empty_bounds, face::TableFace, table_content_height,
         },
         tree::face::Tree,
         wave::zoom_math::{Zoom, window_bounds, zoom_for_wheel},
@@ -68,6 +69,7 @@ pub(crate) enum HostedControlPlan {
         /// the painter drew, rather than measuring the same parts again.
         face: Rect,
     },
+    Search(Box<SearchPlan>),
     Tree(Box<TreePlan>),
     Table(Box<TablePlan>),
     Fader {
@@ -161,6 +163,7 @@ pub(crate) struct TreePlan {
 #[derive(Clone)]
 pub(crate) struct TablePlan {
     divider_paths: DividerPaths,
+    action_paths: Vec<(String, String)>,
     pub(crate) horizontal_path: String,
     pub(crate) path: String,
     pub(crate) row_target: String,
@@ -211,6 +214,7 @@ impl HostedControlPlan {
                 selected,
                 ..
             } => descriptors.push(Descriptor::picker(path.clone(), items.len(), *selected)),
+            Self::Search(plan) => descriptors.push(plan.descriptor()),
             Self::Tree(plan) => plan.append_descriptors(descriptors),
             Self::Table(plan) => plan.append_descriptors(descriptors),
             Self::Fader {
@@ -314,6 +318,7 @@ impl HostedControlPlan {
             | Self::VerticalVu { path }
             | Self::Wave { path }
             | Self::HeroWave { path, .. } => path,
+            Self::Search(plan) => &plan.path,
             Self::Tree(plan) => &plan.path,
             Self::Table(plan) => &plan.path,
         }
@@ -347,6 +352,14 @@ impl HostedControlPlan {
         let Resolving { ctx, skin } = cx;
         let skin = skin.at(path);
         match (spec, value) {
+            (ControlSpec::Search, value) => {
+                let query = match value {
+                    Some(ReadValue::Text(query)) => query,
+                    _ => "",
+                };
+                let plan = SearchPlan::new(path, query, read, Resolving { skin, ctx });
+                Some(Self::Search(Box::new(plan)))
+            }
             (ControlSpec::Button { .. }, _)
             | (
                 ControlSpec::Checkbox
@@ -548,6 +561,10 @@ fn wave_plan(
 }
 
 impl TreePlan {
+    pub(crate) fn picture(&self) -> Ref<'_, Tree> {
+        self.picture.borrow()
+    }
+
     fn descriptor_count(&self) -> usize {
         1 + usize::from(self.search_path.is_some()) + usize::from(self.toggle_path.is_some())
     }
@@ -604,6 +621,17 @@ impl TreePlan {
 impl TablePlan {
     pub(super) fn new(path: &str, picture: TableFace) -> Self {
         Self {
+            action_paths: picture
+                .columns()
+                .iter()
+                .filter(|column| column.column.write().is_some())
+                .map(|column| {
+                    (
+                        column.column.id().to_owned(),
+                        format!("{path}/{}", column.column.action_slot()),
+                    )
+                })
+                .collect(),
             divider_paths: DividerPaths::new(path, picture.columns()),
             horizontal_path: format!("{path}/scroll-x"),
             path: path.to_owned(),
@@ -635,6 +663,20 @@ impl TablePlan {
             self.path.clone(),
             row_count,
         ));
+        for (id, path) in &self.action_paths {
+            if let Some(column) = columns.iter().position(|column| column.column.id() == id) {
+                let texts = picture
+                    .rows()
+                    .iter()
+                    .map(|row| {
+                        row.cell(column)
+                            .and_then(TableCell::action)
+                            .map(ToOwned::to_owned)
+                    })
+                    .collect();
+                descriptors.push(Descriptor::text_actions(path.clone(), texts));
+            }
+        }
         let resizable = columns
             .iter()
             .enumerate()
@@ -646,6 +688,23 @@ impl TablePlan {
                 column.width,
                 column_resize_track(columns, index, self.viewport_width.get(), picture.metrics()),
             ));
+        }
+    }
+
+    pub(crate) fn append_action_targets<'a>(
+        &'a self,
+        bounds: Rect,
+        point: Option<Pt>,
+        columns: &[ColumnLayout],
+        offsets: (f32, f32),
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        let picture = self.picture.borrow();
+        for (index, column, cell, _) in picture.actions_under(point, bounds, offsets, columns) {
+            let id = columns[column].column.id();
+            if let Some((_, path)) = self.action_paths.iter().find(|(action, _)| action == id) {
+                targets.push(Target::item(path, Hit::new(point, cell), index));
+            }
         }
     }
 
@@ -661,6 +720,11 @@ impl TablePlan {
             .enumerate()
             .filter(|(index, _)| column_resizable(picture.columns(), *index))
             .count()
+            + picture
+                .columns()
+                .iter()
+                .filter(|column| column.column.write().is_some())
+                .count()
             + 3
     }
 

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use num_traits::ToPrimitive;
 
 use super::{
@@ -13,7 +15,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TableRowData {
     pub(crate) selected: bool,
-    pub(crate) drag: Option<String>,
+    pub(crate) muted: bool,
+    pub(crate) drag: Option<BTreeMap<String, String>>,
     cells: Vec<(String, TableCell)>,
 }
 
@@ -26,6 +29,15 @@ impl From<&ReadRow<'_>> for TableRowData {
                 .map(|cell| {
                     let value = match cell.value() {
                         TableValue::Empty => TableCell::Empty,
+                        TableValue::Icon {
+                            icon,
+                            active,
+                            action,
+                        } => TableCell::Icon {
+                            icon: *icon,
+                            active: *active,
+                            action: action.as_deref().map(ToOwned::to_owned),
+                        },
                         TableValue::Badges(badges) => TableCell::Badges(
                             badges
                                 .iter()
@@ -42,7 +54,8 @@ impl From<&ReadRow<'_>> for TableRowData {
                 })
                 .collect(),
             selected: row.selected(),
-            drag: row.drag().map(str::to_owned),
+            muted: row.muted(),
+            drag: row.drag().cloned(),
         }
     }
 }

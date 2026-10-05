@@ -15,6 +15,7 @@ pub(crate) use custom::Custom;
 pub use preview::LayoutPreview;
 pub(crate) use text::Text;
 pub(crate) use tree::Tree;
+pub(in crate::render) use tree::search_bar;
 pub(crate) use viewport::Viewport;
 pub(crate) use wave::MiniWave;
 pub(crate) use wheel::WheelSurface;
