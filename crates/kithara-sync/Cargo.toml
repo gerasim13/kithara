@@ -11,6 +11,10 @@ categories = ["multimedia::audio"]
 
 [features]
 default = []
+stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
+stretch-bungee = ["kithara-warp/stretch-bungee"]
+stretch-glide = ["kithara-warp/stretch-glide"]
+stretch-identity = ["kithara-warp/stretch-identity"]
 usdt = ["kithara-warp/usdt"]
 perf = ["kithara-warp/perf"]
 
