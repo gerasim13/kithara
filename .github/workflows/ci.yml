@@ -79,6 +79,8 @@ jobs:
     if: github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      kind: ${{ steps.kind.outputs.kind }}
     steps:
       - name: Validate actor and runner labels
         env:
@@ -110,6 +112,32 @@ jobs:
               sys.exit(1)
           PY
 
+      # The pipeline kind every role below runs under. A push to the default
+      # branch is `main`. A push to a branch with a pull request open for
+      # review where pull requests land - the repository this one was forked
+      # from, or this one when it is no fork - is `merge-request`; any other
+      # push, a draft's included, is `branch`. Nothing here reacts to a pull
+      # request, so marking a draft ready starts nothing: the next push, or a
+      # re-run of this one, asks again.
+      - name: Name the pipeline kind
+        id: kind
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          REF: ${{ github.ref }}
+          BRANCH: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+            kind=main
+          else
+            upstream=$(gh api "repos/$REPOSITORY" --jq '.parent.full_name // .full_name')
+            ready=$(gh api "repos/$upstream/pulls?head=$OWNER:$BRANCH&state=open" --jq 'map(select(.draft | not)) | length')
+            if [ "$ready" -gt 0 ]; then kind=merge-request; else kind=branch; fi
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+
   # The single self-hosted gate every substantive job depends on. The runner
   # labels remain repository configuration rather than naming an owner or a
   # machine in this workflow.
@@ -118,6 +146,8 @@ jobs:
     needs: authorize
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 5
+    outputs:
+      kind: ${{ needs.authorize.outputs.kind }}
     steps:
       - name: Confirm the runner is reachable
         run: just --version
@@ -128,17 +158,19 @@ jobs:
   # each entry. Nothing about a lane is described here, so nothing here can
   # disagree with what GitLab runs.
   #
-  # A push to the default branch is a `main` pipeline and any other push is a
-  # `branch` one. A branch push runs the lanes that name `branch` among their
-  # kinds. A `main` push asks for `all`, a full run: every lane that some full
-  # kind (main, nightly, weekly, release, platforms) schedules.
+  # The kind comes from the authorization job. A `branch` or `merge-request`
+  # push runs the lanes that name its kind; the two schedule the same lanes, and
+  # a lane that runs the product suite runs it whole on a ready pull request and
+  # only what the push touched on any other branch push. A `main` push asks for
+  # `all`, a full run: every lane that some full kind (main, nightly, weekly,
+  # release, platforms) schedules.
   lanes:
     name: Gate
     needs: gate
     uses: ./.github/workflows/run.yml
     with:
       role: gate
-      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      kind: ${{ needs.gate.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
@@ -155,7 +187,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: deep
-      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      kind: ${{ needs.gate.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
@@ -172,7 +204,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: platforms
-      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      kind: ${{ needs.gate.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
@@ -189,7 +221,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: quality
-      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
+      kind: ${{ needs.gate.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 

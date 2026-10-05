@@ -20,10 +20,11 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-# `--mode` repeats per lane; the input is a space-separated list, so
-# one flag carrying the whole string would name a lane that does not
-# exist and fail the run at argument parsing.
+# `--mode` and `--lane` repeat per entry; each input is a space-separated
+# list, so one flag carrying the whole string would name a mode or a lane
+# that does not exist and fail the run at argument parsing.
 for mode in $MODE; do args+=(--mode "$mode"); done
+for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=(
   --raw "$GITHUB_WORKSPACE/raw"
@@ -35,6 +36,7 @@ const STRESS_REPORT_COMMAND: &str = r#"args=(
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
 for mode in $MODE; do args+=(--mode "$mode"); done
+for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress-report "${args[@]}""#;
 
 const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
@@ -520,6 +522,69 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
 }
 
+// A push to a branch whose pull request is ready for review runs the suite
+// whole, a draft's push only what it touched. Nothing here reacts to a pull
+// request, so the push asks: the hosted job looks the request up before any
+// job reaches the fleet, and every role reads the one kind it named instead of
+// deciding again.
+#[test]
+fn a_ready_pull_request_is_a_merge_request_pipeline() {
+    let workflow = github_workflow("ci.yml");
+    let jobs = workflow_jobs(&workflow);
+
+    let authorize = workflow_job(jobs, "authorize");
+    let outputs = mapping_field(authorize, "outputs")
+        .as_mapping()
+        .expect("authorization names outputs");
+    assert_eq!(
+        mapping_field(outputs, "kind").as_str(),
+        Some("${{ steps.kind.outputs.kind }}")
+    );
+    let step = named_step(authorize, "Name the pipeline kind");
+    assert_eq!(mapping_field(step, "id").as_str(), Some("kind"));
+    let env = mapping_field(step, "env")
+        .as_mapping()
+        .expect("the kind step reads its inputs from the environment");
+    assert_eq!(
+        mapping_field(env, "GH_TOKEN").as_str(),
+        Some("${{ github.token }}")
+    );
+    let script = mapping_field(step, "run")
+        .as_str()
+        .expect("the kind step is a script");
+    for named in [
+        "main",
+        "merge-request",
+        "branch",
+        ".draft",
+        ".parent.full_name",
+    ] {
+        assert!(
+            script.contains(named),
+            "the kind step never reads `{named}`"
+        );
+    }
+
+    let gate = workflow_job(jobs, "gate");
+    let outputs = mapping_field(gate, "outputs")
+        .as_mapping()
+        .expect("the gate hands the kind on");
+    assert_eq!(
+        mapping_field(outputs, "kind").as_str(),
+        Some("${{ needs.authorize.outputs.kind }}")
+    );
+    for name in ["lanes", "deep", "platforms", "quality"] {
+        let with = mapping_field(workflow_job(jobs, name), "with")
+            .as_mapping()
+            .unwrap_or_else(|| panic!("{name} passes inputs"));
+        assert_eq!(
+            mapping_field(with, "kind").as_str(),
+            Some("${{ needs.gate.outputs.kind }}"),
+            "role `{name}` decides the pipeline kind again"
+        );
+    }
+}
+
 // One entry reacts to every push. Optional suites belong inside that run so a
 // commit has one verdict rather than independent CI and UI results.
 #[test]
@@ -869,9 +934,9 @@ fn stress_workflow_is_a_thin_fork_adapter() {
                 .keys()
                 .map(|name| name.as_str().expect("input name is a string"))
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["count", "filter", "mode", "revision",])
+            BTreeSet::from(["count", "filter", "lane", "mode", "revision"])
         );
-        for name in ["count", "filter", "mode", "revision"] {
+        for name in ["count", "filter", "lane", "mode", "revision"] {
             let input = mapping_field(inputs, name)
                 .as_mapping()
                 .unwrap_or_else(|| panic!("{trigger} input `{name}` is a mapping"));
@@ -1024,11 +1089,12 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let stress_env = mapping_field(run, "env")
         .as_mapping()
         .expect("run environment is a mapping");
-    assert_eq!(stress_env.len(), 5);
+    assert_eq!(stress_env.len(), 6);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
         ("FILTER", "${{ inputs.filter }}"),
+        ("LANE", "${{ inputs.lane }}"),
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
     ] {
@@ -1132,12 +1198,13 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let verifier_env = mapping_field(verifier, "env")
         .as_mapping()
         .expect("verifier environment is a mapping");
-    assert_eq!(verifier_env.len(), 6);
+    assert_eq!(verifier_env.len(), 7);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
         ("EXECUTE_RESULT", "${{ needs.execute.result }}"),
         ("FILTER", "${{ inputs.filter }}"),
+        ("LANE", "${{ inputs.lane }}"),
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
     ] {
