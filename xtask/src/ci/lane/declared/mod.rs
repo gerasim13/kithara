@@ -1,7 +1,5 @@
 mod execution;
 #[cfg(test)]
-mod tests {
-    mod network;
-}
+mod tests;
 
 pub(crate) use execution::run;
