@@ -1,0 +1,16 @@
+{
+  "data": {
+    "collection": {
+      "playlists": [
+        {
+          "id": "1023",
+          "title": "Morning Mix"
+        },
+        {
+          "id": "1024",
+          "title": "Evening Mix"
+        }
+      ]
+    }
+  }
+}
