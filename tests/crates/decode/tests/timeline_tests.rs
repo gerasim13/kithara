@@ -14,14 +14,14 @@ mod hls_timeline {
     };
     use kithara_test_fixtures::assets::sized_wav_timeline_saw_2mb;
     use kithara_test_utils::TestTempDir;
+    use num_traits::AsPrimitive;
 
     use crate::common::test_defaults::SawWav;
 
     #[kithara::fixture]
     async fn timeline_server() -> CreatedHls {
         const SEGMENT_COUNT: usize = 10;
-        let segment_duration = SawWav::DEFAULT.segment_size as f64
-            / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
+        let segment_duration = SawWav::DEFAULT.segment_duration_secs();
 
         let wav = tokio::task::spawn_blocking(|| sized_wav_timeline_saw_2mb().bytes().to_vec())
             .await
@@ -97,9 +97,9 @@ mod hls_timeline {
                     meta.frame_offset
                 );
 
-                let expected_ts = Duration::from_secs_f64(
-                    meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
-                );
+                let frame_offset: f64 = meta.frame_offset.as_();
+                let expected_ts =
+                    Duration::from_secs_f64(frame_offset / f64::from(meta.spec.sample_rate.get()));
                 let diff = meta.timestamp.abs_diff(expected_ts);
                 assert!(
                     diff < Duration::from_millis(1),

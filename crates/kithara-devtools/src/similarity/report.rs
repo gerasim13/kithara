@@ -398,7 +398,7 @@ mod tests {
         assert!(markdown.contains("Right"));
         assert!(markdown.contains("Type substitutions"));
         assert!(markdown.contains("```mermaid"));
-        assert!(markdown.contains("## Parallel chains"));
+        assert!(markdown.contains(&format!("\n{}\n", consts::PARALLEL_CHAINS)));
         let manifest: serde_json::Value = serde_json::from_slice(
             &fs::read(temp.path().join("manifest.json")).expect("read manifest"),
         )

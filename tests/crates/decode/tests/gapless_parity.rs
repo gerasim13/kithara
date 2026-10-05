@@ -11,7 +11,9 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
+    fixture_protocol::{
+        GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
+    },
 };
 use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
@@ -134,7 +136,7 @@ async fn generated_aac_elst_fixture(
                     encoder_delay: NonZeroU32::new(AAC_GAPLESS_ENCODER_DELAY),
                     trailing_delay: NonZeroU32::new(AAC_GAPLESS_TRAILING_DELAY),
                     source,
-                    gapless_encoding: Default::default(),
+                    gapless_encoding: GaplessEncoding::default(),
                     variant_overrides: Vec::new(),
                 }),
         )

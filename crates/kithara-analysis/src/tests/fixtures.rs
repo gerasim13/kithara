@@ -122,7 +122,7 @@ pub(super) fn assert_agrees(want: &Artifacts, got: &Artifacts, what: &str) {
 pub(super) fn spec() -> AudioSpec {
     AudioSpec {
         channels: consts::CH,
-        sample_rate: NonZeroU32::new(consts::FIXTURES_SR).unwrap(),
+        sample_rate: NonZeroU32::new(consts::FIXTURES_SR).expect("fixture sample rate is non-zero"),
     }
 }
 

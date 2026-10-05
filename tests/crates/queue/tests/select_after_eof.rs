@@ -68,7 +68,7 @@ async fn wait_for_current_track(
                     return true;
                 }
             }
-            let _ = harness.run(queue, |q| q.tick()).await;
+            let _ = harness.run(queue, QueueControl::tick).await;
             let _ = harness.render(BLOCK_FRAMES).await;
         }
     })

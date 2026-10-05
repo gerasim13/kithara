@@ -258,13 +258,12 @@ mod tests {
                 extension: extension.to_owned(),
             })
             .expect("file layout key");
-        let writer = match config
+        let AcquisitionResult::Pending(writer) = config
             .store()
             .acquire_resource(&key, None)
             .expect("cache acquisition")
-        {
-            AcquisitionResult::Pending(writer) => writer,
-            _ => panic!("new cache must yield a writer"),
+        else {
+            panic!("new cache must yield a writer");
         };
         let bytes = [1, 2, 3, 4];
         writer.write_at(0, &bytes).expect("seed cached file bytes");

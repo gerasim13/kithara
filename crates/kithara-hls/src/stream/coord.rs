@@ -603,13 +603,7 @@ pub(super) mod tests {
         reason: AbrReason,
         v0_segments: u32,
         v1_segments: u32,
-    ) -> (
-        Arc<TestHlsCoord>,
-        EventBus,
-        TestPlanCtx,
-        Arc<AbrState>,
-        Vec<Arc<SegmentSlotState>>,
-    ) {
+    ) -> SwitchCoordSlots {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -640,72 +634,18 @@ pub(super) mod tests {
                     .build(),
             ),
         };
-        let v0_urls: Vec<url::Url> = (0..v0_segments)
-            .map(|idx| {
-                format!("https://example.com/v0-seg{idx}.m4s")
-                    .parse()
-                    .expect("url")
-            })
-            .collect();
-        let v1_urls: Vec<url::Url> = (0..v1_segments)
-            .map(|idx| {
-                format!("https://example.com/v1-seg{idx}.m4s")
-                    .parse()
-                    .expect("url")
-            })
-            .collect();
-        let v0_slots: Vec<Arc<SegmentSlotState>> = (0..v0_segments)
-            .map(|_| SegmentSlotState::missing())
-            .collect();
+        let v0_urls = segment_urls(0, v0_segments);
+        let v1_urls = segment_urls(1, v1_segments);
+        let v0_slots = missing_slots(v0_segments);
+        let v1_slots = missing_slots(v1_segments);
         let playlist = Arc::new(PlaylistState::new(vec![
-            VariantState {
-                codec: Some(AudioCodec::AacLc),
-                container: Some(ContainerFormat::Fmp4),
-                init_url: None,
-                segments: v0_urls
-                    .iter()
-                    .map(|url| SegmentState {
-                        url: url.clone(),
-                        duration: Duration::from_secs(2),
-                        byte_range_len: Some(100),
-                    })
-                    .collect(),
-            },
-            VariantState {
-                codec: Some(AudioCodec::Mp3),
-                container: Some(ContainerFormat::MpegAudio),
-                init_url: None,
-                segments: v1_urls
-                    .iter()
-                    .map(|url| SegmentState {
-                        url: url.clone(),
-                        duration: Duration::from_secs(2),
-                        byte_range_len: Some(100),
-                    })
-                    .collect(),
-            },
+            variant_state(AudioCodec::AacLc, ContainerFormat::Fmp4, &v0_urls),
+            variant_state(AudioCodec::Mp3, ContainerFormat::MpegAudio, &v1_urls),
         ]));
         let variants: Arc<[Arc<TestHlsVariant>]> = Arc::from(vec![
             VariantParts {
                 init: None,
-                segments: v0_urls
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, url)| {
-                        Segment::Media(MediaSegment {
-                            url: url.clone(),
-                            resource_id: ctx
-                                .scope
-                                .key(&AssetResource::Url(url.clone()))
-                                .expect("segment key"),
-                            state: Arc::clone(&v0_slots[idx]),
-                            size: SegmentSize::seed(100),
-                            content: SegmentContent::Plain,
-                            decode_time: Duration::from_secs(2) * u32::try_from(idx).expect("idx"),
-                            duration: Duration::from_secs(2),
-                        })
-                    })
-                    .collect(),
+                segments: media_segments(&ctx, &v0_urls, &v0_slots),
                 seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(0),
                 container: playlist.variant_container(0),
@@ -713,24 +653,7 @@ pub(super) mod tests {
             .into_variant(0, &ctx),
             VariantParts {
                 init: None,
-                segments: v1_urls
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, url)| {
-                        Segment::Media(MediaSegment {
-                            url: url.clone(),
-                            resource_id: ctx
-                                .scope
-                                .key(&AssetResource::Url(url.clone()))
-                                .expect("segment key"),
-                            state: SegmentSlotState::missing(),
-                            size: SegmentSize::seed(100),
-                            content: SegmentContent::Plain,
-                            decode_time: Duration::from_secs(2) * u32::try_from(idx).expect("idx"),
-                            duration: Duration::from_secs(2),
-                        })
-                    })
-                    .collect(),
+                segments: media_segments(&ctx, &v1_urls, &v1_slots),
                 seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(1),
                 container: playlist.variant_container(1),
@@ -767,6 +690,79 @@ pub(super) mod tests {
             variants,
         ));
         (coord, bus, ctx, abr_state, v0_slots)
+    }
+
+    /// The switch fixture's coordinator, bus, plan context, ABR state, and the
+    /// audible variant's segment slot states.
+    type SwitchCoordSlots = (
+        Arc<TestHlsCoord>,
+        EventBus,
+        TestPlanCtx,
+        Arc<AbrState>,
+        Vec<Arc<SegmentSlotState>>,
+    );
+
+    /// The media URLs of variant `variant`'s `count` segments.
+    fn segment_urls(variant: usize, count: u32) -> Vec<url::Url> {
+        (0..count)
+            .map(|idx| {
+                format!("https://example.com/v{variant}-seg{idx}.m4s")
+                    .parse()
+                    .expect("url")
+            })
+            .collect()
+    }
+
+    /// `count` segment slots, none of them fetched yet.
+    fn missing_slots(count: u32) -> Vec<Arc<SegmentSlotState>> {
+        (0..count).map(|_| SegmentSlotState::missing()).collect()
+    }
+
+    /// A playlist variant of two-second, 100-byte segments at `urls`.
+    fn variant_state(
+        codec: AudioCodec,
+        container: ContainerFormat,
+        urls: &[url::Url],
+    ) -> VariantState {
+        VariantState {
+            codec: Some(codec),
+            container: Some(container),
+            init_url: None,
+            segments: urls
+                .iter()
+                .map(|url| SegmentState {
+                    url: url.clone(),
+                    duration: Duration::from_secs(2),
+                    byte_range_len: Some(100),
+                })
+                .collect(),
+        }
+    }
+
+    /// The media segments at `urls`, each one on its slot in `slots`.
+    fn media_segments(
+        ctx: &TestPlanCtx,
+        urls: &[url::Url],
+        slots: &[Arc<SegmentSlotState>],
+    ) -> Vec<Segment> {
+        urls.iter()
+            .zip(slots)
+            .enumerate()
+            .map(|(idx, (url, slot))| {
+                Segment::Media(MediaSegment {
+                    url: url.clone(),
+                    resource_id: ctx
+                        .scope
+                        .key(&AssetResource::Url(url.clone()))
+                        .expect("segment key"),
+                    state: Arc::clone(slot),
+                    size: SegmentSize::seed(100),
+                    content: SegmentContent::Plain,
+                    decode_time: Duration::from_secs(2) * u32::try_from(idx).expect("idx"),
+                    duration: Duration::from_secs(2),
+                })
+            })
+            .collect()
     }
 
     pub(in crate::stream) fn incremental_profile(read_ahead_bytes: u64) -> ReaderProfile {

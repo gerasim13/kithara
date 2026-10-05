@@ -141,13 +141,12 @@ async fn observe_scrub_outcome(
                     src: item.track().src.to_string(),
                 };
             }
-            Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Ok(_) | Err(RecvError::Lagged(_))) | Err(_) => continue,
             Ok(Err(RecvError::Closed)) => {
                 return ScrubOutcome::BudgetElapsed {
                     last_position: queue.position_seconds(),
                 };
             }
-            Err(_) => continue,
         }
     }
 }
@@ -170,7 +169,7 @@ async fn wait_for_playback_progress(
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    let pos_secs = position_ms as f64 / 1000.0;
+                    let pos_secs = Duration::from_millis(position_ms).as_secs_f64();
                     if pos_secs > baseline_secs {
                         return Some(pos_secs);
                     }

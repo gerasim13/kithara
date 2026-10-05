@@ -35,19 +35,14 @@ fn mp3_in_wave_matches_elementary_audio_and_seeks_in_file_coordinates(#[case] ta
     let audio = rhythm_mp3_deck_a_120bpm_48k().bytes();
     let mut wave = Vec::new();
     if tagged {
-        let len = audio.len();
-        wave.extend_from_slice(&[
-            b'I',
-            b'D',
-            b'3',
-            4,
-            0,
-            0,
-            ((len >> 21) & 127) as u8,
-            ((len >> 14) & 127) as u8,
-            ((len >> 7) & 127) as u8,
-            (len & 127) as u8,
-        ]);
+        let len = u32::try_from(audio.len()).expect("fixture fits an ID3 tag size");
+        // ID3v2 sizes are syncsafe: seven payload bits per byte.
+        let syncsafe = (len & 0x0FE0_0000) << 3
+            | (len & 0x001F_C000) << 2
+            | (len & 0x0000_3F80) << 1
+            | (len & 0x0000_007F);
+        wave.extend_from_slice(&[b'I', b'D', b'3', 4, 0, 0]);
+        wave.extend_from_slice(&syncsafe.to_be_bytes());
         wave.extend_from_slice(audio);
     }
     let metadata_prefix = wave.clone();

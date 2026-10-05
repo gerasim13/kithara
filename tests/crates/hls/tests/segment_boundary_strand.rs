@@ -45,12 +45,14 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    test_defaults::SawWav,
 };
 use kithara_test_fixtures::{
     hls_fixtures::{hls_header_boundary, hls_pcm_boundary},
     signal,
 };
 use kithara_test_utils::TestTempDir;
+use num_traits::AsPrimitive;
 use tracing::info;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -63,6 +65,9 @@ const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 /// The boundary the reader crosses INTO. Body withheld until release.
 const GATED_SEGMENT: usize = 4;
+
+/// One decoded chunk: its first frame and its interleaved samples.
+type DecodedChunk = (u64, Vec<f32>);
 
 fn bytes_per_frame() -> usize {
     CHANNELS as usize * size_of::<i16>()
@@ -82,8 +87,12 @@ async fn gated_audio(
     let init_segment = Arc::new(hls_header_boundary);
     let pcm = Arc::new(hls_pcm_boundary);
 
-    let segment_duration = SEGMENT_SIZE as f64
-        / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
+    let segment_duration = SawWav {
+        sample_rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        segment_size: SEGMENT_SIZE,
+    }
+    .segment_duration_secs();
 
     let config = HlsFixtureBuilder::new()
         .variant_count(1)
@@ -143,7 +152,8 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
     // boundary so the forward read-ahead crosses into the withheld segment.
     let boundary_frame = segment_first_frame(GATED_SEGMENT);
     let seek_frame = boundary_frame.saturating_sub(2_048);
-    let seek_pos = Duration::from_secs_f64(seek_frame as f64 / f64::from(SAMPLE_RATE));
+    let seek_frames: f64 = seek_frame.as_();
+    let seek_pos = Duration::from_secs_f64(seek_frames / f64::from(SAMPLE_RATE));
     info!(
         seek_frame,
         boundary_frame,
@@ -181,7 +191,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let decode = spawn_blocking(move || -> (Vec<(u64, Vec<f32>)>, usize) {
+    let decode = spawn_blocking(move || -> (Vec<DecodedChunk>, usize) {
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();
         let decoder_config =
@@ -199,7 +209,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
             .expect("seek before withheld boundary must not error");
         info!(?outcome, "decoder landed");
 
-        let mut chunks: Vec<(u64, Vec<f32>)> = Vec::new();
+        let mut chunks: Vec<DecodedChunk> = Vec::new();
         let mut pendings = 0usize;
         let deadline = Instant::now() + Duration::from_secs(25);
         // Pull enough chunks to cross well past the boundary.

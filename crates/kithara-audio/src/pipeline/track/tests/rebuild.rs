@@ -9,7 +9,7 @@ use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 use kithara_bufpool::PoolConfig;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
-    GaplessMode, GaplessProfile,
+    GaplessMode, GaplessProfile, SilenceTrimParams,
 };
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
@@ -611,6 +611,7 @@ impl WaitPark {
         while !state.released {
             state = self.condvar.wait(state);
         }
+        drop(state);
     }
 
     pub(super) fn release(&self) {
@@ -1655,7 +1656,7 @@ async fn rebuilding_decoder_completion_waits_for_shell_routing() {
 #[kithara::test(tokio)]
 async fn rebuild_prepares_generation_profiles_before_rt_install() {
     let RebuildFixture { mut source, .. } =
-        test_source_with_mode(1, GaplessMode::SilenceTrim(Default::default())).await;
+        test_source_with_mode(1, GaplessMode::SilenceTrim(SilenceTrimParams::default())).await;
     let profile_reads = Arc::new(AtomicU64::new(0));
     let factory_reads = profile_reads.clone();
     let factory = DecoderFactory::new(

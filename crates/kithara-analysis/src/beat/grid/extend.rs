@@ -149,20 +149,24 @@ mod tests {
     use super::extend_over;
     use crate::{BeatArtifact, consts};
 
-    fn grid(beats: Vec<u64>) -> BeatArtifact {
-        let downbeats = beats.iter().step_by(4).map(detected).collect();
-        BeatArtifact::new(120.0, beats.iter().map(detected).collect(), downbeats)
+    fn grid(beats: &[u64]) -> BeatArtifact {
+        let downbeats = beats.iter().copied().step_by(4).map(detected).collect();
+        BeatArtifact::new(
+            120.0,
+            beats.iter().copied().map(detected).collect(),
+            downbeats,
+        )
     }
 
-    fn detected(frame: &u64) -> (u64, Option<f32>) {
-        (*frame, Some(0.9))
+    fn detected(frame: u64) -> (u64, Option<f32>) {
+        (frame, Some(0.9))
     }
 
     #[kithara::test]
     fn an_extrapolated_marker_claims_nothing_and_a_detected_one_keeps_its_answer() {
-        let detected = vec![0, 22_050, 44_100, 66_150];
+        let detected = [0, 22_050, 44_100, 66_150];
         let out = extend_over(
-            grid(detected.clone()),
+            grid(&detected),
             10 * u64::from(consts::EXTEND_RATE),
             consts::EXTEND_RATE,
         );
@@ -190,9 +194,9 @@ mod tests {
     #[kithara::test]
     fn a_short_run_of_markers_covers_the_whole_extent() {
         // Four beats near the start of a ten-second track.
-        let detected = vec![0, 22_050, 44_100, 66_150];
+        let detected = [0, 22_050, 44_100, 66_150];
         let out = extend_over(
-            grid(detected.clone()),
+            grid(&detected),
             10 * u64::from(consts::EXTEND_RATE),
             consts::EXTEND_RATE,
         );
@@ -222,7 +226,7 @@ mod tests {
     fn markers_before_the_first_detection_are_filled_in() {
         // The first covered piece starts two seconds in.
         let out = extend_over(
-            grid(vec![88_200, 110_250]),
+            grid(&[88_200, 110_250]),
             5 * u64::from(consts::EXTEND_RATE),
             consts::EXTEND_RATE,
         );
@@ -237,7 +241,7 @@ mod tests {
     fn a_gap_between_detections_is_divided_evenly() {
         // Two detected pieces four beats apart.
         let out = extend_over(
-            grid(vec![0, 22_050, 110_250, 132_300]),
+            grid(&[0, 22_050, 110_250, 132_300]),
             132_300,
             consts::EXTEND_RATE,
         );
@@ -258,10 +262,10 @@ mod tests {
         let out = extend_over(
             BeatArtifact::new(
                 120.0,
-                beats.iter().map(detected).collect(),
+                beats.iter().copied().map(detected).collect(),
                 heard
                     .iter()
-                    .map(|beat| detected(&(beat * consts::EXTEND_BEAT)))
+                    .map(|beat| detected(beat * consts::EXTEND_BEAT))
                     .collect(),
             ),
             24 * consts::EXTEND_BEAT,
