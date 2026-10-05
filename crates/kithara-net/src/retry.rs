@@ -7,11 +7,22 @@ use url::Url;
 
 use crate::{
     ByteStream,
+    backend::HttpClient,
     error::{NetError, Retryability},
     observe::Observer,
     traits::Net,
     types::{Headers, RangeSpec, RetryPolicy},
 };
+
+impl HttpClient {
+    /// Returns a handle with a different retry policy over the same transport.
+    #[must_use]
+    pub fn with_retry_policy(&self, retry_policy: RetryPolicy) -> Self {
+        let mut options = self.options().clone();
+        options.retry_policy = retry_policy;
+        self.with_options(options)
+    }
+}
 
 /// Retry decorator for Net implementations
 pub struct RetryNet<N> {
