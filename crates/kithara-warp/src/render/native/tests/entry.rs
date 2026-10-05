@@ -46,9 +46,10 @@ fn entered_renderer(plan: WarpPlan, backend: StretchKind, keylock: bool) -> Warp
 }
 
 fn source_span(renderer: &WarpRenderer, start: u64, frames: usize) -> AudioChunk {
-    let samples: Vec<f32> = (0..frames)
+    let samples: Vec<f32> = (start..)
+        .take(frames)
         .flat_map(|frame| {
-            let value = f32::from(u16::try_from((start as usize + frame) % 97).unwrap_or(0));
+            let value = f32::from(u16::try_from(frame % 97).unwrap_or(0));
             [value / 97.0, -value / 97.0]
         })
         .collect();

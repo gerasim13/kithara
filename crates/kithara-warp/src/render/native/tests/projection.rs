@@ -1,7 +1,7 @@
 use kithara_test_fixtures::unit_fixtures::{warp_pair, warp_sine};
 
 use super::*;
-use crate::consts;
+use crate::{RenderSnapshot, consts};
 
 #[kithara::test]
 fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
@@ -331,13 +331,7 @@ fn adoption_frontier_reports_only_committed_pcm() {
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &[0.0; 256]);
 
-    assert!(
-        renderer
-            .committed
-            .as_ref()
-            .map(|snapshot| snapshot.frontier())
-            .is_none()
-    );
+    assert!(renderer.committed.is_none());
     renderer
         .prepare_quantum(input.meta, input.frames())
         .expect("initial quantum is prepared");
@@ -350,20 +344,14 @@ fn adoption_frontier_reports_only_committed_pcm() {
     let frontier = renderer
         .committed
         .as_ref()
-        .map(|snapshot| snapshot.frontier())
+        .map(RenderSnapshot::frontier)
         .expect("rendered PCM has a committed frontier");
     assert_eq!(frontier.source(), 128);
     assert_eq!(frontier.output(), SessionFrame::new(128));
     assert_eq!(frontier.warp_map(), None);
 
     renderer.reset();
-    assert!(
-        renderer
-            .committed
-            .as_ref()
-            .map(|snapshot| snapshot.frontier())
-            .is_none()
-    );
+    assert!(renderer.committed.is_none());
 }
 
 #[kithara::test]
