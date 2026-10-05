@@ -644,7 +644,7 @@ mod tests {
         );
         analyzers.settle();
         let unread = analyzers.snapshot(None, true, Some(end));
-        assert_eq!(unread.coverage().iter().collect::<Vec<_>>(), vec![at..end]);
+        assert_eq!(unread.coverage().iter().cloned().collect::<Vec<_>>(), vec![at..end]);
         assert_eq!(
             unread.beat().expect("the beat slot remains open").state(),
             BeatState::Provisional,

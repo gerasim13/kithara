@@ -477,7 +477,7 @@ mod tests {
     use kithara_beat::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats};
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::rubato::RubatoBackend;
-    use kithara_signal::FrameSpan;
+    use kithara_signal::{FrameCoverage, FrameSpan};
     use kithara_test_fixtures::analysis_beat_fixtures::{
         cancelling, quarter_4096, quarter_10000, quarter_44100, quarter_88200, quarter_132300,
         quarter_176400, quarter_529200, quarter_2646000, sine_220, sine_440, step, tenth_4096,
@@ -815,7 +815,8 @@ mod tests {
         assert_eq!(
             seen.iter().sum::<usize>(),
             quarter_176400.len() / 2,
-            "without overlap every offered sample is heard before release; window lengths: {seen:?}"
+            "without overlap every offered sample is heard before release; window lengths: {:?}",
+            &*seen
         );
         assert_eq!(
             pass.unanalysed(Some(at + 4 * u64::from(consts::SRC))),
