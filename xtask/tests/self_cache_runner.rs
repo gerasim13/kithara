@@ -55,6 +55,13 @@ impl Fixture {
             .parent()
             .context("resolve repository root")?;
         fs::copy(repository.join("justfile"), &justfile)?;
+        // The justfile runs the compiler through this wrapper whenever sccache
+        // is on `PATH`, and `cargo metadata` asks the compiler for its version.
+        fs::create_dir_all(root.join(".config/sccache"))?;
+        fs::copy(
+            repository.join(".config/sccache/rustc-wrapper"),
+            root.join(".config/sccache/rustc-wrapper"),
+        )?;
         fs::copy(
             repository.join("xtask/bootstrap_lease.rs"),
             root.join("xtask/bootstrap_lease.rs"),
