@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::{ids::InternId, module::ChipStyle};
 
 /// A small labelled toggle that reads as a tag.
@@ -7,11 +8,13 @@ use crate::{ids::InternId, module::ChipStyle};
 #[control(size = skin.chip.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Chip {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) style: ChipStyle,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: InternId,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Chip;
     use crate::{

@@ -1,31 +1,30 @@
 use bon::Builder;
 
-use crate::{
-    expand::Binding, ids::InternId, module::WaveStyle, mount::Control, size::SizeSpec,
-    skin::SkinDoc,
-};
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use crate::{expand::Binding, ids::InternId};
+use crate::{module::WaveStyle, size::SizeSpec, skin::SkinDoc};
 
 /// The track's waveform, zoomed and scrubbed.
-#[derive(Builder, kithara_derive::NodeControl)]
-pub(crate) struct Wave<'a> {
+#[derive(Builder, kithara_derive::Control, kithara_derive::NodeControl)]
+#[control(size = size(self.style, skin))]
+pub(crate) struct Wave<#[cfg(any(feature = "iced", feature = "masonry"))] 'a> {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) badge: Option<InternId>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) zoom: Option<&'a Binding>,
     pub(crate) style: WaveStyle,
 }
 
-impl Control for Wave<'_> {
-    /// Each style is a height the rows it stands in are built to, so a fourth
-    /// one names its own number before it renders.
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        match self.style {
-            WaveStyle::Default => skin.wave.default_size,
-            WaveStyle::Hero => skin.wave.size,
-            WaveStyle::Micro => skin.wave.micro_size,
-        }
+/// Each style fixes the height of its containing row.
+fn size(style: WaveStyle, skin: &SkinDoc) -> SizeSpec {
+    match style {
+        WaveStyle::Default => skin.wave.default_size,
+        WaveStyle::Hero => skin.wave.size,
+        WaveStyle::Micro => skin.wave.micro_size,
     }
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Wave;
     #[cfg(feature = "masonry")]

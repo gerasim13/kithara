@@ -8,7 +8,7 @@ pub mod backends;
 pub mod builtin;
 pub mod capture;
 pub mod compile;
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) mod engine;
 pub mod error;
 pub mod expand;
@@ -20,7 +20,7 @@ pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod size;
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) mod solve;
 pub mod source;
 pub mod view;

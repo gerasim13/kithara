@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::{ids::InternId, skin::ColorRole};
 
 /// One palette colour, shown with its name.
@@ -7,11 +8,13 @@ use crate::{ids::InternId, skin::ColorRole};
 #[control(size = skin.swatch.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Swatch {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) role: ColorRole,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: InternId,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Swatch;
     use crate::{

@@ -14,6 +14,7 @@ pub struct TextMeasurer<'a> {
 }
 
 impl<'a> TextMeasurer<'a> {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) const fn new(context: &'a mut TextContext) -> Self {
         Self { context }
     }

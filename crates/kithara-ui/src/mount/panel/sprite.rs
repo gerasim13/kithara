@@ -1,7 +1,8 @@
 use bon::Builder;
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use num_traits::cast::AsPrimitive;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::ids::InternId;
 
 /// One frame of a picture the skin carries, played by whatever answers its
@@ -14,8 +15,10 @@ use crate::ids::InternId;
 #[control(size = skin.vis.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Sprite {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) sheet: InternId,
     /// How long one pass through every frame of the sheet takes.
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) seconds: f32,
 }
 
@@ -26,7 +29,7 @@ pub(crate) struct Sprite {
 ///
 /// Only where there is drawing: a build that mounts documents without painting
 /// them never asks which frame shows.
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) fn frame_at(seconds: f32, pass: f32, frames: usize) -> usize {
     if frames == 0 || !pass.is_finite() || pass <= 0.0 || !seconds.is_finite() {
         return 0;
@@ -37,7 +40,7 @@ pub(crate) fn frame_at(seconds: f32, pass: f32, frames: usize) -> usize {
     index.min(frames - 1)
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use kithara_platform::sync::Arc;
     use num_traits::cast::AsPrimitive;

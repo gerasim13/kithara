@@ -7,7 +7,7 @@ pub(crate) use panel::{
     ContextBar, Custom, Lottie, PortalMap, Search, Shader, Sprite, Table, Tree,
 };
 pub(crate) use press::{Button, Chip, NavItem, Segmented, Settings, Tab};
-pub(crate) use registry::controls;
+pub(crate) use registry::{config, controls};
 pub(crate) use scalar::{Crossfader, Fader, Knob, Meter, Range, VuStereo, VuVertical};
 pub(crate) use switch::{Checkbox, Toggle};
 pub(crate) use window::{Controls, Drag, TitleBar};

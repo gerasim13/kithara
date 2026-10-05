@@ -7,29 +7,6 @@ use crate::{
     render::skin::CustomSkin,
 };
 
-/// One mounted custom widget, with its own action vocabulary already mapped to
-/// whatever the host that holds it speaks.
-pub(crate) trait MountedCustom<Action> {
-    #[cfg(feature = "masonry")]
-    fn accepts_text_input(&self) -> bool;
-
-    fn frame(&mut self, elapsed: Duration) -> Option<Action>;
-
-    fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;
-
-    fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
-
-    fn paint(
-        &mut self,
-        list: &mut DrawListBuilder,
-        text: &mut TextMeasurer<'_>,
-        bounds: Rect,
-        skin: &CustomSkin,
-    );
-
-    fn repaint(&self) -> Repaint;
-}
-
 pub(crate) struct MappedCustom<Widget, Map> {
     map: Map,
     widget: Widget,
@@ -41,11 +18,13 @@ impl<Widget, Map> MappedCustom<Widget, Map> {
     }
 }
 
-impl<Action, Widget, Map> MountedCustom<Action> for MappedCustom<Widget, Map>
+impl<Action, Widget, Map> CustomWidget for MappedCustom<Widget, Map>
 where
     Widget: CustomWidget,
-    Map: Fn(Widget::Action) -> Action,
+    Action: std::fmt::Debug + Send + 'static,
+    Map: Fn(Widget::Action) -> Action + 'static,
 {
+    type Action = Action;
     delegate::delegate! {
         to self.widget {
             #[cfg(feature = "masonry")]
@@ -67,14 +46,15 @@ where
     }
 }
 
-impl<Action> MountedCustom<Action> for Box<dyn MountedCustom<Action>> {
+impl<Widget: CustomWidget + ?Sized> CustomWidget for Box<Widget> {
+    type Action = Widget::Action;
     delegate::delegate! {
         to (**self) {
             #[cfg(feature = "masonry")]
             fn accepts_text_input(&self) -> bool;
             fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
-            fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;
-            fn frame(&mut self, elapsed: Duration) -> Option<Action>;
+            fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action>;
+            fn frame(&mut self, elapsed: Duration) -> Option<Self::Action>;
             fn paint(
                 &mut self,
                 list: &mut DrawListBuilder,

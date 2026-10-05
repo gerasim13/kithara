@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::{ids::InternId, module::Tone};
 
 /// A caption with a value beside it, toned by the document.
@@ -7,12 +8,15 @@ use crate::{ids::InternId, module::Tone};
 #[control(size = skin.readout.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Readout {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: Option<InternId>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) tone: Tone,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) framed: bool,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Readout;
     use crate::{

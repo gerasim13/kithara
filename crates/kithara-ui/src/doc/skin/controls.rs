@@ -5,11 +5,9 @@ use super::{
     palette::ColorRole,
     primitives::{FaceSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin, ToneColors},
 };
-use crate::{
-    layout::FrameSides,
-    module::{TextStyle, text_roles},
-    size::SizeSpec,
-};
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
+use crate::module::TextStyle;
+use crate::{layout::FrameSides, module::text_roles, size::SizeSpec};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
 #[serde(deny_unknown_fields)]
@@ -865,6 +863,7 @@ macro_rules! define_text_skin {
 
         impl TextSkin {
             /// The entry this skin gives one typographic role.
+            #[cfg(any(test, feature = "iced", feature = "masonry"))]
             pub(crate) fn role(&self, style: TextStyle) -> TextRoleSkin {
                 match style {
                     $(TextStyle::$role => self.$field,)*

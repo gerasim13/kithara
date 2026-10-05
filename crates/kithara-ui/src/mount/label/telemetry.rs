@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::module::ScalarFormat;
 
 /// One formatted number read from an endpoint.
@@ -7,11 +8,13 @@ use crate::module::ScalarFormat;
 #[control(size = skin.telemetry.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Telemetry {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) format: ScalarFormat,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) framed: bool,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Telemetry;
     use crate::{

@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::ids::InternId;
 
 /// The deck's tempo, editable in place.
@@ -7,10 +8,11 @@ use crate::ids::InternId;
 #[control(size = skin.deck.bpm_size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Bpm {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) placeholder: Option<InternId>,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Bpm;
     use crate::{

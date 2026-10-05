@@ -1,8 +1,11 @@
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 use std::ops::Range;
 
 use kithara_derive::Ranged;
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 use num_traits::cast::AsPrimitive;
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 use crate::render::WaveBucket;
 
 #[derive(Clone, Copy, Debug, PartialEq, Ranged)]
@@ -19,6 +22,7 @@ mod consts {
 /// the playhead; the window only selects which bars are visible and where
 /// they land on screen. This is what makes playback scroll instead of
 /// resampling: bar heights stay constant while their pixel positions glide.
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 #[derive(Clone, Copy)]
 pub(crate) struct BarGrid {
     pub(crate) norm_width: f32,
@@ -34,6 +38,7 @@ pub(crate) struct BarGrid {
 /// fraction of a pixel further along than the last, and once that fraction adds
 /// up to one the gap after a bar doubles — a black stripe repeating across the
 /// waveform at a regular interval.
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn bar_grid(
     width: f32,
     step: f32,
@@ -53,6 +58,7 @@ pub(crate) fn bar_grid(
     })
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn bar_bucket_range(bar: i64, norm_width: f32, bucket_count: usize) -> Range<usize> {
     if bar < 0 || bucket_count == 0 || norm_width <= 0.0 {
         return 0..0;
@@ -73,6 +79,7 @@ pub(crate) fn bar_bucket_range(bar: i64, norm_width: f32, bucket_count: usize) -
     start..end
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn max_bucket(buckets: &[WaveBucket], range: Range<usize>) -> Option<WaveBucket> {
     let mut buckets = buckets.get(range)?.iter().copied();
     let first = buckets.next()?;
@@ -83,10 +90,12 @@ pub(crate) fn max_bucket(buckets: &[WaveBucket], range: Range<usize>) -> Option<
     }))
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn norm_to_x(norm: f32, window: &Range<f32>, width: f32) -> f32 {
     (norm - window.start) / (window.end - window.start) * width
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn x_to_norm(x: f32, window: &Range<f32>, width: f32) -> Option<f32> {
     (width > 0.0).then(|| {
         (x / width)
@@ -95,24 +104,28 @@ pub(crate) fn x_to_norm(x: f32, window: &Range<f32>, width: f32) -> Option<f32> 
     })
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn visible_marks<'a>(marks: &'a [f32], window: &Range<f32>) -> &'a [f32] {
     marks
         .get(visible_mark_range(marks, window))
         .unwrap_or_default()
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn visible_mark_range(marks: &[f32], window: &Range<f32>) -> Range<usize> {
     let start = marks.partition_point(|mark| *mark < window.start.max(0.0));
     let end = marks.partition_point(|mark| *mark <= window.end.min(1.0));
     start..end
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn window_bounds(position: f32, zoom: impl Into<Zoom>) -> Range<f32> {
     let position = position.clamp(0.0, 1.0);
     let half_zoom = f32::from(zoom.into()) / 2.0;
     position - half_zoom..position + half_zoom
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn zoom_for_wheel(zoom: impl Into<Zoom>, delta_y: f32) -> Zoom {
     let zoom = zoom.into();
     let factor = if delta_y > 0.0 { 1.25 } else { 0.8 };

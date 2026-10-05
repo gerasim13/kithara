@@ -1,12 +1,15 @@
 use std::collections::BTreeMap;
 
-use crate::{draw::Pt, interact::recognizers::Edge, validate::Gesture};
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
+use crate::interact::recognizers::Edge;
+use crate::{draw::Pt, validate::Gesture};
 #[cfg(feature = "masonry")]
 use crate::{engine::EngineEvent, interact::recognizers::DragEvent};
 
 /// The one place a control event is built. Every publisher and every widget
 /// goes through here, so a binding rule has a single site to attach to instead
 /// of fifteen literals to keep in step.
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn control_event(path: &str, action: ControlAction) -> Published {
     Published::Gesture {
         action,
@@ -14,6 +17,7 @@ pub(crate) fn control_event(path: &str, action: ControlAction) -> Published {
     }
 }
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn carry_event(path: &str, step: Carry) -> Published {
     Published::Carry {
         step,
@@ -26,6 +30,7 @@ pub(crate) fn carry_event(path: &str, step: Carry) -> Published {
 /// Both ends are host-owned scalars under the control's own path, so the
 /// control needs no second document node and the host needs no rule for
 /// turning an index back into a name.
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn span_event(path: &str, edge: Edge, value: f32) -> Published {
     let child = match edge {
         Edge::Min => "min",
@@ -111,10 +116,13 @@ pub struct Carry(pub(crate) CarryStep);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CarryStep {
     /// The row at this index is now being carried out of the table.
+    #[cfg(any(test, feature = "iced", feature = "masonry"))]
     Start(usize),
     /// The pointer crossed into (`true`) or out of (`false`) a drop zone.
+    #[cfg(any(test, feature = "iced", feature = "masonry"))]
     Over(bool),
     /// The pointer was released and the carry ended.
+    #[cfg(any(test, feature = "iced", feature = "masonry"))]
     Drop,
 }
 

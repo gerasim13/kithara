@@ -23,11 +23,14 @@ pub(crate) struct ShaderUniform {
 pub struct ShaderSpec {
     #[cfg(feature = "render")]
     module: Arc<ShaderModule>,
-    #[field(get, vis = "pub(crate)")]
+    #[cfg_attr(
+        any(test, feature = "iced", feature = "masonry"),
+        field(get, vis = "pub(crate)")
+    )]
     uniforms: Vec<ShaderUniform>,
 }
 
-#[cfg(feature = "render")]
+#[cfg(all(feature = "render", any(test, feature = "iced", feature = "masonry")))]
 impl ShaderSpec {
     pub(crate) fn source(&self) -> Arc<str> {
         Arc::clone(&self.module.source)

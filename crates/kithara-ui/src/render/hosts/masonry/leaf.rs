@@ -16,7 +16,7 @@ use tracing::{Span, trace_span};
 
 use super::{
     MasonryControl, MasonryNode, Repaint, Size2, SizeLimits, TextMeasurer,
-    custom::{HostAction, MountedCustom},
+    custom::{CustomWidget, HostAction},
     mount::NodeLayout,
     shader::ShaderLeaf,
     vis::VisLeaf,
@@ -53,7 +53,7 @@ pub(in crate::render) enum Leaf {
         text: Box<TextContext>,
     },
     Custom {
-        widget: Box<dyn MountedCustom<HostAction>>,
+        widget: Box<dyn CustomWidget<Action = HostAction>>,
         /// What the skin this leaf was mounted under dresses its kind in.
         skin: CustomSkin,
         text: Box<TextContext>,

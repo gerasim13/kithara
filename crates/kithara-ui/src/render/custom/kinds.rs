@@ -1,9 +1,9 @@
 use super::{mounted::MappedCustom, widget::CustomWidget};
-use crate::render::{Published, UiEvent, custom::MountedCustom};
+use crate::render::{Published, UiEvent};
 
 /// What the application registers under one extension kind: how to build a
 /// fresh widget, already speaking the document's own event vocabulary.
-type Factory = Box<dyn Fn() -> Box<dyn MountedCustom<Published>>>;
+type Factory = Box<dyn Fn() -> Box<dyn CustomWidget<Action = Published>>>;
 
 /// The extensions an application offers its hosts, named by kind.
 ///
@@ -16,7 +16,8 @@ pub struct CustomKinds {
 }
 
 impl CustomKinds {
-    pub(crate) fn make(&self, kind: &str) -> Option<Box<dyn MountedCustom<Published>>> {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
+    pub(crate) fn make(&self, kind: &str) -> Option<Box<dyn CustomWidget<Action = Published>>> {
         self.kinds.get(kind).map(|make| make())
     }
 

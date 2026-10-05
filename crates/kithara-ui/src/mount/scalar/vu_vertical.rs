@@ -5,10 +5,11 @@ use bon::Builder;
 #[control(size = skin.vu_vertical.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct VuVertical {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) ticks: bool,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::VuVertical;
     use crate::{

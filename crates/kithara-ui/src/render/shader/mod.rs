@@ -1,5 +1,6 @@
 //! Document shader snapshots and toolkit-specific GPU adapters.
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 mod frame;
 #[cfg(feature = "iced")]
 mod iced;
@@ -10,6 +11,7 @@ mod tests;
 
 #[cfg(feature = "masonry")]
 pub(crate) use frame::ShaderFrameError;
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) use frame::{ShaderFrame, logical_extent};
 #[cfg(feature = "iced")]
 pub(crate) use iced::view;

@@ -22,7 +22,7 @@ use crate::{
     render::{
         Published, Skin,
         controls::{PaintState, Probe, snapped},
-        custom::{CustomKinds, MountedCustom, Repaint, Size2, SizeLimits, TextMeasurer},
+        custom::{CustomKinds, CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer},
     },
 };
 
@@ -64,7 +64,7 @@ impl Probe for Redrawn {
 struct CustomState {
     drawn: Option<IcedInstant>,
     paint: PaintState<()>,
-    widget: RefCell<Option<Box<dyn MountedCustom<Published>>>>,
+    widget: RefCell<Option<Box<dyn CustomWidget<Action = Published>>>>,
     kind: String,
 }
 
@@ -86,7 +86,7 @@ impl CustomState {
         self.widget
             .borrow()
             .as_ref()
-            .map_or(Repaint::None, MountedCustom::repaint)
+            .map_or(Repaint::None, CustomWidget::repaint)
     }
 }
 

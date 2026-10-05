@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::ids::InternId;
 
 /// A rotary control dragged along the vertical axis.
@@ -7,10 +8,11 @@ use crate::ids::InternId;
 #[control(size = skin.knob.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Knob {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: Option<InternId>,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use num_traits::cast::AsPrimitive;
 

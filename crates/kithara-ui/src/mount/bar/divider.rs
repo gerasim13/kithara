@@ -6,7 +6,7 @@ use crate::size::{Dim, SizeSpec};
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Divider;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Divider;
     use crate::{

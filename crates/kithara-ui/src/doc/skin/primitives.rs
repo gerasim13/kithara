@@ -2,7 +2,9 @@ use kithara_ui_shaping::{FontFamily, FontWeight, TextStyle};
 use serde::{Deserialize, Serialize};
 
 use super::palette::ColorRole;
-use crate::module::{Tone, WindowControlsStyle};
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
+use crate::module::Tone;
+use crate::module::WindowControlsStyle;
 
 /// One of the two looks a control switches between: what it paints under
 /// itself, and what it draws on top. A face naming no fill paints none, and
@@ -41,6 +43,7 @@ pub struct ToneColors {
 }
 
 /// The role one tone names in a control's own tone set.
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) const fn tone_color(tone: Tone, tones: ToneColors) -> ColorRole {
     match tone {
         Tone::Accent => tones.accent,
@@ -66,6 +69,7 @@ pub struct TextRoleSkin {
 impl TextRoleSkin {
     /// This role set in the face a run names, keeping the skin's where it
     /// names none.
+    #[cfg(any(test, feature = "iced", feature = "masonry"))]
     pub(crate) fn faced(self, font: Option<FontFamily>, weight: Option<FontWeight>) -> Self {
         Self {
             font: font.unwrap_or(self.font),

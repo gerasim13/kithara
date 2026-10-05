@@ -9,11 +9,15 @@ use crate::{ids::InternId, size::SizeSpec};
 #[derive(kithara_derive::Control)]
 #[control(size = SizeSpec::FILL)]
 pub(crate) struct Custom {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) kind: InternId,
 }
 
 impl Custom {
-    pub(crate) const fn new(kind: InternId) -> Self {
-        Self { kind }
+    pub(crate) const fn new(_kind: InternId) -> Self {
+        Self {
+            #[cfg(any(feature = "iced", feature = "masonry"))]
+            kind: _kind,
+        }
     }
 }

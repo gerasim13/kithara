@@ -9,10 +9,6 @@ use iced::{
 use kithara_platform::time::Instant;
 
 use super::{
-    super::{
-        Carried, ControlAction, InputOwner, Published, control_event, controls::RetainedCanvas,
-        drag, index, scalar,
-    },
     paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect},
 };
 use crate::{
@@ -21,6 +17,10 @@ use crate::{
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerPhase, iced as iced_interact,
         recognizers::{ItemDrag, Scalar, Track, click},
+    },
+    render::{
+        Carried, ControlAction, InputOwner, Published, control_event, controls::RetainedCanvas,
+        drag, index, scalar,
     },
 };
 

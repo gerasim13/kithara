@@ -188,6 +188,7 @@ impl TextStyle {
     /// Every host asks here rather than deciding for itself, because the case a
     /// run is set in changes how wide it is, and two hosts that answered
     /// separately would lay the same document out differently.
+    #[cfg(any(test, feature = "iced", feature = "masonry"))]
     pub(crate) fn cased(self, content: String) -> String {
         match self {
             Self::MicroLabel => content.to_uppercase(),

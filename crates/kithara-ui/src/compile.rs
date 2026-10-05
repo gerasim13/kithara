@@ -60,7 +60,7 @@ pub struct CompiledUi {
 }
 
 impl CompiledUi {
-    #[cfg(feature = "render")]
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     #[must_use]
     pub(crate) const fn draw_buffers(&self) -> &DrawBuffers {
         &self.draw_buffers

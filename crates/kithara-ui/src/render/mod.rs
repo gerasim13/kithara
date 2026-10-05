@@ -1,61 +1,51 @@
 pub mod address;
-pub(crate) mod controls;
 pub mod custom;
 pub mod document;
-mod drag;
-#[cfg(test)]
-mod drop_fixture;
 pub mod event;
-#[cfg(feature = "iced")]
-pub mod fonts;
 pub mod gpu;
-mod hosted;
-mod icons;
-#[cfg(feature = "iced")]
-mod immediate;
-mod layer;
-#[cfg(feature = "masonry")]
-pub mod masonry;
-#[cfg(feature = "masonry")]
-mod masonry_widgets;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+mod hosts;
 pub mod model;
 mod owner;
-mod picker;
 pub mod picture;
-#[cfg(feature = "iced")]
-mod placed;
-pub(crate) mod scroll;
 pub mod shader;
 pub mod skin;
-#[cfg(feature = "iced")]
-mod table;
-mod text_input;
 pub mod theme;
-#[cfg(feature = "iced")]
-pub mod tree;
 pub mod vis;
-mod window;
+
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use hosts::{drag, hosted, icons, layer, picker, text_input, window};
+#[cfg(feature = "iced")]
+use hosts::{immediate, placed, table};
+#[cfg(all(test, any(feature = "iced", feature = "masonry")))]
+use hosts::drop_fixture;
 
 pub use address::{Node, Scope, Walk};
 pub use document::{Clock, Ctx, PlacedMount, Snap};
-pub(crate) use drag::{Carried, DragSession};
 pub use event::{Carry, ControlAction, Published, UiEvent, WindowCommand, WindowEdge, WriteValue};
-pub(crate) use event::{CarryStep, carry_event, control_event, span_event};
-pub(crate) use hosted::{HostedControlPlan, Resolving};
-pub(crate) use icons::Mark;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) use {
+    drag::{Carried, DragSession},
+    event::{CarryStep, carry_event, control_event, span_event},
+    hosted::{HostedControlPlan, Resolving},
+    hosts::{controls, scroll},
+    icons::Mark,
+    layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover},
+    picker::{picker_hits, picker_selected_index},
+    text_input::text_input_layout,
+    window::{DragGhost, TitleBar, WindowControls, WindowSurface},
+};
 #[cfg(feature = "iced")]
-pub use immediate::LayoutPreview;
-pub(crate) use layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover};
+pub use hosts::{fonts, immediate::LayoutPreview, tree};
+#[cfg(feature = "masonry")]
+pub use hosts::masonry;
 pub use model::{
     Badge, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell,
     TableRow, TableValue, TreeRow, WaveBucket, WaveformView,
 };
 pub use owner::InputOwner;
-pub(crate) use picker::{picker_hits, picker_selected_index};
 pub use picture::{Pictures, Sheet, SheetError};
 pub use skin::{CrossfaderLabels, CustomSkin, Skin};
-pub(crate) use text_input::text_input_layout;
-pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 #[cfg(feature = "iced")]
 pub(crate) use {
     controls::{ChromeLeaf, Marked, Marks, Probe, chrome_leaf, header_chevron, tree_rows},

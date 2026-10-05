@@ -5,10 +5,11 @@ use bon::Builder;
 #[control(size = skin.crossfader.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Crossfader {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) ticks: bool,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use num_traits::cast::AsPrimitive;
 

@@ -49,11 +49,11 @@ mod art {
     use super::Art;
 
     pub(super) static PLAY_REVERSE: Art =
-        Art::new(include_str!("../../assets/icons/play-reverse.svg"));
+        Art::new(include_str!("../../../assets/icons/play-reverse.svg"));
     pub(super) static HEART_FILLED: Art =
-        Art::new(include_str!("../../assets/icons/heart-filled.svg"));
-    pub(super) static KITHARA: Art = Art::new(include_str!("../../assets/icons/kithara.svg"));
-    pub(super) static ZVUK: Art = Art::new(include_str!("../../assets/icons/zvuk.svg"));
+        Art::new(include_str!("../../../assets/icons/heart-filled.svg"));
+    pub(super) static KITHARA: Art = Art::new(include_str!("../../../assets/icons/kithara.svg"));
+    pub(super) static ZVUK: Art = Art::new(include_str!("../../../assets/icons/zvuk.svg"));
 }
 
 /// What an icon is made of, once its source has been resolved.

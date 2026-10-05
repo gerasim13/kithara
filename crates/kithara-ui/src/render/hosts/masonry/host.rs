@@ -11,7 +11,7 @@ use masonry::core::WidgetId;
 use super::{
     CustomWidget, MasonryNode,
     built::{BlockState, LayerParts},
-    custom::{HostAction, MappedCustom, MountedCustom},
+    custom::{HostAction, MappedCustom},
     flex::{ChildLayout, Flex},
     leaf::{Leaf, TextFace, TextFaces, WindowLeafLayer},
     mount::{
@@ -58,7 +58,7 @@ pub struct MasonryHost<'a, Action = Published> {
     pub(in crate::render) skin: &'a Skin,
     pub(in crate::render) ctx: Ctx<'a, 'a>,
     pub(in crate::render) map_event: Rc<dyn Fn(Published) -> HostAction>,
-    custom: BTreeMap<String, Box<dyn MountedCustom<HostAction>>>,
+    custom: BTreeMap<String, Box<dyn CustomWidget<Action = HostAction>>>,
     #[field(with)]
     state: MasonryState,
     action: std::marker::PhantomData<fn() -> Action>,
@@ -194,7 +194,7 @@ where
     /// dress and is dressed in nothing.
     pub(in crate::render) fn custom_leaf(
         &self,
-        widget: Box<dyn MountedCustom<HostAction>>,
+        widget: Box<dyn CustomWidget<Action = HostAction>>,
         kind: Option<&str>,
         declared: Size<Length>,
     ) -> MasonryNode<Action> {

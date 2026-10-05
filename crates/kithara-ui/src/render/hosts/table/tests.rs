@@ -18,7 +18,6 @@ use iced_tiny_skia::Renderer as TinySkiaRenderer;
 use kithara_test_utils::kithara;
 
 use super::{
-    super::{Marked, Published, Skin, controls::RetainedCanvas},
     paint::{TablePaint, TableState, local_rect},
     widget::*,
 };
@@ -34,7 +33,8 @@ use crate::{
     interact::recognizers::Track,
     module::{TableColumn, TableColumnStyle, TableFrame},
     render::{
-        Carry, CarryStep, ControlAction,
+        Carry, CarryStep, ControlAction, Marked, Published, Skin,
+        controls::RetainedCanvas,
         fonts::{FONT_BYTES, SANS},
     },
     shaping::TextContext,

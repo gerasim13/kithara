@@ -1,19 +1,19 @@
 use bon::Builder;
 
-use crate::{
-    ids::InternId,
-    size::{Dim, SizeSpec},
-};
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use crate::ids::InternId;
+use crate::size::{Dim, SizeSpec};
 
 /// A full-width tab heading one page of a panel.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
 #[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)), composes_size = false)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Tab {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: InternId,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Tab;
     use crate::{

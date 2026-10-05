@@ -1,36 +1,42 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use crate::{expand::Binding, module::IconName, skin::ColorRole};
 use crate::{
-    expand::Binding,
-    module::{GlyphStyle, IconName},
-    mount::Control,
+    module::GlyphStyle,
     size::{Dim, SizeSpec},
-    skin::{ColorRole, SkinDoc},
+    skin::SkinDoc,
 };
 
 /// A single icon, drawn as a text glyph.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::NodeControl)]
-pub(crate) struct Glyph<'a> {
+#[derive(
+    Builder, kithara_derive::ViewControl, kithara_derive::Control, kithara_derive::NodeControl,
+)]
+#[control(size = size(self.style, skin))]
+pub(crate) struct Glyph<#[cfg(any(feature = "iced", feature = "masonry"))] 'a> {
     pub(crate) style: GlyphStyle,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) icon: IconName,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active: Option<&'a Binding>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active_color: Option<ColorRole>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active_icon: Option<IconName>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) color: Option<ColorRole>,
 }
 
-impl Control for Glyph<'_> {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        match self.style {
-            GlyphStyle::Menu => cell(skin.menu.icon_size),
-            GlyphStyle::MenuBurger => cell(skin.menu.burger_icon_size),
-            GlyphStyle::MenuSmall => cell(skin.menu.small_icon_size),
-            GlyphStyle::MenuCell => cell(skin.menu.cell_icon_size),
-            GlyphStyle::Default | GlyphStyle::Vis => SizeSpec::new(
-                Dim::Fixed(skin.nav.header_icon_size),
-                Dim::Fixed(skin.nav.header_height),
-            ),
-        }
+fn size(style: GlyphStyle, skin: &SkinDoc) -> SizeSpec {
+    match style {
+        GlyphStyle::Menu => cell(skin.menu.icon_size),
+        GlyphStyle::MenuBurger => cell(skin.menu.burger_icon_size),
+        GlyphStyle::MenuSmall => cell(skin.menu.small_icon_size),
+        GlyphStyle::MenuCell => cell(skin.menu.cell_icon_size),
+        GlyphStyle::Default | GlyphStyle::Vis => SizeSpec::new(
+            Dim::Fixed(skin.nav.header_icon_size),
+            Dim::Fixed(skin.nav.header_height),
+        ),
     }
 }
 
@@ -41,7 +47,7 @@ fn cell(side: f32) -> SizeSpec {
     SizeSpec::new(Dim::Fixed(side), Dim::Fill)
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Glyph;
     use crate::{

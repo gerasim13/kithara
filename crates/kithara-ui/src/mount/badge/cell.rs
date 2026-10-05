@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::ids::InternId;
 
 /// One box of a grid, optionally captioned and optionally picked out.
@@ -7,11 +8,13 @@ use crate::ids::InternId;
 #[control(size = skin.cell.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Cell {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: Option<InternId>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) highlighted: bool,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Cell;
     use crate::{

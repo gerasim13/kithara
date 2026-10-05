@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::module::DeckSummaryStyle;
 
 /// The deck's headline: what is loaded and how it is playing.
@@ -7,10 +8,11 @@ use crate::module::DeckSummaryStyle;
 #[control(size = skin.deck.summary_size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Summary {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) style: DeckSummaryStyle,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Summary;
     #[cfg(feature = "masonry")]

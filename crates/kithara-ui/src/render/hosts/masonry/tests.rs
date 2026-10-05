@@ -658,11 +658,11 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
     for (preset, fixture) in [
         (
             builtin::MICRO_PRESET,
-            include_str!("../../../tests/fixtures/layout/micro.rects"),
+            include_str!("../../../../tests/fixtures/layout/micro.rects"),
         ),
         (
             builtin::PLAYER_PRESET,
-            include_str!("../../../tests/fixtures/layout/player.rects"),
+            include_str!("../../../../tests/fixtures/layout/player.rects"),
         ),
     ] {
         let ui = compile(

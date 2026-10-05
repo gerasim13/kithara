@@ -1,9 +1,9 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use crate::{ids::InternId, layout::FrameSides, module::IconName};
 use crate::{
-    ids::InternId,
-    layout::FrameSides,
-    module::{ButtonStyle, IconName},
+    module::ButtonStyle,
     mount::Control,
     size::{Dim, SizeSpec},
     skin::SkinDoc,
@@ -13,9 +13,13 @@ use crate::{
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::NodeControl)]
 pub(crate) struct Button {
     pub(crate) style: ButtonStyle,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: InternId,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active_label: Option<InternId>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) frame: Option<FrameSides>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) icon: Option<IconName>,
 }
 
@@ -35,7 +39,7 @@ fn square(side: f32) -> SizeSpec {
     SizeSpec::new(Dim::Fixed(side), Dim::Fixed(side))
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Button;
     use crate::{

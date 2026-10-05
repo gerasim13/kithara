@@ -4,7 +4,7 @@
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Brand;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Brand;
     use crate::{

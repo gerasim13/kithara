@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::ids::InternId;
 
 /// A labelled picker the document opens.
@@ -7,10 +8,11 @@ use crate::ids::InternId;
 #[control(size = skin.select.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Select {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: InternId,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Select;
     use crate::{

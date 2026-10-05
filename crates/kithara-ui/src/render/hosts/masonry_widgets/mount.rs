@@ -21,7 +21,7 @@ use crate::{
         masonry::{
             MasonryHost, MasonryNode, Painted,
             controls::{Retained, SearchLeaf, TableLeaf, TreeLeaf},
-            custom::Respoken,
+            custom::MappedCustom,
             flex::{Flex, box_constraints, normalized},
             leaf::{DragProgram, Leaf},
             node::Node,
@@ -137,7 +137,7 @@ impl NodeControl for mount::Custom {
         };
         let map = Rc::clone(&host.map_event);
         host.custom_leaf(
-            Box::new(Respoken::new(widget, move |event| map(event))),
+            Box::new(MappedCustom::new(widget, move |event| map(event))),
             Some(kind),
             cx.declared,
         )

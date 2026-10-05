@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::{expand::Binding, ids::InternId};
 
 /// One frame of a named artwork, played by whatever answers its endpoint.
@@ -11,18 +12,22 @@ use crate::{expand::Binding, ids::InternId};
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
 #[control(size = skin.vis.size)]
 #[derive(kithara_derive::NodeControl)]
-pub(crate) struct Lottie<'a> {
+pub(crate) struct Lottie<#[cfg(any(feature = "iced", feature = "masonry"))] 'a> {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) artwork: InternId,
     /// The flag that says which of the two artworks stands. It is an endpoint
     /// of its own rather than the control's value, which carries seconds.
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active: Option<&'a Binding>,
     /// The artwork shown while `active` reads true.
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active_artwork: Option<InternId>,
     /// How long one pass through the whole artwork takes.
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) seconds: f32,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use num_traits::cast::AsPrimitive;
 

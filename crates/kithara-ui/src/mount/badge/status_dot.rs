@@ -1,20 +1,26 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::{expand::Binding, ids::InternId, module::Tone};
 
 /// A toned dot beside a word.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
 #[control(size = skin.status_dot.size)]
 #[derive(kithara_derive::NodeControl)]
-pub(crate) struct StatusDot<'a> {
+pub(crate) struct StatusDot<#[cfg(any(feature = "iced", feature = "masonry"))] 'a> {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: InternId,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active: Option<&'a Binding>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) active_tone: Option<Tone>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) dot_size: Option<f32>,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) tone: Tone,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::StatusDot;
     use crate::{

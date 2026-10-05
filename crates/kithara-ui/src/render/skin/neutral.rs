@@ -2,11 +2,15 @@ use std::collections::BTreeMap;
 
 use kithara_platform::sync::Arc;
 
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 use crate::{
     draw::{Rgba, TRANSPARENT},
+    module::TextStyle,
+    skin::{ColorRole, TextRoleSkin},
+};
+use crate::{
     error::UiDocError,
     ids::SourceUri,
-    module::TextStyle,
     render::{
         picture::{Pictures, Sheet},
         skin::{CustomSkin, CustomSkins},
@@ -14,12 +18,12 @@ use crate::{
     },
     shaping::{FontPolicy, TextResources},
     skin::{
-        ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
-        DeckSkin, DividerSkin, DragSkin, FaderSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin,
-        LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, PortalMapSkin, RangeSkin, ReadoutSkin,
-        ScrollSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin,
-        TableSkin, TelemetrySkin, TextRoleSkin, TextSkin, ToggleSkin, TreeSkin, VisSkin,
-        VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, skin_sections,
+        ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, CrossfaderSkin, DeckSkin,
+        DividerSkin, DragSkin, FaderSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin, LayoutSkin,
+        MenuSkin, MeterSkin, NavSkin, PopSkin, PortalMapSkin, RangeSkin, ReadoutSkin, ScrollSkin,
+        SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin, TableSkin,
+        TelemetrySkin, TextSkin, ToggleSkin, TreeSkin, VisSkin, VuStereoSkin, VuVerticalSkin,
+        WaveSkin, WindowSkin, skin_sections,
     },
     source::SourceResolver,
     text::TextDoc,
@@ -58,7 +62,7 @@ macro_rules! define_skin {
             /// resolved. A document names a picture; the skin is what answers
             /// the name, so switching skins switches the drawings.
             pictures: Arc<Pictures>,
-            #[field(get, vis = "pub(crate)")]
+            #[cfg_attr(any(feature = "iced", feature = "masonry"), field(get, vis = "pub(crate)"))]
             text_resources: Arc<TextResources>,
             /// The document this skin was resolved from, which is what a
             /// host compiles its pages against: what a page measures comes
@@ -134,6 +138,7 @@ skin_sections!(define_skin);
 ///
 /// A node is active or it is not, and the active role only wins while it is;
 /// a node naming no active role keeps the base one it declared.
+#[cfg(any(test, feature = "iced", feature = "masonry"))]
 pub(crate) fn active_tone(
     base: Option<ColorRole>,
     active: Option<ColorRole>,
@@ -189,6 +194,7 @@ impl Skin {
         Self::resolve_with_font_policy(document, catalog, origin, resolver, FontPolicy::System)
     }
 
+    #[cfg(any(test, feature = "iced", feature = "masonry"))]
     pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
         self.palette[role]
     }
@@ -210,6 +216,7 @@ impl Skin {
     /// typefaces, which is the one thing the shared base exists to prevent.
     /// There is no wildcard arm, so a new style does not build until it is
     /// given a skin entry.
+    #[cfg(any(test, feature = "iced", feature = "masonry"))]
     pub(crate) fn text_role(
         &self,
         style: TextStyle,
@@ -227,6 +234,7 @@ impl Skin {
 
     /// Resolves one state of a [`StateColors`]: a state naming no role paints
     /// nothing.
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) fn tint(&self, role: Option<ColorRole>) -> Rgba {
         role.map_or(TRANSPARENT, |role| self.rgba(role))
     }

@@ -1,10 +1,11 @@
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::{atoms::bar::preset::PresetItem, builtin};
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod consts {
     use super::*;
 
-    #[cfg(feature = "render")]
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(super) const ITEMS: [PresetItem; 2] = [
         PresetItem {
             label: "MICRO",
@@ -23,7 +24,7 @@ mod consts {
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Preset;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::{Preset, consts::ITEMS};
     #[cfg(feature = "masonry")]

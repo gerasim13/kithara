@@ -1,21 +1,21 @@
 use bon::Builder;
 
-use crate::{
-    expand::Binding,
-    ids::InternId,
-    size::{Dim, SizeSpec},
-};
+use crate::size::{Dim, SizeSpec};
+#[cfg(any(feature = "iced", feature = "masonry"))]
+use crate::{expand::Binding, ids::InternId};
 
 /// The strip under the tree that names the scope in view.
 #[derive(Builder, kithara_derive::Control)]
 #[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height)))]
 #[derive(kithara_derive::NodeControl)]
-pub(crate) struct ContextBar<'a> {
+pub(crate) struct ContextBar<#[cfg(any(feature = "iced", feature = "masonry"))] 'a> {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) scope_items: &'a [InternId],
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) scope: Option<&'a Binding>,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::ContextBar;
     use crate::{

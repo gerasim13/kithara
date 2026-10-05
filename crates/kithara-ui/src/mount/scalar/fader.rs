@@ -1,5 +1,6 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::{ids::InternId, module::FaderStyle};
 
 /// A rail and a cap, dragged along the rail.
@@ -7,11 +8,13 @@ use crate::{ids::InternId, module::FaderStyle};
 #[control(size = skin.fader.size)]
 #[derive(kithara_derive::NodeControl)]
 pub(crate) struct Fader {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) style: FaderStyle,
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) label: Option<InternId>,
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use num_traits::cast::AsPrimitive;
 

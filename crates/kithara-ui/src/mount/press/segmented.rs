@@ -1,16 +1,18 @@
 use bon::Builder;
 
+#[cfg(any(feature = "iced", feature = "masonry"))]
 use crate::ids::InternId;
 
 /// A row of mutually exclusive segments, one of them picked.
 #[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
 #[control(size = skin.segmented.size)]
 #[derive(kithara_derive::NodeControl)]
-pub(crate) struct Segmented<'a> {
+pub(crate) struct Segmented<#[cfg(any(feature = "iced", feature = "masonry"))] 'a> {
+    #[cfg(any(feature = "iced", feature = "masonry"))]
     pub(crate) items: &'a [InternId],
 }
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use num_traits::ToPrimitive;
 
