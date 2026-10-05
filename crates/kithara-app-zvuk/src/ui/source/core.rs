@@ -245,12 +245,12 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
         let Some(changed) = self.catalogue.select(node) else {
             return;
         };
-        let retry = self.faults.page.is_some()
+        let reload_selected = self.faults.page.is_some()
             && self.active.is_none()
             && self.pending.is_none()
             && !self.cancel.is_cancelled();
-        if changed || retry {
-            if retry {
+        if changed || reload_selected {
+            if reload_selected {
                 self.faults.set(Operation::Page, None);
             }
             self.queue(Instant::now());
