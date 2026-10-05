@@ -138,12 +138,19 @@ jobs:
           fi
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
+  images:
+    name: Prepare pinned CI images
+    needs: authorize
+    uses: ./.github/workflows/host.yml
+    with:
+      operation: images
+
   # The single self-hosted gate every substantive job depends on. The runner
   # labels remain repository configuration rather than naming an owner or a
   # machine in this workflow.
   gate:
     name: Self-hosted gate
-    needs: authorize
+    needs: [authorize, images]
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 5
     outputs:
@@ -259,6 +266,7 @@ jobs:
     if: ${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}
     needs:
       - authorize
+      - images
       - gate
       - lanes
       - deep

@@ -8,7 +8,7 @@ use clap::{Args, Subcommand};
 use tracing::info;
 
 use super::{
-    cleanup, compose, firewall,
+    cleanup, compose, firewall, image_runner,
     profile::{LinuxHost, RunnerFlavor},
     registration, services, system, windows,
 };
@@ -53,6 +53,15 @@ enum LinuxCommand {
     },
     /// Write and enable one service per runner in the profile.
     InstallServices,
+    /// Install only the native listener for owner-authorized image jobs.
+    InstallImageRunner,
+    /// Mint a one-job native registration before the image listener starts.
+    ConfigureImageRunner {
+        #[arg(long)]
+        env_file: PathBuf,
+    },
+    /// Build this host's pinned images and update its cleanup keep set.
+    Images,
     /// Generate the whole fleet as one Compose project, from the same profile,
     /// and install the memory budget its services are started under.
     Compose {
@@ -148,6 +157,21 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
         LinuxCommand::Configure { runner, env_file } => {
             registration::configure(&host, host.runner(runner)?, env_file)
         }
+        LinuxCommand::ConfigureImageRunner { env_file } => {
+            registration::configure_image_runner(&host, env_file)
+        }
+        LinuxCommand::InstallImageRunner => {
+            let pins = CiPins::load(&args.pins)?;
+            image_runner::install(&process, &host, &pins, &args.config)
+        }
+        LinuxCommand::Images => {
+            let pins = CiPins::load(&args.pins)?;
+            process.require_tools(&["docker"])?;
+            for image in required_builds(&host) {
+                image::build_pinned(&process, image, &pins)?;
+            }
+            services::refresh_cleanup(&process, &host, &pins)
+        }
         LinuxCommand::Cleanup { keep } => cleanup::run(&process, &host, keep),
         LinuxCommand::InstallServices => {
             let pins = CiPins::load(&args.pins)?;
@@ -206,13 +230,30 @@ mod tests {
         let host = super::super::profile::tests::host_fixture();
         let builds = required_builds(&host);
         assert!(
-            matches!(builds.first(), Some(ImageCommand::Toolchain)),
+            matches!(
+                builds.as_slice(),
+                [
+                    ImageCommand::Toolchain,
+                    ImageCommand::Runner,
+                    ImageCommand::Android,
+                    ImageCommand::AndroidRunner
+                ]
+            ),
             "{builds:?}"
         );
+    }
+
+    #[test]
+    fn a_plain_fleet_builds_only_its_toolchain_and_runner() {
+        let mut host = super::super::profile::tests::host_fixture();
+        host.runners
+            .retain(|runner| matches!(runner.flavor, RunnerFlavor::Plain));
+        let builds = required_builds(&host);
         assert!(
-            builds
-                .iter()
-                .any(|image| matches!(image, ImageCommand::AndroidRunner)),
+            matches!(
+                builds.as_slice(),
+                [ImageCommand::Toolchain, ImageCommand::Runner]
+            ),
             "{builds:?}"
         );
     }

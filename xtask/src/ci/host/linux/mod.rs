@@ -3,6 +3,7 @@ pub(crate) mod command;
 mod compose;
 mod container;
 mod firewall;
+mod image_runner;
 mod permissions;
 mod profile;
 mod registration;

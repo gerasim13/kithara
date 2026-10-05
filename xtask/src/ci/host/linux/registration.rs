@@ -49,7 +49,35 @@ struct JitRequest<'a> {
 /// and expires with the job it serves. The token that mints it stays on the
 /// host: only the generated configuration reaches the container.
 pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path) -> Result<()> {
-    let credential = host.credential(&runner.repository)?;
+    let config = mint_jit(host, &runner.repository, &runner.name, &runner.labels)?;
+    write_secret(env_file, &runtime_environment(runner, &config)?)?;
+    info!(runner = runner.name, "runner configuration written");
+    Ok(())
+}
+
+/// Give the native listener a one-job configuration through the runner's
+/// secret input environment. The runner masks and removes this input before
+/// starting a job, and no credential reaches the process arguments.
+pub(super) fn configure_image_runner(host: &LinuxHost, env_file: &Path) -> Result<()> {
+    let runner = host
+        .image_runner
+        .as_ref()
+        .context("this machine's profile defines no native image runner")?;
+    let config = mint_jit(host, &runner.repository, &runner.name, &runner.labels)?;
+    write_image_configuration(env_file, &config)?;
+    info!(runner = runner.name, "image runner configuration written");
+    Ok(())
+}
+
+fn write_image_configuration(env_file: &Path, config: &str) -> Result<()> {
+    write_secret(
+        env_file,
+        &format!("ACTIONS_RUNNER_INPUT_JITCONFIG={config}\n"),
+    )
+}
+
+fn mint_jit(host: &LinuxHost, repository: &str, name: &str, labels: &[String]) -> Result<String> {
+    let credential = host.credential(repository)?;
     let token = read_token(&credential.token_file)?;
     let client = client(&token)?;
     let endpoint = format!(
@@ -57,15 +85,15 @@ pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path)
         credential.name
     );
 
-    prune_offline(&client, &endpoint, &runner.name)?;
+    prune_offline(&client, &endpoint, name)?;
 
     let request = JitRequest {
         // A name is claimed until its runner is removed, and an ephemeral
         // runner is removed only after it has served a job. The process id
         // keeps a restart from colliding with the registration it replaces.
-        name: format!("{}-{}", runner.name, process::id()),
+        name: format!("{name}-{}", process::id()),
         runner_group_id: 1,
-        labels: &runner.labels,
+        labels,
         work_folder: "_work",
     };
     let response = client
@@ -76,7 +104,7 @@ pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path)
     if !response.status().is_success() {
         bail!(
             "GitHub refused a runner configuration for {}: {}",
-            runner.name,
+            name,
             response.status()
         );
     }
@@ -84,12 +112,7 @@ pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path)
         .json()
         .context("reading the just-in-time runner configuration")?;
 
-    write_secret(
-        env_file,
-        &runtime_environment(runner, &config.encoded_jit_config)?,
-    )?;
-    info!(runner = runner.name, "runner configuration written");
-    Ok(())
+    Ok(config.encoded_jit_config)
 }
 
 /// Everything a runner's container starts with that is not the same for every
@@ -203,7 +226,13 @@ fn prune_offline(client: &Client, endpoint: &str, prefix: &str) -> Result<()> {
 }
 
 fn is_prunable(runner: &Registration, prefix: &str) -> bool {
-    runner.status == "offline" && !runner.busy && runner.name.starts_with(prefix)
+    runner.status == "offline"
+        && !runner.busy
+        && runner
+            .name
+            .strip_prefix(prefix)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .is_some_and(|pid| pid.parse::<u32>().is_ok())
 }
 
 fn client(token: &str) -> Result<Client> {
@@ -244,7 +273,10 @@ fn write_secret(path: &Path, contents: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Registration, is_prunable, runtime_environment};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::{Registration, is_prunable, runtime_environment, write_image_configuration};
     use crate::{
         ci::{environment::CacheTrust, host::linux::profile::tests::host_fixture},
         consts,
@@ -314,7 +346,7 @@ mod tests {
     fn runner(status: &str, busy: bool) -> Registration {
         Registration {
             id: 1,
-            name: "gerasim13-04-old".to_owned(),
+            name: "gerasim13-04-42".to_owned(),
             status: status.to_owned(),
             busy,
         }
@@ -325,5 +357,39 @@ mod tests {
         assert!(!is_prunable(&runner("offline", true), "gerasim13-04"));
         assert!(is_prunable(&runner("offline", false), "gerasim13-04"));
         assert!(!is_prunable(&runner("online", false), "gerasim13-04"));
+    }
+
+    #[test]
+    fn jit_cleanup_cannot_remove_a_similarly_named_runner() {
+        let mut registration = runner("offline", false);
+        for sibling in [
+            "gerasim13-040-42",
+            "gerasim13-04-images-42",
+            "gerasim13-04-old",
+        ] {
+            sibling.clone_into(&mut registration.name);
+            assert!(!is_prunable(&registration, "gerasim13-04"), "{sibling}");
+        }
+        format!("gerasim13-04-{}", std::process::id()).clone_into(&mut registration.name);
+        assert!(is_prunable(&registration, "gerasim13-04"));
+        assert!(!is_prunable(&registration, "gerasim13"));
+    }
+
+    #[test]
+    fn native_jit_credentials_use_only_the_runners_secret_input() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("native.env");
+        write_image_configuration(&path, "one-job-credential").expect("native configuration");
+        let text = std::fs::read_to_string(&path).expect("native environment");
+        assert_eq!(text, "ACTIONS_RUNNER_INPUT_JITCONFIG=one-job-credential\n");
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(path)
+                .expect("native environment metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            consts::OWNER_ONLY
+        );
     }
 }

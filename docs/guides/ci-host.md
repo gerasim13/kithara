@@ -45,19 +45,29 @@ is present and reloads its agents; a Linux host builds the images its profile
 asks for and installs its units. Every step is idempotent — an image that is
 already there is only retagged — so a run costs seconds when nothing moved.
 
-Neither pipeline runs it on a push. On GitLab it is `host:provision`, reached
+Neither pipeline runs provisioning on a push. On GitLab it is `host:provision`, reached
 only by a pipeline started on the default branch with `KITHARA_PROVISION=1`;
 that run carries nothing else. On GitHub it is the `Host` workflow, started by
-hand. Provisioning writes to the machine
+hand with `operation=provision`. Provisioning writes to the machine
 every lane depends on, and a merge-request or quarantine ref carries code no
 one has reviewed yet.
+
+Image preparation is separate from provisioning. GitLab's `linux:image` and
+GitHub's image stage build from the checkout's pins before Linux lanes run.
+The Linux image command refreshes the cleanup keep set after every required
+image builds; it does not rewrite or restart the ordinary fleet. Existing jobs
+finish in their current containers, and subsequent listeners use the floating
+tags that the build published.
 
 Three things are granted once, by hand, and nothing in a pipeline can grant
 them:
 
-- A non-ephemeral runner on the Linux host itself, labelled by
+- A dedicated native image runner on the Linux host itself, labelled by
   `KITHARA_HOST_RUNNER_LABEL`, with the Docker daemon and `systemctl` in
-  reach. The fleet's own runners are throwaway containers that have neither.
+  reach. The optional `image_runner` profile names it; `ci host linux install-image-runner` installs only its service. Each listener receives fresh
+  one-job registration through the existing credential owner. The workflow
+  admits only the repository owner, including the actor requesting a rerun;
+  ordinary runner containers retain their isolation.
 - The steps that own root-owned files re-run this executable under `sudo -n`,
   which never prompts. A line in `/etc/sudoers.d/kithara-ci` granting the
   runner user that one command — and nothing else — is what lets them run;

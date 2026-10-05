@@ -115,9 +115,15 @@ jobs:
             exit 1
           }
 
+  images:
+    needs: authorize
+    uses: ./.github/workflows/host.yml
+    with:
+      operation: images
+
   execute:
     name: Repeated run
-    needs: authorize
+    needs: [authorize, images]
     if: >-
       ${{ github.event.repository.fork == true &&
           github.actor == github.repository_owner &&

@@ -255,6 +255,15 @@ fn install_cleanup_timer(keep: &[String]) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn refresh_cleanup(process: &Process, host: &LinuxHost, pins: &CiPins) -> Result<()> {
+    install_cleanup_timer(&installed_images(host, pins)?)?;
+    process.run(
+        "systemctl",
+        &["daemon-reload"],
+        "reload cleanup image generation",
+    )
+}
+
 /// Which cores this runner's jobs may use.
 ///
 /// Blocks are handed out in order and wrap around the machine, so runners

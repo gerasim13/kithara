@@ -405,14 +405,17 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some("github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''")
     );
     let gate = workflow_job(jobs, "gate");
-    assert_eq!(job_needs(gate), BTreeSet::from(["authorize".to_owned()]));
+    assert_eq!(
+        job_needs(gate),
+        BTreeSet::from(["authorize".to_owned(), "images".to_owned()])
+    );
     assert_eq!(
         mapping_field(gate, "runs-on").as_str(),
         Some("${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}")
     );
 
     for name in workflow_job_names(jobs) {
-        if matches!(name.as_str(), "authorize" | "gate" | "required") {
+        if matches!(name.as_str(), "authorize" | "images" | "gate" | "required") {
             continue;
         }
         let job = workflow_job(jobs, &name);
@@ -952,6 +955,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         workflow_job_names(jobs),
         BTreeSet::from([
             "authorize".to_owned(),
+            "images".to_owned(),
             "execute".to_owned(),
             "report".to_owned(),
         ])
@@ -1007,7 +1011,10 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     }
 
     let execute = workflow_job(jobs, "execute");
-    assert_eq!(job_needs(execute), BTreeSet::from(["authorize".to_owned()]));
+    assert_eq!(
+        job_needs(execute),
+        BTreeSet::from(["authorize".to_owned(), "images".to_owned()])
+    );
     let execute_guard = mapping_field(execute, "if")
         .as_str()
         .expect("execute guard is a string");
@@ -1881,7 +1888,8 @@ fn mutation_suites_run_only_when_asked_for() {
 // an empty selection for a lane it does not own; the jobs beside the fan-out
 // have no selection to render, so they answer it in their own condition. A
 // request for one lane that also started the Windows guest, the emulator and
-// the stress campaign would be a request for one lane in name only.
+// the stress campaign would be a request for one lane in name only. Image
+// preparation is a prerequisite for the selected Linux work.
 #[test]
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
@@ -1890,7 +1898,7 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
 
     for (name, job) in jobs {
         let name = name.as_str().expect("a dispatcher job name is a string");
-        if fan_out.contains(&name) {
+        if fan_out.contains(&name) || name == "images" {
             continue;
         }
         let condition = job
@@ -2441,7 +2449,10 @@ fn the_host_provisions_itself_only_when_someone_asks_it_to() {
         .keys()
         .map(|key| key.as_str().expect("a trigger is named"))
         .collect();
-    assert_eq!(triggers, BTreeSet::from(["workflow_dispatch"]));
+    assert_eq!(
+        triggers,
+        BTreeSet::from(["workflow_call", "workflow_dispatch"])
+    );
 
     let job = workflow_job(workflow_jobs(&workflow), "provision");
     // A throwaway runner container holds neither the Docker daemon that keeps
@@ -2456,5 +2467,94 @@ fn the_host_provisions_itself_only_when_someone_asks_it_to() {
             .and_then(Value::as_bool),
         Some(false),
         "a second pass would rebuild what the first is installing against"
+    );
+}
+
+#[test]
+fn host_image_preparation_precedes_authorized_ci_and_dispatched_linux_work() {
+    let ci = github_workflow("ci.yml");
+    let image_job = workflow_job(workflow_jobs(&ci), "images");
+    assert_eq!(
+        job_needs(image_job),
+        BTreeSet::from(["authorize".to_owned()])
+    );
+
+    let dispatch = github_workflow("dispatch.yml");
+    let jobs = workflow_jobs(&dispatch);
+    assert_eq!(
+        mapping_field(workflow_job(jobs, "images"), "if").as_str(),
+        Some(
+            "vars.KITHARA_RUNNER_LABELS != '' || vars.KITHARA_ANDROID_RUNNER_LABELS != '' || vars.KITHARA_GPU_RUNNER_LABELS != '' || (vars.KITHARA_STRESS_ENABLED == 'true' && vars.KITHARA_STRESS_RUNNER_LABELS != '')"
+        ),
+        "a specialized Linux pool needs images even without the general pool"
+    );
+    for workflow in [&ci, &dispatch] {
+        let image_job = workflow_job(workflow_jobs(workflow), "images");
+        assert_eq!(
+            mapping_field(image_job, "uses").as_str(),
+            Some("./.github/workflows/host.yml")
+        );
+        let inputs = mapping_field(image_job, "with")
+            .as_mapping()
+            .expect("image preparation inputs");
+        assert_eq!(mapping_field(inputs, "operation").as_str(), Some("images"));
+    }
+    for name in [
+        "gate",
+        "platforms",
+        "deep",
+        "mutants",
+        "quality",
+        "network",
+        "android",
+        "ui",
+        "stress",
+    ] {
+        assert!(
+            job_needs(workflow_job(jobs, name)).contains("images"),
+            "{name} can reach the Linux fleet before its images are prepared"
+        );
+    }
+}
+
+#[test]
+fn host_image_runner_requires_owner_authority_and_an_explicit_provision_request() {
+    let workflow = github_workflow("host.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "provision");
+    assert_eq!(
+        mapping_field(job, "if").as_str(),
+        Some(
+            "github.actor == github.repository_owner && github.triggering_actor == github.repository_owner"
+        )
+    );
+    let triggers = mapping_field(workflow.as_mapping().expect("workflow"), "on")
+        .as_mapping()
+        .expect("workflow triggers");
+    for (trigger, default) in [
+        ("workflow_call", "images"),
+        ("workflow_dispatch", "provision"),
+    ] {
+        let inputs = mapping_field(
+            mapping_field(triggers, trigger)
+                .as_mapping()
+                .expect("trigger"),
+            "inputs",
+        )
+        .as_mapping()
+        .expect("inputs");
+        let operation = mapping_field(inputs, "operation")
+            .as_mapping()
+            .expect("operation");
+        assert_eq!(mapping_field(operation, "default").as_str(), Some(default));
+    }
+    let steps = mapping_field(job, "steps").as_sequence().expect("steps");
+    let provision = steps
+        .iter()
+        .filter_map(Value::as_mapping)
+        .find(|step| mapping_field(step, "name").as_str() == Some("Provision this machine"))
+        .expect("explicit provisioning step");
+    assert_eq!(
+        mapping_field(provision, "if").as_str(),
+        Some("inputs.operation == 'provision'")
     );
 }

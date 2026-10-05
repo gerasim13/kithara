@@ -38,6 +38,9 @@ pub(crate) struct LinuxHost {
     /// and runs separate runners against each.
     pub(crate) repositories: Vec<RepositoryCredential>,
     pub(crate) runners: Vec<LinuxRunner>,
+    /// The native runner that builds images on this machine's Docker daemon.
+    #[serde(default)]
+    pub(crate) image_runner: Option<ImageRunner>,
     /// The Windows guest this machine hosts, if it hosts one.
     #[serde(default)]
     pub(crate) windows: Option<WindowsGuest>,
@@ -55,6 +58,16 @@ pub(crate) struct RepositoryCredential {
     pub(crate) name: String,
     /// File holding the token that mints registrations for it.
     pub(crate) token_file: PathBuf,
+}
+
+/// One native listener for owner-authorized image jobs, separate from the
+/// container fleet that has no host access.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ImageRunner {
+    pub(crate) name: String,
+    pub(crate) repository: String,
+    pub(crate) labels: Vec<String>,
 }
 
 /// A Windows virtual machine serving the lane that needs a real Windows.
@@ -177,6 +190,22 @@ impl LinuxHost {
             self.credential(&runner.repository)?;
             if !seen.insert(runner.name.as_str()) {
                 bail!("Linux CI profile defines runner {} twice", runner.name);
+            }
+        }
+        if let Some(runner) = &self.image_runner {
+            if !safe_name(&runner.name) || !seen.insert(runner.name.as_str()) {
+                bail!("Linux image runner must have a unique usable name");
+            }
+            self.credential(&runner.repository)?;
+            if runner.labels.is_empty() || runner.labels.iter().any(|label| !safe_label(label)) {
+                bail!("Linux image runner has an unusable label");
+            }
+            if runner.labels.iter().any(|label| {
+                self.runners
+                    .iter()
+                    .any(|container| container.labels.contains(label))
+            }) {
+                bail!("Linux image runner labels must be separate from container runner labels");
             }
         }
         Ok(())
@@ -406,6 +435,58 @@ pub(crate) mod tests {
         assert!(
             error.to_string().contains("someone/else"),
             "the error must name the repository that has no credential: {error}"
+        );
+    }
+
+    fn image_runner_profile(repository: &str, name: &str, label: &str) -> LinuxHost {
+        let mut host = host_fixture();
+        host.image_runner = Some(ImageRunner {
+            name: name.to_owned(),
+            repository: repository.to_owned(),
+            labels: vec![label.to_owned()],
+        });
+        host
+    }
+
+    #[test]
+    fn a_native_image_runner_has_its_own_repository_and_labels() {
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+        let text = format!(
+            "{}\n[image_runner]\nname = 'kithara-images'\nrepository = 'octocat/kithara'\n\
+             labels = ['kithara-images-host']\n",
+            fs::read_to_string(source).expect("fixture profile")
+        );
+        let host: LinuxHost = toml::from_str(&text).expect("native image runner profile");
+        host.validate().expect("dedicated image runner is valid");
+        let runner = host.image_runner.expect("native image runner");
+        assert_eq!(runner.repository, "octocat/kithara");
+        assert_eq!(runner.labels, ["kithara-images-host"]);
+    }
+
+    #[test]
+    fn an_image_runner_must_name_a_credentialed_repository() {
+        let host = image_runner_profile("someone/else", "kithara-images", "images-host");
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn an_image_runner_cannot_share_a_fleet_label_or_name() {
+        let host = host_fixture();
+        let container = &host.runners[0];
+        assert!(
+            image_runner_profile(
+                &container.repository,
+                "kithara-images",
+                &container.labels[0]
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            image_runner_profile(&container.repository, &container.name, "images-host")
+                .validate()
+                .is_err()
         );
     }
 

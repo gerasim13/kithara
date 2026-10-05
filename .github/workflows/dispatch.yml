@@ -41,9 +41,20 @@ on:
         default: false
 
 jobs:
+  images:
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      || vars.KITHARA_ANDROID_RUNNER_LABELS != ''
+      || vars.KITHARA_GPU_RUNNER_LABELS != ''
+      || (vars.KITHARA_STRESS_ENABLED == 'true' && vars.KITHARA_STRESS_RUNNER_LABELS != '')
+    uses: ./.github/workflows/host.yml
+    with:
+      operation: images
+
   # The gate lanes a night adds to the ones every push already runs: the
   # sanitizer soak, the secret scan, the check the merge request does.
   gate:
+    needs: images
     if: vars.KITHARA_RUNNER_LABELS != ''
     uses: ./.github/workflows/run.yml
     with:
@@ -55,6 +66,7 @@ jobs:
   # platform lane names a machine this fleet does not have. The jobs below call
   # the workflows that do.
   platforms:
+    needs: images
     if: vars.KITHARA_RUNNER_LABELS != ''
     uses: ./.github/workflows/run.yml
     with:
@@ -69,6 +81,7 @@ jobs:
   # eighteen runner slots idle. The group is held by the calling job, so the
   # fan-out's own lanes still run concurrently inside its turn.
   deep:
+    needs: images
     if: vars.KITHARA_RUNNER_LABELS != ''
     concurrency:
       group: heavy-linux-${{ github.repository }}
@@ -83,6 +96,7 @@ jobs:
   # Never on a schedule: `mutants` runs every suite, and `only` runs the lanes
   # it names.
   mutants:
+    needs: images
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.mutants || (inputs.only || '') != '')
@@ -97,6 +111,7 @@ jobs:
       only: ${{ inputs.only || 'all' }}
 
   quality:
+    needs: images
     if: vars.KITHARA_RUNNER_LABELS != ''
     concurrency:
       group: heavy-linux-${{ github.repository }}
@@ -111,6 +126,7 @@ jobs:
   # The one Linux lane the fan-out cannot carry: it needs build-time secrets,
   # and one executor serves every declared lane.
   network:
+    needs: images
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
@@ -139,12 +155,14 @@ jobs:
   # The Android baseline runs every night and every week, and a request for
   # it by name starts it alone.
   android:
+    needs: images
     if: >-
       vars.KITHARA_ANDROID_RUNNER_LABELS != ''
       && ((inputs.only || '') == '' || contains(inputs.only, 'android-test'))
     uses: ./.github/workflows/android.yml
 
   ui:
+    needs: images
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
@@ -155,6 +173,7 @@ jobs:
   # of its own and a group of its own, and its own admission: only the owner of
   # a fork may spend a night of the fleet on it.
   stress:
+    needs: images
     if: >-
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''

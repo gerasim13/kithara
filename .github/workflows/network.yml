@@ -24,7 +24,14 @@ concurrency:
   queue: max
 
 jobs:
+  images:
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    uses: ./.github/workflows/host.yml
+    with:
+      operation: images
+
   network:
+    needs: images
     name: network
     if: vars.KITHARA_RUNNER_LABELS != ''
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
