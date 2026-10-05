@@ -1,17 +1,18 @@
 use crate::{
-    atoms::{table::face::TableFace, tree::face::Tree as TreeFace},
+    atoms::{search::paint::paint, table::face::TableFace, tree::face::Tree as TreeFace},
     draw::{DrawList, Rect, Transform},
     interact::{Hit, Input, Outcome},
     render::{
         Skin,
         document::Ctx,
-        hosted::{TablePlan, TreePlan},
+        hosted::{SearchPlan, TablePlan, TreePlan},
         masonry::{controls::MasonryControl, custom::HostAction},
     },
     shaping::TextContext,
 };
 
 pub(crate) type TableLeaf = ProjectedLeaf<TablePlan>;
+pub(crate) type SearchLeaf = ProjectedLeaf<SearchPlan>;
 pub(crate) type TreeLeaf = ProjectedLeaf<TreePlan>;
 
 pub(crate) struct ProjectedLeaf<P> {
@@ -79,6 +80,29 @@ impl Projected for TreePlan {
             return DrawList::default();
         };
         TreeFace::commands(&self.picture(), text, bounds, &drawn)
+    }
+
+    fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        self.refresh(ctx)
+    }
+}
+
+impl Projected for SearchPlan {
+    fn draw_list(&self, text: &mut TextContext, bounds: Rect) -> DrawList {
+        let Some(snapshot) = self.drawn() else {
+            return DrawList::default();
+        };
+        let mut list = crate::draw::DrawListBuilder::default();
+        let picture = self.picture.borrow();
+        paint(
+            &mut list,
+            text,
+            bounds,
+            picture.query(),
+            picture.skin(),
+            &snapshot,
+        );
+        list.finish()
     }
 
     fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {

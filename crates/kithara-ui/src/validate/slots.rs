@@ -14,6 +14,7 @@ pub(crate) enum Gesture {
     Step,
     Index,
     Text,
+    Record,
     Place,
 }
 
@@ -78,7 +79,9 @@ pub(crate) const fn primary(control: &ControlNode) -> Option<(Gesture, ValueKind
         | ControlNode::Table { .. }
         | ControlNode::Tree { .. }
         | ControlNode::Select { .. } => (Gesture::Index, ValueKind::Index),
-        ControlNode::PresetSelector { .. } => (Gesture::Text, ValueKind::Text),
+        ControlNode::Search { .. } | ControlNode::PresetSelector { .. } => {
+            (Gesture::Text, ValueKind::Text)
+        }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (Gesture::Step, ValueKind::Scalar),
         ControlNode::Placed { .. } => (Gesture::Place, ValueKind::Point),
         ControlNode::Bpm { .. }
@@ -124,7 +127,7 @@ pub(crate) fn write_slots(site: ControlSite<'_>) -> Vec<WriteSlot<'_>> {
                 slots.push(slot.under("min").edge(Edge::Min));
                 slots.push(slot.under("max").edge(Edge::Max));
             }
-            ControlNode::ContextBar { .. } => slots.push(slot.model()),
+            ControlNode::ContextBar { .. } | ControlNode::Search { .. } => slots.push(slot.model()),
             _ => slots.push(slot),
         }
     }
@@ -194,13 +197,19 @@ pub(crate) fn write_slots(site: ControlSite<'_>) -> Vec<WriteSlot<'_>> {
     slots
 }
 
-pub(crate) fn column_writes(site: ControlSite<'_>) -> Vec<(String, BindingRef)> {
-    let Some(binding) = site.writes.width else {
-        return Vec::new();
-    };
-    site.columns
-        .iter()
-        .map(|column| {
+pub(crate) fn column_writes(
+    site: ControlSite<'_>,
+) -> impl Iterator<Item = (String, BindingRef, Gesture, ValueKind)> + '_ {
+    site.columns.iter().flat_map(move |column| {
+        let action = column.write().map(|binding| {
+            (
+                column.action_slot(),
+                binding.clone(),
+                Gesture::Text,
+                ValueKind::Text,
+            )
+        });
+        let width = site.writes.width.map(|binding| {
             let mut scoped = binding.clone();
             if let BindingRef::Command { with, .. }
             | BindingRef::Parameter { with, .. }
@@ -209,7 +218,13 @@ pub(crate) fn column_writes(site: ControlSite<'_>) -> Vec<(String, BindingRef)> 
             {
                 with.insert("column".to_owned(), column.id().to_owned());
             }
-            (format!("width/{}", column.id()), scoped)
-        })
-        .collect()
+            (
+                format!("width/{}", column.id()),
+                scoped,
+                Gesture::Scalar,
+                ValueKind::Scalar,
+            )
+        });
+        [action, width].into_iter().flatten()
+    })
 }

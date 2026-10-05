@@ -18,9 +18,11 @@ use kithara_platform::{
         task::{JoinHandle, spawn, spawn_on},
     },
 };
-use kithara_play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl};
+use kithara_play::{
+    ArtifactLoadError, Cover, Resource, ResourceConfig, ResourceSrc, player::PlayerControl,
+};
 use kithara_test_utils::kithara;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     attempts::{LoadClass, Ticket},
@@ -188,6 +190,26 @@ where
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
     }
 
+    /// Read the track's cover beside its audio, over the attempt's transport
+    /// and cancel token, and place it while that attempt is current. The
+    /// audio never waits for the cover, and a cover that never arrives leaves
+    /// the load untouched.
+    fn read_cover(&self, id: TrackId, config: &ResourceConfig<S>, attempt: &CancelToken) {
+        let Some(cover) = config.artwork().cloned() else {
+            return;
+        };
+        let config = config.clone();
+        let attempt = attempt.clone();
+        let tracks = Arc::clone(&self.tracks);
+        drop(self.spawn(async move {
+            match config.artifact_fetch().load::<Cover>(&cover).await {
+                Ok(cover) => tracks.place_cover(id, &attempt, Arc::new(cover.into())),
+                Err(ArtifactLoadError::Cancelled { .. }) => {}
+                Err(error) => warn!(?id, %error, "the track's cover never arrived"),
+            }
+        }));
+    }
+
     fn spawn_attempt(
         self: &Arc<Self>,
         ticket: Ticket,
@@ -195,6 +217,7 @@ where
         track_cancel: CancelToken,
         class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
+        self.read_cover(ticket.id, &config, &track_cancel);
         let this = Arc::clone(self);
         self.spawn(async move {
             let id = ticket.id;
@@ -381,7 +404,7 @@ mod tests {
         ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
         player::PlayerControlSource,
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{TestTempDir, kithara, temp_dir};
     use kithara_warp::WarpConfig;
     use kithara_waveform::Waveform;
 
@@ -645,6 +668,67 @@ mod tests {
                 bus,
                 _player: player,
             }
+        }
+    }
+
+    /// A load attempt reads its track's cover beside the audio and places it
+    /// while that attempt is current; a superseded attempt's cover never lands.
+    #[kithara::test(native, tokio)]
+    async fn only_the_current_attempt_places_its_cover(temp_dir: TestTempDir) {
+        let fixture = LoaderFixtureSpec::default().build();
+        let id = TrackId::allocate();
+        let audio = ResourceSrc::Path(temp_dir.path().join("missing.mp3"));
+        let covered = |name: &str, cover: &[u8]| -> TrackSource<TestPools> {
+            ResourceConfig::for_src(audio.clone())
+                .store(fixture.loader.store.clone())
+                .artwork(ResourceSrc::Path(temp_dir.write(name, cover)))
+                .build()
+                .into()
+        };
+        let superseded = covered("superseded.jpg", b"superseded cover");
+        let current = covered("current.jpg", b"current cover");
+        fixture
+            .tracks
+            .lock()
+            .push(TrackRecord::new(id, "covered".into(), current.clone()));
+        let mut events = fixture.bus.subscribe::<QueueEvent>();
+
+        let first = fixture
+            .loader
+            .spawn_load(id, superseded, LoadClass::Prefetch)
+            .expect("fresh track starts one load attempt");
+        fixture.tracks.set_status(id, TrackStatus::Cancelled);
+        assert!(matches!(first.await, Ok(Err(QueueError::Cancelled(_)))));
+        let second = fixture
+            .loader
+            .spawn_load(id, current, LoadClass::Prefetch)
+            .expect("the cancelled attempt is replaced");
+
+        let changed = time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(Envelope {
+                    event: QueueEvent::TrackMetadataChanged { id },
+                    ..
+                }) = events.recv().await
+                {
+                    break id;
+                }
+            }
+        })
+        .await
+        .expect("the current attempt's cover lands");
+        assert_eq!(changed, id);
+        assert!(matches!(second.await, Ok(Err(_))), "the audio is missing");
+        let entry = fixture.tracks.lock()[0].entry();
+        assert_eq!(
+            entry.metadata().artwork.as_deref().map(Vec::as_slice),
+            Some(b"current cover".as_slice())
+        );
+        while let Ok(envelope) = events.try_recv() {
+            assert!(
+                !matches!(envelope.event, QueueEvent::TrackMetadataChanged { .. }),
+                "the superseded attempt's cover landed"
+            );
         }
     }
 

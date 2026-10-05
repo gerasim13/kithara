@@ -17,6 +17,7 @@ use kithara::{
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde::Deserialize;
+use serde_yaml_ng::Value;
 
 use crate::{config::AppConfigPatch, pools::PoolsSection};
 
@@ -60,6 +61,9 @@ pub(crate) struct Document {
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
     pub(crate) queue: QueueConfigPatch,
+    /// Library sources by id. Each source reads its own entry; a null or
+    /// absent entry mounts no source.
+    pub(crate) sources: BTreeMap<String, Value>,
     /// The toolkit's own tunables -- arena bytes and node limits, read by
     /// both hosts, plus `screen_cache`, which only the retained host reads
     /// (see `UiConfig::screen_cache` in `kithara-ui`). `draw_buffers` is not

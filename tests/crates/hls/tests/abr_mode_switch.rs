@@ -1226,14 +1226,55 @@ async fn abr_switch_must_not_redownload_covered_segments(
         unique_fetches.len(),
     );
 
-    let v1_fetches = unique_fetches.iter().filter(|(v, _)| *v == 1).count();
+    // Both of these reject the same set, so both report it. Which segments
+    // each variant actually pulled is the whole of what the harness knows
+    // here, and a message that keeps only the shape it wanted leaves a
+    // failure that can be read as a switch that never happened, one that
+    // happened too late, or a tail served from the store.
+    let fetched = |variant| {
+        let mut segments: Vec<_> = unique_fetches
+            .iter()
+            .filter(|(fetched_variant, _)| *fetched_variant == variant)
+            .map(|(_, segment)| *segment)
+            .collect();
+        segments.sort_unstable();
+        segments
+    };
+    // `segments()` calls a pair the reader saw with no completed GET
+    // `cached`, so a fetch that was planned and then cancelled as stale
+    // leaves the same record as one the store answered. Reporting both
+    // sides separates them: a tail absent from either set means the reader
+    // never reached it, and one that is only in the second means its body
+    // arrived without a GET of its own ever completing.
+    let read_without_fetch = |variant| {
+        let mut indices: Vec<_> = segments
+            .iter()
+            .filter(|record| record.variant == variant && record.cached)
+            .map(|record| record.segment_index)
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    };
+    let v0_segments = fetched(0);
+    let v1_segments = fetched(1);
+    let v1_without_fetch = read_without_fetch(1);
     assert!(
-        v1_fetches > 0,
-        "ABR must switch to V1 (no V1 segments downloaded)"
+        !v1_segments.is_empty(),
+        "ABR must switch to V1, but no V1 segment was fetched over the \
+         network; V0 fetched {v0_segments:?} of {segment_count} segments, and \
+         the switch applied after {} samples with {tail_samples} more read to \
+         EOF",
+        transition.samples,
     );
     assert!(
-        unique_fetches.contains(&(1, segment_count - 1)),
-        "V1 must fetch the final segment"
+        v1_segments.contains(&(segment_count - 1)),
+        "V1 must fetch the final segment {}, but fetched {v1_segments:?} and \
+         read {v1_without_fetch:?} without a completed fetch, while V0 fetched \
+         {v0_segments:?} of {segment_count} segments; the switch applied after \
+         {} samples with {tail_samples} more read to EOF",
+        segment_count - 1,
+        transition.samples,
     );
     // Segment zero can be probed while opening V1, and the handover segment
     // can overlap. The completed media segments between them must stay on V0.

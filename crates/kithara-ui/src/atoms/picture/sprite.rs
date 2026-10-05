@@ -29,18 +29,31 @@ impl ControlPainter for Sprite {
         let Some(image) = data else {
             return;
         };
-        list.image(image.clone(), fitted(image, bounds));
+        list.image(image.clone(), fitted(image, bounds, Fit::Contain));
     }
 }
 
-/// The largest box of the picture's own proportions that the given one holds,
-/// centred in it.
-fn fitted(image: &Image, bounds: Rect) -> Rect {
+/// How a picture of other proportions fills its box.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Fit {
+    /// The largest box the given one holds: all of the picture shows.
+    Contain,
+    /// The smallest box that holds the given one: the box shows no gaps.
+    Cover,
+}
+
+/// A box of the picture's own proportions, sized as `fit` says and centred in
+/// the given one.
+pub(crate) fn fitted(image: &Image, bounds: Rect, fit: Fit) -> Rect {
     let (natural_w, natural_h): (f32, f32) = (image.width().as_(), image.height().as_());
     if natural_w <= 0.0 || natural_h <= 0.0 || bounds.w <= 0.0 || bounds.h <= 0.0 {
         return bounds;
     }
-    let scale = (bounds.w / natural_w).min(bounds.h / natural_h);
+    let (across, down) = (bounds.w / natural_w, bounds.h / natural_h);
+    let scale = match fit {
+        Fit::Contain => across.min(down),
+        Fit::Cover => across.max(down),
+    };
     let (w, h) = (natural_w * scale, natural_h * scale);
     Rect {
         h,
@@ -55,7 +68,7 @@ mod tests {
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
-    use super::fitted;
+    use super::{Fit, fitted};
     use crate::draw::{Image, ImageId, Rect};
 
     mod consts {
@@ -70,20 +83,25 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_square_picture_in_a_wide_box_takes_the_height() {
-        assert_eq!(fitted(&square(), consts::BOX).h, consts::BOX.h);
+    #[case(Fit::Contain, consts::BOX.h)]
+    #[case(Fit::Cover, consts::BOX.w)]
+    fn a_square_picture_in_a_wide_box_takes_the_side_its_fit_names(
+        #[case] fit: Fit,
+        #[case] side: f32,
+    ) {
+        assert_eq!(fitted(&square(), consts::BOX, fit).h, side);
     }
 
     #[kithara::test]
     fn a_square_picture_in_a_wide_box_stays_square() {
-        let placed = fitted(&square(), consts::BOX);
+        let placed = fitted(&square(), consts::BOX, Fit::Contain);
 
         assert_eq!(placed.w, placed.h);
     }
 
     #[kithara::test]
     fn a_fitted_picture_is_centred_in_what_it_was_given() {
-        let placed = fitted(&square(), consts::BOX);
+        let placed = fitted(&square(), consts::BOX, Fit::Contain);
 
         assert_eq!(
             placed.x + placed.w / 2.0,

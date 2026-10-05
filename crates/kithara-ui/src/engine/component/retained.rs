@@ -245,7 +245,9 @@ impl RetainedComponent {
 impl From<Descriptor> for RetainedComponent {
     fn from(descriptor: Descriptor) -> Self {
         match descriptor {
-            Descriptor::Activation { path } => Self::Activation(ActivationComponent::new(path)),
+            Descriptor::Activation { path, press } => {
+                Self::Activation(ActivationComponent::new(path, press))
+            }
             Descriptor::Crossing { path } => Self::Crossing(CrossingComponent::new(path)),
             Descriptor::Segmented { path, item_count } => {
                 Self::Segmented(SegmentedComponent::new(path, item_count))

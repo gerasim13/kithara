@@ -11,10 +11,7 @@ use kithara::{
     },
     events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
-    platform::{
-        thread,
-        time::{self, Duration, Instant},
-    },
+    platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
     signal::AudioSpec,
     stream::SeekEpoch,
@@ -357,6 +354,17 @@ async fn test_seek_complete_emitted_only_after_output_commit(
     seek_result.unwrap();
     let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
 
+    // The gate opens once the producer has queued the post-seek preload, so the
+    // output is ready but uncommitted, and the commit below needs no polling:
+    // `next_chunk` never parks, and spinning on its `Pending` keeps a simulated
+    // clock from reaching the producer's backpressure timer.
+    let gate = audio
+        .preload_gate()
+        .expect("worker-backed audio exposes its preload gate");
+    time::timeout(Duration::from_secs(1), gate.wait_for_epoch(expected_epoch))
+        .await
+        .expect("the producer must preload the post-seek epoch");
+
     let mut saw_seek_complete_before_read = false;
     while let Ok(event) = events.try_recv().map(|env| env.event) {
         if matches!(event, TestEvent::Audio(AudioEvent::SeekComplete { .. })) {
@@ -371,13 +379,9 @@ async fn test_seek_complete_emitted_only_after_output_commit(
 
     let (_audio, committed) = blocking_audio(audio, move |audio| {
         if next_chunk {
-            loop {
-                match audio.next_chunk() {
-                    Ok(ChunkOutcome::Chunk(chunk)) => break chunk.frames() > 0,
-                    Ok(ChunkOutcome::Pending { .. }) => thread::yield_now(),
-                    Ok(ChunkOutcome::Eof { .. }) => break false,
-                    Err(error) => panic!("decode error while waiting for post-seek chunk: {error}"),
-                }
+            match audio.next_chunk() {
+                Ok(ChunkOutcome::Chunk(chunk)) => chunk.frames() > 0,
+                outcome => panic!("a preloaded epoch must yield a chunk, got {outcome:?}"),
             }
         } else {
             let mut buf = [0.0f32; 512];

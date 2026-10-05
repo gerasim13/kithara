@@ -10,6 +10,7 @@ mod cursor;
 #[cfg(feature = "iced")]
 pub mod iced;
 mod input;
+mod letters;
 #[cfg(feature = "masonry")]
 pub mod masonry;
 mod modifiers;

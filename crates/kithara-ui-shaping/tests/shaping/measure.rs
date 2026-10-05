@@ -85,6 +85,42 @@ fn max_width_breaks_lines_and_changes_measurement() {
 }
 
 #[kithara::test]
+fn elided_text_stays_on_one_line_and_fits_measured_width() {
+    let mut context = TextContext::new().unwrap();
+    let title = "Big Man, Little Dignity (Re: DOM & JD BECK)";
+    let full = context.shape(title, DISPLAY, None);
+    let width = full.width() / 2.0;
+    let (content, run) = context.shape_elided(title, DISPLAY, width);
+
+    assert!(content.ends_with('\u{2026}'));
+    assert!(title.starts_with(content.trim_end_matches('\u{2026}')));
+    assert!(run.width() <= width);
+    assert_eq!(run.height(), full.height());
+    let (unchanged, exact) = context.shape_elided(title, DISPLAY, full.width());
+    assert_eq!(unchanged, title);
+    assert_eq!(exact, full);
+    let (joined, run) = context.shape_elided("Title\nArtist\u{2028}Album", DISPLAY, 500.0);
+    assert_eq!(joined, "Title Artist Album");
+    assert_eq!(run, context.shape("Title Artist Album", DISPLAY, None));
+}
+
+#[kithara::test]
+fn elision_keeps_combining_graphemes_and_handles_a_tiny_box() {
+    let mut context = TextContext::new().unwrap();
+    let title = "e\u{301}e\u{301}e\u{301}e\u{301}";
+    let width = context.shape("e\u{301}\u{2026}", DISPLAY, None).width();
+    let (content, run) = context.shape_elided(title, DISPLAY, width);
+
+    assert_eq!(content, "e\u{301}\u{2026}");
+    assert!(run.width() <= width);
+    for width in [0.0, 1.0] {
+        let (content, run) = context.shape_elided(title, DISPLAY, width);
+        assert!(content.is_empty());
+        assert_eq!(run.width(), 0.0);
+    }
+}
+
+#[kithara::test]
 fn caret_offsets_cover_every_grapheme_boundary() {
     let (run, carets) = TextContext::new().unwrap().shape_input("GAIN", DISPLAY);
 

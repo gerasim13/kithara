@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
 };
@@ -312,6 +313,13 @@ impl Config {
     #[must_use]
     pub fn queue(&self) -> QueueConfigPatch {
         self.document.queue.clone()
+    }
+
+    /// Each library source's entry by source id, references resolved; the
+    /// source that reads an entry owns its schema.
+    #[must_use]
+    pub const fn sources(&self) -> &BTreeMap<String, Value> {
+        &self.document.sources
     }
 
     fn read(path: &Path) -> Result<Value, LoadError> {

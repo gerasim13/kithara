@@ -1,29 +1,37 @@
+use std::{borrow::Cow, collections::BTreeMap};
+
 use kithara::ui::render::{TableCell, TableRow};
+use kithara_app_library::Playable;
+
+use crate::catalog::canonical_source;
 
 /// One playable source a page lists.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct Track {
     title: String,
-    #[field(get, vis = "pub(super)")]
-    analysis_key: String,
     /// The source as given; what a deck is handed when the row is dropped.
     #[field(get, vis = "pub(super)")]
     url: String,
+    /// The source as the queue names it, which analysis is keyed by.
+    #[field(get, vis = "pub(super)")]
+    key: String,
+    drag: BTreeMap<String, String>,
 }
 
 impl Track {
     pub(super) fn new(title: String, url: String) -> Self {
         Self {
             title,
-            analysis_key: crate::catalog::canonical_source(&url),
+            key: canonical_source(&url),
+            drag: Playable::new(url.clone()).into(),
             url,
         }
     }
 
     pub(super) fn row(&self, selected: bool) -> TableRow<'_> {
         TableRow::new(vec![TableCell::text("title", &self.title)], selected)
-            .with_drag(self.url.as_str())
+            .with_drag(Cow::Borrowed(&self.drag))
     }
 }
 

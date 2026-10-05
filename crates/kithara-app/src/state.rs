@@ -54,7 +54,7 @@ impl UiState {
     pub(crate) fn new(queue: &AppQueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
-        let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
+        let track_name = tracks.first().map(caption).unwrap_or_default();
         let beat_marks = empty_marks();
         let downbeat_marks = empty_marks();
 
@@ -559,7 +559,7 @@ pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state:
             let mut st = state.lock();
             st.current_track_index = current_index;
             st.track_name = current_index
-                .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
+                .and_then(|idx| st.tracks.get(idx).map(caption))
                 .unwrap_or_default();
         }
         AnalysisEvent::Player(PlayerEvent::RateChanged { rate }) => {
@@ -572,6 +572,7 @@ pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state:
         AnalysisEvent::Queue(
             QueueEvent::TrackAdded { .. }
             | QueueEvent::TrackRemoved { .. }
+            | QueueEvent::TrackMetadataChanged { .. }
             | QueueEvent::TrackStatusChanged { .. },
         ) => apply_list(queue, state),
         _ => {}
@@ -586,8 +587,17 @@ fn apply_list(queue: &AppQueueControl, state: &Mutex<UiState>) {
     st.current_track_index = shown_index(current, st.current_track_index, st.tracks.len());
     st.track_name = st
         .current_track_index
-        .and_then(|idx| st.tracks.get(idx).map(|track| track.name.clone()))
+        .and_then(|idx| st.tracks.get(idx).map(caption))
         .unwrap_or_default();
+}
+
+/// A track's caption: its title when one is known, else its display name.
+fn caption(track: &TrackEntry) -> String {
+    track
+        .metadata()
+        .title
+        .clone()
+        .unwrap_or_else(|| track.name.clone())
 }
 
 fn shown_index(current: Option<usize>, shown: Option<usize>, len: usize) -> Option<usize> {

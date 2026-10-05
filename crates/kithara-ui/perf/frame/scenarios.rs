@@ -97,6 +97,11 @@ pub(crate) mod consts {
             interaction: Interaction::Drag,
         },
         Scenario {
+            name: "Search",
+            control: r#"Search(id: "control", read: Model(id: "library.query"))"#,
+            interaction: Interaction::DataChange,
+        },
+        Scenario {
             name: "ContextBar",
             control: r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Command(id: "library.select_scope"))"#,
             interaction: Interaction::PressLeading,

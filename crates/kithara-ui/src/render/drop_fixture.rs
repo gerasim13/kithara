@@ -1,7 +1,7 @@
 //! A library beside a deck that takes drops, shared by the gesture tests of
 //! both hosts so each proves the same session.
 
-use std::{cell::Cell, sync::LazyLock};
+use std::{borrow::Cow, cell::Cell, collections::BTreeMap, sync::LazyLock};
 
 use num_traits::AsPrimitive;
 
@@ -26,10 +26,14 @@ pub(crate) const LOAD: &str = "demo.load@deck=b";
 pub(crate) const WIDTH: f32 = 400.0;
 pub(crate) const HEIGHT: f32 = 200.0;
 
+fn source(url: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([("source".to_owned(), url.to_owned())])
+}
+
 fn row(title: &'static str, url: Option<&'static str>) -> TableRow<'static> {
     let row = TableRow::new(vec![TableCell::text("title", title)], false);
     match url {
-        Some(url) => row.with_drag(url),
+        Some(url) => row.with_drag(Cow::Owned(source(url))),
         None => row,
     }
 }
@@ -59,6 +63,28 @@ static FILTERED: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
 
 static BARE: LazyLock<Vec<TableRow<'static>>> =
     LazyLock::new(|| vec![row("One", None), row("Two", None), row("Three", None)]);
+
+static ACTIONS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
+    [
+        ("One", Some("urn:item:one")),
+        ("Two", Some("urn:item:two")),
+        ("Three", None),
+    ]
+    .into_iter()
+    .map(|(title, action)| {
+        let icon = TableCell::icon("lead", IconName::Heart, title == "Two");
+        let icon = match action {
+            Some(action) => icon.with_action(action),
+            None => icon,
+        };
+        TableRow::new(vec![icon, TableCell::text("title", title)], title == "Two")
+            .with_drag(Cow::Owned(source("file:///dragged.mp3")))
+    })
+    .collect()
+});
+
+static ACTIONS_REORDERED: LazyLock<Vec<TableRow<'static>>> =
+    LazyLock::new(|| vec![ACTIONS[1].clone(), ACTIONS[0].clone(), ACTIONS[2].clone()]);
 
 static PLAYING: [Badge<'static>; 1] = [Badge {
     label: "A",
@@ -91,6 +117,7 @@ static TREE: [TreeRow<'static>; 3] = [
         icon: IconName::Folder,
         count: None,
         expanded: Some(true),
+        page: false,
         muted: false,
         selected: false,
         depth: 0,
@@ -100,6 +127,7 @@ static TREE: [TreeRow<'static>; 3] = [
         icon: IconName::Folder,
         count: Some(6),
         expanded: Some(false),
+        page: true,
         muted: false,
         selected: false,
         depth: 1,
@@ -109,6 +137,7 @@ static TREE: [TreeRow<'static>; 3] = [
         icon: IconName::Folder,
         count: None,
         expanded: None,
+        page: true,
         muted: false,
         selected: false,
         depth: 1,
@@ -127,6 +156,7 @@ static OPENED_TREE: [TreeRow<'static>; 4] = [
         icon: IconName::Folder,
         count: None,
         expanded: Some(false),
+        page: true,
         muted: false,
         selected: false,
         depth: 2,
@@ -146,6 +176,8 @@ pub(crate) enum Rows {
     Reordered,
     Bare,
     Badged,
+    Actions,
+    ActionsReordered,
 }
 
 pub(crate) struct DropReads {
@@ -173,6 +205,8 @@ impl Reads for DropReads {
                 Rows::Reordered => &REORDERED[..],
                 Rows::Bare => &BARE[..],
                 Rows::Badged => &BADGED[..],
+                Rows::Actions => &ACTIONS[..],
+                Rows::ActionsReordered => &ACTIONS_REORDERED[..],
             })),
             "library.browser_open" => Some(ReadValue::Bool(true)),
             "library.tree" => Some(ReadValue::Tree(if self.opened.get() {
@@ -286,6 +320,21 @@ pub(crate) struct TreeDoc {
 
 pub(crate) const SELECT: &str = "demo.select";
 pub(crate) const TOGGLE: &str = "demo.toggle";
+const ACTION: &str = "demo.action";
+
+const ACTION_TABLE: &str = r#"(schema: "kithara.module", version: 1, id: "app-library",
+    root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+        Table(
+            id: "tracks", size: (w: Fill, h: Fill),
+            read: Model(id: "library.visible_tracks"),
+            write: Command(id: "demo.select"),
+            columns: [
+                (id: "lead", label: "", style: Icon, width: 28.0,
+                    write: Command(id: "demo.action")),
+                (id: "title", label: "TITLE", style: Primary, width: 172.0, flexible: true),
+            ],
+        ),
+    ]))"#;
 
 fn tree_module(doc: TreeDoc) -> String {
     let id = if doc.engine { "app-library" } else { "library" };
@@ -365,7 +414,7 @@ fn compiled_with(library: &str) -> CompiledUi {
     registry.insert(
         EndpointCategory::Command,
         "demo.load",
-        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+        EndpointDesc::new(ValueKind::Record).with_scope("deck"),
     );
     registry.insert(
         EndpointCategory::Model,
@@ -384,6 +433,11 @@ fn compiled_with(library: &str) -> CompiledUi {
             EndpointDesc::new(ValueKind::Index),
         );
     }
+    registry.insert(
+        EndpointCategory::Command,
+        ACTION,
+        EndpointDesc::new(ValueKind::Text),
+    );
     let mut resolver = MemResolver::default();
     resolver.insert(
         "fixture.klayout.ron",
@@ -437,7 +491,7 @@ pub(crate) fn writes(ui: &CompiledUi, published: &[Published], reads: &dyn Reads
 pub(crate) fn load(url: &str) -> UiEvent {
     UiEvent::Write {
         key: LOAD.to_owned(),
-        value: WriteValue::Text(url.to_owned()),
+        value: WriteValue::Record(source(url)),
     }
 }
 
@@ -499,6 +553,43 @@ pub(crate) fn a_row_dropped_on_a_deck_delivers_the_decks_write_with_the_rows_dra
     let writes = dropped_from::<H>(&compiled(), Rows::Listed, FROM);
 
     assert_eq!(writes, [load(DRAGGED)]);
+}
+
+pub(crate) fn table_icon_actions_capture_ids_before_the_rows_change<H: DropHost>() {
+    let ui = compiled_with(ACTION_TABLE);
+    let reads = DropReads::new(Rows::Actions);
+    let mut host = H::open(&ui, &reads);
+    let skin = builtin::skin();
+    let y = skin.table.header_height + skin.table.grid_gap + skin.table.row_height / 2.0;
+    let at = (14.0, y);
+    host.pick_up(&ui, &reads, at);
+    host.carry_to(&ui, &reads, OVER_THE_DECK);
+    reads.rows.set(Rows::ActionsReordered);
+    host.refresh(&ui, &reads);
+    let first = writes(&ui, &host.let_go(&ui, &reads, OVER_THE_DECK), &reads);
+    assert_eq!(
+        first,
+        [UiEvent::Write {
+            key: ACTION.to_owned(),
+            value: WriteValue::Text("urn:item:one".to_owned()),
+        }]
+    );
+    host.pick_up(&ui, &reads, at);
+    let second = writes(&ui, &host.let_go(&ui, &reads, at), &reads);
+    assert_eq!(
+        second,
+        [UiEvent::Write {
+            key: ACTION.to_owned(),
+            value: WriteValue::Text("urn:item:two".to_owned()),
+        }]
+    );
+    let no_action = (14.0, y + table_row_pitch(skin) * 2.0);
+    host.pick_up(&ui, &reads, no_action);
+    let third = writes(&ui, &host.let_go(&ui, &reads, no_action), &reads);
+    assert_eq!(third, [index(SELECT, 2)]);
+    host.pick_up(&ui, &reads, (60.0, y));
+    let title = writes(&ui, &host.let_go(&ui, &reads, (60.0, y)), &reads);
+    assert_eq!(title, [index(SELECT, 0)]);
 }
 
 pub(crate) fn a_row_dropped_after_the_list_was_filtered_delivers_the_row_that_was_dragged<
@@ -735,6 +826,11 @@ pub(crate) use tree_suite;
 
 macro_rules! drop_suite {
     ($host:ty) => {
+        #[kithara::test]
+        fn table_icon_actions_capture_ids_before_the_rows_change() {
+            $crate::render::drop_fixture::table_icon_actions_capture_ids_before_the_rows_change::<$host>();
+        }
+
         #[kithara::test]
         fn a_row_dropped_on_a_deck_delivers_the_decks_write_with_the_rows_drag_data() {
             $crate::render::drop_fixture::a_row_dropped_on_a_deck_delivers_the_decks_write_with_the_rows_drag_data::<$host>();

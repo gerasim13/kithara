@@ -1,18 +1,21 @@
-use std::{error::Error, path::Path};
+use std::{collections::BTreeMap, error::Error, path::Path};
 
 use arc_swap::ArcSwap;
 use iced::{Size, window::Settings};
 use kithara::{
+    net::HttpClient,
     platform::{
+        CancelToken,
         sync::{Arc, Mutex},
         tokio::sync::mpsc::UnboundedSender,
     },
     ui::{render::fonts, source::UiConfig},
 };
+use serde_yaml_ng::Value;
 
 use super::{
     app::Kithara,
-    library::{Library, PagesModule, StartupSource},
+    library::{FACTORIES, Library, PagesModule, StartupSource, configured},
     ui::{AppUi, package::Package, window::consts::WINDOW_SIZE},
     update, view,
 };
@@ -92,20 +95,27 @@ impl Boot {
         palette: Palette,
         snapshots: Arc<ArcSwap<EngineSnapshot>>,
         commands: UnboundedSender<Envelope>,
-        #[cfg(not(target_arch = "wasm32"))] runtime: kithara::platform::tokio::runtime::Handle,
+        runtime: kithara::platform::tokio::runtime::Handle,
+        net: &HttpClient,
+        sources: &BTreeMap<String, Value>,
+        shutdown: &CancelToken,
         #[builder(default)] chrome_hidden: bool,
     ) -> Result<Self, FrontendError> {
         #[cfg(not(target_arch = "wasm32"))]
         let (explorer, picker) =
-            super::library::Explorer::registered(std::env::home_dir(), runtime);
+            super::library::Explorer::registered(std::env::home_dir(), runtime.clone());
         let registered = vec![
             StartupSource::registered(tracks),
             #[cfg(not(target_arch = "wasm32"))]
             explorer,
         ];
-        let package = Package::load(package, PagesModule::new(&registered).into())?;
+        let registered: Vec<_> = registered
+            .into_iter()
+            .chain(configured(FACTORIES, sources, net, &runtime, shutdown)?)
+            .collect();
+        let package = Package::load(package, PagesModule::new(&registered))?;
         let library = Library::new(registered, package.text())?;
-        let mut ui = AppUi::new(package, settings)?;
+        let mut ui = AppUi::new(package, settings, runtime)?;
         ui.cache.window.set_chrome_hidden(chrome_hidden);
         Ok(Self {
             ui,
@@ -137,6 +147,7 @@ mod tests {
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
         let (commands, _) = mpsc::unbounded_channel();
         let runtime = test_fixture::runtime();
+        let config = test_fixture::config();
         let boot = Boot::builder()
             .settings(&UiConfig::default())
             .tracks(Vec::new())
@@ -144,6 +155,9 @@ mod tests {
             .snapshots(snapshots)
             .commands(commands)
             .runtime(runtime.handle().clone())
+            .net(&config.net)
+            .sources(&config.sources)
+            .shutdown(&config.shutdown)
             .chrome_hidden(chrome_hidden)
             .build()
             .unwrap();
@@ -156,23 +170,8 @@ mod tests {
         let (package, library) =
             test_fixture::mount(None, vec![StartupSource::registered(Vec::new())])
                 .expect("the startup source mounts");
-        let picker = crate::gui::library::Explorer::registered(
-            None,
-            test_fixture::runtime().handle().clone(),
-        )
-        .1;
-        let (commands, _) = mpsc::unbounded_channel();
-        let boot = Boot {
-            ui: AppUi::new(package, &UiConfig::default()).expect("the shipped UI compiles"),
-            snapshots: Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished())),
-            library,
-            picker,
-            palette: Palette::default(),
-            #[cfg(feature = "masonry")]
-            settings: UiConfig::default(),
-            commands,
-        };
-        let state = Kithara::mounted(boot, Id::unique());
+        let runtime = test_fixture::runtime();
+        let state = test_fixture::mounted(package, library, runtime.handle());
         let root = ReadRoot::new(&state);
 
         assert_eq!(

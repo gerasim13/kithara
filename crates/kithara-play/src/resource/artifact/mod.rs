@@ -5,7 +5,7 @@ mod slot;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
-pub use document::ArtifactDocument;
+pub use document::{ArtifactDocument, Cover};
 pub use fetch::{ArtifactFetch, ArtifactLoadError, MAX_ARTIFACT_BYTES};
 pub use prepared::ArtifactSource;
 pub use slot::PreparedGrid;

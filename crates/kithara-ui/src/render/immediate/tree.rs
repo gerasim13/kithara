@@ -1,12 +1,10 @@
 use iced::{
     Background, Element, Length, Padding,
-    alignment::{Horizontal, Vertical},
-    widget::{Column, Space, container, container::Style as ContainerStyle, row},
+    widget::{Column, Space, container, container::Style as ContainerStyle},
 };
 
 use crate::{
     atoms::tree::face::Tree as TreeFace,
-    module::IconName,
     render::{IcedSkin, InputOwner, Published, ReadValue, Skin, Widget, search_input, tree_rows},
 };
 
@@ -42,9 +40,14 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
                 move |_| ContainerStyle::default().background(Background::Color(background))
             });
 
-        let search = self
-            .query
-            .map(|query| search_bar(self.path, query, self.skin, self.owner));
+        let search = self.query.map(|query| {
+            search_bar(
+                &format!("{}/search", self.path),
+                query,
+                self.skin,
+                self.owner,
+            )
+        });
         Column::new()
             .push(search)
             .push(panel)
@@ -54,32 +57,14 @@ impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {
     }
 }
 
-fn search_bar<'a>(
+pub(in crate::render) fn search_bar<'a>(
     path: &str,
     query: &str,
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, Published> {
-    let icon = container(IconName::Search.view(
-        skin.tree.search_icon_size,
-        skin.color(skin.tree.search_icon_color),
-    ))
-    .width(Length::Fixed(skin.tree.search_icon_width))
-    .height(Length::Fill)
-    .align_x(Horizontal::Center)
-    .align_y(Vertical::Center)
-    .style({
-        let background = skin.color(skin.tree.search_background);
-        move |_| ContainerStyle::default().background(Background::Color(background))
-    });
-    let input = search_input(&format!("{path}/search"), query, skin, owner);
-
-    container(row![icon, input].spacing(1).height(Length::Fill))
+    container(search_input(path, query, skin, owner))
         .width(Length::Fill)
         .height(Length::Fixed(skin.tree.search_height))
-        .style({
-            let divider = skin.color(skin.tree.search_divider);
-            move |_| ContainerStyle::default().background(Background::Color(divider))
-        })
         .into()
 }

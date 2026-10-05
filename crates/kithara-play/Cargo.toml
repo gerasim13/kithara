@@ -120,6 +120,7 @@ kithara-worker = { workspace = true }
 # Utilities
 arc-swap = { workspace = true }
 bon = { workspace = true }
+bytes = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }
@@ -127,6 +128,7 @@ fieldwork = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }
+futures = { workspace = true }
 hex = { workspace = true }
 humantime-serde = { workspace = true }
 num-traits = { workspace = true }
@@ -158,7 +160,6 @@ kithara-play = { path = ".", default-features = false, features = ["mock", "usdt
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
-bytes = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

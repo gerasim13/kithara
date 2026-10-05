@@ -23,6 +23,8 @@ pub enum IconName {
     FolderPlus,
     Gear,
     Headphones,
+    Heart,
+    HeartFilled,
     Home,
     Instrument,
     Kithara,
@@ -240,7 +242,8 @@ pub enum WaveStyle {
     Micro,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TableColumn {
@@ -250,9 +253,18 @@ pub struct TableColumn {
     #[serde(default)]
     flexible: bool,
     width: f32,
+    #[serde(default)]
+    #[field(with, option_set_some, vis = "pub(crate)")]
+    write: Option<super::BindingRef>,
 }
 
 impl TableColumn {
+    /// The slot, under the table's path, that a press on this column's
+    /// cells writes through.
+    pub(crate) fn action_slot(&self) -> String {
+        format!("action/{}", self.id)
+    }
+
     pub fn new<I, L>(id: I, label: L, style: TableColumnStyle, width: f32, flexible: bool) -> Self
     where
         I: Into<String>,
@@ -264,6 +276,7 @@ impl TableColumn {
             flexible,
             id: id.into(),
             label: label.into(),
+            write: None,
         }
     }
 
@@ -290,6 +303,11 @@ impl TableColumn {
     #[must_use]
     pub fn width(&self) -> f32 {
         self.width
+    }
+
+    #[must_use]
+    pub(crate) fn write(&self) -> Option<&super::BindingRef> {
+        self.write.as_ref()
     }
 }
 
@@ -318,6 +336,7 @@ impl TableFrame {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum TableColumnStyle {
+    Icon,
     Index,
     Badge,
     Primary,

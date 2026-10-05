@@ -20,7 +20,7 @@ use winit::{
         MouseButton, MouseScrollDelta, WindowEvent,
     },
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{Key as WinitKey, NamedKey as WinitNamedKey},
+    keyboard::{Key as WinitKey, KeyCode, NamedKey as WinitNamedKey, PhysicalKey},
     window::{Fullscreen, ResizeDirection, Window, WindowId},
 };
 
@@ -66,6 +66,8 @@ where
 
 /// The window and its GPU surface, with the UI mounted in it.
 struct Live<'config, Application> {
+    /// Drops before the window whose display handle it borrows.
+    clipboard: Option<window_clipboard::Clipboard>,
     window: Arc<Window>,
     clicks: Clicks,
     frames: FrameClock,
@@ -337,7 +339,17 @@ where
 
         let scale = window.scale_factor();
         let ui = Ui::new(app, self.config, (size.width, size.height), scale)?;
+        // SAFETY: `Live` owns this window and drops `clipboard` before `window`.
+        let clipboard = unsafe { window_clipboard::Clipboard::connect(window.as_ref()) };
+        let clipboard = match clipboard {
+            Ok(clipboard) => Some(clipboard),
+            Err(error) => {
+                tracing::warn!(%error, "system clipboard unavailable");
+                None
+            }
+        };
         let mut live = Live {
+            clipboard,
             context,
             renderer,
             shaders,
@@ -389,16 +401,26 @@ where
     }
 
     fn key(&mut self, event: &WinitKeyEvent) {
-        let key = portable_key(&event.logical_key);
+        let key = portable_key(&event.logical_key, event.physical_key);
         let modifiers = self.modifiers;
-        self.ui.input(match event.state {
+        let input = match event.state {
             ElementState::Pressed => Input::KeyPressed {
                 key,
                 modifiers,
                 text: event.text.as_deref(),
             },
             ElementState::Released => Input::KeyReleased { key, modifiers },
-        });
+        };
+        if input.shortcut('v')
+            && self.ui.editing_text()
+            && let Some(clipboard) = &self.clipboard
+            && let Ok(text) = clipboard.read()
+        {
+            self.ui
+                .input(Input::InputMethod(InputMethod::Commit(&text)));
+        } else {
+            self.ui.input(input);
+        }
         self.request_redraw();
     }
 
@@ -596,7 +618,7 @@ where
     }
 }
 
-fn portable_key(key: &WinitKey) -> Key<'_> {
+fn portable_key(key: &WinitKey, physical: PhysicalKey) -> Key<'_> {
     match key {
         WinitKey::Named(WinitNamedKey::ArrowDown) => Key::ArrowDown,
         WinitKey::Named(WinitNamedKey::ArrowLeft) => Key::ArrowLeft,
@@ -610,8 +632,21 @@ fn portable_key(key: &WinitKey) -> Key<'_> {
         WinitKey::Named(WinitNamedKey::Home) => Key::Home,
         WinitKey::Named(_) | WinitKey::Unidentified(_) | WinitKey::Dead(_) => Key::Other,
         WinitKey::Character(text) if text.as_str() == " " => Key::Space,
-        WinitKey::Character(text) => Key::Character(text.as_str()),
+        WinitKey::Character(text) => Key::character(text.as_str(), letter(physical)),
     }
+}
+
+/// The Latin letter printed on a physical key, which names it for shortcuts
+/// whatever the active layout types.
+fn letter(physical: PhysicalKey) -> Option<char> {
+    const LETTERS: [(KeyCode, char); 26] = crate::interact::letters!(KeyCode);
+    let PhysicalKey::Code(code) = physical else {
+        return None;
+    };
+    LETTERS
+        .iter()
+        .find(|(lettered, _)| *lettered == code)
+        .map(|(_, letter)| *letter)
 }
 
 fn portable_ime(event: &WinitIme) -> InputMethod<'_> {

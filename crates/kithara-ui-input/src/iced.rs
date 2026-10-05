@@ -3,7 +3,7 @@ use iced::{
     advanced::{InputMethod as IcedInputMethod, input_method, input_method::Purpose},
     keyboard::{
         self, Event as KeyboardEvent,
-        key::{Key as IcedKey, Named},
+        key::{Code, Key as IcedKey, Named, Physical},
     },
     mouse::{self, Button, Cursor, ScrollDelta},
 };
@@ -14,25 +14,35 @@ use super::{
     mouse as mouse_input,
 };
 
+mod consts {
+    use super::Code;
+
+    pub(super) const LETTERS: [(Code, char); 26] = crate::letters!(Code);
+}
+
 #[must_use]
 pub fn input(event: &Event) -> Option<Input<'_>> {
     match event {
         Event::Keyboard(KeyboardEvent::KeyPressed {
             key,
+            physical_key,
             modifiers,
             text,
             ..
         }) => Some(Input::KeyPressed {
-            key: portable_key(key),
+            key: portable_key(key, *physical_key),
             modifiers: portable_modifiers(*modifiers),
             text: text.as_deref(),
         }),
-        Event::Keyboard(KeyboardEvent::KeyReleased { key, modifiers, .. }) => {
-            Some(Input::KeyReleased {
-                key: portable_key(key),
-                modifiers: portable_modifiers(*modifiers),
-            })
-        }
+        Event::Keyboard(KeyboardEvent::KeyReleased {
+            key,
+            physical_key,
+            modifiers,
+            ..
+        }) => Some(Input::KeyReleased {
+            key: portable_key(key, *physical_key),
+            modifiers: portable_modifiers(*modifiers),
+        }),
         Event::Keyboard(KeyboardEvent::ModifiersChanged(modifiers)) => {
             Some(Input::ModifiersChanged(portable_modifiers(*modifiers)))
         }
@@ -66,7 +76,7 @@ pub fn input(event: &Event) -> Option<Input<'_>> {
     }
 }
 
-fn portable_key<'a>(key: &'a IcedKey<impl AsRef<str>>) -> Key<'a> {
+fn portable_key(key: &IcedKey, physical: Physical) -> Key<'_> {
     match key {
         IcedKey::Named(Named::ArrowDown) => Key::ArrowDown,
         IcedKey::Named(Named::ArrowLeft) => Key::ArrowLeft,
@@ -79,9 +89,19 @@ fn portable_key<'a>(key: &'a IcedKey<impl AsRef<str>>) -> Key<'a> {
         IcedKey::Named(Named::Escape) => Key::Escape,
         IcedKey::Named(Named::Home) => Key::Home,
         IcedKey::Named(Named::Space) => Key::Space,
-        IcedKey::Character(character) => Key::Character(character.as_ref()),
+        IcedKey::Character(character) => Key::character(character.as_str(), letter(physical)),
         IcedKey::Named(_) | IcedKey::Unidentified => Key::Other,
     }
+}
+
+fn letter(physical: Physical) -> Option<char> {
+    let Physical::Code(code) = physical else {
+        return None;
+    };
+    consts::LETTERS
+        .iter()
+        .find(|(lettered, _)| *lettered == code)
+        .map(|(_, letter)| *letter)
 }
 
 #[must_use]

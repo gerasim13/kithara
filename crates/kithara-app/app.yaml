@@ -78,7 +78,7 @@ drm:
         length: 8
         alphabet: hex
       headers:
-        User-Agent: OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)
+        User-Agent: &zvuk_user_agent OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)
         X-Auth-Token: $KITHARA_DRM_PROD_AUTH_TOKEN
         X-SP-ZV: $KITHARA_DRM_PROD_SP_ZV_TOKEN
     - name: zvuk-stage
@@ -94,3 +94,11 @@ drm:
       headers:
         User-Agent: OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)
         X-Auth-Token: $KITHARA_DRM_STAGE_AUTH_TOKEN
+
+# Library sources by id; each source owns the schema of its entry. The Zvuk
+# catalogue identifies itself like the iOS client and authenticates with the
+# production account's token.
+sources:
+  zvuk:
+    user_agent: *zvuk_user_agent
+    auth_token: $KITHARA_DRM_PROD_AUTH_TOKEN

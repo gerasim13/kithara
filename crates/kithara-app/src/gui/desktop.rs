@@ -51,6 +51,9 @@ pub fn run(
         .snapshots(Arc::clone(&snapshots))
         .commands(commands)
         .runtime(runtime.clone())
+        .net(&config.net)
+        .sources(&config.sources)
+        .shutdown(&config.shutdown)
         .build()?;
     let shutdown = config.shutdown.clone();
     let driver = engine::spawn(

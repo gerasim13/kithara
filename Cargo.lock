@@ -4475,9 +4475,12 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "iced",
+ "image",
  "kithara",
  "kithara-app",
  "kithara-app-document",
+ "kithara-app-library",
+ "kithara-app-zvuk",
  "kithara-assets",
  "kithara-config",
  "kithara-derive",
@@ -4514,6 +4517,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-app-library"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui",
+ "kithara-workspace-hack",
+ "serde",
+ "serde_yaml_ng",
+ "thiserror 2.0.21",
+ "url",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "kithara-app-tests"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -4525,6 +4543,29 @@ dependencies = [
  "kithara-test-utils",
  "num-traits",
  "url",
+]
+
+[[package]]
+name = "kithara-app-zvuk"
+version = "0.0.1-alpha5"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "delegate",
+ "kithara-app-library",
+ "kithara-config",
+ "kithara-net",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui",
+ "kithara-workspace-hack",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unimock",
+ "url",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -5591,6 +5632,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "firewheel",
+ "futures",
  "hex",
  "hotpath",
  "humantime-serde",
@@ -5672,6 +5714,7 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-config",
+ "kithara-decode",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -6057,6 +6100,7 @@ dependencies = [
  "unicode-segmentation",
  "velato",
  "vello",
+ "window_clipboard",
  "winit",
 ]
 

@@ -78,9 +78,8 @@ impl AppConfig {
         let mut net_override = NetOptionsPatch::default();
         net_override.is_insecure = Some(should_accept_invalid_certs);
         net.apply(net_override);
-        let mut downloader_config =
-            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child()))
-                .build();
+        let client = HttpClient::new(net, pools.clone(), shutdown.child());
+        let mut downloader_config = DownloaderConfig::for_client(client.clone()).build();
         downloader_config.apply(document.downloader());
         let downloader = Downloader::new(downloader_config);
         let mut flush_policy = FlushPolicy::default();
@@ -95,6 +94,8 @@ impl AppConfig {
         let store = AppStore::open(store_config);
         let builder = Self::builder()
             .drm(AppDrm::new(document.drm_policy()?))
+            .net(client)
+            .sources(document.sources().clone())
             .beat_analysis(document.beat()?)
             .downloader(downloader)
             .shutdown(shutdown)

@@ -7,6 +7,8 @@ members = [
     "crates/kithara-android",
     "crates/kithara-app",
     "crates/kithara-app-document",
+    "crates/kithara-app-library",
+    "crates/kithara-app-zvuk",
     "crates/kithara-apple",
     "crates/kithara-assets",
     "crates/kithara-audio",
@@ -285,6 +287,8 @@ kithara-analysis = { path = "crates/kithara-analysis", version = "0.0.1-alpha5",
 kithara-android = { path = "crates/kithara-android", version = "0.0.1-alpha5" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-app-document = { path = "crates/kithara-app-document" }
+kithara-app-library = { path = "crates/kithara-app-library" }
+kithara-app-zvuk = { path = "crates/kithara-app-zvuk", default-features = false }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha5" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha5", default-features = false }
 kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha5", default-features = false }
@@ -433,6 +437,7 @@ iced_renderer = "0.14.0"
 iced_runtime = "0.14.0"
 iced_tiny_skia = "0.14.1"
 iced_wgpu = "0.14.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 
 # Link-time registry. The kithara-test-fixtures build script enumerates what its
 # `#[kithara::asset]` definitions submit; nothing links it into a product build.
@@ -553,6 +558,7 @@ wasm-bindgen-test = "=0.3.70"
 wasm_safe_thread = "0.1.1"
 web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageChannel", "MessageEvent", "MessagePort", "Window"] }
 web-time = "1.1"
+window_clipboard = "0.5.1"
 # Dev-only: the gallery example drives the Masonry host in a real window. iced
 # already builds this exact version, so it costs no extra compilation.
 winit = "0.30"

@@ -1,4 +1,5 @@
 use kithara::{effects::GainDb, queue::TrackId};
+use kithara_app_library::Playable;
 
 use crate::deck::{DeckId, EqMode, TempoPercent};
 
@@ -12,7 +13,7 @@ pub(crate) struct Envelope {
 pub(crate) enum Command {
     Deck { deck: DeckId, cmd: DeckCmd },
     Mix(MixCmd),
-    LoadOntoDeck { deck: DeckId, source: String },
+    LoadOntoDeck { deck: DeckId, track: Playable },
     App(AppCmd),
 }
 

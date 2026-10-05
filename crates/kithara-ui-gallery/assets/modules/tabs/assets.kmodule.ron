@@ -48,6 +48,8 @@
                     Include(id: "icon-folder-plus", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "FolderPlus", "label": "FOLDER PLUS" }),
                     Include(id: "icon-gear", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "Gear", "label": "GEAR" }),
                     Include(id: "icon-headphones", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "Headphones", "label": "HEADPHONES" }),
+                    Include(id: "icon-heart", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "Heart", "label": "HEART" }),
+                    Include(id: "icon-heart-filled", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "HeartFilled", "label": "HEART FILLED" }),
                     Include(id: "icon-home", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "Home", "label": "HOME" }),
                     Include(id: "icon-instrument", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "Instrument", "label": "INSTRUMENT" }),
                     Include(id: "icon-kithara", source: "../catalog/icon-cell.kmodule.ron", with: { "icon": "Kithara", "label": "KITHARA" }),

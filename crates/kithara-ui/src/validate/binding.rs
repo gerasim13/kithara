@@ -26,6 +26,7 @@ pub(crate) const fn read_kind(control: &ControlNode) -> Option<ValueKind> {
         ControlNode::DeckSummary { .. }
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. }
+        | ControlNode::Search { .. }
         | ControlNode::ContextBar { .. } => Some(ValueKind::Text),
         ControlNode::Optional { .. } => Some(consts::BLOCK_HIDDEN),
         ControlNode::Popover { .. }

@@ -50,7 +50,7 @@ pub use player::{
     SelectTransition,
 };
 pub use resource::{
-    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, MAX_ARTIFACT_BYTES,
+    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
     PlaybackResamplerBackend, PreparedGrid, Resource, ResourceConfig, ResourceSrc, SourceType,
 };
 pub use rt::{PlayerNode, StreamShape};

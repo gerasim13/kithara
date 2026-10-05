@@ -302,16 +302,13 @@ pub(crate) fn memory_store() -> AppStore {
 pub(crate) fn app_config(cancel: &CancelToken, store: AppStore) -> AppConfig {
     let pools = test_pools();
     let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let net = HttpClient::new(NetOptions::builder().build(), pools, cancel.child());
     AppConfig::builder()
         .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
         .downloader(Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(
-                NetOptions::builder().build(),
-                pools,
-                cancel.child(),
-            ))
-            .build(),
+            DownloaderConfig::for_client(net.clone()).build(),
         ))
+        .net(net)
         .shutdown(cancel.child())
         .worker(worker)
         .store(store)

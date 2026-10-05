@@ -148,6 +148,7 @@ static TREE_ROWS: [TreeRow<'static>; 8] = [TreeRow {
     label: "Late Folder",
     count: Some(8),
     expanded: Some(true),
+    page: false,
     icon: IconName::Folder,
     muted: false,
     selected: false,
@@ -3455,6 +3456,7 @@ fn a_mounted_tree_search_ime_commit_emits_the_complete_query() {
     let skin = builtin::skin();
     let search_x = skin.tree.search_icon_width + 1.0 + skin.tree.search_padding_x;
     let search_y = skin.tree.search_height / 2.0;
+    assert!(!root.editing_text(), "a paste has no field to go to yet");
 
     assert_eq!(
         root.handle_pointer_event(pointer_down(search_x.into(), search_y.into()))
@@ -3465,6 +3467,7 @@ fn a_mounted_tree_search_ime_commit_emits_the_complete_query() {
         root.root().focused_widget().is_some(),
         "the real Tree search target must own Masonry focus before text input"
     );
+    assert!(root.editing_text(), "a paste goes to the focused search");
     assert_eq!(
         root.handle_pointer_event(pointer_up(search_x.into(), search_y.into()))
             .unwrap_or_else(|error| panic!("Tree search release must route: {error}")),
@@ -3483,6 +3486,47 @@ fn a_mounted_tree_search_ime_commit_emits_the_complete_query() {
             ControlAction::Text("needle".to_owned())
         )],
         "the focused retained search target must publish the complete committed query"
+    );
+}
+
+#[kithara::test]
+fn a_page_search_repaints_host_text_and_does_not_echo_its_clear() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "host-page-query",
+        r#"Column(size: (w: Fill, h: Fill), children: [
+            Search(id: "query", read: Model(id: "library.query")),
+        ])"#,
+        &registry,
+    );
+    let reads = LateTreeReads {
+        query_loaded: Cell::new(false),
+        rows_loaded: Cell::new(true),
+    };
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let mut root = masonry_root(output, 240, 160);
+    let (empty, _) = root.redraw().expect("empty Search draws");
+    let empty_scene = empty.encoding().draw_data.clone();
+    reads.query_loaded.set(true);
+    root.refresh(ctx(&ui, &reads));
+    let (loaded, _) = root.redraw().expect("host text draws");
+    assert_ne!(empty_scene, loaded.encoding().draw_data);
+    let y = f64::from(builtin::skin().tree.search_height / 2.0);
+    root.handle_pointer_event(pointer_down(230.0, y))
+        .expect("Search focuses");
+    root.handle_pointer_event(pointer_up(230.0, y))
+        .expect("Search releases");
+    assert!(root.take_actions().is_empty());
+
+    reads.query_loaded.set(false);
+    root.refresh(ctx(&ui, &reads));
+    assert!(
+        root.take_actions().is_empty(),
+        "host clearing must not echo a write"
     );
 }
 
@@ -4143,7 +4187,7 @@ fn seeking_wave_root(extra: &str, takes_drops: bool) -> MasonryRoot<TestAction> 
     registry.insert(
         EndpointCategory::Command,
         "demo.load",
-        EndpointDesc::new(ValueKind::Text),
+        EndpointDesc::new(ValueKind::Record),
     );
     let reads = FixtureReads;
     let takes = if takes_drops {
@@ -4238,7 +4282,7 @@ fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) 
     registry.insert(
         EndpointCategory::Command,
         "deck.queue.load",
-        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+        EndpointDesc::new(ValueKind::Record).with_scope("deck"),
     );
     let mut resolver = MemResolver::default();
     resolver.insert(
@@ -4465,7 +4509,7 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
     registry.insert(
         EndpointCategory::Command,
         "demo.load",
-        EndpointDesc::new(ValueKind::Text),
+        EndpointDesc::new(ValueKind::Record),
     );
     let reads = DragReads;
     let mut resolver = MemResolver::default();

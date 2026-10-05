@@ -20,7 +20,7 @@ use crate::{
         document::Measured,
         masonry::{
             MasonryHost, MasonryNode, Painted,
-            controls::{Retained, TableLeaf, TreeLeaf},
+            controls::{Retained, SearchLeaf, TableLeaf, TreeLeaf},
             custom::Respoken,
             flex::{Flex, box_constraints, normalized},
             leaf::{DragProgram, Leaf},
@@ -169,6 +169,7 @@ macro_rules! hosted_controls {
 
 hosted_controls!(
     mount::Table<'_> => Table, TableLeaf, "Table mount is incomplete";
+    mount::Search => Search, SearchLeaf, "Search mount is incomplete";
     mount::Tree<'_> => Tree, TreeLeaf, "Tree mount is incomplete";
 );
 impl NodeControl for mount::Text<'_> {

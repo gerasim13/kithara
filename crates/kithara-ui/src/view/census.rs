@@ -304,10 +304,10 @@ impl Census {
             };
             self.note_write(path, slot.binding, at);
         }
-        for (child, binding) in column_writes(site) {
+        for (child, binding, gesture, _) in column_writes(site) {
             let at = WriteAt {
                 origin,
-                gesture: Gesture::Scalar,
+                gesture,
                 edge: None,
                 close: close.clone(),
             };

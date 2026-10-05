@@ -5,7 +5,10 @@ use std::{
 
 use kithara_test_macros as kithara;
 
-use super::plan::{HostedControlPlan, Resolving, TablePlan, TreePlan};
+use super::{
+    plan::{HostedControlPlan, Resolving, TablePlan, TreePlan},
+    search::SearchPlan,
+};
 use crate::{
     atoms::{
         bar::context::Context,
@@ -53,6 +56,58 @@ pub(crate) trait TableProjection {
 pub(crate) trait TreeProjection {
     fn project(&self, plan: &TreePlan) -> Option<TreeDrawn>;
     fn reconcile(&self);
+}
+
+pub(crate) trait SearchProjection {
+    fn project(&self, plan: &SearchPlan) -> Option<TextInputSnapshot>;
+    fn reconcile(&self);
+}
+
+#[derive(Clone, Default)]
+pub(super) struct SearchState {
+    projection: Rc<OnceCell<Weak<dyn SearchProjection>>>,
+    source: Rc<OnceCell<Option<String>>>,
+}
+
+impl SearchPlan {
+    pub(super) fn bind_source(&self, endpoint: Option<String>) {
+        let _ = self.state.source.get_or_init(|| endpoint);
+    }
+
+    pub(crate) fn bind_projection(&self, projection: Weak<dyn SearchProjection>) {
+        let _ = self.state.projection.get_or_init(|| projection);
+    }
+
+    pub(crate) fn drawn(&self) -> Option<TextInputSnapshot> {
+        self.state
+            .projection
+            .get()
+            .and_then(Weak::upgrade)?
+            .project(self)
+    }
+
+    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        let query = self
+            .state
+            .source
+            .get()
+            .and_then(Option::as_ref)
+            .and_then(|endpoint| ctx.get(endpoint))
+            .and_then(|value| match value {
+                ReadValue::Text(query) => Some(query),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if self.picture.borrow().query() == query {
+            return false;
+        }
+        let next = crate::atoms::search::Search::new(query, self.picture.borrow().skin());
+        *self.picture.borrow_mut() = next;
+        if let Some(projection) = self.state.projection.get().and_then(Weak::upgrade) {
+            projection.reconcile();
+        }
+        true
+    }
 }
 
 #[derive(Clone, Default)]
@@ -115,6 +170,13 @@ impl HostedControlPlan {
                     }
                 }
             }
+            Self::Search(plan) => targets.push(Target::new(
+                &plan.path,
+                Hit::new(
+                    point,
+                    crate::atoms::search::input_bounds(bounds, plan.picture.borrow().skin()),
+                ),
+            )),
             Self::Tree(plan) => {
                 let Some(engine) = engine else {
                     plan.report_missing("retained engine");
@@ -211,10 +273,6 @@ impl TreePlan {
     pub(crate) fn drawn(&self) -> Option<TreeDrawn> {
         self.projection()
             .and_then(|projection| projection.project(self))
-    }
-
-    pub(crate) fn picture(&self) -> Ref<'_, Tree> {
-        self.picture.borrow()
     }
 
     fn projection(&self) -> Option<Rc<dyn TreeProjection>> {
@@ -317,6 +375,13 @@ impl TablePlan {
                 Hit::new(point, empty_bounds(bounds)),
             )),
         }
+        self.append_action_targets(
+            bounds,
+            point,
+            &view.columns,
+            (view.horizontal, view.vertical),
+            targets,
+        );
         let dividers = table_dividers(bounds, &view.columns, view.horizontal, picture.metrics());
         for (index, column) in view.columns.iter().enumerate() {
             if !column_resizable(&view.columns, index) {

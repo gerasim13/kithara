@@ -42,7 +42,7 @@ impl<T: ArtifactDocument> ArtifactSource<T> {
     pub async fn load(&self, fetch: &ArtifactFetch<'_>) -> Result<Arc<T>, ArtifactLoadError> {
         match self {
             Self::Value(value) => Ok(Arc::clone(value)),
-            Self::Source(src) => fetch.load(src).await,
+            Self::Source(src) => fetch.load(src).await.map(Arc::new),
         }
     }
 }

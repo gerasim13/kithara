@@ -112,10 +112,8 @@ async fn delayed_drm_track() -> (TestServerHelper, Url) {
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
-            .build(),
-    );
+    let client = HttpClient::new(net, pools.clone(), CancelToken::never());
+    let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
     let store = AssetStore::builder(pools.clone())
@@ -132,6 +130,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     let config = AppConfig::builder()
         // The fixture serves its own AES-128 keys; no provider claims 127.0.0.1.
         .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
+        .net(client)
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker.clone())
@@ -193,7 +192,11 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     let mut rng = Xorshift64::new(42);
     for i in 0..3 {
         let target = duration * rng.range_f64(0.05, 0.95);
-        queue.seek(target).expect("seek");
+        // Through the host owner, as the app seeks and as every other
+        // control call here does. Called directly, the seek takes the
+        // queue's admission gate on this thread, and the ticker holding
+        // it parks the test's own poll.
+        queue.run(move |q| q.seek(target)).await.expect("seek");
         wait_for_position_near(&queue, target, 1.0, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail: {e}"));

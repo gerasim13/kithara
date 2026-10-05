@@ -1,3 +1,4 @@
+mod artwork;
 pub(super) mod cache;
 mod compile;
 pub(crate) mod endpoints;

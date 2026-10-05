@@ -430,6 +430,9 @@ where
             /// Returns whether another frame should follow. Every unrelated
             /// platform signal remains queued on the retained root.
             pub fn complete_frame(&mut self) -> bool;
+            /// Whether the widget holding the keyboard takes text input, so a
+            /// paste the window reads belongs to it.
+            pub(crate) fn editing_text(&self) -> bool;
             /// Reports whether the next retained frame would change the picture.
             pub fn needs_frame(&self) -> bool;
             /// Takes the cursor the document last asked its window to show.

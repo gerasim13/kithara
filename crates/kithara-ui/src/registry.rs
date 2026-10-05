@@ -12,6 +12,8 @@ pub enum ValueKind {
     Point,
     Stereo,
     Text,
+    Image,
+    Record,
     Waveform,
     PortalMap,
     Range,

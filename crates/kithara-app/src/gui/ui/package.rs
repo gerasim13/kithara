@@ -11,7 +11,8 @@ use kithara::ui::{
     text::{TextDoc, parse_text},
 };
 
-use super::cache::DeckLayout;
+use super::{cache::DeckLayout, endpoints::Registry};
+use crate::gui::library::PagesModule;
 
 include!(concat!(env!("OUT_DIR"), "/ui_documents.rs"));
 
@@ -38,6 +39,8 @@ fn role(layout: DeckLayout) -> ScreenRole {
 #[fieldwork(opt_in, get)]
 pub(crate) struct Package {
     resolver: Box<dyn SourceResolver>,
+    #[field(get, vis = "pub(in crate::gui)")]
+    registry: Registry,
     screens: Screens,
     /// The skin this package dresses its pages in, resolved once.
     #[field(get, vis = "pub(in crate::gui)")]
@@ -62,25 +65,35 @@ impl Package {
 
     pub(in crate::gui) fn load(
         root: Option<&Path>,
-        modules: MemResolver,
+        pages: PagesModule,
     ) -> Result<Rc<Self>, UiDocError> {
         match root {
-            Some(root) => Self::read_folder(root, modules),
-            None => Self::read(embedded(), modules),
+            Some(root) => Self::read_folder(root, pages),
+            None => Self::read(embedded(), pages),
         }
     }
 
     fn read<R: SourceResolver + 'static>(
         documents: R,
-        modules: MemResolver,
+        pages: PagesModule,
     ) -> Result<Rc<Self>, UiDocError> {
+        let PagesModule {
+            modules,
+            registry,
+            texts,
+        } = pages;
         let resolver: Box<dyn SourceResolver> = Box::new(OverlayResolver::new(modules, documents));
         let manifest = load_package(resolver.as_ref(), Self::MANIFEST)?;
         let screens = Screens::resolve(&manifest, resolver.as_ref())?;
-        let text = catalog(resolver.as_ref(), &manifest)?;
+        let mut text = catalog(resolver.as_ref(), &manifest)?;
+        for document in texts {
+            let origin = SourceUri(document.path.to_owned());
+            text = text.merge(&parse_text(document.text, &origin)?, &origin)?;
+        }
         let skin = dress(resolver.as_ref(), &manifest, &text)?;
         Ok(Rc::new(Self {
             resolver,
+            registry,
             screens,
             skin,
             text,
@@ -88,22 +101,22 @@ impl Package {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn read_folder(root: &Path, modules: MemResolver) -> Result<Rc<Self>, UiDocError> {
+    fn read_folder(root: &Path, pages: PagesModule) -> Result<Rc<Self>, UiDocError> {
         use kithara::ui::source::FileResolver;
 
         if !root.exists() {
-            return Self::read(embedded(), modules);
+            return Self::read(embedded(), pages);
         }
         let files = FileResolver::new(root).map_err(|error| UiDocError::Unreadable {
             origin: SourceUri(root.display().to_string()),
             rel: String::new(),
             source: error,
         })?;
-        Self::read(OverlayResolver::new(files, embedded()), modules)
+        Self::read(OverlayResolver::new(files, embedded()), pages)
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn read_folder(root: &Path, _modules: MemResolver) -> Result<Rc<Self>, UiDocError> {
+    fn read_folder(root: &Path, _pages: PagesModule) -> Result<Rc<Self>, UiDocError> {
         use std::io::ErrorKind;
 
         Err(UiDocError::Unreadable {
