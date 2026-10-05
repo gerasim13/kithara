@@ -71,6 +71,7 @@ symphonia = ["kithara/symphonia"]
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
 stretch-bungee = ["kithara/stretch-bungee"]
 stretch-glide = ["kithara/stretch-glide"]
+stretch-identity = ["kithara/stretch-identity"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 # Forwards the reqwest stack so the wasm build (which runs with

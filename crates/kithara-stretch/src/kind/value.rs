@@ -11,7 +11,7 @@ bitflags::bitflags! {
 
 /// Stretch backend selection. Variants exist only when their backend is
 /// compiled in (this module itself requires at least one `stretch-*`
-/// feature on a native target). Selecting an absent backend is
+/// feature). Selecting an absent backend is
 /// un-representable rather than a runtime error.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
@@ -26,4 +26,7 @@ pub enum StretchKind {
     /// Pure-Rust Glide resampler. Changes pitch with playback rate.
     #[cfg(feature = "stretch-glide")]
     Glide,
+    /// Unity-rate sample copy without pitch or rate changes.
+    #[cfg(feature = "stretch-identity")]
+    Identity,
 }

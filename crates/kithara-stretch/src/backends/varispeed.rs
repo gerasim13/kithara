@@ -64,11 +64,13 @@ impl ElasticEngine for VarispeedElastic {
             source
                 .ensure_len(config.max_source_frames())
                 .map_err(|_| ElasticError::PoolCapacity)?;
+            source.shrink_to_fit();
             input.push(source);
             let mut target = config.pools().get::<f32>();
             target
                 .ensure_len(config.max_output_frames())
                 .map_err(|_| ElasticError::PoolCapacity)?;
+            target.shrink_to_fit();
             output.push(target);
         }
         Ok(Self {

@@ -1,9 +1,11 @@
-//! Conformance suite for the exact-span elastic contract.
+//! Conformance suite for native keylock exact-span engines.
 //!
-//! Every compiled-in engine runs the same conformance cases, including the
+//! Every compiled-in keylock engine runs the same conformance cases, including the
 //! mandatory priming lifecycle.
 //! Every observable lifecycle and audio behavior is shared; backend-specific
 //! tests cover only private preparation and storage mechanics.
+
+#![cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 
 use std::{num::NonZeroUsize, ops::RangeInclusive};
 
