@@ -22,8 +22,9 @@ use crate::{
     error::PlayError,
     player::{
         PlayerConfig, PlayerControl,
+        config::TrackSettings,
         staging::SyncStaging,
-        state::{ItemQueue, PlayerPhase, TrackGrid},
+        state::{ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
     },
     worker::EngineLoad,
 };
@@ -116,7 +117,16 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             config.abr = Some(AbrController::new(abr_settings));
         }
 
-        config.warp.stretch().set_speed(config.default_rate());
+        let settings = TrackSettings::builder().speed(config.default_rate());
+        #[cfg(any(
+            feature = "stretch-signalsmith",
+            feature = "stretch-bungee",
+            feature = "stretch-glide"
+        ))]
+        let settings = settings
+            .keylock(config.warp.keylock())
+            .backend(config.warp.backend());
+        let lanes = TrackLanes::new(settings.build());
         let grid_id = config.grid_id;
         let sample_rate = config.sample_rate;
         let core = PlayerCore {
@@ -128,6 +138,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             start_position: Mutex::default(),
             items: ItemQueue::new(bus),
             track_grid,
+            lanes,
         };
         Self {
             grid_id,

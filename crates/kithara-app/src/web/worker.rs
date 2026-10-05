@@ -3,6 +3,7 @@ use std::convert::Infallible;
 use arc_swap::ArcSwap;
 use kithara::{
     host::wasm,
+    net::HttpClient,
     platform::{
         CancelToken,
         sync::Arc,
@@ -23,8 +24,9 @@ use crate::{
 };
 
 /// Builds the engine on a Worker over the page's host and runs it there. The
-/// first receiver hears whether the build succeeded before the loop starts,
-/// the second closes once the Worker is done with the engine.
+/// first receiver hears whether the build succeeded, with the client the
+/// engine's downloads ride, before the loop starts; the second closes once the
+/// Worker is done with the engine.
 pub(super) fn spawn(
     document: Config,
     pools: Pools,
@@ -33,7 +35,7 @@ pub(super) fn spawn(
     commands: UnboundedReceiver<Envelope>,
     shutdown: CancelToken,
 ) -> (
-    oneshot::Receiver<Result<(), EngineError>>,
+    oneshot::Receiver<Result<HttpClient, EngineError>>,
     oneshot::Receiver<Infallible>,
 ) {
     let (built_tx, built) = oneshot::channel();

@@ -88,7 +88,7 @@ async fn prepare_tiny_ring_player(
         .audio_buffer_chunks(OUTPUT_RING_CHUNKS)
         .build();
     let audio = worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|error| panic!("open {label} audio: {error:?}"));
     let abr = audio

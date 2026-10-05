@@ -12,8 +12,7 @@ use kithara::{
     stretch::StretchKind,
     warp::{
         Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint,
-        SessionAnchor, SessionBeat, StretchControls, WarpConfig, WarpMap, WarpMapRevision,
-        WarpPlan,
+        SessionAnchor, SessionBeat, WarpConfig, WarpMap, WarpMapRevision, WarpPlan,
     },
 };
 use kithara_integration_tests::{
@@ -335,9 +334,6 @@ fn render(
 ) -> Presented {
     let frames = trajectory.seconds * usize::try_from(track.spec.sample_rate.get()).expect("rate");
     let source = track.source_grid();
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
     let mut revision = WarpMapRevision::first();
     let initial = plan(&source, anchors[0], anchors[0].frame(), revision);
     let mut next = 1;
@@ -362,7 +358,9 @@ fn render(
     );
     let mut rendered = render_configured_grid_with_updates(
         WarpConfig::builder()
-            .stretch(controls)
+            .speed(1.0)
+            .keylock(true)
+            .backend(backend)
             .render_quantum_frames(NonZero::new(64).expect("quantum"))
             .build(),
         Some(initial),

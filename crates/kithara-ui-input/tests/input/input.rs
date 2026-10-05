@@ -1,6 +1,8 @@
 use kithara_test_utils::kithara;
 use kithara_ui_draw::{Pt, Rect};
-use kithara_ui_input::{Hit, Input, PointerButton, PointerId, PointerInput, PointerPhase};
+use kithara_ui_input::{
+    Hit, Input, Key, Modifiers, PointerButton, PointerId, PointerInput, PointerPhase,
+};
 
 #[kithara::test]
 fn pointer_input_preserves_identity_button_phase_position_and_clicks() {
@@ -51,4 +53,37 @@ fn hit_keeps_the_unclamped_point_separate_from_containment() {
 
     assert_eq!(hit.at(), Some(point));
     assert_eq!(hit.inside(), None);
+}
+
+/// A shortcut names its key by the typed character while that is one
+/// character below the Greek block, otherwise by the letter on the physical
+/// key, and takes the platform's command modifier without Alt.
+#[kithara::test]
+fn a_shortcut_is_its_letter_under_the_command_modifier_alone() {
+    let macos = cfg!(target_os = "macos");
+    let command = Modifiers::new(false, !macos, macos, false);
+    let other = Modifiers::new(false, macos, !macos, false);
+    for (text, physical, modifiers, shortcut) in [
+        ("v", None, command, true),
+        ("V", None, command, true),
+        ("\u{43c}", Some('v'), command, true),
+        ("\u{370}", Some('v'), command, true),
+        ("\u{36f}", Some('v'), command, false),
+        ("ab", Some('v'), command, true),
+        ("v", None, Modifiers::new(true, !macos, macos, false), false),
+        ("v", None, other, false),
+        ("v", None, Modifiers::default(), false),
+    ] {
+        let input = Input::KeyPressed {
+            key: Key::character(text, physical),
+            modifiers,
+            text: Some(text),
+        };
+
+        assert_eq!(
+            input.shortcut('v'),
+            shortcut,
+            "{text:?} on {physical:?} with {modifiers:?}"
+        );
+    }
 }

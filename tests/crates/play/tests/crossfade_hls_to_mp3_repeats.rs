@@ -116,7 +116,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
             let audio_cfg = AudioConfig::<FileSource<TestPools>>::for_stream(file_cfg)
                 .hint("mp3".to_string())
                 .build();
-            let audio = w.open(audio_cfg).await.expect("create local MP3 audio");
+            let audio = w.load(audio_cfg).await.expect("create local MP3 audio");
             resource_from_reader(audio)
         }
     };
@@ -135,7 +135,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
             let audio_cfg = AudioConfig::<Hls<TestPools>>::for_stream(cfg)
                 .media_info(wav_info)
                 .build();
-            let audio = w.open(audio_cfg).await.expect("create HLS audio");
+            let audio = w.load(audio_cfg).await.expect("create HLS audio");
             let mut r: Resource = resource_from_reader(audio);
             timeout(consts::READ_TIMEOUT, r.preload())
                 .await

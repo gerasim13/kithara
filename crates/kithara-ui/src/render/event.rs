@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::{draw::Pt, interact::recognizers::Edge, validate::Gesture};
 #[cfg(feature = "masonry")]
 use crate::{engine::EngineEvent, interact::recognizers::DragEvent};
@@ -69,6 +71,7 @@ pub enum ControlAction {
     StepScalar(f32),
     SelectIndex(usize),
     Text(String),
+    Record(BTreeMap<String, String>),
 }
 
 impl ControlAction {
@@ -80,6 +83,7 @@ impl ControlAction {
             Self::StepScalar(_) => Gesture::Step,
             Self::SelectIndex(_) => Gesture::Index,
             Self::Text(_) => Gesture::Text,
+            Self::Record(_) => Gesture::Record,
             Self::Place(_) => Gesture::Place,
         }
     }
@@ -94,6 +98,7 @@ pub enum WriteValue {
     Step(f32),
     Index(usize),
     Text(String),
+    Record(BTreeMap<String, String>),
     Point(Pt),
     Range(f64, f64),
 }

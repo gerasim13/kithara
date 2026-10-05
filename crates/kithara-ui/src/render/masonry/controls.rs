@@ -3,7 +3,7 @@ use num_traits::{ToPrimitive, cast::AsPrimitive};
 use super::custom::{HostAction, Repaint};
 pub(crate) use super::{
     painted::Painted,
-    projected::{TableLeaf, TreeLeaf},
+    projected::{SearchLeaf, TableLeaf, TreeLeaf},
 };
 use crate::{
     atoms::{

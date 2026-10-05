@@ -59,7 +59,8 @@ impl_child_node!(AddFolderNode, |this, segment, _scope| {
     }
 });
 
-/// Answers each source under its own key, building its rows on first read.
+/// Answers each source under its own key, building its rows on first read;
+/// a name the shell does not own is the scoped source's read.
 pub(super) struct SourcesNode<'a> {
     library: &'a Library,
     rows: Vec<OnceCell<Vec<TableRow<'a>>>>,
@@ -112,7 +113,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a SourcesNode<'b> {
                 ReadValue::Table(rows)
             }
             "status" => ReadValue::Text(self.library.status_words(source.status())),
-            _ => return None,
+            name => source.read(name)?,
         };
         Some(Box::new(Value(value)))
     }

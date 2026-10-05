@@ -210,7 +210,7 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
         .hint("wav".to_string())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker.open(config).await.expect("create audio pipeline");
+    let mut audio = worker.load(config).await.expect("create audio pipeline");
 
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();

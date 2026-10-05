@@ -187,7 +187,7 @@ async fn warm_hls_worker(
         )
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
@@ -303,7 +303,7 @@ async fn open_packaged_hls_audio(
         )
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
     audio.preload().expect("packaged HLS preload must succeed");
@@ -1062,7 +1062,7 @@ async fn stress_offline_crossfade_no_gaps(
                 .hint("mp3".to_string())
                 .cancel(cancel)
                 .build();
-            let audio = w.open(audio_cfg).await.expect("create local MP3 audio");
+            let audio = w.load(audio_cfg).await.expect("create local MP3 audio");
             resource_from_reader(audio)
         }
     };
@@ -1084,7 +1084,7 @@ async fn stress_offline_crossfade_no_gaps(
                 .media_info(wav_info)
                 .cancel(cancel)
                 .build();
-            let audio = w.open(audio_config).await.expect("HLS audio");
+            let audio = w.load(audio_config).await.expect("HLS audio");
             let mut r = resource_from_reader(audio);
             timeout(consts::READ_TIMEOUT, r.preload())
                 .await

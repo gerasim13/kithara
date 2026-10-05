@@ -78,9 +78,10 @@ to the single `decoder` field.
 - **Configuration:** `PlayerConfig`, `EngineConfig`, and `ResourceConfig` expose
   builders while their fields remain crate-private.
 - **Tempo and key-lock:** `PlayerConfig::builder().warp(...)` supplies the
-  resident `WarpConfig`, including its shared `StretchControls`; speed,
-  key-lock, and backend changes apply live, mid-track. Render quantum and rate
-  smoothing remain optional frame-based Warp settings. Player resolves an
+  `WarpConfig` every track's renderer starts from, with its key-lock and
+  backend. A speed change goes to each held track's render lane and applies on
+  a frame of its output, mid-track. Render quantum and rate smoothing remain
+  optional frame-based Warp settings. Player resolves an
   unspecified render quantum to 32 frames when `response_budget_frames` is
   supplied. This optional application constraint retains admission checks
   against the actual Host output shape.

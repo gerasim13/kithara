@@ -82,7 +82,7 @@ impl Kithara {
         self.published = self.snapshots.load_full();
         self.overlay.retire(self.published.applied_seq);
         self.snapshot = self.overlay.over(&self.published);
-        self.ui.cache.refresh(&self.snapshot);
+        self.ui.cache.refresh(&self.snapshot, &self.ui.runtime);
     }
 
     pub(crate) fn send(&mut self, command: Command) {

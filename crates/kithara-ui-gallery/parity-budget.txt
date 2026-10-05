@@ -90,6 +90,9 @@ clock.png                   3
 pivot.png                   3
 
 library2.png                4
+# Search is one text field and the line that echoes it; its 0.5% of differing
+# pixels, measured 2026-10-05, is glyph edges with no ink disagreement.
+search.png                  1
 micro.png                   2
 table.png                   2
 tokens.png                  2

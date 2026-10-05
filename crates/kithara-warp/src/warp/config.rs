@@ -3,6 +3,12 @@ use std::num::NonZeroUsize;
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::sync::Arc;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use kithara_stretch::StretchKind;
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
@@ -11,7 +17,7 @@ use kithara_stretch::{
     ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError,
 };
 
-use crate::{StretchControls, WarpPlan, WarpPlanSlot, consts};
+use crate::{RegionPlan, WarpPlan, WarpPlanSlot, consts};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -23,16 +29,51 @@ pub struct WarpConfig {
     /// Explicit projected selection prepared by the musical policy owner.
     #[config(skip = "shared projected warp plan handle", builder(default = Arc::new(WarpPlanSlot::default())), get(ref), patch(skip))]
     plan: Arc<WarpPlanSlot>,
-    /// Live temporal controls consumed by the resident Warp lane. Not a
-    /// document key: this is the handle the UI and the deck already share, so
-    /// a document naming a stretch ratio would be overwritten by the first
-    /// gesture.
-    #[config(skip = "shared live temporal control handle", builder(default = StretchControls::new(1.0)), get(ref), patch(skip))]
-    stretch: Arc<StretchControls>,
+    /// Media seconds consumed per output second a renderer built from this
+    /// configuration starts at. Not a document key: the render lane changes it
+    /// on a frame.
+    #[config(
+        skip = "construction value the render lane changes live",
+        builder(default = 1.0),
+        get(copy),
+        patch(skip)
+    )]
+    speed: f32,
+    /// Whether a renderer built from this configuration starts on a
+    /// pitch-preserving engine, where its backend has one.
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    #[config(
+        skip = "construction value the render lane changes live",
+        builder(default),
+        get(copy),
+        patch(skip)
+    )]
+    keylock: bool,
+    /// Stretch engine a renderer built from this configuration starts on.
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    #[config(
+        skip = "construction value the render lane changes live",
+        builder(default),
+        get(copy),
+        patch(skip)
+    )]
+    backend: StretchKind,
+    /// Per-region ratio corrections a renderer built from this configuration
+    /// applies over source frames.
+    #[config(skip = "shared immutable region plan", get(ref), patch(skip))]
+    region_plan: Option<Arc<RegionPlan>>,
     /// Preparation geometry each compiled stretch backend is built with. Not
-    /// the backend selection: which engine runs is a live control on
-    /// [`StretchControls`], while this is the geometry the selected engine is
-    /// prepared with, read again on every rebuild. Only a build that compiles
+    /// the backend selection: which engine runs is the render lane's, while
+    /// this is the geometry the selected engine is prepared with, read again
+    /// on every rebuild. Only a build that compiles
     /// a stretch backend has it, so a document naming it under a build that
     /// has none is refused rather than silently ignored.
     #[cfg(all(
@@ -80,6 +121,24 @@ impl WarpConfig {
     ))]
     pub(crate) const fn enters_plan(&self) -> bool {
         self.entering
+    }
+
+    /// A copy whose renderer starts at `speed` on `backend`, keylocked where
+    /// `keylock`: where a track's render lane stands when it opens, before
+    /// the lane's first command.
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    #[must_use]
+    pub fn starting_at(&self, speed: f32, keylock: bool, backend: StretchKind) -> Self {
+        Self {
+            speed,
+            keylock,
+            backend,
+            ..self.clone()
+        }
     }
 }
 

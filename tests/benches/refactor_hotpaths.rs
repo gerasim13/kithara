@@ -331,7 +331,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                         .build();
                     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
                     let mut audio = worker
-                        .open(config)
+                        .load(config)
                         .await
                         .unwrap_or_else(|e| panic!("audio init failed: {e}"));
 

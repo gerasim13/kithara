@@ -14,7 +14,7 @@ use super::{built::Within, custom::HostAction};
 use crate::{
     atoms::{bar::context::Context, table::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
-    engine::{Descriptor, Engine, PickerSnapshot, Target},
+    engine::{Descriptor, Engine, PickerSnapshot, Target, TextInputSnapshot},
     interact::{
         CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase,
         masonry::{pointer_button, portable_scroll},
@@ -23,7 +23,9 @@ use crate::{
         Carried, HostedControlPlan, Published,
         document::Ctx,
         event::engine_value,
-        hosted::{TablePlan, TableProjection, TreePlan, TreeProjection},
+        hosted::{
+            SearchPlan, SearchProjection, TablePlan, TableProjection, TreePlan, TreeProjection,
+        },
     },
 };
 
@@ -78,6 +80,7 @@ pub(in crate::render) struct Routed {
 enum Face {
     Table(Option<Drawn>),
     Tree(Option<TreeDrawn>),
+    Search(Option<TextInputSnapshot>),
     Picker(Option<PickerSnapshot>),
     Unread,
 }
@@ -94,8 +97,8 @@ pub(crate) struct HostedEngine {
     engine: Rc<RefCell<Engine>>,
     map_event: Rc<dyn Fn(Published) -> HostAction>,
     pointer: Rc<Cell<Option<Pt>>>,
-    _projections: Vec<Rc<dyn TableProjection>>,
-    _tree_projections: Vec<Rc<dyn TreeProjection>>,
+    /// What draws each table, tree and search face from the engine.
+    _projections: Vec<Rc<EngineProjection>>,
     targets: Vec<Within<EngineTarget>>,
     #[field(get(copy), vis = "pub(in crate::render)")]
     owner: WidgetId,
@@ -113,9 +116,12 @@ impl HostedEngine {
         targets: Vec<Within<EngineTarget>>,
         map_event: Rc<dyn Fn(Published) -> HostAction>,
     ) -> Rc<Self> {
-        let text_input = targets
-            .iter()
-            .any(|target| matches!(target.item.plan, HostedControlPlan::Tree(_)));
+        let text_input = targets.iter().any(|target| {
+            matches!(
+                target.item.plan,
+                HostedControlPlan::Tree(_) | HostedControlPlan::Search(_)
+            )
+        });
         let mut engine = Engine::default();
         engine.reconcile(
             targets
@@ -128,32 +134,19 @@ impl HostedEngine {
             let projections = targets
                 .iter()
                 .filter_map(|target| {
-                    let HostedControlPlan::Table(plan) = &target.item.plan else {
-                        return None;
-                    };
-                    let projection: Rc<dyn TableProjection> = Rc::new(EngineProjection {
+                    let projection = Rc::new(EngineProjection {
                         area: Rc::clone(&target.item.area),
                         engine: Rc::clone(&engine),
                         host: host.clone(),
                         pointer: Rc::clone(&pointer),
                     });
-                    plan.bind_projection(Rc::downgrade(&projection));
-                    Some(projection)
-                })
-                .collect();
-            let tree_projections = targets
-                .iter()
-                .filter_map(|target| {
-                    let HostedControlPlan::Tree(plan) = &target.item.plan else {
-                        return None;
-                    };
-                    let projection: Rc<dyn TreeProjection> = Rc::new(EngineProjection {
-                        area: Rc::clone(&target.item.area),
-                        engine: Rc::clone(&engine),
-                        host: host.clone(),
-                        pointer: Rc::clone(&pointer),
-                    });
-                    plan.bind_projection(Rc::downgrade(&projection));
+                    let bound: Weak<EngineProjection> = Rc::downgrade(&projection);
+                    match &target.item.plan {
+                        HostedControlPlan::Table(plan) => plan.bind_projection(bound),
+                        HostedControlPlan::Tree(plan) => plan.bind_projection(bound),
+                        HostedControlPlan::Search(plan) => plan.bind_projection(bound),
+                        _ => return None,
+                    }
                     Some(projection)
                 })
                 .collect();
@@ -167,7 +160,6 @@ impl HostedEngine {
                 menu_changed: Cell::new(false),
                 pointer: Rc::clone(&pointer),
                 _projections: projections,
-                _tree_projections: tree_projections,
             }
         })
     }
@@ -196,6 +188,9 @@ impl HostedEngine {
             .map(|target| match &target.plan {
                 HostedControlPlan::Table(plan) => {
                     Face::Table(plan.view(engine, point, target_bounds(target)))
+                }
+                HostedControlPlan::Search(plan) => {
+                    Face::Search(engine.text_input_snapshot(&plan.path))
                 }
                 HostedControlPlan::Tree(plan) => {
                     Face::Tree(plan.view(engine, point, target_bounds(target)))
@@ -392,6 +387,15 @@ impl TableProjection for EngineProjection {
         plan.view(&engine, self.pointer.get(), bounds(self.area.get()))
     }
 
+    fn reconcile(&self) {
+        self.reconcile_engine();
+    }
+}
+
+impl SearchProjection for EngineProjection {
+    fn project(&self, plan: &SearchPlan) -> Option<TextInputSnapshot> {
+        self.engine.borrow().text_input_snapshot(&plan.path)
+    }
     fn reconcile(&self) {
         self.reconcile_engine();
     }

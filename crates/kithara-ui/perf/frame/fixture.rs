@@ -78,6 +78,7 @@ impl Reads for CensusReads {
             label: "Folder",
             count: Some(8),
             expanded: Some(true),
+            page: false,
             icon: IconName::Folder,
             muted: false,
             selected: false,

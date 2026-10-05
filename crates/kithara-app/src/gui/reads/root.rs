@@ -92,29 +92,37 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 
 #[cfg(test)]
 mod tests {
+    use std::mem;
+
     use ::kithara::{
         abr::AbrMode,
         effects::GainDb,
+        platform::{time::Duration, tokio::runtime::Handle},
+        prelude::TrackMetadata,
         ui::render::{ReadValue, Reads, TableCell, Walk},
     };
     use iced::Size;
-    use kithara_test_utils::kithara;
+    use image::ImageFormat;
+    use kithara_test_utils::{kithara, wait_until};
 
     use super::*;
     use crate::{
+        analysis::fixtures::{self, short_wav},
         deck::{DeckId, EqMode},
-        engine::{DeckSettings, DeckSnapshot},
+        engine::{DeckSettings, DeckSnapshot, EngineSnapshot},
         gui::{
             library::{Library, StartupSource},
             test_fixture::{self, Probe},
             ui::{
-                cache::{DeckCache, DeckLayout, StageView},
+                cache::{DeckCache, DeckLayout, StageView, ViewCache},
                 endpoints::readable_endpoints,
                 modules::Modules,
                 window::WindowState,
             },
         },
         mix::MixState,
+        pools::AppTrackSource,
+        sources::build_resource_config,
         state::{AbrVariant, UiState, covered},
     };
 
@@ -322,9 +330,35 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn the_read_tree_answers_every_key_the_renderer_asks_for() {
+    #[kithara::test(native, tokio, flash(false))]
+    async fn the_read_tree_answers_every_key_the_renderer_asks_for(short_wav: String) {
         const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
+
+        let config = test_fixture::config();
+        let (_host, queue) = fixtures::queue();
+        let mut source = build_resource_config(&short_wav, &config).expect("fixture source");
+        source.set_metadata(TrackMetadata {
+            artwork: Some(test_fixture::cover([255, 0, 0], ImageFormat::Png)),
+            ..Default::default()
+        });
+        queue
+            .append(AppTrackSource::from(source))
+            .expect("fixture track");
+        let mut covered = fixture_in(EqMode::ThreeBand);
+        covered.decks[0].0.tracks = queue.tracks();
+        covered.decks[0].0.current_track_index = Some(0);
+        let mut snapshot = EngineSnapshot::unpublished();
+        snapshot.decks = covered.shown();
+        let mut cache = ViewCache::default();
+        let runtime = Handle::current();
+        wait_until(Duration::from_secs(2), "fixture artwork is decoded", || {
+            cache.refresh(&snapshot, &runtime);
+            cache.decks()[0].artwork.image().is_some()
+        })
+        .await
+        .expect("fixture artwork completes");
+        covered.decks[0].2.artwork =
+            mem::take(&mut cache.deck_mut(0).expect("fixture cache").artwork);
 
         let documented = readable_endpoints().map(|(id, scopes)| {
             let scope: Vec<String> = scopes
@@ -346,8 +380,7 @@ mod tests {
         // A mode-scoped endpoint is answered only by the mode that draws it,
         // so ownership is a claim about the modes together.
         let mut unowned: Vec<String> = documented.chain(synthesized).collect();
-        for mode in [EqMode::ThreeBand, EqMode::FourBand] {
-            let mut fixture = fixture_in(mode);
+        for mut fixture in [covered, fixture_in(EqMode::FourBand)] {
             fixture.library.set_column_width("startup", "artist", 200.0);
             let shown = fixture.shown();
             let root = fixture.root(&shown);
@@ -355,6 +388,7 @@ mod tests {
             unowned.retain(|key| walk.get(key).is_none());
         }
         assert!(unowned.is_empty(), "no owner answers {unowned:?}");
+        config.shutdown.cancel();
 
         let fixture = Fixture::new(["+2.0%", "-1.0%"]);
         let shown = fixture.shown();
@@ -552,7 +586,7 @@ mod tests {
     #[kithara::test]
     fn library_followup_known_bpm_is_a_source_row_cell() {
         let mut fixture = Fixture::new(["0", "0"]);
-        let known = crate::analysis::fixtures::grid().artifact().bpm();
+        let known = fixtures::grid().artifact().bpm();
         assert_eq!(known, 128.0);
         fixture.bpms.insert("dropped.mp3".to_owned(), known);
         let root = fixture.root(&[]);

@@ -4513,9 +4513,11 @@ dependencies = [
  "futures",
  "getrandom 0.4.2",
  "iced",
+ "image",
  "kithara",
  "kithara-app",
  "kithara-app-document",
+ "kithara-app-library",
  "kithara-assets",
  "kithara-config",
  "kithara-derive",
@@ -4549,6 +4551,19 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde_yaml_ng",
+]
+
+[[package]]
+name = "kithara-app-library"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui",
+ "serde",
+ "serde_yaml_ng",
+ "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]
@@ -5631,6 +5646,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "firewheel",
+ "futures",
  "hex",
  "hotpath",
  "humantime-serde",
@@ -5639,6 +5655,7 @@ dependencies = [
  "kithara-audio",
  "kithara-beat",
  "kithara-bufpool",
+ "kithara-command",
  "kithara-config",
  "kithara-decode",
  "kithara-derive",
@@ -5653,6 +5670,7 @@ dependencies = [
  "kithara-output",
  "kithara-platform",
  "kithara-play",
+ "kithara-render",
  "kithara-signal",
  "kithara-stream",
  "kithara-sync",
@@ -5710,6 +5728,7 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-config",
+ "kithara-decode",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
@@ -5770,6 +5789,26 @@ dependencies = [
  "ringbuf",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-render"
+version = "0.0.1-alpha5"
+dependencies = [
+ "delegate",
+ "kithara-audio",
+ "kithara-beat",
+ "kithara-bufpool",
+ "kithara-command",
+ "kithara-effects",
+ "kithara-platform",
+ "kithara-signal",
+ "kithara-stream",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
+ "num-traits",
 ]
 
 [[package]]
@@ -6077,6 +6116,7 @@ dependencies = [
  "unicode-segmentation",
  "velato",
  "vello",
+ "window_clipboard",
  "winit",
 ]
 

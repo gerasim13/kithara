@@ -544,7 +544,7 @@ impl Compiler<'_> {
             let zone = drop_path(&at.instance.0);
             let write = substitute_binding(&args, &module_uri, &drop.write, &zone, &at.instance.0)?;
             self.states
-                .note_write(zone, &write, WriteAt::plain(Gesture::Text, &module_uri));
+                .note_write(zone, &write, WriteAt::plain(Gesture::Record, &module_uri));
         }
         room::check_module(&expanded.root, self.skin, &module_uri)?;
         let declared = at.size;

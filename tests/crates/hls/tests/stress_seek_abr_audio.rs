@@ -469,7 +469,7 @@ async fn stress_seek_abr_audio(
         .block_on_underrun(true)
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

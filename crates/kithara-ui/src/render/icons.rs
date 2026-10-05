@@ -50,6 +50,8 @@ mod art {
 
     pub(super) static PLAY_REVERSE: Art =
         Art::new(include_str!("../../assets/icons/play-reverse.svg"));
+    pub(super) static HEART_FILLED: Art =
+        Art::new(include_str!("../../assets/icons/heart-filled.svg"));
     pub(super) static KITHARA: Art = Art::new(include_str!("../../assets/icons/kithara.svg"));
     pub(super) static ZVUK: Art = Art::new(include_str!("../../assets/icons/zvuk.svg"));
 }
@@ -120,6 +122,8 @@ fn source(icon: IconName) -> IconSource {
         IconName::FolderPlus => IconSource::Lucide(Icon::FolderPlus),
         IconName::Gear => IconSource::Lucide(Icon::Settings),
         IconName::Headphones => IconSource::Lucide(Icon::Headphones),
+        IconName::Heart => IconSource::Lucide(Icon::Heart),
+        IconName::HeartFilled => IconSource::Svg(&art::HEART_FILLED),
         IconName::Home => IconSource::Lucide(Icon::Home),
         IconName::Instrument => IconSource::Lucide(Icon::KeyboardMusic),
         IconName::Lock => IconSource::Lucide(Icon::Lock),

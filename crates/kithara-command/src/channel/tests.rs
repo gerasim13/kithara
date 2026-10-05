@@ -134,6 +134,22 @@ fn next_applies_at_the_block_start() {
 }
 
 #[kithara::test]
+fn the_next_moment_bounds_a_block_the_executor_sizes() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    assert_eq!(inbox.frames_until_due(Frame(0)), None);
+    send(&mut sender, When::At(Frame(40)), batch(1, &[]));
+    send(&mut sender, When::At(Frame(10)), batch(2, &[]));
+    inbox.drain();
+
+    assert_eq!(inbox.frames_until_due(Frame(4)), Some(6));
+    assert_eq!(inbox.frames_until_due(Frame(12)), Some(0));
+
+    send(&mut sender, When::Next, batch(3, &[]));
+    inbox.drain();
+    assert_eq!(inbox.frames_until_due(Frame(4)), Some(0));
+}
+
+#[kithara::test]
 fn a_moment_before_the_block_is_late_and_returns_whole() {
     let (mut sender, mut inbox) = pair(8, 1);
     let late = send(

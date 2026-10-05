@@ -649,6 +649,15 @@ owns = ["crates/kithara-warp/", "tests/crates/warp/"]
 cargo.packages = ["kithara-warp", "kithara-warp-tests"]
 cargo.profile = "test-release"
 
+[test.lanes.render]
+default_backend = "none"
+owns = ["crates/kithara-render/"]
+cargo.packages = ["kithara-render"]
+cargo.profile = "test-release"
+# kithara-render steps its stage synchronously, so no test waits on a clock the
+# virtual one could drive, and its only package declares neither toggle.
+undeclared_toggles = ["flash", "no-block"]
+
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.

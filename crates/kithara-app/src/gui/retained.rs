@@ -17,7 +17,6 @@ use super::{
     ui::{self, window::consts::WINDOW_SIZE},
     update,
 };
-use crate::gui::ui::endpoints::Registry;
 
 /// The studio driven by the retained host.
 ///
@@ -75,13 +74,12 @@ impl App for Studio {
 /// window and its GPU surface cannot be brought up.
 pub(crate) fn run(app: Studio) -> Result<(), RunError> {
     let package = Rc::clone(&app.state.ui.package);
-    let endpoints = Registry::default();
     let (size, min_size) = (window_size(), window_min(app.state.ui.window_min()));
     let settings = app.settings.clone();
     app::run(
         app,
         Config::builder()
-            .endpoints(&endpoints)
+            .endpoints(package.registry())
             .resolver(package.resolver())
             .text(package.text())
             .decorations(false)
@@ -114,7 +112,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{App, Config, Rc, Skin, ui, ui::package::Package};
-    use crate::gui::ui::endpoints;
 
     /// A studio with nothing loaded: every control falls back to what the
     /// document and the skin say, which is the hardest case for a host that
@@ -152,13 +149,12 @@ mod tests {
     fn the_studio_draws_under_the_retained_host() {
         let package = crate::gui::test_fixture::package(None)
             .expect("the app package must answer for both decks");
-        let endpoints = endpoints::Registry::default();
         let mut ui = Ui::new(
             Empty {
                 package: Rc::clone(&package),
             },
             Config::builder()
-                .endpoints(&endpoints)
+                .endpoints(package.registry())
                 .resolver(package.resolver())
                 .text(package.text())
                 .build(),
@@ -201,10 +197,7 @@ mod library {
     use kithara_test_utils::kithara;
 
     use super::{Studio, window_size};
-    use crate::{
-        engine::EngineSnapshot,
-        gui::{test_fixture, ui::endpoints::Registry},
-    };
+    use crate::{engine::EngineSnapshot, gui::test_fixture};
 
     fn studio() -> Studio {
         let runtime = test_fixture::runtime();
@@ -222,11 +215,10 @@ mod library {
     fn mounted(check: impl FnOnce(&mut Ui<'_, Studio>)) {
         let studio = studio();
         let package = Rc::clone(&studio.state.ui.package);
-        let endpoints = Registry::default();
         let mut ui = Ui::new(
             studio,
             Config::builder()
-                .endpoints(&endpoints)
+                .endpoints(package.registry())
                 .resolver(package.resolver())
                 .text(package.text())
                 .build(),

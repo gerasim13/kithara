@@ -307,10 +307,12 @@ fn finish_control(
 fn expand_control(
     context: &Context<'_>,
     control: &ControlNode,
-    fields: ControlFields<'_>,
+    id: &NodeId,
     depth: usize,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
+    let (read, write) = control.bindings();
+    let fields = ControlFields::new(id, control.size().copied(), read, write);
     let path = begin_control(context, fields.id, machine)?;
     let extra = ExtraBindings::substitute(context, control, &path)?;
     let Some(spec) = control_spec(context, control, &extra, &path, machine)? else {
@@ -789,6 +791,7 @@ pub(in crate::expand) fn walk(
         | ControlNode::PortalMap { id, .. }
         | ControlNode::Range { id, .. }
         | ControlNode::Table { id, .. }
+        | ControlNode::Search { id, .. }
         | ControlNode::Tree { id, .. }
         | ControlNode::ContextBar { id, .. }
         | ControlNode::Toggle { id, .. }
@@ -803,14 +806,7 @@ pub(in crate::expand) fn walk(
         | ControlNode::Knob { id, .. }
         | ControlNode::VuStereo { id, .. }
         | ControlNode::VuVertical { id, .. }) => {
-            let (read, write) = control.bindings();
-            expand_control(
-                context,
-                control,
-                ControlFields::new(id, control.size().copied(), read, write),
-                depth,
-                machine,
-            )
+            expand_control(context, control, id, depth, machine)
         }
     }
 }

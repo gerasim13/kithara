@@ -138,7 +138,7 @@ async fn wait_for_current_track(
 ///
 /// The DRM case adds the second moving piece: `ProcessedResource` has a
 /// `ReadinessGate` per resource that has to be re-armed for every fresh
-/// `PlayWorker::open`. If the shortcut bypasses re-arming, the new read path
+/// `PlayWorker::load`. If the shortcut bypasses re-arming, the new read path
 /// observes a still-closed gate and never makes progress.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[case::plain(replay_plain().await)]
@@ -216,7 +216,7 @@ async fn replay_track_after_switch_does_not_hang_loader(
     let status = result.unwrap_or_else(|e| {
         panic!(
             "REGRESSION [{mode:?}]: track A failed to reload after switching B → A: {e}\n\
-             This is the dispatch/asset-store contract bug: a second `PlayWorker::open` \
+             This is the dispatch/asset-store contract bug: a second `PlayWorker::load` \
              on a cache-hot URL short-circuits via `resource_already_committed` \
              without emitting fetches the new read path waits on."
         )

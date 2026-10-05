@@ -117,7 +117,7 @@ async fn create_hls_audio(
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }
@@ -125,7 +125,7 @@ async fn create_hls_audio(
 /// Spawn a reader instance whose cancel, when `cancel_after` is set, fires
 /// `delay_ms` after creation completes — modelling a peer cancelled mid
 /// playback. The timer is armed only once `create_hls_audio` returns so a
-/// slow create under load cannot race the cancel into `PlayWorker::open` and
+/// slow create under load cannot race the cancel into `PlayWorker::load` and
 /// surface as `source error: cancelled` from creation itself.
 async fn spawn_instance(
     id: usize,

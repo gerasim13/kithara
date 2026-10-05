@@ -1,7 +1,7 @@
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_platform::sync::atomic::Ordering;
 use kithara_test_macros as kithara;
-use kithara_warp::StretchControls;
+use kithara_warp::MIN_SPEED;
 use tracing::warn;
 
 use super::super::core::PlayerRuntime;
@@ -10,8 +10,8 @@ use crate::{
         InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
         SlotId,
     },
+    bridge::PlayerCmd,
     error::PlayError,
-    player::state::phase::PlayerPhaseKind,
 };
 
 impl<S> PlayerRuntime<S> {
@@ -98,10 +98,7 @@ impl<S> PlayerRuntime<S> {
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
         let target = self.core.config.set_default_rate(rate);
-        self.core.config.warp.stretch().set_speed(target);
-        if self.phase_kind() == PlayerPhaseKind::Playing {
-            self.set_rate(target);
-        }
+        self.set_rate(target);
     }
 
     /// Set EQ gain for a band in dB.
@@ -147,27 +144,35 @@ impl<S> PlayerRuntime<S> {
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd))
     }
 
-    /// Set the requested rate target, clamped to
-    /// [`kithara_warp::StretchControls::MIN_SPEED`].
+    /// Set the requested rate target, clamped to [`MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        let target = rate.max(StretchControls::MIN_SPEED);
-        let revision = self.core.config.warp.stretch().set_speed(target);
+        let target = rate.max(MIN_SPEED);
         let snapshot = self
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
-        if let Some(snapshot) = snapshot {
-            kithara::probe_event!(
-                rate_requested,
-                request_revision = revision,
-                target_rate_bits = target.to_bits(),
-                session_epoch = u64::from(snapshot.context().output().session_epoch()),
-                transport_revision = snapshot
-                    .context()
-                    .output()
-                    .transport_revision()
-                    .map_or(0, u64::from),
-                session_frame = i64::from(snapshot.context().output().output_frames().end)
-            );
+        let speed = self.core.lanes.set_speed(target, |seq| {
+            if let Some(snapshot) = &snapshot {
+                kithara::probe_event!(
+                    rate_requested,
+                    request_revision = seq.get(),
+                    target_rate_bits = target.to_bits(),
+                    session_epoch = u64::from(snapshot.context().output().session_epoch()),
+                    transport_revision = snapshot
+                        .context()
+                        .output()
+                        .transport_revision()
+                        .map_or(0, u64::from),
+                    session_frame = i64::from(snapshot.context().output().output_frames().end)
+                );
+            }
+        });
+        if let Err(error) = speed {
+            warn!(%error, rate, "rate refused");
+            return;
+        }
+        match self.send_to_slot(PlayerCmd::SetRate(target)) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => warn!(?error, rate = target, "rate not sent to the processor"),
         }
         self.core.config.worker.wake();
     }

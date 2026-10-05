@@ -90,7 +90,7 @@ async fn run_drm_seek_resume_cycle(
         .build();
 
     let mut audio = shared_worker
-        .open(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .load(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     preload_or_timeout(&mut audio, &format!("iter_{iter_idx}_preload")).await;

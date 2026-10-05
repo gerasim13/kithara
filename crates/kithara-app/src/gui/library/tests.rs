@@ -2,13 +2,20 @@ use std::{cell::RefCell, rc::Rc};
 
 use ::kithara::ui::{
     ids::SourceUri,
-    render::TreeRow,
+    render::{TableRow, TreeRow},
     text::{TextDoc, parse_text},
 };
+use kithara_app_library::{LibrarySource, PageStatus, Playable};
 use kithara_test_utils::kithara;
 
-use super::{Library, LibrarySource, PageStatus, StartupSource, track::display_name};
+use super::{Library, StartupSource, track::display_name};
 use crate::gui::test_fixture::{Calls, Probe};
+
+fn drag_source(row: &TableRow<'_>) -> Option<String> {
+    Playable::try_from(row.drag()?.clone())
+        .ok()
+        .map(|track| track.source)
+}
 
 /// The page states a catalog must word for the shell to mount.
 const STATUSES: [(&str, &str); 3] = [
@@ -227,8 +234,11 @@ fn library_rows_are_unique_playlist_entries_without_deck_cells() {
 
     let rows = source.rows(None);
 
-    let drags: Vec<Option<&str>> = rows.iter().map(|row| row.drag()).collect();
-    assert_eq!(drags, [Some("/music/a.mp3"), Some("/music/b.mp3")]);
+    let drags: Vec<Option<String>> = rows.iter().map(drag_source).collect();
+    assert_eq!(
+        drags,
+        ["/music/a.mp3", "/music/b.mp3"].map(|url| Some(url.to_owned()))
+    );
     assert!(
         rows.iter()
             .all(|row| row.cells().iter().all(|cell| cell.id() != "deck"))
@@ -247,14 +257,12 @@ fn a_startup_list_without_tracks_reports_empty() {
 mod startup {
     use std::convert::Infallible;
 
-    use ::kithara::ui::render::{
-        ControlAction, Published, ReadValue, Reads, TableCell, TableRow, TableValue, Walk,
-    };
+    use ::kithara::ui::render::{ReadValue, Reads, TableCell, TableRow, TableValue, Walk};
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
     use crate::{
         catalog::canonical_source,
-        gui::{message::Message, reads::ReadRoot, rig::Rig},
+        gui::{reads::ReadRoot, rig::Rig},
     };
 
     /// One row of a source's page, as the page reads it.
@@ -289,7 +297,7 @@ mod startup {
         };
         Listed {
             title,
-            drag: row.drag().map(str::to_owned),
+            drag: super::drag_source(row),
             selected: row.selected(),
             artist_unknown: matches!(cell("artist"), None | Some(TableValue::Empty)),
         }
@@ -363,11 +371,7 @@ mod startup {
                 .find_map(|row| row.drag.filter(|drag| drag.contains("m3u8")))
                 .expect("the startup branch lists the stream");
 
-            rig.message(Message::Ui(Published::Gesture {
-                action: ControlAction::Text(drag.clone()),
-                path: "deck-b/drop".to_owned(),
-            }));
-            rig.pump();
+            rig.drop_on("b", &drag);
 
             let queued: Vec<Option<String>> = rig.queues[1]
                 .tracks()
@@ -396,7 +400,7 @@ mod explorer {
     use super::startup::{listed, tree, with_rig};
     use crate::{
         catalog::canonical_source,
-        gui::{message::Message, reads::ReadRoot, rig::Rig},
+        gui::{message::Message, reads::ReadRoot, rig::Rig, test_fixture},
     };
 
     const ID: &str = "explorer";
@@ -591,7 +595,7 @@ mod explorer {
 
             rig.message(Message::Ui(Published::Host(UiEvent::Write {
                 key: "deck.queue.load@deck=a".to_owned(),
-                value: WriteValue::Text(drag.clone()),
+                value: WriteValue::Record(test_fixture::dragged(&drag)),
             })));
             rig.pump();
 

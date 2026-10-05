@@ -313,6 +313,12 @@ mod tests {
             ("tree/browser/search", "text-input"),
         ],
     )]
+    #[case::search(
+        "search",
+        "search",
+        |path| path.starts_with("search/"),
+        &[("search/query", "text-input")],
+    )]
     #[case::library(
         "library2",
         "library",
@@ -378,6 +384,7 @@ mod tests {
             ("gallery/objects/item", "activation"),
             ("gallery/pivot/item", "activation"),
             ("gallery/scene/item", "activation"),
+            ("gallery/search/item", "activation"),
             ("gallery/shader/item", "activation"),
             ("gallery/sprites/item", "activation"),
             ("gallery/sizes/item", "activation"),
@@ -427,6 +434,7 @@ mod tests {
             ControlSpec::VuStereo => &["stereo-meter"],
             ControlSpec::VuVertical { .. } => &["vertical-vu"],
             ControlSpec::Tree { .. } => &["scroll", "text-input"],
+            ControlSpec::Search => &["text-input"],
             ControlSpec::Wave {
                 style: WaveStyle::Hero,
                 ..

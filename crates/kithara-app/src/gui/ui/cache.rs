@@ -1,7 +1,7 @@
-use kithara::{analysis::Waveform, ui::render::WaveBucket};
+use kithara::{analysis::Waveform, platform::tokio::runtime::Handle, ui::render::WaveBucket};
 use num_traits::cast::ToPrimitive;
 
-use super::{modules::Modules, window::WindowState};
+use super::{artwork::Artwork, modules::Modules, window::WindowState};
 use crate::{
     analysis::{TrackArtifacts, WaveformId},
     engine::{DeckSnapshot, EngineSnapshot},
@@ -62,6 +62,7 @@ impl DeckLayout {
 
 #[derive(Default)]
 pub(in crate::gui) struct DeckCache {
+    pub(in crate::gui) artwork: Artwork,
     pub(in crate::gui) view: DeckViewState,
     pub(in crate::gui) bpm: String,
     pub(in crate::gui) quality: String,
@@ -87,11 +88,11 @@ impl ViewCache {
         self.layout.decks()
     }
 
-    pub(crate) fn refresh(&mut self, snapshot: &EngineSnapshot) {
+    pub(crate) fn refresh(&mut self, snapshot: &EngineSnapshot, runtime: &Handle) {
         self.decks
             .resize_with(snapshot.decks.len(), Default::default);
         for (cache, deck) in self.decks.iter_mut().zip(&snapshot.decks) {
-            cache.refresh(deck);
+            cache.refresh(deck, runtime);
         }
         self.window.refresh(self.layout, &self.modules);
     }
@@ -118,7 +119,13 @@ impl ViewCache {
 }
 
 impl DeckCache {
-    fn refresh(&mut self, deck: &DeckSnapshot) {
+    fn refresh(&mut self, deck: &DeckSnapshot, runtime: &Handle) {
+        self.artwork.refresh(
+            deck.current_track_index
+                .and_then(|index| deck.tracks.get(index))
+                .and_then(|track| track.metadata().artwork.as_ref()),
+            runtime,
+        );
         self.tempo = format!("{:+.1}%", f32::from(deck.tempo));
         self.bpm = format_bpm(deck.analysis.bpm, deck.tempo.speed());
         self.remain = format_remain(deck);

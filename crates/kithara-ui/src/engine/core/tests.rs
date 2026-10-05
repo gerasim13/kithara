@@ -37,7 +37,14 @@ fn text_input(path: &str, query: &str) -> Descriptor {
     Descriptor::text_input(
         path.to_owned(),
         query.to_owned(),
-        TextInputLayout::new([(0, 4.0), (1, 14.0), (2, 30.0)], 3.0, 12.0, 12.0),
+        TextInputLayout::new(
+            [(0, 4.0), (1, 14.0), (2, 30.0)]
+                .into_iter()
+                .filter(|(index, _)| *index <= query.len()),
+            3.0,
+            12.0,
+            12.0,
+        ),
     )
 }
 
@@ -129,7 +136,7 @@ fn key_released(key: Key<'static>) -> Input<'static> {
 
 fn typed(text: &'static str) -> Input<'static> {
     Input::KeyPressed {
-        key: Key::Character(text),
+        key: Key::character(text, None),
         modifiers: Modifiers::default(),
         text: Some(text),
     }
@@ -1547,6 +1554,111 @@ fn text_input_preedit_replaces_silently_and_commit_publishes_once() {
 }
 
 #[kithara::test]
+fn text_input_select_all_and_commit_replace_the_query_without_shortcut_text() {
+    let mut engine = Engine::default();
+    let path = "page/query";
+    let now = Instant::now();
+    let target = text_target(path, 30.0, 0.0, 0.0);
+    engine.reconcile([text_input(path, "ab")]);
+    let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[target], now);
+    let selected = engine
+        .handle(
+            Input::KeyPressed {
+                key: Key::character("a", None),
+                modifiers: Modifiers::new(
+                    false,
+                    !cfg!(target_os = "macos"),
+                    cfg!(target_os = "macos"),
+                    false,
+                ),
+                text: Some("a"),
+            },
+            &[target],
+            now,
+        )
+        .expect("select all is consumed");
+    assert_eq!(selected.outcome, Outcome::captured());
+    assert_eq!(
+        engine
+            .text_input_snapshot(path)
+            .and_then(|snapshot| snapshot.selection),
+        Some(0..2)
+    );
+    let replaced = engine
+        .handle(
+            Input::InputMethod(InputMethod::Commit("pasted")),
+            &[target],
+            now,
+        )
+        .expect("paste replaces selection");
+    assert_eq!(
+        replaced.outcome,
+        Outcome::set(EngineEvent::Text("pasted".to_owned()))
+    );
+}
+
+#[kithara::test]
+fn text_input_types_what_alt_gr_produces() {
+    let mut engine = Engine::default();
+    let path = "page/query";
+    let now = Instant::now();
+    let target = text_target(path, 30.0, 0.0, 0.0);
+    engine.reconcile([text_input(path, "ab")]);
+    let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[target], now);
+    let typed = engine
+        .handle(
+            Input::KeyPressed {
+                key: Key::character("@", None),
+                modifiers: Modifiers::new(true, true, false, false),
+                text: Some("@"),
+            },
+            &[target],
+            now,
+        )
+        .expect("AltGr text is consumed");
+    assert_eq!(
+        typed.outcome,
+        Outcome::set(EngineEvent::Text("ab@".to_owned()))
+    );
+}
+
+#[kithara::test]
+fn text_input_host_clear_discards_preedit_before_the_next_commit() {
+    let mut engine = Engine::default();
+    let path = "page/query";
+    let now = Instant::now();
+    let target = text_target(path, 30.0, 0.0, 0.0);
+    engine.reconcile([text_input(path, "ab")]);
+    let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[target], now);
+    let _ = engine.handle(
+        Input::InputMethod(InputMethod::Preedit {
+            content: "日本",
+            selection: None,
+        }),
+        &[target],
+        now,
+    );
+    engine.reconcile([text_input(path, "")]);
+    let snapshot = engine
+        .text_input_snapshot(path)
+        .expect("Search stays focused");
+    assert!(snapshot.focused);
+    assert!(snapshot.preedit.is_none());
+    assert_eq!(snapshot.caret, 0);
+    let committed = engine
+        .handle(
+            Input::InputMethod(InputMethod::Commit("new")),
+            &[target],
+            now,
+        )
+        .expect("new edit routes after the host reset");
+    assert_eq!(
+        committed.outcome,
+        Outcome::set(EngineEvent::Text("new".to_owned()))
+    );
+}
+
+#[kithara::test]
 fn text_input_reports_absolute_logical_caret_rect_at_two_positions() {
     let mut engine = Engine::default();
     let path = "library/search";
@@ -1935,7 +2047,7 @@ fn focused_picker_consumes_owned_shortcuts_and_releases_only() {
     }
     assert!(
         engine
-            .handle(key_pressed(Key::Character("x")), &[target], now)
+            .handle(key_pressed(Key::character("x", None)), &[target], now)
             .is_none()
     );
     assert!(

@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use iced::{
     Event, Pixels, Point, Rectangle, Renderer, Size, Theme,
@@ -94,6 +94,56 @@ fn program() -> TableProgram {
     let paint = paint();
     let config = paint.config();
     TableProgram { config, paint }
+}
+
+#[kithara::test]
+fn leaf_icon_action_captures_its_payload_without_selecting_or_dragging_the_row() {
+    let cell = crate::render::TableCell::icon("reaction", crate::module::IconName::Heart, false)
+        .with_action("first-id");
+    let rows = vec![TableRowData::from(
+        &crate::render::TableRow::new(vec![cell], false).with_drag(Cow::Owned(BTreeMap::new())),
+    )];
+    let column = TableColumn::new("reaction", "", TableColumnStyle::Icon, 34.0, false).with_write(
+        crate::module::BindingRef::Command {
+            id: crate::ids::EndpointId("row.activate".to_owned()),
+            with: BTreeMap::new(),
+        },
+    );
+    let paint = TablePaint::new(
+        "library/tracks",
+        TableFace::new(
+            rows,
+            vec![ColumnLayout {
+                width: column.width(),
+                column,
+                resizable: false,
+            }],
+            builtin::skin(),
+            TableFrame::new(0.0, 0.0, false),
+        ),
+    );
+    let program = TableProgram {
+        config: paint.config(),
+        paint,
+    };
+    let bounds = Rectangle::new(Point::ORIGIN, Size::new(100.0, 120.0));
+    let body = table_body(bounds.into(), program.paint.face.metrics());
+    let cursor = Cursor::Available(Point::new(17.0, body.y + 10.0));
+    let mut state = TableState::default();
+    let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let published = canvas::Program::update(&program, &mut state, &press, bounds, cursor)
+        .expect("icon press publishes its payload")
+        .into_inner();
+    assert_eq!(
+        published.0,
+        Some(Published::Gesture {
+            path: "library/tracks/action/reaction".to_owned(),
+            action: ControlAction::Text("first-id".to_owned()),
+        })
+    );
+    assert_eq!(published.2, event::Status::Captured);
+    assert!(state.drag_index.is_none());
+    assert!(state.pressed_index.is_none());
 }
 
 fn headless_renderer() -> Renderer {

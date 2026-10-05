@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use crate::render::{Carry, CarryStep, ControlAction, Published, control_event};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Carried {
-    pub(crate) data: String,
+    pub(crate) data: BTreeMap<String, String>,
     pub(crate) label: Option<String>,
 }
 
@@ -43,7 +45,7 @@ impl DragSession {
             CarryStep::Drop => {
                 let carried = self.carried.take()?;
                 let zone = self.over.as_deref()?;
-                Some(control_event(zone, ControlAction::Text(carried.data)))
+                Some(control_event(zone, ControlAction::Record(carried.data)))
             }
         }
     }

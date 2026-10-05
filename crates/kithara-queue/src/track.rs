@@ -1,10 +1,11 @@
 use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
 use kithara_bufpool::HasPool;
+use kithara_decode::TrackMetadata;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{
     CancelToken,
     sync::{
-        Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -16,7 +17,8 @@ use crate::{
 };
 
 /// Snapshot of a track entry in the queue.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct TrackEntry {
     /// Canonical source location: a normalized URL or a file path.
@@ -24,6 +26,11 @@ pub struct TrackEntry {
     pub url: Option<String>,
     /// Display name derived from the URL or caller-supplied. May be empty.
     pub name: String,
+    /// The source's metadata, with its unset fields filled from the decoder's
+    /// tags once the track's resource is admitted; the cover read from the
+    /// source's artwork becomes its artwork.
+    #[field(get)]
+    metadata: TrackMetadata,
     /// Stable identifier.
     pub id: TrackId,
     /// Current loading status.
@@ -77,6 +84,13 @@ where
             },
         }
     }
+
+    pub(crate) fn metadata(&self) -> Option<&TrackMetadata> {
+        match self {
+            Self::Config(config) => config.metadata(),
+            Self::Uri(_) => None,
+        }
+    }
 }
 
 impl<S> From<&str> for TrackSource<S>
@@ -106,6 +120,8 @@ where
     pub(crate) load: Option<AttemptGuard>,
     pub(crate) url: Option<String>,
     pub(crate) name: String,
+    /// Taken from the source at append; admission fills its unset fields.
+    pub(crate) metadata: TrackMetadata,
     pub(crate) id: TrackId,
     pub(crate) source: TrackSource<S>,
     pub(crate) status: TrackStatus,
@@ -120,6 +136,7 @@ where
         Self {
             id,
             name,
+            metadata: source.metadata().cloned().unwrap_or_default(),
             url: source.uri().map(str::to_string),
             status: TrackStatus::Pending,
             source,
@@ -132,6 +149,7 @@ where
         TrackEntry {
             id: self.id,
             name: self.name.clone(),
+            metadata: self.metadata.clone(),
             url: self.url.clone(),
             status: self.status.clone(),
         }
@@ -242,6 +260,23 @@ where
             id: ticket.id,
             status: TrackStatus::Failed(reason),
         });
+    }
+
+    /// Place the cover a load attempt read for `id` and publish
+    /// [`QueueEvent::TrackMetadataChanged`], unless that attempt's token
+    /// `attempt` is cancelled: a superseded attempt's cover is dropped.
+    pub(crate) fn place_cover(&self, id: TrackId, attempt: &CancelToken, cover: Arc<Vec<u8>>) {
+        let mut guard = self.lock();
+        let Some(record) = guard
+            .iter_mut()
+            .find(|record| record.id == id)
+            .filter(|_| !attempt.is_cancelled())
+        else {
+            return;
+        };
+        record.metadata.artwork = Some(cover);
+        drop(guard);
+        self.bus.publish(QueueEvent::TrackMetadataChanged { id });
     }
 
     /// Lock the underlying `Vec<TrackRecord>` for direct read/write.

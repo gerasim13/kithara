@@ -5,11 +5,10 @@ use kithara::{
     file::FileEvent,
     hls::HlsEvent,
     host::HostOwned,
-    platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
+    platform::tokio::sync::broadcast::error::TryRecvError,
     play::{PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
     queue::ItemEvent,
     signal::TransportRevision,
-    warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};
 use kithara_test_utils::bufpool::TestPools;
@@ -21,7 +20,6 @@ pub(super) struct Deck {
     pub(super) player: HostOwned<PlayerImpl<TestPools>>,
     pub(super) reference: Resource,
     pub(super) reference_events: EventReceiver<TestEvent>,
-    pub(super) controls: Arc<StretchControls>,
     pub(super) events: EventReceiver<TestEvent>,
     pub(super) observation: DeckObservation,
     pub(super) seek_request_epoch: Option<u64>,
@@ -353,30 +351,6 @@ pub(super) fn validate_deck(
                 case.host_rate,
             ));
         }
-    }
-}
-
-pub(super) fn record_control_state(
-    case: &Case,
-    deck_index: usize,
-    deck: &Deck,
-    phase: &str,
-    failures: &mut Vec<String>,
-) {
-    if deck.controls.speed() != 1.0
-        || deck.controls.region_plan().is_some()
-        || deck.controls.backend() != StretchKind::Signalsmith
-        || !deck.controls.keylock()
-    {
-        failures.push(format!(
-            "{} deck {deck_index} ({}): invalid no-SYNC controls {phase} (speed={}, plan={}, backend={:?}, keylock={})",
-            case.label,
-            deck.observation.label,
-            deck.controls.speed(),
-            deck.controls.region_plan().is_some(),
-            deck.controls.backend(),
-            deck.controls.keylock(),
-        ));
     }
 }
 

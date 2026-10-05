@@ -1172,6 +1172,11 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         mapping_field(report, "if").as_str(),
         Some("${{ always() && needs.execute.result != 'skipped' }}")
     );
+    // The renderer is built from the workspace on the hosted image that owns
+    // the reporting boundary, so the job carries the system libraries that
+    // build links and nothing else. It links ALSA because the renderer reaches
+    // the feature-unification crate through `kithara-derive`; until that edge
+    // is gone the headers are a build prerequisite, not portable work.
     assert_eq!(
         job_step_names(report),
         BTreeSet::from([
@@ -1179,6 +1184,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
             "Checkout controller".to_owned(),
             "Download the raw stress evidence".to_owned(),
             "Install just".to_owned(),
+            "Install the audio headers the renderer links".to_owned(),
             "Upload the stress evidence".to_owned(),
             "Verify and render the stress evidence".to_owned(),
         ])

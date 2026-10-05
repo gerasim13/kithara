@@ -111,11 +111,11 @@ pub(crate) fn check_controls(
             endpoints,
         )?;
     }
-    for (_, binding) in column_writes(site) {
+    for (_, binding, _, kind) in column_writes(site) {
         check_binding(
             &binding,
             BindingSide::Write,
-            Some(ValueKind::Scalar),
+            Some(kind),
             site.path,
             origin,
             endpoints,

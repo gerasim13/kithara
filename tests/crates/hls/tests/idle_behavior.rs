@@ -86,7 +86,7 @@ async fn idle_does_not_panic_hang_detector(
         .build();
 
     let mut audio = worker
-        .open(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .load(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
 
@@ -182,7 +182,7 @@ async fn idle_prefetch_is_capped(
         .build();
 
     let _audio = worker
-        .open(
+        .load(
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .events(bus.clone())
                 .build(),

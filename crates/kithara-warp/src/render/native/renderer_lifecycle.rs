@@ -214,7 +214,14 @@ where
         self.region = None;
     }
 
-    fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
+    /// Render the quantum's source frames from the residency at the engine's
+    /// feed; the chunk has already extended the residency.
+    fn process_active(
+        &mut self,
+        chunk: AudioChunk,
+        speed: f32,
+        prepared: Option<PreparedQuantum>,
+    ) -> Option<AudioChunk> {
         if self.engine.is_none() || self.scratch.is_none() {
             warn!("time-stretch target was not prepared before rendering");
             self.defer_scratch(Some(chunk.samples));
@@ -222,13 +229,19 @@ where
         }
 
         let AudioChunk { meta, samples } = chunk;
-        self.last_input_meta = Some(meta);
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         }
 
         let channels = usize::from(self.spec.channels.max(1));
-        let frames = samples.len() / channels;
+        let source_end = meta
+            .frame_offset
+            .saturating_add(u64::try_from(samples.len() / channels).unwrap_or(u64::MAX));
+        let feed = self.resident_feed.unwrap_or(meta.frame_offset);
+        let frames = prepared.map_or_else(
+            || usize::try_from(source_end.saturating_sub(feed)).unwrap_or(usize::MAX),
+            |quantum| quantum.active_frames,
+        );
         if frames > self.source_block_frames.get() {
             let error = ElasticError::SourceFrameLimit {
                 frames,
@@ -238,7 +251,41 @@ where
             self.defer_scratch(Some(samples));
             return None;
         }
-        if let Err(error) = self.render_active(meta, &samples, speed, channels, frames) {
+        let mut input = Self::meta_at_frame(meta, feed);
+        input.frames = u32::try_from(frames).unwrap_or(u32::MAX);
+        self.last_input_meta = Some(input);
+        let landing = prepared.and_then(|quantum| quantum.landing_frames);
+        let residency = self.residency.take();
+        let rendered = residency
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)
+            .and_then(|resident| {
+                let end = feed
+                    .checked_add(
+                        u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
+                    )
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                let range = i64::try_from(feed)
+                    .map_err(|_| ElasticError::SampleCountOverflow)
+                    .and_then(|feed| resident.range(feed, end, channels))?;
+                self.render_active(
+                    input,
+                    &resident.samples[range],
+                    speed,
+                    channels,
+                    frames,
+                    landing,
+                )
+            });
+        self.residency = residency;
+        let rendered =
+            rendered.and_then(
+                |()| match (self.residency.as_mut(), self.scratch.as_mut()) {
+                    (Some(resident), Some(output)) => resident.blend_replacement(output, channels),
+                    _ => Ok(()),
+                },
+            );
+        if let Err(error) = rendered {
             warn!(%error, "time-stretch rendering failed; dropping chunk");
             self.retire_engine();
             self.clear_render_state();
@@ -248,6 +295,8 @@ where
         self.source_frames_admitted = self
             .source_frames_admitted
             .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+        let next = feed.saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+        self.resident_feed = (next < source_end).then_some(next);
         let held_source_frames = self.held_source_frames();
         self.emit(Some(samples), held_source_frames)
     }
@@ -372,6 +421,10 @@ where
     /// Drain one buffered output chunk after source EOF or a transition.
     pub fn flush(&mut self) -> Option<AudioChunk> {
         let snapshot = self.context.load();
+        if self.reprime_pending {
+            self.retire_for_reprime();
+            return None;
+        }
         if self.backend_transition_pending
             && self.projection.selected.is_some()
             && (self.projection.active.is_some() || self.projection.prepared.is_some())
@@ -438,7 +491,7 @@ where
             return ControlFlow::Break(chunk);
         }
         if self.projection.active.is_some() || self.projection.selected.is_some() {
-            let frames = self.prepare_quantum(chunk.meta, chunk.frames());
+            let frames = self.prepare_quantum(chunk.meta, chunk.frames(), usize::MAX);
             if !frames.is_ok_and(|frames| frames.get() == chunk.frames()) {
                 return ControlFlow::Break(chunk);
             }
@@ -446,7 +499,7 @@ where
         }
         let snapshot = self.context.load();
         self.prepared_quantum = None;
-        let rate = self.controls.rate_target();
+        let rate = self.rate;
         let speed = match self.preview_speed(rate.speed(), chunk.frames().max(1)) {
             Ok(speed) => speed,
             Err(error) => {
@@ -525,9 +578,8 @@ where
         if self.unity_passthrough(speed) {
             return self.process_unity(chunk);
         }
-        let mut chunk = chunk;
         if let Some(prepared) = prepared
-            && let Err(error) = self.activate_prepared_quantum(&mut chunk, prepared)
+            && let Err(error) = self.activate_prepared_quantum(&chunk, prepared)
         {
             warn!(%error, "time-stretch activation failed; dropping chunk");
             self.retire_engine();
@@ -535,7 +587,7 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
-        self.process_active(chunk, speed)
+        self.process_active(chunk, speed, prepared)
     }
 
     /// Render the source span selected by [`Self::prepare_quantum`].
@@ -588,15 +640,34 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
+    /// Retire the running engine's tail into the replacement the re-primed
+    /// engine fades from, leaving the held source in the residency.
+    fn retire_for_reprime(&mut self) {
+        match self.retain_projected_replacement() {
+            Ok(()) => {
+                if let Some(pending) = self.pending_source.as_mut() {
+                    pending.clear();
+                }
+                self.pending_meta = None;
+                self.output_remainder = 0.0;
+                self.resident_feed = None;
+            }
+            Err(error) => {
+                warn!(%error, "time-stretch re-prime retirement failed");
+                self.retire_engine();
+                self.clear_render_state();
+            }
+        }
+    }
+
+    /// Drain the running engine's tail into the replacement the next engine
+    /// fades from. A fade still under way blends into that tail on the way, so
+    /// the next fade starts from what sounds now.
     fn retain_projected_replacement(&mut self) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels.max(1));
-        let capacity = self
-            .residency
-            .as_ref()
-            .ok_or(ElasticError::PoolCapacity)?
-            .replacement
-            .capacity()
-            / channels;
+        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        resident.next_replacement.clear();
+        let capacity = resident.next_replacement.capacity() / channels;
         let quantum = self
             .engine
             .as_ref()
@@ -614,21 +685,24 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .clear();
             let complete = self.drain_tail(channels)?;
             let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-            let output = self.scratch.as_ref().ok_or(ElasticError::PoolCapacity)?;
-            if resident.replacement.len() + output.len() > resident.replacement.capacity() {
+            let output = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
+            if resident.next_replacement.len() + output.len() > resident.next_replacement.capacity()
+            {
                 return Err(ElasticError::PoolCapacity);
             }
+            resident.blend_replacement(output, channels)?;
             resident
-                .replacement
+                .next_replacement
                 .try_extend_from_slice(output)
                 .map_err(|_| ElasticError::PoolCapacity)?;
-            self.scratch
-                .as_mut()
-                .ok_or(ElasticError::PoolCapacity)?
-                .clear();
+            output.clear();
             if complete {
+                mem::swap(&mut resident.replacement, &mut resident.next_replacement);
+                resident.next_replacement.clear();
+                resident.replacement_offset = 0;
                 resident.primed = false;
                 self.backend_transition_pending = false;
+                self.reprime_pending = false;
                 self.active = false;
                 self.applied_pitch = f64::NAN;
                 self.reset_pending = false;

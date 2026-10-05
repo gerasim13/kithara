@@ -60,9 +60,13 @@ where
             return;
         };
 
+        let metadata = resource.metadata().clone();
         if let Err(error) = self.player.replace_item(index, resource, id) {
             debug!(id = id.as_u64(), %error, "player closed before load could be applied");
             return;
+        }
+        if let Some(record) = self.tracks.lock().iter_mut().find(|record| record.id == id) {
+            record.metadata.fill_missing_from(&metadata);
         }
         self.tracks.set_status(id, TrackStatus::Loaded);
         if self
@@ -74,6 +78,10 @@ where
             self.bus.publish(QueueEvent::NextTrackReady { id, index });
         }
 
+        self.apply_pending_selection(id, index);
+    }
+
+    fn apply_pending_selection(&self, id: TrackId, index: usize) {
         let selection = {
             let mut phase = self.pending_select.lock();
             let selection = match *phase {
@@ -127,5 +135,69 @@ where
                 queue.apply_loaded(id, resource);
             }));
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_audio::mock::TestPcmReader;
+    use kithara_decode::TrackMetadata;
+    use kithara_platform::{CancelToken, sync::Arc};
+    use kithara_play::{ResourceConfig, ResourceSrc};
+    use kithara_signal::AudioSpec;
+    use kithara_test_utils::{cancel_token, kithara};
+
+    use super::*;
+    use crate::queue::state::tests::{make_queue, make_store};
+
+    /// Admission keeps the caller's metadata and a cover placed before it,
+    /// and fills only the fields they leave unset from the decoder's tags.
+    #[kithara::test(tokio, flash(false))]
+    async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelToken) {
+        let queue = make_queue();
+        let url = "https://example.com/opaque.m3u8";
+        let append = |title: Option<&str>| {
+            let config =
+                ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid source URL"))
+                    .store(make_store())
+                    .metadata(TrackMetadata {
+                        title: title.map(Into::into),
+                        album: Some("Catalogue album".into()),
+                        ..TrackMetadata::default()
+                    })
+                    .build();
+            queue.append(config).expect("append configured track")
+        };
+        let titled = append(Some("Catalogue title"));
+        let untitled = append(None);
+        let track = |id| queue.track(id).expect("the track stays queued");
+        assert_eq!(
+            track(titled).metadata().title.as_deref(),
+            Some("Catalogue title")
+        );
+        let cover = Arc::new(vec![1, 2, 3]);
+        queue
+            .tracks
+            .place_cover(titled, &cancel_token, Arc::clone(&cover));
+
+        let spec = AudioSpec::new(2, crate::consts::TEST_SAMPLE_RATE);
+        for id in [titled, untitled] {
+            let reader = TestPcmReader::new(spec, 0.01);
+            queue.apply_loaded(id, Resource::from_reader(reader, Some(Arc::from(url))));
+            assert!(matches!(
+                track(id).status,
+                TrackStatus::Loaded | TrackStatus::Consumed
+            ));
+        }
+
+        let admitted = track(titled);
+        let metadata = admitted.metadata();
+        assert_eq!(metadata.title.as_deref(), Some("Catalogue title"));
+        assert_eq!(metadata.album.as_deref(), Some("Catalogue album"));
+        assert_eq!(metadata.artwork, Some(cover));
+        assert_eq!(track(untitled).metadata().title.as_deref(), Some("Mock"));
+        queue
+            .close()
+            .expect("close the queue before deferred loads run");
     }
 }

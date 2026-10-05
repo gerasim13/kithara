@@ -508,7 +508,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("create Audio pipeline");
+    let mut audio = worker.load(config).await.expect("create Audio pipeline");
 
     let spec = audio.spec();
     info!(

@@ -1,9 +1,9 @@
 //! The Host queue: Host settings changes the session transport applies on
 //! its render clock, and the receipts that settle them on the session owner.
 
-use std::{mem, num::NonZeroU32};
+use std::{convert::Infallible, mem, num::NonZeroU32};
 
-use kithara_command::{LiveError, Outcome, Protocol, Receipt, Rejection, SendError, Target, When};
+use kithara_command::{LiveError, Outcome, Protocol, Receipt, Rejection, SendError, When};
 use kithara_config::ConfigOwner;
 use kithara_play::PlayError;
 use kithara_signal::SessionFrame;
@@ -31,22 +31,12 @@ pub(crate) enum HostPart {
 #[derive(Debug)]
 pub(crate) enum HostProtocol {}
 
-/// No batch of the Host queue shifts the time of a target.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum NoTarget {}
-
-impl Target for NoTarget {
-    fn index(self) -> usize {
-        match self {}
-    }
-}
-
 impl Protocol for HostProtocol {
     type Applied = TransportRevision;
     type Clock = SessionFrame;
     type Command = HostPart;
     type Refusal = TransportProcessError;
-    type Target = NoTarget;
+    type Target = Infallible;
 
     fn frames_since(at: SessionFrame, start: SessionFrame) -> Option<u64> {
         at.frames_since(start)

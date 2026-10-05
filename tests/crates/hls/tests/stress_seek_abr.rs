@@ -123,7 +123,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
 
-    let mut audio = worker.open(config).await.expect("audio creation");
+    let mut audio = worker.load(config).await.expect("audio creation");
 
     let mut events_rx = audio.event_bus().subscribe::<TestEvent>();
 
@@ -221,7 +221,7 @@ async fn seek_sequence_from_log_real_stream(
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
-    let mut audio = worker.open(config).await.expect("audio creation");
+    let mut audio = worker.load(config).await.expect("audio creation");
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];

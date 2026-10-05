@@ -59,7 +59,7 @@ async fn aac_he_v2_hls_produces_pcm(
         .block_on_underrun(true)
         .build();
 
-    let mut audio = worker.open(config).await.expect("audio creation");
+    let mut audio = worker.load(config).await.expect("audio creation");
 
     let pcm = spawn_blocking(move || {
         let target_samples = SAMPLE_RATE as usize * CHANNELS as usize;

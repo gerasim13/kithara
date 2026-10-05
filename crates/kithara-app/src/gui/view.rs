@@ -10,8 +10,7 @@ pub(crate) fn view(state: &Kithara, _window: Id) -> Element<'_, Message> {
     super::ui::view(state)
 }
 
-/// Folder-derived artist/album only makes sense for local files; a remote
-/// URL has no meaningful parent directories.
+/// Display supplied or decoded tags before deriving labels from local folders.
 pub(crate) fn track_subtitle(deck: &DeckSnapshot) -> String {
     let Some(index) = deck.current_track_index else {
         return "Artist / Album unavailable".to_string();
@@ -19,6 +18,15 @@ pub(crate) fn track_subtitle(deck: &DeckSnapshot) -> String {
     let Some(entry) = deck.tracks.get(index) else {
         return "Artist / Album unavailable".to_string();
     };
+    match (
+        entry.metadata().artist.as_deref(),
+        entry.metadata().album.as_deref(),
+    ) {
+        (Some(artist), Some(album)) => return format!("{artist} / {album}"),
+        (Some(artist), None) => return artist.to_owned(),
+        (None, Some(album)) => return album.to_owned(),
+        (None, None) => {}
+    }
     let Some(url) = entry.url.as_deref() else {
         return "Artist / Album unavailable".to_string();
     };

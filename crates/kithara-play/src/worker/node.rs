@@ -922,12 +922,14 @@ mod tests {
         NoResamplerBackend, PreloadGate, SourceEnd, TrackStep, WaitingReason,
         mock::AudioSourceMock,
     };
+    use kithara_command::{ChannelConfig, channel};
     use kithara_effects::EffectDrain;
     use kithara_events::{DeferredBus, EventBus};
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::Duration,
     };
+    use kithara_render::{LaneProtocol, WarpSource};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{
         PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState, Stream,
@@ -941,7 +943,7 @@ mod tests {
     use super::*;
     use crate::{
         test_pools::{Pools, pools, sample_buffer},
-        worker::{EngineLoad, WarpSource},
+        worker::EngineLoad,
     };
 
     pub(super) async fn prepared_node<S>(
@@ -1103,7 +1105,8 @@ mod tests {
         let config = kithara_warp::WarpConfig::builder().build();
         let warp = kithara_warp::Warp::new((), &config);
         let renderer = warp.renderer(spec, pools.clone());
-        let source = WarpSource::new(source, renderer, effects, drain, spec, pools);
+        let (_lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+        let source = WarpSource::new(source, renderer, effects, drain, spec, pools, inbox);
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let (mut node, mut audio) = prepared_node(source, 1, 1).await;

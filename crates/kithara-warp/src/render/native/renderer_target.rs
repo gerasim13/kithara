@@ -255,19 +255,16 @@ where
             self.projection.cursor = None;
             self.projection.output_frames = 0;
         }
-        self.sync_plan();
-
         if spec.sample_rate != self.spec.sample_rate
             && let Some(applied) = self.applied_speed.as_mut()
         {
             applied.update_sample_rate(spec.sample_rate);
         }
 
-        let kind = self.controls.backend();
-        let keylock = self.controls.keylock();
+        let (kind, keylock) = self.stretch_target();
         let entering_unity = spec == self.spec
             && (self.active || self.pending_frames(channels) > 0)
-            && self.unity_passthrough(self.controls.speed());
+            && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;

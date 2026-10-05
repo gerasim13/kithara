@@ -121,7 +121,7 @@ async fn open_packaged_hls_audio(
         .build();
 
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .unwrap_or_else(|err| panic!("packaged ABR audio should open for {url}: {err}"));
     let _ = audio.preload();
@@ -194,7 +194,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
     spawn_blocking(move || {
         let _ = audio.preload();
         let mut buf = vec![0f32; 4096];
@@ -390,7 +390,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
         .block_on_underrun(true)
         .build();
         let mut warm_audio = worker
-            .open(warm_config)
+            .load(warm_config)
             .await
             .unwrap_or_else(|e| panic!("packaged ABR warm audio (v{variant}) must open: {e}"));
         let warmed = spawn_blocking(move || {
@@ -548,7 +548,7 @@ async fn stream_continues_after_seek(
         )
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
     // The blocking read phase must NOT run on the test runtime thread: with
     // block_on_underrun the read parks the thread, and on the current-thread
     // runtime that starves the HLS drive/fetch tasks that feed it. preload()
@@ -651,7 +651,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
     spawn_blocking(move || {
         let _ = audio.preload();
         let mut buf = vec![0f32; 4096];
@@ -733,7 +733,7 @@ async fn seek_after_eof_mmap_produces_samples(
         )
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
     spawn_blocking(move || {
         let _ = audio.preload();
         let mut buf = vec![0f32; 4096];
@@ -814,7 +814,7 @@ async fn mp3_stream_continues_after_seek(
         .hint(("mp3").to_string())
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
     spawn_blocking(move || {
         let _ = audio.preload();
         let mut buf = vec![0f32; 4096];
@@ -1017,7 +1017,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .build();
 
     let mut audio = worker
-        .open(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .load(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -1273,7 +1273,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(
         .events(bus.clone())
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("create audio");
+    let mut audio = worker.load(config).await.expect("create audio");
 
     // Subscribe before any switch so `VariantApplied{to:3}` cannot be missed.
     // The post-switch read owns this receiver and drains it inline.

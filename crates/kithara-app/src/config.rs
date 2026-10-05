@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZeroU32, path::PathBuf};
+use std::{collections::BTreeMap, fmt, num::NonZeroU32, path::PathBuf};
 
 #[cfg(feature = "gui")]
 use kithara::ui::source::UiConfig;
@@ -9,7 +9,7 @@ use kithara::{
     drm::KeyProcessorRegistry,
     file::FileConfigPatch,
     hls::HlsConfigPatch,
-    net::Headers,
+    net::{Headers, HttpClient},
     platform::{CancelToken, sync::Arc},
     play::{PlayerConfigPatch, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
@@ -18,6 +18,7 @@ use kithara::{
 };
 use kithara_config::Config;
 use kithara_derive::Patch;
+use serde_yaml_ng::Value;
 use url::Url;
 
 #[cfg(feature = "broadcast")]
@@ -76,6 +77,13 @@ pub struct AppConfig {
     /// App-owned DRM policy and its opaque key-request registry.
     #[config(skip = "owned by the app DRM registry", patch(skip))]
     pub drm: AppDrm,
+    /// The one HTTP client the downloader and the library sources share.
+    #[config(skip = "shared by the downloader and the library sources", patch(skip))]
+    pub net: HttpClient,
+    /// The document's `sources` entries, references resolved; each library
+    /// source reads its own.
+    #[config(skip = "read by the library sources", builder(default), patch(skip))]
+    pub sources: BTreeMap<String, Value>,
     /// App-wide shared asset store.
     #[config(skip = "owned by the app asset store", patch(skip))]
     pub store: AppStore,

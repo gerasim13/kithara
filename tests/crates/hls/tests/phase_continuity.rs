@@ -195,7 +195,7 @@ async fn run_case_paced(
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker
-        .open(audio_config)
+        .load(audio_config)
         .await
         .expect("create Audio<Stream<Hls>>");
     audio.preload().expect("preload HLS phase scanner");

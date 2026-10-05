@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use iced::{Element, Size};
 use kithara::{
-    platform::time::Duration,
+    platform::{time::Duration, tokio::runtime::Handle},
     ui::{
         compile::{CompiledUi, compile},
         error::UiDocError,
@@ -15,7 +15,6 @@ use kithara::{
 
 use super::{
     cache::{DeckLayout, ViewCache},
-    endpoints::Registry,
     package::Package,
 };
 use crate::gui::{app::Kithara, message::Message, reads::ReadRoot};
@@ -24,6 +23,8 @@ use crate::gui::{app::Kithara, message::Message, reads::ReadRoot};
 /// deck layouts are compiled once; the top bar picks which one renders.
 pub(crate) struct AppUi {
     pub(crate) cache: ViewCache,
+    /// Decodes the decks' covers off the UI thread.
+    pub(in crate::gui) runtime: Handle,
     /// The package every page here was read, dressed and worded by. A host
     /// that has to build its own window reads it from here rather than
     /// loading a second copy.
@@ -39,7 +40,11 @@ pub(crate) struct AppUi {
 }
 
 impl AppUi {
-    pub(crate) fn new(package: Rc<Package>, doc: &UiConfig) -> Result<Self, UiDocError> {
+    pub(crate) fn new(
+        package: Rc<Package>,
+        doc: &UiConfig,
+        runtime: Handle,
+    ) -> Result<Self, UiDocError> {
         let view = ViewState::default();
         Ok(Self {
             single: compile_screen(&package, DeckLayout::Single, doc, &view)?,
@@ -47,6 +52,7 @@ impl AppUi {
             cache: ViewCache::default(),
             clock: Clock::default(),
             package,
+            runtime,
             view,
         })
     }
@@ -107,7 +113,7 @@ fn compile_screen(
     let ui = compile(
         document,
         package.resolver(),
-        &Registry::default(),
+        package.registry(),
         package.skin().document(),
         package.text(),
         doc,

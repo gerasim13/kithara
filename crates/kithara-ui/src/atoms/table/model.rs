@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct Table<C> {
@@ -20,7 +22,9 @@ pub(crate) struct TableRow {
     #[field(get, vis = "pub(crate)")]
     selected: bool,
     #[field(get, with, vis = "pub(crate)")]
-    drag: Option<String>,
+    muted: bool,
+    #[field(get, with, vis = "pub(crate)")]
+    drag: Option<BTreeMap<String, String>>,
 }
 
 impl TableRow {
@@ -28,6 +32,7 @@ impl TableRow {
         Self {
             cells,
             selected,
+            muted: false,
             drag: None,
         }
     }
@@ -40,6 +45,13 @@ impl TableRow {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TableCell {
     Empty,
+    /// An icon that publishes `action` through its column's write when
+    /// pressed, where it carries one.
+    Icon {
+        icon: crate::module::IconName,
+        active: bool,
+        action: Option<String>,
+    },
     Number(u8),
     Text(String),
     Badges(Vec<BadgeLetter>),
@@ -52,10 +64,17 @@ pub(crate) struct BadgeLetter {
 }
 
 impl TableCell {
+    pub(crate) fn action(&self) -> Option<&str> {
+        match self {
+            Self::Icon { action, .. } => action.as_deref(),
+            Self::Empty | Self::Number(_) | Self::Text(_) | Self::Badges(_) => None,
+        }
+    }
+
     pub(crate) fn badges(&self) -> &[BadgeLetter] {
         match self {
             Self::Badges(letters) => letters,
-            Self::Empty | Self::Number(_) | Self::Text(_) => &[],
+            Self::Empty | Self::Icon { .. } | Self::Number(_) | Self::Text(_) => &[],
         }
     }
 
@@ -69,7 +88,7 @@ impl TableCell {
     pub(crate) fn text(&self) -> Option<&str> {
         match self {
             Self::Text(value) => Some(value),
-            Self::Empty | Self::Number(_) | Self::Badges(_) => None,
+            Self::Empty | Self::Icon { .. } | Self::Number(_) | Self::Badges(_) => None,
         }
     }
 }

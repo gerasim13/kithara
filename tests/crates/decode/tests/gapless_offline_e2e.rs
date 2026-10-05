@@ -11,7 +11,7 @@ use kithara::{
     events::{EventBus, TrackId},
     platform::{
         sync::Arc,
-        time::{self, Duration, Instant},
+        time::{self, Duration},
     },
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
@@ -24,6 +24,7 @@ use kithara::{
 use kithara::{
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
     decode::DecoderBackend,
+    platform::time::Instant,
     play::PlaybackResamplerBackend,
 };
 use kithara_integration_tests::{
@@ -51,6 +52,20 @@ use crate::gapless_common::{
 
 const BLOCK_FRAMES: usize = 512;
 const POST_ROLL_BLOCKS: usize = 8;
+/// How much audio a wait for an item's end may render before it reports that
+/// the item never ended.
+///
+/// Rendering is what moves that wait forward, so rendered audio is what bounds
+/// it. A clock cannot: `Instant::now()` under flash reads the virtual clock,
+/// which the engine fast-forwards to the next pending deadline whenever every
+/// task is parked, and a handover between two items is exactly such a moment.
+/// A stress attempt that ran for 659 ms of real time panicked on a deadline of
+/// 15 virtual seconds with the dump recording that clock at 86416 s, while the
+/// item it waited for had already started and only needed more blocks. The
+/// longest material any caller here renders is a few seconds, so this bounds a
+/// player that stopped advancing without bounding one that is merely waiting
+/// to be scheduled.
+const ITEM_END_BUDGET_FRAMES: usize = 64 * GAPLESS_SAMPLE_RATE as usize;
 const SILENCE_THRESHOLD: f32 = 1.0e-3;
 const FUSED_FIXTURE_SOURCE_RATE: u32 = 44_100;
 const FUSED_FIXTURE_DEVICE_RATE: u32 = 48_000;
@@ -1112,7 +1127,6 @@ async fn render_until_item_end_with_post_roll(
     terminal_item_id: TrackId,
     post_roll_blocks: usize,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
-    let deadline = Instant::now() + Duration::from_secs(15);
     let mut rendered = Vec::new();
     let mut rendered_frames = 0usize;
     let mut events = Vec::new();
@@ -1151,9 +1165,12 @@ async fn render_until_item_end_with_post_roll(
         }
 
         assert!(
-            Instant::now() <= deadline,
-            "timed out waiting for {terminal_item_id} to finish; events={events:?}"
+            rendered_frames < ITEM_END_BUDGET_FRAMES,
+            "{terminal_item_id} never finished within {ITEM_END_BUDGET_FRAMES} rendered \
+             frames; events={events:?}"
         );
+        // A yield, not a wait: the loop renders what it waits on, and under
+        // flash this is where the engine gets to run everything else.
         time::sleep(Duration::from_millis(5)).await;
     }
 }

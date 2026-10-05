@@ -51,6 +51,7 @@ fn value(declared: &Declared, action: ControlAction, reads: &dyn Reads) -> Optio
         ControlAction::StepScalar(steps) => WriteValue::Step(steps),
         ControlAction::SelectIndex(index) => WriteValue::Index(index),
         ControlAction::Text(text) => WriteValue::Text(text),
+        ControlAction::Record(record) => WriteValue::Record(record),
         ControlAction::Place(at) => WriteValue::Point(at),
     })
 }

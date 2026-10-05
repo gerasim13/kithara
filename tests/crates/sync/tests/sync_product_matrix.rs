@@ -58,6 +58,12 @@ use kithara_test_fixtures::{
 use num_traits::AsPrimitive;
 
 pub(super) const BLOCK_FRAMES: usize = 512;
+/// How many blocks a build renders before it checks that a transport was
+/// committed. Builds of one case are compared frame by frame, so the span has
+/// to be the same every time rather than however long one race took to
+/// resolve; it is wide enough that the commit lands inside it on a loaded
+/// machine, and a build that still has no transport by the end says so.
+const WARM_UP_BLOCKS: usize = 24;
 pub(super) const CHANNELS: u16 = 2;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Room in the master tap for one `render`, which renders at most a second.
@@ -808,22 +814,26 @@ impl ProductHarness {
 
     /// The Host reports its transport from the last render it committed, so a
     /// harness that hands a revision to `request_sync` must have committed one
-    /// first. The warm-up render usually is that commit; on a loaded host it
-    /// can return before the renderer publishes, and one more render is what
-    /// the wait costs.
+    /// first. The renderer publishes the `render_committed` probe that
+    /// revision is read from, and how many blocks that takes is not fixed:
+    /// builds of one case were seen committing after two blocks and after
+    /// eight.
+    ///
+    /// Rendering only until the read succeeds therefore left each build on
+    /// whichever frame its own race resolved on, and a case that compares two
+    /// builds sample by sample was comparing two different points of the same
+    /// timeline. The warm-up renders a fixed span instead, so every build
+    /// leaves its deck on the same frame, and a span too short for the commit
+    /// fails here naming itself rather than surfacing later as a frame skew.
     async fn warm_up_transport(&mut self, case: SyncCase) {
-        let deadline = Instant::now() + LOAD_TIMEOUT;
-        loop {
+        for _ in 0..WARM_UP_BLOCKS {
             let _ = self.render(case, self.block_frames).await;
-            if self.host.transport_revision().await.is_ok() {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "{}: no render committed a session transport",
-                case.id
-            );
         }
+        assert!(
+            self.host.transport_revision().await.is_ok(),
+            "{}: no render committed a session transport in {WARM_UP_BLOCKS} blocks",
+            case.id
+        );
     }
 
     async fn wait_loaded(&mut self, case: SyncCase, ids: &[kithara::events::TrackId]) {

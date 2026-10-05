@@ -137,7 +137,7 @@ async fn serve_media_segment(
             // Count size-probes (always live, no gate registration): every
             // HEAD, and any single-byte ranged GET (`Range: bytes=0-0`). Lets a
             // test observe the up-front estimation pass that probes every
-            // segment of every variant at `PlayWorker::open`.
+            // segment of every variant at `PlayWorker::load`.
             match method {
                 SegmentMethod::Head => state.mark_size_probe(hls_spec, variant, segment),
                 SegmentMethod::Get => {

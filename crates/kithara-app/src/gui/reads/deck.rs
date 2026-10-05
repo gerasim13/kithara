@@ -140,6 +140,7 @@ impl<'a> Node<'a> for TrackNode<'a> {
         let value = match segment {
             "title" => ReadValue::Text(title(self.shown)?),
             "source_kind" => ReadValue::Text(&self.cache.subtitle),
+            "artwork" => ReadValue::Image(self.cache.artwork.image()?),
             _ => return None,
         };
         Some(Box::new(Value(value)))

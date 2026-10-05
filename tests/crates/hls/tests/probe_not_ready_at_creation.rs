@@ -23,7 +23,7 @@ use kithara::{
         time::{Duration, Instant, WallInstant},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{LoadRefusal, PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -116,18 +116,18 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFix
             .build(),
     );
     let started = WallInstant::now();
-    let result = worker.open(audio_config(&server, &pools, &cancel)).await;
+    let result = worker.load(audio_config(&server, &pools, &cancel)).await;
     let elapsed = started.elapsed();
 
     assert!(
         elapsed < Duration::from_secs(5),
         "opening must be bounded while media is withheld: {elapsed:?}"
     );
-    let err = result
-        .err()
-        .expect("construction reads the withheld segment it opens in");
+    let Some(LoadRefusal::Open(err)) = result.err() else {
+        panic!("construction reads the withheld segment it opens in");
+    };
     let message = err.to_string();
-    info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "PlayWorker::open failed");
+    info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "PlayWorker::load failed");
     let lower = message.to_ascii_lowercase();
     assert!(
         lower.contains("not ready") || lower.contains("wait budget"),
@@ -179,12 +179,12 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe(
         }
     });
 
-    let result = worker.open(audio_config(&server, &pools, &cancel)).await;
+    let result = worker.load(audio_config(&server, &pools, &cancel)).await;
     releaser.await.expect("releaser joins");
 
     assert!(
         result.is_ok(),
-        "PlayWorker::open must succeed once the slow first segment arrives, got {:?}",
+        "PlayWorker::load must succeed once the slow first segment arrives, got {:?}",
         result.err().map(|e| e.to_string())
     );
 }

@@ -54,6 +54,8 @@ pub struct PlayerNodeProcessor {
     pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
+    /// Media seconds every track consumes per output second.
+    pub(super) rate: f32,
     context_requirement: ContextRequirement,
     trash_tx: HeapProd<PlayerTrack>,
     /// Last effective rate successfully delivered to the control thread.
@@ -365,6 +367,7 @@ impl PlayerNodeProcessor {
             render: RenderPass::new(pools, shape, gate_smoothing),
             crossfade: crate::CrossfadeSettings::default(),
             prefetch_duration: 0.0,
+            rate: 1.0,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }

@@ -104,6 +104,17 @@ pub struct TrackMetadata {
     pub title: Option<String>,
 }
 
+impl TrackMetadata {
+    /// Fill unknown fields from another metadata snapshot, preserving every
+    /// field already supplied by this snapshot.
+    pub fn fill_missing_from(&mut self, missing: &Self) {
+        self.album = self.album.take().or_else(|| missing.album.clone());
+        self.artist = self.artist.take().or_else(|| missing.artist.clone());
+        self.artwork = self.artwork.take().or_else(|| missing.artwork.clone());
+        self.title = self.title.take().or_else(|| missing.title.clone());
+    }
+}
+
 pub(crate) fn checked_audio_spec(
     channels: u16,
     sample_rate: u32,

@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_assets::{AssetResource, AssetSource, AssetStore, ResourceKey};
 use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
-use kithara_decode::DecodeError;
+use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_file::File;
 use kithara_hls::Hls;
@@ -28,6 +28,17 @@ where
             self.headers.as_ref(),
             self.cancel.as_ref(),
         )
+    }
+
+    /// Where this track's encoded cover image is read from, when it has one.
+    #[must_use]
+    pub const fn artwork(&self) -> Option<&ResourceSrc> {
+        self.artwork.as_ref()
+    }
+
+    /// Replace where this track's encoded cover image is read from.
+    pub fn set_artwork(&mut self, artwork: ResourceSrc) {
+        self.artwork = Some(artwork);
     }
 
     /// Mint a layout-owned key for a playback or derived resource.
@@ -71,6 +82,17 @@ where
     #[must_use]
     pub const fn cancel(&self) -> Option<&CancelToken> {
         self.cancel.as_ref()
+    }
+
+    /// Caller-known metadata supplied before this resource opens.
+    #[must_use]
+    pub const fn metadata(&self) -> Option<&TrackMetadata> {
+        self.metadata.as_ref()
+    }
+
+    /// Replace caller-known metadata used ahead of decoder tags.
+    pub fn set_metadata(&mut self, metadata: TrackMetadata) {
+        self.metadata = Some(metadata);
     }
 
     /// Optional cache discriminator.

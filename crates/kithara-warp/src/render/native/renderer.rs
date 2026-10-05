@@ -5,7 +5,8 @@ use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::{
-    ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest, StretchKind,
+    BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest,
+    StretchKind,
 };
 use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive;
@@ -16,9 +17,33 @@ use super::{
     renderer_target::PreparedTarget,
 };
 use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
-    WarpCursor, WarpPlanSlot, consts, temporal::RateTarget,
+    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig, WarpCursor,
+    WarpPlanSlot, consts,
 };
+
+/// The speed a renderer renders at and the revision that set it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RateTarget {
+    speed: f32,
+    revision: u64,
+}
+
+impl RateTarget {
+    fn new(speed: f32, revision: u64) -> Self {
+        Self {
+            speed: speed.max(consts::MIN_SPEED),
+            revision,
+        }
+    }
+
+    pub(super) const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    pub(super) const fn speed(self) -> f32 {
+        self.speed
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
@@ -29,6 +54,8 @@ pub(super) struct PreparedQuantum {
     pub(super) source_start: u64,
     pub(super) active_frames: usize,
     pub(super) frames: usize,
+    /// Output frames a quantum that ends on a scheduled frame renders exactly.
+    pub(super) landing_frames: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -45,11 +72,10 @@ impl PreparedActivation {
     }
 }
 
-/// Source-timeline exact-span time-stretch driven by shared live controls.
+/// Source-timeline exact-span time-stretch driven by its render lane.
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
-    pub(super) controls: Arc<StretchControls>,
     pub(super) plan_slot: Arc<WarpPlanSlot>,
     pub(super) spec: AudioSpec,
     pub(super) backends: ElasticBackendConfig,
@@ -57,8 +83,11 @@ pub struct WarpRenderer<S> {
     pub(super) source_block_frames: NonZeroUsize,
     /// Latency-sized pooled output discarded while priming an inactive engine.
     pub(super) activation_scratch: Option<SampleBuffer>,
-    /// Renderer-owned applied speed. Shared controls contain only the target.
+    /// Renderer-owned applied speed, smoothed toward [`Self::rate`].
     pub(super) applied_speed: Option<SmoothedParam>,
+    /// Speed the last [`Self::set_speed`] set, with the revision stamped on
+    /// every chunk rendered toward it.
+    pub(super) rate: RateTarget,
     pub(super) committed: Option<RenderSnapshot>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
@@ -76,12 +105,12 @@ pub struct WarpRenderer<S> {
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
     pub(super) pending_unity_meta: Option<AudioChunkInfo>,
-    /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
+    /// Region plan the renderer was built with.
     pub(super) plan: Option<Arc<RegionPlan>>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
     /// Region covering the playhead - the lookup cursor. `None` forces a
-    /// fresh binary search (first chunk, plan swap, region exit, seek).
+    /// fresh binary search (first chunk, region exit, seek).
     pub(super) region: Option<ActiveRegion>,
     /// Maximum output frames between samples of live temporal controls.
     pub(super) render_quantum_frames: Option<NonZeroUsize>,
@@ -99,10 +128,20 @@ pub struct WarpRenderer<S> {
     pub(super) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
+    /// Backend the lane last asked for; the scheduler shell prepares its engine.
+    pub(super) requested_kind: StretchKind,
+    /// Whether the lane last asked for a keylock engine.
+    pub(super) requested_keylock: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
     pub(super) backend_transition_pending: bool,
+    /// A speed set while the engine runs: its tail retires into the
+    /// residency's replacement and the engine re-primes on the speed's frame.
+    pub(super) reprime_pending: bool,
+    /// Source frame the engine reads next while it trails the decoded frontier
+    /// after a prime; the residency holds every frame from it on.
+    pub(super) resident_feed: Option<u64>,
     pub(super) current_keylock: bool,
     /// One scheduler-shell rebuild requested after a checked engine failure.
     /// The intent is consumed even when preparation fails.
@@ -129,18 +168,18 @@ where
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
-    /// Build the slot at the source `spec`, driven by the shared `controls`.
+    /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(
         config: &WarpConfig,
         context: RenderReader,
         spec: AudioSpec,
         pools: PoolRegion<S>,
     ) -> Self {
-        let controls = Arc::clone(config.stretch());
-        let current_kind = controls.backend();
-        let current_keylock = controls.keylock();
-        let plan = controls.region_plan();
-        let speed = controls.speed();
+        let requested_kind = config.backend();
+        let requested_keylock = config.keylock();
+        let (current_kind, current_keylock) = Self::stretch_for(requested_kind, requested_keylock);
+        let plan = config.region_plan().clone();
+        let speed = config.speed();
         let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
         let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
@@ -167,8 +206,11 @@ where
             retired_engine: None,
             current_kind,
             current_keylock,
+            requested_kind,
+            requested_keylock,
             backend_transition_pending: false,
-            controls,
+            reprime_pending: false,
+            resident_feed: None,
             pools,
             spec,
             source_block_frames: config.source_block_frames(),
@@ -186,6 +228,7 @@ where
                 )
             }),
             applied_pitch: f64::NAN,
+            rate: RateTarget::new(speed, 0),
             active: false,
             output_remainder: 0.0,
             pending_source: target.pending_source,
@@ -228,7 +271,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     #[must_use]
     pub fn accepts_input(&self) -> bool {
         !self.transition_pending()
-            && (self.unity_passthrough(self.controls.speed())
+            && (self.unity_passthrough(self.rate.speed())
                 || (self.engine.is_some()
                     && self.pending_source.is_some()
                     && self.scratch.is_some()))
@@ -276,6 +319,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.source_frames_admitted = 0;
         self.primed_source_debt = 0;
         self.active = false;
+        self.reprime_pending = false;
+        self.resident_feed = None;
         self.region = None;
     }
 
@@ -375,6 +420,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
+    /// Whether the next quantum would engage an engine other than the one
+    /// the lane asks for, so the scheduler shell must prepare that one first.
+    pub(super) fn engine_outdated(&self) -> bool {
+        !self.active
+            && !self.unity_passthrough(self.rate.speed())
+            && self.stretch_target() != (self.current_kind, self.current_keylock)
+    }
+
     pub(super) fn held_source_frames(&self) -> u64 {
         if !self.active {
             return 0;
@@ -396,13 +449,17 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     pub(super) fn meta_at_frame(meta: AudioChunkInfo, frame_offset: u64) -> AudioChunkInfo {
         let mut start = meta;
-        let delta = frame_offset.saturating_sub(meta.frame_offset);
+        let delta = frame_offset.abs_diff(meta.frame_offset);
+        let span = meta
+            .spec
+            .duration_for(delta)
+            .unwrap_or(Duration::from_nanos(u64::MAX));
         start.frame_offset = frame_offset;
-        start.timestamp = meta.timestamp.saturating_add(
-            meta.spec
-                .duration_for(delta)
-                .unwrap_or(Duration::from_nanos(u64::MAX)),
-        );
+        start.timestamp = if frame_offset < meta.frame_offset {
+            meta.timestamp.saturating_sub(span)
+        } else {
+            meta.timestamp.saturating_add(span)
+        };
         if delta > 0 {
             start.source_byte_offset = None;
             start.source_bytes = 0;
@@ -498,39 +555,81 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         true
     }
 
+    /// Re-primes a running engine on this frame when the requested one differs
+    /// from it, and drops a quantum prepared before.
+    fn retarget_engine(&mut self) {
+        self.reprime_pending |= self.active
+            && self.projection.active.is_none()
+            && self.stretch_target() != (self.current_kind, self.current_keylock);
+        self.prepared_quantum = None;
+    }
+
     pub(super) fn retire_engine(&mut self) {
         debug_assert!(self.retired_engine.is_none());
         self.retired_engine = self.engine.take();
         self.rebuild_pending = true;
     }
 
+    /// Render from the next prepared quantum on with `kind`'s engine. A running
+    /// engine retires its tail into a crossfade and the new engine re-primes
+    /// from the source history on this frame.
+    pub fn set_backend(&mut self, kind: StretchKind) {
+        self.requested_kind = kind;
+        self.retarget_engine();
+    }
+
+    /// Render from the next prepared quantum on with a keylock engine when `on`
+    /// and the backend has one, switching engines as [`Self::set_backend`] does.
+    pub fn set_keylock(&mut self, on: bool) {
+        self.requested_keylock = on;
+        self.retarget_engine();
+    }
+
+    /// Render from the next prepared quantum on at the speed `curve` holds,
+    /// stamping `revision` on every chunk rendered toward it. A quantum
+    /// prepared before is dropped, so the next one is planned at this speed.
+    pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) {
+        let target = match curve {
+            SpeedCurve::Constant(speed) => RateTarget::new(speed, revision),
+        };
+        self.reprime_pending |= self.active
+            && self.projection.active.is_none()
+            && (target.speed() - self.rate.speed()).abs() > f32::EPSILON
+            && !self.unity_passthrough(target.speed())
+            && self
+                .engine
+                .as_ref()
+                .is_some_and(|engine| engine.capabilities().latency().source_frames() > 0);
+        self.rate = target;
+        self.prepared_quantum = None;
+    }
+
     pub(super) fn snap_speed(&mut self) {
         if let Some(applied) = self.applied_speed.as_mut() {
-            applied.set_value(self.controls.speed());
+            applied.set_value(self.rate.speed());
             applied.reset_to_target();
         }
         self.prepared_quantum = None;
     }
 
-    /// Pull the live region plan handle; on a swap drop the region cursor.
-    pub(super) fn sync_plan(&mut self) {
-        let want = self.controls.region_plan();
-        let same = match (&self.plan, &want) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        if !same {
-            self.plan = want;
-            self.region = None;
-            self.prepared_quantum = None;
-        }
+    /// The engine `kind` and `keylock` ask for: keylock only where the backend
+    /// has it.
+    fn stretch_for(kind: StretchKind, keylock: bool) -> (StretchKind, bool) {
+        (
+            kind,
+            keylock && kind.capabilities().contains(BackendCapabilities::KEYLOCK),
+        )
+    }
+
+    /// The engine the lane last asked for.
+    pub(super) fn stretch_target(&self) -> (StretchKind, bool) {
+        Self::stretch_for(self.requested_kind, self.requested_keylock)
     }
 
     /// Whether a live active-to-unity transition still owns queued samples.
     #[must_use]
     pub const fn transition_pending(&self) -> bool {
-        self.pending_unity_meta.is_some() || self.backend_transition_pending
+        self.pending_unity_meta.is_some() || self.backend_transition_pending || self.reprime_pending
     }
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
@@ -553,8 +652,7 @@ mod tests {
             channels: consts::CH,
             sample_rate: NonZeroU32::new(consts::SR).expect("fixture rate is non-zero"),
         };
-        let controls = StretchControls::new(1.0);
-        let config = WarpConfig::builder().stretch(controls).build();
+        let config = WarpConfig::builder().speed(1.0).build();
         let mut warp = Warp::new((), &config);
         let publisher = warp.take_publisher().expect("test Warp owns its publisher");
         let renderer = warp.renderer(spec, pools());

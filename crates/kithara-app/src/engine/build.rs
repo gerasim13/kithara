@@ -70,7 +70,6 @@ pub(crate) fn build(
         |deck| {
             StateController::new(
                 deck.queue.control().clone(),
-                Arc::clone(&deck.timestretch),
                 deck.cancel_child(),
                 handle.clone(),
             )

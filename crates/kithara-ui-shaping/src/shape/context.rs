@@ -121,6 +121,55 @@ impl TextContext {
         self.shape_run(content, FaceStyle::from(style.into()), max_width)
     }
 
+    /// Shapes one line, replacing overflowing graphemes with an ellipsis.
+    ///
+    /// Line separators become spaces. If even the ellipsis does not fit,
+    /// returns an empty line.
+    #[must_use]
+    pub fn shape_elided<'a, S: Into<TextStyle>>(
+        &mut self,
+        content: &'a str,
+        style: S,
+        max_width: f32,
+    ) -> (Cow<'a, str>, GlyphRun) {
+        let style = FaceStyle::from(style.into());
+        let content = if content.contains(['\r', '\n', '\u{2028}', '\u{2029}']) {
+            Cow::Owned(content.replace(['\r', '\n', '\u{2028}', '\u{2029}'], " "))
+        } else {
+            Cow::Borrowed(content)
+        };
+        let run = self.shape_run(&content, style, None);
+        if run.width() <= max_width {
+            return (content, run);
+        }
+        let ellipsis = self.shape_run("\u{2026}", style, None);
+        if ellipsis.width() > max_width {
+            return (Cow::Borrowed(""), self.shape_run("", style, None));
+        }
+        let mut boundaries = content.grapheme_indices(true);
+        let mut remaining = boundaries.clone().count();
+        let mut fitted = String::from("\u{2026}");
+        let mut fitted_run = ellipsis;
+        loop {
+            let middle = remaining / 2;
+            let mut tail = boundaries.clone();
+            let Some((boundary, _)) = tail.by_ref().take(remaining).nth(middle) else {
+                break;
+            };
+            let candidate = format!("{}\u{2026}", &content[..boundary]);
+            let candidate_run = self.shape_run(&candidate, style, None);
+            if candidate_run.width() <= max_width {
+                fitted = candidate;
+                fitted_run = candidate_run;
+                boundaries = tail;
+                remaining -= middle + 1;
+            } else {
+                remaining = middle;
+            }
+        }
+        (Cow::Owned(fitted), fitted_run)
+    }
+
     /// Shapes one editable line and returns the caret offset of every
     /// grapheme boundary, the end of the text included.
     #[must_use]
