@@ -8,6 +8,7 @@ use super::{
     chain::{Chain, Origin, Side},
     config::ChainConfig,
 };
+use crate::consts;
 
 /// The long chains of a source set, and how much of it the call graph reaches.
 #[derive(Debug, Serialize)]
@@ -56,15 +57,16 @@ fn shorter(chain: &Chain) -> usize {
         .unwrap_or_default()
 }
 
-/// The `## Parallel chains` section: one table row per chain, and the
-/// coverage of the call graph.
+/// The parallel-chain section: one table row per chain, and the coverage of
+/// the call graph.
 pub(crate) fn markdown(report: &ChainReport) -> String {
     let coverage = &report.coverage;
     let mut output = format!(
-        "## Parallel chains\n\n\
+        "{}\n\n\
          - Chains: {}\n\
          - Functions: {}; private functions no resolved call reaches: {} (listed in \
          `chains.json`)\n\n",
+        consts::PARALLEL_CHAINS,
         report.chains.len(),
         coverage.functions,
         coverage.unreached_private.len(),
