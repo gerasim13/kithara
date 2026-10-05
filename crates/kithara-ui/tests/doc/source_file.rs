@@ -9,16 +9,17 @@ use kithara_ui::{
 use tempfile::TempDir;
 
 fn rooted() -> (TempDir, FileResolver) {
-    let root = TempDir::new().unwrap();
-    fs::create_dir_all(root.path().join("modules/deck")).unwrap();
-    fs::write(root.path().join("player.klayout.ron"), "(id: \"player\")").unwrap();
+    let root = TempDir::new().expect("create the fixture root");
+    fs::create_dir_all(root.path().join("modules/deck")).expect("create the module directory");
+    fs::write(root.path().join("player.klayout.ron"), "(id: \"player\")")
+        .expect("write the layout");
     fs::write(
         root.path().join("modules/deck/transport.kmodule.ron"),
         "(id: \"transport\")",
     )
-    .unwrap();
-    fs::write(root.path().join("sprites.bin"), [0xff, 0x00, 0xfe]).unwrap();
-    let resolver = FileResolver::new(root.path()).unwrap();
+    .expect("write the module");
+    fs::write(root.path().join("sprites.bin"), [0xff, 0x00, 0xfe]).expect("write the sprites");
+    let resolver = FileResolver::new(root.path()).expect("resolve the fixture root");
     (root, resolver)
 }
 

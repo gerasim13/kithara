@@ -1,8 +1,4 @@
 #![forbid(unsafe_code)]
-#![expect(
-    clippy::unwrap_used,
-    reason = "integration test crate - unwraps are acceptable in test code"
-)]
 
 use kithara_test_dylib as _;
 
@@ -18,6 +14,7 @@ mod live_stress_real_stream;
 mod phase_continuity;
 mod red_flaky_small_cache_hot_refetch;
 mod red_leak_native_drm_seek_resume;
+mod saw_chunk;
 mod startup_no_eager_size_probe_storm;
 mod stress_seek_abr;
 mod stress_seek_abr_audio;

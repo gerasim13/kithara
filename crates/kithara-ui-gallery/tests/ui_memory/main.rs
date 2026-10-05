@@ -7,9 +7,5 @@
 //! measures, and the two hosts are asked one after the other rather than at
 //! once.
 
-use kithara_ui_gallery::{app, capture, cli, fixture};
-#[cfg(feature = "masonry")]
-use kithara_ui_gallery::{custom, demo, host};
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod checks;

@@ -16,7 +16,7 @@ const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;
 const TARGET_BPM: f64 = 120.0;
 
-fn samples(asset: Asset) -> Vec<f32> {
+fn samples(asset: &Asset) -> Vec<f32> {
     let bytes = asset.bytes();
     let header = kithara_test_fixtures::signal::header(SAMPLE_RATE, CHANNELS, Some(0));
     bytes[header.len()..]
@@ -27,7 +27,7 @@ fn samples(asset: Asset) -> Vec<f32> {
 
 fn rhythm(style: &str, control: &str) -> Vec<f32> {
     let name = format!("rhythm_wav_{style}_{control}");
-    samples(by_name(&name).unwrap_or_else(|| panic!("missing `{name}`")))
+    samples(&by_name(&name).unwrap_or_else(|| panic!("missing `{name}`")))
 }
 
 fn rhythm_controls(style: &str) -> [Vec<f32>; 4] {
@@ -195,37 +195,37 @@ fn static_rhythmic_oracle_rejects_invalid_stems_for_the_expected_reason(
 
 #[kithara::fixture]
 fn deck_a() -> Vec<f32> {
-    samples(rhythm_wav_deck_a_120bpm_48k())
+    samples(&rhythm_wav_deck_a_120bpm_48k())
 }
 
 #[kithara::fixture]
 fn deck_b() -> Vec<f32> {
-    samples(rhythm_wav_deck_b_120bpm_48k())
+    samples(&rhythm_wav_deck_b_120bpm_48k())
 }
 
 #[kithara::fixture]
 fn deck_c() -> Vec<f32> {
-    samples(rhythm_wav_deck_c_120bpm_48k())
+    samples(&rhythm_wav_deck_c_120bpm_48k())
 }
 
 #[kithara::fixture]
 fn deck_d() -> Vec<f32> {
-    samples(rhythm_wav_deck_d_120bpm_48k())
+    samples(&rhythm_wav_deck_d_120bpm_48k())
 }
 
 #[kithara::fixture]
 fn deck_b_one_frame_late() -> Vec<f32> {
-    samples(rhythm_wav_deck_b_one_frame_late_120bpm_48k())
+    samples(&rhythm_wav_deck_b_one_frame_late_120bpm_48k())
 }
 
 #[kithara::fixture]
 fn deck_b_missing_beat() -> Vec<f32> {
-    samples(rhythm_wav_deck_b_missing_beat_120bpm_48k())
+    samples(&rhythm_wav_deck_b_missing_beat_120bpm_48k())
 }
 
 #[kithara::fixture]
 fn deck_b_one_beat_bar_late() -> Vec<f32> {
-    samples(rhythm_wav_deck_b_one_beat_bar_late_120bpm_48k())
+    samples(&rhythm_wav_deck_b_one_beat_bar_late_120bpm_48k())
 }
 
 #[kithara::fixture]

@@ -184,8 +184,11 @@ mod tests {
         let config = EqConfig::builder(pools()).build();
         let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE)
             .unwrap_or_else(|error| panic!("test isolator: {error}"));
-        let tone =
-            |n: usize| (n as f32 * TONE_HZ * std::f32::consts::TAU / SAMPLE_RATE as f32).sin();
+        let rate: f32 = SAMPLE_RATE.as_();
+        let tone = |n: usize| {
+            let n: f32 = n.as_();
+            (n * TONE_HZ * std::f32::consts::TAU / rate).sin()
+        };
         let mut previous = eq.process_sample(tone(0));
         let mut max_step = 0.0_f32;
         for n in 1..SAMPLE_RATE as usize {
@@ -198,7 +201,7 @@ mod tests {
             }
             previous = out;
         }
-        let slope = TONE_HZ * std::f32::consts::TAU / SAMPLE_RATE as f32;
+        let slope = TONE_HZ * std::f32::consts::TAU / rate;
         let smoothing = config.smoothing();
         let rate = NonZeroU32::new(SAMPLE_RATE).expect("static sample rate is non-zero");
         let coeff =

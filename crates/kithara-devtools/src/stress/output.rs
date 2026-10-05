@@ -333,11 +333,7 @@ fn terminate_child(child: &mut Child) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        env, fs,
-        io::{Read as _, Write as _},
-        process,
-    };
+    use std::{env, fs, process};
 
     use tempfile::tempdir;
 
