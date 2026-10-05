@@ -1973,6 +1973,63 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     }
 }
 
+#[test]
+fn a_ui_owned_branch_push_routes_to_the_gpu_suite_and_requires_its_verdict() {
+    let ci = github_workflow("ci.yml");
+    let jobs = workflow_jobs(&ci);
+    let gate = workflow_job(jobs, "gate");
+    let outputs = mapping_field(gate, "outputs")
+        .as_mapping()
+        .expect("the gate publishes ownership selection");
+    assert_eq!(
+        mapping_field(outputs, "ui_required").as_str(),
+        Some("${{ steps.ui.outputs.ui_required }}")
+    );
+    let selection = named_step(gate, "Select UI ownership");
+    assert_eq!(mapping_field(selection, "id").as_str(), Some("ui"));
+    let script = mapping_field(selection, "run")
+        .as_str()
+        .expect("the gate reads the canonical scoped ownership selection");
+    assert!(script.contains("ui_required=$(just ci touched --lane ui)"));
+    assert!(script.contains("echo \"ui_required=$ui_required\" >> \"$GITHUB_OUTPUT\""));
+
+    let ui = workflow_job(jobs, "ui");
+    let condition = mapping_field(ui, "if")
+        .as_str()
+        .expect("UI scheduling has a guard");
+    assert!(condition.contains("vars.KITHARA_GPU_RUNNER_LABELS != ''"));
+    assert!(condition.contains("needs.gate.outputs.ui_required == 'true'"));
+    assert_eq!(mapping_field(ui, "uses").as_str(), Some("./.github/workflows/ui.yml"));
+
+    let required = first_step(workflow_job(jobs, "required"));
+    let env = mapping_field(required, "env")
+        .as_mapping()
+        .expect("the aggregate reads automatic UI admission");
+    assert_eq!(
+        mapping_field(env, "TOUCHED_UI_REQUIRED").as_str(),
+        Some("${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.gate.outputs.ui_required == 'true' }}")
+    );
+    let verdict = mapping_field(required, "run")
+        .as_str()
+        .expect("the aggregate judges job results");
+    for (selected, result, accepted) in [
+        ("true", "skipped", false),
+        ("true", "failure", false),
+        ("true", "success", true),
+        ("false", "skipped", true),
+    ] {
+        let results = serde_json::json!({"ui": {"result": result}});
+        let output = std::process::Command::new("bash")
+            .args(["-c", verdict])
+            .env("RESULTS", results.to_string())
+            .env("REQUIRED_LANES", "")
+            .env("TOUCHED_UI_REQUIRED", selected)
+            .output()
+            .expect("the real aggregate script executes");
+        assert_eq!(output.status.success(), accepted, "selected={selected}, result={result}");
+    }
+}
+
 /// Where a lane builds is `ci lane`'s to choose: the first free slot of the
 /// lane's pool under the runner's build root. A workflow that names the build
 /// directory sends every job of the lane to one directory, where the lane
