@@ -167,8 +167,8 @@ mod tests {
         let centred = CrossfadeSettings::new(1.0, CrossfadeCurve::EqualPower, 1.0, 0.5)
             .expect("valid settings");
         let mut previous = centred.gains(0.0);
-        for step in 1..=100 {
-            let gains = centred.gains(step as f32 / 100.0);
+        for step in 1..=100_u8 {
+            let gains = centred.gains(f32::from(step) / 100.0);
             assert!(gains.0 <= previous.0);
             assert!(gains.1 >= previous.1);
             previous = gains;

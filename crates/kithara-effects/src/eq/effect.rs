@@ -126,13 +126,13 @@ mod tests {
         }
     }
 
-    fn test_chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+    fn test_chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            sample_buffer(pools, &samples),
+            sample_buffer(pools, samples),
         )
     }
 
@@ -155,7 +155,7 @@ mod tests {
         let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         let warmup = eq_silence[..4096].to_vec();
-        let _ = eq.process(test_chunk(&pools, spec, warmup));
+        let _ = eq.process(test_chunk(&pools, spec, &warmup));
 
         let num_frames: u16 = 44100;
         let samples = eq_sine_1000;
@@ -163,7 +163,7 @@ mod tests {
         let input_rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 
@@ -217,7 +217,7 @@ mod tests {
         eq.set_gain(0, GainDb::MAX);
         let spec = EqFixture::spec(2, 44100);
         let samples = eq_half;
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let _ = eq.process(chunk);
 
         eq.reset();
@@ -388,13 +388,13 @@ mod tests {
         let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         let warmup = eq_sine_1000[..4096].to_vec();
-        let chunk = test_chunk(&pools, spec, warmup);
+        let chunk = test_chunk(&pools, spec, &warmup);
         let _ = eq.process(chunk);
 
         eq.set_gain(0, GainDb::MAX);
 
         let signal = eq_transition;
-        let chunk = test_chunk(&pools, spec, signal);
+        let chunk = test_chunk(&pools, spec, &signal);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 
@@ -427,7 +427,7 @@ mod tests {
         }
 
         let samples = eq_half[..sample_len].to_vec();
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let result = eq.process(chunk);
         assert!(result.is_some());
         assert_eq!(result.unwrap().samples.len(), sample_len);
@@ -459,7 +459,7 @@ mod tests {
             }
 
             let samples = eq_finite.clone();
-            let chunk = test_chunk(&pools, spec, samples);
+            let chunk = test_chunk(&pools, spec, &samples);
             let output = eq.process(chunk).unwrap();
             for (i, &s) in output.samples.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
@@ -480,7 +480,7 @@ mod tests {
         samples[10] = f32::NAN;
         samples[20] = f32::INFINITY;
         samples[30] = f32::NEG_INFINITY;
-        let chunk = test_chunk(&pools, spec, samples);
+        let chunk = test_chunk(&pools, spec, &samples);
         let output = eq.process(chunk).unwrap();
 
         for (i, &s) in output.samples.iter().enumerate() {
@@ -509,7 +509,7 @@ mod tests {
             eq.set_gain(2, gain);
 
             let samples = eq_oscillation.clone();
-            let chunk = test_chunk(&pools, spec, samples);
+            let chunk = test_chunk(&pools, spec, &samples);
             let output = eq.process(chunk).unwrap();
             for &s in &output.samples[..] {
                 assert!(s.is_finite());
@@ -518,8 +518,7 @@ mod tests {
     }
 
     fn converge_smoother(pools: &Pools, eq: &mut EqEffect, spec: AudioSpec, silence: &[f32]) {
-        let samples = silence.to_vec();
-        let chunk = test_chunk(pools, spec, samples);
+        let chunk = test_chunk(pools, spec, silence);
         let _ = eq.process(chunk);
     }
 
@@ -533,7 +532,7 @@ mod tests {
         let input_rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
-        let chunk = test_chunk(pools, spec, samples.to_vec());
+        let chunk = test_chunk(pools, spec, samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 

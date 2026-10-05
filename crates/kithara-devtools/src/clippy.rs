@@ -10,6 +10,11 @@ use crate::{sccache, verdict::ChildFailure};
 /// few: see [`sccache::clippy_cleared`] for why a workstation and a CI job want
 /// opposite halves of a trade they cannot both have.
 ///
+/// The gate lints every target, not only the libraries and binaries Cargo picks
+/// by default: `#[cfg(test)]` modules, integration tests, benches and examples
+/// compile only under their own targets, and the lint policy holds them to the
+/// same standard.
+///
 /// On macOS the gate also lints the Apple product features.
 ///
 /// # Errors
@@ -24,7 +29,7 @@ pub(crate) fn run() -> Result<()> {
     const APPLE_FEATURES: &str = "kithara-ffi/apple";
 
     let mut cmd = Command::new("cargo");
-    cmd.args(["clippy", "--workspace"]);
+    cmd.args(["clippy", "--workspace", "--all-targets"]);
     if cfg!(target_os = "macos") {
         cmd.args(["--features", APPLE_FEATURES]);
     }

@@ -694,6 +694,7 @@ async fn census_provenance(
     );
 
     census.close().await;
+    drop(trace);
     Some(Take { rendered, ordered })
 }
 

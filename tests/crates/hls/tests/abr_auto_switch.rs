@@ -48,8 +48,7 @@ async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> Cr
     let init_segment = Arc::new(hls_header_thirty);
     let pcm_data = Arc::new(hls_pcm_thirty);
 
-    let segment_duration = consts::D.segment_size as f64
-        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_duration_secs();
 
     TestServerHelper::new()
         .await

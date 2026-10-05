@@ -160,11 +160,11 @@ fn settle(
     ui.views().settle(published, &Interval, view)
 }
 
-fn write(key: &str, value: WriteValue) -> Option<UiEvent> {
-    Some(UiEvent::Write {
+fn write(key: &str, value: WriteValue) -> UiEvent {
+    UiEvent::Write {
         key: key.to_owned(),
         value,
-    })
+    }
 }
 
 const PRESSABLE: &str = r#"Pressable(id: "anchor",
@@ -180,11 +180,11 @@ fn a_secondary_press_delivers_its_own_slot_and_a_primary_press_the_other() {
             "deck-b/anchor",
             &ControlAction::SecondaryActivate
         ),
-        write("fixture.menu@deck=b", WriteValue::Trigger)
+        Some(write("fixture.menu@deck=b", WriteValue::Trigger))
     );
     assert_eq!(
         delivers(PRESSABLE, "deck-b/anchor", &ControlAction::Activate),
-        write("fixture.fire@deck=b", WriteValue::Trigger)
+        Some(write("fixture.fire@deck=b", WriteValue::Trigger))
     );
 }
 
@@ -197,11 +197,11 @@ fn a_stepper_resets_through_its_reset_slot() {
 
     assert_eq!(
         delivers(TEMPO, "deck-b/tempo", &ControlAction::Activate),
-        write("fixture.reset@deck=b", WriteValue::Trigger)
+        Some(write("fixture.reset@deck=b", WriteValue::Trigger))
     );
     assert_eq!(
         delivers(TEMPO, "deck-b/tempo", &ControlAction::StepScalar(-1.0)),
-        write("fixture.rate@deck=b", WriteValue::Step(-1.0))
+        Some(write("fixture.rate@deck=b", WriteValue::Step(-1.0)))
     );
 }
 
@@ -223,7 +223,7 @@ fn a_wave_delivers_seek_zoom_and_loop_edges_each_to_its_slot() {
     ] {
         assert_eq!(
             delivers(WAVE, path, &ControlAction::SetScalar(0.5)),
-            write(key, WriteValue::Scalar(0.5)),
+            Some(write(key, WriteValue::Scalar(0.5))),
             "{path}"
         );
     }
@@ -246,10 +246,10 @@ fn a_table_delivers_each_column_width_scoped_by_its_column() {
                 &format!("deck-b/tracks/width/{column}"),
                 &ControlAction::SetScalar(0.4)
             ),
-            write(
+            Some(write(
                 &format!("fixture.width@column={column},deck=b"),
                 WriteValue::Scalar(0.4)
-            ),
+            )),
             "{column}"
         );
     }
@@ -323,7 +323,10 @@ fn a_text_input_delivers_what_was_typed_to_its_query() {
             "deck-b/browser/search",
             &ControlAction::Text("loc".to_owned())
         ),
-        write("fixture.query@deck=b", WriteValue::Text("loc".to_owned()))
+        Some(write(
+            "fixture.query@deck=b",
+            WriteValue::Text("loc".to_owned())
+        ))
     );
 }
 
@@ -331,7 +334,7 @@ fn a_text_input_delivers_what_was_typed_to_its_query() {
 fn pressing_a_module_header_delivers_its_collapse() {
     assert_eq!(
         delivers(PRESSABLE, "deck-b/header", &ControlAction::Activate),
-        write("fixture.fold@deck=b", WriteValue::Trigger)
+        Some(write("fixture.fold@deck=b", WriteValue::Trigger))
     );
 }
 
@@ -346,10 +349,10 @@ fn a_preset_selector_delivers_the_preset_it_picked() {
             "deck-b/presets",
             &ControlAction::Text("player.klayout.ron".to_owned())
         ),
-        write(
+        Some(write(
             "fixture.preset@deck=b",
             WriteValue::Text("player.klayout.ron".to_owned())
-        )
+        ))
     );
 }
 
@@ -361,7 +364,7 @@ fn a_settings_button_delivers_its_trigger() {
 
     assert_eq!(
         delivers(SETTINGS, "deck-b/settings", &ControlAction::Activate),
-        write("fixture.settings@deck=b", WriteValue::Trigger)
+        Some(write("fixture.settings@deck=b", WriteValue::Trigger))
     );
 }
 
@@ -373,11 +376,11 @@ fn moving_one_end_of_a_range_delivers_the_whole_interval() {
 
     assert_eq!(
         delivers(RANGE, "deck-b/span/min", &ControlAction::SetScalar(0.125)),
-        write("fixture.span@deck=b", WriteValue::Range(0.125, 0.75))
+        Some(write("fixture.span@deck=b", WriteValue::Range(0.125, 0.75)))
     );
     assert_eq!(
         delivers(RANGE, "deck-b/span/max", &ControlAction::SetScalar(0.875)),
-        write("fixture.span@deck=b", WriteValue::Range(0.25, 0.875))
+        Some(write("fixture.span@deck=b", WriteValue::Range(0.25, 0.875)))
     );
 }
 
@@ -393,7 +396,7 @@ fn a_placement_delivers_the_point_it_came_to_rest_at() {
 
     assert_eq!(
         delivers(PLACED, "deck-b/puck", &ControlAction::Place(at)),
-        write("fixture.at@deck=b", WriteValue::Point(at))
+        Some(write("fixture.at@deck=b", WriteValue::Point(at)))
     );
 }
 
@@ -425,7 +428,10 @@ fn an_action_inside_a_popover_shut_on_any_action_shuts_it() {
     let host = settle(&ui, "deck-b/fire", ControlAction::Activate, &mut view);
 
     assert!(!view.flag("deck-b/menu"));
-    assert_eq!(host, write("fixture.fire@deck=b", WriteValue::Trigger));
+    assert_eq!(
+        host,
+        Some(write("fixture.fire@deck=b", WriteValue::Trigger))
+    );
 }
 
 #[kithara::test]
@@ -440,7 +446,10 @@ fn an_action_inside_a_popover_shut_on_a_tap_outside_leaves_it_open() {
         let host = settle(&ui, "deck-b/fire", ControlAction::Activate, &mut view);
 
         assert!(view.flag("deck-b/menu"));
-        assert_eq!(host, write("fixture.fire@deck=b", WriteValue::Trigger));
+        assert_eq!(
+            host,
+            Some(write("fixture.fire@deck=b", WriteValue::Trigger))
+        );
 
         let host = settle(&ui, "deck-b/menu", ControlAction::Activate, &mut view);
 
@@ -578,10 +587,10 @@ fn search_delivers_text_by_binding_when_its_id_changes() {
                 &format!("deck-b/{id}"),
                 &ControlAction::Text("needle".to_owned())
             ),
-            write(
+            Some(write(
                 "fixture.query@deck=b",
                 WriteValue::Text("needle".to_owned())
-            )
+            ))
         );
     }
 }

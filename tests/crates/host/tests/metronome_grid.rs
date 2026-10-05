@@ -148,7 +148,7 @@ struct ComputedBeat {
 
 impl ComputedBeat {
     fn downbeat(self) -> bool {
-        self.ordinal % consts::BEATS_PER_BAR == 0
+        self.ordinal.is_multiple_of(consts::BEATS_PER_BAR)
     }
 }
 

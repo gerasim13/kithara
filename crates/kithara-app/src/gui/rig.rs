@@ -166,7 +166,7 @@ impl Rig {
     }
 
     fn with_host(config: &AppConfig, host: AppHost, broadcast: Broadcaster) -> Self {
-        let (analysis, _) = AnalysisHandle::channel(watch::channel(Default::default()).1);
+        let (analysis, _) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
         Self::build(config, host, broadcast, analysis.clone(), |deck| {
             StateController::new(
                 deck.queue.control().clone(),
@@ -255,7 +255,7 @@ impl Rig {
             &config,
             host,
             Broadcaster::new(AppBroadcastConfig::default()),
-            AnalysisHandle::channel(watch::channel(Default::default()).1).0,
+            AnalysisHandle::channel(watch::channel(Arc::default()).1).0,
             |deck| {
                 let queue = deck.queue.control().clone();
                 let state = Arc::new(kithara::platform::sync::Mutex::new(

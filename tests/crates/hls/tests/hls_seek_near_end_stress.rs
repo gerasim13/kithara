@@ -100,6 +100,17 @@ enum IterOutcome {
     },
 }
 
+impl IterOutcome {
+    /// An attempt that failed with no seek target to report.
+    const fn errored_without_target(iter: u32, error: String) -> Self {
+        Self::Errored {
+            iter,
+            target: f64::NAN,
+            error,
+        }
+    }
+}
+
 /// Every per-phase budget must be reachable. The iteration deadline backstops
 /// the steps that own no budget; a phase budget at or above it can never fire,
 /// so the phase would be reported by the backstop, which does not know which
@@ -190,11 +201,10 @@ async fn run_one_attempt(
         let src = match ResourceSrc::parse(url.as_str()) {
             Ok(src) => src,
             Err(e) => {
-                return IterOutcome::Errored {
+                return IterOutcome::errored_without_target(
                     iter,
-                    target: f64::NAN,
-                    error: format!("ResourceSrc::parse failed: {e}"),
-                };
+                    format!("ResourceSrc::parse failed: {e}"),
+                );
             }
         };
         let builder = ResourceConfig::for_src(src);
@@ -215,11 +225,10 @@ async fn run_one_attempt(
         {
             Ok(track_id) => track_id,
             Err(error) => {
-                return IterOutcome::Errored {
+                return IterOutcome::errored_without_target(
                     iter,
-                    target: f64::NAN,
-                    error: format!("queue.append failed: {error}"),
-                };
+                    format!("queue.append failed: {error}"),
+                );
             }
         };
 
@@ -234,11 +243,7 @@ async fn run_one_attempt(
             .run(move |q| q.select(track_id, Transition::None))
             .await
         {
-            return IterOutcome::Errored {
-                iter,
-                target: f64::NAN,
-                error: format!("queue.select failed: {e}"),
-            };
+            return IterOutcome::errored_without_target(iter, format!("queue.select failed: {e}"));
         }
         queue.run(QueueControl::play).await;
 
@@ -246,11 +251,7 @@ async fn run_one_attempt(
         if let Err(e) =
             wait_for_loader_done_event(&mut rx, &queue, track_id, consts::LOAD_DEADLINE).await
         {
-            return IterOutcome::Errored {
-                iter,
-                target: f64::NAN,
-                error: format!("loader: {e}"),
-            };
+            return IterOutcome::errored_without_target(iter, format!("loader: {e}"));
         }
 
         phase.set(AttemptPhase::Warmup);
@@ -262,22 +263,15 @@ async fn run_one_attempt(
         )
         .await
         {
-            return IterOutcome::Errored {
-                iter,
-                target: f64::NAN,
-                error: format!("warmup: {e}"),
-            };
+            return IterOutcome::errored_without_target(iter, format!("warmup: {e}"));
         }
 
         phase.set(AttemptPhase::Seek);
-        let duration = if let Some(d) = queue.duration_seconds() {
-            d
-        } else {
-            return IterOutcome::Errored {
+        let Some(duration) = queue.duration_seconds() else {
+            return IterOutcome::errored_without_target(
                 iter,
-                target: f64::NAN,
-                error: "duration unknown after Loaded".into(),
-            };
+                "duration unknown after Loaded".into(),
+            );
         };
 
         let target = (duration - target_offset).max(0.0);
@@ -378,7 +372,7 @@ async fn wait_for_seek_landed(
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    if ((position_ms as f64 / 1000.0) - target).abs() < 1.0 {
+                    if (Duration::from_millis(position_ms).as_secs_f64() - target).abs() < 1.0 {
                         return Ok(());
                     }
                 }
@@ -450,7 +444,7 @@ async fn wait_for_post_seek_advance(
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    let p = position_ms as f64 / 1000.0;
+                    let p = Duration::from_millis(position_ms).as_secs_f64();
                     if (p - target) >= min_advance {
                         return Ok(());
                     }
@@ -518,23 +512,21 @@ async fn hls_seek_near_end_fresh_player_stress(
     for iter in 0..consts::FRESH_ITERATIONS {
         let offset = consts::NEAR_END_OFFSETS_S[(iter as usize) % consts::NEAR_END_OFFSETS_S.len()];
         let phase = Cell::new(AttemptPhase::Setup);
-        let outcome = match timeout(
+        let outcome = timeout(
             consts::ITER_DEADLINE,
             run_one_attempt(iter, &url, offset, backend, &phase),
         )
         .await
-        {
-            Ok(o) => o,
-            Err(_) => IterOutcome::Errored {
+        .unwrap_or_else(|_| {
+            IterOutcome::errored_without_target(
                 iter,
-                target: f64::NAN,
-                error: format!(
+                format!(
                     "iteration exceeded ITER_DEADLINE ({:?}) while in {}",
                     consts::ITER_DEADLINE,
                     phase.get().label(),
                 ),
-            },
-        };
+            )
+        });
         outcomes.push(outcome);
     }
 

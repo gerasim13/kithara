@@ -58,9 +58,10 @@ fn entered_renderer(plan: WarpPlan, backend: StretchKind, keylock: bool) -> Warp
 }
 
 fn source_span(renderer: &WarpRenderer, start: u64, frames: usize) -> AudioChunk {
-    let samples: Vec<f32> = (0..frames)
+    let samples: Vec<f32> = (start..)
+        .take(frames)
         .flat_map(|frame| {
-            let value = f32::from(u16::try_from((start as usize + frame) % 97).unwrap_or(0));
+            let value = f32::from(u16::try_from(frame % 97).unwrap_or(0));
             [value / 97.0, -value / 97.0]
         })
         .collect();
@@ -253,7 +254,7 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
 
 #[kithara::test]
 fn a_renderer_without_an_entered_plan_names_no_entry_source() {
-    let (mut renderer, _) = projection::planned_renderer(WarpConfig::builder().speed(1.0).build());
+    let (mut renderer, _) = projection::planned_renderer(&WarpConfig::builder().speed(1.0).build());
     renderer.prepare(spec());
     assert_eq!(renderer.entry_source(), None);
     let input = source_span(&renderer, 0, 16);

@@ -268,11 +268,7 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    /// Open a track for the given `(codec, container)` pair, picking the
-    /// `AudioFileServices` file-type hint internally. The caller is
-    /// expected to have checked [`Self::supports`] (the factory does);
-    /// unsupported combinations return [`DecodeError::UnsupportedCodec`].
-
+    /// [`Self::open_for_with_mode_and_pool`] on the test pools.
     #[cfg(test)]
     pub(crate) fn open_for_with_mode(
         source: BoxedSource,
@@ -284,6 +280,10 @@ impl AppleAudioFileDemuxer {
         Self::open_for_with_mode_and_pool(source, codec, container, open_mode, &pools)
     }
 
+    /// Open a track for the given `(codec, container)` pair, picking the
+    /// `AudioFileServices` file-type hint internally. The caller is
+    /// expected to have checked [`Self::supports`] (the factory does);
+    /// unsupported combinations return [`DecodeError::UnsupportedCodec`].
     pub(crate) fn open_for_with_mode_and_pool<S>(
         source: BoxedSource,
         codec: AudioCodec,

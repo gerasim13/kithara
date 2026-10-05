@@ -494,8 +494,8 @@ async fn streaming_without_writer_still_completes() {
 
     gate.wait().await;
 
-    let completion = completion.lock();
-    let (bytes, has_headers, has_no_error) = completion.expect("completion must be recorded");
+    let recorded = *completion.lock();
+    let (bytes, has_headers, has_no_error) = recorded.expect("completion must be recorded");
     assert_eq!(bytes, 0);
     assert!(has_headers);
     assert!(has_no_error);

@@ -50,11 +50,10 @@ async fn prefetch_403_returns_err_quickly(
     )?;
     let elapsed = started.elapsed();
 
-    let err = match result {
-        Ok(_) => panic!(
+    let Err(err) = result else {
+        panic!(
             "Stream::<Hls<TestPools>>::new must fail when key server returns 403; got Ok in {elapsed:?}"
-        ),
-        Err(e) => e,
+        );
     };
     let msg = format!("{err:?}");
     assert!(

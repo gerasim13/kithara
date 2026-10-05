@@ -745,6 +745,7 @@ mod scheduler_tests {
             })
             .await;
             receive_chunks(&trace, &handle, &mut pop, 1).await;
+            drop(trace);
         }
 
         #[kithara::test(tokio, flash(false))]
@@ -789,6 +790,7 @@ mod scheduler_tests {
                 })
                 .await;
             receive_chunks(&trace, &handle, &mut pop, 1).await;
+            drop(trace);
         }
 
         #[kithara::test(tokio, flash(false))]
@@ -809,6 +811,7 @@ mod scheduler_tests {
             while pop().is_some() {}
             let seen = trace.events().len();
             pass_after(&trace, &handle, seen, |_| true).await;
+            drop(trace);
             assert!(pop().is_none(), "no chunks should arrive after unregister");
         }
 
@@ -903,10 +906,11 @@ mod scheduler_tests {
                 }
                 while pop_b().is_some() {}
                 if delivered == SOURCE_CHUNKS {
-                    return;
+                    break;
                 }
                 admitted_after(&trace, &handle, seen).await;
             }
+            drop(trace);
         }
     }
 }

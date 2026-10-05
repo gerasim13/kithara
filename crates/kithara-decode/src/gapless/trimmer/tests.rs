@@ -57,14 +57,14 @@ fn silent_chunk(spec: AudioSpec, frame_offset: u64, frames: usize, input: &[f32]
     )
 }
 
-fn custom_chunk(spec: AudioSpec, frame_offset: u64, pcm: Vec<f32>) -> AudioChunk {
+fn custom_chunk(spec: AudioSpec, frame_offset: u64, pcm: &[f32]) -> AudioChunk {
     AudioChunk::new(
         AudioChunkInfo {
             spec,
             frame_offset,
             ..Default::default()
         },
-        sample_buffer(&pcm),
+        sample_buffer(pcm),
     )
 }
 
@@ -276,7 +276,7 @@ fn codec_priming_drops_leading_frames_and_fades_in(
     let pcm = trim_codec_priming_drops_leading_frames_and_fades_in;
     let mut trimmer = GaplessTrimmer::codec_priming(trim, spec.sample_rate.get());
 
-    let ready = trimmer.push(custom_chunk(spec, 0, pcm));
+    let ready = trimmer.push(custom_chunk(spec, 0, &pcm));
     let pcm_out = collect_pcm(&ready);
     assert_eq!(pcm_out.len(), total_frames - trim_len);
 
@@ -314,11 +314,11 @@ fn codec_priming_metadata_takes_precedence_when_combined(
     let pcm = trim_codec_priming_metadata_takes_precedence_when_combined;
 
     let mut from_info = metadata_trimmer;
-    let from_info_out = collect_pcm(&from_info.push(custom_chunk(spec, 0, pcm.clone())));
+    let from_info_out = collect_pcm(&from_info.push(custom_chunk(spec, 0, &pcm)));
     assert_eq!(from_info_out[0], 0.5);
 
     let mut from_codec = codec_trimmer;
-    let from_codec_out = collect_pcm(&from_codec.push(custom_chunk(spec, 0, pcm)));
+    let from_codec_out = collect_pcm(&from_codec.push(custom_chunk(spec, 0, &pcm)));
     assert!(from_codec_out[0].abs() < 0.5 * 0.1);
 }
 
@@ -328,7 +328,7 @@ fn silence_trim_below_threshold_is_trimmed(trim_silence_trim_below_threshold_is_
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_below_threshold_is_trimmed;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -344,7 +344,7 @@ fn silence_trim_above_threshold_preserves_audio(
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_above_threshold_preserves_audio;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -360,7 +360,7 @@ fn silence_trim_preserves_quiet_intro_below_threshold_then_above(
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_preserves_quiet_intro_below_threshold_then_above;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -379,7 +379,7 @@ fn silence_trim_min_frames_boundary_under_min(
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_min_frames_boundary_under_min;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -393,7 +393,7 @@ fn silence_trim_min_frames_boundary_at_min(trim_silence_trim_min_frames_boundary
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_min_frames_boundary_at_min;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -415,7 +415,7 @@ fn silence_trim_scan_window_exhausted_preserves_audio(
     let mut trimmer = GaplessTrimmer::silence_trim(params);
 
     let pcm = trim_silence_trim_scan_window_exhausted_preserves_audio;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -431,7 +431,7 @@ fn silence_trim_no_op_with_immediate_content(
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_no_op_with_immediate_content;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -447,7 +447,7 @@ fn silence_trim_trailing_disabled_by_default(
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_trailing_disabled_by_default;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -467,7 +467,7 @@ fn silence_trim_trailing_enabled(trim_silence_trim_trailing_enabled: Vec<f32>) {
 
     let audible_frames = 256;
     let pcm = trim_silence_trim_trailing_enabled;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -512,7 +512,7 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal(
 
     let sine_frames: u32 = 4_800;
     let pcm = trim_trailing_sine;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);
@@ -544,7 +544,7 @@ fn silence_trim_seek_disables_leading_only(trim_silence: Vec<f32>, trim_seek: Ve
     );
     trimmer.notify_seek();
 
-    assert!(trimmer.push(custom_chunk(spec, 128, trim_seek)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 128, &trim_seek)).is_empty());
 
     let mut flushed = trimmer.flush();
     assert_eq!(flushed.len(), 1);
@@ -581,12 +581,12 @@ fn silence_trim_respects_multi_channel_threshold(
 
     assert!(
         trimmer
-            .push(custom_chunk(spec, 0, trim_stereo_silence))
+            .push(custom_chunk(spec, 0, &trim_stereo_silence))
             .is_empty()
     );
     assert!(
         trimmer
-            .push(custom_chunk(spec, 32, trim_stereo_quiet))
+            .push(custom_chunk(spec, 32, &trim_stereo_quiet))
             .is_empty()
     );
 
@@ -606,7 +606,7 @@ fn silence_trim_does_not_introduce_click_at_boundary(
     let mut trimmer = GaplessTrimmer::silence_trim(silence_params(60.0, 32));
 
     let pcm = trim_silence_trim_does_not_introduce_click_at_boundary;
-    assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
+    assert!(trimmer.push(custom_chunk(spec, 0, &pcm)).is_empty());
 
     let flushed = trimmer.flush();
     let pcm_out = collect_pcm(&flushed);

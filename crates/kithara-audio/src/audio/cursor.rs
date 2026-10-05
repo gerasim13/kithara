@@ -715,7 +715,8 @@ mod tests {
             )
             .expect("mono planar read succeeds");
 
-        let want: Vec<f32> = (0..consts::MONO_OUTPUT_FRAMES).map(|i| i as f32).collect();
+        let frames = u16::try_from(consts::MONO_OUTPUT_FRAMES).expect("test frame count fits u16");
+        let want: Vec<f32> = (0..frames).map(f32::from).collect();
         assert_eq!(
             left, want,
             "mono frames must reach the left channel in source order"
@@ -731,14 +732,14 @@ mod tests {
     fn mono_ramp_cursor(pools: &Pools) -> (ChunkCursor, RingConsumer, AudioEvents, PlayheadState) {
         let spec = AudioSpec::new(1, NonZeroU32::new(48_000).expect("test rate"));
         let frames =
-            u32::try_from(consts::MONO_OUTPUT_FRAMES * 2).expect("test frame count fits u32");
-        let samples: Vec<f32> = (0..frames).map(|i| i as f32).collect();
+            u16::try_from(consts::MONO_OUTPUT_FRAMES * 2).expect("test frame count fits u16");
+        let samples: Vec<f32> = (0..frames).map(f32::from).collect();
         let chunk = AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 timestamp: Duration::ZERO,
                 end_timestamp: Duration::from_millis(1),
-                frames,
+                frames: u32::from(frames),
                 ..Default::default()
             },
             sample_buffer(pools, &samples),
