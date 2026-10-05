@@ -63,9 +63,11 @@ async fn wait_for_download_terminal(
         let recv = timeout(remaining, rx.recv());
         match recv.await {
             Ok(Ok(env)) => match env.event {
-                TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => return true,
-                TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }) => return true,
-                TestEvent::File(FileEvent::Error { .. }) => return true,
+                TestEvent::Downloader(
+                    DownloaderEvent::RequestFailed { .. }
+                    | DownloaderEvent::RequestCompleted { .. },
+                )
+                | TestEvent::File(FileEvent::Error { .. }) => return true,
                 _ => {}
             },
             Ok(Err(_)) | Err(_) => return false,

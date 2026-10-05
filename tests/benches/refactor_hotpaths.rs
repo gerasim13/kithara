@@ -163,17 +163,11 @@ fn serve_mp3_with_range(req: Request) -> Response {
             .next()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
+        let last = test_mp3_bytes().len().saturating_sub(1);
         let end = parts
             .next()
-            .and_then(|s| {
-                if s.is_empty() {
-                    None
-                } else {
-                    s.parse::<usize>().ok()
-                }
-            })
-            .unwrap_or(test_mp3_bytes().len().saturating_sub(1))
-            .min(test_mp3_bytes().len().saturating_sub(1));
+            .and_then(|s| s.parse::<usize>().ok())
+            .map_or(last, |end| end.min(last));
 
         if start <= end && start < test_mp3_bytes().len() {
             let chunk = &test_mp3_bytes()[start..=end];

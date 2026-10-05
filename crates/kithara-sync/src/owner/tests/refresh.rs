@@ -86,7 +86,7 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
         .expect("a tempo commit keeps the session axis");
 
     let moved = prepared(&group, track);
-    assert_eq!(transition.issued(), [moved.clone()]);
+    assert_eq!(transition.issued(), std::slice::from_ref(&moved));
     assert!(transition.withdrawn().is_empty());
     assert_eq!(moved.stamp().operation(), planned.stamp().operation());
     assert_eq!(activation(&moved).0, activation(&planned).0);
@@ -284,7 +284,7 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
     };
     assert_eq!(
         transition.issued(),
-        [moved.clone()],
+        std::slice::from_ref(&moved),
         "the root's tempo commit reports the retarget its grandchild deck issued"
     );
     assert_eq!(moved.stamp().member().grid_id(), track);

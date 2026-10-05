@@ -1550,49 +1550,50 @@ mod tests {
             },
             ..TestLaneConfig::default()
         };
-        let mut project = ProjectConfig::default();
-        project.test = TestCommandConfig {
-            lanes: BTreeMap::from([
-                ("product".to_owned(), lane("product")),
-                (
-                    "tools".to_owned(),
-                    TestLaneConfig {
-                        default_backend: Some("local".to_owned()),
-                        undeclared_toggles: vec![consts::FLASH_TOGGLE.to_owned()],
-                        ..lane("tools")
-                    },
-                ),
-                (
-                    "detector".to_owned(),
-                    TestLaneConfig {
-                        default_no_block: Some(true),
-                        ..lane("detector")
-                    },
-                ),
-            ]),
-            net_backends: BTreeMap::from([
-                ("http".to_owned(), TestNetBackendConfig::default()),
-                (
-                    "local".to_owned(),
-                    TestNetBackendConfig {
-                        features: vec!["tools/local".to_owned()],
-                    },
-                ),
-            ]),
-            default_backend: "http".to_owned(),
-            default_lane: "product".to_owned(),
-            nextest_config: ".config/nextest.toml".to_owned(),
-            flash: TestFlashConfig {
-                features: vec!["virtual-time".to_owned()],
-                default: true,
+        ProjectConfig {
+            test: TestCommandConfig {
+                lanes: BTreeMap::from([
+                    ("product".to_owned(), lane("product")),
+                    (
+                        "tools".to_owned(),
+                        TestLaneConfig {
+                            default_backend: Some("local".to_owned()),
+                            undeclared_toggles: vec![consts::FLASH_TOGGLE.to_owned()],
+                            ..lane("tools")
+                        },
+                    ),
+                    (
+                        "detector".to_owned(),
+                        TestLaneConfig {
+                            default_no_block: Some(true),
+                            ..lane("detector")
+                        },
+                    ),
+                ]),
+                net_backends: BTreeMap::from([
+                    ("http".to_owned(), TestNetBackendConfig::default()),
+                    (
+                        "local".to_owned(),
+                        TestNetBackendConfig {
+                            features: vec!["tools/local".to_owned()],
+                        },
+                    ),
+                ]),
+                default_backend: "http".to_owned(),
+                default_lane: "product".to_owned(),
+                nextest_config: ".config/nextest.toml".to_owned(),
+                flash: TestFlashConfig {
+                    features: vec!["virtual-time".to_owned()],
+                    default: true,
+                },
+                no_block: TestNoBlockConfig {
+                    features: vec!["nb-detect".to_owned()],
+                    default: false,
+                },
+                ..TestCommandConfig::default()
             },
-            no_block: TestNoBlockConfig {
-                features: vec!["nb-detect".to_owned()],
-                default: false,
-            },
-            ..TestCommandConfig::default()
-        };
-        project
+            ..ProjectConfig::default()
+        }
     }
 
     /// A mode names the clock and the detector it is about; the rest of the

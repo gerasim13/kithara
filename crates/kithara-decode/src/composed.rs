@@ -1992,12 +1992,12 @@ mod hook_tests {
     }
 
     fn build(
-        trim_silence: Vec<f32>,
+        trim_silence: &[f32],
         demuxer: StubDemuxer,
         log: Arc<Mutex<CallLog>>,
     ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec, crate::test_pools::TestPools> {
         let codec = ConstFrameCodec::new(
-            trim_silence.clone(),
+            trim_silence.to_vec(),
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
@@ -2029,7 +2029,7 @@ mod hook_tests {
     ) {
         let log = Arc::new(Mutex::new(CallLog::default()));
         let demuxer = StubDemuxer::with_outcomes(zero_packet, vec![outcome], Vec::new());
-        let mut decoder = build(trim_silence.clone(), demuxer, Arc::clone(&log));
+        let mut decoder = build(&trim_silence, demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
         assert_eq!(log.lock().unwrap().chunks, vec![expected_signal]);
     }
@@ -2088,7 +2088,7 @@ mod hook_tests {
     ) {
         let log = Arc::new(Mutex::new(CallLog::default()));
         let demuxer = StubDemuxer::with_outcomes(zero_packet, Vec::new(), vec![outcome]);
-        let mut decoder = build(trim_silence.clone(), demuxer, Arc::clone(&log));
+        let mut decoder = build(&trim_silence, demuxer, Arc::clone(&log));
         let _ = decoder.seek(target).unwrap();
         assert_eq!(log.lock().unwrap().seeks, vec![expected_signal]);
     }
@@ -2114,7 +2114,7 @@ mod hook_tests {
             ],
             Vec::new(),
         );
-        let mut decoder = build(trim_silence.clone(), demuxer, Arc::clone(&log));
+        let mut decoder = build(&trim_silence, demuxer, Arc::clone(&log));
 
         for _ in 0..3 {
             let _ = decoder.next_chunk().unwrap();

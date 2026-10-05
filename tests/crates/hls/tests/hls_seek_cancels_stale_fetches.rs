@@ -410,6 +410,7 @@ async fn hls_seek_near_end_skips_prefix(
         consts::POST_SEEK_OBSERVATION,
     );
     queue.close().await;
+    drop(probe_recorder);
 }
 
 async fn observe_post_seek(

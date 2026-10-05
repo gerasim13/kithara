@@ -10,6 +10,7 @@ use kithara::{
     warp::AssetFrame,
 };
 use kithara_integration_tests::{grid::Start, kithara, usdt_trace};
+use num_traits::AsPrimitive;
 
 use super::{
     sync_listening::render_frames,
@@ -208,6 +209,7 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
         "{}: the owner records exactly one proven lane",
         case.id()
     );
+    drop(harness);
 }
 
 #[kithara::test(
@@ -252,6 +254,7 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
         "{}: the owner takes the cancellation of its installed preparation",
         case.id()
     );
+    drop(harness);
 }
 
 #[kithara::test(
@@ -291,6 +294,7 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
         "{}: the sounding deck keeps its slot and plays on",
         case.id()
     );
+    drop(harness);
 }
 
 #[kithara::test(
@@ -329,7 +333,9 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         let built = Window::read(&harness, control);
         let opened = open_window(&mut harness, control).await;
         let (pcm, trace) = render_window(&mut harness, control, None).await;
-        (built, opened, pcm, trace, Window::read(&harness, control))
+        let closed = Window::read(&harness, control);
+        drop(harness);
+        (built, opened, pcm, trace, closed)
     };
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
@@ -408,6 +414,7 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
          different timelines, closings that agree put different audio on one",
         case.id(),
     );
+    drop(harness);
 }
 
 /// Where the sounding deck stood when a measured window opened or closed.
@@ -439,7 +446,7 @@ impl Window {
             .position
             .map(|seconds| seconds * f64::from(case.sample_rate))
             .filter(|frames| frames.is_finite() && *frames >= 0.0)
-            .map(|frames| frames.round() as u64);
+            .map(|frames| frames.round().as_());
         Self {
             frames,
             playing: playback.playing,
@@ -618,10 +625,6 @@ fn level(pcm: &[f32]) -> f32 {
         return 0.0;
     }
     let sum: f64 = pcm.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a level printed into a panic message, not a signal value"
-    )]
-    let rms = (sum / pcm.len() as f64).sqrt() as f32;
-    rms
+    let len: f64 = pcm.len().as_();
+    (sum / len).sqrt().as_()
 }

@@ -36,9 +36,8 @@ async fn html_body_rejected_before_caching(temp_dir: TestTempDir) {
         .build();
 
     let result = Stream::<Hls<TestPools>>::new(config).await;
-    let err = match result {
-        Err(e) => e,
-        Ok(_) => panic!("HTML body from CDN must be rejected"),
+    let Err(err) = result else {
+        panic!("HTML body from CDN must be rejected");
     };
 
     let msg = format!("{err}");

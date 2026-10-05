@@ -93,7 +93,7 @@ fn decode_left_channel(
         decoder
             .track_info()
             .gapless
-            .unwrap_or(GaplessInfo::new(priming, 0)),
+            .unwrap_or_else(|| GaplessInfo::new(priming, 0)),
     );
     let mut left = Vec::new();
     while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {

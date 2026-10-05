@@ -75,6 +75,7 @@ fn render(artifacts: &Path, config: &ProjectConfig, revision: &str) -> Result<St
     )?);
     out.push_str(&architecture(artifacts, budgets.top_contours, revision)?);
     out.push_str(&duplication(artifacts, budgets.similarity_rows, revision)?);
+    out.push_str(&parallel_chains(artifacts, budgets.chain_rows, revision)?);
     Ok(out)
 }
 
@@ -135,7 +136,10 @@ fn assessment(artifacts: &Path, revision: &str) -> Result<String> {
     Ok(out)
 }
 
-fn duplication(artifacts: &Path, rows: usize, revision: &str) -> Result<String> {
+/// The similarity report of the requested commit. A download of a single
+/// artifact is flattened to its contents, so a `report.md` outside the
+/// `similarity-report` directory counts only when its title names it.
+fn similarity_report(artifacts: &Path, revision: &str) -> Result<Option<(PathBuf, String)>> {
     let (report, flattened) = if let Some(report) = find(artifacts, &|path| {
         named(path, consts::SIMILARITY_REPORT)
             && under(path, consts::SIMILARITY_ARTIFACT)
@@ -147,19 +151,57 @@ fn duplication(artifacts: &Path, rows: usize, revision: &str) -> Result<String> 
             named(path, consts::SIMILARITY_REPORT) && at_revision(path, revision)
         })?
         else {
-            return Ok(missing("Duplication", "similarity-report"));
+            return Ok(None);
         };
         (report, true)
     };
     let text = read(&report)?;
     if flattened && !text.starts_with("# Behavioral similarity") {
-        return Ok(missing("Duplication", "similarity-report"));
+        return Ok(None);
     }
+    Ok(Some((report, text)))
+}
+
+/// Where the parallel-chain section of a similarity report begins. The stage
+/// writes it last, under a heading on a line of its own.
+fn chains_start(text: &str) -> Option<usize> {
+    text.rfind(&format!("\n{}\n", consts::PARALLEL_CHAINS))
+        .map(|newline| newline + 1)
+}
+
+fn duplication(artifacts: &Path, rows: usize, revision: &str) -> Result<String> {
+    let Some((_, text)) = similarity_report(artifacts, revision)? else {
+        return Ok(missing("Duplication", "similarity-report"));
+    };
+    let pairs = chains_start(&text).map_or(text.as_str(), |start| &text[..start]);
     let mut out = String::from("\n## Duplication\n\n");
     out.push_str(&capped(
-        &text,
+        pairs,
         rows,
         "the whole report is in the `similarity-report` artifact",
+    ));
+    Ok(out)
+}
+
+/// The chains close a similarity report that runs to megabytes, so the cap on
+/// the duplicated pairs above them never reached them. They carry a budget of
+/// their own.
+fn parallel_chains(artifacts: &Path, rows: usize, revision: &str) -> Result<String> {
+    let Some((report, text)) = similarity_report(artifacts, revision)? else {
+        return Ok(missing("Parallel chains", "similarity-report"));
+    };
+    let Some(start) = chains_start(&text) else {
+        anyhow::bail!(
+            "{} has no `{}` section",
+            report.display(),
+            consts::PARALLEL_CHAINS
+        );
+    };
+    let mut out = String::from("\n");
+    out.push_str(&capped(
+        &text[start..],
+        rows,
+        "the whole table is in the `similarity-report` artifact",
     ));
     Ok(out)
 }
@@ -763,5 +805,100 @@ mod tests {
             0,
             "a truncated report must not leave a fence open: {report}"
         );
+    }
+
+    /// A similarity report as the similarity stage writes it: the duplicated
+    /// pairs first, then the parallel-chain section.
+    fn similarity_report(pairs: usize, chains: usize) -> String {
+        let mut text = String::from("# Behavioral similarity\n\n");
+        for pair in 0..pairs {
+            let _ = writeln!(text, "| pair {pair} |");
+        }
+        let _ = write!(
+            text,
+            "\n{}\n\n- Chains: {chains}\n\n| # | Fork |\n|---:|---|\n",
+            consts::PARALLEL_CHAINS
+        );
+        for chain in 1..=chains {
+            let _ = writeln!(text, "| {chain} | `run` `src/chain_{chain}.rs:1` |");
+        }
+        text
+    }
+
+    #[test]
+    fn the_parallel_chains_survive_a_long_duplication_report() {
+        let temp = tempdir().expect("tempdir");
+        let config = ProjectConfig::default();
+        write(
+            &temp.path().join("similarity-report/abc123def456/report.md"),
+            &similarity_report(config.ci_report.similarity_rows * 2, 2),
+        );
+
+        let report = render(temp.path(), &config, "abc123def456").expect("report");
+
+        assert!(report.contains("- Chains: 2"), "{report}");
+        assert!(report.contains("`src/chain_2.rs:1`"), "{report}");
+    }
+
+    #[test]
+    fn the_duplication_section_stops_where_the_parallel_chains_begin() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("similarity-report/abc1234/report.md"),
+            &similarity_report(3, 1),
+        );
+
+        let report = duplication(temp.path(), 100, "abc1234").expect("duplication section");
+
+        assert!(report.contains("| pair 2 |"), "{report}");
+        assert!(!report.contains("- Chains:"), "{report}");
+    }
+
+    #[test]
+    fn the_parallel_chains_section_caps_the_table() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("similarity-report/abc1234/report.md"),
+            &similarity_report(1, 40),
+        );
+
+        let report = parallel_chains(temp.path(), 8, "abc1234").expect("chains section");
+
+        assert!(report.contains("`src/chain_1.rs:1`"), "{report}");
+        assert!(!report.contains("`src/chain_40.rs:1`"), "{report}");
+        assert!(report.contains("similarity-report` artifact"), "{report}");
+    }
+
+    #[test]
+    fn a_similarity_report_without_parallel_chains_is_rejected() {
+        let temp = tempdir().expect("tempdir");
+        write(
+            &temp.path().join("similarity-report/abc1234/report.md"),
+            "# Behavioral similarity\n\n| pair |\n",
+        );
+
+        let error = parallel_chains(temp.path(), 10, "abc1234").expect_err("no chains section");
+
+        assert!(
+            error.to_string().contains(consts::PARALLEL_CHAINS),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn a_missing_similarity_report_is_stated_for_the_parallel_chains() {
+        let temp = tempdir().expect("tempdir");
+
+        let report = parallel_chains(temp.path(), 10, "abc1234").expect("chains section");
+
+        assert!(
+            report.contains("## Parallel chains\n\nNo `similarity-report` artifact"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn the_default_configuration_carries_chain_rows() {
+        assert!(ProjectConfig::default().ci_report.chain_rows > 0);
     }
 }

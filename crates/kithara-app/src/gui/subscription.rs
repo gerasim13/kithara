@@ -69,34 +69,34 @@ mod tests {
     use super::*;
     use crate::gui::message::Message;
 
-    fn press(key: Key, modifiers: Modifiers) -> Option<Message> {
-        shortcut(&key, modifiers)
+    fn press(key: &Key, modifiers: Modifiers) -> Option<Message> {
+        shortcut(key, modifiers)
     }
 
     #[kithara::test]
     fn the_full_screen_accelerator_matches_the_hint_the_menu_draws() {
         assert!(matches!(
             press(
-                Key::Character("f".into()),
+                &Key::Character("f".into()),
                 Modifiers::CTRL | Modifiers::LOGO
             ),
             Some(Message::Window(WindowCommand::ToggleFullScreen))
         ));
         assert!(
-            press(Key::Character("f".into()), Modifiers::LOGO).is_none(),
+            press(&Key::Character("f".into()), Modifiers::LOGO).is_none(),
             "the menu draws two modifiers, so one must not fire it"
         );
-        assert!(press(Key::Character("f".into()), Modifiers::empty()).is_none());
+        assert!(press(&Key::Character("f".into()), Modifiers::empty()).is_none());
     }
 
     #[kithara::test]
     fn a_bare_delete_removes_the_focused_track() {
         assert!(matches!(
-            press(Key::Named(Named::Delete), Modifiers::empty()),
+            press(&Key::Named(Named::Delete), Modifiers::empty()),
             Some(Message::DeleteFocusedTrack)
         ));
         assert!(matches!(
-            press(Key::Named(Named::Backspace), Modifiers::empty()),
+            press(&Key::Named(Named::Backspace), Modifiers::empty()),
             Some(Message::DeleteFocusedTrack)
         ));
     }

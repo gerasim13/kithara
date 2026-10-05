@@ -180,9 +180,9 @@ fn module_origin() -> SourceUri {
 /// Parses a module, prints it and parses the print again: the document and
 /// its print must both come back unchanged.
 fn module_roundtrip(text: &str) -> ModuleDoc {
-    let doc = parse_module(text, &module_origin()).unwrap();
+    let doc = parse_module(text, &module_origin()).expect("the module parses");
     let printed = to_ron_pretty(&doc);
-    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+    let reparsed = parse_module(&printed, &module_origin()).expect("the print parses");
     assert_eq!(doc, reparsed);
     assert_eq!(printed, to_ron_pretty(&reparsed));
     doc
