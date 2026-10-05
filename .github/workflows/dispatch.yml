@@ -27,7 +27,7 @@ env:
   CARGO_BUILD_JOBS: '2'
 
 concurrency:
-  group: isolated-issue-validation-${{ github.ref }}
+  group: isolated-issue-validation-${{ github.ref }}-${{ inputs.checks_revision }}-${{ inputs.scope }}
   cancel-in-progress: false
 
 jobs:
