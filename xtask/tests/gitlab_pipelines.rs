@@ -75,10 +75,9 @@ impl GitlabConfig {
     /// The pipeline kinds a job's rules admit, following `extends` and
     /// `!reference` to wherever the rules actually live.
     fn admitted_kinds(&self, job: &str) -> BTreeSet<String> {
-        match self.rules_owner(job) {
-            None => BTreeSet::new(),
-            Some(owner) => self.admitted_kinds_inner(&owner, &mut Vec::new()),
-        }
+        self.rules_owner(job).map_or_else(BTreeSet::new, |owner| {
+            self.admitted_kinds_inner(&owner, &mut Vec::new())
+        })
     }
 
     fn admitted_kinds_inner(&self, owner: &str, stack: &mut Vec<String>) -> BTreeSet<String> {
@@ -278,10 +277,10 @@ impl GitlabConfig {
         for rule in rules {
             match rule {
                 Value::Mapping(rule) => {
-                    let decides = match rule.get("if").and_then(Value::as_str) {
-                        None => true,
-                        Some(condition) => declared_kind(condition) == Some(kind),
-                    };
+                    let decides = rule
+                        .get("if")
+                        .and_then(Value::as_str)
+                        .is_none_or(|condition| declared_kind(condition) == Some(kind));
                     if decides {
                         return Some(rule.get("when").and_then(Value::as_str) != Some("never"));
                     }
@@ -1060,10 +1059,11 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
                 )
                 && *job != "host:provision"
         })
-        .filter(|job| match config.rules_owner(job) {
+        .filter(|job| {
             // A job with no rules runs in every pipeline.
-            None => true,
-            Some(owner) => config.admits_kind(&owner, kind).unwrap_or(false),
+            config
+                .rules_owner(job)
+                .is_none_or(|owner| config.admits_kind(&owner, kind).unwrap_or(false))
         })
         .collect();
     beside.sort_unstable();

@@ -23,10 +23,13 @@ use kithara_integration_tests::{
         seek_phase_scan, wrap_pi,
     },
 };
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara_test_fixtures::Mp3Shape;
 use kithara_test_fixtures::{
-    Mp3Shape, SignalAsset, assets::by_name, integration_fixtures::listening_reference,
+    SignalAsset, assets::by_name, integration_fixtures::listening_reference,
 };
 use kithara_test_utils::TestTempDir;
+use num_traits::AsPrimitive;
 use tracing::info;
 use url::Url;
 
@@ -44,6 +47,7 @@ async fn served_signal(asset: SignalAsset) -> ServedSignal {
     (asset, helper, url)
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[kithara::fixture]
 async fn headerless_mp3() -> ServedSignal {
     let asset = SignalAsset::MP3_SINE440_60S_320K;
@@ -478,20 +482,23 @@ fn profile_codec_window(
             .map(|k| f64::from(pcm[(frame + k) * chan]))
             .collect();
         let (measured, amp) = measure_phase_rad_window(&mono, delta);
-        let predicted = wrap_pi(delta * frame as f64);
+        let frame_f: f64 = frame.as_();
+        let predicted = wrap_pi(delta * frame_f);
         let dev = wrap_pi(measured - predicted);
         amps.push(amp);
         phase_devs_rad.push(dev);
         let mut sq = 0.0_f64;
         for (k, &s) in mono.iter().enumerate() {
-            let recon = amp * delta.mul_add((frame + k) as f64, dev).sin();
+            let at: f64 = (frame + k).as_();
+            let recon = amp * delta.mul_add(at, dev).sin();
             let r = s - recon;
             sq = r.mul_add(r, sq);
         }
-        residuals.push((sq / window as f64).sqrt());
+        let window_f: f64 = window.as_();
+        residuals.push((sq / window_f).sqrt());
         frame += stride;
     }
-    let n = amps.len() as f64;
+    let n: f64 = amps.len().as_();
     let mean_amp = amps.iter().sum::<f64>() / n;
     let amp_var = amps.iter().map(|a| (a - mean_amp).powi(2)).sum::<f64>() / n;
     let phase_mean = phase_devs_rad.iter().sum::<f64>() / n;
@@ -635,15 +642,16 @@ async fn dump_aac_for_listening(
         let (phi, amp) = measure_phase_rad_window(&mono_f64, delta);
         let residual: Vec<f32> = (0..aligned_to)
             .map(|k| {
-                let ref_aligned = amp * delta.mul_add(k as f64, phi).sin();
+                let at: f64 = k.as_();
+                let ref_aligned = amp * delta.mul_add(at, phi).sin();
                 mono[k] - num_traits::cast::<f64, f32>(ref_aligned).unwrap_or(0.0)
             })
             .collect();
         let residual_name = format!("{}.residual.wav", name.trim_end_matches(".wav"));
         write_wav_mono_f32(&dump_dir.join(&residual_name), &residual, SAMPLE_RATE);
-        let rms: f64 = (residual.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>()
-            / residual.len() as f64)
-            .sqrt();
+        let residual_len: f64 = residual.len().as_();
+        let rms: f64 =
+            (residual.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>() / residual_len).sqrt();
         let snr_db = if rms > 1e-9 {
             20.0 * (amp / rms).log10()
         } else {

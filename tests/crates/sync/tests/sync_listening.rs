@@ -7,6 +7,7 @@ use kithara_integration_tests::{
     grid::Start,
     kithara,
 };
+use num_traits::AsPrimitive;
 
 use super::sync_product_matrix::{
     Audible, BLOCK_FRAMES, CHANNELS, NEWTECHNO_PHRASE, PreparedSources, ProductHarness,
@@ -53,7 +54,8 @@ async fn render_mix(
         let mut pcm = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
         let mut rendered = 0;
         for step in 1..=RIDE_STEPS {
-            let progress = step as f64 / RIDE_STEPS as f64;
+            let (step_f, steps): (f64, f64) = (step.as_(), RIDE_STEPS.as_());
+            let progress = step_f / steps;
             harness
                 .set_tempo(case, (target_bpm - 120.0).mul_add(progress, 120.0), false)
                 .await;

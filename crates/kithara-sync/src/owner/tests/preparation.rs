@@ -8,6 +8,7 @@ use kithara_warp::{
     FrameUncertainty, MapAxis, MapPosition, MapSegment, Meter, MeterFacts, PresentationFrontier,
     SegmentFacts, SegmentSet, SessionAxis, WarpMapRevision, WarpPlan,
 };
+use num_traits::AsPrimitive;
 
 use super::{
     Accept, TestGrid,
@@ -34,7 +35,7 @@ pub(super) fn asset_segments_from(
     let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
     let marker = |ordinal: u64, frame: u64| {
         BeatMarker::new(
-            MapPosition::Asset(AssetFrame::new(frame as f64).expect("fixture frame is finite")),
+            MapPosition::Asset(AssetFrame::new(frame.as_()).expect("fixture frame is finite")),
             Some(BeatOrdinal::new(ordinal as i64)),
             BeatEvidence::Observed,
             exact,
@@ -84,9 +85,9 @@ pub(super) fn asset_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatG
     asset_grid_with_meter(id, frames, beat_frames, None)
 }
 
-pub(super) fn observed(meter: Meter) -> Option<MeterFacts> {
+pub(super) fn observed(meter: Meter) -> MeterFacts {
     let exact = FrameUncertainty::new(0.0).expect("zero uncertainty is finite");
-    Some(MeterFacts::new(meter, BeatEvidence::Observed, exact))
+    MeterFacts::new(meter, BeatEvidence::Observed, exact)
 }
 
 pub(super) fn four_four() -> Meter {
@@ -95,7 +96,7 @@ pub(super) fn four_four() -> Meter {
 
 /// A four-four track grid, so bar phase is observable in the entry window.
 pub(super) fn four_four_grid(id: BeatGridId, frames: u64, beat_frames: u64) -> BeatGridSnapshot {
-    asset_grid_with_meter(id, frames, beat_frames, observed(four_four()))
+    asset_grid_with_meter(id, frames, beat_frames, Some(observed(four_four())))
 }
 
 /// Attaches `grid` to `group` and returns what the new topology fence
@@ -124,7 +125,7 @@ pub(super) fn window(earliest: i64, end: i64) -> Range<SessionFrame> {
 }
 
 pub(super) fn cue(frame: u64) -> AlignmentSource {
-    AlignmentSource::Prepared(AssetFrame::new(frame as f64).expect("fixture cue is finite"))
+    AlignmentSource::Prepared(AssetFrame::new(frame.as_()).expect("fixture cue is finite"))
 }
 
 pub(super) fn frontier(source: u64, output: i64) -> AlignmentSource {
@@ -361,7 +362,7 @@ fn preparation_preserves_non_four_four_downbeat_phase() {
         .with_downbeat(BeatOrdinal::new(1));
     attach_grid(
         &mut group,
-        asset_grid_with_meter(track, 480_000, 24_000, observed(meter)),
+        asset_grid_with_meter(track, 480_000, 24_000, Some(observed(meter))),
     );
 
     let admission = prepare(&mut group, track, cue(50_000), 50_000);
@@ -655,7 +656,7 @@ fn pickup(cue_beat: f64) -> f64 {
     let source_meter = four_four().with_downbeat(BeatOrdinal::new(1));
     attach_grid(
         &mut group,
-        asset_grid_with_meter(track, 480_000, 24_000, observed(source_meter)),
+        asset_grid_with_meter(track, 480_000, 24_000, Some(observed(source_meter))),
     );
     let cue = AssetFrame::new(cue_beat * 24_000.0).expect("fixture cue is finite");
 
@@ -706,7 +707,7 @@ fn a_building_grid_that_proves_its_bar_is_prepared() {
         &mut group,
         building(
             track,
-            asset_segments(480_000, 24_000, observed(four_four())),
+            asset_segments(480_000, 24_000, Some(observed(four_four()))),
         ),
     );
 
@@ -740,7 +741,7 @@ fn a_building_grid_that_cannot_prove_its_bar_waits_for_it() {
 fn a_building_track_grid_defers_until_it_covers_the_entry() {
     let mut group = synced_deck();
     let track = BeatGridId::allocate().expect("grid id");
-    let meter = observed(four_four());
+    let meter = Some(observed(four_four()));
     attach_grid(
         &mut group,
         building(

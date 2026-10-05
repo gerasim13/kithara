@@ -7,21 +7,10 @@ use kithara_test_utils::{TestTempDir, kithara, temp_dir};
 
 use super::support::{asset_scope, resource};
 
-/// Selects the write path exercised by the case: an "atomic" single write or a
-/// "streaming" write, both finalized via `write_at` + `commit`.
-enum WriteMode {
-    Atomic,
-    Streaming,
-}
-
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case::atomic("metadata.json", WriteMode::Atomic)]
-#[case::streaming("media.bin", WriteMode::Streaming)]
-fn asset_resource_path_method(
-    temp_dir: TestTempDir,
-    #[case] resource_name: &str,
-    #[case] write_mode: WriteMode,
-) {
+#[case::metadata("metadata.json")]
+#[case::media("media.bin")]
+fn asset_resource_path_method(temp_dir: TestTempDir, #[case] resource_name: &str) {
     let scope = asset_scope(&temp_dir, "test-asset");
     let key = scope.key(&resource(resource_name)).unwrap();
     let AcquisitionResult::Pending(writer) = scope
@@ -32,24 +21,12 @@ fn asset_resource_path_method(
         panic!("fresh acquire must be Pending");
     };
 
-    let asset_resource = match write_mode {
-        WriteMode::Atomic => {
-            writer
-                .write_at(0, b"test data")
-                .expect("Write should succeed");
-            writer
-                .commit(Some(b"test data".len() as u64))
-                .expect("Commit should succeed")
-        }
-        WriteMode::Streaming => {
-            writer
-                .write_at(0, b"test data")
-                .expect("Write should succeed");
-            writer
-                .commit(Some(b"test data".len() as u64))
-                .expect("Commit should succeed")
-        }
-    };
+    writer
+        .write_at(0, b"test data")
+        .expect("Write should succeed");
+    let asset_resource = writer
+        .commit(Some(b"test data".len() as u64))
+        .expect("Commit should succeed");
 
     let asset_path = asset_resource.path().unwrap();
     let root_dir = scope.store().root_dir();

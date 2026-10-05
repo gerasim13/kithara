@@ -55,6 +55,7 @@ use kithara_test_fixtures::{
         signal_mp3_sweep_up_60s,
     },
 };
+use num_traits::AsPrimitive;
 
 pub(super) const BLOCK_FRAMES: usize = 512;
 /// How many blocks a build renders before it checks that a transport was
@@ -885,7 +886,8 @@ impl ProductHarness {
             tap.push(&samples);
         }
         let delay = if self.paced {
-            Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
+            let frames: f64 = frames.as_();
+            Duration::from_secs_f64(frames / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())
         } else {
             Duration::from_millis(1)
@@ -931,8 +933,10 @@ impl ProductHarness {
     }
 
     async fn start_staggered(&mut self, case: SyncCase) {
-        let stagger_frames =
-            (f64::from(case.sample_rate) * 3.0 / 8.0 * 60.0 / case.start_bpm()).round() as usize;
+        let stagger_frames: usize = (f64::from(case.sample_rate) * 3.0 / 8.0 * 60.0
+            / case.start_bpm())
+        .round()
+        .as_();
         for index in 0..self.decks.len() {
             let control = self.decks[index].control().clone();
             self.host.run(move || control.play()).await;
@@ -951,7 +955,8 @@ impl ProductHarness {
     pub(super) async fn seek_staggered(&mut self, case: SyncCase) {
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
         for (index, deck) in self.decks.iter().enumerate() {
-            deck.seek(self.cues[index] + index as f64 * stagger_seconds)
+            let stagger: f64 = index.as_();
+            deck.seek(stagger.mul_add(stagger_seconds, self.cues[index]))
                 .unwrap_or_else(|error| panic!("{}: seek deck {index}: {error}", case.id));
         }
         self.settle(case, 96).await;
@@ -1001,7 +1006,7 @@ impl ProductHarness {
                 let source = if playback.playing {
                     AlignmentSource::Audible {
                         frontier: PresentationFrontier::builder()
-                            .source((position * f64::from(case.sample_rate)).max(0.0) as u64)
+                            .source((position * f64::from(case.sample_rate)).max(0.0).as_())
                             .output(SessionFrame::new(
                                 i64::try_from(self.output_frames).unwrap_or(i64::MAX),
                             ))
@@ -1082,8 +1087,10 @@ impl ProductHarness {
     async fn capture(&mut self, case: SyncCase) -> Vec<f32> {
         self.play_all().await;
         self.settle(case, 4).await;
-        let capture_frames =
-            (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0).round() as usize;
+        let capture_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm()
+            * 6.0)
+            .round()
+            .as_();
         self.capture_frames(case, capture_frames, self.block_frames)
             .await
     }
@@ -1129,7 +1136,8 @@ impl ProductHarness {
             );
             pcm.extend(block);
             if let Some(started) = started {
-                let period = Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate));
+                let frames: f64 = frames.as_();
+                let period = Duration::from_secs_f64(frames / f64::from(case.sample_rate));
                 time::sleep(period.saturating_sub(started.elapsed())).await;
             }
         }
@@ -1244,7 +1252,7 @@ pub(super) async fn sources(
             .take(decks)
             .map(|name| {
                 asset_path(
-                    by_name(name).unwrap_or_else(|| panic!("missing rhythm fixture `{name}`")),
+                    &by_name(name).unwrap_or_else(|| panic!("missing rhythm fixture `{name}`")),
                 )
             })
             .collect(),
@@ -1261,7 +1269,7 @@ pub(super) async fn sources(
                 asset
                     .try_bytes()
                     .unwrap_or_else(|error| panic!("BLOCKED_FIXTURE: {error}"));
-                asset_path(asset)
+                asset_path(&asset)
             })
             .collect(),
         Provider::Mp3Same => cycle_paths(&[rhythm_mp3_deck_a_120bpm_48k()], decks),
@@ -1291,7 +1299,7 @@ pub(super) async fn sources(
                 protection,
             )
             .await;
-            let mp3 = asset_path(rhythm_mp3_deck_b_120bpm_48k());
+            let mp3 = asset_path(&rhythm_mp3_deck_b_120bpm_48k());
             (0..decks)
                 .map(|index| {
                     if index.is_multiple_of(2) {
@@ -1321,7 +1329,7 @@ fn cycle_paths(assets: &[Asset], count: usize) -> Vec<String> {
         .collect()
 }
 
-fn asset_path(asset: Asset) -> String {
+fn asset_path(asset: &Asset) -> String {
     asset
         .path()
         .expect("native product fixture is materialized on disk")
@@ -1357,9 +1365,10 @@ async fn hls(
 
 async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     let provider = prepared.0;
-    let expected_samples = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
-        .round() as usize
-        * usize::from(CHANNELS);
+    let expected_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
+        .round()
+        .as_();
+    let expected_samples = expected_frames * usize::from(CHANNELS);
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
@@ -1426,12 +1435,13 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
         ONE_DECK.sample_rate,
         START_BPM,
     );
-    failures.extend(harness.failures);
+    failures.append(&mut harness.failures);
     assert!(
         failures.is_empty(),
         "encoded rhythmic control {provider:?} failed:\n{}",
         failures.join("\n"),
     );
+    drop(harness);
 }
 
 #[kithara::test(

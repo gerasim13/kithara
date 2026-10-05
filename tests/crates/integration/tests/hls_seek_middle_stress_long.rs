@@ -39,6 +39,7 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
     temp_dir,
 };
+use num_traits::AsPrimitive;
 
 mod consts {
     use super::{Duration, shared};
@@ -397,7 +398,8 @@ async fn hls_rate_seek_stress_keeps_playback_live(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let ladder_secs = consts::LADDER_SEGMENTS as f64 * consts::LADDER_SEGMENT_SECS;
+    let ladder_segments: f64 = consts::LADDER_SEGMENTS.as_();
+    let ladder_secs = ladder_segments * consts::LADDER_SEGMENT_SECS;
     assert!(
         consts::SEEK_MAX_SECONDS < ladder_secs,
         "seek targets reach {} s but the ladder is only {ladder_secs} s",

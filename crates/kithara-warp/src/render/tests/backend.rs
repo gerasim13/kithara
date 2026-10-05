@@ -13,7 +13,7 @@ use crate::{WarpConfig, consts};
 #[kithara::test]
 fn glide_masks_unsupported_keylock_from_its_prepared_engine() {
     let renderer = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .backend(StretchKind::Glide)
             .keylock(true)
             .speed(0.5)

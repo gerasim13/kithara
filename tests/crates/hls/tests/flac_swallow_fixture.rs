@@ -27,6 +27,7 @@ use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
 };
+use num_traits::AsPrimitive;
 use url::Url;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -159,7 +160,8 @@ async fn flac_swallow_fixture(
     .await;
     player.load_and_fadein(resource).await;
 
-    let window_secs = (BLOCKS_PER_WINDOW * BLOCK_FRAMES) as f64 / f64::from(OUT_RATE);
+    let window_frames: f64 = (BLOCKS_PER_WINDOW * BLOCK_FRAMES).as_();
+    let window_secs = window_frames / f64::from(OUT_RATE);
     let windows =
         num_traits::cast::<f64, u64>((PLAY_SECS / window_secs).ceil()).unwrap_or(u64::MAX);
     // This reproduces a REAL-TIME-DEADLINE bug: the swallow only occurs when a
@@ -177,6 +179,7 @@ async fn flac_swallow_fixture(
     assert_committed_reached(&records, Duration::from_secs_f64(MIN_DELAYED_PLAYHEAD_SECS));
     assert_no_committed_swallow(&records, Duration::from_secs_f64(MAX_COMMITTED_STEP_SECS));
     player.close().await;
+    drop(trace);
 }
 
 #[kithara::fixture]

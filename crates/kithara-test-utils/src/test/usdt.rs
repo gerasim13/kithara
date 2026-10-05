@@ -462,6 +462,7 @@ mod tests {
         fire("second", 2);
 
         let events = trace.events();
+        drop(trace);
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].probe, "first");
@@ -476,8 +477,11 @@ mod tests {
             fire("tick", value);
         }
 
+        let last = trace.last("tick");
+        drop(trace);
+
         assert_eq!(
-            trace.last("tick").and_then(|event| event.field("value")),
+            last.and_then(|event| event.field("value")),
             Some(MAX_EVENTS as u64)
         );
     }
@@ -505,6 +509,7 @@ mod tests {
         fire("quiet", 2);
 
         let quiet = trace.events_of("quiet");
+        drop(trace);
 
         assert_eq!(quiet.len(), 2);
         assert_eq!(quiet[1].field("value"), Some(2));
@@ -562,7 +567,9 @@ mod tests {
         drop(nested);
         fire("after", 3);
 
-        assert_eq!(outer.events().len(), 3);
+        let events = outer.events();
+        drop(outer);
+        assert_eq!(events.len(), 3);
     }
 
     #[test]

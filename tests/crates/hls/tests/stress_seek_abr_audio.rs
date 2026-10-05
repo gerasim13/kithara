@@ -3,8 +3,8 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
@@ -17,9 +17,13 @@ use kithara_test_fixtures::hls_fixtures::{
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
 use kithara_test_utils::{TestTempDir, Xorshift64};
+use num_traits::AsPrimitive;
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::{
+    common::test_defaults::SawWav,
+    saw_chunk::{channel_mismatches, first_invalid_sample, phase_steps},
+};
 
 mod consts {
     use super::SawWav;
@@ -29,6 +33,10 @@ mod consts {
     pub(super) const SEGMENT_COUNT: usize = 50;
     pub(super) const SEEK_ITERATIONS: usize = 200;
     pub(super) const WARMUP_TIMEOUT_SECS: u64 = 30;
+    /// Length of one read, in seconds of audio.
+    pub(super) const CHUNK_SECS: f64 = 0.05;
+    /// Chunks right after the switch that must all be descending.
+    pub(super) const POST_SWITCH_CHUNKS: usize = 10;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -83,14 +91,266 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, helper: &TestServerHelper, h
     }
 }
 
+type HlsAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
+
+/// Phase 1: read until the saw turns from ascending to descending, the ABR
+/// switch onto the low-bandwidth variant.
+fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
+    info!("Phase 1: waiting for ABR switch (ascending -> descending)...");
+
+    let warmup_start = kithara::platform::time::Instant::now();
+    let warmup_timeout = Duration::from_secs(consts::WARMUP_TIMEOUT_SECS);
+    let mut warmup_ascending_chunks = 0u64;
+    let mut warmup_unknown_chunks = 0u64;
+
+    loop {
+        assert!(
+            warmup_start.elapsed() <= warmup_timeout,
+            "ABR switch not detected within {}s (ascending={warmup_ascending_chunks}, \
+             unknown={warmup_unknown_chunks})",
+            consts::WARMUP_TIMEOUT_SECS,
+        );
+
+        let n = match audio.read(buf) {
+            Ok(ReadOutcome::Pending { .. }) => continue,
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Eof { .. }) => panic!(
+                "Hit EOF before ABR switch (ascending={warmup_ascending_chunks}, \
+                 unknown={warmup_unknown_chunks})"
+            ),
+            Err(e) => panic!("warmup decode error: {e}"),
+        };
+
+        match detect_direction(&buf[..n], channels) {
+            Direction::Ascending => warmup_ascending_chunks += 1,
+            Direction::Descending => {
+                info!(
+                    warmup_ascending_chunks,
+                    warmup_unknown_chunks,
+                    elapsed_ms = warmup_start.elapsed().as_millis(),
+                    "ABR switch detected: ascending -> descending"
+                );
+                return;
+            }
+            Direction::Unknown => warmup_unknown_chunks += 1,
+        }
+
+        if warmup_ascending_chunks.is_multiple_of(100) && warmup_ascending_chunks > 0 {
+            info!(
+                warmup_ascending_chunks,
+                warmup_unknown_chunks,
+                elapsed_ms = warmup_start.elapsed().as_millis(),
+                "Still waiting for ABR switch..."
+            );
+        }
+    }
+}
+
+/// Phase 2: every chunk right after the switch is valid, descending saw, with
+/// at most the one break the decoder handoff leaves.
+fn verify_post_switch_chunks(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
+    info!(
+        "Phase 2: verifying {} post-switch chunks are descending...",
+        consts::POST_SWITCH_CHUNKS
+    );
+
+    for chunk_idx in 0..consts::POST_SWITCH_CHUNKS {
+        let n = match audio.read(buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Pending { .. }) => {
+                panic!("read returned 0 in post-switch chunk {chunk_idx}");
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF in post-switch chunk {chunk_idx}");
+            }
+            Err(e) => panic!("post-switch decode error at chunk {chunk_idx}: {e}"),
+        };
+        let chunk = &buf[..n];
+
+        if let Some((j, sample)) = first_invalid_sample(chunk) {
+            panic!("invalid sample in post-switch chunk {chunk_idx} offset {j}: {sample}");
+        }
+        if channels == 2
+            && let Some((f, l, r)) = channel_mismatches(chunk).next()
+        {
+            panic!("L/R mismatch in post-switch chunk {chunk_idx} frame {f}: L={l} R={r}");
+        }
+
+        let break_count = phase_steps(chunk, channels)
+            .into_iter()
+            .filter(|&(_, prev, curr)| signal::phase::delta(prev, curr) != -1)
+            .count();
+        assert!(
+            break_count <= 1,
+            "too many continuity breaks in post-switch chunk {chunk_idx}: {break_count}"
+        );
+        if break_count == 1 {
+            info!(
+                chunk_idx,
+                "post-switch chunk has 1 expected decoder handoff break"
+            );
+        }
+
+        let dir = detect_direction(chunk, channels);
+        assert_eq!(
+            dir,
+            Direction::Descending,
+            "post-switch chunk {chunk_idx} direction is {dir:?}, expected Descending"
+        );
+    }
+
+    info!(
+        post_switch_ok = consts::POST_SWITCH_CHUNKS,
+        "Phase 2 complete: all post-switch chunks descending"
+    );
+}
+
+/// What the random seek cycles found wrong, out of how many reads.
+#[derive(Debug, Default)]
+struct SeekTally {
+    successful_reads: u64,
+    channel_mismatches: u64,
+    continuity_errors: u64,
+    direction_errors: u64,
+}
+
+impl SeekTally {
+    /// Tally one post-seek chunk: valid samples, channels that agree, a saw
+    /// that steps one frame at a time, and no ascending run after the switch.
+    fn record(&mut self, iteration: usize, pos_secs: f64, chunk: &[f32], channels: usize) {
+        if let Some((j, sample)) = first_invalid_sample(chunk) {
+            panic!("invalid sample at seek #{iteration} offset {j}: {sample} (pos {pos_secs:.4}s)");
+        }
+
+        if channels == 2 {
+            for (frame, l, r) in channel_mismatches(chunk) {
+                self.channel_mismatches += 1;
+                if self.channel_mismatches <= 3 {
+                    info!(iteration, frame, l, r, pos_secs, "Channel mismatch");
+                }
+            }
+        }
+
+        for (frame, prev_phase, curr_phase) in phase_steps(chunk, channels) {
+            if signal::phase::distance(prev_phase, curr_phase) != 1 {
+                self.continuity_errors += 1;
+                if self.continuity_errors <= 3 {
+                    info!(
+                        iteration,
+                        frame, prev_phase, curr_phase, pos_secs, "Continuity break"
+                    );
+                }
+            }
+        }
+
+        let dir = detect_direction(chunk, channels);
+        if dir != Direction::Descending && dir != Direction::Unknown {
+            self.direction_errors += 1;
+            if self.direction_errors <= 3 {
+                info!(
+                    iteration,
+                    direction = ?dir,
+                    pos_secs,
+                    "Unexpected direction (expected SawtoothDescending)"
+                );
+            }
+        }
+
+        self.successful_reads += 1;
+    }
+}
+
+/// Phase 3: random seeks each read back a clean descending chunk.
+fn random_seek_cycles(audio: &mut HlsAudio, buf: &mut [f32], channels: usize, max_seek_secs: f64) {
+    info!(
+        "Phase 3: {} random seek+read cycles...",
+        consts::SEEK_ITERATIONS
+    );
+
+    let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);
+    let mut tally = SeekTally::default();
+
+    for i in 0..consts::SEEK_ITERATIONS {
+        let pos_secs = rng.range_f64(0.001, max_seek_secs);
+        audio
+            .seek(Duration::from_secs_f64(pos_secs))
+            .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.4}s failed: {e}"));
+
+        let n = match audio.read(buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Pending { .. } | ReadOutcome::Eof { .. }) => continue,
+            Err(e) => panic!("seek read error at iteration {i}: {e}"),
+        };
+        tally.record(i, pos_secs, &buf[..n], channels);
+
+        if (i + 1) % 50 == 0 {
+            info!(iteration = i + 1, ?tally, "Progress");
+        }
+    }
+
+    info!(
+        ?tally,
+        "Phase 3 complete: {} seek+read cycles",
+        consts::SEEK_ITERATIONS
+    );
+
+    assert_eq!(
+        tally.channel_mismatches, 0,
+        "L/R channel data diverged {} times",
+        tally.channel_mismatches
+    );
+    assert_eq!(
+        tally.continuity_errors, 0,
+        "{} continuity breaks in decoded data",
+        tally.continuity_errors
+    );
+    assert_eq!(
+        tally.direction_errors, 0,
+        "{} direction errors (expected descending after ABR switch)",
+        tally.direction_errors
+    );
+}
+
+/// Phase 4: a seek near the end reads valid samples through to EOF.
+fn drain_tail_to_eof(audio: &mut HlsAudio, buf: &mut [f32], final_seek_secs: f64) {
+    info!("Phase 4: seek near end + read to EOF...");
+
+    audio
+        .seek(Duration::from_secs_f64(final_seek_secs))
+        .unwrap_or_else(|e| panic!("final seek to {final_seek_secs:.4}s failed: {e}"));
+
+    let mut remaining_samples = 0u64;
+    let mut saw_eof = false;
+    loop {
+        match audio.read(buf) {
+            Ok(ReadOutcome::Pending { .. }) => break,
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                remaining_samples += count.get() as u64;
+                assert!(
+                    first_invalid_sample(&buf[..count.get()]).is_none(),
+                    "invalid sample in final tail read",
+                );
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                saw_eof = true;
+                break;
+            }
+            Err(e) => panic!("final drain error: {e}"),
+        }
+    }
+
+    assert!(saw_eof, "expected EOF after reading all remaining data");
+
+    info!(remaining_samples, "Phase 4 complete: EOF confirmed");
+}
+
 #[kithara::fixture]
 async fn wav_abr(
     hls_header_fifty: Vec<u8>,
     hls_pcm_fifty: Vec<u8>,
     hls_pcm_fifty_descending: Vec<u8>,
 ) -> (TestServerHelper, CreatedHls) {
-    let segment_duration = consts::D.segment_size as f64
-        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_duration_secs();
     let delay_rules = vec![DelayRule {
         variant: Some(0),
         segment_gte: Some(3),
@@ -129,8 +389,7 @@ async fn wav_abr(
 
 #[kithara::fixture]
 async fn flac_abr() -> (TestServerHelper, CreatedHls) {
-    let segment_duration = consts::D.segment_size as f64
-        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_duration_secs();
     let delay_rules = vec![DelayRule {
         variant: Some(0),
         segment_gte: Some(3),
@@ -223,324 +482,31 @@ async fn stress_seek_abr_audio(
 
     let result = spawn_blocking(move || {
         let _ = audio.preload();
-        let channels = spec.channels as usize;
-        let chunk_duration_secs = 0.05;
+        let channels = usize::from(spec.channels);
         let chunk_samples = num_traits::cast::<f64, usize>(
-            chunk_duration_secs * f64::from(spec.sample_rate.get()) * channels as f64,
+            consts::CHUNK_SECS * f64::from(spec.sample_rate.get()) * f64::from(spec.channels),
         )
         .unwrap_or(usize::MAX);
         let mut buf = vec![0.0f32; chunk_samples];
 
-        info!("Phase 1: waiting for ABR switch (ascending -> descending)...");
+        wait_for_abr_switch(&mut audio, &mut buf, channels);
+        verify_post_switch_chunks(&mut audio, &mut buf, channels);
 
-        let warmup_start = kithara::platform::time::Instant::now();
-        let warmup_timeout = Duration::from_secs(consts::WARMUP_TIMEOUT_SECS);
-        let mut warmup_ascending_chunks = 0u64;
-        let mut warmup_unknown_chunks = 0u64;
-
-        loop {
-            if warmup_start.elapsed() > warmup_timeout {
-                panic!(
-                    "ABR switch not detected within {}s (ascending={}, unknown={})",
-                    consts::WARMUP_TIMEOUT_SECS,
-                    warmup_ascending_chunks,
-                    warmup_unknown_chunks
-                );
-            }
-
-            let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(ReadOutcome::Eof { .. }) => {
-                    panic!(
-                        "Hit EOF before ABR switch (ascending={}, unknown={})",
-                        warmup_ascending_chunks, warmup_unknown_chunks
-                    );
-                }
-                Err(e) => panic!("warmup decode error: {e}"),
-            };
-
-            let dir = detect_direction(&buf[..n], channels);
-            match dir {
-                Direction::Ascending => {
-                    warmup_ascending_chunks += 1;
-                }
-                Direction::Descending => {
-                    info!(
-                        warmup_ascending_chunks,
-                        warmup_unknown_chunks,
-                        elapsed_ms = warmup_start.elapsed().as_millis(),
-                        "ABR switch detected: ascending -> descending"
-                    );
-                    break;
-                }
-                Direction::Unknown => {
-                    warmup_unknown_chunks += 1;
-                }
-            }
-
-            if warmup_ascending_chunks.is_multiple_of(100) && warmup_ascending_chunks > 0 {
-                info!(
-                    warmup_ascending_chunks,
-                    warmup_unknown_chunks,
-                    elapsed_ms = warmup_start.elapsed().as_millis(),
-                    "Still waiting for ABR switch..."
-                );
-            }
-        }
-
-        info!("Phase 2: verifying 10 post-switch chunks are descending...");
-
-        let mut post_switch_ok = 0u64;
-        for chunk_idx in 0..10 {
-            let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(ReadOutcome::Pending { .. }) => {
-                    panic!("read returned 0 in post-switch chunk {}", chunk_idx);
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    panic!("unexpected EOF in post-switch chunk {}", chunk_idx);
-                }
-                Err(e) => panic!("post-switch decode error at chunk {}: {}", chunk_idx, e),
-            };
-
-            let frames = n / channels;
-
-            for (j, &sample) in buf[..n].iter().enumerate() {
-                assert!(
-                    sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                    "invalid sample in post-switch chunk {} offset {}: {}",
-                    chunk_idx,
-                    j,
-                    sample
-                );
-            }
-
-            if channels == 2 {
-                for f in 0..frames {
-                    let l = buf[f * 2];
-                    let r = buf[f * 2 + 1];
-                    assert!(
-                        (l - r).abs() <= f32::EPSILON,
-                        "L/R mismatch in post-switch chunk {} frame {}: L={} R={}",
-                        chunk_idx,
-                        f,
-                        l,
-                        r
-                    );
-                }
-            }
-
-            if frames >= 2 {
-                let mut break_count = 0;
-                for f in 1..frames {
-                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
-                    let curr_phase = signal::phase::units(buf[f * channels]);
-                    let expected = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
-                    if curr_phase != expected {
-                        break_count += 1;
-                    }
-                }
-                assert!(
-                    break_count <= 1,
-                    "too many continuity breaks in post-switch chunk {}: {}",
-                    chunk_idx,
-                    break_count
-                );
-                if break_count == 1 {
-                    info!(
-                        chunk_idx,
-                        "post-switch chunk has 1 expected decoder handoff break"
-                    );
-                }
-            }
-
-            let dir = detect_direction(&buf[..n], channels);
-            assert_eq!(
-                dir,
-                Direction::Descending,
-                "post-switch chunk {} direction is {:?}, expected Descending",
-                chunk_idx,
-                dir
-            );
-
-            post_switch_ok += 1;
-        }
-
-        info!(
-            post_switch_ok,
-            "Phase 2 complete: all post-switch chunks descending"
+        let segments: f64 = consts::SEGMENT_COUNT.as_();
+        let total_secs = audio
+            .duration()
+            .map_or(segments * consts::CHUNK_SECS * 20.0, |d| d.as_secs_f64());
+        random_seek_cycles(
+            &mut audio,
+            &mut buf,
+            channels,
+            (total_secs - consts::CHUNK_SECS).max(0.1),
         );
-
-        info!(
-            "Phase 3: {} random seek+read cycles...",
-            consts::SEEK_ITERATIONS
+        drain_tail_to_eof(
+            &mut audio,
+            &mut buf,
+            (total_secs - consts::CHUNK_SECS).max(0.0),
         );
-
-        let total_duration = audio.duration();
-        let total_secs = total_duration.map_or(
-            consts::SEGMENT_COUNT as f64 * chunk_duration_secs * 20.0,
-            |d| d.as_secs_f64(),
-        );
-        let max_seek_secs = (total_secs - chunk_duration_secs).max(0.1);
-
-        let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);
-        let mut successful_reads = 0u64;
-        let mut channel_mismatches = 0u64;
-        let mut continuity_errors = 0u64;
-        let mut direction_errors = 0u64;
-
-        for i in 0..consts::SEEK_ITERATIONS {
-            let pos_secs = rng.range_f64(0.001, max_seek_secs);
-            let position = Duration::from_secs_f64(pos_secs);
-
-            audio.seek(position).unwrap_or_else(|e| {
-                panic!("seek #{} to {:.4}s failed: {}", i, pos_secs, e);
-            });
-
-            let n = match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(ReadOutcome::Eof { .. }) => continue,
-                Err(e) => panic!("seek read error at iteration {}: {}", i, e),
-            };
-
-            let frames = n / channels;
-
-            for (j, &sample) in buf[..n].iter().enumerate() {
-                assert!(
-                    sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                    "invalid sample at seek #{} offset {}: {} (pos {:.4}s)",
-                    i,
-                    j,
-                    sample,
-                    pos_secs
-                );
-            }
-
-            if channels == 2 {
-                for f in 0..frames {
-                    let l = buf[f * 2];
-                    let r = buf[f * 2 + 1];
-                    if (l - r).abs() > f32::EPSILON {
-                        channel_mismatches += 1;
-                        if channel_mismatches <= 3 {
-                            info!(iteration = i, frame = f, l, r, pos_secs, "Channel mismatch");
-                        }
-                    }
-                }
-            }
-
-            if frames >= 2 {
-                for f in 1..frames {
-                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
-                    let curr_phase = signal::phase::units(buf[f * channels]);
-                    let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
-                    let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
-                    if curr_phase != expected_asc && curr_phase != expected_desc {
-                        continuity_errors += 1;
-                        if continuity_errors <= 3 {
-                            info!(
-                                iteration = i,
-                                frame = f,
-                                prev_phase,
-                                curr_phase,
-                                expected_asc,
-                                expected_desc,
-                                pos_secs,
-                                "Continuity break"
-                            );
-                        }
-                    }
-                }
-            }
-
-            let dir = detect_direction(&buf[..n], channels);
-            if dir != Direction::Descending && dir != Direction::Unknown {
-                direction_errors += 1;
-                if direction_errors <= 3 {
-                    info!(
-                        iteration = i,
-                        direction = ?dir,
-                        pos_secs,
-                        "Unexpected direction (expected SawtoothDescending)"
-                    );
-                }
-            }
-
-            successful_reads += 1;
-
-            if (i + 1) % 50 == 0 {
-                info!(
-                    iteration = i + 1,
-                    successful_reads,
-                    channel_mismatches,
-                    continuity_errors,
-                    direction_errors,
-                    "Progress"
-                );
-            }
-        }
-
-        info!(
-            successful_reads,
-            channel_mismatches,
-            continuity_errors,
-            direction_errors,
-            "Phase 3 complete: {} seek+read cycles",
-            consts::SEEK_ITERATIONS
-        );
-
-        assert_eq!(
-            channel_mismatches, 0,
-            "L/R channel data diverged {} times",
-            channel_mismatches
-        );
-        assert_eq!(
-            continuity_errors, 0,
-            "{} continuity breaks in decoded data",
-            continuity_errors
-        );
-        assert_eq!(
-            direction_errors, 0,
-            "{} direction errors (expected descending after ABR switch)",
-            direction_errors
-        );
-
-        info!("Phase 4: seek near end + read to EOF...");
-
-        let final_seek_secs = (total_secs - chunk_duration_secs).max(0.0);
-        audio
-            .seek(Duration::from_secs_f64(final_seek_secs))
-            .unwrap_or_else(|e| {
-                panic!("final seek to {:.4}s failed: {}", final_seek_secs, e);
-            });
-
-        let mut remaining_samples = 0u64;
-        let mut saw_eof = false;
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    remaining_samples += count.get() as u64;
-                    for &sample in &buf[..count.get()] {
-                        assert!(
-                            sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                            "invalid sample in final tail read",
-                        );
-                    }
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    saw_eof = true;
-                    break;
-                }
-                Err(e) => panic!("final drain error: {e}"),
-            }
-        }
-
-        assert!(saw_eof, "expected EOF after reading all remaining data");
-
-        info!(remaining_samples, "Phase 4 complete: EOF confirmed");
     })
     .await;
 
