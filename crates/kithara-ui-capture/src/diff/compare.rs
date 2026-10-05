@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt,
     fs::{File, create_dir_all, read_dir, read_to_string},
+    io::BufReader,
     iter::once,
     path::{Path, PathBuf},
 };
@@ -268,11 +269,14 @@ pub(super) struct Image {
 
 fn read_png(path: &Path) -> Result<Image, String> {
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
-    let decoder = Decoder::new(file);
+    let decoder = Decoder::new(BufReader::new(file));
     let mut reader = decoder
         .read_info()
         .map_err(|error| format!("decode {}: {error}", path.display()))?;
-    let mut rgba = vec![0; reader.output_buffer_size()];
+    let buffer_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| format!("decode {}: image exceeds buffer capacity", path.display()))?;
+    let mut rgba = vec![0; buffer_size];
     let info = reader
         .next_frame(&mut rgba)
         .map_err(|error| format!("decode {}: {error}", path.display()))?;

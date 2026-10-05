@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use kithara_platform::sync::Arc;
 use png::{ColorType, Decoder, Transformations};
 
@@ -90,13 +92,19 @@ impl Sheet {
 
 /// The sheet as straight RGBA8, whatever the file spelled it as.
 fn read(name: &str, png: &[u8]) -> Result<(png::OutputInfo, Vec<u8>), SheetError> {
-    let mut decoder = Decoder::new(png);
+    let mut decoder = Decoder::new(Cursor::new(png));
     decoder.set_transformations(Transformations::normalize_to_color8() | Transformations::ALPHA);
     let mut reader = decoder.read_info().map_err(|source| SheetError::Decode {
         source,
         name: name.to_owned(),
     })?;
-    let mut pixels = vec![0; reader.output_buffer_size()];
+    let buffer_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| SheetError::Decode {
+            source: png::DecodingError::LimitsExceeded,
+            name: name.to_owned(),
+        })?;
+    let mut pixels = vec![0; buffer_size];
     let info = reader
         .next_frame(&mut pixels)
         .map_err(|source| SheetError::Decode {

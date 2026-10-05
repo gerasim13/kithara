@@ -9,9 +9,6 @@ description = "Serializable modular UI model: layout and module documents, regis
 keywords = ["ui", "layout", "modular", "serde", "ron"]
 categories = ["gui", "config"]
 
-[package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
-
 [features]
 default = ["iced"]
 # Tests that need a graphics device. Off by default: a machine without one
@@ -92,11 +89,6 @@ tracing = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
-
-# The workspace hack is a desktop build cache: kithara-ui stays out of the hakari
-# traversal, and its iOS, Android and wasm builds do not pull the feature union.
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 # The graphics device answers how much it holds. The platform call that asks it
 # belongs to `kithara-apple`, which owns every Apple ABI this workspace uses.

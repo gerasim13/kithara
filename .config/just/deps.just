@@ -1,6 +1,14 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
+[positional-arguments]
+hakari *ARGS:
+    cargo hakari "$@"
+
+hakari-check:
+    cargo hakari generate --diff
+    cargo hakari manage-deps --dry-run
+
 deny:
     cargo fetch --locked
     cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2

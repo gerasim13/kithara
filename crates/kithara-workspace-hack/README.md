@@ -12,16 +12,17 @@
 
 # kithara-workspace-hack
 
-Internal workspace-hack crate managed by [cargo-hakari](https://docs.rs/cargo-hakari). Not published; not for direct use. Hakari produces a unified feature set for third-party dependencies so Cargo unifies them into a single build per dep, avoiding duplicate compilation across workspace members. Every publishable crate in this workspace pulls in `kithara-workspace-hack` as an internal dependency to lock in those unified features.
+Internal workspace-hack crate managed by [cargo-hakari](https://docs.rs/cargo-hakari). Not published; not for direct use. Hakari produces a unified feature set for third-party dependencies so Cargo unifies them into a single build per dep, avoiding duplicate compilation across participating workspace members. Target platforms and exclusions are owned by [the Hakari configuration](../../.config/hakari.toml).
 
 ## Usage
 
-`Cargo.toml` and `src/lib.rs` are auto-generated. Do not edit manually. To regenerate:
+Use the cargo-hakari version pinned in [`.config/ci-pins.toml`](../../.config/ci-pins.toml). The dependency section in `Cargo.toml` is generated; do not edit it manually. To regenerate and synchronize member dependencies:
 
 ```bash
-cargo install cargo-hakari --locked
-cargo hakari generate
-cargo hakari manage-deps
+just deps hakari generate
+just deps hakari manage-deps --yes
+just deps hakari generate
+just deps hakari-check
 ```
 
 Run after adding or removing workspace dependencies, or when CI flags hakari drift.

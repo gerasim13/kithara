@@ -40,9 +40,29 @@ platforms = [
 # the base dependencies and Android compiled android-activity with no backend.
 [traversal-excludes]
 workspace-members = [
+  "kithara-analysis-tests",
+  "kithara-app-tests",
+  "kithara-audio-tests",
+  "kithara-broadcast-tests",
+  "kithara-core-test-fixtures",
+  "kithara-decode-tests",
   "kithara-devtools",
-  "kithara-integration-tests",
+  "kithara-dsp-tests",
+  "kithara-effects-tests",
   "kithara-ffi",
+  "kithara-ffi-web-analysis-tests",
+  "kithara-ffi-web-tests",
+  "kithara-file-tests",
+  "kithara-fuzz",
+  "kithara-harness-tests",
+  "kithara-hls-tests",
+  "kithara-host-tests",
+  "kithara-integration-tests",
+  "kithara-play-tests",
+  "kithara-queue-tests",
+  "kithara-stream-tests",
+  "kithara-sync-tests",
+  "kithara-test-dylib",
   "kithara-test-utils",
   "kithara-ui",
   "kithara-ui-capture",
@@ -51,6 +71,7 @@ workspace-members = [
   "kithara-ui-input",
   "kithara-ui-lottie",
   "kithara-ui-shaping",
+  "kithara-warp-tests",
   "xtask",
 ]
 third-party = [

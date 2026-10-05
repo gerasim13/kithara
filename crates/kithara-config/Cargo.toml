@@ -9,6 +9,7 @@ description = "Retained configuration values and composed configuration macros."
 
 [dependencies]
 kithara-derive = { workspace = true, features = ["config", "patch"] }
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }
 

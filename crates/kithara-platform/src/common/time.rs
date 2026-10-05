@@ -1,5 +1,6 @@
 pub use core::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use web_time::Instant;
 pub use web_time::{Instant as WallInstant, SystemTime};
 

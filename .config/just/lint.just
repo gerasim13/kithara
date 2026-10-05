@@ -21,6 +21,7 @@ idioms *ARGS:
 
 _shared:
     just fmt check
+    just deps hakari-check
     just check clippy
     just lint ast-grep
     just lint typos
