@@ -599,8 +599,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        super::config::fixture, CacheGroup, CompilerCache, Lane, PipelineKind, command_lane,
-        compiler_cache_note, execute_lane, executor_replies, sccache_server_is_stopped,
+        super::{config::fixture, process::Step},
+        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
+        execute_lane, executor_replies, sccache_server_is_stopped,
     };
     use crate::{
         Cli,
@@ -693,10 +694,7 @@ mod tests {
 
     /// One lane resolved in one pipeline kind: the program and arguments of
     /// each step it asks for, or the reason it refuses the kind.
-    fn resolve(
-        name: &str,
-        kind: PipelineKind,
-    ) -> (Result<(), String>, Vec<(String, Vec<String>, String)>) {
+    fn resolve(name: &str, kind: PipelineKind) -> (Result<(), String>, Vec<Step>) {
         let checkout = checkout();
         let root = checkout.path();
         let ci_config = fixture();
@@ -719,9 +717,7 @@ mod tests {
             .recorded()
             .expect("a recording process records")
             .steps()
-            .iter()
-            .map(|step| (step.program.clone(), step.args.clone(), step.label.clone()))
-            .collect();
+            .to_vec();
         (outcome, steps)
     }
 
@@ -730,11 +726,11 @@ mod tests {
     fn gate(name: &str, kind: PipelineKind) -> (Vec<String>, String) {
         let (outcome, steps) = resolve(name, kind);
         outcome.expect("the lane accepts this kind");
-        let (_, args, label) = steps
+        let step = steps
             .into_iter()
-            .find(|(program, _, _)| program == "just")
+            .find(|step| step.program == "just")
             .expect("the lane runs a just recipe");
-        (args, label)
+        (step.args, step.label)
     }
 
     #[test]
@@ -744,7 +740,7 @@ mod tests {
         assert_eq!(
             steps
                 .iter()
-                .map(|(program, args, _)| (program.as_str(), args.clone()))
+                .map(|step| (step.program.as_str(), step.args.clone()))
                 .collect::<Vec<_>>(),
             vec![
                 (
@@ -894,7 +890,7 @@ mod tests {
         assert!(
             steps
                 .iter()
-                .all(|(_, args, _)| args.first().is_none_or(|tool| tool != "xcresulttool"))
+                .all(|step| step.args.first().is_none_or(|tool| tool != "xcresulttool"))
         );
     }
 

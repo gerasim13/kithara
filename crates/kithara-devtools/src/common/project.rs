@@ -227,6 +227,9 @@ pub struct CiReportConfig {
     /// the crate-level map and the explainable candidates, which is the part
     /// worth reading without opening the artifact.
     pub similarity_rows: usize,
+    /// Lines of the parallel-chain section carried into the report: its
+    /// counts, then the longest chains first.
+    pub chain_rows: usize,
     /// Contours listed under the architecture complexity index, worst first.
     pub top_contours: usize,
 }
@@ -237,6 +240,7 @@ impl Default for CiReportConfig {
             crap_rows: 120,
             top_contours: 10,
             similarity_rows: 80,
+            chain_rows: 60,
         }
     }
 }
@@ -574,7 +578,7 @@ pub struct TestCommandConfig {
     /// grows to stay green.
     pub known_flakes: Vec<KnownFlake>,
     /// Paths that belong to no single lane: a change to one of them runs every
-    /// lane that declares `owns`, because the routing itself moved.
+    /// lane of a `--touched` scope whole, because the routing itself moved.
     pub shared_paths: Vec<String>,
 }
 
@@ -642,8 +646,11 @@ pub struct TestLaneConfig {
     pub runner: TestRunner,
     pub default_features: Vec<String>,
     /// Source prefixes this lane is the test for. `just test run --touched`
-    /// runs the lane when the branch changed a path under one of them; a lane
-    /// that owns nothing is never selected that way.
+    /// tests the lane when the branch changed a path under one of them: a
+    /// scope that names the lane runs it whole, and the default lane, the
+    /// scope of a run that names none, runs narrowed to this lane's packages
+    /// when it builds them all. A lane that owns nothing is never selected
+    /// that way.
     pub owns: Vec<String>,
     /// Toggles whose feature none of this lane's packages declares.
     ///

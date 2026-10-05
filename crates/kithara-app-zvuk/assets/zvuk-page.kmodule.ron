@@ -1,0 +1,59 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "zvuk-page",
+    chrome: Plain,
+    parameters: ["source"],
+    root: Column(
+        id: "catalogue",
+        children: [
+            Row(
+                id: "query-bar",
+                size: (w: Fill, h: Fixed(32.0)),
+                frame: (top: false, right: false, bottom: true, left: false),
+                frame_color: LineInner,
+                children: [
+                    Search(id: "query", size: (w: Fill, h: Fill), read: Model(id: "source.query", with: { "source": "$source" }), write: Command(id: "source.query", with: { "source": "$source" })),
+                    Row(
+                        id: "count-cell",
+                        size: (w: Shrink, h: Fill),
+                        pad_x: 12.0,
+                        frame: (top: false, right: false, bottom: false, left: true),
+                        frame_color: LineInner,
+                        children: [Text(id: "count", style: Section, read: Model(id: "source.count", with: { "source": "$source" }), color: Muted)],
+                    ),
+                ],
+            ),
+            Optional(
+                id: "status",
+                hidden: Model(id: "source.fault_hidden", with: { "source": "$source" }),
+                child: Row(
+                    id: "status-bar",
+                    size: (w: Fill, h: Shrink),
+                    pad_x: 34.0,
+                    children: [Text(id: "error", read: Model(id: "source.fault", with: { "source": "$source" }), color: Muted)],
+                ),
+            ),
+            Table(
+                    id: "rows",
+                    size: (w: Fill, h: Fill),
+                    footer: false,
+                    padding_left: 0.0,
+                    padding_right: 34.0,
+                    write_width: Parameter(id: "source.column.width", with: { "source": "$source" }),
+                    status: Model(id: "source.status", with: { "source": "$source" }),
+                    read: Model(id: "source.rows", with: { "source": "$source" }),
+                    write: Command(id: "source.select", with: { "source": "$source" }),
+                    columns: [
+                        (id: "reaction", label: "", style: Icon, width: 34.0, write: Command(id: "source.like_track", with: { "source": "$source" })),
+                        (id: "index", label: "@track_list.column.index", style: Index, width: 28.0),
+                        (id: "title", label: "@track_list.column.title", style: Primary, width: 180.0, flexible: true),
+                        (id: "artist", label: "@track_list.column.artist", style: Secondary, width: 200.0),
+                        (id: "bpm", label: "@track_list.column.bpm", style: Metric, width: 70.0),
+                        (id: "key", label: "@track_list.column.key", style: Mono, width: 56.0),
+                        (id: "time", label: "@track_list.column.time", style: Time, width: 70.0),
+                    ],
+                ),
+        ],
+    ),
+)

@@ -1222,8 +1222,8 @@ timeout_minutes = 30
     }
 
     /// The compiler cache keys every compilation on each `CARGO_*` value, so a
-    /// step that names its build directory - even the checkout's own `target`
-    /// - splits every key it builds by checkout. The executor owns the build
+    /// step that names its build directory, even the checkout's own `target`,
+    /// splits every key it builds by checkout. The executor owns the build
     /// directory: Cargo finds `<checkout>/target` by itself.
     #[test]
     fn a_lane_step_may_not_name_the_build_directory() {

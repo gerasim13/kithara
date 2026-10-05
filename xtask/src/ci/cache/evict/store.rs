@@ -200,7 +200,7 @@ esac
                 store = consts::CACHE_STORE_URL,
             ),
         );
-        Store::connect(&program, "user", "password").unwrap()
+        Store::connect(&program, "user", "password").expect("the stand-in store connects")
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use kithara::{
-    drm::{DecryptContext, DrmError, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
+    drm::{DecryptContext, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult, KeyProcessorRegistry},
     platform::{sync::Arc, time::Duration},
     play::policy::{DomainKeyPolicy, DomainKeyRule},
@@ -23,16 +23,16 @@ fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyPr
     reg
 }
 
-fn uppercase_key(key: Bytes) -> Result<Bytes, DrmError> {
-    Ok(Bytes::from(key.to_ascii_uppercase()))
+fn uppercase_key(key: &[u8]) -> Bytes {
+    Bytes::from(key.to_ascii_uppercase())
 }
 
-fn reverse_key(key: Bytes) -> Result<Bytes, DrmError> {
-    Ok(Bytes::from(key.iter().rev().copied().collect::<Vec<_>>()))
+fn reverse_key(key: &[u8]) -> Bytes {
+    Bytes::from(key.iter().rev().copied().collect::<Vec<_>>())
 }
 
-fn sentinel_key(_key: Bytes) -> Result<Bytes, DrmError> {
-    Ok(Bytes::from_static(b"MODIFIED"))
+fn sentinel_key(_key: &[u8]) -> Bytes {
+    Bytes::from_static(b"MODIFIED")
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
@@ -42,7 +42,7 @@ fn sentinel_key(_key: Bytes) -> Result<Bytes, DrmError> {
 async fn key_processor_cases(
     #[future] aes128_hls: CreatedHls,
     assets_fixture: TestAssets,
-    #[case] process: fn(Bytes) -> Result<Bytes, DrmError>,
+    #[case] process: fn(&[u8]) -> Bytes,
     #[case] matches_host: bool,
     #[case] expected: &[u8],
 ) -> HlsResult<()> {
@@ -53,7 +53,7 @@ async fn key_processor_cases(
     } else {
         "other.example"
     };
-    let registry = registry_for_host(host, Arc::new(process));
+    let registry = registry_for_host(host, Arc::new(move |key: Bytes| Ok(process(&key))));
     let key_store = test_key_store(&assets_fixture, Some(registry));
 
     let key: Bytes = key_store.get_raw_key(&key_url, None).await?;

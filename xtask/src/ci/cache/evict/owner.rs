@@ -384,7 +384,7 @@ mod tests {
     }
 
     fn entry(first: char, fill: char) -> Entry {
-        Entry::parse(&object(first, fill)).unwrap()
+        Entry::parse(&object(first, fill)).expect("a compiler cache object names an entry")
     }
 
     /// A bucket at the quota [`owner`] gives it: the startup probe, three
@@ -447,7 +447,7 @@ esac
 
     fn calls(directory: &Path) -> Vec<String> {
         fs::read_to_string(directory.join("log"))
-            .unwrap()
+            .expect("the stand-in store logs its calls")
             .lines()
             .map(str::to_owned)
             .collect()
@@ -455,14 +455,17 @@ esac
 
     fn owner(program: &Path) -> (Owner, mpsc::SyncSender<Delivery>) {
         let (sender, deliveries) = mpsc::sync_channel(16);
-        let store = Store::connect(program, "user", "password").unwrap();
-        let owner =
-            Owner::start(store, vec![("kithara-review".to_owned(), 1000)], deliveries).unwrap();
+        let store =
+            Store::connect(program, "user", "password").expect("the stand-in store connects");
+        let owner = Owner::start(store, vec![("kithara-review".to_owned(), 1000)], deliveries)
+            .expect("the owner starts on a readable store");
         (owner, sender)
     }
 
     fn deliver(sender: &mpsc::SyncSender<Delivery>, events: Vec<Event>) {
-        sender.send(Delivery { events, dropped: 0 }).unwrap();
+        sender
+            .send(Delivery { events, dropped: 0 })
+            .expect("the owner holds the receiving end");
     }
 
     /// The age rule this replaces expired the entry every build reads. Here

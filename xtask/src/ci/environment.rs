@@ -1181,7 +1181,7 @@ mod tests {
                     .map(OsString::as_os_str),
                 Some(project.as_os_str())
             );
-            assert!(vars.get(OsStr::new("SCCACHE_BASEDIR")).is_none());
+            assert!(!vars.contains_key(OsStr::new("SCCACHE_BASEDIR")));
             assert_eq!(
                 vars.get(OsStr::new("RUSTC_WRAPPER"))
                     .map(OsString::as_os_str),

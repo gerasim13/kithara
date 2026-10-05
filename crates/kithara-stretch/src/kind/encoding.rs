@@ -11,6 +11,8 @@ impl From<StretchKind> for u8 {
             StretchKind::Bungee => 2,
             #[cfg(feature = "stretch-glide")]
             StretchKind::Glide => 3,
+            #[cfg(feature = "stretch-identity")]
+            StretchKind::Identity => 4,
         }
     }
 }
@@ -26,6 +28,8 @@ impl From<u8> for StretchKind {
             2 => Self::Bungee,
             #[cfg(feature = "stretch-glide")]
             3 => Self::Glide,
+            #[cfg(feature = "stretch-identity")]
+            4 => Self::Identity,
             _ => Self::all()[0],
         }
     }

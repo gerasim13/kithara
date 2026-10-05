@@ -785,7 +785,7 @@ async fn a_head_the_source_cannot_reach_is_retired_after_one_chunk(analysis_pcm:
 
     assert_eq!(
         pass.analysis().missing(),
-        vec![0..0 + FLOOR],
+        vec![0..FLOOR],
         "only what the source cannot deliver is left over"
     );
     let lengths = run_lengths(&pass.calls());
@@ -862,7 +862,7 @@ async fn a_pass_that_gave_up_still_reports_what_it_never_reached(analysis_pcm: &
         !analysis.is_complete(),
         "a pass that gave up on a range is not a complete one"
     );
-    let missing: u64 = analysis.missing().iter().map(|gap| gap.frames()).sum();
+    let missing: u64 = analysis.missing().iter().map(FrameSpan::frames).sum();
     assert_eq!(
         missing,
         consts::SCHEDULE_EXTENT - covered,
@@ -954,7 +954,7 @@ async fn a_run_is_measured_from_where_it_decoded_not_where_it_asked(analysis_pcm
     let lengths = run_lengths(&pass.calls());
     // A one-second schedule chunk is five decoder chunks.
     assert!(
-        lengths.iter().any(|len| *len == 5),
+        lengths.contains(&5),
         "a run must carry the chunk it was sized for: {lengths:?}"
     );
     assert!(
@@ -1029,7 +1029,7 @@ mod artifacts {
             artifacts: artifacts(&analysis),
             seeks: targets(&pass.calls()).len(),
             lost: analysis.beat().map_or(0, |beat| {
-                beat.unanalysed().iter().map(|range| range.frames()).sum()
+                beat.unanalysed().iter().map(FrameSpan::frames).sum()
             }),
         }
     }

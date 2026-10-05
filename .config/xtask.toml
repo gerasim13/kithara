@@ -1854,9 +1854,13 @@ timeout_minutes = 60
 #
 # The two clock lanes run one recipe and differ in the clock they ask for and
 # the directory they build in. Every kind runs the suite whole except a branch
-# push, which runs `--touched`. That is fail-closed: shared configuration and
-# every path without a reviewed domain owner run `workspace`, and a branch only
-# becomes narrow after its path is explicitly owned by one of the lanes above.
+# push, which runs `--touched`: the build `main` runs, with the run narrowed to
+# the packages of the lanes the branch touched. One build per directory however
+# many lanes a branch touched, so no lane's build replaces the shared test
+# dylib another one linked. That is fail-closed: shared configuration and every
+# path without a reviewed domain owner run `workspace` whole, and a branch only
+# becomes narrow after its path is explicitly owned by one of the lanes above. A
+# lane with a configuration of its own is reached through `linux-support`.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
@@ -2023,7 +2027,7 @@ timeout_minutes = 180
 
 # A full run carries `kithara-net`'s own tests on the Linux host under its
 # `client-host` backend only here. A branch push that touches that backend
-# runs them through the clock lanes' `--touched` step, so this lane has no
+# runs them through `linux-support`'s `--touched` step, so this lane has no
 # `branch` kind, nor the `merge-request` kind that schedules what `branch`
 # does; Android runs the backend with a real transport.
 [ext.ci.lanes.linux-net-host]
@@ -2214,18 +2218,22 @@ role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 120
 
-# `just test` no longer carries the build tooling or the harness it is written
-# with. A `main` push and the nightly run get them whole from `linux-tooling`,
-# `linux-harness` and `linux-fixtures`; a branch push or a ready pull request
-# runs here the ones it touched, so a change to their own sources does not wait
-# for `main`.
+# The suites `just test` does not carry, or carries under a configuration other
+# than their own: the build tooling, the harness it is written with,
+# `kithara-net` under its host backend and the broadcast stack. A `main` push
+# and the nightly run get them whole from their own lanes; a branch push or a
+# ready pull request runs here the ones it touched, so a change to their own
+# sources does not wait for `main`. The clock lanes run the workspace build
+# only, so a branch reaches these suites here and nowhere else. The UI suite is
+# not one of them: only `ui.yml` judges it, on a graphics device, and a branch
+# run gets it by naming `deep-ui` among its required lanes.
 [ext.ci.lanes.linux-support]
 cache_group = "linux"
 label = "Linux"
 freshness = "checksum"
 os = "linux"
 fetch_depth = 0
-tools = ["cargo", "just"]
+tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [
   { args = [
@@ -2235,11 +2243,13 @@ steps = [
     "--lane=tooling",
     "--lane=harness",
     "--lane=fixtures",
-  ], label = "support suites this push touches" },
+    "--lane=net-host",
+    "--lane=broadcast",
+  ], label = "own-configuration suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
 ]
 role = "gate"
 kinds_github = ["branch", "merge-request"]
-timeout_minutes = 60
+timeout_minutes = 180
 
 [ext.ci.lanes.linux-usdt]
 cache_group = "linux"

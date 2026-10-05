@@ -2059,51 +2059,67 @@
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / branch
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / platforms
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / merge-request
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / quarantine
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / main
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / nightly
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / weekly
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / release
   <require os> linux
-  <require tools> cargo just
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures
+  <require tools> cargo just sccache
+  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+    CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RTEN_NUM_THREADS=1
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / branch
   <require os> linux

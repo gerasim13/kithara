@@ -494,7 +494,7 @@ async fn preloaded_survives_seek(wav_88200: NamedTempFile) {
     assert!(after_seek > 0, "must read samples after seek");
 }
 
-fn prepared_wav(asset: Asset) -> NamedTempFile {
+fn prepared_wav(asset: &Asset) -> NamedTempFile {
     let tmp = NamedTempFile::new().expect("temporary audio file");
     File::create(tmp.path())
         .expect("open temporary audio file")
@@ -505,35 +505,35 @@ fn prepared_wav(asset: Asset) -> NamedTempFile {
 
 #[kithara::fixture]
 fn wav_16() -> NamedTempFile {
-    prepared_wav(assets::audio_wav_frames_16())
+    prepared_wav(&assets::audio_wav_frames_16())
 }
 
 #[kithara::fixture]
 fn wav_100() -> NamedTempFile {
-    prepared_wav(assets::audio_wav_frames_100())
+    prepared_wav(&assets::audio_wav_frames_100())
 }
 
 #[kithara::fixture]
 fn wav_1000() -> NamedTempFile {
-    prepared_wav(assets::audio_wav_frames_1000())
+    prepared_wav(&assets::audio_wav_frames_1000())
 }
 
 #[kithara::fixture]
 fn wav_1024() -> NamedTempFile {
-    prepared_wav(assets::audio_wav_frames_1024())
+    prepared_wav(&assets::audio_wav_frames_1024())
 }
 
 #[kithara::fixture]
 fn wav_44100() -> NamedTempFile {
-    prepared_wav(assets::audio_wav_frames_44100())
+    prepared_wav(&assets::audio_wav_frames_44100())
 }
 
 #[kithara::fixture]
 fn wav_88200() -> NamedTempFile {
-    prepared_wav(assets::audio_wav_frames_88200())
+    prepared_wav(&assets::audio_wav_frames_88200())
 }
 
 #[kithara::fixture]
 fn wav_176400() -> NamedTempFile {
-    prepared_wav(assets::audio_wav_frames_176400())
+    prepared_wav(&assets::audio_wav_frames_176400())
 }

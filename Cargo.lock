@@ -4518,6 +4518,7 @@ dependencies = [
  "kithara-app",
  "kithara-app-document",
  "kithara-app-library",
+ "kithara-app-zvuk",
  "kithara-assets",
  "kithara-config",
  "kithara-derive",
@@ -4577,6 +4578,26 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "url",
+]
+
+[[package]]
+name = "kithara-app-zvuk"
+version = "0.0.1-alpha5"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "delegate",
+ "kithara-app-library",
+ "kithara-net",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "unimock",
  "url",
 ]
 
@@ -4699,6 +4720,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "serial_test",
  "tempfile",
  "tracing",
@@ -5331,6 +5353,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "reqwest",
  "serial_test",
  "tempfile",
@@ -5453,6 +5476,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "serde",
  "tracing",
  "url",
@@ -5805,6 +5829,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
+ "num-traits",
 ]
 
 [[package]]
@@ -5987,6 +6012,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
  "serde_json",
 ]
 

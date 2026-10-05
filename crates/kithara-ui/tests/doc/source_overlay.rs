@@ -57,9 +57,10 @@ mod on_disk {
     use super::*;
 
     fn shipped() -> (TempDir, FileResolver) {
-        let root = TempDir::new().unwrap();
-        fs::write(root.path().join("player.klayout.ron"), "(id: \"shipped\")").unwrap();
-        let resolver = FileResolver::new(root.path()).unwrap();
+        let root = TempDir::new().expect("create the shipped root");
+        fs::write(root.path().join("player.klayout.ron"), "(id: \"shipped\")")
+            .expect("write the shipped layout");
+        let resolver = FileResolver::new(root.path()).expect("resolve the shipped root");
         (root, resolver)
     }
 

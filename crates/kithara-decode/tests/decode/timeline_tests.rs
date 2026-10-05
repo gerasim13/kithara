@@ -38,9 +38,10 @@ fn test_progressive_file_timeline_monotonic(tone_wav: &'static [u8]) {
             meta.frame_offset
         );
 
-        let expected_ts = Duration::from_secs_f64(
-            meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
-        );
+        let expected_ts = meta
+            .spec
+            .duration_for(meta.frame_offset)
+            .expect("frame offset is a representable duration");
         let diff = meta.timestamp.abs_diff(expected_ts);
         assert!(
             diff < Duration::from_micros(100),

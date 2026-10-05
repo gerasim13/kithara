@@ -19,7 +19,7 @@ fn spec(channels: u16, sample_rate: u32) -> AudioSpec {
     )
 }
 
-fn chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
     let frames = samples.len() / usize::from(spec.channels);
     AudioChunk::new(
         AudioChunkInfo {
@@ -36,7 +36,7 @@ fn chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
             frame_offset: 9_876,
             source_bytes: 512,
         },
-        sample_buffer(pools, &samples),
+        sample_buffer(pools, samples),
     )
 }
 
@@ -48,7 +48,7 @@ fn blender(pools: &Pools, profile: BlenderProfile) -> GaplessBlender {
 fn single_input_blender_is_bit_exact(blend_identity: Vec<f32>) {
     let pools = pools();
     let spec = spec(2, 48_000);
-    let input = chunk(&pools, spec, blend_identity);
+    let input = chunk(&pools, spec, &blend_identity);
     let input_ptr = input.samples.as_ptr();
     let input_meta = input.meta;
     let input_bits = input
@@ -88,7 +88,7 @@ fn replacing_active_profile_accepts_the_new_spec(blend_multichannel: Vec<f32>) {
     blender.replace_active(BlenderProfile::new(replacement));
     let capacities_after = blender.buffer_capacities();
 
-    let output = blender.process_active(chunk(&pools, replacement, blend_multichannel));
+    let output = blender.process_active(chunk(&pools, replacement, &blend_multichannel));
 
     assert_eq!(output.spec(), replacement);
     assert_eq!(capacities_after.0, prepared_capacity);
@@ -140,7 +140,7 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
 
     let mut output = Vec::with_capacity(incoming.len());
     for (chunk_index, samples) in incoming.chunks(CHUNK_FRAMES * channels).enumerate() {
-        let mut input = chunk(&pools, spec, samples.to_vec());
+        let mut input = chunk(&pools, spec, samples);
         input.meta.frame_offset =
             u64::try_from(chunk_index.saturating_mul(CHUNK_FRAMES)).unwrap_or(u64::MAX);
         let input_meta = input.meta;
@@ -193,11 +193,11 @@ fn reset_cancels_an_active_join(
         true
     }));
     blender.commit_join();
-    let joined = blender.process_active(chunk(&pools, spec, blend_join_frame));
+    let joined = blender.process_active(chunk(&pools, spec, &blend_join_frame));
     assert_eq!(joined.samples[0].to_bits(), (-0.75_f32).to_bits());
 
     blender.reset();
-    let input = chunk(&pools, spec, blend_signed_frame);
+    let input = chunk(&pools, spec, &blend_signed_frame);
     let input_bits = input
         .samples
         .iter()

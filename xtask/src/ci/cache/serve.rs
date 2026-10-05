@@ -107,11 +107,11 @@ mod tests {
                 .args(["-c", &format!("trap 'exit 0' TERM; echo up; {then}")])
                 .stdout(Stdio::piped()),
         )
-        .unwrap();
+        .expect("the stand-in store starts");
         let mut line = String::new();
-        BufReader::new(store.stdout.take().unwrap())
+        BufReader::new(store.stdout.take().expect("the store's output is piped"))
             .read_line(&mut line)
-            .unwrap();
+            .expect("the stand-in store says it is up");
         assert_eq!(line, "up\n");
         store
     }
@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(status.code(), Some(0), "the store was killed: {status}");
     }
 
-    /// RustFS answers 503 while it starts, and the setup that follows talks
+    /// `RustFS` answers 503 while it starts, and the setup that follows talks
     /// to it.
     #[test]
     fn the_store_is_ready_once_it_answers_ready() {
