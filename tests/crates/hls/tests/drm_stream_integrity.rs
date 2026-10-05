@@ -22,9 +22,9 @@ use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-const fn is_known_box(tag: &[u8; 4]) -> bool {
+const fn is_known_box(tag: [u8; 4]) -> bool {
     matches!(
-        tag,
+        &tag,
         b"moof" | b"mdat" | b"styp" | b"sidx" | b"free" | b"ftyp" | b"moov" | b"emsg"
     )
 }
@@ -88,7 +88,7 @@ fn next_box(
         return None;
     }
     let tag_str = String::from_utf8_lossy(&tag).to_string();
-    if !is_known_box(&tag) {
+    if !is_known_box(tag) {
         let hex = hex_dump(&header[..8]);
         warn!("[{label}] scan: UNKNOWN box at pos={pos} tag='{tag_str}' hex=[{hex}]");
         return None;
@@ -202,6 +202,95 @@ fn assert_boxes_contiguous(boxes: &[(u64, u64, String)], label: &str) {
     }
 }
 
+/// Phase 2: the scanned boxes tile the stream and pair every `moof` with an
+/// `mdat`.
+fn assert_box_layout(boxes: &[(u64, u64, String)], last_end: u64, stream_len: u64, label: &str) {
+    assert_boxes_contiguous(boxes, label);
+
+    let moof_count = boxes.iter().filter(|(_, _, t)| t == "moof").count();
+    let mdat_count = boxes.iter().filter(|(_, _, t)| t == "mdat").count();
+
+    info!(
+        "[{label}] Phase 2 result: {} boxes, {moof_count} moofs, {mdat_count} mdats, \
+         last_end={last_end}, stream_len={stream_len}",
+        boxes.len()
+    );
+
+    assert!(
+        boxes.len() >= 4,
+        "[{label}] Expected at least 4 fMP4 boxes, found {}",
+        boxes.len()
+    );
+    assert_eq!(moof_count, mdat_count, "[{label}] moof/mdat count mismatch");
+}
+
+/// Phase 1 read the whole stream: it reached EOF without a read error, and
+/// read as many bytes as the stream reports.
+fn assert_phase1_read(phase1: &Phase1Result, stream_len: u64, is_auto_abr: bool, label: &str) {
+    let Phase1Result {
+        total_read,
+        saw_eof,
+        ref read_error,
+        hit_deadline,
+    } = *phase1;
+
+    let read_vs_len = (total_read as i64) - (stream_len as i64);
+    debug!("[{label}] total_read - stream_len = {read_vs_len}");
+    assert!(
+        !hit_deadline || read_vs_len.unsigned_abs() < 1024,
+        "[{label}] Phase 1 hit deadline before EOF: total_read={total_read} \
+         stream_len={stream_len} delta={read_vs_len}"
+    );
+    if let Some(error) = read_error {
+        panic!("[{label}] Phase 1 ended with read error before EOF: {error}");
+    }
+    // WHY: For ABR-auto fMP4, a non-byte-continuous variant switch
+    // (`HlsCoord::commit_variant_switch`, `needs_byte_continuity=false`
+    // path) leaves the byte axis discontinuous: the reader physically
+    // streams `pre_switch_v0_bytes + post_switch_v_new_bytes`, while
+    // `stream.len()` only reports the active variant's natural total.
+    // The strict equality contract only holds for byte-continuous
+    // streams (single variant, or WAV ABR via `byte_shift`).
+    if is_auto_abr {
+        assert!(
+            saw_eof,
+            "[{label}] Phase 1 did not reach EOF: total_read={total_read} \
+             stream_len={stream_len} delta={read_vs_len}"
+        );
+        assert!(
+            total_read >= stream_len.saturating_sub(1024),
+            "[{label}] Phase 1 read less than active variant size: \
+             total_read={total_read} stream_len={stream_len} delta={read_vs_len}"
+        );
+    } else {
+        assert!(
+            read_vs_len.unsigned_abs() < 1024,
+            "[{label}] Phase 1 did not read full stream: total_read={total_read} \
+             stream_len={stream_len} delta={read_vs_len} saw_eof={saw_eof}"
+        );
+    }
+}
+
+/// Phase 2: the scanned boxes end within 1024 bytes of `coverage_ref`, the bytes
+/// the active variant holds.
+fn assert_box_coverage(
+    last_end: u64,
+    coverage_ref: u64,
+    total_read: u64,
+    stream_len: u64,
+    label: &str,
+) {
+    let coverage_delta = (last_end as i64) - (coverage_ref as i64);
+    debug!("[{label}] box coverage delta (last_end - {coverage_ref}) = {coverage_delta}");
+
+    assert!(
+        coverage_delta.unsigned_abs() < 1024,
+        "[{label}] fMP4 box coverage doesn't match active-variant size: \
+         last_end={last_end} coverage_ref={coverage_ref} total_read={total_read} \
+         stream_len={stream_len} delta={coverage_delta}"
+    );
+}
+
 #[kithara::test(
     tokio,
     native,
@@ -269,72 +358,16 @@ async fn drm_stream_byte_integrity(
 
         info!("[{label}] Phase 1: reading to EOF");
         let mut buf = vec![0u8; 65536];
-        let Phase1Result {
-            total_read,
-            saw_eof,
-            read_error,
-            hit_deadline,
-        } = read_to_eof_or_deadline(&mut stream, &mut buf, label);
+        let phase1 = read_to_eof_or_deadline(&mut stream, &mut buf, label);
+        let total_read = phase1.total_read;
 
         let stream_len = stream.len().unwrap_or(0);
         info!("[{label}] Phase 1 done: total_read={total_read} stream_len={stream_len}");
 
         info!("[{label}] Phase 2: scanning fMP4 from pos 0");
         let (boxes, last_end) = scan_boxes(&mut stream, 0, stream_len.max(total_read), label);
-
-        assert_boxes_contiguous(&boxes, label);
-
-        let moof_count = boxes.iter().filter(|(_, _, t)| t == "moof").count();
-        let mdat_count = boxes.iter().filter(|(_, _, t)| t == "mdat").count();
-
-        info!(
-            "[{label}] Phase 2 result: {} boxes, {moof_count} moofs, {mdat_count} mdats, \
-             last_end={last_end}, stream_len={stream_len}",
-            boxes.len()
-        );
-
-        assert!(
-            boxes.len() >= 4,
-            "[{label}] Expected at least 4 fMP4 boxes, found {}",
-            boxes.len()
-        );
-        assert_eq!(moof_count, mdat_count, "[{label}] moof/mdat count mismatch");
-
-        let read_vs_len = (total_read as i64) - (stream_len as i64);
-        debug!("[{label}] total_read - stream_len = {read_vs_len}");
-        assert!(
-            !hit_deadline || read_vs_len.unsigned_abs() < 1024,
-            "[{label}] Phase 1 hit deadline before EOF: total_read={total_read} \
-             stream_len={stream_len} delta={read_vs_len}"
-        );
-        if let Some(error) = read_error {
-            panic!("[{label}] Phase 1 ended with read error before EOF: {error}");
-        }
-        // WHY: For ABR-auto fMP4, a non-byte-continuous variant switch
-        // (`HlsCoord::commit_variant_switch`, `needs_byte_continuity=false`
-        // path) leaves the byte axis discontinuous: the reader physically
-        // streams `pre_switch_v0_bytes + post_switch_v_new_bytes`, while
-        // `stream.len()` only reports the active variant's natural total.
-        // The strict equality contract only holds for byte-continuous
-        // streams (single variant, or WAV ABR via `byte_shift`).
-        if is_auto_abr {
-            assert!(
-                saw_eof,
-                "[{label}] Phase 1 did not reach EOF: total_read={total_read} \
-                 stream_len={stream_len} delta={read_vs_len}"
-            );
-            assert!(
-                total_read >= stream_len.saturating_sub(1024),
-                "[{label}] Phase 1 read less than active variant size: \
-                 total_read={total_read} stream_len={stream_len} delta={read_vs_len}"
-            );
-        } else {
-            assert!(
-                read_vs_len.unsigned_abs() < 1024,
-                "[{label}] Phase 1 did not read full stream: total_read={total_read} \
-                 stream_len={stream_len} delta={read_vs_len} saw_eof={saw_eof}"
-            );
-        }
+        assert_box_layout(&boxes, last_end, stream_len, label);
+        assert_phase1_read(&phase1, stream_len, is_auto_abr, label);
 
         // For ABR-auto streams Phase 2 re-scans bytes [0..stream_len) from
         // the post-switch active variant. Phase 1's `total_read` may exceed
@@ -343,15 +376,7 @@ async fn drm_stream_byte_integrity(
         // instead. Single-variant cases keep the strict equality against
         // `total_read`.
         let coverage_ref = if is_auto_abr { stream_len } else { total_read };
-        let coverage_delta = (last_end as i64) - (coverage_ref as i64);
-        debug!("[{label}] box coverage delta (last_end - {coverage_ref}) = {coverage_delta}");
-
-        assert!(
-            coverage_delta.unsigned_abs() < 1024,
-            "[{label}] fMP4 box coverage doesn't match active-variant size: \
-             last_end={last_end} coverage_ref={coverage_ref} total_read={total_read} \
-             stream_len={stream_len} delta={coverage_delta}"
-        );
+        assert_box_coverage(last_end, coverage_ref, total_read, stream_len, label);
 
         info!("[{label}] PASSED");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())

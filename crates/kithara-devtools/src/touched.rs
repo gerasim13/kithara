@@ -191,9 +191,11 @@ mod tests {
     /// The default lane: the workspace without the tool packages.
     const WORKSPACE: &str = "workspace";
 
-    /// Lanes as `(name, owns, packages)`, beside a workspace lane that leaves
-    /// `xtask` out.
-    fn config(owned: &[(&str, &[&str], &[&str])]) -> BTreeMap<String, TestLaneConfig> {
+    /// A lane as `(name, owns, packages)`.
+    type Lane<'a> = (&'a str, &'a [&'a str], &'a [&'a str]);
+
+    /// Lanes beside a workspace lane that leaves `xtask` out.
+    fn config(owned: &[Lane<'_>]) -> BTreeMap<String, TestLaneConfig> {
         let strings = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect();
         let mut lanes: BTreeMap<String, TestLaneConfig> = owned
             .iter()

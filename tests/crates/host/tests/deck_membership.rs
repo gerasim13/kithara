@@ -17,7 +17,12 @@ async fn failed_deck_preparation_releases_host_membership() {
     let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate");
     let config = HostConfig::offline(region.clone())
         .settings(HostSettings::builder().sample_rate(sample_rate).build())
-        .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES as u32).expect("block size"))
+        .max_block_frames(
+            u32::try_from(consts::BLOCK_FRAMES)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .expect("block size"),
+        )
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

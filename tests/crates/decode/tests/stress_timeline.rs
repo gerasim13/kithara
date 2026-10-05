@@ -7,6 +7,7 @@ use kithara::{
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::fixtures::stress_wav;
 use kithara_test_utils::Xorshift64;
+use num_traits::AsPrimitive;
 
 use crate::common::test_defaults::SawWav;
 
@@ -72,9 +73,9 @@ fn stress_seeks_preserve_timeline_integrity(stress_wav: &'static [u8]) {
                 );
             }
 
-            let expected_ts = Duration::from_secs_f64(
-                meta.frame_offset as f64 / f64::from(meta.spec.sample_rate.get()),
-            );
+            let frame_offset: f64 = meta.frame_offset.as_();
+            let expected_ts =
+                Duration::from_secs_f64(frame_offset / f64::from(meta.spec.sample_rate.get()));
             let ts_diff = meta.timestamp.abs_diff(expected_ts);
             assert!(
                 ts_diff < Duration::from_millis(1),

@@ -8,6 +8,7 @@ use kithara_integration_tests::offline::{
     OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
+use num_traits::AsPrimitive;
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
@@ -96,8 +97,9 @@ fn cochlea_silent_segments(samples: &[f32], start_frame: usize, end_frame: usize
         &audio,
         &SegmentOpts::default().with_window_ms(SEGMENT_WINDOW_MS),
     );
-    let start_ms = start_frame as f64 / f64::from(SAMPLE_RATE) * 1_000.0;
-    let end_ms = end_frame as f64 / f64::from(SAMPLE_RATE) * 1_000.0;
+    let frame_ms = 1_000.0 / f64::from(SAMPLE_RATE);
+    let (start_frame, end_frame): (f64, f64) = (start_frame.as_(), end_frame.as_());
+    let (start_ms, end_ms) = (start_frame * frame_ms, end_frame * frame_ms);
     timeline
         .segments
         .iter()
