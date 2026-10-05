@@ -44,9 +44,10 @@ tracing-subscriber = { workspace = true }
 nix = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["http-server"] }
+
+axum = { workspace = true }
 proc-macro2 = { workspace = true }
 syn = { workspace = true, features = ["visit"] }
 
