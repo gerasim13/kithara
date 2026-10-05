@@ -16,6 +16,10 @@ mod badge;
 mod bar;
 mod contract;
 mod deck;
+#[cfg(not(any(feature = "iced", feature = "masonry")))]
+pub(crate) mod geometry;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host;
 mod label;
 mod panel;
 mod press;

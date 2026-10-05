@@ -1,4 +1,4 @@
-use super::super::TablePresentation;
+use super::super::registry::TablePresentation;
 use crate::{
     expand::Binding,
     ids::InternId,

@@ -1,4 +1,4 @@
-use super::super::{GlyphPresentation, TextPresentation};
+use super::super::registry::{GlyphPresentation, TextPresentation};
 use crate::{
     ids::InternId,
     module::{GlyphStyle, ScalarFormat, TextStyle, Tone},

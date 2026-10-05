@@ -1,12 +1,7 @@
 #[cfg(not(any(feature = "iced", feature = "masonry")))]
-pub(crate) mod geometry;
+pub(crate) use super::geometry as config;
 #[cfg(any(feature = "iced", feature = "masonry"))]
-pub(crate) mod host;
-
-#[cfg(not(any(feature = "iced", feature = "masonry")))]
-pub(crate) use geometry as config;
-#[cfg(any(feature = "iced", feature = "masonry"))]
-pub(crate) use host as config;
+pub(crate) use super::host as config;
 
 use crate::{
     expand::Binding,
@@ -15,7 +10,7 @@ use crate::{
     skin::{ColorRole, FontFamily, FontWeight},
 };
 
-type TextPresentation<'a> = (
+pub(super) type TextPresentation<'a> = (
     Option<InternId>,
     Option<ColorRole>,
     Option<ColorRole>,
@@ -25,7 +20,7 @@ type TextPresentation<'a> = (
     Option<FontWeight>,
 );
 
-type GlyphPresentation<'a> = (
+pub(super) type GlyphPresentation<'a> = (
     IconName,
     Option<IconName>,
     Option<ColorRole>,
@@ -33,7 +28,7 @@ type GlyphPresentation<'a> = (
     Option<&'a Binding>,
 );
 
-type TablePresentation<'a> = (
+pub(super) type TablePresentation<'a> = (
     &'a [TableColumn],
     Option<&'a Binding>,
     Option<&'a Binding>,
