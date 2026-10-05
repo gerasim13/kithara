@@ -5,12 +5,12 @@ on:
     inputs:
       scope:
         type: choice
-        options: [all, source-gates]
+        options: [all, issue-327, source-gates]
         default: all
       checks_revision:
         description: Immutable fork revision for format and fast lint checks
         type: string
-        default: 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+        default: 7cb1e830914d585138104b2fb90bdc20ae51a0c6
 
 defaults:
   run:
@@ -105,14 +105,14 @@ jobs:
   ui-probes:
     name: Issue 327 final feature compile probes
     needs: authorize
-    if: inputs.scope == 'all'
+    if: inputs.scope == 'all' || inputs.scope == 'issue-327'
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
     steps:
       - name: Checkout immutable subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+          ref: 7cb1e830914d585138104b2fb90bdc20ae51a0c6
           persist-credentials: false
       - name: Scope Cargo dependency fetch authorization
         env:
@@ -133,7 +133,7 @@ jobs:
           mkdir -p validation
           printf '%s\n' "$GITHUB_SHA" > validation/controller-sha.txt
           git rev-parse HEAD | tee validation/subject-sha.txt
-          test "$(git rev-parse HEAD)" = 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+          test "$(git rev-parse HEAD)" = 7cb1e830914d585138104b2fb90bdc20ae51a0c6
       - name: Check final host feature closures and hostless owner warnings
         run: |
           set -uo pipefail
@@ -167,14 +167,14 @@ jobs:
   ui-acceptance:
     name: Issue 327 real UI acceptance
     needs: authorize
-    if: inputs.scope == 'all'
+    if: inputs.scope == 'all' || inputs.scope == 'issue-327'
     runs-on: ${{ fromJSON(vars.KITHARA_GPU_RUNNER_LABELS) }}
     timeout-minutes: 120
     steps:
       - name: Checkout immutable subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+          ref: 7cb1e830914d585138104b2fb90bdc20ae51a0c6
           persist-credentials: false
       - name: Scope Cargo dependency fetch authorization
         env:
@@ -196,7 +196,7 @@ jobs:
           mkdir -p validation
           printf '%s\n' "$GITHUB_SHA" > validation/controller-sha.txt
           git rev-parse HEAD | tee validation/subject-sha.txt
-          test "$(git rev-parse HEAD)" = 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+          test "$(git rev-parse HEAD)" = 7cb1e830914d585138104b2fb90bdc20ae51a0c6
           just ci lane deep-ui --kind nightly 2>&1 | tee validation/ui-acceptance.log
       - name: Preserve UI evidence
         if: always()
