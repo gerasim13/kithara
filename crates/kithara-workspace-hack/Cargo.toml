@@ -25,7 +25,6 @@ firewheel = { version = "0.14", default-features = false, features = ["cpal", "s
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
-futures-core = { version = "0.3" }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
@@ -70,7 +69,6 @@ firewheel = { version = "0.14", default-features = false, features = ["cpal", "s
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
-futures-core = { version = "0.3" }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
@@ -118,14 +116,13 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -143,7 +140,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -163,15 +159,13 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
-hotpath-macros = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -190,8 +184,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
-time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -211,15 +203,14 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -238,7 +229,7 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -260,16 +251,14 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
-hotpath-macros = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -289,8 +278,7 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
-time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -311,15 +299,14 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -338,7 +325,7 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -360,16 +347,14 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 cookie = { version = "0.18", default-features = false, features = ["percent-encode"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 dispatch2 = { version = "0.3" }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
-hotpath-macros = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -389,8 +374,7 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
-time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -403,13 +387,12 @@ aho-corasick = { version = "1" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -424,7 +407,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -437,14 +419,12 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 clang-sys = { version = "1", default-features = false, features = ["clang_11_0", "runtime"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
-hotpath-macros = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -459,8 +439,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
-time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -478,14 +456,13 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -504,7 +481,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -523,15 +499,13 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
-hotpath-macros = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -551,8 +525,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
-time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -570,14 +542,13 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -596,7 +567,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -615,15 +585,13 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
-deranged = { version = "0.5", features = ["serde"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
-hotpath = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
-hotpath-macros = { version = "0.28", features = ["hotpath", "hotpath-alloc"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
@@ -643,8 +611,6 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-time = { version = "0.3", features = ["macros", "serde-well-known"] }
-time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
@@ -658,6 +624,7 @@ bytemuck = { version = "1", default-features = false, features = ["aarch64_simd"
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
 firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-util = { version = "0.3" }
 half = { version = "2" }
 js-sys = { version = "0.3" }
@@ -677,6 +644,7 @@ bytemuck = { version = "1", default-features = false, features = ["aarch64_simd"
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
 firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
 futures-channel = { version = "0.3" }
+futures-core = { version = "0.3" }
 futures-util = { version = "0.3" }
 half = { version = "2" }
 js-sys = { version = "0.3" }
