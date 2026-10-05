@@ -176,11 +176,8 @@ where
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(mut cmd) = self.build_init_cmd(ctx, handle, cancel.clone()) else {
-                        if self
-                            .init()
-                            .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
-                        {
+                    let Some(mut cmd) = self.build_fetch_cmd(ctx, init, handle, cancel.clone()) else {
+                        if !init.state().is_loaded() && !init.state().is_failed() {
                             deferred.push((planned, plan_revision));
                         }
                         continue;
@@ -214,7 +211,9 @@ where
                         cancel.clone()
                     };
                     let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, token) else {
-                        deferred.push((planned, plan_revision));
+                        if !entry.state().is_loaded() && !entry.state().is_failed() {
+                            deferred.push((planned, plan_revision));
+                        }
                         continue;
                     };
                     if owed(seg_idx) {
@@ -248,17 +247,24 @@ where
         cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
-        let Some(resource_handle) = self.segment_handle(seg_idx) else {
-            let _ = handle.into_missing();
-            return None;
-        };
+        self.build_fetch_cmd(ctx, entry, handle, cancel)
+    }
+
+    fn build_fetch_cmd(
+        self: &Arc<Self>,
+        ctx: &PlanCtx<S>,
+        entry: &Segment,
+        handle: FetchClaim<Downloading, S>,
+        cancel: CancelToken,
+    ) -> Option<FetchCmd> {
+        let resource_handle = entry.resource(&self.segments.scope);
         let resource = match resource_handle.acquire(entry.content()) {
             Ok(r) => {
                 entry.state().clear_acquire_failures();
                 r
             }
             Err(err) => {
-                self.settle_unacquirable(ctx, entry, seg_idx, handle, &err);
+                self.settle_unacquirable(ctx, entry, handle, &err);
                 return None;
             }
         };
@@ -288,7 +294,6 @@ where
         &self,
         ctx: &PlanCtx<S>,
         entry: &Segment,
-        seg_idx: u32,
         handle: FetchClaim<Downloading, S>,
         err: &AssetsError,
     ) {
@@ -297,22 +302,23 @@ where
             AcquireSettle::Requeue => {
                 debug!(
                     variant = self.variant,
-                    seg_idx,
+                    planned = ?handle.planned(),
                     failures,
                     error = %err,
-                    "emit_fetch_cmd: segment resource not acquirable yet; requeued"
+                    "resource not acquirable yet; requeued"
                 );
                 let _ = handle.into_missing();
             }
             AcquireSettle::Fail => {
                 warn!(
                     variant = self.variant,
-                    seg_idx,
+                    planned = ?handle.planned(),
                     failures,
                     error = %err,
-                    "emit_fetch_cmd: segment resource cannot be acquired; settling as failed"
+                    "resource cannot be acquired; settling as failed"
                 );
                 let _ = handle.into_failed();
+                ctx.signal.fire();
             }
         }
     }
