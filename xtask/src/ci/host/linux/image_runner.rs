@@ -33,7 +33,7 @@ pub(super) fn install(
     if process.capture("id", &["-u"], "read the installer user")? != "0" {
         bail!("install the native image runner as root");
     }
-    process.require_tools(&["docker", "systemctl", "tar"])?;
+    process.require_tools(&["docker", "systemctl", "systemd-analyze", "tar"])?;
     let runner = host
         .image_runner
         .as_ref()
@@ -87,6 +87,14 @@ pub(super) fn install(
     let path = Path::new(consts::SERVICE_SYSTEMD_ROOT).join(&service);
     fs::write(&path, unit(runner, &directory, &executable, &config)?)
         .with_context(|| format!("writing {}", path.display()))?;
+    process.run(
+        "systemd-analyze",
+        &[
+            "verify",
+            path.to_str().context("the native unit path is not UTF-8")?,
+        ],
+        "verify the native image runner unit",
+    )?;
     process.run(
         "systemctl",
         &["daemon-reload"],
@@ -165,7 +173,7 @@ fn unit(
          Environment=PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
          RuntimeDirectory=kithara-ci-image-runner\n\
          RuntimeDirectoryMode=0700\n\
-         EnvironmentFile=-{environment}\n\
+         EnvironmentFile=-{environment_path}\n\
          ExecStartPre=:{executable} ci host linux --config {config} configure-image-runner --env-file {environment}\n\
          ExecStart=:{entrypoint}\n\
          Restart=always\n\
@@ -173,10 +181,11 @@ fn unit(
          [Install]\n\
          WantedBy=multi-user.target\n",
         directory = unit_path(directory)?,
-        environment = unit_path(&environment_file(runner))?,
-        executable = unit_path(executable)?,
-        config = unit_path(config)?,
-        entrypoint = unit_path(&directory.join("run.sh"))?,
+        environment_path = unit_path(&environment_file(runner))?,
+        environment = unit_argument(&environment_file(runner))?,
+        executable = unit_argument(executable)?,
+        config = unit_argument(config)?,
+        entrypoint = unit_argument(&directory.join("run.sh"))?,
     ))
 }
 
@@ -191,11 +200,13 @@ fn unit_path(path: &Path) -> Result<String> {
     if text.contains(['\n', '\r']) {
         bail!("the native runner path cannot contain a line break");
     }
+    Ok(text.replace('%', "%%"))
+}
+
+fn unit_argument(path: &Path) -> Result<String> {
     Ok(format!(
         "\"{}\"",
-        text.replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('%', "%%")
+        unit_path(path)?.replace('\\', "\\\\").replace('"', "\\\"")
     ))
 }
 
@@ -252,8 +263,9 @@ mod tests {
         assert!(!pre.contains("ExecStartPre=-"));
         assert!(pre.starts_with("ExecStartPre=:"));
         assert!(pre.contains("--config \"/etc/${PROFILE}/linux-host.toml\""));
-        assert!(text.contains("EnvironmentFile=-\"/run/kithara-ci-image-runner/images.env\""));
+        assert!(text.contains("EnvironmentFile=-/run/kithara-ci-image-runner/images.env"));
         assert!(text.contains("RuntimeDirectoryMode=0700"));
+        assert!(text.contains(&format!("WorkingDirectory={}", directory.display())));
         assert!(text.contains("Environment=RUNNER_ALLOW_RUNASROOT=1"));
         assert!(text.contains("Environment=PATH=/root/.cargo/bin:"));
         let start = text
@@ -271,14 +283,18 @@ mod tests {
     #[test]
     fn systemd_paths_preserve_spaces_and_literal_specifiers() {
         assert_eq!(
-            unit_path(Path::new("/ci % root/runner")).expect("quoted path"),
+            unit_path(Path::new("/ci % root/runner")).expect("scalar path"),
+            "/ci %% root/runner"
+        );
+        assert_eq!(
+            unit_argument(Path::new("/ci % root/runner")).expect("quoted argument"),
             "\"/ci %% root/runner\""
         );
         assert!(unit_path(Path::new("/ci\nrunner")).is_err());
         let path = Path::new("/ci ${ROOT}/runner");
         assert_eq!(
             unit_path(path).expect("property path"),
-            "\"/ci ${ROOT}/runner\""
+            "/ci ${ROOT}/runner"
         );
     }
 }
