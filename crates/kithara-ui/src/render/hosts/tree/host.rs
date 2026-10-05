@@ -1226,7 +1226,9 @@ mod tests {
         );
         resolver.insert(
             "library2.kmodule.ron",
-            include_str!("../../../../../kithara-ui-gallery/assets/modules/tabs/library2.kmodule.ron"),
+            include_str!(
+                "../../../../../kithara-ui-gallery/assets/modules/tabs/library2.kmodule.ron"
+            ),
         );
         compile(
             "library.klayout.ron",
@@ -1321,7 +1323,9 @@ mod tests {
         );
         resolver.insert(
             "buttons.kmodule.ron",
-            include_str!("../../../../../kithara-ui-gallery/assets/modules/tabs/buttons.kmodule.ron"),
+            include_str!(
+                "../../../../../kithara-ui-gallery/assets/modules/tabs/buttons.kmodule.ron"
+            ),
         );
         compile(
             "gallery.klayout.ron",
@@ -1390,7 +1394,9 @@ mod tests {
         );
         resolver.insert(
             "faders.kmodule.ron",
-            include_str!("../../../../../kithara-ui-gallery/assets/modules/tabs/faders.kmodule.ron"),
+            include_str!(
+                "../../../../../kithara-ui-gallery/assets/modules/tabs/faders.kmodule.ron"
+            ),
         );
         compile(
             "gallery.klayout.ron",
@@ -1434,7 +1440,9 @@ mod tests {
         );
         resolver.insert(
             "module-tabs.kmodule.ron",
-            include_str!("../../../../../kithara-ui-gallery/assets/modules/module-tabs.kmodule.ron"),
+            include_str!(
+                "../../../../../kithara-ui-gallery/assets/modules/module-tabs.kmodule.ron"
+            ),
         );
         compile(
             "gallery.klayout.ron",

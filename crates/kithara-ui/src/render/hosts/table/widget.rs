@@ -8,9 +8,7 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-use super::{
-    paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect},
-};
+use super::paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect};
 use crate::{
     atoms::table::{face::TableFace, table_body, table_dividers, table_visible_row_rect},
     draw::{Pt, Rect},

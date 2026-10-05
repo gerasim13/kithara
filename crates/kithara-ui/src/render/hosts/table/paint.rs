@@ -7,7 +7,6 @@ use iced::{
 };
 use kithara_test_macros as kithara;
 
-use crate::render::{Carried, Marked, Marks, Probe, Published, controls::RetainedCanvasState};
 use crate::{
     atoms::table::{
         column_resizable,
@@ -22,6 +21,7 @@ use crate::{
         recognizers::{ItemDrag, ScalarState},
     },
     module::TableColumn,
+    render::{Carried, Marked, Marks, Probe, Published, controls::RetainedCanvasState},
     shaping::TextContext,
 };
 
