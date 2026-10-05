@@ -30,16 +30,16 @@ thiserror = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-kithara-net = { workspace = true, features = ["client-reqwest", "mock", "tls-rustls"] }
+kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 kithara-test-utils = { workspace = true }
 
-async-trait = { workspace = true }
-unimock = { workspace = true }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-net = { workspace = true, features = ["mock"] }
 kithara-test-utils = { workspace = true, features = ["http-server"] }
 
+async-trait = { workspace = true }
 axum = { workspace = true }
+unimock = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }
