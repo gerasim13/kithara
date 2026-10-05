@@ -396,6 +396,8 @@ fn pin(pins: &CiPins, key: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    mod network;
+
     use std::path::Path;
 
     use super::*;

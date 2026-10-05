@@ -12851,6 +12851,7 @@ name = "xtask"
 version = "0.0.1-alpha5"
 dependencies = [
  "anyhow",
+ "axum",
  "base64",
  "cargo_metadata 0.23.1",
  "clap",
@@ -12861,6 +12862,8 @@ dependencies = [
  "glob",
  "hex",
  "kithara-devtools",
+ "kithara-platform",
+ "kithara-test-utils",
  "nix",
  "plist",
  "proc-macro2",
