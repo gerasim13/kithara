@@ -1,10 +1,6 @@
 use kithara_bufpool::HasPool;
 
-#[cfg(feature = "stretch-bungee")]
-use crate::backends::BungeeElastic;
-#[cfg(feature = "stretch-signalsmith")]
-use crate::backends::SignalsmithElastic;
-use crate::{ElasticConfig, ElasticEngine, ElasticError, StretchKind, backends::VarispeedElastic};
+use crate::{ElasticConfig, ElasticEngine, ElasticError, StretchKind, backends};
 
 /// Prepares the selected exact-span engine.
 ///
@@ -17,19 +13,22 @@ where
 {
     match config.backend() {
         #[cfg(feature = "stretch-signalsmith")]
-        StretchKind::Signalsmith => SignalsmithElastic::prepare(config)
+        StretchKind::Signalsmith => backends::SignalsmithElastic::prepare(config)
             .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
         #[cfg(feature = "stretch-bungee")]
-        StretchKind::Bungee => {
-            BungeeElastic::prepare(config).map(|engine| Box::new(engine) as Box<dyn ElasticEngine>)
-        }
+        StretchKind::Bungee => backends::BungeeElastic::prepare(config)
+            .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
         #[cfg(feature = "stretch-glide")]
-        StretchKind::Glide => VarispeedElastic::prepare(config)
+        StretchKind::Glide => backends::VarispeedElastic::prepare(config)
+            .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
+        #[cfg(feature = "stretch-identity")]
+        StretchKind::Identity => backends::IdentityElastic::prepare(config)
             .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
     }
 }
 
-/// Prepares the exact-span varispeed engine used when pitch follows transport.
+/// Prepares the exact-span engine used when pitch follows transport.
+/// A selected backend without rate support preserves unity spans.
 ///
 /// # Errors
 /// Returns [`ElasticError`] when the configured shape cannot be prepared.
@@ -39,5 +38,15 @@ pub fn build_varispeed_engine<S>(
 where
     S: HasPool<f32>,
 {
-    VarispeedElastic::prepare(config).map(|engine| Box::new(engine) as Box<dyn ElasticEngine>)
+    match config.backend() {
+        #[cfg(feature = "stretch-identity")]
+        StretchKind::Identity => build_engine(config),
+        #[cfg(any(
+            feature = "stretch-signalsmith",
+            feature = "stretch-bungee",
+            feature = "stretch-glide"
+        ))]
+        _ => backends::VarispeedElastic::prepare(config)
+            .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
+    }
 }
