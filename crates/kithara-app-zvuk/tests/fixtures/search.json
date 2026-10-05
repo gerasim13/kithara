@@ -1,0 +1,107 @@
+{
+  "data": {
+    "search": {
+      "tracks": {
+        "items": [
+          {
+            "artists": [
+              {
+                "title": "Ana Vale"
+              },
+              {
+                "title": "Ben Ore"
+              }
+            ],
+            "collectionItemData": {
+              "itemStatus": null
+            },
+            "duration": 128,
+            "id": "1000",
+            "release": {
+              "image": {
+                "src": "https://covers.example.invalid/{size}/1000.jpg"
+              },
+              "title": "First Light"
+            },
+            "title": "Amber Field"
+          },
+          {
+            "artists": [
+              {
+                "title": "Cleo Moss"
+              },
+              {
+                "title": "Dara Fen"
+              }
+            ],
+            "collectionItemData": {
+              "itemStatus": null
+            },
+            "duration": 220,
+            "id": "1003",
+            "release": {
+              "image": null,
+              "title": "Second Wind"
+            },
+            "title": "Birch Lane"
+          },
+          {
+            "artists": [
+              {
+                "title": "Eli Rook"
+              }
+            ],
+            "collectionItemData": {
+              "itemStatus": null
+            },
+            "duration": 198,
+            "id": "1006",
+            "release": null,
+            "title": "Cedar Hill"
+          },
+          {
+            "artists": [
+              {
+                "title": "Fay Lowe"
+              }
+            ],
+            "collectionItemData": {
+              "itemStatus": null
+            },
+            "duration": 234,
+            "id": "1008",
+            "release": {
+              "image": {
+                "src": null
+              },
+              "title": null
+            },
+            "title": "Dune Road"
+          },
+          {
+            "artists": [
+              {
+                "title": "Gus Hale"
+              }
+            ],
+            "collectionItemData": {
+              "itemStatus": null
+            },
+            "duration": 190,
+            "id": "1010",
+            "release": {
+              "image": {
+                "src": "https://covers.example.invalid/{size}/1010.jpg"
+              },
+              "title": "Fifth Season"
+            },
+            "title": "Elm Court"
+          }
+        ],
+        "page": {
+          "total": 120
+        }
+      }
+    }
+  }
+}

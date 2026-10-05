@@ -28,7 +28,7 @@ use crate::{
     resumable::{Refetch, Resumed, resumable_body},
     retry::RetryNet,
     traits::Net,
-    types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec},
+    types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
 /// Truncate an HTTP error body so it stays useful in logs without dumping
@@ -396,8 +396,20 @@ impl HttpClient {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
+        self.with_options(self.options().clone().with_observer(observer))
+    }
+
+    /// Returns a handle with a different retry policy, sharing the HTTP
+    /// transport and connection pool with this client.
+    #[must_use]
+    pub fn with_retry_policy(&self, retry_policy: RetryPolicy) -> Self {
+        let mut options = self.options().clone();
+        options.retry_policy = retry_policy;
+        self.with_options(options)
+    }
+
+    fn with_options(&self, options: NetOptions) -> Self {
         let current = self.net.inner();
-        let options = current.options.with_observer(observer);
         let raw = RawHttp {
             inner: current.inner.clone(),
             options,
@@ -1177,6 +1189,36 @@ mod tests {
         assert_eq!(
             client.with_observer(None).options().pool_idle_timeout,
             Duration::from_secs(77)
+        );
+    }
+
+    /// A handle derived with its own retry policy retries by that policy, and
+    /// the original keeps retrying by its own.
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn a_retry_policy_handle_leaves_the_original_policy() {
+        let (server, counter) = server_post_echo_failing_first_n(u32::MAX).await;
+        let client = HttpClient::new(
+            fast_options(2),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
+        let derived = client.with_retry_policy(fast_options(0).retry_policy);
+
+        let _ = derived
+            .post_bytes(server.url("/echo"), Bytes::new(), None)
+            .await;
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "the derived handle sends once"
+        );
+        let _ = client
+            .post_bytes(server.url("/echo"), Bytes::new(), None)
+            .await;
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            4,
+            "the original retries twice"
         );
     }
 }
