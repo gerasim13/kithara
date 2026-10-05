@@ -1383,6 +1383,84 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
     );
 }
 
+/// Run `body` as the root task of a current-thread runtime, under flash, and
+/// return its output with the virtual time it took.
+fn on_virtual_clock<F: Future>(body: F) -> (F::Output, Duration) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let start = Instant::now();
+    let out = rt.block_on(participate(body, Location::caller()));
+    (out, start.elapsed())
+}
+
+/// The runtime wakes a joiner only after the joined work has returned, and
+/// the work used to give up its engine slot as it returned. In between, every
+/// participant looked parked, so the clock jumped to the joiner's own deadline
+/// before the joiner learned the work was done. That is how a cover read that
+/// took no virtual time missed a two-second wait in
+/// `only_the_current_attempt_places_its_cover`. The closure returns only
+/// once its joiner has parked on it, which opens exactly that window.
+#[kithara::test(native, flash(false))]
+fn a_joined_blocking_closure_holds_the_clock_until_its_joiner_wakes() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let (joined, took) = on_virtual_clock(async {
+        let handle = crate::tokio::task::spawn_blocking(|| {
+            while forward::async_active_count() != 0 {
+                thread::yield_now();
+            }
+        });
+        crate::time::timeout(Duration::from_secs(2), handle).await
+    });
+    assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
+    assert_eq!(
+        took,
+        Duration::ZERO,
+        "the clock moved between the closure's return and its joiner's wake"
+    );
+}
+
+/// The same window for an async task: on a current-thread runtime the task
+/// first runs once its joiner has parked on it, and it finishes in that poll.
+#[kithara::test(native, flash(false))]
+fn a_joined_task_holds_the_clock_until_its_joiner_wakes() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let (joined, took) = on_virtual_clock(async {
+        let handle = crate::tokio::task::spawn(async {});
+        crate::time::timeout(Duration::from_secs(2), handle).await
+    });
+    assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
+    assert_eq!(
+        took,
+        Duration::ZERO,
+        "the clock moved between the task's completion and its joiner's wake"
+    );
+}
+
+/// The other half: work nobody is waiting on has no joiner to hold its slot
+/// for, so it gives the slot up as it finishes. Holding it until the handle is
+/// next polled would freeze the clock under a joiner that sleeps first.
+#[kithara::test(native, flash(false))]
+fn an_unjoined_task_lets_the_clock_advance_when_it_finishes() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let (joined, took) = on_virtual_clock(async {
+        let handle = crate::tokio::task::spawn(async {});
+        crate::time::sleep(Duration::from_secs(1)).await;
+        handle.await
+    });
+    assert!(joined.is_ok(), "{joined:?}");
+    assert_eq!(took, Duration::from_secs(1));
+}
+
 /// A starved poll loop must not buy virtual time with its own backoff. A dated
 /// backoff registers a free `Timed` deadline that the engine services in
 /// isolation: each wake re-polls and re-sleeps, so a consumer whose producer is
