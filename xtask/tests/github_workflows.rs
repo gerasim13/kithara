@@ -1908,7 +1908,11 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
         if name == "authorize" {
             continue;
         }
-        assert!(job_needs(job).contains("authorize"), "`{name}` bypasses authorization");
+        assert!(
+            job_needs(job.as_mapping().expect("a dispatcher job is a mapping"))
+                .contains("authorize"),
+            "`{name}` bypasses authorization"
+        );
         if fan_out.contains(&name) {
             continue;
         }
