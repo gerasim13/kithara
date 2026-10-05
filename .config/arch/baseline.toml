@@ -38,7 +38,6 @@ schema_version = 1
 
 [fn_arg_count]
 "crates/kithara-hls/src/stream/coord.rs::HlsCoord::new" = 1
-"crates/kithara-stream/src/source/traits.rs::SegmentDescriptor::new" = 1
 
 [generic_param_count]
 "crates/kithara-net/src/retry.rs::RetryNet::retry_loop" = 1

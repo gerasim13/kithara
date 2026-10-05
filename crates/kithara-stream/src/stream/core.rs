@@ -381,13 +381,15 @@ mod tests {
     impl ScriptByteMap {
         fn descriptor(&self, index: usize) -> Option<crate::SegmentDescriptor> {
             let segment_index = u32::try_from(index).ok()?;
-            Some(crate::SegmentDescriptor::new(
-                self.segments.get(index)?.clone(),
-                Duration::ZERO,
-                Duration::ZERO,
-                segment_index,
-                0,
-            ))
+            Some(
+                crate::SegmentDescriptor::builder()
+                    .byte_range(self.segments.get(index)?.clone())
+                    .decode_time(Duration::ZERO)
+                    .duration(Duration::ZERO)
+                    .segment_index(segment_index)
+                    .variant_index(0)
+                    .build(),
+            )
         }
     }
 

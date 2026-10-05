@@ -30,13 +30,15 @@ where
         let seg_idx_u32 = u32::try_from(idx).ok()?;
         let byte_offset = self.layout.natural_offset(idx)?;
         let size = self.segment_size(idx)?;
-        Some(SegmentDescriptor::new(
-            byte_offset..byte_offset + size,
-            entry.decode_time(),
-            entry.duration(),
-            seg_idx_u32,
-            self.variant,
-        ))
+        Some(
+            SegmentDescriptor::builder()
+                .byte_range(byte_offset..byte_offset + size)
+                .decode_time(entry.decode_time())
+                .duration(entry.duration())
+                .segment_index(seg_idx_u32)
+                .variant_index(self.variant)
+                .build(),
+        )
     }
 
     #[kithara::probe(variant = self.variant as u64, byte)]
@@ -59,13 +61,15 @@ where
     pub(crate) fn descriptor_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         let (idx, off, size) = self.find_at_offset(byte)?;
         let entry = self.segments.get(idx as usize)?.as_media()?;
-        Some(SegmentDescriptor::new(
-            off..off + size,
-            entry.decode_time(),
-            entry.duration(),
-            idx,
-            self.variant,
-        ))
+        Some(
+            SegmentDescriptor::builder()
+                .byte_range(off..off + size)
+                .decode_time(entry.decode_time())
+                .duration(entry.duration())
+                .segment_index(idx)
+                .variant_index(self.variant)
+                .build(),
+        )
     }
 
     #[kithara::probe(variant = self.variant as u64)]

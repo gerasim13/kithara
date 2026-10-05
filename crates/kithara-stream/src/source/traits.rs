@@ -20,7 +20,7 @@ use crate::{
 };
 
 /// Per-segment metadata exposed by segmented sources (HLS).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, bon::Builder)]
 #[non_exhaustive]
 pub struct SegmentDescriptor {
     /// Absolute decode time at the start of this segment (cumulative
@@ -34,25 +34,6 @@ pub struct SegmentDescriptor {
     pub segment_index: u32,
     /// Variant the descriptor was resolved against.
     pub variant_index: usize,
-}
-
-impl SegmentDescriptor {
-    #[must_use]
-    pub const fn new(
-        byte_range: Range<u64>,
-        decode_time: Duration,
-        duration: Duration,
-        segment_index: u32,
-        variant_index: usize,
-    ) -> Self {
-        Self {
-            decode_time,
-            duration,
-            byte_range,
-            segment_index,
-            variant_index,
-        }
-    }
 }
 
 /// Time-first seek anchor resolved by a segmented source.
