@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::{fmt::Display, path::Path, process::Command};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -11,7 +11,7 @@ use super::{
 use crate::{
     common::project::{ProjectConfig, TestCommandConfig},
     retried::Evidence,
-    touched,
+    touched::{self, Touched},
     verdict::ChildFailure,
 };
 
@@ -51,23 +51,25 @@ fn run_touched(test: &TestCommandConfig, root: &Path, request: &TestRequest) -> 
         println!("no owned path touched; the nightly sweep covers these lanes");
         return Ok(());
     }
-    run_each(&selected, |lane_name| {
-        run_lane(test, root, lane_name, request)
+    run_each(&selected, |run| {
+        let mut command = touched_command(test, run, request)?;
+        execute(test, root, run.lane(), &mut command)
     })
 }
 
 /// Run `selected` serially without letting the first failure hide the rest:
 /// the error names each red lane with its own reason and leaves with the
 /// first one's exit code.
-pub(super) fn run_each<F>(selected: &[String], mut run: F) -> Result<()>
+pub(super) fn run_each<T, F>(selected: &[T], mut run: F) -> Result<()>
 where
-    F: FnMut(&str) -> Result<()>,
+    T: Display,
+    F: FnMut(&T) -> Result<()>,
 {
     let mut failures = Vec::new();
     let mut code = None;
-    for lane_name in selected {
-        println!("=== {lane_name} ===");
-        if let Err(error) = run(lane_name) {
+    for lane in selected {
+        println!("=== {lane} ===");
+        if let Err(error) = run(lane) {
             code.get_or_insert_with(|| {
                 error
                     .downcast_ref::<ChildFailure>()
@@ -123,6 +125,22 @@ pub(super) fn lane_command(
 ) -> Result<Command> {
     resolve(test, &requested(test, lane_name, Some(request))?)?
         .command(NextestAction::Run, &request.passthrough)
+}
+
+/// The command of one touched run: a lane whole, or narrowed to packages.
+pub(super) fn touched_command(
+    test: &TestCommandConfig,
+    run: &Touched,
+    request: &TestRequest,
+) -> Result<Command> {
+    match run {
+        Touched::Whole(lane_name) => lane_command(test, lane_name, request),
+        Touched::Narrowed { lane, packages } => {
+            resolve(test, &requested(test, lane, Some(request))?)?
+                .narrowed(packages)?
+                .command(NextestAction::Run, &request.passthrough)
+        }
+    }
 }
 
 /// Operation on the same configured nextest selection.

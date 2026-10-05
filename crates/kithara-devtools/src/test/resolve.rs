@@ -111,6 +111,29 @@ impl ResolvedLane {
         Ok(command)
     }
 
+    /// The lane with its own build, running only the tests of `packages`.
+    ///
+    /// Only the filterset changes: selecting the packages instead would make
+    /// cargo resolve features over them alone and build different units.
+    pub(crate) fn narrowed(mut self, packages: &BTreeSet<String>) -> Result<Self> {
+        let TestRunner::Nextest(nextest) = &mut self.runner else {
+            bail!(
+                "test lane `{}` runs `cargo test`, which a filterset cannot narrow",
+                self.lane
+            );
+        };
+        let union = packages
+            .iter()
+            .map(|package| format!("package({package})"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        nextest.filter = Some(match &nextest.filter {
+            Some(filter) => intersect(filter, &[union]),
+            None => union,
+        });
+        Ok(self)
+    }
+
     /// The cargo arguments the lane's typed options derive. `profile_flag` is
     /// the one flag the runners spell differently: nextest takes the Cargo
     /// profile as `--cargo-profile` and hands it to `cargo test` as
