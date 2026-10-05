@@ -20,12 +20,17 @@ message: |
   reads, because in a UI crate most of them collect widgets, brushes, or nodes.
   A buffer that leaves the function as an `Arc<[T]>`, `Rc<[T]>` or `Box<[T]>`
   is not scratch and is not covered: no pool can own storage that escapes.
+
+  Skin PNG decoding in `render/picture` runs during asset loading and caches
+  the sheet for later frame lookups. It does not allocate layout or draw scratch
+  per pass, so that cold owner is excluded.
 severity: error
 language: Rust
 files:
   - crates/kithara-ui/src/**/*.rs
   - crates/kithara-app/src/**/*.rs
 ignores:
+  - crates/kithara-ui/src/render/picture/**
   - "**/tests/**"
   - "**/test_*.rs"
   - "**/*_test.rs"

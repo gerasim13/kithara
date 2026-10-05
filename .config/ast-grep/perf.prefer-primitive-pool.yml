@@ -29,6 +29,11 @@ message: |
   existing `PoolRegion<S>` instead. This is a reusable-storage rule: a
   documented long-lived output that crosses an ownership boundary may own its
   bytes directly and must not retain a pool guard merely to silence this lint.
+
+  Cold skin loading in `kithara-ui/src/render/picture` retains decoded sheets;
+  its temporary PNG bytes are not recurring stream scratch. `kithara-ui-capture`
+  owns debug PNG loading and comparison I/O outside the product render loop.
+  These owners are excluded; recurring UI and streaming buffers stay covered.
 severity: error
 language: Rust
 files:
@@ -42,6 +47,8 @@ ignores:
   - crates/kithara-test-fixtures/**
   - crates/kithara-test-macros/**
   - crates/kithara-test-utils/**
+  - crates/kithara-ui/src/render/picture/**
+  - crates/kithara-ui-capture/**
   - crates/kithara-ui-gallery/**
   - crates/kithara-workspace-hack/**
   - "**/tests/**"

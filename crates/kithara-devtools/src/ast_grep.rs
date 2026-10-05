@@ -990,6 +990,75 @@ impl Registered<u8> for HandWrittenPools {
     }
 
     #[test]
+    fn primitive_pool_scope_excludes_cold_picture_loading_and_capture_io() {
+        let sources = [
+            "fn scratch() { let values: Vec<f32> = vec![0.0; 8]; }",
+            "fn read(buffer_size: usize) -> Vec<u8> { let mut pixels = vec![0; buffer_size]; pixels }",
+        ];
+
+        for source in sources {
+            for path in [
+                "crates/kithara-ui/src/render/picture/sprite.rs",
+                "crates/kithara-ui/src/render/picture/nested/load.rs",
+                "crates/kithara-ui-capture/src/diff/compare.rs",
+            ] {
+                assert_eq!(
+                    rule_hits_at("perf.prefer-primitive-pool.yml", path, source),
+                    0,
+                    "cold picture or capture buffer at {path}"
+                );
+            }
+            for path in [
+                "crates/kithara-ui/src/solve/row.rs",
+                "crates/kithara-ui/src/mount/panel/curve.rs",
+                "crates/kithara-ui/src/render/masonry/layout.rs",
+                "crates/kithara-app/src/gui/frame.rs",
+                "crates/kithara-audio/src/producer/tick.rs",
+                "crates/kithara-file/src/stream.rs",
+            ] {
+                assert_eq!(
+                    rule_hits_at("perf.prefer-primitive-pool.yml", path, source),
+                    1,
+                    "recurring primitive buffer at {path}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn layout_scratch_scope_excludes_cold_picture_loading() {
+        let sources = [
+            "fn scratch() { let values: Vec<f32> = vec![0.0; 8]; }",
+            "fn read(buffer_size: usize) -> Vec<u8> { let mut pixels = vec![0; buffer_size]; pixels }",
+        ];
+
+        for source in sources {
+            for path in [
+                "crates/kithara-ui/src/render/picture/sprite.rs",
+                "crates/kithara-ui/src/render/picture/nested/load.rs",
+            ] {
+                assert_eq!(
+                    rule_hits_at("perf.reuse-layout-scratch.yml", path, source),
+                    0,
+                    "cold picture loading buffer at {path}"
+                );
+            }
+            for path in [
+                "crates/kithara-ui/src/solve/row.rs",
+                "crates/kithara-ui/src/mount/panel/curve.rs",
+                "crates/kithara-ui/src/render/masonry/layout.rs",
+                "crates/kithara-app/src/gui/frame.rs",
+            ] {
+                assert_eq!(
+                    rule_hits_at("perf.reuse-layout-scratch.yml", path, source),
+                    1,
+                    "recurring layout or draw buffer at {path}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn pool_rules_allow_test_items_and_reject_wasm_construction() {
         let source = r#"
 #[cfg(test)]
