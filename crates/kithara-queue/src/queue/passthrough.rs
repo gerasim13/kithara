@@ -35,7 +35,9 @@ where
         self.with_open_result(|queue| queue.player.reset_eq())
     }
 
-    /// Update the profile captured by future transitions.
+    /// Update the profile captured by future transitions. A successor armed
+    /// for the other kind of link comes off the deck, to be armed again for
+    /// this one.
     ///
     /// # Errors
     /// Returns an error when any profile value is invalid.
@@ -43,7 +45,11 @@ where
         let settings = settings.validate()?;
         self.with_open_result(|queue| {
             queue.player.try_set_crossfade_duration(settings.duration)?;
+            let relinked = queue.config.crossfade_settings().link() != settings.link();
             queue.config.set_crossfade_settings(settings);
+            if relinked && let Some(armed) = queue.player.armed_next() {
+                queue.disarm_successor(armed);
+            }
             queue
                 .bus
                 .publish(QueueEvent::CrossfadeSettingsChanged { settings });

@@ -43,6 +43,7 @@ where
     pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
         self.command(|queue| {
             queue.config.set_action_at_item_end(action);
+            queue.reconcile_successor();
             queue
                 .bus
                 .publish(QueueEvent::ActionAtItemEndChanged { action });
@@ -57,6 +58,7 @@ where
                 .map(|track| track.id)
                 .collect::<SmallVec<[_; 16]>>();
             queue.lock_navigation_mut().set_playback_order(order, &ids);
+            queue.reconcile_successor();
             queue
                 .bus
                 .publish(QueueEvent::PlaybackOrderChanged { order });
@@ -67,6 +69,7 @@ where
     pub fn set_repeat(&self, mode: RepeatMode) {
         self.command(|queue| {
             queue.lock_navigation_mut().set_repeat(mode);
+            queue.reconcile_successor();
             queue.bus.publish(QueueEvent::RepeatModeChanged {
                 mode: map_repeat_mode(mode),
             });

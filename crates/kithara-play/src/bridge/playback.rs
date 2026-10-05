@@ -49,6 +49,21 @@ impl PlaybackSnapshot {
     }
 }
 
+/// The epochs whose track may publish the playhead in one audio block.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PublishingEpochs {
+    adopted: u64,
+    taken_on: u64,
+}
+
+impl PublishingEpochs {
+    /// Whether the track leading under `epoch` describes the playhead: the one the audio thread
+    /// adopted, or a stitched successor the control side has taken on.
+    pub(crate) const fn admit(self, epoch: u64) -> bool {
+        epoch == self.adopted || epoch == self.taken_on
+    }
+}
+
 /// Atomic playback state written by the RT processor and read by control code.
 #[derive(Default)]
 #[non_exhaustive]
@@ -107,14 +122,35 @@ impl PlaybackShared {
         duration: f64,
         send: impl FnOnce(u64) -> Result<(), E>,
     ) -> Result<(), E> {
-        let epoch = self
-            .issued_epoch
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1);
+        let epoch = self.issue_epoch();
         send(epoch)?;
+        self.take_on(epoch, duration);
+        Ok(())
+    }
+
+    /// A fresh epoch for an item that is to lead: a `FadeIn` carries it to make its item lead
+    /// at once, a `Chain` to the successor the audio thread stitches in.
+    pub(crate) fn issue_epoch(&self) -> u64 {
+        self.issued_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
+    /// The item `epoch` was issued for leads now, with `duration`.
+    ///
+    /// A stitched successor publishes its playhead only from here on: until the control side
+    /// takes it on, a snapshot describes the item it still calls current, played to its end.
+    pub(crate) fn take_on(&self, epoch: u64, duration: f64) {
         self.leading_duration.store(duration.max(0.0));
         self.leading_epoch.fetch_max(epoch, Ordering::AcqRel);
-        Ok(())
+    }
+
+    /// The epochs whose track describes the playhead, read once per audio block.
+    pub(crate) fn publishing(&self) -> PublishingEpochs {
+        PublishingEpochs {
+            adopted: self.adopted_epoch.load(Ordering::Acquire),
+            taken_on: self.leading_epoch.load(Ordering::Acquire),
+        }
     }
 
     /// Audio thread: take on the item `epoch` made leading, publishing its playhead with it.

@@ -130,20 +130,6 @@ impl NavigationState {
         self.bag.last().copied()
     }
 
-    pub(crate) fn peek_next(&self, tracks: &[TrackId]) -> Option<TrackId> {
-        match self.playback_order {
-            PlaybackOrder::Sequential => {
-                self.next_sequential(tracks, self.repeat_mode == RepeatMode::All)
-            }
-            PlaybackOrder::Shuffle => self
-                .bag
-                .iter()
-                .rev()
-                .find(|id| tracks.contains(id))
-                .copied(),
-        }
-    }
-
     pub(crate) fn prev(&mut self, tracks: &[TrackId]) -> Option<TrackId> {
         while let Some(previous) = self.history.pop_back() {
             if tracks.contains(&previous) {

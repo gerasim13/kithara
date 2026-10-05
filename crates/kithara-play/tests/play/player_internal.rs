@@ -16,9 +16,10 @@ use kithara_audio::{
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{
-    AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-    PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionBinding,
-    SessionDispatcher, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
+    AllocatedSlot, Cmd, CrossfadeSettings, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
+    PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome,
+    SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId, SuccessorLink,
+    bridge::slot_channels,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::{
@@ -390,7 +391,7 @@ fn arm_next_loads_item_and_returns_src(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["item-1", "item-2"]);
 
     let src = player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Gapless)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
@@ -419,7 +420,9 @@ fn arm_next_returns_none_for_empty_slot(constant_half: &'static [u8]) {
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
-    let src = player.arm_next(1).expect("arm_next succeeds");
+    let src = player
+        .arm_next(1, SuccessorLink::Gapless)
+        .expect("arm_next succeeds");
     assert!(src.is_none(), "empty slot must yield None");
     assert_eq!(player.armed_next(), None);
 }
@@ -429,11 +432,11 @@ fn arm_next_idempotent_for_same_index(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["item-1", "item-2"]);
 
     let first_src = player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Gapless)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     let second_src = player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Gapless)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_eq!(first_src.as_ref(), second_src.as_ref());
@@ -445,11 +448,11 @@ fn arm_next_replaces_previously_armed_slot(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["a", "b", "c"]);
 
     let first = player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Gapless)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     let second = player
-        .arm_next(2)
+        .arm_next(2, SuccessorLink::Gapless)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_ne!(first.as_ref(), second.as_ref());
@@ -460,11 +463,13 @@ fn arm_next_replaces_previously_armed_slot(constant_half: &'static [u8]) {
 fn commit_next_index_mismatch_returns_typed_error(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Fade)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
 
-    let err = player.commit_next(2).expect_err("mismatch");
+    let err = player
+        .commit_next(2, CrossfadeSettings::default())
+        .expect_err("mismatch");
     assert!(matches!(
         err,
         PlayError::ArmIndexMismatch {
@@ -478,12 +483,12 @@ fn commit_next_index_mismatch_returns_typed_error(constant_half: &'static [u8]) 
 fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Fade)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     let mut rx: EventReceiver<PlayerEvent> = player.subscribe();
 
-    player.commit_next(1).unwrap();
+    player.commit_next(1, CrossfadeSettings::default()).unwrap();
     assert_eq!(player.current_index(), 1);
     assert_eq!(player.armed_next(), None, "armed clears after commit");
 
@@ -498,16 +503,36 @@ fn commit_next_advances_index_and_publishes_event(constant_half: &'static [u8]) 
     assert!(saw_changed, "commit_next must publish CurrentItemChanged");
 }
 
+/// Removing the current item shifts the armed successor into its place, and
+/// committing it there announces it as the item that now plays.
+#[kithara::test]
+fn a_successor_committed_into_the_removed_current_place_is_announced(constant_half: &'static [u8]) {
+    let player = prepared_player(constant_half, 1.0, ["a", "b"]);
+    player
+        .arm_next(1, SuccessorLink::Fade)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
+    let _ = player.remove_at(0);
+    assert_eq!(player.armed_next(), Some(0));
+    let mut rx: EventReceiver<PlayerEvent> = player.subscribe();
+
+    player.commit_next(0, CrossfadeSettings::default()).unwrap();
+
+    let announced = std::iter::from_fn(|| rx.try_recv().ok().map(|env| env.event))
+        .any(|event| matches!(event, PlayerEvent::CurrentItemChanged { .. }));
+    assert!(announced, "the committed successor must be announced");
+}
+
 #[kithara::test]
 fn commit_next_idempotent_when_already_activated(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Fade)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
 
-    player.commit_next(1).unwrap();
-    player.commit_next(1).unwrap();
+    player.commit_next(1, CrossfadeSettings::default()).unwrap();
+    player.commit_next(1, CrossfadeSettings::default()).unwrap();
     assert_eq!(player.current_index(), 1);
 }
 
@@ -515,7 +540,7 @@ fn commit_next_idempotent_when_already_activated(constant_half: &'static [u8]) {
 fn unarm_next_clears_when_not_activated_and_unloads(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 0.0, ["a", "b"]);
     let src = player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Gapless)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
 
@@ -528,10 +553,10 @@ fn unarm_next_clears_when_not_activated_and_unloads(constant_half: &'static [u8]
 fn unarm_next_preserves_activated_current(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["a", "b"]);
     player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Fade)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
-    player.commit_next(1).unwrap();
+    player.commit_next(1, CrossfadeSettings::default()).unwrap();
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
     assert_eq!(player.current_index(), 1);
@@ -541,7 +566,7 @@ fn unarm_next_preserves_activated_current(constant_half: &'static [u8]) {
 fn select_item_clears_pending_next_and_unloads_preloaded_track(constant_half: &'static [u8]) {
     let player = prepared_player(constant_half, 1.0, ["item-1", "item-2", "item-3"]);
     let src = player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Fade)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
@@ -566,7 +591,7 @@ fn select_item_on_armed_index_promotes_armed_slot(constant_half: &'static [u8]) 
         .select_item(0, kithara_play::SelectionPlayback::Play)
         .unwrap();
     let armed_src = player
-        .arm_next(1)
+        .arm_next(1, SuccessorLink::Fade)
         .expect("arm_next succeeds")
         .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));

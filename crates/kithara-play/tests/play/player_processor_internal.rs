@@ -515,6 +515,7 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
         .send(DeckPart::Chain {
             from: short_id,
             to: preload_id,
+            epoch: 0,
         })
         .ok();
     control.send(DeckPart::StartAll).ok();
@@ -572,6 +573,7 @@ async fn an_ending_track_starts_only_the_track_chained_to_it(constant_half: &'st
         .send(DeckPart::Chain {
             from: leading_id,
             to: chained_id,
+            epoch: 0,
         })
         .ok();
     control.send(DeckPart::StartAll).ok();
@@ -625,7 +627,7 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
         (leading_id, short_preload_id),
         (short_preload_id, preload_id),
     ] {
-        control.send(DeckPart::Chain { from, to }).ok();
+        control.send(DeckPart::Chain { from, to, epoch: 0 }).ok();
     }
     control.send(DeckPart::StartAll).ok();
     block(&mut processor);
@@ -686,6 +688,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         .send(DeckPart::Chain {
             from: leading_id,
             to: successor_id,
+            epoch: 0,
         })
         .ok();
     control.send(DeckPart::StartAll).ok();
@@ -741,6 +744,7 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
         .send(DeckPart::Chain {
             from: short_id,
             to: preload_id,
+            epoch: 0,
         })
         .ok();
     control.send(DeckPart::StartAll).ok();

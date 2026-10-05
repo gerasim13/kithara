@@ -1,13 +1,13 @@
 use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
-use kithara_events::{Envelope, EventSet, TrackId};
+use kithara_events::{Envelope, EventSet};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use kithara_play::{ItemRole, PlaybackFault, PlayerEvent};
 use tracing::debug;
 
 use super::{
     QueueControl,
-    types::{CachedPosition, CrossfadeArm, Transition},
+    types::{CachedPosition, Transition},
 };
 use crate::{
     ActionAtItemEnd,
@@ -18,75 +18,6 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Every exit is reported: a pre-arm that declines leaves no trace in the
-    /// event stream, and the next thing anyone sees is an end-of-item that
-    /// advances nothing.
-    pub(super) fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
-        let track = current_id.as_u64();
-        let action = self.action_at_item_end();
-        if action != ActionAtItemEnd::Advance {
-            debug!(
-                track,
-                ?action,
-                "pre-arm declined: the queue does not advance"
-            );
-            return;
-        }
-        let Some(next) = self.next_selectable_entry(AdvanceReason::CrossfadePreArm) else {
-            debug!(
-                track,
-                current = ?self.current().map(|entry| entry.id),
-                player_index = self.player.current_index(),
-                "pre-arm declined: navigation offers no successor"
-            );
-            return;
-        };
-        if !matches!(next.status, TrackStatus::Loaded) {
-            debug!(
-                track,
-                next = next.id.as_u64(),
-                status = ?next.status,
-                current = ?self.current().map(|entry| entry.id),
-                player_index = self.player.current_index(),
-                "pre-arm declined: the successor is not loaded"
-            );
-            return;
-        }
-
-        let before_index = self.player.current_index();
-        if let Err(error) =
-            self.select_with_reason(next.id, transition, AdvanceReason::CrossfadePreArm)
-        {
-            debug!(
-                %error,
-                track,
-                next = next.id.as_u64(),
-                current = ?self.current().map(|entry| entry.id),
-                player_index = self.player.current_index(),
-                "pre-arm declined: the successor would not select"
-            );
-            return;
-        }
-        if self.player.current_index() != before_index {
-            self.write_armed_for(CrossfadeArm::armed(current_id));
-        }
-    }
-
-    /// If an advance was already armed from `tick()`, consume it and
-    /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
-    /// the same track must not advance again.
-    pub(super) fn consume_armed_advance(&self, ended_id: TrackId, pos: f64, dur: f64) -> bool {
-        if self.take_armed_for_if_matches(ended_id) {
-            debug!(
-                track_id = ended_id.as_u64(),
-                pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)"
-            );
-            true
-        } else {
-            false
-        }
-    }
-
     /// `CurrentItemChanged` is edge-triggered and de-duplicated by
     /// `ItemQueue::announce_current_item`, so a dropped event cannot be recovered by waiting again.
     pub(super) fn drain_player_events(&self) {
@@ -125,9 +56,6 @@ where
         }
         if self.is_paused() {
             debug!(%track, pos, dur, "paused: not auto-advancing");
-            return false;
-        }
-        if self.consume_armed_advance(track.id, pos, dur) {
             return false;
         }
         if !item.is_leading() {
@@ -175,7 +103,7 @@ where
                     debug!(%error, "failed to advance after track failure");
                 }
             }
-            ActionAtItemEnd::Pause => self.pause(),
+            ActionAtItemEnd::Pause => self.pause_inner(),
             ActionAtItemEnd::None => {}
         }
     }
@@ -202,7 +130,7 @@ where
                     debug!(%error, "failed to advance after natural EOF");
                 }
             }
-            ActionAtItemEnd::Pause => self.pause(),
+            ActionAtItemEnd::Pause => self.pause_inner(),
             ActionAtItemEnd::None => {}
         }
     }
@@ -233,7 +161,7 @@ where
 mod tests {
     use kithara_audio::DecodeErrorKind;
     use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
-    use kithara_platform::sync::Arc;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_play::{ItemRole, PlaybackFault, PlayerEvent, TrackRef};
     use kithara_test_utils::kithara;
 
@@ -384,6 +312,30 @@ mod tests {
                 .await
             );
         }
+    }
+
+    /// The tick that drains a natural end the queue pauses at pauses the deck
+    /// from inside the queue's own admission.
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn a_tick_pauses_at_the_natural_end_it_drains() {
+        let queue = make_queue();
+        let first = TrackId::allocate();
+        let second = TrackId::allocate();
+        queue.tracks.lock().extend([
+            TrackRecord::new(first, "first".into(), TrackSource::from("first")),
+            TrackRecord::new(second, "second".into(), TrackSource::from("second")),
+        ]);
+        *queue.lock_pending_select_mut() = SelectPhase::Idle;
+        queue.lock_navigation_mut().select(first, &[first, second]);
+        queue.player.play();
+        queue.set_action_at_item_end(ActionAtItemEnd::Pause);
+
+        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Leading(TrackRef::new(first, SlotId::new(0), Arc::from("first"))),
+        });
+        queue.tick().expect("the tick drains the end");
+
+        assert!(queue.is_paused());
     }
 
     #[kithara::test(tokio)]

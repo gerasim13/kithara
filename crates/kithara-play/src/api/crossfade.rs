@@ -21,6 +21,16 @@ pub enum CrossfadeCurve {
     EqualPower,
 }
 
+/// How an armed successor joins the item it follows, fixed when it is armed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuccessorLink {
+    /// Chained behind its predecessor: the deck starts it on the frame the
+    /// predecessor runs out.
+    Gapless,
+    /// Faded in over its predecessor when the transition commits.
+    Fade,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, Config)]
 #[config(builder(existing), fields(value))]
 pub struct CrossfadeSettings {
@@ -62,6 +72,16 @@ impl CrossfadeSettings {
         };
         settings.validate()?;
         Ok(settings)
+    }
+
+    /// A transition with no fade duration is gapless.
+    #[must_use]
+    pub fn link(self) -> SuccessorLink {
+        if self.duration > 0.0 {
+            SuccessorLink::Fade
+        } else {
+            SuccessorLink::Gapless
+        }
     }
 
     #[must_use]

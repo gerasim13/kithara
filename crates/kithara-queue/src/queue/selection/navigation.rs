@@ -110,26 +110,6 @@ where
         selectable.into_iter().find(|entry| entry.id == id)
     }
 
-    pub(in crate::queue) fn peek_selectable_entry(&self) -> Option<TrackEntry> {
-        let selectable = self
-            .lock_tracks()
-            .iter()
-            .filter(|record| {
-                !matches!(
-                    record.status,
-                    TrackStatus::Cancelled | TrackStatus::Failed(_)
-                )
-            })
-            .map(crate::track::TrackRecord::entry)
-            .collect::<Vec<TrackEntry>>();
-        let ids = selectable
-            .iter()
-            .map(|entry| entry.id)
-            .collect::<SmallVec<[_; 16]>>();
-        let id = self.lock_navigation().peek_next(&ids)?;
-        selectable.into_iter().find(|entry| entry.id == id)
-    }
-
     /// Go back to the previous track. Returns the newly selected id, or
     /// `None` at index 0.
     ///

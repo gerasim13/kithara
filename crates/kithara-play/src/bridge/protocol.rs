@@ -49,8 +49,13 @@ pub enum DeckPart {
     /// have stitched it in at the end of the leading track before reading
     /// this; a promoted track keeps playing.
     Withdraw { item_id: TrackId },
-    /// Start `to`, a held track still preloading, on the frame after `from`'s last.
-    Chain { from: TrackId, to: TrackId },
+    /// Start `to`, a held track still preloading, on the frame after `from`'s last. It leads
+    /// under `epoch`, and publishes the playhead once the control side takes that epoch on.
+    Chain {
+        from: TrackId,
+        to: TrackId,
+        epoch: u64,
+    },
     /// Take every track out of the deck and reset the position/duration
     /// snapshot to zero. Sent when the queue is explicitly cleared.
     Clear,
@@ -90,10 +95,11 @@ impl fmt::Debug for DeckPart {
                 .debug_struct("Withdraw")
                 .field("item_id", item_id)
                 .finish(),
-            Self::Chain { from, to } => f
+            Self::Chain { from, to, epoch } => f
                 .debug_struct("Chain")
                 .field("from", from)
                 .field("to", to)
+                .field("epoch", epoch)
                 .finish(),
             Self::Clear => f.write_str("Clear"),
             Self::Fade(t) => f.debug_tuple("Fade").field(t).finish(),
@@ -212,8 +218,13 @@ pub enum PlayerNotification {
     Loaded { src: Arc<str> },
     /// A track was removed from the processor arena.
     Unloaded { src: Arc<str>, item_id: TrackId },
-    /// A track started audible playback (fade-in completed or `play()`).
-    PlaybackStarted { src: Arc<str>, item_id: TrackId },
+    /// A track started audible playback (fade-in completed or `play()`), leading under `epoch`
+    /// if it leads.
+    PlaybackStarted {
+        src: Arc<str>,
+        item_id: TrackId,
+        epoch: u64,
+    },
     /// A track stopped playback. `src` and `item_id` are read by the
     /// player to construct the `ItemRole` on `ItemDidPlayToEnd`.
     PlaybackStopped {

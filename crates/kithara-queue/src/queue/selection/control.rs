@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use super::super::{
     QueueControl,
-    types::{CrossfadeArm, PendingSelect, Transition},
+    types::{PendingSelect, Transition},
 };
 use crate::{
     attempts::LoadClass,
@@ -97,7 +97,7 @@ where
                 | AdvanceReason::UserPrev
                 | AdvanceReason::RemovedCurrent
         ) {
-            self.autoplay_target.store(CrossfadeArm::Disarmed);
+            self.autoplay_target.disarm();
         }
         let default = self.config.crossfade_settings();
         let settings = transition.settings(default).validate()?;
@@ -145,7 +145,6 @@ where
                 .map(|(i, e)| (i, e.status.clone()))
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
-
         if self.player.current_index() == index
             && matches!(status, TrackStatus::Consumed)
             && matches!(
@@ -178,6 +177,12 @@ where
                 id: Some(id),
             });
             return Ok(());
+        }
+
+        if let Some(armed) = self.player.armed_next()
+            && armed != index
+        {
+            self.disarm_successor(armed);
         }
 
         match status {

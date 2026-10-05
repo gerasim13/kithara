@@ -15,7 +15,7 @@ use kithara_play::{
 
 use super::{
     engine_events::PlayerBusEvent,
-    types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase},
+    types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, SelectPhase},
 };
 use crate::{
     config::QueueConfig,
@@ -64,15 +64,6 @@ where
     /// Track whose load completion starts playback: the first one appended
     /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
     pub(super) autoplay_target: AtomicTrackId,
-    /// Tracks the id of the track whose crossfade-advance has already
-    /// been armed during `tick()`. Prevents triggering the next-track
-    /// select repeatedly as the remaining playtime keeps ticking below
-    /// the crossfade threshold. Cleared on
-    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
-    ///
-    /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
-    /// loop and the engine event handler.
-    pub(super) crossfade_armed_for: AtomicTrackId,
     /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
     pub(super) bus: EventBus,
@@ -188,7 +179,6 @@ where
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: ExclusiveGate::default(),
             player_rx: Mutex::new(player_rx),
-            crossfade_armed_for: AtomicTrackId::disarmed(),
             autoplay_target: AtomicTrackId::disarmed(),
             cached_position: AtomicCachedPosition::unknown(),
         });
@@ -268,14 +258,6 @@ where
             #[call(lock)]
             pub(super) fn lock_tracks_mut(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
             pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
-        }
-        to self.crossfade_armed_for {
-            #[call(load)]
-            pub(super) fn read_armed_for(&self) -> CrossfadeArm;
-            #[call(take_if_matches)]
-            pub(super) fn take_armed_for_if_matches(&self, id: TrackId) -> bool;
-            #[call(store)]
-            pub(super) fn write_armed_for(&self, arm: CrossfadeArm);
         }
         to self.cached_position {
             #[call(load)]
@@ -556,27 +538,6 @@ pub(crate) mod tests {
         assert_eq!(values.playback_order, PlaybackOrder::Shuffle);
         assert_eq!(values.crossfade_settings, crossfade);
         assert_eq!(queue.player.crossfade_duration(), crossfade.duration);
-    }
-
-    #[kithara::test]
-    fn crossfade_arm_disarmed_after_construction() {
-        let queue = make_queue();
-        assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
-    }
-
-    #[kithara::test]
-    fn crossfade_arm_take_only_disarms_matching_track() {
-        let queue = make_queue();
-        queue.write_armed_for(CrossfadeArm::armed(TrackId(9)));
-        assert!(!queue.take_armed_for_if_matches(TrackId(10)));
-        assert_eq!(
-            queue.read_armed_for(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(9),
-            }
-        );
-        assert!(queue.take_armed_for_if_matches(TrackId(9)));
-        assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
     }
 
     #[kithara::test]

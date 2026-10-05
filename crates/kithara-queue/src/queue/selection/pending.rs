@@ -36,8 +36,8 @@ where
         }
     }
 
-    /// Drop a cancelled track's resource from the player so the
-    /// near-EOF `arm_next` prefetch cannot plant it for handover. The
+    /// Drop a cancelled track's resource from the player so the queue
+    /// cannot arm it as the successor. The
     /// `spawn_apply_after_load` completion path already skips
     /// `replace_item` on a cancelled status, but a fast loader can
     /// finish *before* the override runs and leave the resource in

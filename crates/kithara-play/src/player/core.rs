@@ -12,7 +12,7 @@ use super::{
     PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
-    state::{ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
+    state::{ItemPresentation, ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
@@ -24,7 +24,14 @@ use crate::{
     worker::EngineLoad,
 };
 
-type EnqueuedItem = (TrackId, Arc<str>, f64);
+/// An item handed to the processor, with the presentation it publishes once
+/// it becomes the current item.
+pub(crate) struct EnqueuedItem {
+    pub(crate) item_id: TrackId,
+    pub(crate) src: Arc<str>,
+    pub(crate) duration_seconds: f64,
+    pub(crate) presentation: ItemPresentation,
+}
 
 /// Decoded frames a load of `duration_seconds` covers on a `rate` axis.
 ///
@@ -112,8 +119,8 @@ impl<S> PlayerRuntime<S> {
         Ok(())
     }
 
-    /// The track geometry the player publishes now belongs to this load: the prepared grid, on the
-    /// axis the engine decodes onto, spans the length this load states.
+    /// Hand `items[index]` to the processor. Its presentation is returned, not
+    /// published: the item may be attached ahead of the one playing.
     pub(crate) fn enqueue_to_processor(
         &self,
         index: usize,
@@ -130,16 +137,6 @@ impl<S> PlayerRuntime<S> {
         else {
             return Ok(None);
         };
-        self.phase.lock().set_abr_handle(item.abr_handle);
-        self.core.staging.load(item.item_id, item.staging);
-        let rate = self.core.engine.master_sample_rate();
-        if let Some(sample_rate) = NonZeroU32::new(rate) {
-            self.core.track_grid.load(
-                &item.beat_grid,
-                sample_rate,
-                track_frames(item.duration_seconds, rate),
-            );
-        }
         let src = Arc::clone(item.player_resource.src());
         let loaded = self
             .send_to_slot(DeckPart::Attach {
@@ -150,7 +147,37 @@ impl<S> PlayerRuntime<S> {
         if loaded && let Some(lane) = item.lane {
             self.core.lanes.load(item.item_id, lane);
         }
-        Ok(Some((item.item_id, src, item.duration_seconds)))
+        Ok(Some(EnqueuedItem {
+            item_id: item.item_id,
+            src,
+            duration_seconds: item.duration_seconds,
+            presentation: ItemPresentation {
+                beat_grid: item.beat_grid,
+                abr_handle: item.abr_handle,
+                staging: item.staging,
+            },
+        }))
+    }
+
+    /// The track geometry the player publishes now belongs to the item that
+    /// became current: the prepared grid, on the axis the engine decodes onto,
+    /// spans the length this load states.
+    pub(crate) fn adopt_presentation(
+        &self,
+        item_id: TrackId,
+        duration_seconds: f64,
+        presentation: ItemPresentation,
+    ) {
+        self.phase.lock().set_abr_handle(presentation.abr_handle);
+        self.core.staging.load(item_id, presentation.staging);
+        let rate = self.core.engine.master_sample_rate();
+        if let Some(sample_rate) = NonZeroU32::new(rate) {
+            self.core.track_grid.load(
+                &presentation.beat_grid,
+                sample_rate,
+                track_frames(duration_seconds, rate),
+            );
+        }
     }
 
     /// Terminal teardown: close the player and cancel its subtree.
@@ -206,12 +233,20 @@ impl<S> PlayerRuntime<S> {
     }
 
     /// Remove item at index. Returns the removed resource, or `None` if out of
-    /// bounds or already consumed.
+    /// bounds or already consumed. The armed successor is unarmed only when it
+    /// is the removed item.
     pub fn remove_at(&self, index: usize) -> Option<Resource>
     where
         S: HasPool<f32>,
     {
-        self.unarm_next();
+        let successor_removed = self
+            .phase
+            .lock()
+            .pending_loads_mut()
+            .is_some_and(|loads| loads.removed_at(index));
+        if successor_removed {
+            self.unarm_next();
+        }
 
         self.core
             .items

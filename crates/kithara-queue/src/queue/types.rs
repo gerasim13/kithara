@@ -54,25 +54,6 @@ pub(super) struct PendingSelect {
     pub(super) id: TrackId,
 }
 
-/// Crossfade-arm coordination state. Replaces the `u64::MAX` sentinel
-/// previously stored in `crossfade_armed_for`; "no track armed" is the
-/// explicit [`CrossfadeArm::Disarmed`] variant.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CrossfadeArm {
-    Disarmed,
-    Armed { for_track: TrackId },
-}
-
-impl CrossfadeArm {
-    pub(super) const fn armed(for_track: TrackId) -> Self {
-        Self::Armed { for_track }
-    }
-
-    pub(super) fn is_armed_for(self, id: TrackId) -> bool {
-        matches!(self, Self::Armed { for_track } if for_track == id)
-    }
-}
-
 /// Pending-select phase. Replaces `Option<PendingSelect>` where `None`
 /// conflated "idle" with "absent"; [`SelectPhase::Idle`] makes the
 /// no-selection state explicit.
@@ -112,18 +93,16 @@ impl From<CachedPosition> for Option<f64> {
     }
 }
 
-/// Lock-free [`CrossfadeArm`] cell for the `tick` hot path. The
-/// `u64::MAX` bit pattern encodes [`CrossfadeArm::Disarmed`]; real ids
-/// are allocated monotonically from `0`, so the top of the range is
-/// free as the sentinel. Orderings match the original raw-`AtomicU64`
-/// accessors: `Acquire` load, `Release` store, `AcqRel` swap /
-/// compare-exchange.
+/// Lock-free cell holding at most one armed track. The `u64::MAX` bit
+/// pattern encodes "disarmed"; real ids are allocated monotonically from
+/// `0`, so the top of the range is free as the sentinel. Orderings: `Release`
+/// store, `AcqRel` compare-exchange.
 pub(super) struct AtomicTrackId(AtomicU64);
 
 impl AtomicTrackId {
     const NONE_BITS: u64 = u64::MAX;
 
-    /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`.
+    /// Arm `track` unless another track is armed; `true` when it was armed.
     pub(super) fn arm_if_disarmed(&self, track: TrackId) -> bool {
         self.0
             .compare_exchange(
@@ -135,18 +114,7 @@ impl AtomicTrackId {
             .is_ok()
     }
 
-    const fn decode(bits: u64) -> CrossfadeArm {
-        if bits == Self::NONE_BITS {
-            CrossfadeArm::Disarmed
-        } else {
-            CrossfadeArm::Armed {
-                for_track: TrackId(bits),
-            }
-        }
-    }
-
-    /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true` when
-    /// `track` was the armed id.
+    /// Disarm `track`; `true` when it was the armed track.
     pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
         self.0
             .compare_exchange(
@@ -162,30 +130,8 @@ impl AtomicTrackId {
         Self(AtomicU64::new(Self::NONE_BITS))
     }
 
-    const fn encode(arm: CrossfadeArm) -> u64 {
-        match arm {
-            CrossfadeArm::Disarmed => Self::NONE_BITS,
-            CrossfadeArm::Armed { for_track } => for_track.as_u64(),
-        }
-    }
-
-    pub(super) fn load(&self) -> CrossfadeArm {
-        Self::decode(self.0.load(Ordering::Acquire))
-    }
-
-    pub(super) fn store(&self, arm: CrossfadeArm) {
-        self.0.store(Self::encode(arm), Ordering::Release);
-    }
-
-    pub(super) fn take_if_matches(&self, track: TrackId) -> bool {
-        self.0
-            .compare_exchange(
-                track.as_u64(),
-                Self::NONE_BITS,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+    pub(super) fn disarm(&self) {
+        self.0.store(Self::NONE_BITS, Ordering::Release);
     }
 }
 
@@ -248,24 +194,6 @@ impl PlaybackTime {
     }
 }
 
-/// Decide whether `Queue::tick` should arm the pre-end advance.
-///
-/// Returns `true` when:
-/// - `crossfade > 0` (no pre-arm without crossfade — natural-EOF advance is
-///   handled via [`PlayerEvent::ItemDidPlayToEnd`] instead), AND
-/// - `time.pos` and `time.dur` are positive (track has meaningful position + duration), AND
-/// - the track advances, and it ends within `crossfade` session seconds — the
-///   time the fade lasts at any rate — AND
-/// - we haven't already armed for this track this play-through.
-pub(crate) fn should_arm_crossfade(
-    time: PlaybackTime,
-    crossfade: f32,
-    current_id: TrackId,
-    armed_for: CrossfadeArm,
-) -> bool {
-    crossfade > 0.0 && time.ends_within(crossfade) && !armed_for.is_armed_for(current_id)
-}
-
 pub(super) fn extract_track_name<S>(source: &TrackSource<S>) -> String
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -304,47 +232,48 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn atomic_track_id_disarmed_loads_disarmed() {
-        let cell = AtomicTrackId::disarmed();
-        assert_eq!(cell.load(), CrossfadeArm::Disarmed);
-    }
-
-    #[kithara::test]
-    fn atomic_track_id_take_if_matches_only_disarms_matching_track() {
-        let cell = AtomicTrackId::disarmed();
-        cell.store(CrossfadeArm::armed(TrackId(7)));
-        assert_eq!(
-            cell.load(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(7),
-            }
-        );
-        assert!(!cell.take_if_matches(TrackId(8)));
-        assert_eq!(
-            cell.load(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(7),
-            }
-        );
-        assert!(cell.take_if_matches(TrackId(7)));
-        assert_eq!(cell.load(), CrossfadeArm::Disarmed);
-    }
-
-    #[kithara::test]
     fn atomic_track_id_cas_arm_then_disarm() {
         let cell = AtomicTrackId::disarmed();
-        cell.arm_if_disarmed(TrackId(3));
-        cell.arm_if_disarmed(TrackId(4));
-        assert_eq!(
-            cell.load(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(3),
-            },
+        assert!(cell.arm_if_disarmed(TrackId(3)));
+        assert!(
+            !cell.arm_if_disarmed(TrackId(4)),
             "a second arm must not replace the armed track"
         );
         assert!(!cell.disarm_if_matches(TrackId(4)));
         assert!(cell.disarm_if_matches(TrackId(3)));
-        assert_eq!(cell.load(), CrossfadeArm::Disarmed);
+        assert!(cell.arm_if_disarmed(TrackId(4)), "disarmed again");
+    }
+
+    #[kithara::test]
+    fn disarm_clears_the_armed_track() {
+        let cell = AtomicTrackId::disarmed();
+        assert!(cell.arm_if_disarmed(TrackId(7)));
+        cell.disarm();
+        assert!(cell.arm_if_disarmed(TrackId(8)));
+    }
+
+    #[kithara::test]
+    #[case::remaining_equals_window(157.0, 162.0, 1.0, 5.0, true)]
+    #[case::remaining_below_window(160.0, 162.0, 1.0, 5.0, true)]
+    #[case::far_from_end(100.0, 162.0, 1.0, 5.0, false)]
+    #[case::double_speed_halves_the_session_time_left(152.0, 162.0, 2.0, 5.0, true)]
+    #[case::double_speed_media_tail_is_not_yet_due(150.0, 162.0, 2.0, 5.0, false)]
+    #[case::half_speed_media_tail_is_too_long(158.0, 162.0, 0.5, 5.0, false)]
+    #[case::stopped_track_never_ends(161.0, 162.0, 0.0, 5.0, false)]
+    #[case::zero_window_only_at_the_end(161.9, 162.0, 1.0, 0.0, false)]
+    #[case::zero_position_rejected(0.0, 162.0, 1.0, 5.0, false)]
+    #[case::zero_duration_rejected(10.0, 0.0, 1.0, 5.0, false)]
+    fn ends_within_cases(
+        #[case] pos: f64,
+        #[case] dur: f64,
+        #[case] rate: f64,
+        #[case] window: f32,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            PlaybackTime { dur, pos, rate }.ends_within(window),
+            expected
+        );
     }
 
     #[kithara::test]
@@ -366,13 +295,6 @@ mod tests {
             CachedPosition::known(f64::NAN),
             CachedPosition::Unknown
         ));
-    }
-
-    #[kithara::test]
-    fn crossfade_arm_is_armed_for_matches_track() {
-        let arm = CrossfadeArm::armed(TrackId(2));
-        assert!(arm.is_armed_for(TrackId(2)));
-        assert!(!arm.is_armed_for(TrackId(3)));
     }
 
     #[kithara::test]

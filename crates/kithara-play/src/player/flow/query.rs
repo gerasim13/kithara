@@ -11,11 +11,12 @@ use crate::{
 };
 
 impl<S> PlayerRuntime<S> {
-    /// ABR handle of the currently loaded item, if any.
+    /// ABR handle of the current item, if any.
     ///
-    /// Reads the stash populated by `enqueue_to_processor` — stays valid for
-    /// the whole life of the track, including after `items[idx]` has been
-    /// emptied by the load handoff.
+    /// Reads the stash set when an item becomes current (its load, a
+    /// crossfade commit or a gapless stitch), not when it is attached — stays
+    /// valid for the whole life of the track, including after `items[idx]`
+    /// has been emptied by the load handoff.
     #[must_use]
     pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.phase.lock().abr_handle()

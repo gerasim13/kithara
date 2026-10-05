@@ -255,6 +255,7 @@ impl PlayerTrack {
             TrackState::Playing => PlayerNotification::PlaybackStarted {
                 src: Arc::clone(self.src()),
                 item_id: self.item_id,
+                epoch: self.epoch,
             },
             TrackState::Finished => PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),

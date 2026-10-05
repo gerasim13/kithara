@@ -28,7 +28,7 @@ use crate::{
         DeckApplied, DeckMixSettings, DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification,
         TrackState,
     },
-    rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
+    rt::{LeadingPlayhead, RenderPass, RenderTargets, TrackSlot, TrackSlots},
     session::SessionError,
 };
 
@@ -343,7 +343,7 @@ impl Deck {
         context: Option<&RenderContext>,
         buffers: &mut ProcBuffers,
         range: Range<usize>,
-    ) -> (bool, Option<(f64, f64)>) {
+    ) -> (bool, Option<LeadingPlayhead>) {
         self.render.render_range(
             context,
             RenderTargets {
@@ -351,6 +351,7 @@ impl Deck {
                 notification_tx: &mut self.notif_tx,
                 metrics: self.playback.metrics(),
                 seek_epoch: self.playback.seek_epoch.load(Ordering::SeqCst),
+                publishing: self.playback.publishing(),
             },
             buffers,
             range,
@@ -388,39 +389,31 @@ impl Deck {
         }
     }
 
-    /// Update `playback.position` / `playback.duration` from the
-    /// leading track's last [`TrackReadOutcome`].
+    /// Publish the playhead from the track that describes it: its last [`TrackReadOutcome`] this
+    /// block, or its own position and duration when no range rendered it.
     ///
-    /// `render_range` captures the snapshot directly out of the outcome
-    /// returned by `PlayerTrack::read`.
-    /// Falls back to `track.position()` / `track.duration()` only when no
-    /// leading track produced an outcome this cycle (cold start before
-    /// the first render block, or every active track was a non-leading
-    /// fade-in).
+    /// That track leads under an epoch the deck publishes for (see
+    /// [`PublishingEpochs`](crate::bridge::PublishingEpochs)). A successor stitched in under an
+    /// epoch the control side has not taken on yet leaves the playhead on the track that ended,
+    /// which the control side still calls current; once taken on, the successor is adopted.
     ///
-    /// Both published windows come from the leading track's lock-free snapshots: the decoded
-    /// frontier, which is always `>=` position, and the cached span the download side published.
-    fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
-        for (_, track) in self.tracks.iter() {
-            if track.state().is_leading() {
-                self.playback.frontier.store(track.decoded_frontier());
-                self.playback.cached.store(track.cached_span());
-                break;
-            }
+    /// Both published windows come from that track's lock-free snapshots: the decoded frontier,
+    /// which is always `>=` position, and the cached span the download side published.
+    fn update_position_duration(&self, leading_outcome: Option<LeadingPlayhead>) {
+        let publishing = self.playback.publishing();
+        let leading = self
+            .tracks
+            .iter()
+            .map(|(_, track)| track)
+            .find(|track| track.state().is_leading() && publishing.admit(track.epoch()));
+        if let Some(track) = leading {
+            self.playback.frontier.store(track.decoded_frontier());
+            self.playback.cached.store(track.cached_span());
         }
-
-        if let Some((position, duration)) = leading_outcome {
-            self.playback.position.store(position);
-            self.playback.duration.store(duration);
-            return;
-        }
-
-        for (_, track) in self.tracks.iter() {
-            if track.state().is_leading() {
-                self.playback.position.store(track.position());
-                self.playback.duration.store(track.duration());
-                break;
-            }
+        let playhead = leading_outcome
+            .or_else(|| leading.map(|track| (track.epoch(), track.position(), track.duration())));
+        if let Some((epoch, position, duration)) = playhead {
+            self.playback.adopt(epoch, position, duration);
         }
     }
 }
@@ -468,14 +461,18 @@ mod tests {
         mask::{ConnectedMask, ConstantMask, SilenceMask},
         node::{ProcStore, StreamStatus},
     };
+    use kithara_audio::mock::TestPcmReader;
     use kithara_platform::time::Duration;
-    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_test_fixtures::integration_fixtures::constant_half;
     use kithara_warp::RenderContext;
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
     use crate::{
-        bridge::{SharedEq, slot_channels},
+        Resource,
+        bridge::{DeckPart, SharedEq, slot_channels},
+        rt::track::PlayerResource,
         test_pools::pools,
     };
 
@@ -587,6 +584,103 @@ mod tests {
         assert_eq!(
             left.output().transport_revision(),
             Some(TransportRevision::first())
+        );
+    }
+
+    fn pcm_resource(constant_half: &'static [u8], src: &str, seconds: f64) -> Box<PlayerResource> {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("static sample rate"));
+        let reader = TestPcmReader::with_pcm(spec, seconds, constant_half);
+        Box::new(
+            PlayerResource::new(
+                Resource::from_reader(reader, None),
+                Arc::from(src),
+                &pools(),
+            )
+            .expect("player resource fits the test pool budget"),
+        )
+    }
+
+    fn render(processor: &mut DeckMixer) {
+        let frames = 512;
+        let mut left = vec![0.0f32; frames];
+        let mut right = vec![0.0f32; frames];
+        let inputs: [&[f32]; 0] = [];
+        let mut outputs = [&mut left[..], &mut right[..]];
+        let mut buffers = ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
+        };
+        processor.render_block(SessionFrame::default(), &mut buffers, frames);
+    }
+
+    /// A successor the deck stitches in leads under the epoch its chain carries: until the
+    /// control side takes that epoch on, the playhead describes the track that ended, and from
+    /// then on the successor.
+    #[kithara::test(tokio)]
+    async fn a_stitched_successor_publishes_its_playhead_once_its_epoch_is_taken_on(
+        constant_half: &'static [u8],
+    ) {
+        const ENDING_SECONDS: f64 = 0.005;
+        const SUCCESSOR_SECONDS: f64 = 60.0;
+        let (mut processor, mut control) = processor();
+        let playback = Arc::clone(processor.playback());
+        let ending = TrackId::allocate();
+        let successor = TrackId::allocate();
+        for (src, seconds, item_id) in [
+            ("ending", ENDING_SECONDS, ending),
+            ("successor", SUCCESSOR_SECONDS, successor),
+        ] {
+            control
+                .send(DeckPart::Attach {
+                    resource: pcm_resource(constant_half, src, seconds),
+                    item_id,
+                })
+                .ok();
+        }
+        let epoch = playback.issue_epoch();
+        control
+            .send(DeckPart::Chain {
+                from: ending,
+                to: successor,
+                epoch,
+            })
+            .ok();
+        control.send(DeckPart::StartAll).ok();
+        render(&mut processor);
+        processor
+            .track_mut(ending)
+            .expect("the ending track is attached")
+            .play();
+
+        render(&mut processor);
+        assert_eq!(
+            processor.track(successor).map(PlayerTrack::state),
+            Some(TrackState::Playing),
+            "the deck stitched the successor in"
+        );
+        let stitched = playback.snapshot();
+        assert!(
+            (stitched.duration() - ENDING_SECONDS).abs() < 1e-3,
+            "the ended track still describes the playhead: {stitched:?}"
+        );
+        assert!(
+            (stitched.position() - stitched.duration()).abs() < 1e-3,
+            "the ended track reads at its end: {stitched:?}"
+        );
+
+        playback.take_on(epoch, SUCCESSOR_SECONDS);
+        let taken_on = playback.snapshot();
+        assert_eq!(
+            (taken_on.position(), taken_on.duration()),
+            (0.0, SUCCESSOR_SECONDS)
+        );
+
+        render(&mut processor);
+        let adopted = playback.snapshot();
+        assert!(adopted.position() > 0.0, "{adopted:?}");
+        assert!(
+            (adopted.duration() - SUCCESSOR_SECONDS).abs() < 1e-3,
+            "{adopted:?}"
         );
     }
 

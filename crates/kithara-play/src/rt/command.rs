@@ -106,7 +106,10 @@ impl Deck {
                     self.unload_slot(slot);
                 }
             }
-            DeckPart::Chain { from, to } => {
+            DeckPart::Chain { from, to, epoch } => {
+                if let Some(track) = self.tracks.get_mut(to) {
+                    track.lead_under(epoch);
+                }
                 if let Some(track) = self.tracks.get_mut(from) {
                     track.chain(to);
                 }
@@ -181,6 +184,7 @@ impl Deck {
         }
         if let Some(track) = self.tracks.at_mut(slot) {
             track.fade_in(settings);
+            track.lead_under(epoch);
             self.playback
                 .adopt(epoch, track.position(), track.duration());
             if old.is_some() {

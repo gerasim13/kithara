@@ -1,20 +1,31 @@
 use kithara_platform::sync::Arc;
 
-use crate::api::TrackId;
+use crate::{
+    api::TrackId,
+    resource::{PreparedGrid, StagingRecipe},
+};
 
-/// Whether the armed successor has been activated for the current handover.
-///
-/// Mirrors the pre-split `PendingNext::activated: bool`:
-/// - `Armed` ⇒ `activated == false` (armed, not yet committed).
-/// - `ActivatedReady` ⇒ `activated == true` (committed, leading slot).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What the player publishes about the item it plays: its beat grid, its
+/// staging recipe and its ABR handle. An armed successor holds it until it
+/// becomes the current item.
+pub(crate) struct ItemPresentation {
+    pub(crate) beat_grid: Arc<PreparedGrid>,
+    pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
+    pub(crate) staging: Option<StagingRecipe>,
+}
+
+/// Whether the successor is armed behind the current item or already
+/// committed as the leading one.
 pub(crate) enum PendingNextState {
-    Armed,
+    /// Attached ahead and not yet current; holds the presentation it
+    /// publishes once it becomes current.
+    Armed(ItemPresentation),
+    /// Committed by a crossfade: the leading item, its presentation published.
     ActivatedReady,
 }
 
 impl PendingNextState {
-    pub(crate) const fn activated(self) -> bool {
+    pub(crate) const fn activated(&self) -> bool {
         matches!(self, Self::ActivatedReady)
     }
 }
@@ -29,6 +40,19 @@ pub(crate) struct PendingNext {
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
     pub(crate) index: usize,
+}
+
+/// The track the processor reported playing, as a handover settles it.
+pub(crate) enum Played {
+    /// The armed successor, stitched in behind its predecessor, with what it
+    /// publishes now that it leads.
+    Armed {
+        duration_seconds: f64,
+        presentation: ItemPresentation,
+    },
+    /// A withdrawn successor the processor stitched in before it read the
+    /// withdrawal.
+    Withdrawn,
 }
 
 /// Successor loads a handover has handed the processor.
@@ -58,10 +82,6 @@ impl PendingLoads {
         }
     }
 
-    const fn in_question(&self) -> bool {
-        !(self.withdrawn.is_empty() && self.uncancelled.is_empty())
-    }
-
     /// The processor unloaded `item_id`, so it can no longer stitch that
     /// withdrawn successor in.
     pub(crate) fn retire(&mut self, item_id: TrackId) {
@@ -71,42 +91,53 @@ impl PendingLoads {
     }
 
     /// The processor played `item_id`: it reported the track's start or its
-    /// natural or failed end. While a withdrawal is in question that is the
-    /// stitch that settles it, when it names the armed successor or a
-    /// withdrawn one; the armed successor is consumed only when it is the one
-    /// played.
-    pub(crate) fn settle_played(&mut self, item_id: TrackId) -> bool {
-        let armed = self
-            .next
-            .as_ref()
-            .is_some_and(|next| !next.state.activated() && next.item_id == item_id);
-        let withdrawn = self.withdrawn.contains(&item_id) || self.uncancelled.contains(&item_id);
-        if !self.in_question() || !(armed || withdrawn) {
-            return false;
-        }
-        if armed {
-            self.next = None;
-        }
+    /// natural or failed end. That report, not its predecessor's end, makes
+    /// the armed successor or a withdrawn one the track that leads; a
+    /// withdrawn one leaves the armed successor armed.
+    pub(crate) fn settle_played(&mut self, item_id: TrackId) -> Option<Played> {
+        let played = match self.next.take() {
+            Some(PendingNext {
+                state: PendingNextState::Armed(presentation),
+                item_id: armed,
+                duration_seconds,
+                ..
+            }) if armed == item_id => Played::Armed {
+                duration_seconds,
+                presentation,
+            },
+            next => {
+                self.next = next;
+                if !(self.withdrawn.contains(&item_id) || self.uncancelled.contains(&item_id)) {
+                    return None;
+                }
+                Played::Withdrawn
+            }
+        };
         self.withdrawn.clear();
         self.uncancelled
             .retain(|uncancelled| *uncancelled != item_id);
-        true
+        Some(played)
     }
 
-    /// The successor a track's end settles. While a withdrawal is in question
-    /// the audio thread may have stitched a withdrawn track in instead of the
-    /// armed one, so the armed successor waits for the processor to report the
-    /// track it played.
-    pub(crate) fn take_at_end(&mut self) -> Option<PendingNext> {
-        let activated = self
-            .next
-            .as_ref()
-            .is_some_and(|next| next.state.activated());
-        if !self.in_question() || activated {
-            self.next.take()
-        } else {
-            None
+    /// Retire a committed successor once a track ends. An armed one stays:
+    /// only the processor's report that it played makes it lead.
+    pub(crate) fn take_activated(&mut self) -> Option<PendingNext> {
+        self.next.take_if(|next| next.state.activated())
+    }
+
+    /// The playlist dropped the item at `index`: whether that was the
+    /// successor, whose index is otherwise shifted down past the gap.
+    pub(crate) fn removed_at(&mut self, index: usize) -> bool {
+        let Some(next) = self.next.as_mut() else {
+            return false;
+        };
+        if next.index == index {
+            return true;
         }
+        if next.index > index {
+            next.index -= 1;
+        }
+        false
     }
 
     /// Take the successor off the handover. The audio thread may already have
@@ -140,7 +171,12 @@ mod tests {
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
-        assert!(!PendingNextState::Armed.activated());
+        let presentation = ItemPresentation {
+            beat_grid: Arc::default(),
+            abr_handle: None,
+            staging: None,
+        };
+        assert!(!PendingNextState::Armed(presentation).activated());
         assert!(PendingNextState::ActivatedReady.activated());
     }
 }

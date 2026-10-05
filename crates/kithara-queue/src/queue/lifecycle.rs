@@ -6,8 +6,7 @@ use smallvec::SmallVec;
 use super::{
     QueueControl,
     types::{
-        CachedPosition, CrossfadeArm, PendingSelect, Placement, SelectPhase, Transition,
-        extract_track_name,
+        CachedPosition, PendingSelect, Placement, SelectPhase, Transition, extract_track_name,
     },
 };
 use crate::{
@@ -77,9 +76,8 @@ where
             navigation.set_repeat(repeat);
             navigation.set_playback_order(order, &[]);
             drop(navigation);
-            self.write_armed_for(CrossfadeArm::Disarmed);
             self.write_cached_position(CachedPosition::Unknown);
-            self.autoplay_target.store(CrossfadeArm::Disarmed);
+            self.autoplay_target.disarm();
             self.player.remove_all_items();
             ids
         };

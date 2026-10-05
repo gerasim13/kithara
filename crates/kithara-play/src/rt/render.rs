@@ -17,7 +17,7 @@ use super::{
     track::{PlayerTrack, RtSink, TrackReadOutcome},
 };
 use crate::{
-    bridge::{PlayerNotification, RtMetrics, TrackState},
+    bridge::{PlayerNotification, PublishingEpochs, RtMetrics, TrackState},
     rt::{TrackSlot, TrackSlots},
 };
 
@@ -34,7 +34,13 @@ pub(crate) struct RenderTargets<'a> {
     pub(crate) tracks: &'a mut TrackSlots,
     /// Slot seek epoch published when this block started rendering.
     pub(crate) seek_epoch: u64,
+    /// The epochs whose track describes the playhead in this block.
+    pub(crate) publishing: PublishingEpochs,
 }
+
+/// The playhead one leading track reported: the epoch it leads under, its position and its
+/// duration.
+pub(crate) type LeadingPlayhead = (u64, f64, f64);
 
 pub(crate) struct RenderPass {
     /// The deck's output gain, ramped to each new target from the frame it is set on.
@@ -87,9 +93,10 @@ impl RenderPass {
         targets: RenderTargets<'_>,
         buffers: &mut ProcBuffers,
         range: Range<usize>,
-    ) -> (bool, Option<(f64, f64)>) {
+    ) -> (bool, Option<LeadingPlayhead>) {
         let mut playback_started = false;
-        let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
+        let mut leading_outcome_pos_dur: Option<LeadingPlayhead> = None;
+        let publishing = targets.publishing;
 
         if buffers.outputs.len() < Self::MIN_STEREO {
             return (false, None);
@@ -147,7 +154,9 @@ impl RenderPass {
             };
 
             if *was_leading {
-                if let Some(snapshot) = outcome_position_duration(&read_outcome) {
+                if let Some(snapshot) =
+                    leading_playhead(tracks, *track_handle, &read_outcome, publishing)
+                {
                     leading_outcome_pos_dur = Some(snapshot);
                 }
 
@@ -181,7 +190,9 @@ impl RenderPass {
                     skip_tracks[next_idx] = true;
                     ending = *next_handle;
 
-                    if let Some(snapshot) = outcome_position_duration(&read_outcome) {
+                    if let Some(snapshot) =
+                        leading_playhead(tracks, *next_handle, &read_outcome, publishing)
+                    {
                         leading_outcome_pos_dur = Some(snapshot);
                     }
 
@@ -211,7 +222,9 @@ impl RenderPass {
                             offset..frames,
                             &mut sink,
                         );
-                        if let Some(snapshot) = outcome_position_duration(&outcome) {
+                        if let Some(snapshot) =
+                            leading_playhead(tracks, next_handle, &outcome, publishing)
+                        {
                             leading_outcome_pos_dur = Some(snapshot);
                         }
                         match next_handover(&outcome, offset) {
@@ -313,6 +326,21 @@ const fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option
         }),
         TrackReadOutcome::Eof | TrackReadOutcome::Failed(_) => Some(Handover { offset }),
     }
+}
+
+/// The playhead `outcome` reports for the track in `slot`, if that track describes the playhead.
+fn leading_playhead(
+    tracks: &TrackSlots,
+    slot: TrackSlot,
+    outcome: &TrackReadOutcome,
+    publishing: PublishingEpochs,
+) -> Option<LeadingPlayhead> {
+    let epoch = tracks
+        .at(slot)
+        .map(PlayerTrack::epoch)
+        .filter(|epoch| publishing.admit(*epoch))?;
+    let (position, duration) = outcome_position_duration(outcome)?;
+    Some((epoch, position, duration))
 }
 
 const fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {

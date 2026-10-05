@@ -9,7 +9,8 @@ use tracing::warn;
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, InterruptionKind, PlayError, PlaybackSnapshot, PlayerStatus,
-    Resource, ResourceConfig, SelectionPlayback, SessionDuckingMode, bridge::RtMetricsSnapshot,
+    Resource, ResourceConfig, SelectionPlayback, SessionDuckingMode, SuccessorLink,
+    bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -28,6 +29,26 @@ where
 {
     pub(super) fn new(runtime: Arc<PlayerRuntime<S>>) -> Self {
         Self { runtime }
+    }
+
+    /// Attach the prepared item at `index` to the deck ahead of the current
+    /// one, joined to it by `link`. `Ok(None)` when the item holds no
+    /// prepared resource.
+    ///
+    /// # Errors
+    /// Returns a closed-owner error or the failure to allocate its buffers.
+    pub fn arm_next(
+        &self,
+        index: usize,
+        link: SuccessorLink,
+    ) -> Result<Option<Arc<str>>, PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.arm_next(index, link))
+    }
+
+    /// Drop the armed successor from the deck without committing it.
+    pub fn unarm_next(&self) {
+        self.command(PlayerRuntime::unarm_next);
     }
 
     /// Root event bus used to scope per-track loader events.
@@ -240,6 +261,9 @@ where
             /// Current queue item index in the resident player.
             #[must_use]
             pub fn current_index(&self) -> usize;
+            /// Index of the successor armed on the deck and not yet committed.
+            #[must_use]
+            pub fn armed_next(&self) -> Option<usize>;
             /// Whether one player item still owns a prepared resource.
             #[must_use]
             pub fn item_has_resource(&self, index: usize) -> bool;

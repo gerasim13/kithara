@@ -3,7 +3,7 @@ use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
-use super::super::core::PlayerRuntime;
+use super::super::core::{EnqueuedItem, PlayerRuntime};
 use crate::{
     api::{CrossfadeSettings, PlayerStatus, SelectionPlayback, TrackId},
     bridge::{DeckPart, TrackTransition},
@@ -64,20 +64,21 @@ where
     /// `false` means the slot held no resource, so nothing reached the
     /// processor and the item is not current.
     fn load_current_item(&self) -> Result<bool, PlayError> {
-        let index = self.current_index();
-        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
-            return Ok(false);
-        };
-        self.start_playback(item_id, duration_seconds);
-        self.apply_start_position();
-        Ok(true)
+        self.load_current_item_with(self.configured_crossfade())
     }
 
     fn load_current_item_with(&self, crossfade: CrossfadeSettings) -> Result<bool, PlayError> {
         let index = self.current_index();
-        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+        let Some(EnqueuedItem {
+            item_id,
+            duration_seconds,
+            presentation,
+            ..
+        }) = self.enqueue_to_processor(index)?
+        else {
             return Ok(false);
         };
+        self.adopt_presentation(item_id, duration_seconds, presentation);
         self.start_playback_with(item_id, duration_seconds, crossfade);
         self.apply_start_position();
         Ok(true)
@@ -252,7 +253,7 @@ where
         let _ = self.send_to_slot(DeckPart::SetRate(self.core.lanes.next().speed()));
 
         if armed_for_index {
-            self.commit_next(index)?;
+            self.commit_next(index, crossfade)?;
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
             self.core.items.set_current(index);
@@ -264,30 +265,25 @@ where
         Ok(())
     }
 
-    pub(crate) fn start_playback(&self, item_id: TrackId, duration_seconds: f64) {
-        self.start_playback_with(
-            item_id,
-            duration_seconds,
-            CrossfadeSettings {
-                duration: self.crossfade_duration(),
-                ..CrossfadeSettings::default()
-            },
-        );
+    /// The player's configured crossfade, for transitions nobody gave settings
+    /// of their own.
+    pub(crate) fn configured_crossfade(&self) -> CrossfadeSettings {
+        CrossfadeSettings {
+            duration: self.crossfade_duration(),
+            ..CrossfadeSettings::default()
+        }
     }
 
     /// Make `item_id` leading: once the processor accepts its `FadeIn`, the playhead reads
     /// describe it, not only once the audio thread has taken it on, and no withdrawn
     /// successor is left in question.
-    fn start_playback_with(
+    pub(crate) fn start_playback_with(
         &self,
         item_id: TrackId,
         duration_seconds: f64,
         settings: CrossfadeSettings,
     ) {
-        let Some(playback) = self
-            .slot()
-            .and_then(|slot_id| self.core.engine.slot_playback(slot_id))
-        else {
+        let Some(playback) = self.slot_playback() else {
             return;
         };
         let led = playback.lead(duration_seconds, |epoch| {

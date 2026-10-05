@@ -1,3 +1,5 @@
+use kithara_platform::sync::Arc;
+
 #[cfg(test)]
 use super::super::PlayerImpl;
 use super::{
@@ -6,7 +8,7 @@ use super::{
 };
 use crate::{
     api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
-    bridge::DeckPart,
+    bridge::{DeckPart, PlaybackShared},
     error::PlayError,
 };
 
@@ -304,6 +306,12 @@ impl<S> PlayerRuntime<S> {
     /// Snapshot of the active slot under a short phase lock.
     pub(crate) fn slot(&self) -> Option<SlotId> {
         self.require_active_slot().ok()
+    }
+
+    /// The live playback state the processor of the active slot publishes.
+    pub(crate) fn slot_playback(&self) -> Option<Arc<PlaybackShared>> {
+        self.slot()
+            .and_then(|slot| self.core.engine.slot_playback(slot))
     }
 
     delegate::delegate! {

@@ -54,8 +54,7 @@ impl<S> PlayerRuntime<S> {
     pub fn notify_interruption(&self, kind: InterruptionKind) {
         if matches!(kind, InterruptionKind::Began) {
             let tick = self
-                .slot()
-                .and_then(|slot| self.core.engine.slot_playback(slot))
+                .slot_playback()
                 .map_or(0, |shared| shared.process_count.load(Ordering::Relaxed));
             self.core.engine.suspend_output(tick);
         }

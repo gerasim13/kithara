@@ -28,6 +28,10 @@ pub struct PlayerTrack {
     /// The track that starts on the frame after this one's last.
     #[field(get, copy)]
     pub(super) successor: Option<TrackId>,
+    /// The epoch this track leads under: from the `FadeIn` that leads it, or the `Chain` that
+    /// stitches it in behind another.
+    #[field(get, copy)]
+    pub(super) epoch: u64,
     /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
     /// Marks a played-out track as eligible to be kept warm at end-of-queue
     /// and revived by a later in-range seek (Superpowered-style resume).
@@ -102,6 +106,7 @@ impl PlayerTrack {
             state_dirty: false,
             triggers: TrackTriggers::default(),
             successor: None,
+            epoch: 0,
             fade: TrackFade::new(crossfade, sample_rate),
             gate: TrackGate::new(!stopped, declick, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
@@ -131,6 +136,11 @@ impl PlayerTrack {
     /// Make `successor` the track that starts on the frame after this one's last.
     pub const fn chain(&mut self, successor: TrackId) {
         self.successor = Some(successor);
+    }
+
+    /// Lead under `epoch` from the next time this track leads.
+    pub const fn lead_under(&mut self, epoch: u64) {
+        self.epoch = epoch;
     }
 
     /// Re-base this track onto a slot seek epoch the processor has applied.

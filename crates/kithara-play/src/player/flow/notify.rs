@@ -96,11 +96,11 @@ where
         if self.auto_advance_enabled()
             && let Some(idx) = self.armed_next()
         {
-            let _ = self.commit_next(idx);
+            let _ = self.commit_next(idx, self.configured_crossfade());
         }
     }
 
-    /// The role is read before `finalize_handover_if_armed` runs, so the
+    /// The role is read before `retire_activated_at_end` runs, so the
     /// phase still describes the arena as it was when the track stopped.
     fn handle_track_playback_stopped(
         &self,
@@ -113,7 +113,7 @@ where
             self.core.engine.bus().publish(event);
         }
 
-        self.finalize_handover_if_armed();
+        self.retire_activated_at_end();
     }
 
     fn handle_track_requested(&self) {
@@ -124,7 +124,7 @@ where
         if self.auto_advance_enabled() {
             let next_index = self.current_index() + 1;
             if next_index < self.item_count() {
-                let _ = self.arm_next(next_index);
+                let _ = self.arm_next(next_index, self.configured_crossfade().link());
             }
         }
     }
@@ -141,7 +141,7 @@ where
     /// leading slot, but it is not what the listener is hearing.
     fn item_role(&self, slot_id: SlotId, notification: &PlayerNotification) -> Option<ItemRole> {
         let (src, id) = match notification {
-            PlayerNotification::PlaybackStarted { src, item_id }
+            PlayerNotification::PlaybackStarted { src, item_id, .. }
             | PlayerNotification::PlaybackStopped { src, item_id, .. }
             | PlayerNotification::HandoverRequested { src, item_id } => (src, *item_id),
             _ => return None,
@@ -526,6 +526,7 @@ mod tests {
             &PlayerNotification::PlaybackStarted {
                 src: Arc::from("background.mp3"),
                 item_id: consts::BACKGROUND,
+                epoch: 0,
             },
         );
 

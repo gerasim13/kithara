@@ -1,8 +1,10 @@
 use kithara_bufpool::HasPool;
+use kithara_events::TrackId;
 use kithara_play::{
-    InterruptionKind, PlayError, SeekOutcome, SelectionPlayback, SessionDuckingMode,
+    InterruptionKind, PlayError, SeekOutcome, SelectionPlayback, SessionDuckingMode, SuccessorLink,
 };
 use smallvec::SmallVec;
+use tracing::debug;
 
 use super::{
     QueueControl,
@@ -13,6 +15,7 @@ use crate::{
     attempts::LoadClass,
     error::QueueError,
     event::{AdvanceReason, TrackStatus},
+    track::TrackEntry,
 };
 
 impl<S> QueueControl<S>
@@ -48,48 +51,117 @@ where
         })
     }
 
-    /// Reload a consumed successor once the current track has the queue's
-    /// prefetch lead left in session time, so the load has that long before
-    /// the successor is needed.
-    fn maybe_reload_successor(&self, time: super::types::PlaybackTime) {
-        if !time.ends_within(self.config.prefetch_duration)
-            || self.action_at_item_end() != ActionAtItemEnd::Advance
+    /// The successor the queue wants armed behind the current track: the one
+    /// navigation offers at its natural end, while the queue advances, no
+    /// selection waits for its load, and the cursor stands on the track the
+    /// deck plays. Repeating the current track needs no successor.
+    fn wanted_successor(&self) -> Option<(usize, TrackEntry)> {
+        if self.action_at_item_end() != ActionAtItemEnd::Advance
+            || matches!(*self.lock_pending_select_mut(), SelectPhase::Pending(_))
         {
-            return;
+            return None;
         }
-        let Some(next) = self.peek_selectable_entry() else {
-            return;
-        };
-        if !matches!(next.status, TrackStatus::Consumed) {
-            return;
+        let current = self.current()?;
+        let playing = self
+            .lock_tracks()
+            .get(self.player.current_index())
+            .map(|entry| entry.id);
+        if playing != Some(current.id) {
+            return None;
         }
-        let Some(source) = self.tracks.source(next.id) else {
-            return;
-        };
-        self.set_status(next.id, TrackStatus::Pending);
-        self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
+        let next = self.next_selectable_entry(AdvanceReason::NaturalEof)?;
+        if next.id == current.id {
+            return None;
+        }
+        let index = self
+            .lock_tracks()
+            .iter()
+            .position(|entry| entry.id == next.id)?;
+        Some((index, next))
     }
 
-    /// Start the next-track crossfade ahead of end-of-track when the
-    /// session time left at the current rate drops below the configured
-    /// crossfade window, so the two tracks actually overlap. `ItemDidPlayToEnd` alone
-    /// fires after the first track is already silent — too late for a
-    /// real crossfade.
-    fn maybe_arm_crossfade(&self, time: super::types::PlaybackTime) {
-        let crossfade = self.player.crossfade_duration();
-        let Some(entry) = self.current() else {
-            return;
-        };
-        let armed_for = self.read_armed_for();
-        if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
+    /// Keep the deck's armed successor the one the queue wants. Once the
+    /// current track ends within the longer of the prefetch lead and the
+    /// crossfade, in session time, a consumed successor reloads and a loaded
+    /// one is armed; a crossfade successor is committed once the track ends
+    /// within the fade, so the two overlap. A gapless one needs no commit:
+    /// the processor plays it on the frame after the current track's last.
+    pub(super) fn reconcile_successor(&self) {
+        let settings = self.crossfade_settings();
+        let lead = self.config.prefetch_duration.max(settings.duration);
+        let time = self.playback_time().filter(|time| time.ends_within(lead));
+        let armed = self.player.armed_next();
+        if armed.is_none() && time.is_none() {
             return;
         }
-        let transition = if crossfade > 0.0 {
-            Transition::Crossfade
-        } else {
-            Transition::None
+        let wanted = self.wanted_successor();
+        if let Some(armed) = armed
+            && wanted.as_ref().is_none_or(|(index, _)| *index != armed)
+        {
+            self.disarm_successor(armed);
+        }
+        let (Some(time), Some((index, next))) = (time, wanted) else {
+            return;
         };
-        self.advance_loaded_successor(entry.id, transition);
+        match next.status {
+            TrackStatus::Consumed => {
+                let Some(source) = self.tracks.source(next.id) else {
+                    return;
+                };
+                self.set_status(next.id, TrackStatus::Pending);
+                self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
+            }
+            TrackStatus::Loaded => {
+                if armed != Some(index) && !self.arm_successor(index, next.id, settings.link()) {
+                    return;
+                }
+                if settings.link() == SuccessorLink::Fade && time.ends_within(settings.duration) {
+                    self.cross_fade_into(next.id);
+                }
+            }
+            TrackStatus::Pending
+            | TrackStatus::Loading
+            | TrackStatus::Slow
+            | TrackStatus::Cancelled
+            | TrackStatus::Failed(_) => {}
+        }
+    }
+
+    /// Arm the loaded successor at `index`; `false` when the deck did not.
+    fn arm_successor(&self, index: usize, id: TrackId, link: SuccessorLink) -> bool {
+        match self.player.arm_next(index, link) {
+            Ok(Some(_)) => true,
+            Ok(None) => {
+                debug!(
+                    id = id.as_u64(),
+                    index, "the successor has no resource on the deck to arm"
+                );
+                false
+            }
+            Err(error) => {
+                debug!(%error, id = id.as_u64(), index, "the successor would not arm");
+                false
+            }
+        }
+    }
+
+    fn cross_fade_into(&self, id: TrackId) {
+        if let Err(error) =
+            self.select_with_reason(id, Transition::Crossfade, AdvanceReason::CrossfadePreArm)
+        {
+            debug!(%error, id = id.as_u64(), "the armed successor would not cross-fade in");
+        }
+    }
+
+    /// Take the armed successor at `index` off the deck. Arming moved its
+    /// resource onto the deck, so the entry is consumed and reloads once it
+    /// is wanted again.
+    pub(super) fn disarm_successor(&self, index: usize) {
+        self.player.unarm_next();
+        let id = self.lock_tracks().get(index).map(|entry| entry.id);
+        if let Some(id) = id {
+            self.set_status(id, TrackStatus::Consumed);
+        }
     }
 
     /// Platform audio-route changed while playback may be active.
@@ -116,16 +188,20 @@ where
 
     /// Pause playback and freeze the queue-visible head position.
     pub fn pause(&self) {
-        self.command(|queue| {
-            queue.player.pause();
-            let mut phase = queue.lock_pending_select_mut();
-            if let SelectPhase::Pending(mut pending) = *phase {
-                pending.playback = SelectionPlayback::Pause;
-                *phase = SelectPhase::Pending(pending);
-            }
-            drop(phase);
-            queue.freeze_cached_position();
-        });
+        self.command(Self::pause_inner);
+    }
+
+    /// [`Self::pause`] inside the admission its caller holds, as the tick
+    /// does when a drained end pauses the queue.
+    pub(super) fn pause_inner(&self) {
+        self.player.pause();
+        let mut phase = self.lock_pending_select_mut();
+        if let SelectPhase::Pending(mut pending) = *phase {
+            pending.playback = SelectionPlayback::Pause;
+            *phase = SelectPhase::Pending(pending);
+        }
+        drop(phase);
+        self.freeze_cached_position();
     }
 
     /// Starts playback, marking a consumed slot or retaining the selection until loading finishes.
@@ -257,10 +333,7 @@ where
         self.player.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
-        if let Some(time) = self.playback_time() {
-            self.maybe_reload_successor(time);
-            self.maybe_arm_crossfade(time);
-        }
+        self.reconcile_successor();
         Ok(())
     }
 
@@ -338,10 +411,7 @@ mod tests {
 
     use crate::{
         event::{QueueEvent, TrackStatus},
-        queue::{
-            state::tests::make_queue,
-            types::{CrossfadeArm, PlaybackTime, SelectPhase, should_arm_crossfade},
-        },
+        queue::{state::tests::make_queue, types::SelectPhase},
         track::{TrackRecord, TrackSource},
     };
 
@@ -442,79 +512,5 @@ mod tests {
         queue.play();
 
         assert!(queue.tracks.attempt_selected(id));
-    }
-
-    #[kithara::test]
-    #[case::remaining_equals_crossfade(157.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, true)]
-    #[case::remaining_below_crossfade(160.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, true)]
-    #[case::far_from_end(100.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, false)]
-    #[case::double_speed_halves_the_session_time_left(
-        152.0,
-        162.0,
-        2.0,
-        5.0,
-        CrossfadeArm::Disarmed,
-        true
-    )]
-    #[case::double_speed_media_tail_is_not_yet_due(
-        150.0,
-        162.0,
-        2.0,
-        5.0,
-        CrossfadeArm::Disarmed,
-        false
-    )]
-    #[case::half_speed_media_tail_is_too_long(
-        158.0,
-        162.0,
-        0.5,
-        5.0,
-        CrossfadeArm::Disarmed,
-        false
-    )]
-    #[case::stopped_track_never_arms(161.0, 162.0, 0.0, 5.0, CrossfadeArm::Disarmed, false)]
-    #[case::already_armed_for_same_track(
-        160.0,
-        162.0,
-        1.0,
-        5.0,
-        CrossfadeArm::armed(TrackId(1)),
-        false
-    )]
-    #[case::armed_for_different_track_still_arms(
-        160.0,
-        162.0,
-        1.0,
-        5.0,
-        CrossfadeArm::armed(TrackId(0)),
-        true
-    )]
-    #[case::crossfade_zero_at_tail_no_pre_arm(
-        161.9,
-        162.0,
-        1.0,
-        0.0,
-        CrossfadeArm::Disarmed,
-        false
-    )]
-    #[case::zero_position_rejected(0.0, 162.0, 1.0, 5.0, CrossfadeArm::Disarmed, false)]
-    #[case::zero_duration_rejected(10.0, 0.0, 1.0, 5.0, CrossfadeArm::Disarmed, false)]
-    fn should_arm_crossfade_cases(
-        #[case] pos: f64,
-        #[case] dur: f64,
-        #[case] rate: f64,
-        #[case] crossfade: f32,
-        #[case] armed_for: CrossfadeArm,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            should_arm_crossfade(
-                PlaybackTime { dur, pos, rate },
-                crossfade,
-                TrackId(1),
-                armed_for
-            ),
-            expected
-        );
     }
 }
