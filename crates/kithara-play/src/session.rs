@@ -7,7 +7,6 @@ mod wire {
     use kithara_dsp::param::SmootherConfig;
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
-    use kithara_signal::FaderValue;
     use kithara_sync::{SyncError, SyncReceipt};
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
@@ -105,11 +104,6 @@ mod wire {
         },
         SetPlayerMasterVolumes {
             levels: Vec<PlayerLevel>,
-        },
-        SetPlayerSlotVolume {
-            player_id: PlayerId,
-            slot: SlotId,
-            volume: FaderValue,
         },
         SetPlayerEqGain {
             band: usize,
@@ -460,20 +454,6 @@ mod handle {
             }
             self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
                 .map(|_| ())
-        }
-
-        pub fn set_player_slot_volume(
-            &self,
-            player_id: PlayerId,
-            slot: SlotId,
-            volume: kithara_signal::FaderValue,
-        ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetPlayerSlotVolume {
-                player_id,
-                slot,
-                volume,
-            })
-            .map(|_| ())
         }
 
         pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {

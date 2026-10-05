@@ -27,7 +27,8 @@ use smallvec::SmallVec;
 use super::{context::read_render_context, track::PlayerTrack};
 use crate::{
     bridge::{
-        DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification, TrackState, TrackTransition,
+        DeckMixSettings, DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification, TrackState,
+        TrackTransition,
     },
     rt::{RenderPass, RenderTargets, TrackSlot, TrackSlots},
     session::SessionError,
@@ -54,6 +55,8 @@ pub struct PlayerNodeProcessor {
 pub(super) struct Deck {
     pub(super) playback: Arc<PlaybackShared>,
     pub(super) crossfade: crate::CrossfadeSettings,
+    /// How loud the deck sounds, as its parts last set it.
+    pub(super) mix: DeckMixSettings,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
     pub(super) render: RenderPass,
@@ -213,6 +216,7 @@ impl PlayerNodeProcessor {
         S: HasPool<f32>,
     {
         let last_notified_rate = inputs.playback.rate.load();
+        let mix = DeckMixSettings::default();
         Self {
             context_requirement,
             inbox: inputs.deck,
@@ -222,8 +226,9 @@ impl PlayerNodeProcessor {
                 trash_tx: inputs.trash_tx,
                 playback: inputs.playback,
                 sample_rate: shape.sample_rate,
-                render: RenderPass::new(pools, shape, gate_smoothing),
+                render: RenderPass::new(pools, shape, gate_smoothing, mix.gain()),
                 crossfade: crate::CrossfadeSettings::default(),
+                mix,
                 prefetch_duration: 0.0,
                 rate: 1.0,
                 tracks: TrackSlots::default(),

@@ -1,11 +1,12 @@
 use delegate::delegate;
 use kithara_events::EventBus;
+use kithara_signal::FaderValue;
 use kithara_warp::MIN_SPEED;
 
 use super::PlayerConfig;
 use crate::{
-    api::{PlayerEvent, SlotId},
-    bridge::DeckPart,
+    api::PlayerEvent,
+    bridge::{DeckMixSettingsChange, DeckPart},
     error::PlayError,
 };
 
@@ -71,13 +72,12 @@ impl<S> PlayerConfig<S> {
     pub(crate) fn set_muted(
         &self,
         muted: bool,
-        slot: Option<SlotId>,
-        set_slot_volume: impl FnOnce(SlotId, f32) -> Result<(), PlayError>,
+        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
         bus: &EventBus,
     ) -> Result<(), PlayError> {
-        let effective = if muted { 0.0 } else { self.volume() };
-        if let Some(slot) = slot {
-            set_slot_volume(slot, effective)?;
+        match send(DeckPart::Mix(DeckMixSettingsChange::Muted(muted))) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
         }
         self.muted.store(muted);
         bus.publish(PlayerEvent::MuteChanged { muted });
@@ -101,15 +101,15 @@ impl<S> PlayerConfig<S> {
     pub(crate) fn set_volume(
         &self,
         volume: f32,
-        slot: Option<SlotId>,
-        set_slot_volume: impl FnOnce(SlotId, f32) -> Result<(), PlayError>,
+        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
         bus: &EventBus,
     ) -> Result<(), PlayError> {
         let clamped = volume.clamp(0.0, 1.0);
-        if !self.is_muted()
-            && let Some(slot) = slot
-        {
-            set_slot_volume(slot, clamped)?;
+        match send(DeckPart::Mix(DeckMixSettingsChange::Volume(
+            FaderValue::from(clamped),
+        ))) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
         }
         self.volume.store(clamped);
         bus.publish(PlayerEvent::VolumeChanged { volume: clamped });
@@ -164,28 +164,31 @@ mod tests {
     }
 
     #[kithara::test]
-    fn rejected_slot_volume_leaves_live_values_unchanged() {
+    fn a_refused_mix_part_leaves_volume_and_mute_unchanged() {
         let config = config();
-        let slot = SlotId::new(1);
         let bus = EventBus::new(8);
         let mut events = bus.subscribe::<PlayerEvent>();
-        let rejected = |_: SlotId, _: f32| Err(PlayError::SlotChannelFull { slot });
+        let rejected = |_: DeckPart| {
+            Err(PlayError::SlotChannelFull {
+                slot: SlotId::new(1),
+            })
+        };
 
         assert!(matches!(
-            config.set_volume(0.4, Some(slot), rejected, &bus),
+            config.set_volume(0.4, rejected, &bus),
             Err(PlayError::SlotChannelFull { .. })
         ));
         assert_eq!(config.values().volume, 1.0);
 
         assert!(matches!(
-            config.set_muted(true, Some(slot), rejected, &bus),
+            config.set_muted(true, rejected, &bus),
             Err(PlayError::SlotChannelFull { .. })
         ));
         assert!(!config.values().muted);
         assert!(events.try_recv().is_err());
 
         config
-            .set_volume(0.4, None, rejected, &bus)
+            .set_volume(0.4, |_| Err(PlayError::NoActiveSlot), &bus)
             .expect("an idle player retains its next-slot volume");
         assert_eq!(config.values().volume, 0.4);
         assert!(matches!(

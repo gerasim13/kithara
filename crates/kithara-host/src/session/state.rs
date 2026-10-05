@@ -38,9 +38,7 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) struct SlotNodes {
-    pub(super) volume_memo: Memo<VolumeNode>,
     pub(super) player_node_id: NodeID,
-    pub(super) volume_node_id: NodeID,
     pub(super) slot_id: SlotId,
 }
 

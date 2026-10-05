@@ -190,14 +190,6 @@ where
                 Err(err) => Reply::Err(err),
             }
         }
-        Cmd::SetPlayerSlotVolume {
-            player_id,
-            slot,
-            volume,
-        } => match controls::set_player_slot_volume(state, player_id, slot, volume) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
         Cmd::SetPlayerEqGain {
             band,
             gain_db,

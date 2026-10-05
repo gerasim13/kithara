@@ -1,12 +1,14 @@
 pub mod channels;
 pub mod eq;
 pub mod metrics;
+pub mod mix;
 pub mod playback;
 pub mod protocol;
 
 pub use channels::{MixTapWriter, NodeInputs, SlotControl, slot_channels};
 pub use eq::SharedEq;
 pub use metrics::{RtMetrics, RtMetricsSnapshot};
+pub use mix::{DeckMixSettings, DeckMixSettingsChange};
 pub use playback::{PlaybackShared, PlaybackSnapshot};
 pub use protocol::{
     DeckPart, DeckProtocol, PlaybackFault, PlayerNotification, TrackPlaybackStopReason, TrackState,

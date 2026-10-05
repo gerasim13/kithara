@@ -1,3 +1,4 @@
+use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_platform::sync::{Arc, atomic::Ordering};
 use ringbuf::traits::Producer;
@@ -115,6 +116,10 @@ impl Deck {
             }
             DeckPart::Stop => {
                 self.playback.playing.store(false, Ordering::SeqCst);
+            }
+            DeckPart::Mix(change) => {
+                self.mix.apply_change(change);
+                self.render.set_gain(self.mix.gain());
             }
             DeckPart::SetFadeDuration(duration) => {
                 self.apply_fade_duration(duration);

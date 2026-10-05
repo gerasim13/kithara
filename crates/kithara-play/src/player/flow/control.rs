@@ -1,5 +1,6 @@
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_platform::sync::atomic::Ordering;
+use kithara_signal::FaderValue;
 use kithara_test_macros as kithara;
 use kithara_warp::MIN_SPEED;
 use tracing::warn;
@@ -10,7 +11,7 @@ use crate::{
         InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
         SlotId,
     },
-    bridge::DeckPart,
+    bridge::{DeckMixSettingsChange, DeckPart},
     error::PlayError,
 };
 
@@ -22,8 +23,12 @@ impl<S> PlayerRuntime<S> {
         }
         let id = self.core.engine.allocate_slot()?;
         self.enter_loading_with_slot(id);
-        let effective = if self.is_muted() { 0.0 } else { self.volume() };
-        self.core.engine.set_slot_volume(id, effective)?;
+        for change in [
+            DeckMixSettingsChange::Volume(FaderValue::from(self.volume())),
+            DeckMixSettingsChange::Muted(self.is_muted()),
+        ] {
+            self.core.engine.send_slot_cmd(id, DeckPart::Mix(change))?;
+        }
         Ok(id)
     }
 
@@ -111,11 +116,9 @@ impl<S> PlayerRuntime<S> {
 
     /// Set muted state.
     pub fn set_muted(&self, muted: bool) {
-        let slot = self.slot();
         if let Err(error) = self.core.config.set_muted(
             muted,
-            slot,
-            |slot, volume| self.core.engine.set_slot_volume(slot, volume),
+            |part| self.send_to_slot(part),
             self.core.engine.bus(),
         ) {
             warn!(?error, muted, "mute update rejected");
@@ -179,11 +182,9 @@ impl<S> PlayerRuntime<S> {
 
     /// Set volume, clamped to `0.0..=1.0`.
     pub fn set_volume(&self, volume: f32) {
-        let slot = self.slot();
         if let Err(error) = self.core.config.set_volume(
             volume,
-            slot,
-            |slot, volume| self.core.engine.set_slot_volume(slot, volume),
+            |part| self.send_to_slot(part),
             self.core.engine.bus(),
         ) {
             warn!(?error, volume, "volume update rejected");

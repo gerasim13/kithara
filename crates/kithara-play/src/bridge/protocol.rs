@@ -6,6 +6,7 @@ use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_signal::SessionFrame;
 
+use super::DeckMixSettingsChange;
 use crate::rt::track::PlayerResource;
 
 /// Types a deck's audio thread speaks: its parts, its clock and its answers.
@@ -51,6 +52,8 @@ pub enum DeckPart {
     Start,
     /// Fade the deck's output to silence from this frame on.
     Stop,
+    /// Change how loud the deck sounds from this frame on.
+    Mix(DeckMixSettingsChange),
     /// Update the fade duration.
     SetFadeDuration(f32),
     /// Update the prefetch lead time.
@@ -84,6 +87,7 @@ impl fmt::Debug for DeckPart {
                 .finish(),
             Self::Start => f.write_str("Start"),
             Self::Stop => f.write_str("Stop"),
+            Self::Mix(change) => f.debug_tuple("Mix").field(change).finish(),
             Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
             Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
             Self::SetRate(rate) => f.debug_tuple("SetRate").field(rate).finish(),

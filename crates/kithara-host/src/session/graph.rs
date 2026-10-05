@@ -10,7 +10,6 @@ use kithara_effects::{
     eq::{EqBandConfig, EqConfig},
 };
 use kithara_output::OutputGroup;
-use kithara_signal::FaderValue;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
@@ -348,9 +347,6 @@ pub(super) mod lifecycle {
     pub(super) fn remove_player_graph<S>(fw_ctx: &mut FirewheelContext, player: &mut Deck<S>) {
         let player_id = player.player_id;
         for slot in player.slots.drain(..) {
-            if let Err(err) = fw_ctx.remove_node(slot.volume_node_id) {
-                warn!(player_id, ?err, "failed to remove slot volume node");
-            }
             if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
                 warn!(player_id, ?err, "failed to remove slot player node");
             }
@@ -402,13 +398,8 @@ pub(super) mod slots {
         let player_node = PlayerNode::new(inputs, player.pools.clone(), player.gate_smoothing)
             .with_session_context();
         let player_node_id = add_graph_node(fw_ctx, player_node)?;
-        let slot_volume = VolumeNode::from_linear(1.0);
-        let slot_volume_memo = Memo::new(slot_volume);
-        let slot_volume_id = add_graph_node(fw_ctx, slot_volume)?;
-        let player_to_slot = "connect player->slot_volume";
-        connect_stereo(fw_ctx, player_node_id, slot_volume_id, player_to_slot)?;
-        let slot_to_master = "connect slot_volume->player_master_eq";
-        connect_stereo(fw_ctx, slot_volume_id, master_eq_id, slot_to_master)?;
+        let player_to_master = "connect player->player_master_eq";
+        connect_stereo(fw_ctx, player_node_id, master_eq_id, player_to_master)?;
         if let Err(err) = fw_ctx.update() {
             warn!(
                 player_id,
@@ -417,16 +408,13 @@ pub(super) mod slots {
             );
         }
         player.slots.push(SlotNodes {
-            slot_id,
             player_node_id,
-            volume_memo: slot_volume_memo,
-            volume_node_id: slot_volume_id,
+            slot_id,
         });
         debug!(
             player_id,
             ?slot_id,
             ?player_node_id,
-            ?slot_volume_id,
             slots = player.slots.len(),
             "[KITHARA-ROUTE] player slot allocated"
         );
@@ -470,9 +458,6 @@ pub(super) mod slots {
         player_id: PlayerId,
         slot: &SlotNodes,
     ) {
-        if let Err(err) = fw_ctx.remove_node(slot.volume_node_id) {
-            warn!(player_id, ?err, "failed to remove slot volume node");
-        }
         if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
             warn!(player_id, ?err, "failed to remove slot player node");
         }
@@ -536,30 +521,6 @@ pub(super) mod controls {
             let mut queue = fw_ctx.event_queue(master_id);
             memo.update_memo(&mut queue);
         }
-        Ok(())
-    }
-    pub(in crate::session) fn set_player_slot_volume<T, S>(
-        state: &mut SessionState<T, S>,
-        player_id: PlayerId,
-        slot: SlotId,
-        volume: FaderValue,
-    ) -> Result<(), SessionError> {
-        let idx = player_index(state, player_id)?;
-        if !deck_at(state, idx)?.started {
-            return Err(SessionError::NotRunning(player_id));
-        }
-        let (ctx, graph) = (&mut state.ctx, &mut state.graph);
-        let Some(slot_nodes) = deck_at_mut(graph, idx)?
-            .slots
-            .iter_mut()
-            .find(|s| s.slot_id == slot)
-        else {
-            return Err(SessionError::SlotNotFound(slot));
-        };
-        let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
-        slot_nodes.volume_memo.volume = Volume::Linear(volume.into());
-        let mut queue = fw_ctx.event_queue(slot_nodes.volume_node_id);
-        slot_nodes.volume_memo.update_memo(&mut queue);
         Ok(())
     }
     pub(in crate::session) fn set_player_eq_gain<T, S>(

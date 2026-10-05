@@ -4,7 +4,7 @@ use firewheel::node::ProcBuffers;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_dsp::{
     fade::FadeCurve,
-    param::{Mix, MixDSP, SmootherConfig},
+    param::{Mix, MixDSP, SmoothedParam, SmootherConfig},
 };
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
@@ -38,6 +38,8 @@ pub(crate) struct RenderTargets<'a> {
 
 pub(crate) struct RenderPass {
     gate: MixDSP,
+    /// The deck's output gain, ramped to each new target from the frame it is set on.
+    gain: SmoothedParam,
     scratch_bufs: [SampleBuffer; Self::SCRATCH_BUF_COUNT],
     priming: bool,
     capacity: usize,
@@ -45,6 +47,8 @@ pub(crate) struct RenderPass {
 
 impl RenderPass {
     const GATE_CURVE: FadeCurve = FadeCurve::Linear;
+    /// A deck's gain runs from silence to unity.
+    const GAIN_SPAN: f32 = 1.0;
     const MIN_STEREO: usize = 2;
     const SCRATCH_BUF_COUNT: usize = 4;
 
@@ -52,11 +56,18 @@ impl RenderPass {
         pools: &PoolRegion<S>,
         shape: StreamShape,
         gate_smoothing: SmootherConfig,
+        gain: f32,
     ) -> Self
     where
         S: HasPool<f32>,
     {
         let mut pass = Self {
+            gain: SmoothedParam::new(
+                gain,
+                Self::GAIN_SPAN,
+                SmootherConfig::default(),
+                shape.sample_rate,
+            ),
             scratch_bufs: std::array::from_fn(|_| pools.get::<f32>()),
             capacity: 0,
             priming: true,
@@ -98,19 +109,7 @@ impl RenderPass {
         let frames = range.end.min(self.capacity);
         let start = range.start.min(frames);
 
-        self.gate.set_mix(
-            if is_playing {
-                Mix::FULLY_DRY
-            } else {
-                Mix::FULLY_WET
-            },
-            Self::GATE_CURVE,
-        );
-        if self.priming {
-            self.priming = false;
-            self.gate.reset_to_target();
-        }
-        if !is_playing && self.gate.has_settled() {
+        if !self.steer_gate(is_playing) {
             return (false, None);
         }
 
@@ -249,8 +248,57 @@ impl RenderPass {
             &mut out_right[0][start..frames],
             frames - start,
         );
+        self.apply_gain(
+            &mut out_left[0][start..frames],
+            &mut out_right[0][start..frames],
+        );
 
         (playback_started, leading_outcome_pos_dur)
+    }
+
+    /// Moves the pause gate toward `is_playing`. Returns `false` when the deck renders silence:
+    /// paused with the gate settled closed, where the gain snaps to its target as well.
+    fn steer_gate(&mut self, is_playing: bool) -> bool {
+        self.gate.set_mix(
+            if is_playing {
+                Mix::FULLY_DRY
+            } else {
+                Mix::FULLY_WET
+            },
+            Self::GATE_CURVE,
+        );
+        if self.priming {
+            self.priming = false;
+            self.gate.reset_to_target();
+            self.gain.reset_to_target();
+        }
+        if !is_playing && self.gate.has_settled() {
+            self.gain.reset_to_target();
+            return false;
+        }
+        true
+    }
+
+    /// Ramp the deck's output gain to `gain` from the next frame rendered.
+    pub(crate) fn set_gain(&mut self, gain: f32) {
+        self.gain.set_value(gain);
+    }
+
+    fn apply_gain(&mut self, left: &mut [f32], right: &mut [f32]) {
+        if self.gain.has_settled() {
+            let gain = self.gain.target_value();
+            for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+                *l *= gain;
+                *r *= gain;
+            }
+            return;
+        }
+        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+            let gain = self.gain.next_smoothed();
+            *l *= gain;
+            *r *= gain;
+        }
+        self.gain.settle();
     }
 
     pub(crate) fn resize(&mut self, max_frames: usize) {
@@ -271,6 +319,7 @@ impl RenderPass {
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.gate.update_sample_rate(sample_rate);
+        self.gain.update_sample_rate(sample_rate);
     }
 }
 

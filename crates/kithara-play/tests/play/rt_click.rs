@@ -12,10 +12,10 @@ use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     Resource, SharedEq,
-    bridge::{DeckPart, SlotControl, TrackTransition, slot_channels},
+    bridge::{DeckMixSettingsChange, DeckPart, SlotControl, TrackTransition, slot_channels},
     rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
 };
-use kithara_signal::{AudioSpec, SessionFrame};
+use kithara_signal::{AudioSpec, FaderValue, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
 use kithara_test_utils::{bufpool::pools, kithara};
 
@@ -240,6 +240,114 @@ fn a_start_inside_a_block_sounds_from_its_frame(constant_half: &'static [u8]) {
     assert!(
         matches!(answer.outcome(), Outcome::Applied { at: applied, .. } if *applied == at),
         "the start is applied at its frame"
+    );
+}
+
+/// Half the fader, a quarter of the amplitude: the deck sounds at the square of its volume.
+const HALF_FADER_GAIN: f32 = 0.25;
+
+fn mix(change: DeckMixSettingsChange) -> DeckPart {
+    DeckPart::Mix(change)
+}
+
+fn half_volume() -> DeckPart {
+    mix(DeckMixSettingsChange::Volume(FaderValue::from(0.5)))
+}
+
+#[kithara::test]
+fn a_volume_change_inside_a_block_moves_the_gain_from_its_frame(constant_half: &'static [u8]) {
+    let (mut processor, mut control) = processor();
+    let item_id = load(&mut control, "a.mp3", constant_half);
+    push(&mut control, DeckPart::Start);
+    block(&mut processor);
+    start(&mut processor, item_id);
+    let unity = pump(&mut processor, WARMUP_BLOCKS);
+    assert!(
+        (last(&unity) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
+        "the deck plays at unity before its volume changes ({})",
+        last(&unity)
+    );
+
+    let origin = i64::try_from(BLOCK_FRAMES).expect("a block fits the clock");
+    let offset = BLOCK_FRAMES / 2;
+    let at = SessionFrame::new(origin + i64::try_from(offset).expect("an offset fits the clock"));
+    let seq = control
+        .deck
+        .send(
+            When::At(at),
+            Batch {
+                basis: Vec::new(),
+                commands: vec![half_volume()],
+            },
+        )
+        .expect("the deck channel has room");
+    let (changed, _) = block_from(&mut processor, SessionFrame::new(origin));
+
+    assert!(
+        changed[..offset]
+            .iter()
+            .all(|sample| (*sample - TEST_PCM_DEFAULT_VALUE).abs() < EXACT),
+        "the deck keeps its gain before the frame the change applies on"
+    );
+    assert!(
+        changed[offset] < TEST_PCM_DEFAULT_VALUE,
+        "the gain moves from the frame the change applies on"
+    );
+    let answer = control
+        .deck
+        .receipts()
+        .find(|receipt| receipt.seq() == seq)
+        .expect("the change is answered in the block it applies in");
+    assert!(
+        matches!(answer.outcome(), Outcome::Applied { at: applied, .. } if *applied == at),
+        "the change is applied at its frame"
+    );
+
+    let settled = pump(&mut processor, SETTLE_BLOCKS);
+    let step = max_step(&across(&unity, &[changed, settled.clone()].concat()));
+    assert!(
+        step <= MAX_STEP,
+        "a volume change ramps the gain, it does not step it (step {step})"
+    );
+    assert!(
+        (last(&settled) - TEST_PCM_DEFAULT_VALUE * HALF_FADER_GAIN).abs() < EXACT,
+        "the deck settles at the square of its volume ({})",
+        last(&settled)
+    );
+}
+
+#[kithara::test]
+fn a_muted_deck_is_silent_at_any_volume_and_unmutes_to_it(constant_half: &'static [u8]) {
+    let (mut processor, mut control) = processor();
+    let item_id = load(&mut control, "a.mp3", constant_half);
+    push(&mut control, DeckPart::Start);
+    block(&mut processor);
+    start(&mut processor, item_id);
+    let unity = pump(&mut processor, WARMUP_BLOCKS);
+
+    push(&mut control, mix(DeckMixSettingsChange::Muted(true)));
+    let muted = pump(&mut processor, SETTLE_BLOCKS);
+    let step = max_step(&across(&unity, &muted));
+    assert!(
+        step <= MAX_STEP,
+        "muting ramps the deck down, it does not cut it (step {step})"
+    );
+    assert!(last(&muted) == 0.0, "a muted deck reaches silence");
+
+    push(&mut control, half_volume());
+    assert!(
+        pump(&mut processor, SETTLE_BLOCKS)
+            .iter()
+            .all(|sample| *sample == 0.0),
+        "a volume change leaves a muted deck silent"
+    );
+
+    push(&mut control, mix(DeckMixSettingsChange::Muted(false)));
+    let unmuted = pump(&mut processor, SETTLE_BLOCKS);
+    assert!(
+        (last(&unmuted) - TEST_PCM_DEFAULT_VALUE * HALF_FADER_GAIN).abs() < EXACT,
+        "unmuting brings the deck back at the volume it was given while muted ({})",
+        last(&unmuted)
     );
 }
 

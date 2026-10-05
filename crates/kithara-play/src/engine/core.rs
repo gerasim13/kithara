@@ -8,7 +8,6 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_signal::FaderValue;
 use kithara_warp::RenderSnapshot;
 use ringbuf::traits::Consumer;
 use tracing::{debug, info};
@@ -330,12 +329,6 @@ impl<S> EngineImpl<S> {
 
     pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
         self.session.set_session_ducking(mode)
-    }
-
-    pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
-        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session
-            .set_player_slot_volume(player_id, slot, FaderValue::from(volume))
     }
 
     pub fn start(&self) -> Result<(), PlayError> {
