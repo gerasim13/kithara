@@ -71,7 +71,7 @@ import sys
 results = json.loads(os.environ["RESULTS"])
 required_lanes = set(os.environ["REQUIRED_LANES"].split())
 optional_required = bool(required_lanes)
-ui_required = "all" in required_lanes or "deep-ui" in required_lanes
+ui_required = "all" in required_lanes or "deep-ui" in required_lanes or os.environ["TOUCHED_UI_REQUIRED"] == "true"
 android_required = "all" in required_lanes or "android-test" in required_lanes
 incomplete = {
     name: job["result"]
@@ -1999,7 +1999,10 @@ fn a_ui_owned_branch_push_routes_to_the_gpu_suite_and_requires_its_verdict() {
         .expect("UI scheduling has a guard");
     assert!(condition.contains("vars.KITHARA_GPU_RUNNER_LABELS != ''"));
     assert!(condition.contains("needs.gate.outputs.ui_required == 'true'"));
-    assert_eq!(mapping_field(ui, "uses").as_str(), Some("./.github/workflows/ui.yml"));
+    assert_eq!(
+        mapping_field(ui, "uses").as_str(),
+        Some("./.github/workflows/ui.yml")
+    );
 
     let required = first_step(workflow_job(jobs, "required"));
     let env = mapping_field(required, "env")
@@ -2007,7 +2010,9 @@ fn a_ui_owned_branch_push_routes_to_the_gpu_suite_and_requires_its_verdict() {
         .expect("the aggregate reads automatic UI admission");
     assert_eq!(
         mapping_field(env, "TOUCHED_UI_REQUIRED").as_str(),
-        Some("${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.gate.outputs.ui_required == 'true' }}")
+        Some(
+            "${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.gate.outputs.ui_required == 'true' }}"
+        )
     );
     let verdict = mapping_field(required, "run")
         .as_str()
@@ -2026,7 +2031,11 @@ fn a_ui_owned_branch_push_routes_to_the_gpu_suite_and_requires_its_verdict() {
             .env("TOUCHED_UI_REQUIRED", selected)
             .output()
             .expect("the real aggregate script executes");
-        assert_eq!(output.status.success(), accepted, "selected={selected}, result={result}");
+        assert_eq!(
+            output.status.success(),
+            accepted,
+            "selected={selected}, result={result}"
+        );
     }
 }
 

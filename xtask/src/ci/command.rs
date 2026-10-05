@@ -34,8 +34,17 @@ enum CiCommand {
     Lanes(LanesArgs),
     /// Execute one repository CI lane.
     Run(RunArgs),
+    /// Print whether a branch touches any of the scoped test lanes.
+    Touched(TouchedArgs),
     /// Record what the default branch fails, and hold a run that fails more.
     Verdict(VerdictArgs),
+}
+
+#[derive(Debug, Args)]
+struct TouchedArgs {
+    /// Test lanes whose ownership to inspect.
+    #[arg(long, required = true)]
+    lane: Vec<String>,
 }
 
 pub(crate) const fn is_standalone(args: &CiArgs) -> bool {
@@ -56,7 +65,7 @@ pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
         CiCommand::Host(args) => super::host::run(args),
         CiCommand::Image(args) => super::image::run(args),
         CiCommand::Verdict(args) => super::verdict::run(args),
-        CiCommand::Run(_) | CiCommand::Lane(_) | CiCommand::Lanes(_) => {
+        CiCommand::Run(_) | CiCommand::Lane(_) | CiCommand::Lanes(_) | CiCommand::Touched(_) => {
             bail!("repository CI lanes require a workspace")
         }
     }
@@ -72,5 +81,10 @@ pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
         CiCommand::Run(args) => super::run::run(args, ctx),
         CiCommand::Lane(args) => super::lane::direct::run(args, ctx),
         CiCommand::Lanes(args) => super::lane::select::run(args, ctx),
+        CiCommand::Touched(args) => {
+            let lanes = kithara_devtools::test::touched_lanes(&ctx.config.test, &args.lane)?;
+            println!("{}", !lanes.is_empty());
+            Ok(())
+        }
     }
 }

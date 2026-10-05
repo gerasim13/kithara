@@ -11,6 +11,11 @@ run *ARGS:
 lanes *ARGS:
     just _xtask ci lanes "$@"
 
+# Print whether a branch touches any of the named test lanes.
+[positional-arguments]
+touched *ARGS:
+    just _xtask ci touched "$@"
+
 # Run one declared lane in an environment the executor already prepared.
 [positional-arguments]
 lane *ARGS:
