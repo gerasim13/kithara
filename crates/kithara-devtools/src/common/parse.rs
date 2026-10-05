@@ -121,6 +121,14 @@ pub fn self_ty_name(ty: &Type) -> Option<String> {
     }
 }
 
+pub(crate) fn qualified(scope: &[String], name: &str) -> String {
+    if scope.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}::{name}", scope.join("::"))
+    }
+}
+
 /// Stable string for "subject" expressions (paths, field chains, zero-arg
 /// method calls, references). Returns `None` for literals/calls/closures —
 /// expressions that cannot be a sensible canonical key for grouping or

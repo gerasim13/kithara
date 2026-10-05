@@ -1,8 +1,9 @@
 use anyhow::Result;
-use syn::{Item, ItemImpl, Type, spanned::Spanned};
+use syn::{Item, ItemImpl, spanned::Spanned};
 
 use super::{Check, Context};
 use crate::common::{
+    parse::self_ty_name,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -85,7 +86,7 @@ fn collect_impls<'a>(items: &'a [Item], out: &mut Vec<&'a ItemImpl>) {
 }
 
 fn describe_impl(im: &ItemImpl) -> String {
-    let target = type_label(&im.self_ty);
+    let target = self_ty_name(&im.self_ty).unwrap_or_else(|| "?".to_string());
     if let Some((path, _)) = &im.trait_ {
         let trait_name = path
             .segments
@@ -94,16 +95,5 @@ fn describe_impl(im: &ItemImpl) -> String {
         format!("impl {trait_name} for {target}")
     } else {
         format!("impl {target}")
-    }
-}
-
-fn type_label(ty: &Type) -> String {
-    match ty {
-        Type::Path(p) => p
-            .path
-            .segments
-            .last()
-            .map_or_else(|| "?".to_string(), |s| s.ident.to_string()),
-        _ => "?".to_string(),
     }
 }

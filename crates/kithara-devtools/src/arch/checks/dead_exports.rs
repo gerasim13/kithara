@@ -19,6 +19,7 @@ use syn::{
 
 use super::{super::config::DeadExportsThreshold, Check, Context};
 use crate::common::{
+    exclude::item_attrs,
     fix::{FixOutcome, SourceRewriter, expand_blocks},
     parse::{is_pub_visibility, parse_file},
     violation::Violation,
@@ -694,21 +695,6 @@ impl DefScan<'_> {
 
 const fn head<'a>(vis: &'a Visibility, attrs: &'a [Attribute], ident: &'a Ident) -> Head<'a> {
     Head { ident, vis, attrs }
-}
-
-fn item_attrs(it: &Item) -> &[Attribute] {
-    match it {
-        Item::Fn(x) => &x.attrs,
-        Item::Const(x) => &x.attrs,
-        Item::Static(x) => &x.attrs,
-        Item::Struct(x) => &x.attrs,
-        Item::Enum(x) => &x.attrs,
-        Item::Trait(x) => &x.attrs,
-        Item::Type(x) => &x.attrs,
-        Item::Impl(x) => &x.attrs,
-        Item::Mod(x) => &x.attrs,
-        _ => &[],
-    }
 }
 
 /// `#[test]`, `#[kithara::test]`/`#[tokio::test]` (last segment `test`), or a

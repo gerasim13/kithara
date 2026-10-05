@@ -155,3 +155,31 @@ threads-required = "num-test-threads"
 [[profile.ci.overrides]]
 filter = 'binary_id(=kithara-ui-gallery::ui_memory) and test(=checks::a_settled_page_stays_inside_its_budget_on_every_host)'
 threads-required = "num-test-threads"
+
+# These fixtures resolve or build Cargo graphs inside the test process. They
+# share its package cache with the suite, so reserve the scheduler while they run.
+[[profile.default.overrides]]
+filter = """
+(binary_id(=kithara-devtools) and (
+    test(=stress::coverage_tests::every_lane_is_stressed_exempt_or_covered)
+    + test(=test::repository_tests::the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives)
+))
++ (binary_id(=kithara-devtools::viz_portable) and (
+    test(=configured_runtime_scenario_enriches_the_same_graph)
+    + test(=excluded_test_harness_can_still_produce_runtime_evidence)
+))
+"""
+threads-required = "num-test-threads"
+
+[[profile.ci.overrides]]
+filter = """
+(binary_id(=kithara-devtools) and (
+    test(=stress::coverage_tests::every_lane_is_stressed_exempt_or_covered)
+    + test(=test::repository_tests::the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives)
+))
++ (binary_id(=kithara-devtools::viz_portable) and (
+    test(=configured_runtime_scenario_enriches_the_same_graph)
+    + test(=excluded_test_harness_can_still_produce_runtime_evidence)
+))
+"""
+threads-required = "num-test-threads"

@@ -6,6 +6,7 @@ use syn::{Attribute, Item, Meta, meta::ParseNestedMeta, parse_file};
 
 use super::{Check, Context};
 use crate::common::{
+    exclude::item_attrs,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -160,27 +161,6 @@ fn collect_test_ranges(items: &[Item], out: &mut Vec<(usize, usize)>) {
         {
             collect_test_ranges(inner, out);
         }
-    }
-}
-
-fn item_attrs(item: &Item) -> &[Attribute] {
-    match item {
-        Item::Const(i) => &i.attrs,
-        Item::Enum(i) => &i.attrs,
-        Item::ExternCrate(i) => &i.attrs,
-        Item::Fn(i) => &i.attrs,
-        Item::ForeignMod(i) => &i.attrs,
-        Item::Impl(i) => &i.attrs,
-        Item::Macro(i) => &i.attrs,
-        Item::Mod(i) => &i.attrs,
-        Item::Static(i) => &i.attrs,
-        Item::Struct(i) => &i.attrs,
-        Item::Trait(i) => &i.attrs,
-        Item::TraitAlias(i) => &i.attrs,
-        Item::Type(i) => &i.attrs,
-        Item::Union(i) => &i.attrs,
-        Item::Use(i) => &i.attrs,
-        _ => &[],
     }
 }
 

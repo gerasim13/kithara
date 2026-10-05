@@ -1,7 +1,9 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
+
+use crate::common::project::load_optional_config;
 
 #[derive(Debug, Default, Clone, kithara_config::Config)]
 #[config(builder(none), fields(nested))]
@@ -15,10 +17,10 @@ pub(crate) struct ArchConfig {
 impl ArchConfig {
     pub(crate) fn load(dir: &Path) -> Result<Self> {
         Ok(Self {
-            direction: load_optional(&dir.join("direction.toml"))?,
-            canonical_types: load_optional(&dir.join("canonical-types.toml"))?,
-            thresholds: load_optional(&dir.join("thresholds.toml"))?,
-            module_layers: load_optional(&dir.join("module-layers.toml"))?,
+            direction: load_optional_config(&dir.join("direction.toml"), "config")?,
+            canonical_types: load_optional_config(&dir.join("canonical-types.toml"), "config")?,
+            thresholds: load_optional_config(&dir.join("thresholds.toml"), "config")?,
+            module_layers: load_optional_config(&dir.join("module-layers.toml"), "config")?,
         })
     }
 }
@@ -1188,15 +1190,6 @@ pub(crate) struct ModuleLayer {
     pub(crate) name: String,
     pub(crate) paths: Vec<String>,
     pub(crate) index: u32,
-}
-
-fn load_optional<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    if !path.exists() {
-        return Ok(T::default());
-    }
-    let text =
-        fs::read_to_string(path).with_context(|| format!("read config: {}", path.display()))?;
-    toml::from_str(&text).with_context(|| format!("parse config: {}", path.display()))
 }
 
 #[cfg(test)]
