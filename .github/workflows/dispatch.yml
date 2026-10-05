@@ -1,163 +1,266 @@
-name: Dispatch
+name: Isolated issue validation
 
-# When the lanes run unattended, and the one door for starting any of them by
-# hand. Eleven crons fired this workflow so that one job ran and ten skipped,
-# and the collector then reported on each nearly-empty run; two crons carry the
-# same coverage, because what a night runs is now declared by the lanes
-# themselves rather than by which cron happened to fire.
-#
-# A schedule belongs to whichever copy of the repository carries it, and this
-# one is carried by every copy. What decides whether it does anything is the
-# variable naming the runners that serve the lanes, so a copy without runners
-# spends a scheduled run doing nothing rather than a machine's night doing
-# nothing. A copy that does have runners must also let GitHub start it:
-# scheduled workflows do not run in a fork until Actions is enabled there.
 on:
-  schedule:
-    # The night: every lane whose membership names `nightly`.
-    - cron: '0 1 * * *'
-    # The week: the lanes that cost hours - Miri, the deep assessment - and
-    # would owe the machine a night it needs for lanes that answer faster.
-    - cron: '0 8 * * 6'
   workflow_dispatch:
     inputs:
-      kind:
-        description: Which cadence to run, when starting this by hand.
+      scope:
         type: choice
-        options: [nightly, weekly]
-        default: nightly
-      only:
-        description: >-
-          Space-separated lane names to run instead of a role's whole
-          selection. This is how one subtask is started on its own. `all`
-          asks for a full run: every lane that some full kind schedules.
+        options: [all, source-gates]
+        default: all
+      checks_revision:
+        description: Immutable fork revision for format and fast lint checks
         type: string
-        default: ''
-      mutants:
-        description: >-
-          Run every mutation suite. They cost hours and run only when asked
-          for; name single `deep-mutants-*` lanes in `only` to run some.
-        type: boolean
-        default: false
+        default: 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
+  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  CARGO_BUILD_JOBS: '2'
+
+concurrency:
+  group: isolated-issue-validation-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  # The gate lanes a night adds to the ones every push already runs: the
-  # sanitizer soak, the secret scan, the check the merge request does.
-  gate:
-    if: vars.KITHARA_RUNNER_LABELS != ''
-    uses: ./.github/workflows/run.yml
-    with:
-      role: gate
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
-      only: ${{ inputs.only || '' }}
+  authorize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Admit only the fork owner on the isolated validation ref
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          OWNER: ${{ github.repository_owner }}
+          IS_FORK: ${{ github.event.repository.fork }}
+          REF: ${{ github.ref }}
+          RUNNER_LABELS: ${{ vars.KITHARA_RUNNER_LABELS }}
+          GPU_RUNNER_LABELS: ${{ vars.KITHARA_GPU_RUNNER_LABELS }}
+          CHECKS_REVISION: ${{ inputs.checks_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$IS_FORK" == true && "$ACTOR" == "$OWNER" && "$TRIGGERING_ACTOR" == "$OWNER" ]]
+          [[ "$REF" == refs/heads/codex/ci-issue-validation-2026-10-05 ]]
+          [[ "$CHECKS_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]
+          python3 - <<'PY'
+          import json
+          import os
+          for name in ('RUNNER_LABELS', 'GPU_RUNNER_LABELS'):
+              labels = json.loads(os.environ[name])
+              assert isinstance(labels, list) and labels
+              assert all(isinstance(label, str) and label for label in labels)
+              assert {'self-hosted', 'linux', 'x64'}.issubset(labels)
+          PY
 
-  # Reachable by name; the fan-out itself renders nothing here, because every
-  # platform lane names a machine this fleet does not have. The jobs below call
-  # the workflows that do.
-  platforms:
-    if: vars.KITHARA_RUNNER_LABELS != ''
-    uses: ./.github/workflows/run.yml
-    with:
-      role: platforms
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
-      only: ${{ inputs.only || '' }}
+  store-contract:
+    name: Issue 347 actual store contract
+    needs: authorize
+    if: inputs.scope == 'all'
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/kithara-validation-347
+    steps:
+      - name: Checkout immutable subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 8bd233fa27b757d1a268319918a3e81ccceeff13
+          persist-credentials: false
+      - name: Scope Cargo dependency fetch authorization
+        env:
+          GITHUB_FETCH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_FETCH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$auth"
+          {
+            echo 'GIT_CONFIG_COUNT=2'
+            echo 'GIT_CONFIG_KEY_0=http.https://github.com/gerasim13/bevy_seedling.extraheader'
+            echo "GIT_CONFIG_VALUE_0=AUTHORIZATION: basic $auth"
+            echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
+            echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
+          } >> "$GITHUB_ENV"
+      - name: Record provenance and run the existing owner harness
+        run: |
+          set -euo pipefail
+          mkdir -p validation
+          printf '%s\n' "$GITHUB_SHA" > validation/controller-sha.txt
+          git rev-parse HEAD | tee validation/subject-sha.txt
+          test "$(git rev-parse HEAD)" = 8bd233fa27b757d1a268319918a3e81ccceeff13
+          just test run --net-backend=none --flash=off -p kithara-test-fixtures --features kithara-test-fixtures/all -E 'binary(store_contract)' 2>&1 | tee validation/store-contract.log
+      - name: Preserve contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: issue-347-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: validation
+          if-no-files-found: error
 
-  # The lanes that ask for the whole fleet take turns with each other. One
-  # machine serves every lane, and a queue that also stalled the pushes was
-  # measured on the Linux host: a nightly assessment held the only slot with
-  # three jobs while two pushes waited fourteen minutes with fifteen of
-  # eighteen runner slots idle. The group is held by the calling job, so the
-  # fan-out's own lanes still run concurrently inside its turn.
-  deep:
-    if: vars.KITHARA_RUNNER_LABELS != ''
-    concurrency:
-      group: heavy-linux-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
-    uses: ./.github/workflows/run.yml
-    with:
-      role: deep
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
-      only: ${{ inputs.only || '' }}
+  ui-probes:
+    name: Issue 327 final feature compile probes
+    needs: authorize
+    if: inputs.scope == 'all'
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/kithara-validation-327
+    steps:
+      - name: Checkout immutable subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+          persist-credentials: false
+      - name: Scope Cargo dependency fetch authorization
+        env:
+          GITHUB_FETCH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_FETCH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$auth"
+          {
+            echo 'GIT_CONFIG_COUNT=2'
+            echo 'GIT_CONFIG_KEY_0=http.https://github.com/gerasim13/bevy_seedling.extraheader'
+            echo "GIT_CONFIG_VALUE_0=AUTHORIZATION: basic $auth"
+            echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
+            echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
+          } >> "$GITHUB_ENV"
+      - name: Record subject identity
+        run: |
+          mkdir -p validation
+          printf '%s\n' "$GITHUB_SHA" > validation/controller-sha.txt
+          git rev-parse HEAD | tee validation/subject-sha.txt
+          test "$(git rev-parse HEAD)" = 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+      - name: Check final host feature closures and hostless owner warnings
+        run: |
+          set -uo pipefail
+          status=0
+          for features in render render,vello iced masonry iced,masonry; do
+            cargo check -p kithara-ui --lib --no-default-features --features "$features" --message-format=json > "validation/$features.jsonl" 2> "validation/$features.stderr" || status=1
+          done
+          python3 - <<'PY' || status=1
+          import json
+          from pathlib import Path
+          counts = {}
+          for features in ('render', 'render,vello', 'iced', 'masonry', 'iced,masonry'):
+              messages = [json.loads(line) for line in Path(f'validation/{features}.jsonl').read_text().splitlines()]
+              assert any(message.get('reason') == 'build-finished' and message.get('success') for message in messages), features
+              assert any(message.get('reason') == 'compiler-artifact' and '/crates/kithara-ui#' in message.get('package_id', '') for message in messages), features
+              warnings = [message for message in messages if message.get('reason') == 'compiler-message' and '/crates/kithara-ui#' in message.get('package_id', '') and message['message']['level'] == 'warning']
+              counts[features] = len(warnings)
+          Path('validation/owner-warning-counts.json').write_text(json.dumps(counts, indent=2) + '\n')
+          print(counts)
+          assert counts['render'] == 0 and counts['render,vello'] == 0, counts
+          PY
+          exit "$status"
+      - name: Preserve compile and gate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: issue-327-probes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: validation
+          if-no-files-found: error
 
-  # Never on a schedule: `mutants` runs every suite, and `only` runs the lanes
-  # it names.
-  mutants:
-    if: >-
-      vars.KITHARA_RUNNER_LABELS != ''
-      && (inputs.mutants || (inputs.only || '') != '')
-    concurrency:
-      group: heavy-linux-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
-    uses: ./.github/workflows/run.yml
-    with:
-      role: mutants
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
-      only: ${{ inputs.only || 'all' }}
+  ui-acceptance:
+    name: Issue 327 real UI acceptance
+    needs: authorize
+    if: inputs.scope == 'all'
+    runs-on: ${{ fromJSON(vars.KITHARA_GPU_RUNNER_LABELS) }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout immutable subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+          persist-credentials: false
+      - name: Scope Cargo dependency fetch authorization
+        env:
+          GITHUB_FETCH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_FETCH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$auth"
+          {
+            echo 'GIT_CONFIG_COUNT=2'
+            echo 'GIT_CONFIG_KEY_0=http.https://github.com/gerasim13/bevy_seedling.extraheader'
+            echo "GIT_CONFIG_VALUE_0=AUTHORIZATION: basic $auth"
+            echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
+            echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
+          } >> "$GITHUB_ENV"
+      - name: Record subject identity and execute the existing UI lane
+        run: |
+          set -euo pipefail
+          mkdir -p validation
+          printf '%s\n' "$GITHUB_SHA" > validation/controller-sha.txt
+          git rev-parse HEAD | tee validation/subject-sha.txt
+          test "$(git rev-parse HEAD)" = 0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+          just ci lane deep-ui --kind nightly 2>&1 | tee validation/ui-acceptance.log
+      - name: Preserve UI evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: issue-327-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            validation
+            target/parity
+          if-no-files-found: error
 
-  quality:
-    if: vars.KITHARA_RUNNER_LABELS != ''
-    concurrency:
-      group: heavy-linux-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
-    uses: ./.github/workflows/run.yml
-    with:
-      role: quality
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
-      only: ${{ inputs.only || '' }}
-
-  # The one Linux lane the fan-out cannot carry: it needs build-time secrets,
-  # and one executor serves every declared lane.
-  network:
-    if: >-
-      vars.KITHARA_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
-      && (inputs.only || '') == ''
-    uses: ./.github/workflows/network.yml
-    # A called workflow starts with no secrets of its own, so the keys its
-    # build bakes in arrive empty unless the caller hands them over.
-    secrets: inherit
-
-  # Three machines the Linux fan-out cannot reach: each has a runner pool of
-  # its own, named by a variable of its own, so each stays a workflow of its
-  # own until the catalog can name a pool.
-  #
-  # `only` names lanes, and the fan-out is what selects lanes, so a request for
-  # one lane leaves these out - the UI suite and the Android baseline excepted,
-  # because each is a declared lane and this is the only caller that can start
-  # it. Each of these workflows
-  # also starts on its own, which is how one of them is run by hand.
-  windows:
-    if: >-
-      vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
-      && (inputs.only || '') == ''
-    uses: ./.github/workflows/windows.yml
-
-  # The Android baseline runs every night and every week, and a request for
-  # it by name starts it alone.
-  android:
-    if: >-
-      vars.KITHARA_ANDROID_RUNNER_LABELS != ''
-      && ((inputs.only || '') == '' || contains(inputs.only, 'android-test'))
-    uses: ./.github/workflows/android.yml
-
-  ui:
-    if: >-
-      vars.KITHARA_GPU_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
-      && ((inputs.only || '') == '' || contains(inputs.only, 'deep-ui'))
-    uses: ./.github/workflows/ui.yml
-
-  # The repeated run that turns "fails sometimes" into a rate. It has a runner
-  # of its own and a group of its own, and its own admission: only the owner of
-  # a fork may spend a night of the fleet on it.
-  stress:
-    if: >-
-      vars.KITHARA_STRESS_ENABLED == 'true'
-      && vars.KITHARA_STRESS_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
-      && (inputs.only || '') == ''
-    uses: ./.github/workflows/stress.yml
+  source-gates:
+    name: Exact subject format and fast lint checks
+    needs: authorize
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/kithara-validation-source-gates
+    steps:
+      - name: Checkout immutable subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checks_revision }}
+          persist-credentials: false
+      - name: Scope Cargo dependency fetch authorization
+        env:
+          GITHUB_FETCH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_FETCH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$auth"
+          {
+            echo 'GIT_CONFIG_COUNT=2'
+            echo 'GIT_CONFIG_KEY_0=http.https://github.com/gerasim13/bevy_seedling.extraheader'
+            echo "GIT_CONFIG_VALUE_0=AUTHORIZATION: basic $auth"
+            echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
+            echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
+          } >> "$GITHUB_ENV"
+      - name: Record subject identity
+        id: subject
+        env:
+          EXPECTED_SHA: ${{ inputs.checks_revision }}
+        run: |
+          mkdir -p validation
+          printf '%s\n' "$GITHUB_SHA" > validation/controller-sha.txt
+          git rev-parse HEAD | tee validation/subject-sha.txt
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Check repository fast lint gate
+        run: just lint fast 2>&1 | tee validation/lint-fast.log
+      - name: Check formatting and preserve any required source patch
+        if: ${{ always() && !cancelled() && steps.subject.outcome == 'success' }}
+        run: |
+          set +e
+          just fmt check 2>&1 | tee validation/fmt-check.log
+          status=${PIPESTATUS[0]}
+          if (( status != 0 )); then
+            just fmt > validation/fmt-apply.log 2>&1
+            git diff --binary > validation/format.patch
+          fi
+          exit "$status"
+      - name: Preserve gate results and formatting patch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: source-gates-${{ inputs.checks_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: validation
+          if-no-files-found: error

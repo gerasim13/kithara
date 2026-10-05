@@ -1,141 +1,40 @@
-stages:
-  - dispatch
-
 workflow:
-  auto_cancel:
-    on_new_commit: interruptible
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    # The bridge creates the quarantine pipeline itself and watches that one by
-    # id. The push that places the commit adds a second pipeline nobody reads,
-    # and the two then compete for the single Apple host.
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^quarantine\//
-      when: never
-    # A branch with an open merge request is already covered by the
-    # merge-request pipeline. A second pipeline on the same commit would take
-    # the one Apple host twice to report the same thing.
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
-      when: never
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_RELEASE_VERSION =~ /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
-    - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA
-    # The only way into `host:provision`. It writes to the machine every lane
-    # runs on, so it takes the default branch alone: a review ref carries code
-    # no one has reviewed yet.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_PROVISION == "1"
-    # Asking for a platform is only possible on a run that carries variables,
-    # and a push carries none. This is that door: "Run pipeline" with
-    # `KITHARA_PLATFORMS` set. It is deliberately narrow — without the variable
-    # the run would only repeat what a push already does.
-    - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
-    - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
+    - if: $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_NAME == "codex/ci-issue-validation-macos-2026-10-05"
     - when: never
 
-.dispatch:
-  stage: dispatch
-  trigger:
-    include:
-      - local: .gitlab/ci/pipeline.yml
-    strategy: depend
-    # The child sees what the run was started with — the platforms it names,
-    # the release version — only when the trigger hands it down. A job variable
-    # that names itself is no substitute: on a run that does not set it, it
-    # stays the literal `$NAME`, and every rule reads that as a value.
-    forward:
-      pipeline_variables: true
+stages:
+  - validation
 
-dispatch:merge-request:
-  extends: .dispatch
-  interruptible: true
-  variables:
-    KITHARA_CACHE_TRUST: review
-    KITHARA_PIPELINE_KIND: merge-request
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+variables:
+  CARGO_INCREMENTAL: '0'
+  CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+  GIT_DEPTH: '0'
+  GIT_CLEAN_FLAGS: -ffdx -e target -e target-flash-off
+  KITHARA_CI_HOST_CONFIG: /etc/kithara-ci/mac-host.toml
+  RUST_BACKTRACE: '1'
+  CARGO_BUILD_JOBS: '2'
 
-# Child jobs own host resources; dispatch must not reserve the entire host.
-dispatch:branch:
-  extends: .dispatch
-  interruptible: true
-  variables:
-    KITHARA_CACHE_TRUST: review
-    KITHARA_PIPELINE_KIND: branch
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
-
-# Started by hand to name platforms a push cannot. Its own kind admits the
-# verify and integration sets so the requested platform lanes exist, while the
-# verdict checks the default-branch journal instead of recording this branch as
-# a new baseline.
-dispatch:platforms:
-  extends: .dispatch
-  allow_failure: true
-  interruptible: true
-  variables:
-    KITHARA_CACHE_TRUST: review
-    KITHARA_PIPELINE_KIND: platforms
-  rules:
-    # A provisioning run rebuilds the Linux image, and a platform matrix beside
-    # it would move the same tag underneath the roll-out.
-    - if: $KITHARA_PROVISION == "1"
-      when: never
-    - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
-    - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
-
-dispatch:main:
-  extends: .dispatch
-  interruptible: false
-  variables:
-    KITHARA_CACHE_TRUST: trusted
-    KITHARA_PIPELINE_KIND: main
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-# Its own kind rather than a flag on `main`: a kind no lane rule names leaves
-# the host to the roll-out alone.
-dispatch:provision:
-  extends: .dispatch
-  interruptible: false
-  variables:
-    KITHARA_CACHE_TRUST: trusted
-    KITHARA_PIPELINE_KIND: provision
-  rules:
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_PROVISION == "1"
-
-dispatch:quarantine:
-  extends: .dispatch
-  interruptible: true
-  variables:
-    KITHARA_CACHE_TRUST: quarantine
-    KITHARA_PIPELINE_KIND: quarantine
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA
-
-dispatch:nightly:
-  extends: .dispatch
-  interruptible: false
-  variables:
-    KITHARA_CACHE_TRUST: trusted
-    KITHARA_PIPELINE_KIND: nightly
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $KITHARA_SCHEDULE_KIND == "nightly"
-
-dispatch:weekly:
-  extends: .dispatch
-  interruptible: false
-  variables:
-    KITHARA_CACHE_TRUST: trusted
-    KITHARA_PIPELINE_KIND: weekly
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $KITHARA_SCHEDULE_KIND == "weekly"
-
-dispatch:release:
-  extends: .dispatch
-  interruptible: false
-  variables:
-    KITHARA_CACHE_TRUST: trusted
-    KITHARA_PIPELINE_KIND: release
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_RELEASE_VERSION =~ /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
+validation:ui:
+  stage: validation
+  tags:
+    - kithara-macos
+  resource_group: kithara-suite
+  timeout: 120 minutes
+  cache: []
+  script:
+    - |
+      set -euo pipefail
+      subject_sha=0bdd9a21eb4c28b139b1efce8ed1c3f251ed14d2
+      mkdir -p validation
+      printf '%s\n' "$CI_COMMIT_SHA" > validation/controller-sha.txt
+      git switch --detach "$subject_sha"
+      test "$(git rev-parse HEAD)" = "$subject_sha"
+      git rev-parse HEAD | tee validation/subject-sha.txt
+      just test ui 2>&1 | tee validation/ui-acceptance.log
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - validation/
+      - target/parity/
