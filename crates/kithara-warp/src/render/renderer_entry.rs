@@ -44,7 +44,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// start of the recording.
     #[must_use]
     pub fn entry_source(&self) -> Option<u64> {
-        if !self.projection.entering {
+        if !self.requires_staging() || !self.projection.entering {
             return None;
         }
         let cue = self.projection.active.as_ref()?.activation().source();
@@ -68,6 +68,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         meta: AudioChunkInfo,
         samples: &[f32],
     ) -> Result<(), crate::WarpRenderError> {
+        if !self.requires_staging() {
+            return Err(crate::WarpRenderError::UnsupportedProjection);
+        }
         let cue = self
             .projection
             .active
