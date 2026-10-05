@@ -1,6 +1,6 @@
-//! A keylock deck that changes speed mid-play: the engine starts over on the
-//! change, every source beat sounds once at the new step and the ring the
-//! device reads never runs dry.
+//! A deck that changes speed mid-play, key-locked or varispeed: every source
+//! beat sounds once at the new step, the ring the device reads never runs dry
+//! and the source opens once.
 
 use std::num::NonZeroU32;
 
@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     disk_asset_store, kithara,
     offline::{OfflinePlayer, OfflinePlayerOptions},
+    usdt_trace,
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::assets::rhythm_wav_deck_b_120bpm_48k;
@@ -34,10 +35,10 @@ const BEAT_FRAMES: f64 = 24_000.0;
 const WARMUP_BLOCKS: usize = 48;
 /// Blocks the deck plays.
 const TOTAL_BLOCKS: usize = 844;
-/// The deck's first speed: the engine stands aside at unity.
+/// The deck's first speed: the renderer passes the source through at unity.
 const START_SPEED: f32 = 1.0;
 /// Each change: the block it is sent before and the speed it sets. The first
-/// starts the engine, the second starts it over while it runs.
+/// leaves unity, the second changes a speed already off it.
 const CHANGES: [(usize, f32); 2] = [(188, 1.07), (469, 0.94)];
 /// A beat the pulse's onset crosses: a fifth of the quieter beat's peak.
 const ONSET_LEVEL: f32 = 0.06;
@@ -70,6 +71,8 @@ struct Onset {
 struct Take {
     master: Vec<f32>,
     underruns: u64,
+    /// Sources the deck opened from the load to its last block.
+    opened: usize,
 }
 
 fn session() -> HostConfig<TestPools> {
@@ -95,6 +98,7 @@ fn session() -> HostConfig<TestPools> {
 async fn playing_deck(
     temp_dir: &TestTempDir,
     backend: StretchKind,
+    keylock: bool,
 ) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
     let harness = OfflinePlayer::with_options(
         OfflinePlayerOptions::builder()
@@ -103,7 +107,7 @@ async fn playing_deck(
                 WarpConfig::builder()
                     .speed(START_SPEED)
                     .backend(backend)
-                    .keylock(true)
+                    .keylock(keylock)
                     .build(),
             )
             .build(),
@@ -120,7 +124,7 @@ async fn playing_deck(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("fixture path is a valid resource source"),
     )
-    .store(disk_asset_store(temp_dir.path().join("keylock-store")))
+    .store(disk_asset_store(temp_dir.path().join("speed-store")))
     .build();
     let mut events = queue.subscribe();
     let id = harness
@@ -142,8 +146,9 @@ async fn playing_deck(
 /// period elapses only once the worker has rendered; an underrun is then the
 /// lane's, not the machine's.
 #[kithara::flash(true)]
-async fn play(temp_dir: &TestTempDir, backend: StretchKind) -> Take {
-    let (harness, queue) = playing_deck(temp_dir, backend).await;
+async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Take {
+    let trace = usdt_trace::scope();
+    let (harness, queue) = playing_deck(temp_dir, backend, keylock).await;
     let mut master = harness
         .host()
         .attach_tap(Tap::Master, TOTAL_BLOCKS * BLOCK_FRAMES * CHANNELS)
@@ -181,6 +186,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind) -> Take {
         }
         time::sleep(period.saturating_sub(started.elapsed())).await;
     }
+    let opened = trace.events_of("source_opened").len();
     let underruns = harness
         .metrics()
         .underruns()
@@ -189,7 +195,11 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind) -> Take {
     let master = master.drain();
     drop(queue);
     harness.close().await;
-    Take { master, underruns }
+    Take {
+        master,
+        underruns,
+        opened,
+    }
 }
 
 fn onsets(master: &[f32]) -> Vec<Onset> {
@@ -307,27 +317,35 @@ fn beat_failures(onsets: &[Onset]) -> Vec<String> {
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(10)
 )]
-#[case::signalsmith(StretchKind::Signalsmith)]
+#[case::signalsmith(StretchKind::Signalsmith, true)]
 #[cfg_attr(
     all(
         not(target_os = "android"),
         not(all(target_os = "windows", target_env = "msvc"))
     ),
-    case::bungee(StretchKind::Bungee)
+    case::bungee(StretchKind::Bungee, true)
 )]
-async fn a_keylock_speed_change_keeps_every_beat_and_starves_no_ring(
+#[case::varispeed(StretchKind::Signalsmith, false)]
+async fn a_speed_change_keeps_every_beat_on_the_source_it_opened(
     temp_dir: TestTempDir,
     #[case] backend: StretchKind,
+    #[case] keylock: bool,
 ) {
-    let take = play(&temp_dir, backend).await;
+    let take = play(&temp_dir, backend, keylock).await;
     let onsets = onsets(&take.master);
+    let deck = if keylock {
+        format!("{backend} keylock")
+    } else {
+        format!("{backend} varispeed")
+    };
 
-    assert_eq!(take.underruns, 0, "{backend}: the ring ran dry");
+    assert_eq!(take.opened, 1, "{deck}: a speed change opens no source");
+    assert_eq!(take.underruns, 0, "{deck}: the ring ran dry");
     let failures = beat_failures(&onsets);
     let frames: Vec<usize> = onsets.iter().map(|onset| onset.frame).collect();
     assert!(
         failures.is_empty(),
-        "{backend}: the beat broke:\n{}\nonsets: {frames:?}",
+        "{deck}: the beat broke:\n{}\nonsets: {frames:?}",
         failures.join("\n"),
     );
     let last_change = CHANGES[CHANGES.len() - 1].0 * BLOCK_FRAMES + CHANGE_REACH_FRAMES;
@@ -337,6 +355,6 @@ async fn a_keylock_speed_change_keeps_every_beat_and_starves_no_ring(
             .filter(|onset| onset.frame >= last_change)
             .count()
             >= BEATS_PER_BAR,
-        "{backend}: a bar sounds at the last speed: onsets {frames:?}",
+        "{deck}: a bar sounds at the last speed: onsets {frames:?}",
     );
 }
