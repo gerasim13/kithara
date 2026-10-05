@@ -106,10 +106,7 @@ fn deps_deny_stall_probe() {
     .unwrap();
     let process = Process::new(
         root,
-        BTreeMap::from([(
-            OsString::from(STALL_URL),
-            env::var_os(STALL_URL).unwrap(),
-        )]),
+        BTreeMap::from([(OsString::from(STALL_URL), env::var_os(STALL_URL).unwrap())]),
     );
     let started = Instant::now();
     let error = run(
