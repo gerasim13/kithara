@@ -1,4 +1,4 @@
-use crate::{expand::Binding, ids::InternId, module::{GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle}, mount::{Glyph, Readout, Select, Telemetry, Text}, skin::{ColorRole, FontFamily, FontWeight, Tone}};
+use crate::{expand::Binding, ids::InternId, module::{GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle, Tone}, mount::{Glyph, Readout, Select, Telemetry, Text}, skin::{ColorRole, FontFamily, FontWeight}};
 
 pub(crate) fn text<'a>(
     style: TextStyle,

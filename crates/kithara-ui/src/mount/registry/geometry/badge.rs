@@ -1,4 +1,4 @@
-use crate::{expand::Binding, ids::InternId, mount::{Cell, StatusDot, Swatch}, skin::{ColorRole, Tone}};
+use crate::{expand::Binding, ids::InternId, module::Tone, mount::{Cell, StatusDot, Swatch}, skin::ColorRole};
 
 pub(crate) fn status_dot<'a>(
     _label: InternId,
