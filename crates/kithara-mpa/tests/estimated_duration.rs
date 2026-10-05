@@ -48,10 +48,7 @@ fn frame(bitrate_index: u8, padded: bool) -> Vec<u8> {
 }
 
 fn open(source: impl MediaSource + 'static) -> MpaReader<'static> {
-    let stream = MediaSourceStream::new(
-        Box::new(source),
-        MediaSourceStreamOptions::default(),
-    );
+    let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
     match MpaReader::try_new(stream, FormatOptions::default()) {
         Ok(reader) => reader,
         Err(error) => panic!("synthetic MPEG stream must open: {error}"),
@@ -264,7 +261,11 @@ fn an_accurate_seek_resumes_across_transient_side_info_reads() {
                 .expect("reference and target packets exist");
             assert_eq!(actual.pts, expected.pts, "after {kind:?}");
             assert_eq!(actual.dur, expected.dur, "after {kind:?}");
-            assert_eq!(actual.data.as_ref(), expected.data.as_ref(), "after {kind:?}");
+            assert_eq!(
+                actual.data.as_ref(),
+                expected.data.as_ref(),
+                "after {kind:?}"
+            );
         }
     }
 }
@@ -428,7 +429,10 @@ fn a_transient_packet_attempt_preserves_the_pending_seek() {
 #[kithara::test]
 fn consuming_a_packet_retires_the_pending_seek() {
     let frames = reservoir_frames(consts::KBPS_128);
-    let mut resumed = open(SeekGap::new(&frames, &[(consts::SEEK_FRAME, ErrorKind::WouldBlock)]));
+    let mut resumed = open(SeekGap::new(
+        &frames,
+        &[(consts::SEEK_FRAME, ErrorKind::WouldBlock)],
+    ));
     assert!(matches!(
         resumed.seek(SeekMode::Accurate, target(consts::SEEK_FRAME)),
         Err(Error::IoError(error)) if error.kind() == ErrorKind::WouldBlock
@@ -517,7 +521,8 @@ fn transient_frames_do_not_evict_the_four_frame_seek_history() {
             .expect("bounded control seek");
         assert_eq!(
             expected.actual_ts.get(),
-            i64::try_from(consts::SEEK_FRAME - 3).expect("frame index fits i64") * consts::FRAME_DUR
+            i64::try_from(consts::SEEK_FRAME - 3).expect("frame index fits i64")
+                * consts::FRAME_DUR
         );
         let actual = resumed
             .seek(SeekMode::Accurate, target(consts::SEEK_FRAME))

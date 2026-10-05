@@ -442,9 +442,7 @@ impl<'s> MpaReader<'s> {
         debug!("seeking to ts={required_ts}");
 
         let mut pending = match pending {
-            Some(pending) if pending.required_ts == required_ts && pending.mode == mode => {
-                pending
-            }
+            Some(pending) if pending.required_ts == required_ts && pending.mode == mode => pending,
             _ => {
                 match mode {
                     SeekMode::Coarse if is_seekable => {
