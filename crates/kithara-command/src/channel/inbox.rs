@@ -176,17 +176,16 @@ impl<P: Protocol> Inbox<P> {
     {
         self.drain();
         let mut reached = 0;
-        while reached < frames {
-            let until = self
-                .frames_until_due(start)
-                .and_then(|due| usize::try_from(due).ok())
-                .map_or(frames, |due| due.min(frames));
-            if until > reached {
-                step(Step::Run(reached..until));
-                reached = until;
-            } else if let Some(due) = self.next_due(start, frames) {
-                step(Step::Due(due));
+        while let Some(due) = self.next_due(start, frames) {
+            let offset = due.offset;
+            if offset > reached {
+                step(Step::Run(reached..offset));
+                reached = offset;
             }
+            step(Step::Due(due));
+        }
+        if reached < frames {
+            step(Step::Run(reached..frames));
         }
     }
 

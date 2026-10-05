@@ -194,6 +194,25 @@ fn a_block_renders_up_to_each_due_batch_and_applies_it_at_its_frame() {
 }
 
 #[kithara::test]
+fn a_late_batch_ahead_leaves_the_next_one_at_its_own_frame() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let late = send(&mut sender, When::At(Frame(10)), batch(1, &[]));
+    let due = send(&mut sender, When::At(Frame(140)), batch(2, &[]));
+
+    assert_eq!(
+        render(&mut inbox, 100, BLOCK),
+        [Seen::Run(0..40), Seen::Due(40, 2), Seen::Run(40..BLOCK)]
+    );
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (late, Outcome::Rejected(Rejection::Late)),
+            (due, applied(140))
+        ]
+    );
+}
+
+#[kithara::test]
 fn a_block_before_the_next_moment_renders_whole_and_leaves_it_waiting() {
     let (mut sender, mut inbox) = pair(8, 0);
     let end = Frame(u64::try_from(BLOCK).expect("the block fits the clock"));
