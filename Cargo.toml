@@ -8,6 +8,7 @@ members = [
     "crates/kithara-app",
     "crates/kithara-app-document",
     "crates/kithara-app-library",
+    "crates/kithara-app-zvuk",
     "crates/kithara-apple",
     "crates/kithara-assets",
     "crates/kithara-audio",
@@ -287,6 +288,7 @@ kithara-android = { path = "crates/kithara-android", version = "0.0.1-alpha5" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-app-document = { path = "crates/kithara-app-document" }
 kithara-app-library = { path = "crates/kithara-app-library" }
+kithara-app-zvuk = { path = "crates/kithara-app-zvuk", default-features = false }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha5" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha5", default-features = false }
 kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha5", default-features = false }
