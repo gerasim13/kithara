@@ -40,6 +40,7 @@ pub struct MpaReader<'s> {
     next_packet_ts: Timestamp,
     tracks: Vec<Track>,
     first_packet_pos: u64,
+    pending_seek: Option<PendingSeek>,
 }
 
 impl Scoreable for MpaReader<'_> {
@@ -175,11 +176,21 @@ impl<'s> MpaReader<'s> {
         let header = loop {
             let header = match read_mpeg_frame_into(&mut self.reader, packet_buf) {
                 Ok(header) => header,
+                Err(Error::IoError(err))
+                    if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) =>
+                {
+                    return Err(Error::IoError(err));
+                }
                 Err(Error::IoError(err)) if err.kind() == ErrorKind::UnexpectedEof => {
+                    self.pending_seek = None;
                     return Ok(None);
                 }
-                Err(err) => return Err(err),
+                Err(err) => {
+                    self.pending_seek = None;
+                    return Err(err);
+                }
             };
+            self.pending_seek = None;
 
             let data = &packet_buf[..consts::MPEG_HEADER_LEN + header.frame_size];
             if is_maybe_info_tag(data, &header) {
@@ -294,13 +305,7 @@ impl<'s> MpaReader<'s> {
     /// Parses frames forward from the current position until the frame holding
     /// `required_ts` is reached, leaving the reader on the reference frame a
     /// decoder needs to resume from.
-    fn scan_to(&mut self, required_ts: Timestamp) -> Result<()> {
-        const MAX_REF_FRAMES: usize = 4;
-        const REF_FRAMES_MASK: usize = MAX_REF_FRAMES - 1;
-
-        let mut frames: [FramePos; MAX_REF_FRAMES] = Default::default();
-        let mut n_parsed = 0;
-
+    fn scan_to(&mut self, pending: &mut PendingSeek) -> Result<()> {
         loop {
             self.reader
                 .ensure_seekback_buffer(consts::MAX_MPEG_FRAME_SIZE);
@@ -321,18 +326,18 @@ impl<'s> MpaReader<'s> {
 
             let frame_dur = header.duration();
 
-            frames[n_parsed & REF_FRAMES_MASK] = FramePos {
+            let frame = FramePos {
                 pos,
                 ts: self.next_packet_ts,
             };
-            n_parsed += 1;
 
             let next_packet_ts = match self.next_packet_ts.checked_add(frame_dur) {
-                Some(ts) if ts <= required_ts => ts,
+                Some(ts) if ts <= pending.required_ts => ts,
                 _ => {
                     let read = read_main_data_begin(&mut self.reader, &header);
                     let main_data_begin =
                         u64::from(roll_back_transient(&mut self.reader, checkpoint, read)?);
+                    pending.remember(frame);
 
                     debug!(
                         "found frame with ts={} @ pos={} with main_data_begin={}",
@@ -340,13 +345,14 @@ impl<'s> MpaReader<'s> {
                     );
 
                     let mut n_ref_frames = 0;
-                    let mut ref_frame = &frames[(n_parsed - 1) & REF_FRAMES_MASK];
+                    let mut ref_frame = &pending.frames[(pending.n_parsed - 1) & REF_FRAMES_MASK];
 
                     if main_data_begin > 0 {
-                        let max_ref_frames = std::cmp::min(n_parsed, frames.len());
+                        let max_ref_frames = std::cmp::min(pending.n_parsed, pending.frames.len());
 
                         while n_ref_frames < max_ref_frames {
-                            ref_frame = &frames[(n_parsed - n_ref_frames - 1) & REF_FRAMES_MASK];
+                            ref_frame = &pending.frames
+                                [(pending.n_parsed - n_ref_frames - 1) & REF_FRAMES_MASK];
 
                             if pos - ref_frame.pos >= main_data_begin {
                                 break;
@@ -364,7 +370,9 @@ impl<'s> MpaReader<'s> {
                         );
                     }
 
-                    self.reader.seek_buffered(ref_frame.pos);
+                    if self.reader.seek_buffered(ref_frame.pos) != ref_frame.pos {
+                        return seek_error(SeekErrorKind::Unseekable);
+                    }
 
                     self.next_packet_ts = ref_frame.ts;
                     break;
@@ -377,6 +385,7 @@ impl<'s> MpaReader<'s> {
                 .map_err(Error::from);
             roll_back_transient(&mut self.reader, checkpoint, ignored)?;
 
+            pending.remember(frame);
             self.next_packet_ts = next_packet_ts;
         }
 
@@ -393,6 +402,7 @@ impl<'s> MpaReader<'s> {
         to: &SeekTo,
         packet_buf: &mut [u8],
     ) -> Result<SeekedTo> {
+        let pending = self.pending_seek.take();
         let required_ts = match *to {
             SeekTo::Timestamp { ts, .. } => ts,
             SeekTo::Time { time, .. } => {
@@ -431,15 +441,35 @@ impl<'s> MpaReader<'s> {
 
         debug!("seeking to ts={required_ts}");
 
-        match mode {
-            SeekMode::Coarse if is_seekable => {
-                self.preseek_coarse(required_ts, min_ts, max_ts, packet_buf)?;
+        let mut pending = match pending {
+            Some(pending) if pending.required_ts == required_ts && pending.mode == mode => {
+                pending
             }
-            SeekMode::Accurate => self.preseek_accurate(required_ts, min_ts)?,
-            SeekMode::Coarse => (),
-        }
+            _ => {
+                match mode {
+                    SeekMode::Coarse if is_seekable => {
+                        self.preseek_coarse(required_ts, min_ts, max_ts, packet_buf)?;
+                    }
+                    SeekMode::Accurate => self.preseek_accurate(required_ts, min_ts)?,
+                    SeekMode::Coarse => (),
+                }
 
-        self.scan_to(required_ts)?;
+                PendingSeek {
+                    required_ts,
+                    mode,
+                    frames: Default::default(),
+                    n_parsed: 0,
+                }
+            }
+        };
+
+        let scanned = self.scan_to(&mut pending);
+        if let Err(Error::IoError(err)) = &scanned
+            && matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock)
+        {
+            self.pending_seek = Some(pending);
+        }
+        scanned?;
 
         debug!(
             "seeked to ts={} (delta={})",
@@ -526,6 +556,7 @@ impl<'s> MpaReader<'s> {
             format_info,
             first_packet_pos,
             next_packet_ts,
+            pending_seek: None,
             reader: mss,
             media_info: MediaInfo::from_track(&track),
             tracks: vec![track],
@@ -653,6 +684,23 @@ fn is_frame_header_similar(header: &FrameHeader, sync: u32) -> bool {
     }
 
     false
+}
+
+const MAX_REF_FRAMES: usize = 4;
+const REF_FRAMES_MASK: usize = MAX_REF_FRAMES - 1;
+
+struct PendingSeek {
+    required_ts: Timestamp,
+    mode: SeekMode,
+    frames: [FramePos; MAX_REF_FRAMES],
+    n_parsed: usize,
+}
+
+impl PendingSeek {
+    fn remember(&mut self, frame: FramePos) {
+        self.frames[self.n_parsed & REF_FRAMES_MASK] = frame;
+        self.n_parsed += 1;
+    }
 }
 
 #[derive(Default)]
