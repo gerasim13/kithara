@@ -146,6 +146,20 @@ impl CacheManifest {
     }
 
     pub(super) fn freshness(&self, root: &Path, config: &XtaskCacheConfig) -> Result<Freshness> {
+        // A package this manifest recorded that the tree no longer carries is
+        // the plainest statement that the manifest was written against another
+        // tree, and the answer to that is the one this function exists to give.
+        // The stamp cannot be recomputed over a package that is gone, so
+        // without this the store a shared runner keeps between branches turns
+        // a checkout that merely drops a crate into an unreadable input rather
+        // than a cache to rebuild.
+        if self
+            .package_roots
+            .iter()
+            .any(|relative| fs::symlink_metadata(root.join(relative)).is_err())
+        {
+            return Ok(Freshness::Stale);
+        }
         let normalized = normalize_config(config)?;
         let source_stamp = source_stamp(
             root,
@@ -458,6 +472,20 @@ mod tests {
             generation_grace_secs: 3600,
         };
         Ok((temp, root, config))
+    }
+
+    #[test]
+    fn a_package_root_the_tree_no_longer_carries_is_stale() -> Result<()> {
+        let (_temp, root, config) = fixture()?;
+        let manifest = CacheManifest::from_roots(&root, &config, vec![PathBuf::from("xtask")])?;
+        assert_eq!(manifest.freshness(&root, &config)?, Freshness::Current);
+
+        // What a runner shared between branches does to a checkout: the
+        // manifest one branch left behind is read against a tree that never
+        // had the package it recorded.
+        fs::remove_dir_all(root.join("xtask"))?;
+        assert_eq!(manifest.freshness(&root, &config)?, Freshness::Stale);
+        Ok(())
     }
 
     #[test]
