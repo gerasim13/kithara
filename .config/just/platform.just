@@ -26,6 +26,7 @@ wasm MODE="check" *ARGS:
         cargo "+$toolchain" check -p kithara-ui --lib --target wasm32-unknown-unknown
         cargo "+$toolchain" check -p kithara-app --lib --target wasm32-unknown-unknown --no-default-features --features gui,analysis-waveform,beat-dsp,stretch-identity
         cargo "+$toolchain" check -p kithara-app --bin kithara --target wasm32-unknown-unknown --no-default-features --features gui,analysis-waveform,beat-dsp,stretch-identity
+        cargo "+$toolchain" check -p kithara-app --bin kithara --target wasm32-unknown-unknown --no-default-features --features gui,analysis-waveform,beat-dsp,stretch-identity,zvuk
         cargo "+$toolchain" check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       build)
