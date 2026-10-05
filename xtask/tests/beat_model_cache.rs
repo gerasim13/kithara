@@ -130,6 +130,125 @@ impl Fixture {
     fn cached_path(&self) -> PathBuf {
         self.cache.join(consts::FILE)
     }
+
+    fn cargo_fixture(&self) -> PathBuf {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repository root");
+        let workspace: toml::Value = fs::read_to_string(repository.join("Cargo.toml"))
+            .expect("workspace manifest")
+            .parse()
+            .expect("workspace dependency declarations");
+        let dependencies: toml::Table = ["hex", "sha2"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    workspace["workspace"]["dependencies"][name].clone(),
+                )
+            })
+            .collect();
+        let root = self
+            .cache
+            .parent()
+            .expect("fixture directory")
+            .join("cargo-fixture");
+        fs::create_dir_all(root.join("src")).expect("Cargo fixture source directory");
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"beat_cache_fixture\"\nversion = \"0.0.0\"\n\
+                 edition = \"2024\"\n\n[workspace]\nresolver = \"2\"\n\n\
+                 [build-dependencies]\n{}",
+                toml::to_string(&dependencies).expect("existing build dependency declarations")
+            ),
+        )
+        .expect("Cargo fixture manifest");
+        fs::copy(repository.join("Cargo.lock"), root.join("Cargo.lock"))
+            .expect("seed fixture with the workspace dependency lock");
+        let owner = repository.join("crates/kithara-beat/build.rs");
+        let owner = owner.to_str().expect("build-script source path");
+        let url = reqwest::Url::from_file_path(&self.source).expect("local model source URL");
+        let hash = hex::encode(Sha256::digest(consts::BYTES));
+        fs::write(
+            root.join("build.rs"),
+            format!(
+                r#"mod script {{
+    include!({owner:?});
+
+    pub fn run() {{
+        main();
+        resolve(&cache_dir(), &Model {{
+            env: "KITHARA_TEST_EMBED_MODEL",
+            file: {file:?},
+            source: Some(({url:?}, {hash:?})),
+        }});
+    }}
+}}
+
+fn main() {{
+    use std::io::Write;
+
+    script::run();
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo OUT_DIR"));
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(out.join("resolver-runs"))
+        .expect("resolver execution ledger")
+        .write_all(b"run\n")
+        .expect("record resolver execution");
+}}
+"#,
+                file = consts::FILE,
+                url = url.as_str(),
+            ),
+        )
+        .expect("Cargo build script including the production resolver");
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub const MODEL: &[u8] = include_bytes!(env!(\"KITHARA_TEST_EMBED_MODEL\"));\n",
+        )
+        .expect("library embeds the resolved model");
+        root
+    }
+
+    fn cargo_build(&self, root: &Path) -> Vec<serde_json::Value> {
+        let pins: toml::Value = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.config/ci-pins.toml"),
+        )
+        .expect("repository CI pins")
+        .parse()
+        .expect("CI toolchain declarations");
+        let output = Command::new("cargo")
+            .args(["build", "--offline", "--message-format=json"])
+            .current_dir(root)
+            .env(
+                "RUSTUP_TOOLCHAIN",
+                pins["nightly_toolchain"].as_str().expect("pinned nightly"),
+            )
+            .env("CARGO_UNSTABLE_CHECKSUM_FRESHNESS", "true")
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .env("KITHARA_BEAT_MODEL_CACHE", &self.cache)
+            .env_remove("CARGO_BUILD_TARGET")
+            .env_remove("RUSTC")
+            .env_remove("CARGO_FEATURE_EMBED_MODEL")
+            .env_remove("CARGO_FEATURE_EMBED_SMALL_MODEL")
+            .env_remove("CARGO_FEATURE_EMBED_FULL_MODEL")
+            .env_remove("CARGO_FEATURE_EMBED_FULL_INT8_MODEL")
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env("TMPDIR", &self.temporary)
+            .env("TMP", &self.temporary)
+            .env("TEMP", &self.temporary)
+            .stdin(Stdio::null())
+            .output()
+            .expect("actual checksum Cargo build");
+        stdout(output)
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("Cargo JSON message"))
+            .collect()
+    }
 }
 
 fn stdout(output: Output) -> String {
@@ -297,5 +416,109 @@ fn the_default_source_cache_survives_temporary_directory_relocation() {
     assert_eq!(
         first, second,
         "OS temporary cleanup does not move the source cache"
+    );
+}
+
+#[test]
+fn a_fresh_fetch_and_source_cache_eviction_rebuild_zero_units_on_the_next_cargo_build() {
+    let fixture = Fixture::new();
+    let root = fixture.cargo_fixture();
+    assert!(!fixture.cached_path().exists(), "the first build must fetch");
+    assert!(
+        !root.join("target").exists(),
+        "the Cargo target starts empty"
+    );
+
+    let first = fixture.cargo_build(&root);
+
+    assert!(
+        first.iter().any(|message| {
+            message["reason"] == "compiler-artifact"
+                && message["target"]["name"] == "beat_cache_fixture"
+                && !message["fresh"].as_bool().expect("Cargo artifact freshness")
+        }),
+        "the library must compile after the first fetch: {first:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.cached_path()).expect("fetched model source"),
+        consts::BYTES
+    );
+    let build_script = first
+        .iter()
+        .find(|message| {
+            message["reason"] == "build-script-executed"
+                && message["env"].as_array().is_some_and(|variables| {
+                    variables
+                        .iter()
+                        .any(|entry| entry[0] == "KITHARA_TEST_EMBED_MODEL")
+                })
+        })
+        .expect("Cargo consumed the resolver's model directive");
+    let embedded = build_script["env"]
+        .as_array()
+        .expect("Cargo build-script environment")
+        .iter()
+        .find(|entry| entry[0] == "KITHARA_TEST_EMBED_MODEL")
+        .and_then(|entry| entry[1].as_str())
+        .map(PathBuf::from)
+        .expect("resolved model path");
+    let out = PathBuf::from(
+        build_script["out_dir"]
+            .as_str()
+            .expect("Cargo build-script OUT_DIR"),
+    );
+    assert_eq!(
+        fs::read(&embedded).expect("embedded model snapshot"),
+        consts::BYTES
+    );
+    let ledger = out.join("resolver-runs");
+    assert_eq!(fs::read(&ledger).expect("first resolver run"), b"run\n");
+    let lock = fs::read(root.join("Cargo.lock")).expect("resolved fixture dependency lock");
+    let assert_fresh = |messages: &[serde_json::Value]| {
+        let artifacts: Vec<_> = messages
+            .iter()
+            .filter(|message| message["reason"] == "compiler-artifact")
+            .collect();
+        assert!(
+            artifacts
+                .iter()
+                .any(|message| message["target"]["name"] == "beat_cache_fixture")
+        );
+        let rebuilt: Vec<_> = artifacts
+            .iter()
+            .filter(|message| !message["fresh"].as_bool().expect("Cargo artifact freshness"))
+            .map(|message| &message["target"]["name"])
+            .collect();
+        assert!(
+            rebuilt.is_empty(),
+            "the next checksum Cargo build rebuilt units: {rebuilt:?}"
+        );
+        assert_eq!(
+            fs::read(&ledger).expect("resolver execution ledger"),
+            b"run\n"
+        );
+        assert_eq!(
+            fs::read(root.join("Cargo.lock")).expect("unchanged fixture lock"),
+            lock
+        );
+    };
+
+    let second = fixture.cargo_build(&root);
+    assert_fresh(&second);
+
+    fs::remove_file(fixture.cached_path()).expect("evict only this fixture's source cache");
+    let after_eviction = fixture.cargo_build(&root);
+    assert_fresh(&after_eviction);
+    assert!(
+        !fixture.cached_path().exists(),
+        "a fresh Cargo build must not refetch"
+    );
+    assert_eq!(
+        fs::read(&embedded).expect("snapshot survives source eviction"),
+        consts::BYTES
+    );
+    assert!(
+        embedded.starts_with(&out) && out.starts_with(root.join("target")),
+        "Cargo owns the embed path: {embedded:?} in {out:?}"
     );
 }
