@@ -2092,7 +2092,9 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     );
     assert_eq!(
         mapping_field(job, "runs-on").as_str(),
-        Some("${{ fromJSON(needs.select.outputs.matrix || '[]')[0].runner || inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"),
+        Some(
+            "${{ fromJSON(needs.select.outputs.matrix || '[]')[0].runner || inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"
+        ),
         "the catalog or rendered call supplies the lane runner before the shared pool"
     );
     let upload = named_step(job, "Upload the lane's report");
