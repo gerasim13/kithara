@@ -7,7 +7,8 @@ pub(super) struct TestRequest {
     pub(super) net_backend: Option<String>,
     pub(super) no_block: Option<bool>,
     /// Lanes named with `--lane`. One picks the lane to run; with `--touched`
-    /// they bound what the touched paths may select.
+    /// they name the lanes the touched paths may run, the default lane when
+    /// none is named.
     pub(super) lanes: Vec<String>,
     pub(super) passthrough: Vec<String>,
     pub(super) touched: bool,

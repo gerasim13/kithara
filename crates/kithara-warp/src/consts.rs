@@ -62,91 +62,47 @@ pub(crate) const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize:
 };
 
 #[cfg(feature = "render")]
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
 #[cfg(test)]
 pub(crate) const CH: u16 = 2;
 
 #[cfg(feature = "render")]
+#[cfg(test)]
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-#[cfg(test)]
 pub(crate) const F0: f64 = 440.0;
 
 /// FFT length for the pitch (dominant-frequency) check.
 #[cfg(feature = "render")]
+#[cfg(test)]
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-#[cfg(test)]
 pub(crate) const N: usize = 1 << 14;
 
 #[cfg(feature = "render")]
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
 #[cfg(test)]
 pub(crate) const SR: u32 = 44_100;
 
 /// Source beat the entered plan activates at: well inside the recording,
 /// so the engine history before it is real audio rather than padding.
 #[cfg(feature = "render")]
+#[cfg(test)]
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-#[cfg(test)]
 pub(crate) const CUE_BEAT: f64 = 4.0;
-
-/// Decoder chunks alternating a long span with a single frame, which at a
-/// slowed rate projects to less than one audible source frame.
-#[cfg(feature = "render")]
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-#[cfg(test)]
-pub(crate) const ALTERNATING_CHUNKS: [usize; 2] = [1_023, 1];
-
-#[cfg(feature = "render")]
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-#[cfg(test)]
-pub(crate) const CHUNK_PAIRS: usize = 64;
-
-/// How far the audible source may trail the decoded one.
-#[cfg(feature = "render")]
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-#[cfg(test)]
-pub(crate) const LAG_FRAMES: u64 = 16 * 1024;
 
 /// Span the speed smoother measures its settle threshold against: the range
 /// a playback speed realistically travels over, from a heavy stretch back to
 /// unity and a little past it. The smoother reads it as a scale, not a bound,
 /// so a speed outside it still smooths — it just settles on the same relative
 /// terms as one inside.
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
+#[cfg(feature = "render")]
 pub(crate) const SPEED_SMOOTHING_SPAN: f32 = 2.0;

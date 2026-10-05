@@ -12,6 +12,7 @@ use tempfile::TempDir;
 /// providers' own validity and salt shapes are pinned in `document::policy`,
 /// which reads the baked document without expanding it.
 const NEUTRAL_DRM: &str = concat!(
+    "sources:\n  zvuk: null\n",
     "drm:\n  providers:\n    - name: test\n",
     "      domains: [keys.test]\n      cipher_key: not-a-secret\n",
 );
@@ -87,9 +88,7 @@ fn the_app_section_reaches_the_config_patch() {
 
 /// The stretch backends' preparation geometry is the deepest nesting a
 /// document reaches: `player:` carries a `warp:` section, which carries a
-/// `backends:` section, which carries one per compiled engine. Only a build
-/// that compiles a backend has the key at all.
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+/// `backends:` section, which carries the preparation geometry for each engine.
 #[kithara::test(native, flash(false))]
 fn the_document_reaches_the_stretch_backend_geometry() {
     const WARP_BACKENDS: &str = concat!(

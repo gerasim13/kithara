@@ -36,6 +36,7 @@ resample-rubato = ["kithara-play/resample-rubato"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
 stretch-glide = ["kithara-play/stretch-glide"]
+stretch-identity = ["kithara-play/stretch-identity"]
 usdt = ["kithara-effects/usdt", "kithara-play/usdt", "kithara-sync/usdt"]
 
 [dependencies]
