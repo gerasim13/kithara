@@ -14,7 +14,6 @@ use firewheel::{
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::{Inbox, Step};
-use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_signal::SessionFrame;
@@ -22,9 +21,8 @@ use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
-use smallvec::SmallVec;
 
-use super::{context::read_render_context, track::PlayerTrack};
+use super::{DeckMixerConfig, context::read_render_context, track::PlayerTrack};
 use crate::{
     bridge::{
         DeckMixSettings, DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification, TrackState,
@@ -45,7 +43,7 @@ pub(super) enum ContextRequirement {
 ///
 /// Takes the deck's batches from its inbox at the frames they apply on and renders the deck's
 /// tracks between them into the Firewheel output buffers.
-pub struct PlayerNodeProcessor {
+pub struct DeckMixer {
     inbox: Inbox<DeckProtocol>,
     deck: Deck,
     context_requirement: ContextRequirement,
@@ -60,7 +58,7 @@ pub(super) struct Deck {
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
     pub(super) render: RenderPass,
-    pub(super) tracks: TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+    pub(super) tracks: TrackSlots,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
     /// Media seconds every track consumes per output second.
@@ -123,28 +121,19 @@ impl StreamShape {
     }
 }
 
-impl PlayerNodeProcessor {
-    /// Maximum number of concurrent tracks per player node.
-    pub const MAX_TRACKS: usize = 4;
-
-    /// Create a new processor with the given command receiver and shared state.
+impl DeckMixer {
+    /// Create a deck over the given channel ends, built as `config` says.
     #[must_use]
     pub fn new<S>(
         inputs: NodeInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-        gate_smoothing: SmootherConfig,
+        config: DeckMixerConfig,
     ) -> Self
     where
         S: HasPool<f32>,
     {
-        Self::with_context_requirement(
-            inputs,
-            shape,
-            pools,
-            gate_smoothing,
-            ContextRequirement::Standalone,
-        )
+        Self::with_context_requirement(inputs, shape, pools, config, ContextRequirement::Standalone)
     }
 
     /// Shared playback state the control side reads.
@@ -209,7 +198,7 @@ impl PlayerNodeProcessor {
         inputs: NodeInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-        gate_smoothing: SmootherConfig,
+        config: DeckMixerConfig,
         context_requirement: ContextRequirement,
     ) -> Self
     where
@@ -226,13 +215,13 @@ impl PlayerNodeProcessor {
                 trash_tx: inputs.trash_tx,
                 playback: inputs.playback,
                 sample_rate: shape.sample_rate,
-                render: RenderPass::new(pools, shape, gate_smoothing, mix.gain()),
+                render: RenderPass::new(pools, shape, config, mix.gain()),
                 crossfade: crate::CrossfadeSettings::default(),
                 mix,
                 prefetch_duration: 0.0,
                 rate: 1.0,
-                tracks: TrackSlots::default(),
-                tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+                tracks: TrackSlots::new(config.slots()),
+                tracks_transitions: VecDeque::with_capacity(config.slots().get()),
             },
         }
     }
@@ -264,29 +253,26 @@ impl Deck {
     /// reached natural EOF resident so an in-range seek can later revive it; `is_playing()` stays
     /// false until then.
     pub(super) fn cleanup_finished_tracks(&mut self) {
-        let finished: SmallVec<[(TrackSlot, bool); PlayerNodeProcessor::MAX_TRACKS]> = self
+        let all_finished = self
             .tracks
             .iter()
-            .filter(|(_, track)| track.state() == TrackState::Finished)
-            .map(|(slot, track)| (slot, track.ended_at_eof()))
-            .collect();
-
-        let retain: Option<TrackSlot> = if finished.len() == self.tracks.len() {
-            finished
+            .all(|(_, track)| track.state() == TrackState::Finished);
+        let retain: Option<TrackSlot> = if all_finished {
+            self.tracks
                 .iter()
-                .find_map(|(slot, ended_at_eof)| ended_at_eof.then_some(*slot))
+                .find_map(|(slot, track)| track.ended_at_eof().then_some(slot))
         } else {
             None
         };
 
-        for (slot, _) in finished.iter().filter(|(slot, _)| Some(*slot) != retain) {
-            if let Some(track) = self.tracks.remove_at(*slot) {
-                let item_id = track.item_id();
-                let src = Arc::clone(track.src());
-                self.discard_track(track);
-                self.notif_tx
-                    .try_push(PlayerNotification::Unloaded { src, item_id })
-                    .ok();
+        for slot in self.tracks.slots() {
+            if Some(slot) != retain
+                && self
+                    .tracks
+                    .at(slot)
+                    .is_some_and(|track| track.state() == TrackState::Finished)
+            {
+                self.unload_slot(slot);
             }
         }
 
@@ -442,7 +428,7 @@ impl Deck {
     }
 }
 
-impl AudioNodeProcessor for PlayerNodeProcessor {
+impl AudioNodeProcessor for DeckMixer {
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.deck.update_host_sample_rate(stream_info.sample_rate);
         self.deck
@@ -518,29 +504,29 @@ mod tests {
         ));
     }
 
-    fn processor() -> (PlayerNodeProcessor, crate::bridge::SlotControl) {
+    fn processor() -> (DeckMixer, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
         (
-            PlayerNodeProcessor::new(inputs, shape, &pools(), crate::DEFAULT_GATE_SMOOTHING),
+            DeckMixer::new(inputs, shape, &pools(), DeckMixerConfig::default()),
             control,
         )
     }
 
-    fn session_processor() -> PlayerNodeProcessor {
+    fn session_processor() -> DeckMixer {
         let (inputs, _control) = slot_channels(SharedEq::new(0));
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        PlayerNodeProcessor::with_context_requirement(
+        DeckMixer::with_context_requirement(
             inputs,
             shape,
             &pools(),
-            crate::DEFAULT_GATE_SMOOTHING,
+            DeckMixerConfig::default(),
             ContextRequirement::Session,
         )
     }

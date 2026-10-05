@@ -1,4 +1,7 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
+};
 
 use firewheel::node::ProcBuffers;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
@@ -9,11 +12,11 @@ use kithara_dsp::{
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
-use smallvec::SmallVec;
 use tracing::warn;
 
 use super::{
-    processor::{PlayerNodeProcessor, StreamShape},
+    DeckMixerConfig,
+    processor::StreamShape,
     track::{RtSink, TrackReadOutcome},
 };
 use crate::{
@@ -31,7 +34,7 @@ struct Handover {
 pub(crate) struct RenderTargets<'a> {
     pub(crate) notification_tx: &'a mut HeapProd<PlayerNotification>,
     pub(crate) metrics: &'a RtMetrics,
-    pub(crate) tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
+    pub(crate) tracks: &'a mut TrackSlots,
     /// Slot seek epoch published when this block started rendering.
     pub(crate) seek_epoch: u64,
 }
@@ -41,6 +44,7 @@ pub(crate) struct RenderPass {
     /// The deck's output gain, ramped to each new target from the frame it is set on.
     gain: SmoothedParam,
     scratch_bufs: [SampleBuffer; Self::SCRATCH_BUF_COUNT],
+    range_tracks: RangeTracks,
     priming: bool,
     capacity: usize,
 }
@@ -55,7 +59,7 @@ impl RenderPass {
     pub(crate) fn new<S>(
         pools: &PoolRegion<S>,
         shape: StreamShape,
-        gate_smoothing: SmootherConfig,
+        config: DeckMixerConfig,
         gain: f32,
     ) -> Self
     where
@@ -69,12 +73,13 @@ impl RenderPass {
                 shape.sample_rate,
             ),
             scratch_bufs: std::array::from_fn(|_| pools.get::<f32>()),
+            range_tracks: RangeTracks::new(config.slots()),
             capacity: 0,
             priming: true,
             gate: MixDSP::new(
                 Mix::FULLY_WET,
                 Self::GATE_CURVE,
-                gate_smoothing,
+                config.declick(),
                 shape.sample_rate,
             ),
         };
@@ -123,23 +128,13 @@ impl RenderPass {
         }
         let tracks = targets.tracks;
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
-        let loaded_tracks: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
-            tracks
-                .iter()
-                .map(|(idx, track)| (idx, track.state()))
-                .collect();
-        let active_tracks: SmallVec<[ActiveTrackEntry; PlayerNodeProcessor::MAX_TRACKS]> =
-            loaded_tracks
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, state))| state.is_playing())
-                .map(|(loaded_idx, (idx, state))| (loaded_idx, *idx, state.is_leading()))
-                .collect();
-        let mut active_slots = [false; PlayerNodeProcessor::MAX_TRACKS];
-        for (loaded_idx, _, _) in &active_tracks {
-            active_slots[*loaded_idx] = true;
-        }
-        let mut skip_tracks = [false; PlayerNodeProcessor::MAX_TRACKS];
+        self.range_tracks.refill(tracks);
+        let RangeTracks {
+            loaded: loaded_tracks,
+            active: active_tracks,
+            active_slots,
+            skip: skip_tracks,
+        } = &mut self.range_tracks;
 
         for (track_idx, (_arena_slot, track_handle, was_leading)) in
             active_tracks.iter().enumerate()
@@ -320,6 +315,51 @@ impl RenderPass {
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.gate.update_sample_rate(sample_rate);
         self.gain.update_sample_rate(sample_rate);
+    }
+}
+
+/// The deck's tracks as one range sees them, in lists sized to the deck's slots so a range never
+/// allocates.
+struct RangeTracks {
+    /// Every held track and its state as the range begins, in slot order.
+    loaded: Vec<(TrackSlot, TrackState)>,
+    /// The playing tracks: their index in `loaded`, their slot, and whether they lead.
+    active: Vec<ActiveTrackEntry>,
+    /// Whether the track at each index of `loaded` is playing.
+    active_slots: Vec<bool>,
+    /// Whether the playing track at each index of `active` already rendered as a handover.
+    skip: Vec<bool>,
+}
+
+impl RangeTracks {
+    fn new(slots: NonZeroUsize) -> Self {
+        Self {
+            loaded: Vec::with_capacity(slots.get()),
+            active: Vec::with_capacity(slots.get()),
+            active_slots: Vec::with_capacity(slots.get()),
+            skip: Vec::with_capacity(slots.get()),
+        }
+    }
+
+    fn refill(&mut self, tracks: &TrackSlots) {
+        self.loaded.clear();
+        self.loaded
+            .extend(tracks.iter().map(|(slot, track)| (slot, track.state())));
+        self.active.clear();
+        self.active.extend(
+            self.loaded
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, state))| state.is_playing())
+                .map(|(loaded_idx, (slot, state))| (loaded_idx, *slot, state.is_leading())),
+        );
+        self.active_slots.clear();
+        self.active_slots.resize(self.loaded.len(), false);
+        for (loaded_idx, _, _) in &self.active {
+            self.active_slots[*loaded_idx] = true;
+        }
+        self.skip.clear();
+        self.skip.resize(self.active.len(), false);
     }
 }
 

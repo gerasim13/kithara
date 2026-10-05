@@ -8,12 +8,14 @@ use firewheel::{
     },
 };
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_dsp::param::SmootherConfig;
 #[cfg(test)]
 use kithara_platform::sync::atomic::Ordering;
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::processor::{ContextRequirement, PlayerNodeProcessor, StreamShape};
+use super::{
+    DeckMixerConfig,
+    processor::{ContextRequirement, DeckMixer, StreamShape},
+};
 use crate::bridge::{NodeInputs, SharedEq, slot_channels};
 
 /// A player source node that outputs mixed audio from loaded tracks.
@@ -38,7 +40,7 @@ pub struct PlayerNode<S> {
     pools: PoolRegion<S>,
 
     #[diff(skip)]
-    gate_smoothing: SmootherConfig,
+    mixer: DeckMixerConfig,
 }
 
 /// A runtime parameter patch for [`PlayerNode`].
@@ -67,10 +69,10 @@ impl<S> Patch for PlayerNode<S> {
 
 impl<S> PlayerNode<S> {
     /// Create a player node wired to RT input channels.
-    pub fn new(inputs: NodeInputs, pools: PoolRegion<S>, gate_smoothing: SmootherConfig) -> Self {
+    pub fn new(inputs: NodeInputs, pools: PoolRegion<S>, mixer: DeckMixerConfig) -> Self {
         Self {
             pools,
-            gate_smoothing,
+            mixer,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
             context_requirement: ContextRequirement::Standalone,
@@ -109,11 +111,11 @@ where
             .lock()
             .take()
             .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
-        Ok(PlayerNodeProcessor::with_context_requirement(
+        Ok(DeckMixer::with_context_requirement(
             inputs,
             shape,
             &self.pools,
-            self.gate_smoothing,
+            self.mixer,
             self.context_requirement,
         ))
     }
@@ -140,7 +142,7 @@ mod tests {
 
     fn make_node() -> (PlayerNode<TestPools>, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
-        let node = PlayerNode::new(inputs, pools(), crate::DEFAULT_GATE_SMOOTHING);
+        let node = PlayerNode::new(inputs, pools(), DeckMixerConfig::default());
         (node, control)
     }
 

@@ -64,7 +64,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             grid_id: BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
+            mixer: kithara_play::DeckMixerConfig::default(),
             pools: pools(),
         })
         .expect("register player command")

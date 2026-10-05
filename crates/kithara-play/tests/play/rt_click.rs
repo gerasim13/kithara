@@ -13,7 +13,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::{
     Resource, SharedEq,
     bridge::{DeckMixSettingsChange, DeckPart, SlotControl, TrackTransition, slot_channels},
-    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };
 use kithara_signal::{AudioSpec, FaderValue, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
@@ -40,19 +40,14 @@ fn spec() -> AudioSpec {
     AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
 }
 
-fn processor() -> (PlayerNodeProcessor, SlotControl) {
+fn processor() -> (DeckMixer, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(128).expect("non-zero block"),
     };
     (
-        PlayerNodeProcessor::new(
-            inputs,
-            shape,
-            &pools(),
-            kithara_play::DEFAULT_GATE_SMOOTHING,
-        ),
+        DeckMixer::new(inputs, shape, &pools(), DeckMixerConfig::default()),
         control,
     )
 }
@@ -84,13 +79,13 @@ fn push(control: &mut SlotControl, part: DeckPart) {
     control.send(part).expect("the deck channel has room");
 }
 
-fn start(processor: &mut PlayerNodeProcessor, item_id: TrackId) {
+fn start(processor: &mut DeckMixer, item_id: TrackId) {
     if let Some(track) = processor.track_mut(item_id) {
         track.play();
     }
 }
 
-fn block_from(processor: &mut PlayerNodeProcessor, start: SessionFrame) -> (Vec<f32>, bool) {
+fn block_from(processor: &mut DeckMixer, start: SessionFrame) -> (Vec<f32>, bool) {
     let mut out_l = vec![0.0f32; BLOCK_FRAMES];
     let mut out_r = vec![0.0f32; BLOCK_FRAMES];
     let inputs: [&[f32]; 0] = [];
@@ -105,11 +100,11 @@ fn block_from(processor: &mut PlayerNodeProcessor, start: SessionFrame) -> (Vec<
 
 /// Renders a block on a clock that stands still: every part `push` sends applies on the next
 /// block, whatever frame it starts on.
-fn block(processor: &mut PlayerNodeProcessor) -> (Vec<f32>, bool) {
+fn block(processor: &mut DeckMixer) -> (Vec<f32>, bool) {
     block_from(processor, SessionFrame::default())
 }
 
-fn pump(processor: &mut PlayerNodeProcessor, blocks: usize) -> Vec<f32> {
+fn pump(processor: &mut DeckMixer, blocks: usize) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES);
     for _ in 0..blocks {
         let (out_l, _) = block(processor);
@@ -351,9 +346,7 @@ fn a_muted_deck_is_silent_at_any_volume_and_unmutes_to_it(constant_half: &'stati
     );
 }
 
-fn fading_in(
-    constant_half: &'static [u8],
-) -> (PlayerNodeProcessor, SlotControl, Vec<f32>, TrackId) {
+fn fading_in(constant_half: &'static [u8]) -> (DeckMixer, SlotControl, Vec<f32>, TrackId) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
     push(&mut control, DeckPart::SetFadeDuration(FADE_SECONDS));

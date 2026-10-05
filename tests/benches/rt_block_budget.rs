@@ -13,7 +13,7 @@ use kithara::{
     play::{
         Resource, SharedEq,
         bridge::{DeckPart, SlotControl, slot_channels},
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+        rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
     },
     signal::{AudioSpec, SessionFrame},
 };
@@ -56,7 +56,7 @@ fn spec() -> AudioSpec {
     )
 }
 
-fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
+fn processor() -> (DeckMixer, SlotControl, Pools) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let pools = pools();
     let shape = StreamShape {
@@ -64,7 +64,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
         max_block_frames: non_zero(consts::BLOCK_FRAMES, "block frames"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &pools, kithara::play::DEFAULT_GATE_SMOOTHING),
+        DeckMixer::new(inputs, shape, &pools, DeckMixerConfig::default()),
         control,
         pools,
     )
@@ -76,12 +76,7 @@ fn send(control: &mut SlotControl, part: DeckPart) {
     }
 }
 
-fn load_tracks(
-    processor: &mut PlayerNodeProcessor,
-    control: &mut SlotControl,
-    pools: &Pools,
-    count: usize,
-) {
+fn load_tracks(processor: &mut DeckMixer, control: &mut SlotControl, pools: &Pools, count: usize) {
     let tracks: Vec<(TrackId, Arc<str>)> = (0..count)
         .map(|idx| {
             (
@@ -120,11 +115,7 @@ fn load_tracks(
 }
 
 /// Renders one block on a clock that stands still: every part sent applies at its start.
-fn render_block(
-    processor: &mut PlayerNodeProcessor,
-    out_l: &mut [f32],
-    out_r: &mut [f32],
-) -> Duration {
+fn render_block(processor: &mut DeckMixer, out_l: &mut [f32], out_r: &mut [f32]) -> Duration {
     let frames = out_l.len();
     let inputs: [&[f32]; 0] = [];
     let mut outputs = [out_l, out_r];
@@ -213,7 +204,7 @@ fn cell(elapsed: Duration, budget: Duration) -> String {
 fn main() {
     let budget = block_budget();
     println!(
-        "PlayerNodeProcessor block budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
+        "DeckMixer block budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
         budget.as_secs_f64() * 1e3,
         consts::BLOCK_FRAMES,
         consts::SAMPLE_RATE,

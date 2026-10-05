@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_events::TrackId;
 
 use super::track::PlayerTrack;
@@ -5,19 +7,18 @@ use super::track::PlayerTrack;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TrackSlot(usize);
 
-pub(crate) struct TrackSlots<const CAPACITY: usize> {
-    slots: [Option<PlayerTrack>; CAPACITY],
+pub(crate) struct TrackSlots {
+    slots: Box<[Option<PlayerTrack>]>,
 }
 
-impl<const CAPACITY: usize> Default for TrackSlots<CAPACITY> {
-    fn default() -> Self {
+impl TrackSlots {
+    /// `capacity` free slots, allocated once: a deck never grows them on the audio thread.
+    pub(crate) fn new(capacity: NonZeroUsize) -> Self {
         Self {
-            slots: [const { None }; CAPACITY],
+            slots: (0..capacity.get()).map(|_| None).collect(),
         }
     }
-}
 
-impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
     pub(crate) fn get(&self, item_id: TrackId) -> Option<&PlayerTrack> {
         self.iter()
             .find_map(|(_, track)| (track.item_id() == item_id).then_some(track))
@@ -54,6 +55,11 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
             .filter_map(|(idx, slot)| Some((TrackSlot(idx), slot.as_mut()?)))
     }
 
+    /// Every slot, held or free, in order.
+    pub(crate) fn slots(&self) -> impl Iterator<Item = TrackSlot> + use<> {
+        (0..self.slots.len()).map(TrackSlot)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.slots.iter().flatten().count()
     }
@@ -65,6 +71,9 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
 
     delegate::delegate! {
         to self.slots {
+            #[expr($?.as_ref())]
+            #[call(get)]
+            pub(crate) fn at(&self, #[newtype] slot: TrackSlot) -> Option<&PlayerTrack>;
             #[expr($?.as_mut())]
             #[call(get_mut)]
             pub(crate) fn at_mut(&mut self, #[newtype] slot: TrackSlot) -> Option<&mut PlayerTrack>;
@@ -123,7 +132,7 @@ mod tests {
         let src: Arc<str> = Arc::from("same.mp3");
         let first_id = TrackId::allocate();
         let second_id = TrackId::allocate();
-        let mut tracks = TrackSlots::<2>::default();
+        let mut tracks = TrackSlots::new(NonZeroUsize::new(2).expect("two slots"));
 
         assert!(tracks.insert(track(first_id, Arc::clone(&src))).is_none());
         assert!(tracks.insert(track(second_id, src)).is_none());

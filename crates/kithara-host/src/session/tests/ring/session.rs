@@ -410,7 +410,7 @@ fn bootstrap(
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
         eq_layout: Vec::new(),
-        gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
+        mixer: kithara_play::DeckMixerConfig::default(),
         pools: pools(),
     }) {
         Reply::PlayerRegistered(registered) => registered.id,

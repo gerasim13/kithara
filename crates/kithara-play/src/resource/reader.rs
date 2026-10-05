@@ -499,7 +499,7 @@ mod tests {
     use crate::{
         bridge::{DeckPart, PlayerNotification, SharedEq, TrackTransition, slot_channels},
         consts,
-        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+        rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
         test_pools::{TestPools, pools},
     };
 
@@ -659,7 +659,7 @@ mod tests {
             .map_or_else(|error| panic!("test player resource: {error}"), Box::new)
     }
 
-    fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
+    fn process_block(processor: &mut DeckMixer, extra: &mut ProcExtra) {
         let info = ProcInfo {
             sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
             frames: consts::BLOCK_FRAMES,
@@ -735,8 +735,7 @@ mod tests {
             )
             .expect("static block size"),
         };
-        let mut processor =
-            PlayerNodeProcessor::new(inputs, shape, &pools, crate::DEFAULT_GATE_SMOOTHING);
+        let mut processor = DeckMixer::new(inputs, shape, &pools, DeckMixerConfig::default());
         let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
         let mut extra = ProcExtra {
             logger,

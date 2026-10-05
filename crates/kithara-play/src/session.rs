@@ -4,7 +4,6 @@ mod wire {
     use std::num::NonZeroUsize;
 
     use kithara_bufpool::PoolRegion;
-    use kithara_dsp::param::SmootherConfig;
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_sync::{SyncError, SyncReceipt};
@@ -13,7 +12,7 @@ mod wire {
     use crate::{
         api::{SessionDuckingMode, SessionTransportSnapshot, SlotId},
         bridge::{SharedEq, SlotControl},
-        rt::StreamShape,
+        rt::{DeckMixerConfig, StreamShape},
     };
 
     pub type PlayerId = u64;
@@ -80,7 +79,7 @@ mod wire {
             grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
-            gate_smoothing: SmootherConfig,
+            mixer: DeckMixerConfig,
             pools: PoolRegion<S>,
         },
         UnregisterPlayer {
@@ -209,7 +208,6 @@ mod handle {
 
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
-    use kithara_dsp::param::SmootherConfig;
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_platform::{
@@ -225,7 +223,7 @@ mod handle {
     use crate::{
         api::{SessionDuckingMode, SlotId},
         error::PlayError,
-        rt::StreamShape,
+        rt::{DeckMixerConfig, StreamShape},
     };
 
     /// Handle used by resident players to reach their session owner.
@@ -392,13 +390,13 @@ mod handle {
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pools: PoolRegion<S>,
-            gate_smoothing: SmootherConfig,
+            mixer: DeckMixerConfig,
         ) -> Result<RegisteredPlayer, PlayError> {
             match self.exec_ok(Cmd::RegisterPlayer {
                 grid_id,
                 bus,
                 eq_layout,
-                gate_smoothing,
+                mixer,
                 pools,
             })? {
                 Reply::PlayerRegistered(id) => Ok(id),
@@ -563,7 +561,8 @@ mod tests {
 
     use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
     use crate::{
-        DEFAULT_GATE_SMOOTHING, PlayError,
+        PlayError,
+        rt::DeckMixerConfig,
         test_pools::{TestPools, pools},
     };
 
@@ -667,7 +666,7 @@ mod tests {
                 EventBus::default(),
                 Vec::new(),
                 pools(),
-                DEFAULT_GATE_SMOOTHING,
+                DeckMixerConfig::default(),
             )
             .expect("register player")
             .id;

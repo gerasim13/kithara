@@ -6,5 +6,5 @@ mod slots;
 
 pub use core::EngineImpl;
 
-pub use config::{DEFAULT_GATE_SMOOTHING, EngineConfig};
+pub use config::EngineConfig;
 pub use mix::apply_mix;

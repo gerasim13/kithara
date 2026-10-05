@@ -148,9 +148,9 @@ where
             grid_id,
             bus,
             eq_layout,
-            gate_smoothing,
+            mixer,
             pools,
-        } => match register_player(state, grid_id, bus, eq_layout, pools, gate_smoothing) {
+        } => match register_player(state, grid_id, bus, eq_layout, pools, mixer) {
             Ok(player_id) => Reply::PlayerRegistered(player_id),
             Err(error) => Reply::Err(error),
         },
@@ -507,7 +507,7 @@ mod tests {
         },
         time::Duration,
     };
-    use kithara_play::{DEFAULT_GATE_SMOOTHING, Tempo};
+    use kithara_play::{DeckMixerConfig, Tempo};
     use kithara_sync::SyncGroupSnapshot;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -680,7 +680,7 @@ mod tests {
             grid_id,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            gate_smoothing: DEFAULT_GATE_SMOOTHING,
+            mixer: DeckMixerConfig::default(),
             pools: pools(),
         }
     }

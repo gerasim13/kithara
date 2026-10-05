@@ -2,17 +2,11 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
-use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, SmootherConfig};
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_platform::{CancelToken, sync::Mutex};
 use kithara_warp::BeatGridId;
 
-use crate::session::SessionBinding;
-
-pub const DEFAULT_GATE_SMOOTHING: SmootherConfig = SmootherConfig {
-    smooth_seconds: 0.005,
-    settle_ratio: DEFAULT_SETTLE_RATIO,
-};
+use crate::{rt::DeckMixerConfig, session::SessionBinding};
 
 /// Configuration for the audio engine.
 #[derive(Config)]
@@ -50,9 +44,9 @@ pub struct EngineConfig<S> {
         debug(skip)
     )]
     pub(crate) eq_layout: Mutex<Vec<EqBandConfig>>,
-    /// Render-pass slot gate smoothing. Default: 5 ms.
-    #[config(builder(default = DEFAULT_GATE_SMOOTHING))]
-    pub(crate) gate_smoothing: SmootherConfig,
+    /// What the player's deck mixer is built with.
+    #[config(builder(default))]
+    pub(crate) mixer: DeckMixerConfig,
     /// Number of output channels. Default: 2 (stereo). Not a document key:
     /// the only reader is a startup log line, so a document value would
     /// change nothing the engine actually does.
@@ -74,7 +68,7 @@ impl<S> Clone for EngineConfig<S> {
             session: self.session.clone(),
             pools: self.pools.clone(),
             eq_layout: Mutex::new(self.eq_layout.lock().clone()),
-            gate_smoothing: self.gate_smoothing,
+            mixer: self.mixer,
             channels: self.channels,
             max_slots: self.max_slots,
         }
@@ -86,7 +80,7 @@ mod tests {
     use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
-    use super::{BeatGridId, DEFAULT_GATE_SMOOTHING, EngineConfig, NonZeroU32, NonZeroUsize};
+    use super::{BeatGridId, DeckMixerConfig, EngineConfig, NonZeroU32, NonZeroUsize};
     use crate::test_pools::{TestPools, pools};
 
     #[kithara::test]
@@ -101,7 +95,7 @@ mod tests {
         assert_eq!(config.channels, 2);
         assert_eq!(config.max_slots, 4);
         assert_eq!(config.eq_layout.lock().len(), 10);
-        assert_eq!(config.gate_smoothing, DEFAULT_GATE_SMOOTHING);
+        assert_eq!(config.mixer, DeckMixerConfig::default());
     }
 
     #[kithara::test]
@@ -119,7 +113,7 @@ mod tests {
             Some(448)
         );
         assert_eq!(values.render_quantum_frames, None);
-        assert_eq!(values.gate_smoothing, DEFAULT_GATE_SMOOTHING);
+        assert_eq!(values.mixer, DeckMixerConfig::default());
         assert_eq!(values.channels, 2);
         assert_eq!(values.max_slots, 4);
         assert_eq!(values.eq_layout.len(), 10);

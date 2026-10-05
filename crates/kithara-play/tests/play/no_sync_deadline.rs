@@ -9,7 +9,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::{
     Resource, SharedEq,
     bridge::{DeckPart, SlotControl, slot_channels},
-    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };
 use kithara_signal::{AudioSpec, SessionFrame};
 use kithara_test_fixtures::{integration_fixtures::deadline_tracks, signal::peak};
@@ -49,19 +49,14 @@ fn spec() -> AudioSpec {
     )
 }
 
-fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
+fn processor(block_frames: u32) -> (DeckMixer, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
         sample_rate: non_zero(consts::SAMPLE_RATE, "sample rate"),
         max_block_frames: non_zero(block_frames, "block frames"),
     };
     (
-        PlayerNodeProcessor::new(
-            inputs,
-            shape,
-            &pools(),
-            kithara_play::DEFAULT_GATE_SMOOTHING,
-        ),
+        DeckMixer::new(inputs, shape, &pools(), DeckMixerConfig::default()),
         control,
     )
 }
@@ -73,7 +68,7 @@ fn send(control: &mut SlotControl, part: DeckPart) {
 }
 
 fn load_tracks(
-    processor: &mut PlayerNodeProcessor,
+    processor: &mut DeckMixer,
     control: &mut SlotControl,
     count: usize,
     deadline_tracks: [&'static [u8]; 4],
@@ -122,7 +117,7 @@ fn load_tracks(
 
 /// Renders one block on a clock that stands still: every part `send` sends applies on the next
 /// block, whatever frame it starts on.
-fn render_block(processor: &mut PlayerNodeProcessor, out_l: &mut [f32], out_r: &mut [f32]) {
+fn render_block(processor: &mut DeckMixer, out_l: &mut [f32], out_r: &mut [f32]) {
     let frames = out_l.len();
     let inputs: [&[f32]; 0] = [];
     let mut outputs = [out_l, out_r];

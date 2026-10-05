@@ -17,12 +17,10 @@ use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Observer, Producer, Split},
 };
-use smallvec::SmallVec;
 
 use super::PlaybackShared;
 use crate::{
     bridge::{DeckPart, DeckProtocol, PlayerNotification, SharedEq},
-    consts,
     rt::track::PlayerTrack,
 };
 
@@ -93,12 +91,12 @@ pub struct SlotControl {
 }
 
 #[derive(Default)]
-struct SeekBindings(SmallVec<[SeekBinding; consts::SLOT_TRACKS]>);
+struct SeekBindings(Vec<SeekBinding>);
 
 type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
 
 #[derive(Default)]
-struct RenderBindings(SmallVec<[RenderBinding; consts::SLOT_TRACKS]>);
+struct RenderBindings(Vec<RenderBinding>);
 
 type RenderBinding = (TrackId, RenderReader);
 

@@ -13,7 +13,7 @@ impl<S> EngineImpl<S> {
             self.bus.clone(),
             self.config.eq_layout.lock().clone(),
             self.pools().clone(),
-            self.config.gate_smoothing,
+            self.config.mixer,
         )?;
         let id = registered.id;
         *registration = Some(registered);

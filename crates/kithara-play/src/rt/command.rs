@@ -2,11 +2,9 @@ use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_platform::sync::{Arc, atomic::Ordering};
 use ringbuf::traits::Producer;
-use smallvec::SmallVec;
 
 use super::{
-    TrackSlot,
-    processor::{Deck, PlayerNodeProcessor},
+    processor::Deck,
     track::{PlayerResource, PlayerTrack},
 };
 use crate::bridge::{DeckPart, PlayerNotification, TrackState, TrackTransition};
@@ -65,9 +63,7 @@ impl Deck {
     }
 
     fn clear_all_tracks(&mut self) {
-        let loaded: SmallVec<[TrackSlot; PlayerNodeProcessor::MAX_TRACKS]> =
-            self.tracks.iter().map(|(slot, _)| slot).collect();
-        for slot in loaded {
+        for slot in self.tracks.slots() {
             self.unload_slot(slot);
         }
         self.tracks_transitions.clear();

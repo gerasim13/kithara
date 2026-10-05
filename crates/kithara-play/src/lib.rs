@@ -37,7 +37,7 @@ pub use bridge::{
     SessionError, SessionHandle, SessionSampleRate, SharedEq, SlotControl, TrackPlaybackStopReason,
     TrackState, TrackTransition,
 };
-pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
+pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
@@ -53,7 +53,7 @@ pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
     PlaybackResamplerBackend, PreparedGrid, Resource, ResourceConfig, ResourceSrc, SourceType,
 };
-pub use rt::{PlayerNode, StreamShape};
+pub use rt::{DeckMixerConfig, PlayerNode, StreamShape};
 pub use worker::{
     EngineLoad, EngineLoadSnapshot, LoadRefusal, PlayWorker, PlayWorkerConfig,
     PlayWorkerConfigPatch, RegisteredAudio, ServiceClass, TrackConfig,

@@ -13,7 +13,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{
     Resource, SharedEq,
     bridge::{DeckPart, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
-    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };
 use kithara_signal::{AudioSpec, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -40,19 +40,14 @@ fn spec() -> AudioSpec {
     AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
 }
 
-fn processor() -> (PlayerNodeProcessor, SlotControl) {
+fn processor() -> (DeckMixer, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(BLOCK_FRAMES).expect("non-zero block"),
     };
     (
-        PlayerNodeProcessor::new(
-            inputs,
-            shape,
-            &pools(),
-            kithara_play::DEFAULT_GATE_SMOOTHING,
-        ),
+        DeckMixer::new(inputs, shape, &pools(), DeckMixerConfig::default()),
         control,
     )
 }
@@ -86,7 +81,7 @@ fn load(control: &mut SlotControl, resource: Box<PlayerResource>) -> TrackId {
 
 /// Renders `blocks` blocks on a clock that stands still: every part sent applies on the next
 /// block, whatever frame it starts on.
-fn pump(processor: &mut PlayerNodeProcessor, blocks: usize) -> Vec<f32> {
+fn pump(processor: &mut DeckMixer, blocks: usize) -> Vec<f32> {
     let mut out_l = vec![0.0f32; block_len()];
     for _ in 0..blocks {
         let mut out_r = vec![0.0f32; block_len()];
@@ -106,10 +101,7 @@ fn peak(rendered: &[f32]) -> f32 {
     rendered.iter().fold(0.0f32, |acc, s| acc.max(s.abs()))
 }
 
-fn render_loaded_blocks(
-    resource: Box<PlayerResource>,
-    blocks: usize,
-) -> (PlayerNodeProcessor, Vec<f32>) {
+fn render_loaded_blocks(resource: Box<PlayerResource>, blocks: usize) -> (DeckMixer, Vec<f32>) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, resource);
     control.send(DeckPart::Start).ok();
@@ -124,11 +116,11 @@ fn render_loaded_blocks(
     (processor, rendered)
 }
 
-fn render_loaded(resource: Box<PlayerResource>) -> PlayerNodeProcessor {
+fn render_loaded(resource: Box<PlayerResource>) -> DeckMixer {
     render_loaded_blocks(resource, 1).0
 }
 
-fn metrics(processor: &PlayerNodeProcessor) -> RtMetricsSnapshot {
+fn metrics(processor: &DeckMixer) -> RtMetricsSnapshot {
     processor.playback().metrics().snapshot()
 }
 
@@ -321,7 +313,7 @@ fn unloading_one_seek_binding_preserves_other_identity() {
 fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
 
-    for idx in 0..PlayerNodeProcessor::MAX_TRACKS {
+    for idx in 0..DeckMixerConfig::default().slots().get() {
         let src = format!("track-{idx}.mp3");
         let item_id = load(&mut control, healthy_track(constant_half, &src));
         pump(&mut processor, 1);

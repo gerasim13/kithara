@@ -254,7 +254,7 @@ mod tests {
     use kithara_effects::LimiterConfig;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
-    use kithara_play::DEFAULT_GATE_SMOOTHING;
+    use kithara_play::DeckMixerConfig;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara, wait_until,
@@ -324,7 +324,7 @@ mod tests {
             grid_id: player_grid_id,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            gate_smoothing: DEFAULT_GATE_SMOOTHING,
+            mixer: DeckMixerConfig::default(),
             pools: pools(),
         }) {
             Ok(Reply::PlayerRegistered(registered)) => registered.id,

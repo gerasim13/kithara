@@ -40,7 +40,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
             bus,
             grid_id: BeatGridId::allocate().expect("fixture grid id"),
             eq_layout: Vec::new(),
-            gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
+            mixer: kithara_play::DeckMixerConfig::default(),
             pools: pools(),
         })
         .expect("invariant: player registration reaches the session")

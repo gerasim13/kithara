@@ -395,8 +395,8 @@ pub(super) mod slots {
         player.next_slot_id += 1;
         let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, player.pools.clone(), player.gate_smoothing)
-            .with_session_context();
+        let player_node =
+            PlayerNode::new(inputs, player.pools.clone(), player.mixer).with_session_context();
         let player_node_id = add_graph_node(fw_ctx, player_node)?;
         let player_to_master = "connect player->player_master_eq";
         connect_stereo(fw_ctx, player_node_id, master_eq_id, player_to_master)?;
@@ -759,7 +759,7 @@ mod tests {
                 grid_id,
                 bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
-                gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
+                mixer: kithara_play::DeckMixerConfig::default(),
                 pools: pools(),
             },
         ) {

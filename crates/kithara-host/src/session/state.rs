@@ -11,12 +11,11 @@ use firewheel::{
 use kithara_bufpool::PoolRegion;
 use kithara_command::Live;
 use kithara_config::ConfigOwner;
-use kithara_dsp::param::SmootherConfig;
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{SessionSampleRate, StreamShape, session::RegisteredPlayer};
+use kithara_play::{DeckMixerConfig, SessionSampleRate, StreamShape, session::RegisteredPlayer};
 use kithara_sync::{GroupState, SyncError, SyncGroup, SyncGroupSnapshot, SyncStatusSnapshot};
 use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
 use tracing::{debug, warn};
@@ -52,7 +51,7 @@ pub(super) struct Deck<S> {
     pub(super) player_id: PlayerId,
     pub(super) pools: PoolRegion<S>,
     pub(super) shared_eq: SharedEq,
-    pub(super) gate_smoothing: SmootherConfig,
+    pub(super) mixer: DeckMixerConfig,
     pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) slots: Vec<SlotNodes>,
     pub(super) started: bool,
@@ -68,7 +67,7 @@ impl<S> Deck<S> {
         eq_layout: Vec<EqBandConfig>,
         pools: PoolRegion<S>,
         master_volume: f32,
-        gate_smoothing: SmootherConfig,
+        mixer: DeckMixerConfig,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
@@ -77,7 +76,7 @@ impl<S> Deck<S> {
         Self {
             bus,
             eq_layout,
-            gate_smoothing,
+            mixer,
             pools,
             player_id,
             grid_id,
@@ -348,7 +347,7 @@ pub(super) fn register_player<T, S>(
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pools: PoolRegion<S>,
-    gate_smoothing: SmootherConfig,
+    mixer: DeckMixerConfig,
 ) -> Result<RegisteredPlayer, SessionError> {
     let player_id = state.next_player_id;
     let next_player_id = player_id
@@ -375,7 +374,7 @@ pub(super) fn register_player<T, S>(
         eq_layout,
         pools,
         master_volume,
-        gate_smoothing,
+        mixer,
     );
     let registration = RegisteredPlayer {
         id: player_id,

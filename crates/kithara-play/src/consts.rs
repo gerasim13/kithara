@@ -1,12 +1,9 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, SmootherConfig};
 #[cfg(test)]
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
-
-use crate::rt::PlayerNodeProcessor;
-
-pub(crate) const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 #[cfg(test)]
 pub(crate) const BACKGROUND: TrackId = TrackId(9);
@@ -60,6 +57,18 @@ pub(crate) const MS_PER_SEC: f64 = 1000.0;
 pub(crate) const DEFAULT_EQ_BAND_COUNT: usize = 10;
 pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 pub(crate) const DEFAULT_MAX_SLOTS: usize = 4;
+
+/// Tracks a deck holds at once.
+pub(crate) const DEFAULT_DECK_SLOTS: NonZeroUsize = match NonZeroUsize::new(4) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
+/// The ramp of a deck's pause gate: 5 ms.
+pub(crate) const DEFAULT_DECLICK: SmootherConfig = SmootherConfig {
+    smooth_seconds: 0.005,
+    settle_ratio: DEFAULT_SETTLE_RATIO,
+};
 
 #[cfg(test)]
 pub(crate) const DROPPED_AFTER_CANCEL: u8 = 2;

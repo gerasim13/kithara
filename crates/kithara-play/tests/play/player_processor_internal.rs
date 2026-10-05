@@ -7,7 +7,10 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::{num::NonZeroU32, sync::atomic::Ordering as AtomicOrdering};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    sync::atomic::Ordering as AtomicOrdering,
+};
 
 use firewheel::node::ProcBuffers;
 use kithara_audio::mock::{MockReader, TestPcmReader};
@@ -19,7 +22,7 @@ use kithara_platform::{
 use kithara_play::{
     PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
     bridge::{DeckPart, SlotControl, slot_channels},
-    rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };
 use kithara_signal::SessionFrame;
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -44,20 +47,20 @@ fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
     }
 }
 
-fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
+fn make_processor() -> (DeckMixer, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
-    let processor = PlayerNodeProcessor::new(
+    let processor = DeckMixer::new(
         inputs,
         stream_shape(SAMPLE_RATE),
         &pools(),
-        kithara_play::DEFAULT_GATE_SMOOTHING,
+        DeckMixerConfig::default(),
     );
     (processor, control)
 }
 
 /// Renders one block of `frames` on a clock that stands still, so every part sent so far
 /// applies at its start. Returns whether a track was read and both channels.
-fn render(processor: &mut PlayerNodeProcessor, frames: usize) -> (bool, Vec<f32>, Vec<f32>) {
+fn render(processor: &mut DeckMixer, frames: usize) -> (bool, Vec<f32>, Vec<f32>) {
     let mut out_l = vec![99.0f32; frames];
     let mut out_r = vec![99.0f32; frames];
     let inputs: [&[f32]; 0] = [];
@@ -71,7 +74,7 @@ fn render(processor: &mut PlayerNodeProcessor, frames: usize) -> (bool, Vec<f32>
 }
 
 /// Applies every part sent so far through one block of the deck.
-fn block(processor: &mut PlayerNodeProcessor) {
+fn block(processor: &mut DeckMixer) {
     render(processor, MAX_BLOCK_FRAMES as usize);
 }
 
@@ -124,11 +127,11 @@ async fn load_track_propagates_host_sample_rate() {
 
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
-    let mut processor = PlayerNodeProcessor::new(
+    let mut processor = DeckMixer::new(
         inputs,
         stream_shape(sample_rate),
         &pools(),
-        kithara_play::DEFAULT_GATE_SMOOTHING,
+        DeckMixerConfig::default(),
     );
 
     control
@@ -388,6 +391,40 @@ async fn processor_track_command_scenarios(
         assert!(unloaded);
         assert!(loaded >= 2);
     }
+}
+
+#[kithara::test(tokio)]
+#[case::one(1)]
+#[case::two(2)]
+async fn a_deck_holds_as_many_tracks_as_its_config_gives_it_slots(
+    constant_half: &'static [u8],
+    #[case] slots: usize,
+) {
+    let config = DeckMixerConfig::builder()
+        .slots(NonZeroUsize::new(slots).expect("a test deck has a slot"))
+        .build();
+    let (inputs, mut control) = slot_channels(SharedEq::new(0));
+    let mut processor = DeckMixer::new(inputs, stream_shape(SAMPLE_RATE), &pools(), config);
+    let ids: Vec<TrackId> = (0..=slots).map(|_| TrackId::allocate()).collect();
+
+    for (idx, &item_id) in ids.iter().enumerate() {
+        let resource = create_mock_player_resource(constant_half, &format!("track-{idx}.mp3"));
+        control
+            .send(DeckPart::Attach { resource, item_id })
+            .expect("the deck channel has room for one attach a block");
+        block(&mut processor);
+    }
+
+    assert_eq!(
+        processor.track_count(),
+        slots,
+        "a deck holds one track per configured slot, never more"
+    );
+    assert!(
+        ids.last()
+            .is_some_and(|&newest| processor.track(newest).is_some()),
+        "the newest attach takes the slot an older track gave up"
+    );
 }
 
 #[kithara::test(tokio)]
