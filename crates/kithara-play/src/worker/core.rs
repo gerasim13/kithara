@@ -201,8 +201,13 @@ where
             warp,
         } = config;
         let wake = Wake::new(self.0.dispatcher.wake_handle());
-        let prepared =
-            Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
+        // Keep cold source preparation out of the callers' inline future state.
+        let prepared = Box::pin(Audio::<Stream<T>>::prepare(
+            audio,
+            Arc::new(wake),
+            self.pools().clone(),
+        ))
+        .await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
         let (lane_sender, inbox) = channel::<LaneProtocol>(self.0.lane);
         let prepared = prepared.map(|audio, source| {
