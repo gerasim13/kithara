@@ -305,9 +305,9 @@ where
                 TickResult::Progress
             }
 
-            TrackStep::Failed => {
+            TrackStep::Failed(failure) => {
                 let epoch = self.source.decode_epoch();
-                let marker = Fetch::failure(epoch);
+                let marker = Fetch::failure(epoch, failure);
                 self.port.push_direct(marker);
                 self.complete_preload();
                 if let Some(probe) = self.readiness.as_mut() {
@@ -328,7 +328,8 @@ where
 #[cfg(test)]
 mod scheduler_tests {
     use kithara_audio::{
-        AudioRead, AudioSource, ChunkOutcome, Fetch, PreloadGate, TrackStep, WaitingReason,
+        AudioRead, AudioSource, ChunkOutcome, DecodeErrorKind, Fetch, PreloadGate,
+        TrackFailureKind, TrackStep, WaitingReason,
     };
     use kithara_platform::{
         CancelToken,
@@ -428,7 +429,9 @@ mod scheduler_tests {
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Failed
+            TrackStep::Failed(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            })
         }
     }
 
@@ -1404,7 +1407,7 @@ mod tests {
         let failed_source = Unimock::new((
             AudioSourceMock::step_track
                 .next_call(matching!())
-                .returns(TrackStep::Failed),
+                .returns(TrackStep::Failed(TrackFailureKind::SourceCancelled)),
             AudioSourceMock::decode_epoch.stub(|each| {
                 each.call(matching!()).returns(0u64);
             }),

@@ -5,7 +5,7 @@ use kithara_events::EventBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 
-use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
+use super::{AudioReadError, ChunkOutcome, ReadOutcome, SeekOutcome};
 use crate::{ConsumerWakeMode, producer::PreloadGate};
 
 mod kithara {
@@ -33,7 +33,7 @@ pub trait AudioRead {
     /// Read the next decoded chunk with full metadata.
     ///
     /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
-    /// Decoder / channel failures surface as `Err(DecodeError)`.
+    /// Decoder / channel failures surface as `Err(AudioReadError)`.
     /// Discards any partially-consumed chunk from previous
     /// [`AudioRead::read`] calls.
     ///
@@ -42,9 +42,9 @@ pub trait AudioRead {
     ///
     /// # Errors
     ///
-    /// Returns `Err(DecodeError)` for terminal producer failures, same
+    /// Returns `Err(AudioReadError)` for terminal producer failures, same
     /// semantics as [`Self::read`].
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
         })
@@ -59,14 +59,14 @@ pub trait AudioRead {
     /// without blocking. The returned [`ReadOutcome`] distinguishes a
     /// productive read from natural EOF; `count` is interleaved
     /// samples, so `count / channels` frames. Decoder / channel
-    /// failures surface as `Err(DecodeError)`.
+    /// failures surface as `Err(AudioReadError)`.
     ///
     /// # Errors
     ///
-    /// Returns `Err(DecodeError)` for terminal producer failures:
+    /// Returns `Err(AudioReadError)` for terminal producer failures:
     /// closed audio channel, decoder fault, or backend error. The error
     /// is one-way — once returned, subsequent reads continue to fail.
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError>;
 
     /// Read deinterleaved (planar) audio samples.
     ///
@@ -78,11 +78,11 @@ pub trait AudioRead {
     /// # Errors
     ///
     /// Same as [`Self::read`] — terminal producer failures are surfaced
-    /// as `Err(DecodeError)`.
+    /// as `Err(AudioReadError)`.
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError>;
+    ) -> Result<ReadOutcome, AudioReadError>;
 
     /// Get the current decoded-audio specification.
     fn spec(&self) -> AudioSpec;
@@ -209,7 +209,7 @@ pub trait AudioControl {
 ///
 /// - `Ok(ReadOutcome::Frames { .. })` — reader is alive and produced frames.
 /// - `Ok(ReadOutcome::Eof { .. })` — natural end of stream.
-/// - `Err(DecodeError)` — decoder or channel failure.
+/// - `Err(AudioReadError)` — decoder or channel failure.
 pub trait AudioReader: AudioRead + AudioSession + AudioControl + Send {}
 
 impl<T> AudioReader for T where T: AudioRead + AudioSession + AudioControl + Send {}

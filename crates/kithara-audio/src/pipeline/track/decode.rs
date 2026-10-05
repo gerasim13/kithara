@@ -3,12 +3,12 @@ use kithara_stream::{SourcePhase, StreamType};
 use kithara_test_utils::kithara;
 
 use super::{
-    CurrentFsm, Failed, TrackFailure, TrackStep, WaitContext, WaitState, WaitingForSource,
+    CurrentFsm, TrackFailure, TrackStep, WaitContext, WaitState, WaitingForSource,
     WaitingReason,
     phase::{Track, TrackPhase, sealed},
     rebuild::start_recreating_decoder,
 };
-use crate::pipeline::{
+use crate::{TrackFailureKind, pipeline::{
     decode::{
         core::{DecodeAction as CoreDecodeAction, DecodeCtx},
         format::{FormatDecision, detect},
@@ -16,7 +16,7 @@ use crate::pipeline::{
     },
     fetch::Fetch,
     source::StreamAudioSource,
-};
+}};
 
 /// Normal decoding — produce PCM chunks.
 #[derive(kithara_derive::Phase)]
@@ -60,8 +60,7 @@ impl Track<Decoding> {
                 return TrackStep::Blocked(reason);
             }
             if phase == SourcePhase::Cancelled {
-                src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
-                return TrackStep::Failed;
+                return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
             }
             super::waiting_branch!("decoding_not_ready_unparked");
             return TrackStep::Blocked(WaitingReason::Waiting);
@@ -85,7 +84,7 @@ impl Track<Decoding> {
                 TrackStep::Blocked(reason)
             }
             DecodeStep::Eof => TrackStep::Eof,
-            DecodeStep::Failed => TrackStep::Failed,
+            DecodeStep::Failed(failure) => TrackStep::Failed(failure),
         }
     }
 }
@@ -96,7 +95,7 @@ pub(super) enum DecodeStep {
     TransitionPending,
     NotReady(WaitingReason),
     Eof,
-    Failed,
+    Failed(TrackFailureKind),
 }
 
 #[kithara::probe]
@@ -144,8 +143,7 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
             DecodeStep::Eof
         }
         CoreDecodeAction::Failed(failure) => {
-            src.update_state(Track::<Failed>::new(failure).erase());
-            DecodeStep::Failed
+            DecodeStep::Failed(src.fail(failure))
         }
     }
 }

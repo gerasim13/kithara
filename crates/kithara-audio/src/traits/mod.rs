@@ -1,9 +1,11 @@
+mod error;
 mod observer;
 mod outcome;
 mod reader;
 mod source;
 
 pub use kithara_decode::{DecodeError, DecodeResult};
+pub use error::{AudioReadError, FailureSource};
 #[cfg(any(test, feature = "mock"))]
 pub use observer::AudioObserverMock;
 pub use observer::{AudioObserveError, AudioObserver, AudioObserverRelay, AudioObserverSlot};

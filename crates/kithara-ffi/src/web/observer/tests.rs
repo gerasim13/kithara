@@ -15,7 +15,10 @@ mod types {
     pub(crate) use kithara_ffi::types::*;
 }
 
-use types::{FfiItemEvent, FfiKeySource, FfiPlayerEvent, FfiStretchBackendKind, FfiTrackStatus};
+use types::{
+    FfiDecodeErrorKind, FfiItemEvent, FfiKeySource, FfiPlayerEvent, FfiStretchBackendKind,
+    FfiTrackFailureKind, FfiTrackStatus,
+};
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
@@ -113,4 +116,79 @@ fn drm_key_schema_omits_absent_optional_fields() {
             latency_ms: None
         })
     ));
+}
+
+#[wasm_bindgen_test]
+fn track_failure_preserves_kind_offset_and_epoch() {
+    let cases = [
+        (
+            FfiTrackFailureKind::Decode {
+                kind: FfiDecodeErrorKind::Io,
+            },
+            "Decode",
+            Some("Io"),
+            None,
+        ),
+        (
+            FfiTrackFailureKind::Decode {
+                kind: FfiDecodeErrorKind::InvalidData,
+            },
+            "Decode",
+            Some("InvalidData"),
+            None,
+        ),
+        (
+            FfiTrackFailureKind::RecreateFailed {
+                offset: MAX_SAFE_INTEGER,
+            },
+            "RecreateFailed",
+            None,
+            Some(MAX_SAFE_INTEGER_F64),
+        ),
+        (
+            FfiTrackFailureKind::SourceCancelled,
+            "SourceCancelled",
+            None,
+            None,
+        ),
+        (
+            FfiTrackFailureKind::ChannelClosed,
+            "ChannelClosed",
+            None,
+            None,
+        ),
+        (FfiTrackFailureKind::Render, "Render", None, None),
+    ];
+
+    for (reason, reason_name, decode_kind, offset) in cases {
+        let encoded = encode_item::encode_item_event(&FfiItemEvent::TrackFailed {
+            reason: reason.clone(),
+            epoch: MAX_SAFE_INTEGER,
+        });
+
+        assert_eq!(
+            marshal::get_str(&encoded, "kind").as_deref(),
+            Some("TrackFailed")
+        );
+        assert_eq!(
+            marshal::get_str(&encoded, "reason").as_deref(),
+            Some(reason_name)
+        );
+        assert_eq!(
+            marshal::get_str(&encoded, "decode_kind").as_deref(),
+            decode_kind
+        );
+        assert_eq!(marshal::get_f64(&encoded, "offset"), offset);
+        assert_eq!(
+            marshal::get_f64(&encoded, "epoch"),
+            Some(MAX_SAFE_INTEGER_F64)
+        );
+        assert!(matches!(
+            decode_item::decode_item_event(&encoded),
+            Some(FfiItemEvent::TrackFailed {
+                reason: decoded_reason,
+                epoch: MAX_SAFE_INTEGER,
+            }) if decoded_reason == reason
+        ));
+    }
 }

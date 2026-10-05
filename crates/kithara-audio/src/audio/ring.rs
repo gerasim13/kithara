@@ -95,6 +95,9 @@ impl RingConsumer {
         self.recycle_current();
         self.rendered_source_head = None;
         cursor.clear();
+        if matches!(self.phase, ConsumerPhase::Failed { .. }) {
+            return false;
+        }
         self.phase = ConsumerPhase::SeekPending { epoch };
 
         let mut popped = false;
@@ -165,9 +168,9 @@ impl RingConsumer {
                 self.phase = ConsumerPhase::AtEof;
                 ControlFlow::Break(None)
             }
-            Fetch::Failure { .. } => {
+            Fetch::Failure { failure, .. } => {
                 self.phase = ConsumerPhase::Failed {
-                    source: FailureSource::Producer,
+                    source: FailureSource::Producer { failure },
                 };
                 ControlFlow::Break(None)
             }
@@ -346,10 +349,10 @@ impl RingConsumer {
                 self.current_source_span = None;
                 self.phase = ConsumerPhase::AtEof;
             }
-            Fetch::Failure { .. } => {
+            Fetch::Failure { failure, .. } => {
                 self.current_source_span = None;
                 self.phase = ConsumerPhase::Failed {
-                    source: FailureSource::ProducerAfterSeek,
+                    source: FailureSource::ProducerAfterSeek { failure },
                 };
             }
         }
@@ -861,14 +864,16 @@ mod tests {
         let mut failed = RingFixture::new(true);
         failed
             .data_tx
-            .try_push(Fetch::failure(0))
+            .try_push(Fetch::failure(0, crate::TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
         let _chunk = failed.recv();
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
         assert_eq!(
             failed.ring.phase,
             ConsumerPhase::Failed {
-                source: FailureSource::Producer
+                source: FailureSource::Producer {
+                    failure: crate::TrackFailureKind::SourceCancelled,
+                }
             }
         );
     }
@@ -878,7 +883,7 @@ mod tests {
         let mut fixture = RingFixture::new(true);
         fixture
             .data_tx
-            .try_push(Fetch::failure(0))
+            .try_push(Fetch::failure(0, crate::TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
 
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
@@ -886,7 +891,9 @@ mod tests {
         assert_eq!(
             fixture.ring.phase,
             ConsumerPhase::Failed {
-                source: FailureSource::ProducerAfterSeek
+                source: FailureSource::ProducerAfterSeek {
+                    failure: crate::TrackFailureKind::SourceCancelled,
+                }
             }
         );
     }
@@ -910,7 +917,7 @@ mod tests {
         fixture.ring.validator.epoch = 3;
         fixture
             .data_tx
-            .try_push(Fetch::failure(0))
+            .try_push(Fetch::failure(0, crate::TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
 
         let _chunk = fixture.recv();
@@ -918,7 +925,9 @@ mod tests {
         assert_eq!(
             fixture.ring.phase,
             ConsumerPhase::Failed {
-                source: FailureSource::Producer
+                source: FailureSource::Producer {
+                    failure: crate::TrackFailureKind::SourceCancelled,
+                }
             }
         );
     }

@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
-    SeekOutcome,
+    AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome,
+    ResamplerBackend, SeekOutcome,
 };
 use kithara_bufpool::HasPool;
 use kithara_command::Sender;
@@ -418,17 +418,17 @@ impl Resource {
             #[must_use]
             pub fn metadata(&self) -> &TrackMetadata;
             /// Read the next decoded chunk with full metadata.
-            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
+            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError>;
             /// Get current playback position.
             #[must_use]
             pub fn position(&self) -> Duration;
             /// Read interleaved samples.
-            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError>;
             /// Read deinterleaved (planar) samples.
             pub fn read_planar<'a>(
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
-            ) -> Result<ReadOutcome, DecodeError>;
+            ) -> Result<ReadOutcome, AudioReadError>;
             /// Seek to position. Begins and applies in one call, so it takes locks — off the audio
             /// thread only. Audio-thread callers begin through [`seek_handle`](Self::seek_handle)
             /// instead.
@@ -599,7 +599,7 @@ mod tests {
         fn position(&self) -> Duration {
             self.position_duration()
         }
-        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
             let Some(frames) = self.take_frames(buf.len() / 2) else {
                 return Ok(self.eof());
             };
@@ -615,7 +615,7 @@ mod tests {
         fn read_planar<'a>(
             &mut self,
             output: &'a mut [&'a mut [f32]],
-        ) -> Result<ReadOutcome, DecodeError> {
+        ) -> Result<ReadOutcome, AudioReadError> {
             let capacity = output.first().map_or(0, |channel| channel.len());
             let Some(frames) = self.take_frames(capacity) else {
                 return Ok(self.eof());

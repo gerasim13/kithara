@@ -1,6 +1,8 @@
 use std::ops::ControlFlow;
 
-use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep, WaitingReason};
+use kithara_audio::{
+    AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackFailureKind, TrackStep, WaitingReason,
+};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Inbox;
 use kithara_effects::{
@@ -490,23 +492,23 @@ where
 
     fn render_staged(&mut self, frames: usize) -> TrackStep<AudioChunk> {
         if self.quantum_failed {
-            return TrackStep::Failed;
+            return TrackStep::Failed(TrackFailureKind::Render);
         }
         let channels = usize::from(self.spec.channels.max(1));
         let Some(samples) = frames.checked_mul(channels) else {
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return TrackStep::Failed(TrackFailureKind::Render);
         };
         let Some(meta) = self
             .staged_meta
             .and_then(|meta| Self::span_meta(meta, 0, frames))
         else {
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return TrackStep::Failed(TrackFailureKind::Render);
         };
         let Some(epoch) = self.staged_epoch else {
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return TrackStep::Failed(TrackFailureKind::Render);
         };
         let Some(input) = self.render_input.take() else {
             return TrackStep::StateChanged;
@@ -514,7 +516,7 @@ where
         if input.len() != samples {
             self.render_input = Some(input);
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return TrackStep::Failed(TrackFailureKind::Render);
         }
         self.staged_meta = None;
         self.staged_epoch = None;
@@ -526,7 +528,7 @@ where
             ControlFlow::Break(input) => {
                 self.render_input = Some(input.samples);
                 self.quantum_failed = true;
-                TrackStep::Failed
+                TrackStep::Failed(TrackFailureKind::Render)
             }
         }
     }
@@ -565,7 +567,7 @@ where
                 TrackStep::StateChanged
             }
             TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-            TrackStep::Failed => TrackStep::Failed,
+            TrackStep::Failed(failure) => TrackStep::Failed(failure),
         }
     }
 
@@ -629,7 +631,7 @@ where
             return TrackStep::StateChanged;
         }
         if self.quantum_failed {
-            return TrackStep::Failed;
+            return TrackStep::Failed(TrackFailureKind::Render);
         }
 
         if matches!(self.drain_state, DrainState::Exhausted(_)) {
@@ -657,7 +659,7 @@ where
                 .unwrap_or(TrackStep::StateChanged);
         }
         if !self.warp.accepts_input() {
-            return TrackStep::Failed;
+            return TrackStep::Failed(TrackFailureKind::Render);
         }
 
         match self.source.step_track() {
@@ -688,11 +690,11 @@ where
                 } else {
                     let Some(meta) = self.staged_meta else {
                         self.quantum_failed = true;
-                        return TrackStep::Failed;
+                        return TrackStep::Failed(TrackFailureKind::Render);
                     };
                     let Some(frames) = self.warp.prepare_terminal_quantum(meta, frames) else {
                         self.quantum_failed = true;
-                        return TrackStep::Failed;
+                        return TrackStep::Failed(TrackFailureKind::Render);
                     };
                     self.prepared_frames = Some(frames.get());
                     self.render_staged(frames.get())
@@ -703,7 +705,7 @@ where
                 TrackStep::StateChanged
             }
             TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-            TrackStep::Failed => TrackStep::Failed,
+            TrackStep::Failed(failure) => TrackStep::Failed(failure),
         }
     }
 
@@ -831,6 +833,47 @@ mod tests {
             );
             TrackStep::Produced(Fetch::data(chunk, self.seek.epoch()))
         }
+    }
+
+    struct FailedSource {
+        seek: Arc<SeekState>,
+        failure: TrackFailureKind,
+    }
+
+    impl AudioSource for FailedSource {
+        type Chunk = AudioChunk;
+
+        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        }
+
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
+            TrackStep::Failed(self.failure)
+        }
+    }
+
+    #[kithara::test(native)]
+    #[cfg(feature = "stretch-signalsmith")]
+    #[case::direct(false)]
+    #[case::staged(true)]
+    fn upstream_terminal_failure_keeps_its_classification(#[case] staged: bool) {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let failure = TrackFailureKind::RecreateFailed { offset: 91 };
+        let raw = FailedSource {
+            seek: Arc::new(SeekState::new()),
+            failure,
+        };
+        let mut source = source_stage(&pools, raw, Vec::new(), spec);
+        flush_deferred(&mut source);
+        assert!(source.warp.requires_staging());
+        let step = if staged {
+            source.step_track()
+        } else {
+            source.step_direct()
+        };
+        assert!(matches!(step, TrackStep::Failed(actual) if actual == failure));
+        assert!(!source.quantum_failed);
     }
 
     #[derive(Default)]
@@ -1516,7 +1559,7 @@ mod tests {
         }
         let (mut source, decoded_pointer, staged_pointer) = prepare(&quarter);
         let result = reject(&mut source).await;
-        assert!(matches!(result, TrackStep::Failed));
+        assert!(matches!(result, TrackStep::Failed(TrackFailureKind::Render)));
         assert!(source.quantum_failed);
         let decoded = source
             .retired_input
@@ -1676,7 +1719,7 @@ mod tests {
                 .consumed_frames;
             let step = source.step_track();
             assert!(
-                !matches!(step, TrackStep::Failed | TrackStep::Eof),
+                !matches!(step, TrackStep::Failed(_) | TrackStep::Eof),
                 "backend service must neither fail nor finish the source"
             );
             let pending = source
@@ -1753,7 +1796,10 @@ mod tests {
 
         for _ in 0..3 {
             flush_deferred(&mut source);
-            assert!(matches!(source.step_track(), TrackStep::Failed));
+            assert!(matches!(
+                source.step_track(),
+                TrackStep::Failed(TrackFailureKind::Render)
+            ));
             assert_eq!(head.load(Ordering::Acquire), 0);
         }
     }

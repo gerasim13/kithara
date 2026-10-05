@@ -12,11 +12,11 @@ use super::{
     start_recreating_decoder, start_route_change_recreate_if_needed,
 };
 use crate::{
-    AudioEvent,
+    AudioEvent, TrackFailureKind,
     pipeline::{
         fetch::Fetch,
         seek::{SeekContext, SeekRequest, emit::preempt_target, engine::SeekTransition},
-        source::StreamAudioSource,
+        source::{StreamAudioSource, map_track_failure_kind},
     },
 };
 
@@ -39,7 +39,7 @@ pub enum TrackStep<C> {
     Blocked(WaitingReason),
     StateChanged,
     Eof,
-    Failed,
+    Failed(TrackFailureKind),
 }
 
 /// Terminal failure.
@@ -163,21 +163,11 @@ pub(super) fn apply_seek_transition<T: StreamType>(
                 .commit_decode_epoch(request.seek.epoch, "seek_failed");
             src.readiness
                 .finalize_seek_pending(src.seek.as_ref(), request.seek.epoch);
-            src.update_state(Track::<Failed>::new(TrackFailure::Decode(error)).erase());
+            src.fail(TrackFailure::Decode(error));
         }
         SeekTransition::Wait { context, reason } => {
             src.update_state(Track::<WaitingForSource>::new(WaitState { context, reason }).erase());
         }
-    }
-}
-
-fn emit_failure_log(failure: &TrackFailure) {
-    match failure {
-        TrackFailure::Decode(err) => warn!(?err, "track failed: decode error"),
-        TrackFailure::RecreateFailed { offset } => {
-            warn!(offset = *offset, "track failed: decoder recreation failed");
-        }
-        TrackFailure::SourceCancelled => warn!("track failed: source cancelled"),
     }
 }
 
@@ -223,9 +213,9 @@ pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackSt
             TrackStep::Eof
         }
         CurrentFsm::Failed(handle) => {
-            emit_failure_log(handle.data());
+            let failure = map_track_failure_kind(handle.data());
             src.state = CurrentFsm::Failed(handle);
-            TrackStep::Failed
+            TrackStep::Failed(failure)
         }
     }
 }
@@ -340,7 +330,9 @@ mod tests {
         assert!(ConsumerPhase::AtEof.is_terminal());
         assert!(
             ConsumerPhase::Failed {
-                source: FailureSource::Producer
+                source: FailureSource::Producer {
+                    failure: TrackFailureKind::SourceCancelled,
+                }
             }
             .is_terminal()
         );

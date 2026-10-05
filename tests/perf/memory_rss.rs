@@ -6,7 +6,7 @@
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead, DecodeError, ReadOutcome},
+    audio::{AudioConfig, AudioRead, AudioReadError, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{
         time::{Duration, Instant},
@@ -72,7 +72,7 @@ fn physical_memory() -> Option<usize> {
 /// truncate it, and a truncated drain cannot say whether RSS settled.
 enum DrainEnd {
     Eof,
-    Failed(DecodeError),
+    Failed(AudioReadError),
     Deadline,
 }
 

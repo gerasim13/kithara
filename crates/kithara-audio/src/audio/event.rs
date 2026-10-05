@@ -13,9 +13,9 @@ use num_traits::cast::ToPrimitive;
 
 use super::{AudioLaneEvent, ReadOutcome, ThreadWake, WakeSignal};
 use crate::{
-    AudioEvent, ConsumerWakeMode, DecodeErrorClass, DecodeErrorKind,
+    AudioEvent, AudioReadError, ConsumerWakeMode, DecodeErrorClass, DecodeErrorKind, FailureSource,
     DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, FrameDomain,
-    GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation, consts,
+    GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation, TrackFailureKind, consts,
 };
 
 /// Reader-side event sink.
@@ -278,6 +278,18 @@ pub const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
         DecodeError::BackendStatus { .. } => DecodeErrorKind::BackendStatus,
         DecodeError::Interrupted => DecodeErrorKind::Interrupted,
         _ => DecodeErrorKind::Backend,
+    }
+}
+
+impl From<&AudioReadError> for TrackFailureKind {
+    fn from(error: &AudioReadError) -> Self {
+        match error {
+            AudioReadError::Decode(error) => Self::Decode { kind: map_decode_error_kind(error) },
+            AudioReadError::Stream { source, .. } => match source {
+                FailureSource::Producer { failure } | FailureSource::ProducerAfterSeek { failure } => *failure,
+                FailureSource::ChannelClosed => Self::ChannelClosed,
+            },
+        }
     }
 }
 

@@ -12,7 +12,7 @@ use super::{
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer, Wait},
 };
-use crate::SourceSpan;
+use crate::{AudioReadError, SourceSpan};
 
 #[derive(Clone, Copy)]
 pub(super) struct CursorRead {
@@ -122,7 +122,7 @@ impl ChunkCursor {
         playhead: &dyn PlayheadWrite,
         recv: RecvCtx<'_>,
         buf: &mut [f32],
-    ) -> Result<CursorRead, DecodeError> {
+    ) -> Result<CursorRead, AudioReadError> {
         self.read_into(ring, events, playhead, recv, ReadBuffer::Interleaved(buf))
     }
 
@@ -134,7 +134,7 @@ impl ChunkCursor {
         playhead: &dyn PlayheadWrite,
         recv: RecvCtx<'_>,
         mut output: ReadBuffer<'_, '_>,
-    ) -> Result<CursorRead, DecodeError> {
+    ) -> Result<CursorRead, AudioReadError> {
         let capacity = output.capacity()?;
         if capacity == 0 {
             return Ok(pending(playhead, PendingReason::Buffering));
@@ -144,7 +144,7 @@ impl ChunkCursor {
                 return Ok(eof(playhead));
             }
             ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::audio_stream("cursor read", source));
+                return Err(AudioReadError::Stream { what: "cursor read", source });
             }
             _ => {}
         }
@@ -230,7 +230,7 @@ impl ChunkCursor {
         Ok(match ring.phase {
             ConsumerPhase::AtEof => eof(playhead),
             ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::audio_stream("cursor read", source));
+                return Err(AudioReadError::Stream { what: "cursor read", source });
             }
             ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
             _ => pending(playhead, PendingReason::Buffering),
@@ -244,7 +244,7 @@ impl ChunkCursor {
         playhead: &dyn PlayheadWrite,
         recv: RecvCtx<'_>,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<CursorRead, DecodeError> {
+    ) -> Result<CursorRead, AudioReadError> {
         self.read_into(ring, events, playhead, recv, ReadBuffer::Planar(output))
     }
 }

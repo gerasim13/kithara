@@ -46,7 +46,8 @@ pub use producer::PreloadGate;
 pub use producer::{AudioLaneEvent, PreparedAudioLane, ProducerPort};
 pub use traits::{
     AudioControl, AudioObserveError, AudioObserver, AudioObserverRelay, AudioObserverSlot,
-    AudioRead, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,
+    AudioRead, AudioReadError, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,
+    FailureSource,
     PendingReason, ReadOutcome, SeekBegin, SeekOutcome, SourceDiscontinuity,
 };
 mod consts;

@@ -126,7 +126,7 @@ async fn terminal_failure_reentry_defers_one_full_diagnostic(
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     fixture.source.update_state(Track::<Failed>::new(failure).erase());
     for _ in 0..2 {
-        assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
+        assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
         assert!(
             failure_log_output().is_empty(),
             "Failed reentry must not format a terminal diagnostic on the produce core"
@@ -137,7 +137,7 @@ async fn terminal_failure_reentry_defers_one_full_diagnostic(
     let first = failure_log_output();
     assert_eq!(first.len(), 1, "the shell must drain the failure once: {first:?}");
     assert!(first[0].contains(detail), "the full cause must survive: {first:?}");
-    assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
     fixture.source.finish_deferred();
     drop(fixture.source);
     assert_eq!(
@@ -167,7 +167,7 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
     match transition {
         TerminalTransition::Cancel => {
             *fixture.phase.lock() = SourcePhase::Cancelled;
-            assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
+            assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
             let CurrentFsm::Failed(handle) = &fixture.source.state else {
                 panic!("the cancelled source must install Failed");
             };
@@ -184,7 +184,7 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
                 },
                 RecreateOutcome::SoftFailed,
             );
-            assert!(matches!(step, TrackStep::Failed));
+            assert!(matches!(step, TrackStep::Failed(_)));
             let CurrentFsm::Failed(handle) = &fixture.source.state else {
                 panic!("the failed recreate must install Failed");
             };
@@ -212,7 +212,7 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
         }
     }
     assert!(failure_log_output().is_empty(), "the transition must not emit the terminal log");
-    assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
     assert!(failure_log_output().is_empty(), "the later Failed step must not emit the terminal log");
     fixture.source.finish_deferred();
     let first = failure_log_output();
@@ -1299,7 +1299,7 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+            TrackStep::Failed(_) => panic!("finite gapless fixture must reach EOF cleanly"),
         }
         fixture.source.flush_deferred();
     }
@@ -1318,7 +1318,7 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+            TrackStep::Failed(_) => panic!("finite gapless fixture must reach EOF cleanly"),
         }
         fixture.source.flush_deferred();
     }
@@ -1532,5 +1532,5 @@ async fn failed_seek_commits_its_epoch_for_the_terminal_marker(route_pcm: RouteP
     // is stamped with `decode_epoch`, so the epoch must be committed here or
     // the marker is discarded as stale and a blocking reader hangs forever.
     assert_eq!(fixture.source.decode_epoch(), request.seek.epoch);
-    assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
 }

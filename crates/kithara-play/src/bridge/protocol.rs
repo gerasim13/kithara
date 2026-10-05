@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kithara_audio::DecodeErrorKind;
+use kithara_audio::TrackFailureKind;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 
@@ -118,17 +118,12 @@ pub enum TrackTransition {
 /// Which fault ended a track before its natural end.
 ///
 /// The classification is `Copy` because it is raised on the audio thread,
-/// which cannot allocate: the decoder's own error is reduced to its kind at
-/// the read that returned it and travels as a code from there. Carrying it
-/// is what lets a consumer tell a decode fault from an output rate the
-/// render context disagrees with, or from a range that context could not
-/// supply -- three different defects that otherwise reach the queue as one
-/// indistinguishable "the engine failed". It is named for the render path
-/// because the decode pipeline already owns its own failure classification.
+/// which cannot allocate. The audio owner classifies source errors at the
+/// read boundary, separately from faults of the output render context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackFault {
     /// The decoder or source returned an error mid-stream.
-    Decode(DecodeErrorKind),
+    Source(TrackFailureKind),
     /// The render context's output rate disagreed with the track's.
     OutputRateMismatch,
     /// The render context could not supply the requested output range.
@@ -138,7 +133,7 @@ pub enum PlaybackFault {
 impl fmt::Display for PlaybackFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Decode(kind) => write!(f, "decode error ({kind:?})"),
+            Self::Source(failure) => fmt::Display::fmt(failure, f),
             Self::OutputRateMismatch => f.write_str("output sample-rate mismatch"),
             Self::OutputRangeUnavailable => f.write_str("render context has no output range"),
         }

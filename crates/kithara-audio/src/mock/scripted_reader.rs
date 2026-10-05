@@ -13,7 +13,7 @@ use kithara_signal::AudioSpec;
 
 use super::pcm_reader::prepared_sample;
 use crate::{
-    AudioControl, AudioRead, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome, SeekBegin,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ConsumerWakeMode, PendingReason, ReadOutcome, SeekBegin,
     SeekOutcome,
 };
 
@@ -148,14 +148,14 @@ impl MockReader {
         (reader, counts)
     }
 
-    fn fixed_outcome(&self) -> Result<ReadOutcome, DecodeError> {
+    fn fixed_outcome(&self) -> Result<ReadOutcome, AudioReadError> {
         match &self.behavior {
             MockBehavior::LiveFrontier { .. } => Ok(ReadOutcome::Eof {
                 position: Duration::ZERO,
             }),
             MockBehavior::Faulty(Fault::DecodeError) => Err(DecodeError::Io {
                 source: std::io::Error::other("mock decode failure"),
-            }),
+            }.into()),
             MockBehavior::Faulty(Fault::Stall | Fault::RefuseSeek)
             | MockBehavior::AdoptionTracking { .. }
             | MockBehavior::SeekTracking { .. }
@@ -212,7 +212,7 @@ impl AudioRead for MockReader {
         }
     }
 
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,
@@ -246,7 +246,7 @@ impl AudioRead for MockReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,

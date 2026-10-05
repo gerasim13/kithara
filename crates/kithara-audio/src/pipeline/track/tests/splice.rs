@@ -621,7 +621,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
-            TrackStep::Failed => panic!("splice source failed before metric collection"),
+            TrackStep::Failed(_) => panic!("splice source failed before metric collection"),
         }
     }
 
@@ -713,7 +713,7 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantL
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
-            TrackStep::Failed => {
+            TrackStep::Failed(_) => {
                 panic!("same-variant recreate source failed before metric collection");
             }
         }

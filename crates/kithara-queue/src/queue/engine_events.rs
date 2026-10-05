@@ -181,7 +181,7 @@ where
         if !self.end_of_item_is_actionable(item, pos, dur) {
             return;
         }
-        let reason = format!("mid-stream engine failure: {fault}");
+        let reason = fault.to_string();
         self.set_status(track.id, TrackStatus::Failed(reason.clone()));
         let action = self.action_at_item_end();
         self.bus.publish(QueueEvent::TrackLoadFailed {
@@ -276,7 +276,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_audio::DecodeErrorKind;
+    use kithara_audio::{DecodeErrorKind, TrackFailureKind};
     use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_play::{ItemRole, PlaybackFault, PlayerEvent, TrackRef};
@@ -319,7 +319,9 @@ mod tests {
                 SlotId::new(0),
                 Arc::from("https://example.com/repeated.mp3"),
             )),
-            PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+            PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
         );
 
         assert!(
@@ -346,9 +348,9 @@ mod tests {
     /// with, and a range it could not supply were one message. Nothing in a
     /// report could then say which defect ended the track.
     #[kithara::test(tokio)]
-    #[case::invalid_data(PlaybackFault::Decode(DecodeErrorKind::InvalidData))]
-    #[case::unsupported_codec(PlaybackFault::Decode(DecodeErrorKind::UnsupportedCodec))]
-    #[case::direct_io(PlaybackFault::Decode(DecodeErrorKind::Io))]
+    #[case::invalid_data(PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::InvalidData }))]
+    #[case::unsupported_codec(PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::UnsupportedCodec }))]
+    #[case::direct_io(PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::Io }))]
     #[case::output_rate(PlaybackFault::OutputRateMismatch)]
     #[case::output_range(PlaybackFault::OutputRangeUnavailable)]
     async fn a_leading_failure_records_the_fault_the_player_reported(
@@ -403,7 +405,10 @@ mod tests {
         let reported = if paused { second } else { first };
         if paused {
             queue.player.play();
-            assert!(queue.player.is_playing(), "setup must activate a player slot");
+            assert!(
+                queue.player.playback_snapshot().is_some(),
+                "setup must allocate a player slot"
+            );
             queue.pause();
             assert!(queue.player.is_paused(), "setup must pause the active player");
             assert_eq!(queue.current().map(|entry| entry.id), Some(second));
@@ -416,7 +421,9 @@ mod tests {
                 SlotId::new(0),
                 Arc::from("https://example.com/repeated.mp3"),
             )),
-            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+            fault: PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
         }));
         assert_eq!(queue.current().map(|entry| entry.id), Some(second));
         assert_eq!(queue.track(reported).expect("the entry survives").status, before);
@@ -438,7 +445,12 @@ mod tests {
         ));
 
         queue.handle_item_did_play_to_end(&item);
-        queue.handle_item_did_fail(&item, PlaybackFault::Decode(DecodeErrorKind::InvalidData));
+        queue.handle_item_did_fail(
+            &item,
+            PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
+        );
 
         assert_eq!(queue.current().map(|entry| entry.id), Some(current));
         assert!(
