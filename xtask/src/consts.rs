@@ -199,8 +199,9 @@ pub(crate) const CACHE_REGION: &str = "us-east-1";
 /// retention had to be a single unfiltered rule expiring everything after a
 /// day. That rule also governed the snapshot layers, so a multi-gigabyte
 /// source layer would have been republished daily. Naming the compiler cache
-/// makes retention expressible per layer. The cost is paid once: existing
-/// compiler-cache objects sit at the old keys and are not read again.
+/// gives each layer its own retention, and the evictor its own entries. The
+/// cost is paid once: existing compiler-cache objects sit at the old keys and
+/// are not read again.
 pub(crate) const SCCACHE_PREFIX: &str = "sccache";
 
 /// Directory every Unix executor reads the installed host profile from.
@@ -216,6 +217,45 @@ pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
 
 /// Repository-relative location of the cache stack's Compose file.
 pub(crate) const CACHE_COMPOSE_FILE: &str = "docker/ci-cache.compose.yml";
+
+/// Where a container of the cache stack reaches the store: its Compose
+/// service, on the stack's own network.
+pub(crate) const CACHE_STORE_URL: &str = "http://cache:9000";
+
+/// Port the cache stack's evictor hears the store's audit log on. Nothing
+/// outside the stack's network reaches it.
+pub(crate) const EVICT_PORT: u16 = 9180;
+
+/// Bucket the evictor keeps each scope's record of last use in. It is no
+/// scope's bucket, so neither a quota nor eviction applies to it.
+pub(crate) const RECENCY_BUCKET: &str = "ci-cache-recency";
+
+/// Format of a scope's record of last reads: this byte, then each entry's
+/// hash and the second it was last read, big-endian, in hash order.
+pub(crate) const RECENCY_RECORD_VERSION: u8 = 1;
+
+/// Bytes each entry takes in a record of last reads: its hash, then its last
+/// read.
+pub(crate) const RECENCY_RECORD_BYTES: usize = 32 + 8;
+
+/// The object the evictor asks for to learn that the audit log is arriving,
+/// and writes to make the store recount a bucket. It is no compiler-cache
+/// entry.
+pub(crate) const EVICT_MARKER: &str = ".evict/recount";
+
+/// The largest body the evictor reads from one audit delivery. The store
+/// sends one request per delivery, a few hundred bytes; anything larger is
+/// not its audit log.
+pub(crate) const AUDIT_BODY_LIMIT: u64 = 1 << 20;
+
+/// The hash of a compiler-cache entry, as sccache names its objects.
+#[cfg(test)]
+pub(crate) const ENTRY_HASH: &str =
+    "abc0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc";
+
+/// How a fake `rc` answers the quota of a review bucket holding 1000 bytes.
+#[cfg(test)]
+pub(crate) const REVIEW_QUOTA_RC_CASE: &str = r#""--json bucket quota info ci/kithara-review") printf '%s' '{"bucket":"kithara-review","quota":1000,"quotaHuman":"1000 B","usage":1000,"usageHuman":"1000 B","quotaType":"HARD"}' ;;"#;
 
 /// Keys nextest reads on a profile. Inside a `junit` table it drops them
 /// with a warning, which is how `[profile.ci.junit]` swallowed two of them.

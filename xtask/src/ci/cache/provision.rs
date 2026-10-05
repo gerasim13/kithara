@@ -80,7 +80,7 @@ fn scope_quota(scope: &str, shared: &str) -> String {
     env::var(&named).unwrap_or_else(|_| shared.to_owned())
 }
 
-fn scope_bucket(scope: &str) -> Result<String> {
+pub(super) fn scope_bucket(scope: &str) -> Result<String> {
     ensure!(
         !scope.is_empty()
             && scope.len() <= 48
@@ -112,9 +112,15 @@ pub(super) fn initialize() -> Result<()> {
         "set",
         "--",
         "ci",
-        "http://cache:9000",
+        consts::CACHE_STORE_URL,
         &read_secret(&root.join("admin-user"))?,
         &read_secret(&root.join("admin-password"))?,
+    ])?;
+    rc(&[
+        "bucket",
+        "create",
+        "--ignore-existing",
+        &format!("ci/{}", consts::RECENCY_BUCKET),
     ])?;
     for scope in scopes.split_whitespace() {
         initialize_scope(scope, &scope_quota(scope, &quota), &endpoint, uid)?;
@@ -169,17 +175,12 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
     Ok(())
 }
 
-/// How long each layer in a scope's bucket lives.
+/// How long each snapshot layer in a scope's bucket lives.
 ///
-/// The compiler cache keeps three days. An entry expires by the age of its
-/// write, and a hit does not renew it, so a single day made the first jobs of
-/// every morning, and all of Monday's, recompile dependencies nobody had
-/// changed. Three days spans a weekend and no more, because the smallest
-/// quota bounds it: with every lane slot sharing one key, a day of fleet
-/// traffic wrote about 25 gibibytes, so three days fit even a 200-gibibyte
-/// scope beside its snapshots, while a key split per slot wrote about 127 a
-/// day, and a week of that fills an 800-gibibyte bucket, which then refuses
-/// every write. The snapshot layers are keyed by content
+/// The compiler cache has no age rule. An age rule measures an entry's write,
+/// and a hit does not renew it, so it expired first the entries every build
+/// reads, the ones written longest ago. The evictor keeps that layer under the
+/// scope's quota by last use instead. The snapshot layers are keyed by content
 /// (a target fingerprint, a `Cargo.lock`), so an object still named by a lock
 /// file is still the right answer weeks later, and expiring it daily would
 /// mean paying the full fetch every morning to rebuild the same bytes.
@@ -188,11 +189,6 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
 fn retention() -> serde_json::Value {
     json!({
         "Rules": [
-            {
-                "ID": "compiler-cache", "Status": "Enabled",
-                "Filter": {"Prefix": format!("{SCCACHE_PREFIX}/", SCCACHE_PREFIX = consts::SCCACHE_PREFIX)},
-                "Expiration": {"Days": 3}
-            },
             {
                 "ID": "target-snapshots", "Status": "Enabled",
                 "Filter": {"Prefix": "target-snapshots/"},
@@ -261,9 +257,9 @@ fn write_environment(
 mod tests {
     use super::*;
 
-    /// The retention rule expires only what sits under the compiler-cache
-    /// prefix, so a runner whose environment drops the prefix writes to the
-    /// bucket root, where nothing expires, until the quota refuses every write.
+    /// The evictor removes only what sits under the compiler-cache prefix, so
+    /// a runner whose environment drops the prefix writes to the bucket root,
+    /// where nothing is evicted, until the quota refuses every write.
     #[test]
     fn a_provisioned_environment_reaches_the_client_with_its_key_prefix() {
         let directory = tempfile::tempdir().unwrap();
@@ -363,39 +359,48 @@ mod retention_tests {
     fn each_layer_carries_its_own_retention_and_no_rule_is_unfiltered() {
         let rules = retention();
         let rules = rules["Rules"].as_array().expect("rules");
-        assert_eq!(rules.len(), 3);
+        assert!(!rules.is_empty());
 
-        let mut days = std::collections::BTreeMap::new();
         for rule in rules {
             let prefix = rule["Filter"]["Prefix"].as_str().expect("prefix");
             assert!(!prefix.is_empty(), "an unfiltered rule governs every layer");
             assert!(prefix.ends_with('/'), "{prefix} must name a whole prefix");
-            days.insert(
-                prefix.to_owned(),
-                rule["Expiration"]["Days"].as_u64().expect("days"),
-            );
+            assert!(rule["Expiration"]["Days"].as_u64().expect("days") > 0);
         }
-
-        let compiler = days[&format!("{SCCACHE_PREFIX}/", SCCACHE_PREFIX = consts::SCCACHE_PREFIX)];
-        assert!(
-            days["source-snapshots/"] > compiler && days["target-snapshots/"] > compiler,
-            "a content-keyed snapshot must outlive the compiler cache: {days:?}"
-        );
     }
 
-    /// An entry expires by the age of its write, never by its last hit, so a
-    /// retention shorter than a weekend hands Monday's first jobs a cold cache
-    /// for dependencies nobody changed since Friday.
+    /// An age rule measures an entry's write, so it expired first the entries
+    /// every build reads. The compiler cache answers to the evictor alone.
     #[test]
-    fn the_compiler_cache_outlives_a_weekend() {
+    fn no_age_rule_reaches_the_compiler_cache() {
+        let compiler = format!("{}/", consts::SCCACHE_PREFIX);
         let rules = retention();
-        let compiler = rules["Rules"]
-            .as_array()
-            .expect("rules")
-            .iter()
-            .find(|rule| rule["ID"] == "compiler-cache")
-            .expect("a compiler-cache rule");
 
-        assert!(compiler["Expiration"]["Days"].as_u64().expect("days") >= 3);
+        for rule in rules["Rules"].as_array().expect("rules") {
+            let prefix = rule["Filter"]["Prefix"].as_str().expect("prefix");
+            assert!(
+                !compiler.starts_with(prefix) && !prefix.starts_with(&compiler),
+                "{prefix} expires compiler-cache entries by age"
+            );
+        }
+    }
+
+    /// The evictor keeps its records beside the scopes. A scope that could
+    /// name that bucket would hand the records to a client key and put them
+    /// under a quota and eviction.
+    #[test]
+    fn no_scope_names_the_recency_bucket() {
+        let bucket = scope_bucket("a").expect("a valid scope");
+        let prefix = bucket
+            .strip_suffix('a')
+            .expect("a scope ends its bucket name");
+
+        assert!(
+            consts::RECENCY_BUCKET
+                .strip_prefix(prefix)
+                .is_none_or(|scope| scope_bucket(scope).is_err()),
+            "{} is a scope's bucket",
+            consts::RECENCY_BUCKET
+        );
     }
 }

@@ -283,6 +283,35 @@ a per-scope quota never reached it, and every initialize set each scope to
 source older than that still flattens the quotas: refresh it before starting
 the stack.
 
+The compiler cache has no age rule: a hit does not renew an object's date, so
+an age rule expires first the entries every build reads. The `evict` service
+keeps each scope's compiler cache under its quota by last use instead. The
+store posts its audit log to it, one record per request, over a network only
+the two of them join: the evictor takes the log on trust, and every job shares
+the store's other network. A successful read or write of an entry is a use.
+Every half hour it lists each scope, and once the bucket holds four fifths of
+its quota it removes the entries used longest ago until it is under thirteen
+twentieths. Each finished pass writes the last reads to the `ci-cache-recency`
+bucket, one object per scope, so a restart of the evictor loses only the reads
+since; a record that does not read back is set aside. Either only makes
+entries look older than they are.
+
+RustFS charges a removal to the quota only when it recounts the bucket. The
+evictor asks for one once a twentieth of the quota has left, after it starts,
+and after a removal that failed, and only once the bucket has been idle a
+minute: it requests its own marker, waits for that request to come back
+through the audit log so nothing is queued ahead of it, and rewrites the
+marker. A recount that fails, or whose request never comes back, waits for the
+next pass. The recount holds the bucket's quota lock; on a large bucket it can
+outlast the five seconds a job's first write waits, and that job runs with the
+cache read-only. The idle minute makes that unlikely, not impossible.
+
+The quota stays as the backstop. While the evictor is down nothing is removed,
+and what the store could not deliver waits in its memory up to the queue limit;
+a restart of the store loses it. A lost read only makes an entry look older
+than it is. `docker logs kithara-ci-cache-evict` prints one line per pass and
+one per recount.
+
 ## Storage policy
 
 Profile thresholds are bytes used against the quota; cleanup takes each as the

@@ -2,13 +2,13 @@ use std::{
     collections::BTreeMap,
     env,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
 
-use super::{super::config::CiPins, provision, snapshot, snapshot::SnapshotArgs, verify};
+use super::{super::config::CiPins, evict, provision, snapshot, snapshot::SnapshotArgs, verify};
 use crate::{ci::host::mac::read_secret, consts};
 
 /// Everything else a client is told, fixed by how a scope is provisioned.
@@ -168,6 +168,9 @@ enum CacheCommand {
     Verify { env_file: PathBuf },
     /// Restore and publish immutable trusted Cargo target snapshots.
     Snapshot(SnapshotArgs),
+    /// Keep each scope's compiler cache under its budget, evicting the entries
+    /// used longest ago.
+    Evict,
 }
 
 /// Compose against the host's environment file, which also goes to
@@ -208,7 +211,19 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
         CacheCommand::Initialize => provision::initialize(),
         CacheCommand::Verify { env_file } => verify::run(env_file),
         CacheCommand::Snapshot(args) => snapshot::run(args),
+        CacheCommand::Evict => evict::run(),
     }
+}
+
+/// Fails with what the client said on stderr when it exited unsuccessfully.
+pub(super) fn require_success(output: &Output, what: &str) -> Result<()> {
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "{what} failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
 }
 
 pub(super) fn required(name: &str) -> Result<String> {
@@ -220,6 +235,8 @@ pub(super) fn required(name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use std::{fs, os::unix::fs::PermissionsExt};
+
+    use clap::Parser;
 
     use super::*;
     use crate::ci::config::workspace_root;
@@ -402,6 +419,136 @@ mod tests {
             }
         }
         assert!(mounts > 0, "the stack mounts nothing");
+    }
+
+    fn stack() -> serde_yaml_ng::Value {
+        serde_yaml_ng::from_str(
+            &fs::read_to_string(workspace_root().join(consts::CACHE_COMPOSE_FILE)).unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// The store sends its audit log to the evictor by container name, and
+    /// its egress filter refuses a private address whose origin it was not
+    /// told to allow. An endpoint that drifted from the evictor's name or port
+    /// would leave every read unseen, and the evictor would age entries by
+    /// their writes alone.
+    #[test]
+    fn the_store_sends_its_audit_log_to_the_evictor() {
+        let stack = stack();
+        let cache = &stack["services"]["cache"];
+        let environment = &cache["environment"];
+        let setting = |name: &str| {
+            environment[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("the store sets no {name}"))
+        };
+
+        let endpoint =
+            reqwest::Url::parse(setting("RUSTFS_AUDIT_WEBHOOK_ENDPOINT_RECENCY")).unwrap();
+
+        assert_eq!(setting("RUSTFS_AUDIT_ENABLE"), "true");
+        assert_eq!(setting("RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY"), "on");
+        assert_eq!(
+            endpoint.host_str(),
+            stack["services"]["evict"]["container_name"].as_str()
+        );
+        assert_eq!(endpoint.port(), Some(consts::EVICT_PORT));
+        let origin = endpoint.origin().ascii_serialization();
+        assert!(
+            setting("RUSTFS_OUTBOUND_ALLOW_ORIGINS")
+                .split(',')
+                .any(|allowed| allowed == origin),
+            "the store's egress filter refuses {origin}"
+        );
+        let queue = setting("RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_RECENCY");
+        assert!(
+            cache["tmpfs"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_yaml_ng::Value::as_str)
+                .any(|mount| mount.split(':').next() == Some(queue)),
+            "the audit queue {queue} is not in memory"
+        );
+    }
+
+    /// The evictor reads the scopes and the administrator's credentials the
+    /// way `initialize` does, starts only once the buckets exist, and nothing
+    /// outside the stack reaches the port the audit log arrives on.
+    #[test]
+    fn the_evictor_runs_after_initialize_and_publishes_no_port() {
+        let stack = stack();
+        let evict = &stack["services"]["evict"];
+
+        let entrypoint = evict["entrypoint"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|word| word.as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(
+            crate::Cli::try_parse_from(&entrypoint).is_ok(),
+            "{entrypoint:?}"
+        );
+        assert_eq!(entrypoint.last(), Some(&"evict"));
+        assert_eq!(
+            evict["env_file"],
+            stack["services"]["initialize"]["env_file"]
+        );
+        assert_eq!(
+            evict["depends_on"]["initialize"]["condition"].as_str(),
+            Some("service_completed_successfully")
+        );
+        assert!(
+            evict["volumes"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_yaml_ng::Value::as_str)
+                .any(|mount| mount.ends_with(":/config:ro")),
+            "the evictor cannot read the administrator's credentials"
+        );
+        assert!(evict.get("ports").is_none(), "the evictor publishes a port");
+    }
+
+    /// Job containers share the network they reach the store on, and the
+    /// evictor takes every delivery on trust: a job that could post to it
+    /// could age the trusted scope's entries or hold its recounts forever.
+    #[test]
+    fn only_the_store_reaches_the_evictor() {
+        let stack = stack();
+        let services = stack["services"].as_mapping().unwrap();
+        let joined = |service: &serde_yaml_ng::Value| {
+            service["networks"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_yaml_ng::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+
+        let evict = joined(&stack["services"]["evict"]);
+
+        assert!(!evict.is_empty(), "the evictor joins no network");
+        for network in &evict {
+            assert_eq!(
+                stack["networks"][network.as_str()]["internal"].as_bool(),
+                Some(true),
+                "{network} leaves the stack"
+            );
+            for (name, service) in services {
+                let name = name.as_str().unwrap();
+                let joins = joined(service).contains(network);
+                assert_eq!(
+                    joins,
+                    matches!(name, "cache" | "evict"),
+                    "{name} and {network}"
+                );
+            }
+        }
     }
 
     #[test]

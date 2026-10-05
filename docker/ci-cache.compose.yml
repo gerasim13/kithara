@@ -27,6 +27,19 @@ services:
     environment:
       RUSTFS_ACCESS_KEY_FILE: /config/admin-user
       RUSTFS_SECRET_KEY_FILE: /config/admin-password
+      # Every request reaches the evictor, which learns from it what each
+      # build still reads. The store refuses to send anywhere it was not
+      # told to reach.
+      RUSTFS_AUDIT_ENABLE: "true"
+      RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY: "on"
+      RUSTFS_AUDIT_WEBHOOK_ENDPOINT_RECENCY: http://kithara-ci-cache-evict:9180/
+      RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_RECENCY: /audit
+      RUSTFS_AUDIT_WEBHOOK_QUEUE_LIMIT_RECENCY: "20000"
+      RUSTFS_OUTBOUND_ALLOW_ORIGINS: http://kithara-ci-cache-evict:9180
+    # What the evictor has not taken yet waits in memory: a request it misses
+    # only ages an entry, and the queue must not take the store's disk.
+    tmpfs:
+      - /audit:size=128m
     depends_on:
       credentials:
         condition: service_completed_successfully
@@ -37,7 +50,7 @@ services:
       - ${CACHE_DATA_VOLUME:?set the host directory for the cached objects}:/data
     ports:
       - "127.0.0.1:${CACHE_PORT:-19000}:9000"
-    networks: [ci]
+    networks: [ci, audit]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/health/ready"]
       interval: 5s
@@ -60,7 +73,25 @@ services:
     networks: [ci]
     restart: "no"
 
+  evict:
+    <<: *cache-image
+    container_name: kithara-ci-cache-evict
+    entrypoint: ["xtask", "ci", "cache", "evict"]
+    env_file: ${CACHE_ENV_FILE:?use just ci cache}
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    volumes:
+      - ${CACHE_CONFIG_VOLUME:?set the host directory for the cache credentials}:/config:ro
+    networks: [audit]
+    init: true
+    restart: unless-stopped
+
 networks:
   ci:
     external: true
     name: ${CACHE_NETWORK:?set existing CI network}
+  # The evictor takes the audit log on trust, so only the store reaches it:
+  # every job container shares the network above.
+  audit:
+    internal: true
