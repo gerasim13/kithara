@@ -32,7 +32,7 @@ use std::{
 use kithara::{
     assets::{AssetResource, AssetSource, AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -48,6 +48,7 @@ mod consts {
     /// stall lands where a listener hears it: in the middle of the track.
     pub(super) const STALE_SEGMENT: usize = 3;
     pub(super) const READ_CHUNK: usize = 8 * 1024;
+    pub(super) const INIT_DATA: &[u8] = b"V0-INIT:ACQUIRE_OBSTRUCTION";
 }
 
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
@@ -106,10 +107,30 @@ async fn a_segment_that_can_never_be_acquired_fails_the_read() {
     );
 }
 
-/// Server, store, and the on-disk path of [`consts::STALE_SEGMENT`].
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+async fn an_init_that_can_never_be_acquired_fails_the_read() {
+    let fixture = Fixture::new_with_init(true).await;
+    assert_eq!(fixture.server.init_bytes(0), consts::INIT_DATA);
+    let blocked = fixture.tmp_path();
+    fs::create_dir_all(&blocked).expect("block the init tmp path with a directory");
+    assert!(blocked.is_dir(), "the init tmp path must be obstructed");
+    assert!(!fixture.canonical.exists(), "the init must not be cached");
+
+    let err = fixture
+        .read_to_eof()
+        .await
+        .expect_err("an unacquirable init must fail the read, not park it");
+
+    assert!(
+        err.to_string().contains("segment data not ready"),
+        "expected the terminal SegmentUnavailable, got: {err}"
+    );
+}
+
+/// Server, store, and the on-disk path of the resource under test.
 struct Fixture {
     server: CreatedHls,
-    /// The path the store commits the stale segment to. Derived through the
+    /// The path the store commits the blocked resource to. Derived through the
     /// store's own scope and key so a test cannot plant its tmp somewhere the
     /// store never looks.
     canonical: PathBuf,
@@ -119,18 +140,30 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::new_with_init(false).await
+    }
+
+    async fn new_with_init(has_init: bool) -> Self {
         let temp_dir = TestTempDir::new();
+        let builder = HlsFixtureBuilder::new()
+            .segment_size(consts::SEGMENT_SIZE)
+            .segments_per_variant(consts::SEGMENT_COUNT);
+        let builder = if has_init {
+            builder.init_data_per_variant(vec![Arc::new(consts::INIT_DATA.to_vec())])
+        } else {
+            builder
+        };
         let server = TestServerHelper::new()
             .await
-            .create_hls(
-                HlsFixtureBuilder::new()
-                    .segment_size(consts::SEGMENT_SIZE)
-                    .segments_per_variant(consts::SEGMENT_COUNT),
-            )
+            .create_hls(builder)
             .await
             .expect("create HLS fixture");
         let master_url = server.master_url();
-        let stale_url = server.segment_url(0, consts::STALE_SEGMENT);
+        let blocked_url = if has_init {
+            server.init_url(0)
+        } else {
+            server.segment_url(0, consts::STALE_SEGMENT)
+        };
 
         let root = temp_dir.path().to_path_buf();
         let pools = pools();
@@ -144,8 +177,8 @@ impl Fixture {
                 discriminator: None,
             })
             .expect("hls asset scope")
-            .key(&AssetResource::Url(stale_url))
-            .expect("stale segment key");
+            .key(&AssetResource::Url(blocked_url))
+            .expect("blocked resource key");
         let canonical = root
             .join(key.asset_root().expect("relative asset root"))
             .join(key.rel_path().expect("relative resource path"));
@@ -188,6 +221,10 @@ impl Fixture {
     /// segment: the canonical file *name* plus `.tmp`, sibling in the same
     /// directory.
     fn tmp_path_of_stale_segment(&self) -> PathBuf {
+        self.tmp_path()
+    }
+
+    fn tmp_path(&self) -> PathBuf {
         let name = self
             .canonical
             .file_name()
