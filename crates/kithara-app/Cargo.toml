@@ -32,6 +32,7 @@ tls-native = ["kithara/tls-native"]
 # Put the session mix on air over live HLS. Off by default; with it off the
 # bar's phase machine compiles against a packager that has no stream values.
 broadcast = ["kithara/broadcast"]
+zvuk = ["dep:kithara-app-zvuk"]
 gui = ["dep:iced", "dep:image", "dep:rfd", "kithara/ui-iced"]
 # Draw the studio through the retained host (masonry + Vello) instead of the
 # immediate one. Both hosts read the same documents and the same state; only
@@ -62,6 +63,7 @@ apple-fused-src = ["kithara/apple-fused-src"]
 # stays opt-in (need a C++ toolchain).
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
 stretch-bungee = ["kithara/stretch-bungee"]
+stretch-identity = ["kithara/stretch-identity"]
 # Enable both stretch libraries in the DJ deck's selector.
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
@@ -87,6 +89,7 @@ kithara = { workspace = true, default-features = false, features = [
 ] }
 kithara-app-document = { workspace = true }
 kithara-app-library = { workspace = true }
+kithara-app-zvuk = { workspace = true, optional = true }
 kithara-assets = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }

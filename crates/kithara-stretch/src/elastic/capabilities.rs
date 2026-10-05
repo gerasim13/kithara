@@ -31,6 +31,7 @@ impl ElasticCapabilities {
     }
 
     /// Validate caller-owned interleaved storage and return its frame capacity.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     pub(crate) fn output_capacity(self, output_samples: usize) -> Result<usize, ElasticError> {
         if output_samples == 0 {
             return Err(ElasticError::EmptyOutput);
@@ -78,6 +79,7 @@ impl ElasticCapabilities {
     }
 
     /// Priming uses the declared latency rather than the ordinary block limits.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     pub(crate) fn validate_prime(
         self,
         request: ElasticRequest,
@@ -158,7 +160,10 @@ impl ElasticCapabilities {
         }
         for source_frames in [request.source_frames(), request.output_source_frames()] {
             let span = ElasticRequest::new(source_frames, request.output_frames())?;
-            if !self.rate_envelope().contains(span) {
+            if (!self.functions.contains(BackendCapabilities::RATE)
+                && source_frames != request.output_frames())
+                || !self.rate_envelope().contains(span)
+            {
                 return Err(ElasticError::RateOutsideEnvelope {
                     source_frames,
                     output_frames: request.output_frames(),
@@ -209,7 +214,7 @@ mod tests {
         let capabilities = ElasticCapabilities::new(
             config.shape(),
             ElasticLatency::new(1, 1),
-            BackendCapabilities::RATE,
+            config.backend().capabilities(),
         );
         let request = ElasticRequest::new(32, 1).expect("non-empty request");
 
@@ -223,6 +228,11 @@ mod tests {
             })
         );
     }
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test]
     fn audible_span_validation_does_not_change_admitted_storage() {
         let config = ElasticConfig::builder()
@@ -286,6 +296,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     #[kithara::test]
     fn priming_rejects_an_ignored_audible_span() {
         let config = ElasticConfig::builder()

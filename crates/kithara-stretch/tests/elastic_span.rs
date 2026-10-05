@@ -77,6 +77,11 @@ fn assert_close(actual: f64, expected: f64) {
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 fn phase_residuals(
     mut cursor: ElasticCursor,
     starts: [f64; 3],
@@ -109,6 +114,11 @@ fn reverse_quantization_keeps_a_descending_cursor_inside_the_rate_envelope() {
     assert_close(plan.cursor().continuous(), 120.0);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 #[case::reverse(360.0, [359.25, 239.25, 119.25], -120.0)]
 #[case::forward(0.75, [0.0, 120.0, 240.0], 120.0)]
@@ -122,6 +132,11 @@ fn a_negative_phase_error_converges_without_a_source_jump(
     assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn small_phase_error_converges_without_a_source_jump_and_is_partition_independent() {
     let (residuals, cursor) = phase_residuals(source_cursor(0.0), [0.75, 120.75, 240.75], 120.0);
@@ -135,6 +150,11 @@ fn small_phase_error_converges_without_a_source_jump_and_is_partition_independen
     assert_eq!(whole.cursor().integer(), cursor.integer());
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn one_frame_error_is_continuous_but_larger_error_requires_relocation() {
     let cursor = Some(source_cursor(0.0));
@@ -151,6 +171,11 @@ fn one_frame_error_is_continuous_but_larger_error_requires_relocation() {
     ));
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn correction_respects_configured_rate_headroom() {
     let cursor = Some(source_cursor(0.0));
