@@ -184,7 +184,7 @@ where
         let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = Self::prepare_target(
             (current_kind, current_keylock),
-            Self::backend_config(config),
+            config.backends(),
             config.source_block_frames(),
             spec,
             &pools,
@@ -201,7 +201,7 @@ where
             projection: ProjectionState::new(config),
             residency: target.residency,
             committed: None,
-            backends: Self::backend_config(config),
+            backends: config.backends(),
             engine: target.engine,
             retired_engine: None,
             current_kind,
@@ -247,22 +247,6 @@ where
             plan,
             region: None,
         }
-    }
-
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
-    fn backend_config(config: &WarpConfig) -> ElasticBackendConfig {
-        config.backends()
-    }
-
-    #[cfg(not(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    )))]
-    fn backend_config(_config: &WarpConfig) -> ElasticBackendConfig {
-        ElasticBackendConfig::default()
     }
 }
 
@@ -424,7 +408,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// the lane asks for, so the scheduler shell must prepare that one first.
     pub(super) fn engine_outdated(&self) -> bool {
         !self.active
-            && !self.unity_passthrough(self.rate.speed())
+            && (!self.requires_staging() || !self.unity_passthrough(self.rate.speed()))
             && self.stretch_target() != (self.current_kind, self.current_keylock)
     }
 
@@ -549,18 +533,25 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rendered_source_end
     }
 
-    /// Whether this target has elastic DSP and needs worker staging.
+    /// Whether the applied backend changes rate and needs worker staging.
     #[must_use]
     pub const fn requires_staging(&self) -> bool {
-        true
+        self.current_kind
+            .capabilities()
+            .contains(BackendCapabilities::RATE)
     }
 
     /// Re-primes a running engine on this frame when the requested one differs
     /// from it, and drops a quantum prepared before.
     fn retarget_engine(&mut self) {
-        self.reprime_pending |= self.active
-            && self.projection.active.is_none()
-            && self.stretch_target() != (self.current_kind, self.current_keylock);
+        let target = self.stretch_target();
+        let changed = target != (self.current_kind, self.current_keylock);
+        if target.0.capabilities().contains(BackendCapabilities::RATE) {
+            self.reprime_pending |= self.active && self.projection.active.is_none() && changed;
+        } else {
+            self.reprime_pending = false;
+            self.backend_transition_pending |= self.active && changed;
+        }
         self.prepared_quantum = None;
     }
 
@@ -593,6 +584,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             SpeedCurve::Constant(speed) => RateTarget::new(speed, revision),
         };
         self.reprime_pending |= self.active
+            && self
+                .stretch_target()
+                .0
+                .capabilities()
+                .contains(BackendCapabilities::RATE)
             && self.projection.active.is_none()
             && (target.speed() - self.rate.speed()).abs() > f32::EPSILON
             && !self.unity_passthrough(target.speed())
@@ -633,9 +629,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        self.projection.active.is_none()
-            && self.plan.is_none()
-            && (speed - 1.0).abs() <= f32::EPSILON
+        !self.requires_staging()
+            || (self.projection.active.is_none()
+                && self.plan.is_none()
+                && (speed - 1.0).abs() <= f32::EPSILON)
     }
 }
 
