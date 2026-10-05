@@ -12,6 +12,7 @@ use tracing::info;
 
 use super::{client::provisioned_environment, required};
 use crate::{
+    child::{self, Cancel},
     ci::host::mac::{read_secret, write_secure},
     consts,
 };
@@ -47,13 +48,16 @@ pub(super) fn credentials() -> Result<()> {
     Ok(())
 }
 
-fn rc(arguments: &[&str]) -> Result<()> {
-    let status = Command::new("rc")
-        .args(arguments)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("start cache administration client")?;
+/// Runs one administration step; a stop signal ends it and the setup.
+fn rc(arguments: &[&str], cancel: &Cancel) -> Result<()> {
+    let status = child::run(
+        Command::new("rc")
+            .args(arguments)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+        Some(cancel),
+    )
+    .context("cache administration client")?;
     // Arguments and client diagnostics can include credentials.
     ensure!(
         status.success(),
@@ -93,7 +97,7 @@ pub(super) fn scope_bucket(scope: &str) -> Result<String> {
     Ok(format!("kithara-{scope}"))
 }
 
-pub(super) fn initialize() -> Result<()> {
+pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
     let scopes = required("CACHE_SCOPES")?;
     let quota = required("CACHE_BUCKET_QUOTA")?;
     let endpoint = required("CACHE_CLIENT_ENDPOINT")?;
@@ -107,69 +111,95 @@ pub(super) fn initialize() -> Result<()> {
         scope_bucket(scope)?;
     }
     let root = Path::new("/config");
-    rc(&[
-        "alias",
-        "set",
-        "--",
-        "ci",
-        consts::CACHE_STORE_URL,
-        &read_secret(&root.join("admin-user"))?,
-        &read_secret(&root.join("admin-password"))?,
-    ])?;
-    rc(&[
-        "bucket",
-        "create",
-        "--ignore-existing",
-        &format!("ci/{}", consts::RECENCY_BUCKET),
-    ])?;
+    rc(
+        &[
+            "alias",
+            "set",
+            "--",
+            "ci",
+            consts::CACHE_STORE_URL,
+            &read_secret(&root.join("admin-user"))?,
+            &read_secret(&root.join("admin-password"))?,
+        ],
+        cancel,
+    )?;
+    rc(
+        &[
+            "bucket",
+            "create",
+            "--ignore-existing",
+            &format!("ci/{}", consts::RECENCY_BUCKET),
+        ],
+        cancel,
+    )?;
     for scope in scopes.split_whitespace() {
-        initialize_scope(scope, &scope_quota(scope, &quota), &endpoint, uid)?;
+        initialize_scope(scope, &scope_quota(scope, &quota), &endpoint, uid, cancel)?;
     }
     Ok(())
 }
 
-fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Result<()> {
+fn initialize_scope(
+    scope: &str,
+    quota: &str,
+    endpoint: &str,
+    uid: u32,
+    cancel: &Cancel,
+) -> Result<()> {
     let bucket = scope_bucket(scope)?;
     let destination = format!("ci/{bucket}");
     let directory = Path::new("/clients").join(scope);
     fs::create_dir_all(&directory)?;
     let key = secret(&directory.join("access-key"))?;
     let password = secret(&directory.join("secret-key"))?;
-    rc(&["bucket", "create", "--ignore-existing", &destination])?;
-    rc(&["bucket", "quota", "set", &destination, quota])?;
+    rc(
+        &["bucket", "create", "--ignore-existing", &destination],
+        cancel,
+    )?;
+    rc(&["bucket", "quota", "set", &destination, quota], cancel)?;
     let mut lifecycle = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut lifecycle, &retention())?;
-    rc(&[
-        "bucket",
-        "lifecycle",
-        "rule",
-        "import",
-        &destination,
-        lifecycle
-            .path()
-            .to_str()
-            .context("cache lifecycle path must be UTF-8")?,
-    ])?;
-    rc(&["admin", "user", "add", "ci", &key, &password])?;
+    rc(
+        &[
+            "bucket",
+            "lifecycle",
+            "rule",
+            "import",
+            &destination,
+            lifecycle
+                .path()
+                .to_str()
+                .context("cache lifecycle path must be UTF-8")?,
+        ],
+        cancel,
+    )?;
+    rc(&["admin", "user", "add", "ci", &key, &password], cancel)?;
     let mut policy_file = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut policy_file, &policy(scope, &bucket))?;
-    rc(&[
-        "admin",
-        "policy",
-        "create",
-        "ci",
-        &bucket,
-        policy_file
-            .path()
-            .to_str()
-            .context("cache policy path must be UTF-8")?,
-    ])?;
-    rc(&["admin", "policy", "attach", "ci", &bucket, "--user", &key])?;
+    rc(
+        &[
+            "admin",
+            "policy",
+            "create",
+            "ci",
+            &bucket,
+            policy_file
+                .path()
+                .to_str()
+                .context("cache policy path must be UTF-8")?,
+        ],
+        cancel,
+    )?;
+    rc(
+        &["admin", "policy", "attach", "ci", &bucket, "--user", &key],
+        cancel,
+    )?;
     write_environment(&directory, &bucket, endpoint, &key, &password)?;
-    let status = Command::new("chown")
-        .args(["-R", &uid.to_string()])
-        .arg(&directory)
-        .status()?;
+    let status = child::run(
+        Command::new("chown")
+            .args(["-R", &uid.to_string()])
+            .arg(&directory),
+        Some(cancel),
+    )?;
     ensure!(status.success(), "cache client ownership failed: {status}");
     info!(%scope, "compiler cache scope initialized");
     Ok(())
@@ -256,6 +286,20 @@ fn write_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stop signal during the setup ends it, so the store is asked to stop
+    /// while Docker still waits for it.
+    #[cfg(unix)]
+    #[test]
+    fn the_setup_stops_at_a_stop_signal() {
+        let _signals = crate::testing::signals();
+        let cancel = Cancel::install().unwrap();
+
+        signal_hook::low_level::raise(signal_hook::consts::signal::SIGTERM).unwrap();
+        let error = rc(&["alias", "list"], &cancel).expect_err("the setup went on");
+
+        assert!(format!("{error:#}").contains("cancelled"), "{error:#}");
+    }
 
     /// The evictor removes only what sits under the compiler-cache prefix, so
     /// a runner whose environment drops the prefix writes to the bucket root,

@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    net::{Ipv4Addr, SocketAddrV4},
+    time::Duration,
+};
 
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
@@ -219,13 +222,21 @@ pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
 /// Repository-relative location of the cache stack's Compose file.
 pub(crate) const CACHE_COMPOSE_FILE: &str = "docker/ci-cache.compose.yml";
 
-/// Where a container of the cache stack reaches the store: its Compose
-/// service, on the stack's own network.
-pub(crate) const CACHE_STORE_URL: &str = "http://cache:9000";
+/// Where the cache stack's own processes reach the store: beside them, in
+/// the one container the stack is.
+pub(crate) const CACHE_STORE_URL: &str = "http://127.0.0.1:9000";
 
-/// Port the cache stack's evictor hears the store's audit log on. Nothing
-/// outside the stack's network reaches it.
-pub(crate) const EVICT_PORT: u16 = 9180;
+/// How long one request asking the starting store whether it is ready may
+/// take before the next one is due.
+pub(crate) const CACHE_READY_REQUEST: Duration = Duration::from_secs(2);
+
+/// How often the cache stack asks its starting store whether it is ready.
+pub(crate) const CACHE_READY_POLL: Duration = Duration::from_millis(250);
+
+/// Where the cache stack's evictor hears the store's audit log. It takes
+/// every delivery on trust, and loopback keeps every job out: the jobs share
+/// the network the store is published on.
+pub(crate) const EVICT_LISTEN: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9180);
 
 /// Bucket the evictor keeps each scope's record of last use in. It is no
 /// scope's bucket, so neither a quota nor eviction applies to it.

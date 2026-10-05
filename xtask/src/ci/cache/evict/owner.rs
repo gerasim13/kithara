@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    convert::Infallible,
     path::Path,
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread,
@@ -22,12 +23,12 @@ use crate::{ci::host::mac::read_secret, consts};
 
 /// Keeps each scope's compiler cache under its budget by evicting the entries
 /// used longest ago, as the store's audit log reports their use.
-pub(in crate::ci::cache) fn run() -> Result<()> {
+pub(in crate::ci::cache) fn run() -> Result<Infallible> {
     let buckets = required("CACHE_SCOPES")?
         .split_whitespace()
         .map(provision::scope_bucket)
         .collect::<Result<Vec<_>>>()?;
-    let server = Server::http(("0.0.0.0", consts::EVICT_PORT))
+    let server = Server::http(consts::EVICT_LISTEN)
         .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
     let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
     let managed = buckets.clone();
@@ -148,7 +149,7 @@ impl Owner {
         })
     }
 
-    fn serve(mut self) -> Result<()> {
+    fn serve(mut self) -> Result<Infallible> {
         loop {
             match self.deliveries.recv_timeout(Self::TICK) {
                 Ok(delivery) => self.absorb(delivery),
@@ -419,7 +420,7 @@ mod tests {
                 r#"#!/bin/sh
 echo "$*" >> '{log}'
 case "$*" in
-"alias set -- ci http://cache:9000 user password") ;;
+"alias set -- ci {store} user password") ;;
 "object show ci/ci-cache-recency/kithara-review") echo "Not found" >&2; exit 5 ;;
 "pipe ci/ci-cache-recency/kithara-review") cat > '{record}' ;;
 "pipe ci/kithara-review/.evict/recount") wc -c | tr -d ' ' >> '{log}' ;;
@@ -429,6 +430,7 @@ case "$*" in
 esac
 "#,
                 log = log.display(),
+                store = consts::CACHE_STORE_URL,
                 record = directory.join("record").display(),
             ),
         );
@@ -610,13 +612,14 @@ esac
                 r#"#!/bin/sh
 echo "$*" >> '{log}'
 case "$*" in
-"alias set -- ci http://cache:9000 user password") ;;
+"alias set -- ci {store} user password") ;;
 "object show ci/ci-cache-recency/kithara-review") exit 5 ;;
 "object stat ci/kithara-review/.evict/recount") echo "Access denied" >&2; exit 4 ;;
 *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
 "#,
                 log = directory.path().join("log").display(),
+                store = consts::CACHE_STORE_URL,
             ),
         );
         let (mut owner, _sender) = owner(&program);

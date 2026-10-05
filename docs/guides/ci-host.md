@@ -210,8 +210,8 @@ a regression.
 ## Object cache service
 
 Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
-published on `127.0.0.1:19000`; the two hosts share no cache. Jobs and
-`initialize` reach it through the `rc` client.
+published on `127.0.0.1:19000`; the two hosts share no cache. Jobs reach it
+through the `rc` client.
 `docker/ci-cache.compose.yml` declares it, and
 `docker/ci-cache/linux.env.example` and `docker/ci-cache/macos.env.example`
 give the shape of the environment each is started with. The environment itself
@@ -227,9 +227,16 @@ working.
 
 The server needs RustFS 1.0.1 or later. 1.0.0 answers a bucket quota request
 with 503 for about ten seconds after it reports ready (rustfs/rustfs#8014), so
-an `initialize` started on a fresh stack fails at its first quota.
+a setup started on a fresh stack fails at its first quota.
 
-The image carries `xtask`, and `ci cache initialize` builds every bucket
+The stack is one container. Its image carries RustFS, `rc` and `xtask`, and
+runs `xtask ci cache serve`: it writes the administrator's credentials if
+there are none, starts RustFS as its child, waits for it to answer ready,
+creates each scope's bucket, quota, lifecycle and client key, and then runs the
+evictor beside the store. They start and stop together: a stop signal is
+passed to RustFS and waited on, and when either RustFS or the evictor ends,
+the container ends and Docker restarts it. Every start applies the setup
+again, from the code the store is served with. `serve` builds every bucket
 policy from `ci::cache::provision`. So the copy of this repository the image
 was built from, not the repository itself, decides what the live policy says.
 The Linux host's deployment copy is `/etc/kithara-ci/cache-compose/source`;
@@ -260,41 +267,42 @@ there the whole time. The refusal named the bucket with an empty key, which is
 what a `ListBucket` denial always looks like - so it read as a broken client
 rather than a policy that had never been updated.
 
-Quotas are per scope and applied at initialize. Changing one afterwards is
-`rc bucket quota set` against the live bucket; editing the environment file
-changes only what the next initialize would apply.
+Quotas are per scope and applied each time the stack starts. Changing one
+afterwards is `rc bucket quota set` against the live bucket; editing the
+environment file changes only what the next start applies.
 
 The two drift, and the drift is the danger: the live buckets had been raised by
 hand to 200 GiB trusted and 800 GiB review while the environment the stack was
 started with still said 50, and the per-fork scopes existed outside the
-`CACHE_SCOPES` it named - so an initialize run would have flattened every quota
+`CACHE_SCOPES` it named - so a setup run would have flattened every quota
 and known nothing of half the buckets. A scope that needs
 its own size now names it, `CACHE_BUCKET_QUOTA_<SCOPE>`, and
 `CACHE_BUCKET_QUOTA` is what the scopes that say nothing are given. The
 environment on the host states what the buckets actually are, so applying it is
 no longer a way to lose them.
 
-That holds only if `initialize` sees the whole environment. Compose hands a
+That holds only if the setup sees the whole environment. Compose hands a
 container only the variables its file names, and `--env-file` only fills in
 the Compose file itself. Until 2026-10-02 the service named four variables, so
-a per-scope quota never reached it, and every initialize set each scope to
+a per-scope quota never reached it, and every setup set each scope to
 `CACHE_BUCKET_QUOTA`. `just ci cache` now passes the file's absolute path as
 `CACHE_ENV_FILE`, and the service reads it as its `env_file`. A copy of the
 source older than that still flattens the quotas: refresh it before starting
 the stack.
 
 The compiler cache has no age rule: a hit does not renew an object's date, so
-an age rule expires first the entries every build reads. The `evict` service
-keeps each scope's compiler cache under its quota by last use instead. The
-store posts its audit log to it, one record per request, over a network only
-the two of them join: the evictor takes the log on trust, and every job shares
-the store's other network. A successful read or write of an entry is a use.
-Every half hour it lists each scope, and once the bucket holds four fifths of
-its quota it removes the entries used longest ago until it is under thirteen
-twentieths. Each finished pass writes the last reads to the `ci-cache-recency`
-bucket, one object per scope, so a restart of the evictor loses only the reads
-since; a record that does not read back is set aside. Either only makes
-entries look older than they are.
+an age rule expires first the entries every build reads. The evictor keeps
+each scope's compiler cache under its quota by last use instead. The store
+posts its audit log to it, one record per request, on the container's
+loopback: the evictor takes the log on trust, and every job shares the network
+the store is published on. RustFS refuses to send to loopback unless the
+origin is allowed, so the stack allows exactly that one. A successful read or
+write of an entry is a use. Every half hour it lists each scope, and once the
+bucket holds four fifths of its quota it removes the entries used longest ago
+until it is under thirteen twentieths. Each finished pass writes the last
+reads to the `ci-cache-recency` bucket, one object per scope, so a restart of
+the evictor loses only the reads since; a record that does not read back is
+set aside. Either only makes entries look older than they are.
 
 RustFS charges a removal to the quota only when it recounts the bucket. The
 evictor asks for one once a twentieth of the quota has left, after it starts,
@@ -309,8 +317,8 @@ cache read-only. The idle minute makes that unlikely, not impossible.
 The quota stays as the backstop. While the evictor is down nothing is removed,
 and what the store could not deliver waits in its memory up to the queue limit;
 a restart of the store loses it. A lost read only makes an entry look older
-than it is. `docker logs kithara-ci-cache-evict` prints one line per pass and
-one per recount.
+than it is. `docker logs kithara-ci-cache` prints one line per pass and one
+per recount, among the store's own lines.
 
 ## Storage policy
 

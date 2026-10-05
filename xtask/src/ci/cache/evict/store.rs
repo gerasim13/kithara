@@ -207,12 +207,13 @@ mod tests {
                 r#"#!/bin/sh
 echo "$*" >> '{log}'
 case "$*" in
-"alias set -- ci http://cache:9000 user password") ;;
+"alias set -- ci {store} user password") ;;
 {cases}
 *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
 "#,
                 log = directory.join("log").display(),
+                store = consts::CACHE_STORE_URL,
             ),
         );
         Store::connect(&program, "user", "password").unwrap()

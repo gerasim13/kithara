@@ -1,6 +1,7 @@
 mod client;
 mod evict;
 mod provision;
+mod serve;
 pub(crate) mod snapshot;
 mod verify;
 

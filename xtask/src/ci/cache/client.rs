@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
 
-use super::{super::config::CiPins, evict, provision, snapshot, snapshot::SnapshotArgs, verify};
+use super::{super::config::CiPins, serve, snapshot, snapshot::SnapshotArgs, verify};
 use crate::{ci::host::mac::read_secret, consts};
 
 /// Everything else a client is told, fixed by how a scope is provisioned.
@@ -160,17 +160,14 @@ enum CacheCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<String>,
     },
-    /// Create persistent administrator credentials inside the Compose volume.
-    Credentials,
-    /// Initialize isolated buckets and client credentials inside Compose.
-    Initialize,
+    /// Run the cache stack inside its container: the store, its buckets and
+    /// client credentials, and the evictor keeping each scope's compiler cache
+    /// under its budget by last use.
+    Serve,
     /// Verify cache reuse between two independent compiler daemons.
     Verify { env_file: PathBuf },
     /// Restore and publish immutable trusted Cargo target snapshots.
     Snapshot(SnapshotArgs),
-    /// Keep each scope's compiler cache under its budget, evicting the entries
-    /// used longest ago.
-    Evict,
 }
 
 /// Compose against the host's environment file, which also goes to
@@ -207,11 +204,9 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             ensure!(status.success(), "cache Compose exited with {status}");
             Ok(())
         }
-        CacheCommand::Credentials => provision::credentials(),
-        CacheCommand::Initialize => provision::initialize(),
+        CacheCommand::Serve => serve::run(),
         CacheCommand::Verify { env_file } => verify::run(env_file),
         CacheCommand::Snapshot(args) => snapshot::run(args),
-        CacheCommand::Evict => evict::run(),
     }
 }
 
@@ -361,12 +356,19 @@ mod tests {
         assert!(missing_defaults(|_| None).is_empty());
     }
 
-    /// `initialize` reads a quota under a name built from each scope the host
+    fn stack() -> serde_yaml_ng::Value {
+        serde_yaml_ng::from_str(
+            &fs::read_to_string(workspace_root().join(consts::CACHE_COMPOSE_FILE)).unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// The stack reads a quota under a name built from each scope the host
     /// serves. Compose hands a container only the variables its file names,
     /// so the quota a host named for one scope never reached it, and every
-    /// initialize flattened that scope to the shared quota.
+    /// start flattened that scope to the shared quota.
     #[test]
-    fn initialize_is_handed_the_environment_file_the_stack_is_started_with() {
+    fn the_stack_is_handed_the_environment_file_it_is_started_with() {
         let host = Path::new("docker/ci-cache/linux.env");
 
         let command = compose(host).unwrap();
@@ -377,15 +379,11 @@ mod tests {
             .and_then(|(_, value)| value)
             .map(PathBuf::from);
         assert_eq!(handed, Some(env::current_dir().unwrap().join(host)));
-        let stack: serde_yaml_ng::Value = serde_yaml_ng::from_str(
-            &fs::read_to_string(workspace_root().join(consts::CACHE_COMPOSE_FILE)).unwrap(),
-        )
-        .unwrap();
         assert!(
-            stack["services"]["initialize"]["env_file"]
+            stack()["services"]["cache"]["env_file"]
                 .as_str()
                 .is_some_and(|file| file.starts_with("${CACHE_ENV_FILE")),
-            "initialize must read the file CACHE_ENV_FILE names"
+            "the stack must read the file CACHE_ENV_FILE names"
         );
     }
 
@@ -421,20 +419,47 @@ mod tests {
         assert!(mounts > 0, "the stack mounts nothing");
     }
 
-    fn stack() -> serde_yaml_ng::Value {
-        serde_yaml_ng::from_str(
-            &fs::read_to_string(workspace_root().join(consts::CACHE_COMPOSE_FILE)).unwrap(),
+    /// The store, what sets it up and the evictor start and stop together,
+    /// so the setup always runs the code the store is served with. The image
+    /// runs the whole stack, and Docker's init stands first in the container
+    /// to hand the stack the signal that stops it.
+    #[test]
+    fn the_stack_is_one_container_the_image_runs_whole() {
+        let stack = stack();
+        let services = stack["services"].as_mapping().unwrap();
+        let cache = &stack["services"]["cache"];
+
+        let dockerfile = fs::read_to_string(
+            workspace_root().join(cache["build"]["dockerfile"].as_str().unwrap()),
         )
-        .unwrap()
+        .unwrap();
+        let entrypoint: Vec<String> = dockerfile
+            .lines()
+            .find_map(|line| line.strip_prefix("ENTRYPOINT "))
+            .map(|words| serde_json::from_str(words).unwrap())
+            .expect("the image names what it runs");
+
+        assert_eq!(services.len(), 1, "the stack runs apart");
+        assert!(
+            cache.get("entrypoint").is_none(),
+            "the stack overrides what the image runs"
+        );
+        assert!(
+            crate::Cli::try_parse_from(&entrypoint).is_ok(),
+            "{entrypoint:?}"
+        );
+        assert_eq!(entrypoint.last().map(String::as_str), Some("serve"));
+        assert_eq!(cache["init"].as_bool(), Some(true));
     }
 
-    /// The store sends its audit log to the evictor by container name, and
-    /// its egress filter refuses a private address whose origin it was not
-    /// told to allow. An endpoint that drifted from the evictor's name or port
-    /// would leave every read unseen, and the evictor would age entries by
-    /// their writes alone.
+    /// The store posts its audit log to the evictor beside it, and its egress
+    /// filter refuses even loopback unless the origin is allowed. An endpoint
+    /// that drifted from where the evictor listens would leave every read
+    /// unseen, and the evictor would age entries by their writes alone. The
+    /// evictor takes every delivery on trust, so it listens where no job
+    /// reaches.
     #[test]
-    fn the_store_sends_its_audit_log_to_the_evictor() {
+    fn the_store_sends_its_audit_log_to_the_evictor_beside_it() {
         let stack = stack();
         let cache = &stack["services"]["cache"];
         let environment = &cache["environment"];
@@ -449,11 +474,12 @@ mod tests {
 
         assert_eq!(setting("RUSTFS_AUDIT_ENABLE"), "true");
         assert_eq!(setting("RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY"), "on");
+        assert!(consts::EVICT_LISTEN.ip().is_loopback());
         assert_eq!(
             endpoint.host_str(),
-            stack["services"]["evict"]["container_name"].as_str()
+            Some(consts::EVICT_LISTEN.ip().to_string().as_str())
         );
-        assert_eq!(endpoint.port(), Some(consts::EVICT_PORT));
+        assert_eq!(endpoint.port(), Some(consts::EVICT_LISTEN.port()));
         let origin = endpoint.origin().ascii_serialization();
         assert!(
             setting("RUSTFS_OUTBOUND_ALLOW_ORIGINS")
@@ -471,84 +497,6 @@ mod tests {
                 .any(|mount| mount.split(':').next() == Some(queue)),
             "the audit queue {queue} is not in memory"
         );
-    }
-
-    /// The evictor reads the scopes and the administrator's credentials the
-    /// way `initialize` does, starts only once the buckets exist, and nothing
-    /// outside the stack reaches the port the audit log arrives on.
-    #[test]
-    fn the_evictor_runs_after_initialize_and_publishes_no_port() {
-        let stack = stack();
-        let evict = &stack["services"]["evict"];
-
-        let entrypoint = evict["entrypoint"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .map(|word| word.as_str().unwrap())
-            .collect::<Vec<_>>();
-
-        assert!(
-            crate::Cli::try_parse_from(&entrypoint).is_ok(),
-            "{entrypoint:?}"
-        );
-        assert_eq!(entrypoint.last(), Some(&"evict"));
-        assert_eq!(
-            evict["env_file"],
-            stack["services"]["initialize"]["env_file"]
-        );
-        assert_eq!(
-            evict["depends_on"]["initialize"]["condition"].as_str(),
-            Some("service_completed_successfully")
-        );
-        assert!(
-            evict["volumes"]
-                .as_sequence()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_yaml_ng::Value::as_str)
-                .any(|mount| mount.ends_with(":/config:ro")),
-            "the evictor cannot read the administrator's credentials"
-        );
-        assert!(evict.get("ports").is_none(), "the evictor publishes a port");
-    }
-
-    /// Job containers share the network they reach the store on, and the
-    /// evictor takes every delivery on trust: a job that could post to it
-    /// could age the trusted scope's entries or hold its recounts forever.
-    #[test]
-    fn only_the_store_reaches_the_evictor() {
-        let stack = stack();
-        let services = stack["services"].as_mapping().unwrap();
-        let joined = |service: &serde_yaml_ng::Value| {
-            service["networks"]
-                .as_sequence()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_yaml_ng::Value::as_str)
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        };
-
-        let evict = joined(&stack["services"]["evict"]);
-
-        assert!(!evict.is_empty(), "the evictor joins no network");
-        for network in &evict {
-            assert_eq!(
-                stack["networks"][network.as_str()]["internal"].as_bool(),
-                Some(true),
-                "{network} leaves the stack"
-            );
-            for (name, service) in services {
-                let name = name.as_str().unwrap();
-                let joins = joined(service).contains(network);
-                assert_eq!(
-                    joins,
-                    matches!(name, "cache" | "evict"),
-                    "{name} and {network}"
-                );
-            }
-        }
     }
 
     #[test]
