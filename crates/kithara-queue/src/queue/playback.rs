@@ -9,6 +9,7 @@ use super::{
     types::{CachedPosition, PendingSelect, PlaybackView, SelectPhase, Transition},
 };
 use crate::{
+    ActionAtItemEnd,
     attempts::LoadClass,
     error::QueueError,
     event::{AdvanceReason, TrackStatus},
@@ -33,24 +34,53 @@ where
         self.player.is_paused()
     }
 
+    /// Where the current track is, in media seconds, and the rate it plays
+    /// at; `None` while paused or before it has a position and a duration.
+    fn playback_time(&self) -> Option<super::types::PlaybackTime> {
+        if self.is_paused() {
+            return None;
+        }
+        let view = self.playback_view();
+        Some(super::types::PlaybackTime {
+            dur: view.duration?,
+            pos: view.position?,
+            rate: f64::from(self.player.rate()),
+        })
+    }
+
+    /// Reload a consumed successor once the current track has the queue's
+    /// prefetch lead left in session time, so the load has that long before
+    /// the successor is needed.
+    fn maybe_reload_successor(&self, time: super::types::PlaybackTime) {
+        if !time.ends_within(self.config.prefetch_duration)
+            || self.action_at_item_end() != ActionAtItemEnd::Advance
+        {
+            return;
+        }
+        let Some(next) = self.peek_selectable_entry() else {
+            return;
+        };
+        if !matches!(next.status, TrackStatus::Consumed) {
+            return;
+        }
+        let Some(source) = self.tracks.source(next.id) else {
+            return;
+        };
+        self.set_status(next.id, TrackStatus::Pending);
+        self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
+    }
+
     /// Start the next-track crossfade ahead of end-of-track when the
     /// session time left at the current rate drops below the configured
     /// crossfade window, so the two tracks actually overlap. `ItemDidPlayToEnd` alone
     /// fires after the first track is already silent — too late for a
     /// real crossfade.
-    fn maybe_arm_crossfade(&self) {
-        if self.is_paused() {
-            return;
-        }
+    fn maybe_arm_crossfade(&self, time: super::types::PlaybackTime) {
         let crossfade = self.player.crossfade_duration();
-        let view = self.playback_view();
-        let (Some(dur), Some(pos), Some(entry)) = (view.duration, view.position, self.current())
-        else {
+        let Some(entry) = self.current() else {
             return;
         };
         let armed_for = self.read_armed_for();
-        let rate = f64::from(self.player.rate());
-        let time = super::types::PlaybackTime { dur, pos, rate };
         if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
             return;
         }
@@ -227,7 +257,10 @@ where
         self.player.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
-        self.maybe_arm_crossfade();
+        if let Some(time) = self.playback_time() {
+            self.maybe_reload_successor(time);
+            self.maybe_arm_crossfade(time);
+        }
         Ok(())
     }
 

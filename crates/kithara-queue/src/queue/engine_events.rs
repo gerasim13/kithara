@@ -11,7 +11,6 @@ use super::{
 };
 use crate::{
     ActionAtItemEnd,
-    attempts::LoadClass,
     event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus},
 };
 
@@ -208,23 +207,6 @@ where
         }
     }
 
-    fn handle_prefetch_requested(&self) {
-        if self.action_at_item_end() != ActionAtItemEnd::Advance {
-            return;
-        }
-        let Some(next) = self.peek_selectable_entry() else {
-            return;
-        };
-        if !matches!(next.status, TrackStatus::Consumed) {
-            return;
-        }
-        let Some(source) = self.tracks.source(next.id) else {
-            return;
-        };
-        self.set_status(next.id, TrackStatus::Pending);
-        self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
-    }
-
     pub(super) fn process_player_event(&self, ev: &PlayerBusEvent) {
         match ev {
             PlayerBusEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
@@ -235,9 +217,6 @@ where
             }
             PlayerBusEvent::Player(PlayerEvent::CurrentItemChanged { .. }) => {
                 self.handle_current_item_changed();
-            }
-            PlayerBusEvent::Player(PlayerEvent::PrefetchRequested) => {
-                self.handle_prefetch_requested();
             }
             PlayerBusEvent::Audio(AudioEvent::UnderrunStarted { .. }) => {
                 self.bus.publish(ItemEvent::PlaybackStalled);

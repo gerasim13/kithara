@@ -238,10 +238,13 @@ pub(crate) struct PlaybackTime {
 }
 
 impl PlaybackTime {
-    /// Session seconds until the track ends at its current rate; `None` while
-    /// it does not advance.
-    fn remaining_session_seconds(self) -> Option<f64> {
-        (self.rate > 0.0).then(|| (self.dur - self.pos) / self.rate)
+    /// Whether the track advances and ends within `seconds` of session time:
+    /// the media time left, divided by the rate it plays at.
+    pub(crate) fn ends_within(self, seconds: f32) -> bool {
+        self.dur > 0.0
+            && self.pos > 0.0
+            && self.rate > 0.0
+            && (self.dur - self.pos) / self.rate <= f64::from(seconds)
     }
 }
 
@@ -260,13 +263,7 @@ pub(crate) fn should_arm_crossfade(
     current_id: TrackId,
     armed_for: CrossfadeArm,
 ) -> bool {
-    crossfade > 0.0
-        && time.dur > 0.0
-        && time.pos > 0.0
-        && time
-            .remaining_session_seconds()
-            .is_some_and(|remaining| remaining <= f64::from(crossfade))
-        && !armed_for.is_armed_for(current_id)
+    crossfade > 0.0 && time.ends_within(crossfade) && !armed_for.is_armed_for(current_id)
 }
 
 pub(super) fn extract_track_name<S>(source: &TrackSource<S>) -> String

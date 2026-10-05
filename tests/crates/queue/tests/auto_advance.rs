@@ -540,17 +540,100 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     harness.close().await;
 }
 
+/// The lead is how long a reload has before the successor is needed, and
+/// that time passes on the session clock: at double speed a consumed
+/// successor reloads when the outgoing track has `lead` session seconds
+/// left, which is twice the lead in media seconds.
+#[kithara::test(tokio)]
+async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() {
+    const TRACK_SECS: f64 = 1.5;
+    const SPEED: f32 = 2.0;
+    const LEAD_SECS: f32 = 0.5;
+    const TOLERANCE_SECS: f64 = 0.1;
+
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let config = QueueConfig::builder()
+        .player(harness.take_player())
+        .crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: 0.0,
+            ..kithara::play::CrossfadeSettings::default()
+        })
+        .prefetch_duration(LEAD_SECS)
+        .build();
+    let queue = harness.insert_control(Queue::new(config)).await;
+
+    let a = assets::constant_wav_quiet_1_5s();
+    let id_a = append_loaded(&harness, &queue, &a).await;
+    let b = assets::constant_wav_loud_1_5s();
+    let id_b = append_loaded(&harness, &queue, &b).await;
+    harness
+        .run(&queue, move |q| q.set_default_rate(SPEED))
+        .await;
+
+    harness
+        .run(&queue, move |q| q.select(id_b, Transition::None))
+        .await
+        .expect("select track B");
+    let _ = render_loop(&queue, &harness, 8).await;
+    assert_eq!(
+        queue.track(id_b).map(|entry| entry.status),
+        Some(TrackStatus::Consumed),
+        "playing B consumes its resource"
+    );
+
+    // The queue loaded A paused on its first append, and B replaced it, so
+    // selecting A reloads it; measure only once A is the track playing.
+    let mut a_events = queue.subscribe();
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select track A");
+    wait_for_loader_done_event(&mut a_events, &queue, id_a, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("track A reloads");
+    let mut reload = None;
+    for block in 0..MAX_BLOCKS {
+        let _ = harness.run(&queue, QueueControl::tick).await;
+        let status = queue.track(id_b).map(|entry| entry.status);
+        if status != Some(TrackStatus::Consumed) {
+            reload = Some((block, status, queue.current_index(), queue.playback_view()));
+            break;
+        }
+        let _ = harness.render(BLOCK_FRAMES).await;
+    }
+
+    let (block, status, current, view) = reload.expect("B reloads while A still plays");
+    assert_eq!(current, Some(0), "B reloads ahead of A, the track playing");
+    let pos = view.position.unwrap_or_else(|| {
+        panic!("A has a position when B reloads (block {block}, B {status:?}, view {view:?})")
+    });
+    let expected = TRACK_SECS - f64::from(LEAD_SECS * SPEED);
+    assert!(
+        (pos - expected).abs() <= TOLERANCE_SECS,
+        "B must reload with {LEAD_SECS}s of session time left in A: \
+         expected A at ≈{expected}s media, got {pos}s"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
 /// Replay regression: after a full cf=0 playthrough every track is
 /// `Consumed`. A second pass over the same queue must still
-/// auto-advance — i.e. `handle_prefetch_requested` must respawn the
-/// `Consumed` next-track via the loader path so `arm_next` can fire
-/// again. Before the fix, the queue stopped after the first track on
-/// every replay.
+/// auto-advance — i.e. the tick must respawn the `Consumed` next-track
+/// via the loader path so the advance has a resource again. Before the
+/// fix, the queue stopped after the first track on every replay.
 ///
 /// Drives the full production code path: the second `select` of track A
 /// hits the `Consumed` branch in `Queue::select` (which respawns via
-/// `spawn_apply_after_load`), then mid-A the prefetch trigger fires
-/// for `Consumed` track B which my fix re-spawns. We pre-supply fresh
+/// `spawn_apply_after_load`), then within the prefetch lead of A's end
+/// the tick respawns `Consumed` track B. We pre-supply fresh
 /// `Resource`s to the loader so spawn completes synthetically, mirroring
 /// what a real network loader would deliver on a replay.
 #[kithara::test(tokio, flash(false))]
@@ -871,8 +954,8 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     harness.close().await;
 }
 
-/// `PrefetchRequested` can arrive before the autoplayed track is current; it
-/// must not arm slot 0 against the decoder already playing it.
+/// A short autoplayed track opens its prefetch lead at once; the reload it
+/// prompts must not arm slot 0 against the decoder already playing it.
 #[kithara::test(tokio)]
 async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_SECS: f64 = 0.4;

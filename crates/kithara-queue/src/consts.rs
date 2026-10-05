@@ -8,9 +8,8 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize
     None => unreachable!(),
 };
 
-/// Default prefetch lead time before EOF, in seconds.
-///
-/// Mirrors `kithara_play::PlayerConfig::prefetch_duration` default.
+/// Default session seconds before a track ends at which the queue reloads a
+/// consumed successor.
 pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
 #[cfg(test)]

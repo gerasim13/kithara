@@ -58,8 +58,9 @@ where
     #[config(skip = "player moves to the queue owner", builder(required, with = Some), patch(skip), debug(skip))]
     pub(crate) player: Option<PlayerImpl<S>>,
 
-    /// Lead time in seconds before EOF at which the next queued track is
-    /// preloaded into the audio processor. Default: 3.5. Stays `f32`
+    /// Session seconds before the current track ends at which a consumed
+    /// successor is reloaded, so its load has that long before it plays.
+    /// Fixed for the queue's lifetime. Default: 3.5. Stays `f32`
     /// seconds rather than the campaign's `humantime` duration convention:
     /// the value already reaches 10 setter and 14 read call sites as a bare
     /// `f32`, and converting the type would only churn those for a

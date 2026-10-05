@@ -150,7 +150,6 @@ where
         let config_cancel = config.cancel.take();
         let max_concurrent_loads = config.max_concurrent_loads;
         let max_history_size = config.max_history_size;
-        let prefetch_duration = config.prefetch_duration;
         let playback_order = config.playback_order;
         let crossfade_settings = config.crossfade_settings();
         let cancel = CancelScope::new(config_cancel).token();
@@ -161,7 +160,6 @@ where
                 .build()
         });
         player.set_auto_advance_enabled(false);
-        player.set_prefetch_duration(prefetch_duration);
         player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
         let player_control = player.control();
@@ -540,22 +538,6 @@ pub(crate) mod tests {
         mutation.join().expect("mutation thread must not panic");
         close.join().expect("close thread must not panic");
         assert!(queue.is_closed());
-    }
-
-    /// `PlayerImpl::set_prefetch_duration` names the queue as the canonical
-    /// owner of this knob, so what the queue's config says has to be what
-    /// the player it drives runs with.
-    #[kithara::test]
-    fn the_configured_prefetch_lead_reaches_the_player() {
-        let queue = Queue::new(
-            QueueConfig::builder()
-                .player(player())
-                .store(make_store())
-                .prefetch_duration(8.0)
-                .build(),
-        );
-
-        assert!((queue.player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
