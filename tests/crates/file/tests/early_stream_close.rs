@@ -61,9 +61,13 @@ async fn wait_for_download_terminal(rx: &mut EventReceiver<TestEvent>, within: D
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }))) => return true,
-            Ok(Ok(TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }))) => return true,
-            Ok(Ok(TestEvent::File(FileEvent::Error { .. }))) => return true,
+            Ok(Ok(
+                TestEvent::Downloader(
+                    DownloaderEvent::RequestCompleted { .. }
+                    | DownloaderEvent::RequestFailed { .. },
+                )
+                | TestEvent::File(FileEvent::Error { .. }),
+            )) => return true,
             Ok(Ok(_)) => {}
             Ok(Err(_)) | Err(_) => return false,
         }

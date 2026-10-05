@@ -6,7 +6,7 @@ use kithara_warp::{
     AssetFrame, BeatGrid, BeatGridId, BeatGridQuery, PresentationFrontier, WarpMapRevision,
     WarpPlan,
 };
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 
 use super::{
     modes::{Group, synced_deck, tempo_at},
@@ -102,7 +102,7 @@ fn relocate(
         target: track,
         load,
         transport: TransportRevision::first(),
-        cue: AssetFrame::new(cue as f64).expect("fixture cue is finite"),
+        cue: AssetFrame::new(cue.as_()).expect("fixture cue is finite"),
         frontier,
         window,
     }
@@ -276,7 +276,7 @@ fn an_uncovered_cue_refuses_the_relocation_without_waiting() {
         &mut group,
         building(
             track,
-            asset_segments_from(480_000, 192_000, 24_000, 0, observed(four_four())),
+            asset_segments_from(480_000, 192_000, 24_000, 0, Some(observed(four_four()))),
         ),
     );
     let launch = launched(&mut group, track);
@@ -362,7 +362,7 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
     };
     assert_eq!(transition.withdrawn(), [relocation.stamp()]);
     let retarget = prepared(&group, track);
-    assert_eq!(transition.issued(), [retarget.clone()]);
+    assert_eq!(transition.issued(), std::slice::from_ref(&retarget));
     assert_ne!(retarget.stamp().operation(), relocation.stamp().operation());
     assert_eq!(
         plan(&retarget).activation().output(),

@@ -612,6 +612,21 @@ mod tests {
                     });
             }
         }
+
+        for stage in SharedStage::AUDIT {
+            let stage_command = stage.health_command();
+            if stage_command.args.first().is_none_or(|arg| arg != "xtask") {
+                continue;
+            }
+            let argv = std::iter::once("xtask")
+                .chain(stage_command.args.iter().skip(1).map(String::as_str));
+            command
+                .clone()
+                .try_get_matches_from(argv)
+                .unwrap_or_else(|error| {
+                    panic!("invalid assessment stage '{}': {error}", stage.audit_name())
+                });
+        }
     }
 
     #[test]

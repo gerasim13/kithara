@@ -18,7 +18,7 @@ fn identity_projection_refusal_retains_the_original_pcm() {
     config.plan().install(Some(kithara_platform::sync::Arc::new(
         mock::projected_plan(120.0, 180.0, spec().sample_rate),
     )));
-    let mut renderer = renderer(config);
+    let mut renderer = renderer(&config);
     renderer.prepare(spec());
     let input = chunk(&renderer.pools, &[0.25, -0.0, -0.25, 1.0]);
     let pointer = input.samples.as_ptr();
@@ -70,7 +70,7 @@ fn native_identity_transitions_preserve_tail_and_restore_processing(
         .speed(0.5)
         .keylock(true)
         .build();
-    let mut reference = renderer(config.clone());
+    let mut reference = renderer(&config);
     let source = &warp_sine[..4096 * 2];
     let input = chunk(&reference.pools, source);
     render_serviced(&mut reference, input).expect("native backend emits PCM");
@@ -81,7 +81,7 @@ fn native_identity_transitions_preserve_tail_and_restore_processing(
     }
     assert!(!reference_tail.is_empty(), "native processing owns a tail");
 
-    let mut live = renderer(config);
+    let mut live = renderer(&config);
     let input = chunk(&live.pools, source);
     render_serviced(&mut live, input).expect("native backend emits PCM");
     live.set_backend(StretchKind::Identity);

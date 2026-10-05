@@ -128,8 +128,7 @@ async fn abr_escapes_stalled_initial_variant(
         while chunks < consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
             match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
-                Ok(ChunkOutcome::Eof { .. }) => break,
-                Ok(ChunkOutcome::Pending { .. }) => break,
+                Ok(ChunkOutcome::Eof { .. } | ChunkOutcome::Pending { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             }
         }

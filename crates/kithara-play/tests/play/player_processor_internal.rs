@@ -606,7 +606,9 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
         "the block is filled end to end"
     );
     assert_eq!(
-        processor.track(preload_id).map(|track| track.state()),
+        processor
+            .track(preload_id)
+            .map(kithara_play::rt::track::PlayerTrack::state),
         Some(TrackState::Playing)
     );
 }
@@ -671,7 +673,9 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
     processor.drain_commands();
 
     assert_eq!(
-        processor.track(successor_id).map(|track| track.state()),
+        processor
+            .track(successor_id)
+            .map(kithara_play::rt::track::PlayerTrack::state),
         after_cancel
     );
 }

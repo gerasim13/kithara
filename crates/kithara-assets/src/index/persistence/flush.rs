@@ -296,10 +296,12 @@ mod tests {
     fn a_patch_writes_only_the_field_it_names() {
         let settings: FlushPolicyPatch =
             serde_yaml_ng::from_str("force_every_n_ops: 512\n").expect("the document types");
-        let mut policy = FlushPolicy::default();
         // Seeded away from the default of 50ms, so the assertion below can tell
         // "left alone" from "reset to the default".
-        policy.debounce = Duration::from_millis(250);
+        let mut policy = FlushPolicy {
+            debounce: Duration::from_millis(250),
+            ..FlushPolicy::default()
+        };
 
         policy.apply(settings);
 

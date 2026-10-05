@@ -227,6 +227,9 @@ pub struct CiReportConfig {
     /// the crate-level map and the explainable candidates, which is the part
     /// worth reading without opening the artifact.
     pub similarity_rows: usize,
+    /// Lines of the parallel-chain section carried into the report: its
+    /// counts, then the longest chains first.
+    pub chain_rows: usize,
     /// Contours listed under the architecture complexity index, worst first.
     pub top_contours: usize,
 }
@@ -237,6 +240,7 @@ impl Default for CiReportConfig {
             crap_rows: 120,
             top_contours: 10,
             similarity_rows: 80,
+            chain_rows: 60,
         }
     }
 }

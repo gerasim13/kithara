@@ -85,11 +85,12 @@ fn partial_decoder_seek_past_available_bytes_errors(tone_mp3: &'static [u8]) {
     assert!(
         result.is_err(),
         "seek to {:?} (inside {:?} total duration) must fail when the source only \
-         holds {:.1} % of the bytes — otherwise the FSM would never reach the \
+         holds {}/{} of the bytes — otherwise the FSM would never reach the \
          recreation path and the user-visible hang wouldn't exist",
         target,
         duration,
-        (consts::PARTIAL_FRACTION_NUM as f64 / consts::PARTIAL_FRACTION_DEN as f64) * 100.0,
+        consts::PARTIAL_FRACTION_NUM,
+        consts::PARTIAL_FRACTION_DEN,
     );
 }
 
