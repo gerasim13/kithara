@@ -50,15 +50,16 @@ impl Availability {
     }
 
     pub(super) fn mark_committed(&mut self, final_len: u64) -> bool {
-        let range = 0..final_len;
-        if self.committed && self.final_len == Some(final_len) && self.contains(&range) {
+        let mut ranges = RangeSet::new();
+        if final_len > 0 {
+            ranges.insert(0..final_len);
+        }
+        if self.committed && self.final_len == Some(final_len) && self.ranges == ranges {
             return false;
         }
         self.committed = true;
         self.final_len = Some(final_len);
-        if final_len > 0 {
-            self.ranges.insert(range);
-        }
+        self.ranges = ranges;
         true
     }
 }
@@ -513,6 +514,37 @@ mod tests {
         assert!(a.committed);
         assert_eq!(a.final_len, Some(0));
         assert!(a.ranges.is_empty());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[case::empty(0)]
+    #[case::shorter(3)]
+    fn committed_ranges_match_final_length_after_shrink(#[case] final_len: u64) {
+        let mut availability = Availability::default();
+        availability.mark_committed(7);
+
+        assert!(availability.mark_committed(final_len));
+
+        assert_eq!(availability.final_len, Some(final_len));
+        assert!(availability.contains(&(0..final_len)));
+        assert!(!availability.contains(&(final_len..7)));
+        assert_eq!(availability.ranges.is_empty(), final_len == 0);
+        assert!(!availability.mark_committed(final_len));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[case::empty(0)]
+    #[case::shorter(3)]
+    fn committing_the_same_length_removes_legacy_range_tails(#[case] final_len: u64) {
+        let mut availability = Availability::default();
+        availability.mark_committed(final_len);
+        availability.insert(final_len..7);
+
+        assert!(availability.mark_committed(final_len));
+
+        assert!(!availability.contains(&(final_len..7)));
+        assert_eq!(availability.ranges.is_empty(), final_len == 0);
+        assert!(!availability.mark_committed(final_len));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

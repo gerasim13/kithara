@@ -2,9 +2,9 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    fs::OpenOptions,
-    io::ErrorKind,
-    path::PathBuf,
+    fs::{File, OpenOptions},
+    io::{self, ErrorKind},
+    path::{Path, PathBuf},
 };
 
 use arc_swap::ArcSwap;
@@ -12,6 +12,7 @@ use kithara_bufpool::ByteBuffer;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::StorageError;
 use rkyv::rancor::Error;
+use same_file::Handle;
 
 use super::core::{AssetTree, Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
@@ -117,22 +118,22 @@ impl InnerIndex {
             .filter_map(|path| self.pending_durability.remove(&path))
             .collect();
         for (path, key) in &queued {
+            let (root, relative) = AvailabilityIndex::resolve_refs(key);
+            let selected = index
+                .assets
+                .get(root)
+                .and_then(|asset| asset.resources.get(relative));
             let synced = OpenOptions::new()
                 .write(true)
                 .open(path)
-                .and_then(|file| file.sync_data());
+                .and_then(|file| sync_selected_file(file, path, selected));
             if let Err(error) = synced {
-                let (root, relative) = AvailabilityIndex::resolve_refs(key);
-                let selected = index
-                    .assets
-                    .get(root)
-                    .is_some_and(|asset| asset.resources.contains_key(relative));
                 let present = self
                     .assets
                     .load()
                     .get(root)
                     .is_some_and(|asset| asset.contains_key(relative));
-                if error.kind() == ErrorKind::NotFound && !selected && !present {
+                if error.kind() == ErrorKind::NotFound && selected.is_none() && !present {
                     continue;
                 }
                 for (path, key) in queued {
@@ -155,6 +156,32 @@ impl InnerIndex {
         self.barrier_pending_files(&index)?;
         write_aggregate(&index, &p.file, durable)
     }
+}
+
+/// Force the opened file, then verify the canonical path still names those
+/// bytes at the extent selected for this manifest. A rewrite may replace the
+/// path or shrink its payload while a flush is holding an older snapshot.
+fn sync_selected_file(
+    file: File,
+    path: &Path,
+    selected: Option<&ResourceAvailabilityFile>,
+) -> io::Result<()> {
+    let synced = Handle::from_file(file)?;
+    synced.as_file().sync_data()?;
+    let canonical = Handle::from_path(path)?;
+    let synced_len = synced.as_file().metadata()?.len();
+    let canonical_len = canonical.as_file().metadata()?.len();
+    let extent_matches = selected.is_none_or(|record| {
+        record.final_len == Some(synced_len)
+            && record.ranges.iter().all(|(_, end)| *end <= synced_len)
+    });
+    if synced != canonical || synced_len != canonical_len || !extent_matches {
+        return Err(io::Error::other(format!(
+            "availability file changed during durability barrier: {}",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Freeze committed values before taking their durability cohort. Tree
@@ -369,5 +396,100 @@ mod tests {
         fs::remove_file(&canonical).unwrap();
 
         assert!(matches!(index.flush(), Err(AssetsError::Io(_))));
+    }
+
+    fn open_observed_resource(
+        path: PathBuf,
+        index: AvailabilityIndex,
+        key: ResourceKey,
+    ) -> AtomicChunked<MmapDriver> {
+        let observer: Arc<dyn AvailabilityObserver> =
+            ScopedAvailabilityObserver::for_file(key, index, path.clone());
+        AtomicChunked::open_deferred(path, move |target, intent| {
+            let mode = match intent {
+                OpenIntent::Fresh => OpenMode::ReadWrite,
+                OpenIntent::Reopen => OpenMode::ReadOnly,
+            };
+            Resource::open_with_observer(
+                CancelToken::never(),
+                MmapOptions::for_path(target.to_path_buf())
+                    .mode(mode)
+                    .build(),
+                Some(Arc::clone(&observer)),
+            )
+        })
+        .unwrap()
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[case::same_size(7)]
+    #[case::shorter(3)]
+    fn a_file_barrier_rejects_a_replaced_handle_even_at_the_same_length(#[case] final_len: usize) {
+        let dir = TempDir::new().unwrap();
+        let canonical = dir.path().join("segment.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        let resource = open_observed_resource(canonical.clone(), index.clone(), key);
+        resource.write_at(0, b"payload").unwrap();
+        resource.commit(Some(7)).unwrap();
+        let selected = snapshot_aggregate(&index.inner);
+        let opened = OpenOptions::new().write(true).open(&canonical).unwrap();
+
+        resource.reactivate().unwrap();
+        let replacement = vec![0xAB; final_len];
+        resource.write_at(0, &replacement).unwrap();
+        resource.commit(Some(final_len as u64)).unwrap();
+        assert_eq!(fs::read(&canonical).unwrap(), replacement);
+
+        let record = &selected.assets["asset"].resources["segment.bin"];
+        assert_eq!(record.final_len, Some(7));
+        assert!(sync_selected_file(opened, &canonical, Some(record)).is_err());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[case::empty(0)]
+    #[case::shorter(3)]
+    fn a_frozen_manifest_rejects_a_shrunk_resource_and_next_flush_records_its_extent(
+        #[case] final_len: usize,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let pools = crate::test_pools::pools();
+        let canonical = dir.path().join("segment.bin");
+        let manifest = dir.path().join("availability.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        index.enable_persistence(manifest.clone(), crate::test_pools::byte_buffer(&pools));
+        let resource = open_observed_resource(canonical.clone(), index.clone(), key.clone());
+        resource.write_at(0, b"payload").unwrap();
+        resource.commit(Some(7)).unwrap();
+        index.flush().unwrap();
+        let selected = snapshot_aggregate(&index.inner);
+        let previous = fs::read(&manifest).unwrap();
+
+        resource.reactivate().unwrap();
+        resource.write_at(0, &vec![0xAB; final_len]).unwrap();
+        resource.commit(Some(final_len as u64)).unwrap();
+        assert_eq!(fs::metadata(&canonical).unwrap().len(), final_len as u64);
+
+        assert!(index.inner.barrier_pending_files(&selected).is_err());
+        assert_eq!(fs::read(&manifest).unwrap(), previous);
+        index.flush().unwrap();
+
+        let restored = AvailabilityIndex::new();
+        restored
+            .load_from(
+                &IndexFile::new(manifest),
+                &mut crate::test_pools::byte_buffer(&pools),
+            )
+            .unwrap();
+        assert_eq!(restored.final_len(&key), Some(final_len as u64));
+        assert!(restored.contains_range(&key, 0..final_len as u64));
+        assert!(!restored.contains_range(&key, final_len as u64..7));
+        assert!(
+            restored
+                .available_ranges(&key)
+                .iter()
+                .all(|range| range.end <= final_len as u64)
+        );
     }
 }

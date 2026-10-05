@@ -4660,6 +4660,7 @@ dependencies = [
  "lru 0.18.5",
  "rangemap",
  "rkyv",
+ "same-file",
  "serde",
  "serde_yaml_ng",
  "serial_test",
