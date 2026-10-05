@@ -1,8 +1,19 @@
-use kithara_test_fixtures::unit_fixtures::{warp_pair, warp_sine};
+use kithara_test_fixtures::unit_fixtures::warp_pair;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use kithara_test_fixtures::unit_fixtures::warp_sine;
 
 use super::*;
 use crate::{SpeedCurve, consts};
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
     use crate::mock;
@@ -45,6 +56,11 @@ fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
     }
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
@@ -111,6 +127,11 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     }
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
     use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
@@ -164,6 +185,11 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
     assert_eq!(frontiers[1], frontiers[2]);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
     use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
@@ -199,6 +225,11 @@ fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
     assert_eq!(frontiers[1], frontiers[2]);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn a_future_projection_retains_the_active_producer_until_activation() {
     use crate::{WarpPlan, mock};
@@ -361,6 +392,11 @@ fn adoption_frontier_reports_only_committed_pcm() {
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 #[case::short(17)]
 #[case::one_worker_quantum(120)]
@@ -386,6 +422,11 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
     assert_eq!(frames.get(), 16);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     let (mut renderer, slot) =
@@ -413,6 +454,11 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     assert_eq!(&*output.samples, samples);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let config = WarpConfig::builder().speed(1.0).build();
@@ -565,6 +611,11 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
     let (mut renderer, slot) = planned_renderer(WarpConfig::builder().speed(1.0).build());
@@ -597,6 +648,11 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
     assert_eq!(output.frames(), 128);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn an_unprojected_renderer_starts_at_the_manual_target() {
     let target = 2.0;
@@ -610,14 +666,25 @@ fn an_unprojected_renderer_starts_at_the_manual_target() {
     );
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
 #[kithara::test]
-#[cfg(feature = "stretch-signalsmith")]
-fn entering_a_unity_grid_preserves_the_next_source_samples(warp_sine: Vec<f32>) {
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(kithara_stretch::StretchKind::Signalsmith)
+)]
+#[cfg_attr(
+    feature = "stretch-glide",
+    case::glide(kithara_stretch::StretchKind::Glide)
+)]
+fn entering_a_unity_grid_preserves_the_next_source_samples(
+    #[case] backend: kithara_stretch::StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let (mut renderer, slot) = planned_renderer(
         WarpConfig::builder()
             .speed(1.0)
             .keylock(false)
-            .backend(kithara_stretch::StretchKind::Signalsmith)
+            .backend(backend)
             .build(),
     );
     renderer.prepare(spec());
@@ -663,9 +730,16 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(warp_sine: Vec<f32>) 
     );
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
 #[kithara::test]
-#[cfg(feature = "stretch-signalsmith")]
-#[case::signalsmith(kithara_stretch::StretchKind::Signalsmith)]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(kithara_stretch::StretchKind::Signalsmith)
+)]
+#[cfg_attr(
+    feature = "stretch-glide",
+    case::glide(kithara_stretch::StretchKind::Glide)
+)]
 fn distant_reanchor_keeps_each_source_quantum_bounded(
     #[case] backend: kithara_stretch::StretchKind,
     warp_sine: Vec<f32>,
@@ -802,6 +876,11 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
     let (mut renderer, slot) =
@@ -832,6 +911,7 @@ fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
     assert!(renderer.projection.active.is_none());
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -945,6 +1025,11 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
     }
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
     let mut renderer = renderer(WarpConfig::builder().speed(1.0).build());
@@ -969,6 +1054,7 @@ fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
     assert!(resident.samples[padded].iter().all(|sample| *sample == 0.0));
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -1071,6 +1157,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     assert_eq!(output.meta.frame_offset, admitted);
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",

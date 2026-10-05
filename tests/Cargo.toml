@@ -88,6 +88,7 @@ wasm = [
     "kithara/resample-rubato",
     "kithara/analysis-beat",
     "kithara/analysis-waveform",
+    "kithara/stretch-identity",
     "kithara/webcodecs",
     "kithara/client-reqwest",
     "kithara/tls-rustls",
@@ -243,9 +244,7 @@ uuid = { workspace = true, features = ["v4"] }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# What the native tests take, minus time stretching: the stretch backends are
-# C++ libraries and `kithara-stretch` declares them for non-wasm targets only,
-# so on wasm the feature compiles a module whose imports do not exist.
+# Native C++ stretchers are unavailable on wasm.
 kithara = { workspace = true, default-features = false, optional = true }
 
 # Only `signal` reaches wasm: the store and its accessors are a host
