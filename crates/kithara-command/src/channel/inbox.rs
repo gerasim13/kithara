@@ -46,6 +46,8 @@ pub struct Due<'inbox, P: Protocol> {
     at: P::Clock,
     /// What the receipt reports when the due batch drops.
     outcome: Outcome<P>,
+    /// Number the sender gave the batch.
+    #[field(get(copy))]
     seq: Seq,
     /// Targets the batch shifts, as judged.
     #[field(get)]
@@ -105,6 +107,18 @@ impl<P: Protocol> Inbox<P> {
         while let Some(sent) = self.pending.try_pop() {
             self.schedule.insert(sent);
         }
+    }
+
+    /// Frames from `start` to the moment of the earliest waiting batch, for an
+    /// executor that ends its block there; zero when that batch waits for the
+    /// next block or its moment is not after `start`. `None` when nothing
+    /// waits.
+    #[must_use]
+    pub fn frames_until_due(&self, start: P::Clock) -> Option<u64> {
+        Some(match self.schedule.peek()? {
+            When::Next => 0,
+            When::At(at) => P::frames_since(at, start).unwrap_or(0),
+        })
     }
 
     /// Next batch due in the block of `frames` frames starting at `start`.

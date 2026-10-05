@@ -200,7 +200,7 @@ fn studio_registry() -> kithara_ui::mock::TestRegistry {
         (
             EndpointCategory::Command,
             "deck.queue.load",
-            ValueKind::Text,
+            ValueKind::Record,
         ),
         (
             EndpointCategory::Telemetry,

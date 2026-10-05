@@ -11,13 +11,14 @@ use kithara::{
     },
     ui::{error::UiDocError, module::IconName, render::TableRow, text::TextDoc},
 };
+use kithara_app_library::{
+    BranchNode, LibrarySource, PageStatus, Registration, SourcePage, worded,
+};
 use tracing::debug;
 
 use super::{
-    BranchNode, LibrarySource, PageStatus, Registration, SourcePage,
     folders::{FolderPicker, MusicFolders},
     listing::{self, Listing},
-    worded,
 };
 
 /// What a thread Explorer started hands back, taken in on the app's tick.
@@ -109,6 +110,7 @@ impl Explorer {
     ) -> BranchNode {
         let key = format!("{top}:{}", path.display());
         let mut folder = BranchNode::new(&key, label, icon);
+        folder.page = true;
         nodes.insert(key, path.to_path_buf());
         match self.listings.get(path) {
             Some(Listing::Listed(listed)) => {
@@ -169,10 +171,7 @@ impl Explorer {
 impl LibrarySource for Explorer {
     fn analysis_key(&self, row: usize) -> Option<&str> {
         match self.shown() {
-            Some(Listing::Listed(folder)) => folder
-                .tracks
-                .get(row)
-                .map(super::track::Track::analysis_key),
+            Some(Listing::Listed(folder)) => folder.tracks.get(row).map(super::track::Track::key),
             _ => None,
         }
     }

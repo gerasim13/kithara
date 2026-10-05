@@ -112,6 +112,7 @@ mod tests {
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct OverlayData {
+    pub(crate) art: Option<crate::draw::Image>,
     pub(crate) artist: String,
     pub(crate) badge: String,
     pub(crate) bpm: String,

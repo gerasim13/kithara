@@ -31,6 +31,7 @@ apple-fused-src = ["kithara-play/apple-fused-src"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
 stretch-glide = ["kithara-play/stretch-glide"]
+stretch-identity = ["kithara-play/stretch-identity"]
 usdt = ["kithara-play/usdt", "kithara-sync/usdt", "kithara-test-utils/usdt"]
 
 [dependencies]
@@ -39,6 +40,7 @@ kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-config = { workspace = true }
+kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-events = { workspace = true }
@@ -66,12 +68,13 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 getrandom = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
+kithara-audio = { workspace = true, features = ["mock"] }
 kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
 kithara-play = { workspace = true, default-features = false, features = ["mock"] }
 kithara-queue = { path = ".", default-features = false, features = ["usdt"] }
 kithara-signal = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
 kithara-warp = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

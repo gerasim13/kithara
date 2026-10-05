@@ -24,6 +24,7 @@
                         state: "/page",
                         initial: "atoms",
                         pages: {
+                            "search": Module(instance: "search", source: "modules/tabs/search.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
                             "assets": Module(instance: "assets", source: "modules/tabs/assets.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
                             "atoms": Module(
                                 instance: "atoms",

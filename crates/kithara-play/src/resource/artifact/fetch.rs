@@ -1,5 +1,7 @@
 use std::{fs::File, io::Read, path::PathBuf};
 
+use bytes::Bytes;
+use futures::StreamExt;
 use kithara_abr::Abr;
 use kithara_download::{Downloader, FetchCmd, Peer};
 use kithara_net::{Headers, NetError, NetResult};
@@ -10,9 +12,10 @@ use url::Url;
 use super::ArtifactDocument;
 use crate::resource::ResourceSrc;
 
-/// Largest document any artifact may arrive as. A prepared grid or waveform is
-/// a summary of a track, not a second copy of it: anything past this is a
-/// wrong URL, not a big artifact, and it is refused before it is buffered.
+/// Largest document any artifact may arrive as. A prepared grid, waveform or
+/// cover is a summary of a track, not a second copy of it: anything past this
+/// is a wrong URL, not a big artifact, and it is refused as soon as its
+/// declared length or its received bytes pass the cap.
 pub const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Why a prepared artifact never reached the resource it was configured for.
@@ -101,7 +104,7 @@ impl<'a> ArtifactFetch<'a> {
     pub async fn load<T: ArtifactDocument>(
         &self,
         src: &ResourceSrc,
-    ) -> Result<Arc<T>, ArtifactLoadError> {
+    ) -> Result<T, ArtifactLoadError> {
         if self.cancel.is_some_and(CancelToken::is_cancelled) {
             return Err(ArtifactLoadError::Cancelled { kind: T::KIND });
         }
@@ -109,12 +112,10 @@ impl<'a> ArtifactFetch<'a> {
             ResourceSrc::Path(path) => self.read_file::<T>(path.clone()).await?,
             ResourceSrc::Url(url) => self.read_url::<T>(url).await?,
         };
-        T::decode(&bytes)
-            .map(Arc::new)
-            .map_err(|reason| ArtifactLoadError::Decode {
-                reason,
-                kind: T::KIND,
-            })
+        T::decode(bytes).map_err(|reason| ArtifactLoadError::Decode {
+            reason,
+            kind: T::KIND,
+        })
     }
 
     async fn read_file<T: ArtifactDocument>(
@@ -162,24 +163,37 @@ impl<'a> ArtifactFetch<'a> {
             .maybe_headers(self.headers_for(url))
             .validator(reject_oversized_artifact)
             .build();
-        match handle.execute(cmd).await {
-            Ok(response) => response
-                .body
-                .collect()
-                .await
-                .map(|bytes| bytes.to_vec())
-                .map_err(|error| ArtifactLoadError::Fetch {
+        let mut body = handle
+            .execute(cmd)
+            .await
+            .map_err(|error| fetch_error::<T>(url, error))?
+            .body;
+        let mut chunks: Vec<Bytes> = Vec::new();
+        let mut received = 0;
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(|error| fetch_error::<T>(url, error))?;
+            received += chunk.len();
+            if received > MAX_ARTIFACT_BYTES {
+                return Err(ArtifactLoadError::TooLarge {
+                    bytes: received as u64,
                     kind: T::KIND,
-                    src: url.to_string(),
-                    reason: error.to_string(),
-                }),
-            Err(NetError::Cancelled) => Err(ArtifactLoadError::Cancelled { kind: T::KIND }),
-            Err(error) => Err(ArtifactLoadError::Fetch {
-                kind: T::KIND,
-                src: url.to_string(),
-                reason: error.to_string(),
-            }),
+                    limit: MAX_ARTIFACT_BYTES,
+                });
+            }
+            chunks.push(chunk);
         }
+        Ok(chunks.concat())
+    }
+}
+
+fn fetch_error<T: ArtifactDocument>(url: &Url, error: NetError) -> ArtifactLoadError {
+    match error {
+        NetError::Cancelled => ArtifactLoadError::Cancelled { kind: T::KIND },
+        error => ArtifactLoadError::Fetch {
+            kind: T::KIND,
+            src: url.to_string(),
+            reason: error.to_string(),
+        },
     }
 }
 

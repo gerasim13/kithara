@@ -5,16 +5,13 @@ use kithara::{
     events::{EventBus, TrackId},
     hls::AbrMode,
     host::{HostConfig, HostSettings, Tap},
-    platform::{
-        sync::Arc,
-        time::{self, Duration},
-    },
+    platform::time::{self, Duration},
     play::{
         CrossfadeSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
         ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SelectionPlayback,
     },
     signal::TransportRevision,
-    warp::{StretchControls, StretchKind, WarpConfig},
+    warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::PackagedSignal, memory_asset_store,
@@ -318,7 +315,7 @@ async fn run_case(
             .push(prepare_deck(case, deck_index, media, hls, media_dir, &pool_region, &host).await);
     }
 
-    load_decks(case, &host, &decks, &mut failures).await;
+    load_decks(case, &host, &decks).await;
     runtime::record_transport_state(&host, None, "before first render", &mut failures).await;
     runtime::drain_all_events(
         &mut decks,
@@ -353,7 +350,6 @@ async fn run_case(
 
     for (deck_index, deck) in decks.iter().enumerate() {
         runtime::validate_deck(case, deck_index, deck, &mut failures);
-        runtime::record_control_state(case, deck_index, deck, "after capture", &mut failures);
     }
     runtime::record_transport_state(
         &host,
@@ -902,14 +898,8 @@ fn assess_position_advance(
     }
 }
 
-async fn load_decks(
-    case: &Case,
-    host: &OfflineHostHarness<TestPools>,
-    decks: &[Deck],
-    failures: &mut Vec<String>,
-) {
+async fn load_decks(case: &Case, host: &OfflineHostHarness<TestPools>, decks: &[Deck]) {
     for (deck_index, deck) in decks.iter().enumerate() {
-        runtime::record_control_state(case, deck_index, deck, "before playback", failures);
         let player = deck.player.control().clone();
         host.run(move || {
             player.select_item_with_crossfade(
@@ -952,9 +942,6 @@ async fn prepare_deck(
     pool_region: &PoolRegion<TestPools>,
     host: &OfflineHostHarness<TestPools>,
 ) -> Deck {
-    let controls = StretchControls::new(1.0);
-    controls.set_backend(StretchKind::Signalsmith);
-    controls.set_keylock(true);
     let bus = EventBus::new(16_384);
     let player = PlayerImpl::new(
         PlayerConfig::builder()
@@ -966,7 +953,12 @@ async fn prepare_deck(
             .sample_rate(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
-            .warp(WarpConfig::builder().stretch(Arc::clone(&controls)).build())
+            .warp(
+                WarpConfig::builder()
+                    .backend(StretchKind::Signalsmith)
+                    .keylock(true)
+                    .build(),
+            )
             .build(),
     );
     let events = player.subscribe();
@@ -1027,7 +1019,6 @@ async fn prepare_deck(
         player,
         reference,
         reference_events,
-        controls,
         events,
         seek_request_epoch: None,
         seek_complete_epoch: None,

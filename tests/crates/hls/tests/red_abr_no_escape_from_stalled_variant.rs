@@ -106,7 +106,7 @@ async fn abr_escapes_stalled_initial_variant(
         )
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.open(config).await.expect("audio creation");
+    let mut audio = worker.load(config).await.expect("audio creation");
 
     // Clone the live ABR handle to read `current_variant` after the drain —
     // the `Arc<AbrState>` it holds outlives `audio` (dropped inside the

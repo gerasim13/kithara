@@ -2,8 +2,10 @@ use std::num::NonZeroU32;
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_command::Sender;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
+use kithara_render::LaneProtocol;
 use tracing::debug;
 
 use super::{QueuedResource, playlist::Playlist};
@@ -23,6 +25,8 @@ pub(crate) struct TakenItem {
     pub(crate) staging: Option<StagingRecipe>,
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
+    /// Player end of the render lane of this load, if its stage has one.
+    pub(crate) lane: Option<Sender<LaneProtocol>>,
 }
 
 pub(crate) struct ItemQueue {
@@ -126,6 +130,7 @@ impl ItemQueue {
         let abr_handle = resource.abr_handle();
         let beat_grid = Arc::clone(resource.beat_grid());
         let staging = resource.staging();
+        let lane = resource.take_lane();
         if let Some(sample_rate) = NonZeroU32::new(host_sample_rate) {
             resource.set_host_sample_rate(sample_rate);
         }
@@ -141,6 +146,7 @@ impl ItemQueue {
             staging,
             item_id,
             duration_seconds,
+            lane,
         }))
     }
 

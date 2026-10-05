@@ -9,7 +9,10 @@ use iced::{
 use kithara_platform::time::Instant;
 
 use super::{
-    super::{Carried, InputOwner, Published, controls::RetainedCanvas, drag, index, scalar},
+    super::{
+        Carried, ControlAction, InputOwner, Published, control_event, controls::RetainedCanvas,
+        drag, index, scalar,
+    },
     paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect},
 };
 use crate::{
@@ -17,7 +20,7 @@ use crate::{
     draw::{Pt, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerPhase, iced as iced_interact,
-        recognizers::{ItemDrag, Scalar, Track},
+        recognizers::{ItemDrag, Scalar, Track, click},
     },
 };
 
@@ -169,6 +172,12 @@ impl canvas::Program<Published> for TableProgram {
         if let Some(action) = self.divider_input(state, input, bounds, drag_point, origin) {
             return Some(action);
         }
+        if let Some(action) = self.cell_action_input(state, input, bounds, point) {
+            state.row_drag = ItemDrag::default();
+            state.drag_index = None;
+            state.pressed_index = None;
+            return Some(action);
+        }
         if let Some(action) = self.row_drag_input(state, input, bounds, point) {
             return Some(action);
         }
@@ -196,6 +205,31 @@ impl canvas::Program<Published> for TableProgram {
 }
 
 impl TableProgram {
+    fn cell_action_input(
+        &self,
+        state: &TableState,
+        input: Input<'_>,
+        bounds: Rect,
+        point: Option<Pt>,
+    ) -> Option<Action<Published>> {
+        let face = &self.paint.face;
+        let offsets = (state.horizontal.offset(), state.vertical.offset());
+        let (_, column, _, action) = face
+            .actions_under(point, bounds, offsets, face.columns())
+            .find(|(_, _, cell, _)| {
+                click::on_input(input, &Hit::new(point, *cell)).is_captured()
+            })?;
+        let path = format!(
+            "{}/{}",
+            self.paint.path,
+            face.columns()[column].column.action_slot()
+        );
+        Some(
+            Action::publish(control_event(&path, ControlAction::Text(action.to_owned())))
+                .and_capture(),
+        )
+    }
+
     fn divider_input(
         &self,
         state: &mut TableState,

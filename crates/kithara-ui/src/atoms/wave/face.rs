@@ -81,6 +81,7 @@ impl Wave {
             cue_text: self.cue_text,
             metrics: self.metrics,
             overlay: data.overlay.as_ref().map(|overlay| Overlay {
+                art: overlay.art.as_ref(),
                 title: &overlay.title,
                 artist: &overlay.artist,
                 bpm: &overlay.bpm,
@@ -160,6 +161,7 @@ impl Drawn {
         Self {
             cached: cached_extent(reads, scope, progress),
             overlay: (style == WaveStyle::Hero).then(|| OverlayData {
+                art: read_art(reads, scope),
                 title: read_text(reads, &derived("deck.track.title", scope))
                     .filter(|title| !title.is_empty())
                     .unwrap_or("No track loaded")
@@ -203,6 +205,7 @@ impl Drawn {
         changed |= std::mem::replace(&mut self.zoom, zoom) != zoom;
         if let Some(overlay) = &mut self.overlay {
             let next = OverlayData {
+                art: read_art(reads, scope),
                 title: read_text(reads, &derived("deck.track.title", scope))
                     .filter(|title| !title.is_empty())
                     .unwrap_or("No track loaded")
@@ -291,14 +294,22 @@ fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
     }
 }
 
+fn read_art(reads: &dyn Reads, scope: &str) -> Option<crate::draw::Image> {
+    match reads.get(&derived("deck.track.artwork", scope)) {
+        Some(ReadValue::Image(image)) => Some(image.clone()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::{Drawn, Rect, Skin, Wave, WaveStyle, cached_extent};
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pt, Rgba},
+        draw::{DrawCmd, DrawListBuilder, Geom, Image, ImageId, Paint, Pt, Rgba},
         ids::SourceUri,
         render::{ReadValue, Reads, WaveBucket, WaveformView},
         shaping::TextContext,
@@ -440,6 +451,153 @@ mod tests {
         assert_eq!(overlay.remain, "-00:15");
         assert_eq!(data.progress, 0.75);
         assert_eq!(f32::from(data.zoom), 0.5);
+    }
+
+    struct ArtReads(Option<Image>);
+
+    impl Reads for ArtReads {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            if endpoint == "deck.track.artwork@deck=a" {
+                self.0.as_ref().map(ReadValue::Image)
+            } else {
+                None
+            }
+        }
+    }
+
+    fn art(id: &str, width: u32, height: u32) -> Image {
+        let len = usize::try_from(width * height * 4).expect("the fixture image fits usize");
+        Image::pixels(
+            ImageId::new(id),
+            width,
+            height,
+            Arc::from(vec![255_u8; len]),
+        )
+        .expect("the fixture contains RGBA pixels")
+    }
+
+    #[kithara::test]
+    fn artwork_arrival_and_removal_update_both_wave_paths() {
+        let mut reads = ArtReads(None);
+        let mut retained = Drawn::read(WaveStyle::Hero, 1.0, Some("A"), None, &reads, "@deck=a");
+        assert!(!retained.refresh(&reads, "@deck=a", None));
+        for next in [Some(art("cover", 4, 2)), None] {
+            reads.0 = next;
+            assert!(retained.refresh(&reads, "@deck=a", None));
+            let immediate = Drawn::read(WaveStyle::Hero, 1.0, Some("A"), None, &reads, "@deck=a");
+            assert!(retained == immediate);
+            assert_eq!(
+                retained.overlay.as_ref().expect("hero overlay").art,
+                reads.0
+            );
+            assert!(!retained.refresh(&reads, "@deck=a", None));
+            let other = Drawn::read(WaveStyle::Hero, 1.0, Some("B"), None, &reads, "@deck=b");
+            assert!(
+                other
+                    .overlay
+                    .as_ref()
+                    .expect("other hero overlay")
+                    .art
+                    .is_none()
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn artwork_is_drawn_instead_of_the_art_placeholder() {
+        let skin = builtin::skin();
+        let painter = Wave::new(WaveStyle::Hero, skin);
+        let mut text = TextContext::from(skin.text_resources());
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 640.0,
+            h: 120.0,
+        };
+        for image in [None, Some(art("cover", 4, 2))] {
+            let reads = ArtReads(image);
+            let data = Drawn::read(WaveStyle::Hero, 1.0, Some("A"), None, &reads, "@deck=a");
+            let mut list = DrawListBuilder::default();
+            painter.paint(&mut list, &mut text, &data, bounds, true);
+            let list = list.finish();
+            let placeholder = list.commands().iter().any(
+                |command| matches!(command, DrawCmd::Text { content, .. } if content == "ART"),
+            );
+            let drawn = list.commands().iter().find_map(|command| match command {
+                DrawCmd::Clip { list, .. } => {
+                    list.commands().iter().find_map(|command| match command {
+                        DrawCmd::Image { image, .. } => Some(image.id()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            });
+            assert_eq!(placeholder, reads.0.is_none());
+            assert_eq!(drawn, reads.0.as_ref().map(Image::id));
+        }
+    }
+
+    #[kithara::test]
+    fn a_long_deck_title_stays_on_one_line_inside_the_summary() {
+        const TITLE: &str = "Big Man, Little Dignity (Re: DOM & JD BECK)";
+        struct SummaryReads;
+        impl Reads for SummaryReads {
+            fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+                (endpoint == "deck.track.title@deck=a").then_some(ReadValue::Text(TITLE))
+            }
+        }
+
+        let skin = builtin::skin();
+        let painter = Wave::new(WaveStyle::Hero, skin);
+        let data = Drawn::read(
+            WaveStyle::Hero,
+            1.0,
+            Some("A"),
+            None,
+            &SummaryReads,
+            "@deck=a",
+        );
+        let mut text = TextContext::from(skin.text_resources());
+        let mut list = DrawListBuilder::default();
+        painter.paint(
+            &mut list,
+            &mut text,
+            &data,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 440.0,
+                h: 120.0,
+            },
+            true,
+        );
+        let list = list.finish();
+        let (summary, run, at) = list
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCmd::Clip { region, list } => {
+                    list.commands().iter().find_map(|command| match command {
+                        DrawCmd::Text {
+                            run,
+                            content,
+                            transform,
+                            ..
+                        } if content.starts_with("Big Man") => {
+                            Some((region, run, transform.apply(Pt { x: 0.0, y: 0.0 })))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("the summary paints the title inside its clip");
+
+        assert_eq!(
+            run.height(),
+            text.shape(TITLE, skin.wave.overlay.title, None).height()
+        );
+        assert!(at.x + run.width() <= summary.x + summary.w);
     }
 
     /// The continuously repainted wave keeps its owned sample arrays when the

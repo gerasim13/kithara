@@ -79,6 +79,13 @@ jobs:
           render() {
             just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} --field "$1"
           }
+          # Assigned first and echoed second, because a substitution inside
+          # `echo` is only the echo's argument: the selector could die and the
+          # step would still exit zero, writing an empty value. The caller then
+          # hands that empty string to `fromJSON` and the run dies at the job
+          # graph, naming nothing, while the job that knew the reason is
+          # reported green. A plain assignment carries the substitution's own
+          # status, so the step that failed is the step that says so.
           matrix=$(render matrix)
           dependent=$(render dependent)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"

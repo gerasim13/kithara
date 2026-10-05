@@ -1,4 +1,4 @@
-use std::{fmt::Debug, num::NonZeroU64};
+use std::{convert::Infallible, fmt::Debug, num::NonZeroU64};
 
 /// Number a channel gives a batch when it is sent.
 ///
@@ -42,6 +42,13 @@ impl<T> Default for When<T> {
 pub trait Target: Copy {
     /// Position of this target among the targets a channel tracks.
     fn index(self) -> usize;
+}
+
+/// A protocol whose batches shift no time names no target.
+impl Target for Infallible {
+    fn index(self) -> usize {
+        match self {}
+    }
 }
 
 /// Types one executor speaks: its commands, targets, clock and answers.

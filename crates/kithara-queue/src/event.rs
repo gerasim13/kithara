@@ -64,6 +64,11 @@ pub enum QueueEvent {
         id: TrackId,
         status: TrackStatus,
     },
+    /// A track's metadata changed without a status change: the cover read
+    /// with its load arrived.
+    TrackMetadataChanged {
+        id: TrackId,
+    },
     /// The currently playing track changed.
     CurrentTrackChanged {
         id: Option<TrackId>,

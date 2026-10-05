@@ -7,7 +7,7 @@ use kithara_events::{Envelope, EventBus, TryRecvError};
 use kithara_platform::time::Duration;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
-    SelectTransition, StretchControls, mock, player::PlayerControlSource,
+    SelectTransition, mock, player::PlayerControlSource,
 };
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
@@ -167,11 +167,7 @@ fn player_config_custom() {
         .gapless_mode(GaplessMode::MediaOnly)
         .eq_layout(generate_log_spaced_bands(5))
         .max_slots(2)
-        .warp(
-            WarpConfig::builder()
-                .stretch(StretchControls::new(1.0))
-                .build(),
-        )
+        .warp(WarpConfig::builder().build())
         .build();
     let player = PlayerImpl::new(config);
     assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);

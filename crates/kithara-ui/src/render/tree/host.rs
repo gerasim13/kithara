@@ -287,6 +287,12 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<State>();
+        let pasted = state
+            .engine
+            .editing_text()
+            .then(|| crate::render::text_input::paste(event, clipboard))
+            .flatten();
+        let event = pasted.as_ref().unwrap_or(event);
         let input = iced_interact::input(event);
         let focus_before = state.engine.focused_path().map(ToOwned::to_owned);
         let item_was_pressed = state.engine.has_pressed_item();
@@ -632,6 +638,7 @@ mod tests {
             document::{Clock, Ctx},
             drop_fixture,
             fonts::{FONT_BYTES, SANS},
+            text_input::ClipboardText,
             tree::control::HostedControl,
             window_layer,
         },
@@ -926,6 +933,7 @@ mod tests {
             icon: IconName::Folder,
             count: None,
             expanded: None,
+            page: false,
             selected: false,
             muted: false,
         }; 8],
@@ -1232,6 +1240,23 @@ mod tests {
         .unwrap_or_else(|error| panic!("gallery library fixture must compile: {error}"))
     }
 
+    fn compiled_page_search() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert("search.klayout.ron", r#"(schema: "kithara.layout", version: 1, id: "page-search", root: Module(instance: "page", source: "search.kmodule.ron"))"#);
+        resolver.insert("search.kmodule.ron", r#"(schema: "kithara.module", version: 1, id: "gallery-library2-tab", chrome: Plain,
+            root: Column(size: (w: Fill, h: Fill), children: [Search(id: "query", read: Model(id: "library.query"), write: Model(id: "library.query"))]))"#);
+        compile(
+            "search.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &UiConfig::default(),
+            &view::EMPTY,
+        )
+        .expect("standalone page Search compiles")
+    }
+
     fn compiled_gallery_primitive(page: &str, source: &str) -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
@@ -1442,6 +1467,7 @@ mod tests {
             "titlebars",
             "table",
             "tree",
+            "search",
             "library2",
             "stress",
             "menu",
@@ -1813,7 +1839,7 @@ mod tests {
 
     fn descriptor_path(descriptor: &Descriptor) -> &str {
         match descriptor {
-            Descriptor::Activation { path }
+            Descriptor::Activation { path, .. }
             | Descriptor::Crossing { path }
             | Descriptor::Segmented { path, .. }
             | Descriptor::Picker { path, .. }
@@ -4096,6 +4122,69 @@ mod tests {
     }
 
     #[kithara::test]
+    fn hosted_page_search_pastes_through_the_engine() {
+        let ui = compiled_page_search();
+        let reads = FixtureReads {
+            query: "ab".to_owned(),
+            ..FixtureReads::default()
+        };
+        let CompiledNode::Module { root, .. } = &ui.root else {
+            panic!("Search fixture is a module")
+        };
+        let renderer = headless_renderer();
+        let viewport = Size::new(240.0, 120.0);
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let pointer =
+            Cursor::Available(Point::new(230.0, builtin::skin().tree.search_height / 2.0));
+        let mut clipboard = ClipboardText;
+        let mut messages = Vec::new();
+        for event in [
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
+        ] {
+            element.as_widget_mut().update(
+                &mut tree,
+                &event,
+                Layout::new(&node),
+                pointer,
+                &renderer,
+                &mut clipboard,
+                &mut Shell::new(&mut messages),
+                &Rectangle::with_size(viewport),
+            );
+        }
+        assert!(messages.is_empty());
+        let mut event = character_event("v", Code::KeyV);
+        if let Event::Keyboard(keyboard::Event::KeyPressed { modifiers, .. }) = &mut event {
+            *modifiers = IcedModifiers::COMMAND;
+        }
+        element.as_widget_mut().update(
+            &mut tree,
+            &event,
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut Shell::new(&mut messages),
+            &Rectangle::with_size(viewport),
+        );
+        assert_eq!(
+            messages,
+            [control_event(
+                "page/query",
+                ControlAction::Text("ab pasted".to_owned())
+            )]
+        );
+    }
+
+    #[kithara::test]
     fn gallery_module_tabs_share_the_host_activation_component() {
         let ui = compiled_gallery_tabs();
         let reads = FixtureReads::default();
@@ -4185,7 +4274,7 @@ mod tests {
         assert_eq!(ui.resolve(*module), "gallery-nav");
         let mut components = Vec::new();
         claimed_components(root, &mut components);
-        assert_eq!(components, ["activation"; 30]);
+        assert_eq!(components, ["activation"; 31]);
 
         let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
@@ -4222,6 +4311,7 @@ mod tests {
                 "gallery/titlebars/item",
                 "gallery/table/item",
                 "gallery/tree/item",
+                "gallery/search/item",
                 "gallery/library2/item",
                 "gallery/stress/item",
                 "gallery/menu/item",

@@ -159,6 +159,7 @@ macro_rules! controls {
                     .maybe_status(status.as_ref())
                     .build(),
             ),
+            $crate::expand::ControlSpec::Search => with.apply(&$crate::mount::Search),
             $crate::expand::ControlSpec::Tree {
                 query,
                 search,

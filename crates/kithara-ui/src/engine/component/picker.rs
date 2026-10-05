@@ -88,7 +88,7 @@ impl PickerComponent {
             Key::Backspace | Key::Delete => Outcome::captured(),
             Key::ArrowLeft
             | Key::ArrowRight
-            | Key::Character(_)
+            | Key::Character { .. }
             | Key::End
             | Key::Home
             | Key::Other => Outcome::IGNORED,

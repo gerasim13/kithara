@@ -5,7 +5,7 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-use super::{paint::TextInputPaint, widget::TextInputState};
+use super::{paint::SearchPaint, widget::TextInputState};
 use crate::{
     engine::Target,
     interact::iced as iced_interact,
@@ -14,11 +14,11 @@ use crate::{
 
 pub(super) struct InputProgram<'a> {
     path: String,
-    paint: TextInputPaint<'a>,
+    paint: SearchPaint<'a>,
 }
 
 impl<'a> InputProgram<'a> {
-    pub(super) fn new(path: &str, paint: TextInputPaint<'a>) -> Self {
+    pub(super) fn new(path: &str, paint: SearchPaint<'a>) -> Self {
         Self {
             paint,
             path: path.to_owned(),
@@ -46,7 +46,10 @@ impl canvas::Program<Published> for InputProgram<'_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Interaction {
-        let target = Target::new(&self.path, iced_interact::hit(bounds, cursor));
+        let target = Target::new(
+            &self.path,
+            iced_interact::hit(self.paint.input_bounds(bounds), cursor),
+        );
         state
             .engine()
             .map_or(Interaction::None, |engine| engine.cursor(&[target]).into())
@@ -61,7 +64,10 @@ impl canvas::Program<Published> for InputProgram<'_> {
     ) -> Option<Action<Published>> {
         let input = iced_interact::input(event)?;
         let before = state.snapshot().clone();
-        let target = Target::new(&self.path, iced_interact::hit(bounds, cursor));
+        let target = Target::new(
+            &self.path,
+            iced_interact::hit(self.paint.input_bounds(bounds), cursor),
+        );
         let emission = state.engine_mut()?.handle(input, &[target], Instant::now());
         state.refresh();
         let changed = before != *state.snapshot();
@@ -80,11 +86,11 @@ impl canvas::Program<Published> for InputProgram<'_> {
 }
 
 pub(super) struct PaintProgram<'a> {
-    paint: TextInputPaint<'a>,
+    paint: SearchPaint<'a>,
 }
 
 impl<'a> PaintProgram<'a> {
-    pub(super) const fn new(paint: TextInputPaint<'a>) -> Self {
+    pub(super) const fn new(paint: SearchPaint<'a>) -> Self {
         Self { paint }
     }
 }

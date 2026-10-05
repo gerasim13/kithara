@@ -697,6 +697,36 @@ fn present_table_column_state_endpoint_must_be_bool() {
 }
 
 #[kithara::test]
+fn a_table_column_action_endpoint_must_accept_text() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(id: "rows", read: Model(id: "library.visible_tracks"),
+                columns: [(id: "reaction", label: "", style: Icon, width: 28.0,
+                    write: Command(id: "fixture.action"))]))"#,
+    );
+    let mut registry = kithara_ui::mock::player_registry();
+    registry.insert(
+        EndpointCategory::Command,
+        "fixture.action",
+        EndpointDesc::new(ValueKind::Index),
+    );
+    let error = compile(
+        "table.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, UiDocError::BindingType { id, expected, got, .. }
+        if id == "fixture.action" && expected == "Text" && got == "Index")
+    );
+}
+
+#[kithara::test]
 fn layout_module_size_override_wins_over_computed_size() {
     let mut resolver = MemResolver::default();
     resolver.insert(

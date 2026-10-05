@@ -7,7 +7,7 @@ use kithara::{
     events::TrackId,
     platform::time::{self, Duration},
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
-    warp::{StretchControls, StretchKind, WarpConfig},
+    warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     disk_asset_store,
@@ -121,12 +121,10 @@ async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
 /// plays out in audibly fewer frames than its length only on the Warp path.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: TestTempDir) {
-    let stretch = StretchControls::new(1.0);
-    stretch.set_backend(StretchKind::Glide);
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .warp(WarpConfig::builder().stretch(stretch).build())
+            .warp(WarpConfig::builder().backend(StretchKind::Glide).build())
             .build(),
         consts::SAMPLE_RATE,
     )

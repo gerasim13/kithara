@@ -50,6 +50,8 @@ struct DemoTreeRow {
 
 #[derive(Deserialize)]
 struct DemoTrack {
+    #[serde(default)]
+    muted: bool,
     artist: String,
     bpm: String,
     deck: String,
@@ -131,6 +133,7 @@ fn load_catalog() -> Catalog {
             icon: row.icon,
             count: row.count,
             expanded: row.expanded,
+            page: false,
             selected: row.selected,
             muted: row.muted,
         })
@@ -187,4 +190,5 @@ fn track_row(
         ],
         selected,
     )
+    .with_muted(track.muted)
 }

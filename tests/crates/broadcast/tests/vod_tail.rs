@@ -53,7 +53,7 @@ async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
 
     let mut audio = worker
-        .open(audio_config)
+        .load(audio_config)
         .await
         .expect("open the stopped broadcast as HLS");
     audio.preload().expect("preload the VOD tail");

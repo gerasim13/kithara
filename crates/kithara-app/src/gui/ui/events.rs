@@ -4,6 +4,7 @@ use kithara::{
         DEFAULT_ZOOM, Scope, UiEvent, WindowCommand, WriteValue, Zoom, zoom_in, zoom_out,
     },
 };
+use kithara_app_library::Playable;
 use num_traits::cast::AsPrimitive;
 
 use super::{
@@ -65,10 +66,11 @@ fn deck_write(
                 Some(f64::from(f32::from(Zoom::from(zoom))));
             return None;
         }
-        ("deck.queue.load", WriteValue::Text(source)) => {
+        ("deck.queue.load", WriteValue::Record(record)) => {
+            let track = Playable::try_from(record).ok()?;
             let deck = deck_id(state, index)?;
             state.ui.cache.focus(index);
-            state.send(Command::LoadOntoDeck { deck, source });
+            state.send(Command::LoadOntoDeck { deck, track });
             return None;
         }
         ("deck.eq.mode", WriteValue::Trigger) => {
@@ -179,22 +181,23 @@ fn library_write(state: &mut Kithara, id: &str, value: &WriteValue) {
     }
 }
 
+/// The shell answers its own source writes; the rest are the scoped
+/// source's, by their name under `source.`.
 fn source_write(
     state: &mut Kithara,
     id: &str,
     scope: Scope<'_>,
     value: &WriteValue,
 ) -> Option<Message> {
-    match (id, value) {
-        ("source.select", WriteValue::Index(row)) => {
-            state.library.select_row(scope.get("source")?, *row);
-        }
-        ("source.column.width", WriteValue::Scalar(width)) => {
+    let source = scope.get("source")?;
+    match (id.strip_prefix("source.")?, value) {
+        ("select", WriteValue::Index(row)) => state.library.select_row(source, *row),
+        ("column.width", WriteValue::Scalar(width)) => {
             state
                 .library
-                .set_column_width(scope.get("source")?, scope.get("column")?, *width);
+                .set_column_width(source, scope.get("column")?, *width);
         }
-        _ => {}
+        (name, value) => state.library.write(source, name, value),
     }
     None
 }
@@ -312,7 +315,7 @@ mod tests {
         use std::convert::Infallible;
 
         use ::kithara::ui::render::{
-            ControlAction, DEFAULT_ZOOM, Published, UiEvent, WindowCommand, WriteValue,
+            ControlAction, DEFAULT_ZOOM, UiEvent, WindowCommand, WriteValue,
         };
         use kithara_test_utils::{kithara, off_thread::OffThread};
 
@@ -499,14 +502,6 @@ mod tests {
             );
         }
 
-        fn drop_on(rig: &mut Rig, deck: &str, url: &str) {
-            rig.message(Message::Ui(Published::Gesture {
-                action: ControlAction::Text(url.to_owned()),
-                path: format!("deck-{deck}/drop"),
-            }));
-            rig.pump();
-        }
-
         fn until_current(rig: &mut Rig, deck: usize, name: &str) {
             rig.until(
                 "the dropped track becomes current",
@@ -542,7 +537,7 @@ mod tests {
         #[kithara::test(native, tokio, flash(false))]
         async fn a_row_dropped_on_deck_b_loads_onto_deck_b(tone_mp3: String) {
             with_rig(move |rig| {
-                drop_on(rig, "b", &tone_mp3);
+                rig.drop_on("b", &tone_mp3);
                 let [name] = names(rig, 1)
                     .try_into()
                     .expect("deck B holds the dropped track");
@@ -559,12 +554,12 @@ mod tests {
             short_wav: String,
         ) {
             with_rig(move |rig| {
-                drop_on(rig, "a", &tone_mp3);
-                drop_on(rig, "a", &short_wav);
+                rig.drop_on("a", &tone_mp3);
+                rig.drop_on("a", &short_wav);
                 let [tone, wav] = names(rig, 0).try_into().expect("deck A holds both tracks");
                 until_current(rig, 0, &wav);
 
-                drop_on(rig, "a", &tone_mp3);
+                rig.drop_on("a", &tone_mp3);
 
                 assert_eq!(names(rig, 0), [tone.clone(), wav]);
                 until_current(rig, 0, &tone);

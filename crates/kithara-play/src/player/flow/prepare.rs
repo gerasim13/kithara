@@ -30,7 +30,12 @@ where
             .cancel
             .or_else(|| self.player.core.engine.cancel_token())
             .map(|parent| parent.child());
-        let warp = self.player.core.config.warp.clone();
+        let warp = self
+            .player
+            .core
+            .lanes
+            .next()
+            .warp(&self.player.core.config.warp);
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let stream_shape = self.player.core.engine.stream_shape()?;

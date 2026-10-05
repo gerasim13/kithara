@@ -244,8 +244,8 @@ resample-rubato = [
 ]
 analysis-beat = ["analysis", "beat", "kithara-analysis/analysis-beat"]
 analysis-waveform = ["analysis", "kithara-analysis/analysis-waveform", "kithara-waveform/dsp"]
-# Native-only C++ time-stretch backends. Native builds require at least one;
-# enabling both makes them selectable at runtime in the DJ deck.
+# Warp requires an explicit backend. Native stretchers and Glide provide DSP;
+# Identity preserves samples without rate or keylock support.
 stretch-signalsmith = [
     "stretch",
     "kithara-host?/stretch-signalsmith",
@@ -269,6 +269,14 @@ stretch-glide = [
     "kithara-queue?/stretch-glide",
     "kithara-stretch/stretch-glide",
     "kithara-warp?/stretch-glide",
+]
+stretch-identity = [
+    "stretch",
+    "kithara-host?/stretch-identity",
+    "kithara-play?/stretch-identity",
+    "kithara-queue?/stretch-identity",
+    "kithara-stretch/stretch-identity",
+    "kithara-warp?/stretch-identity",
 ]
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.

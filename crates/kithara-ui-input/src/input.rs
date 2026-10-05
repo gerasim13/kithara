@@ -25,6 +25,24 @@ pub enum Input<'a> {
     Wheel(Scroll),
 }
 
+impl Input<'_> {
+    /// Whether this is the platform's shortcut on the key lettered `letter`:
+    /// that key pressed with the command modifier and without Alt.
+    #[must_use]
+    pub fn shortcut(&self, letter: char) -> bool {
+        matches!(
+            self,
+            Self::KeyPressed {
+                key: Key::Character {
+                    latin: Some(latin), ..
+                },
+                modifiers,
+                ..
+            } if latin.eq_ignore_ascii_case(&letter) && modifiers.command() && !modifiers.alt()
+        )
+    }
+}
+
 /// Toolkit-neutral keyboard key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Key<'a> {
@@ -39,8 +57,27 @@ pub enum Key<'a> {
     Escape,
     Home,
     Space,
-    Character(&'a str),
+    /// A key that types `text` in the active layout. Shortcuts match on
+    /// `latin`: the typed character when it is one Latin-script character,
+    /// otherwise the letter on the physical key.
+    Character {
+        text: &'a str,
+        latin: Option<char>,
+    },
     Other,
+}
+
+impl<'a> Key<'a> {
+    /// The key that types `text` from the physical key lettered `physical`.
+    #[must_use]
+    pub fn character(text: &'a str, physical: Option<char>) -> Self {
+        let mut chars = text.chars();
+        let latin = match (chars.next(), chars.next()) {
+            (Some(single), None) if single < '\u{370}' => Some(single),
+            _ => physical,
+        };
+        Self::Character { text, latin }
+    }
 }
 
 /// Toolkit-neutral text-input-method event.

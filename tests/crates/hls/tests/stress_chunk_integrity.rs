@@ -198,7 +198,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         .media_info(wav_info)
         .build();
     let mut audio = worker
-        .open(config)
+        .load(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

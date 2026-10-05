@@ -5,23 +5,52 @@ use std::{
 
 use kithara_audio::{Audio, ResamplerBackend};
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_command::{ChannelConfig, channel};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
+use kithara_render::{LaneProtocol, WarpSource};
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
-use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskError, Worker, WorkerConfig};
+use kithara_worker::{
+    Dispatcher, DispatcherConfig, PendingTask, TaskConfig, TaskError, Worker, WorkerConfig,
+};
 
 use super::{
     DecoderNode, PlayWorkerConfig, ReadinessProbe, RegisteredAudio, StagedSlot, TrackConfig,
-    TrackLease, WarpSource,
+    TrackLease,
     scheduler::{PlaybackObserver, ServiceClass, Wake},
 };
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Why a worker refused to load a track.
+#[derive(Debug, thiserror::Error)]
+pub enum LoadRefusal {
+    /// Every worker slot is held; the track's source was not opened.
+    #[error("play worker holds its capacity of {capacity} tracks")]
+    Capacity { capacity: usize },
+    /// The track did not open: its source or decoder failed, the load was
+    /// cancelled, or the worker stopped.
+    #[error(transparent)]
+    Open(#[from] DecodeError),
+}
+
+impl From<LoadRefusal> for DecodeError {
+    fn from(refusal: LoadRefusal) -> Self {
+        match refusal {
+            LoadRefusal::Open(error) => error,
+            capacity @ LoadRefusal::Capacity { .. } => {
+                Self::audio_stream("play worker load", capacity)
+            }
+        }
+    }
+}
+
 struct WorkerOwner<S> {
+    /// Sizes of the channel each registered track's render lane gets.
+    lane: ChannelConfig,
     dispatcher: Dispatcher,
     pools: PoolRegion<S>,
     base: Worker,
@@ -45,6 +74,7 @@ impl<S> PlayWorker<S> {
             capacity,
             fairness_yield_interval,
             idle_timeout,
+            lane_capacity,
             pools,
             slow_tick_threshold,
             task_burst,
@@ -74,6 +104,7 @@ impl<S> PlayWorker<S> {
             .build();
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
+            lane: ChannelConfig::builder().capacity(lane_capacity).build(),
             dispatcher,
             pools,
             base,
@@ -95,18 +126,32 @@ impl<S> PlayWorker<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Prepare and register a stream-backed audio reader on this worker.
+    /// Loads a stream-backed track: holds its worker slot first, then opens
+    /// its source once.
     ///
     /// # Errors
     ///
-    /// Returns decode/setup errors or a typed worker registration failure.
-    pub async fn open<T, B, C>(&self, config: C) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
+    /// Returns [`LoadRefusal::Capacity`] without opening anything when every
+    /// slot is held, or [`LoadRefusal::Open`] when the track does not open.
+    pub async fn load<T, B, C>(
+        &self,
+        config: C,
+    ) -> Result<RegisteredAudio<Stream<T>, S>, LoadRefusal>
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
         C: Into<TrackConfig<T, B>>,
     {
-        self.open_lane(config.into(), None).await
+        let config = config.into();
+        let slot = self
+            .0
+            .dispatcher
+            .reserve(Self::task_config(config.audio.cancel().cloned()))
+            .map_err(|error| match error {
+                TaskError::Capacity { capacity } => LoadRefusal::Capacity { capacity },
+                error => LoadRefusal::Open(DecodeError::audio_stream("play worker load", error)),
+            })?;
+        Ok(self.open_lane(config, slot, None).await?)
     }
 
     /// Holds a worker slot for one staged lane before anything is opened.
@@ -135,13 +180,15 @@ where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
     {
-        self.open_lane(config, Some((slot, probe))).await
+        self.open_lane(config, slot.0, Some(probe)).await
     }
 
+    /// Opens the lane's source and starts it in its held `slot`.
     async fn open_lane<T, B>(
         &self,
         config: TrackConfig<T, B>,
-        staged: Option<(StagedSlot, ReadinessProbe)>,
+        slot: PendingTask,
+        probe: Option<ReadinessProbe>,
     ) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
     where
         T: StreamType<Events = EventBus>,
@@ -153,11 +200,11 @@ where
             engine_load,
             warp,
         } = config;
-        let task_cancel = audio.cancel().cloned();
         let wake = Wake::new(self.0.dispatcher.wake_handle());
         let prepared =
             Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
+        let (lane_sender, inbox) = channel::<LaneProtocol>(self.0.lane);
         let prepared = prepared.map(|audio, source| {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
@@ -168,36 +215,29 @@ where
                 drain,
                 spec,
                 self.pools().clone(),
+                inbox,
             );
             (warp, source)
         });
         let (mut audio, lane) = prepared.into();
-        let task = match staged {
-            None => self
-                .0
-                .dispatcher
-                .register(Self::task_config(task_cancel), |_| {
-                    DecoderNode::new(lane, engine_load, None)
-                })
-                .map_err(|error| DecodeError::audio_stream("play worker registration", error))?,
-            Some((slot, probe)) => {
-                let entry =
-                    lane.source
-                        .entry_position()
-                        .ok_or_else(|| DecodeError::InvalidData {
-                            detail: "staged lane enters no plan",
-                        })?;
-                if !entry.is_zero() {
-                    audio.source_mut().seek(entry)?;
-                }
-                slot.0
-                    .start(|_| DecoderNode::new(lane, engine_load, Some(probe)))
-                    .map_err(|error| DecodeError::audio_stream("play worker staging", error))?
+        if probe.is_some() {
+            let entry = lane
+                .source
+                .entry_position()
+                .ok_or_else(|| DecodeError::InvalidData {
+                    detail: "staged lane enters no plan",
+                })?;
+            if !entry.is_zero() {
+                audio.source_mut().seek(entry)?;
             }
-        };
+        }
+        let task = slot
+            .start(|_| DecoderNode::new(lane, engine_load, probe))
+            .map_err(|error| DecodeError::audio_stream("play worker start", error))?;
         Ok(RegisteredAudio::new(
             audio,
             TrackLease::new(self.clone(), task),
+            lane_sender,
         ))
     }
 

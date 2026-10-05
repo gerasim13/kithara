@@ -127,7 +127,7 @@ async fn forward_into_withheld_segment_waits_and_resumes(
         .build();
 
     let mut audio = worker
-        .open(audio_config)
+        .load(audio_config)
         .await
         .expect("audio creation (segment 0 not withheld)");
 

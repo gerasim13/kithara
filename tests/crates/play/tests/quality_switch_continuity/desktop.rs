@@ -5,9 +5,8 @@ use kithara::{
     StretchKind,
     audio::{DecoderResamplerSettings, ResamplerKind},
     events::TrackId,
-    platform::sync::Arc,
     play::{PlaybackResamplerBackend, ResourceSrc},
-    warp::{StretchControls, WarpConfig},
+    warp::WarpConfig,
 };
 use kithara_integration_tests::{
     CreatedHls, TestServerHelper,
@@ -186,13 +185,11 @@ async fn render_paced(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
 async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPrepared {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
 
-    let timestretch = StretchControls::new(1.0);
-    timestretch.set_backend(StretchKind::Signalsmith);
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .warp(
                 WarpConfig::builder()
-                    .stretch(Arc::clone(&timestretch))
+                    .backend(StretchKind::Signalsmith)
                     .build(),
             )
             .build(),

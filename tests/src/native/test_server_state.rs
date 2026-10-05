@@ -127,7 +127,7 @@ impl Gate {
 ///   BEFORE this segment's size is known" — the genuinely-immediate-seek
 ///   condition that the body-only gate cannot model (the body gate would block
 ///   stream construction, since size estimation HEADs every segment
-///   synchronously at `PlayWorker::open`). The `head_requested` counter lets a test
+///   synchronously at `PlayWorker::load`). The `head_requested` counter lets a test
 ///   observe the HEAD arrival.
 ///
 /// Lives in `TestServerState` (mutable, per-token) — never in the immutable
@@ -190,7 +190,7 @@ fn size_probe_key(hls_token: &str, variant: usize, segment: usize) -> String {
 ///
 /// A track's loader does not resolve `TrackStatus::Loaded` until `Resource::new`
 /// completes, and `Resource::new` builds the initial decoder through the off-RT
-/// **blocking** preparation read (`PlayWorker::open`), whose first read of the
+/// **blocking** preparation read (`PlayWorker::load`), whose first read of the
 /// container header touches the init body. So while this gate withholds the
 /// init GET body, that blocking read parks and the owning track stays in
 /// `Loading` until the test releases the gate — a release-driven lever for
@@ -250,7 +250,7 @@ pub(crate) struct TestServerState {
     /// `GET` (`Range: bytes=0-0`). Unlike the withhold gates this counter is
     /// always live (no pre-registration), so a test can observe the up-front
     /// size-estimation pass that probes every segment of every variant at
-    /// `PlayWorker::open` versus the lazy per-segment resolve that probes only
+    /// `PlayWorker::load` versus the lazy per-segment resolve that probes only
     /// the active prefix.
     size_probes: RwLock<HashMap<String, AtomicU64>>,
     /// Server-wide reachability switch. Anything other than

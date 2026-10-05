@@ -16,10 +16,12 @@ use iced::{
 };
 
 use super::{
-    paint::TextInputPaint,
+    paint::SearchPaint,
     program::{InputProgram, PaintProgram},
 };
 use crate::{
+    atoms::search::input_bounds,
+    draw::Rect,
     engine::{Descriptor, Engine, Target, TextInputSnapshot},
     interact::{Hit, InputMethodRequest, TextInputLayout, iced as iced_interact},
     render::{InputOwner, Published, Skin},
@@ -31,7 +33,7 @@ pub(crate) fn search_input<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, Published> {
-    let paint = TextInputPaint::new(query, skin);
+    let paint = SearchPaint::new(query, skin);
     let input_layout = paint.layout();
     match owner {
         InputOwner::Leaf => TextInputWidget::new(
@@ -42,6 +44,7 @@ pub(crate) fn search_input<'a>(
             query,
             input_layout,
             owner,
+            skin,
         )
         .view(),
         InputOwner::Engine => TextInputWidget::new(
@@ -52,6 +55,7 @@ pub(crate) fn search_input<'a>(
             query,
             input_layout,
             owner,
+            skin,
         )
         .view(),
     }
@@ -78,7 +82,7 @@ pub(crate) fn sync_text_input(path: &str, snapshot: TextInputSnapshot) -> impl O
     Sync { path, snapshot }
 }
 
-struct TextInputWidget<P>
+struct TextInputWidget<'a, P>
 where
     P: Program<Published, Theme, Renderer, State = TextInputState>,
 {
@@ -87,9 +91,10 @@ where
     path: String,
     query: String,
     input_layout: TextInputLayout,
+    skin: &'a Skin,
 }
 
-impl<P> TextInputWidget<P>
+impl<'a, P> TextInputWidget<'a, P>
 where
     P: Program<Published, Theme, Renderer, State = TextInputState>,
 {
@@ -99,17 +104,19 @@ where
         query: &str,
         input_layout: TextInputLayout,
         owner: InputOwner,
+        skin: &'a Skin,
     ) -> Self {
         Self {
             canvas,
-            input_layout,
             owner,
             path: path.to_owned(),
             query: query.to_owned(),
+            input_layout,
+            skin,
         }
     }
 
-    fn view<'a>(self) -> Element<'a, Published>
+    fn view(self) -> Element<'a, Published>
     where
         P: 'a,
     {
@@ -117,7 +124,7 @@ where
     }
 }
 
-impl<P> IcedWidget<Published, Theme, Renderer> for TextInputWidget<P>
+impl<P> IcedWidget<Published, Theme, Renderer> for TextInputWidget<'_, P>
 where
     P: Program<Published, Theme, Renderer, State = TextInputState>,
 {
@@ -168,6 +175,18 @@ where
         shell: &mut Shell<'_, Published>,
         viewport: &Rectangle,
     ) {
+        let pasted = if matches!(self.owner, InputOwner::Leaf)
+            && tree
+                .state
+                .downcast_ref::<TextInputState>()
+                .snapshot()
+                .focused
+        {
+            super::paste(event, clipboard)
+        } else {
+            None
+        };
+        let event = pasted.as_ref().unwrap_or(event);
         self.canvas.update(
             tree, event, layout, cursor, renderer, clipboard, shell, viewport,
         );
@@ -175,7 +194,8 @@ where
             && matches!(event, Event::Window(window::Event::RedrawRequested(_)))
         {
             let state = tree.state.downcast_ref::<TextInputState>();
-            let request = iced_interact::input_method(state.input_method(layout.bounds()));
+            let input = input_bounds(layout.bounds().into(), self.skin);
+            let request = iced_interact::input_method(state.input_method(input));
             shell.request_input_method(&request);
         }
     }
@@ -229,9 +249,9 @@ impl TextInputState {
         state
     }
 
-    fn input_method(&self, bounds: Rectangle) -> Option<InputMethodRequest<'_>> {
+    fn input_method(&self, bounds: Rect) -> Option<InputMethodRequest<'_>> {
         let engine = self.engine.as_ref()?;
-        let target = Target::new(&self.path, Hit::new(None, bounds.into()));
+        let target = Target::new(&self.path, Hit::new(None, bounds));
         engine.input_method(&[target])
     }
 
@@ -299,7 +319,7 @@ mod tests {
     use iced::{
         Pixels, Point,
         advanced::{
-            InputMethod as IcedInputMethod, clipboard, graphics::text::font_system, input_method,
+            InputMethod as IcedInputMethod, graphics::text::font_system, input_method,
             layout::Limits, widget::Tree,
         },
         keyboard::{
@@ -319,6 +339,7 @@ mod tests {
         render::{
             ControlAction, control_event,
             fonts::{FONT_BYTES, SANS},
+            text_input::ClipboardText,
         },
     };
 
@@ -367,7 +388,7 @@ mod tests {
             &Limits::new(Size::ZERO, viewport),
         );
         let pointer = Cursor::Available(Point::new(viewport.width - 1.0, viewport.height / 2.0));
-        let mut clipboard = clipboard::Null;
+        let mut clipboard = ClipboardText;
         let mut messages = Vec::new();
 
         for event in [
@@ -466,6 +487,27 @@ mod tests {
                     ControlAction::Text("abx\u{65e5}".to_owned())
                 ),
             ]
+        );
+        let mut paste = character_event("v", Code::KeyV);
+        if let Event::Keyboard(keyboard::Event::KeyPressed { modifiers, .. }) = &mut paste {
+            *modifiers = Modifiers::COMMAND;
+        }
+        element.as_widget_mut().update(
+            &mut tree,
+            &paste,
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut Shell::new(&mut messages),
+            &viewport_bounds,
+        );
+        assert_eq!(
+            messages.last(),
+            Some(&control_event(
+                "tree/browser/search",
+                ControlAction::Text("abx日 pasted".to_owned())
+            ))
         );
     }
 }

@@ -73,9 +73,9 @@ pub fn android_fixture_rejection(asset: SignalAsset) -> Option<(&'static str, bo
 
 /// Validate fixture admission before running the existing decoding assertions.
 /// A supported fixture must open; a rejected fixture must report its exact cause.
-pub fn assert_fixture_open<T>(
+pub fn assert_fixture_open<T, E: std::fmt::Display>(
     asset: SignalAsset,
-    result: Result<T, kithara::decode::DecodeError>,
+    result: Result<T, E>,
 ) -> Option<T> {
     match (android_fixture_rejection(asset), result) {
         (Some((expected, _)), Err(error)) => {

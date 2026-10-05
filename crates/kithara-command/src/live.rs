@@ -129,15 +129,14 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
+    use std::{convert::Infallible, num::NonZeroUsize};
 
     use kithara_config::{Config, ConfigOwner, LiveConfig};
     use kithara_test_utils::kithara;
 
     use super::{Live, LiveError};
     use crate::{
-        ChannelConfig, Inbox, Outcome, Protocol, Rejection, SendError, Sender, Seq, Target, When,
-        channel,
+        ChannelConfig, Inbox, Outcome, Protocol, Rejection, SendError, Sender, Seq, When, channel,
     };
 
     /// A level of at most ten and a mute switch.
@@ -184,20 +183,10 @@ mod tests {
         type Clock = Frame;
         type Command = Part;
         type Refusal = ();
-        type Target = NoTarget;
+        type Target = Infallible;
 
         fn frames_since(at: Frame, start: Frame) -> Option<u64> {
             at.0.checked_sub(start.0)
-        }
-    }
-
-    /// Changes of a configuration shift no time, so no batch names a target.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum NoTarget {}
-
-    impl Target for NoTarget {
-        fn index(self) -> usize {
-            match self {}
         }
     }
 

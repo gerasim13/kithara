@@ -195,6 +195,7 @@ pub(super) fn control_spec(
                 path,
             )?
         }
+        ControlNode::Search { .. } => ControlSpec::Search,
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: optional_binding(context, machine, extra.query.as_ref())?,
             search: extra.query.is_some() || extra.writes.query.is_some(),
@@ -391,6 +392,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Lottie { .. }
         | ControlNode::Sprite { .. }
         | ControlNode::Table { .. }
+        | ControlNode::Search { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }
         | ControlNode::Segmented { .. }
@@ -452,13 +454,17 @@ fn table_spec(
             &context.origin,
             &format!("{path}/columns/{index}/label"),
         )?;
-        resolved.push(TableColumn::new(
+        let mut resolved_column = TableColumn::new(
             column.id(),
             label,
             column.style(),
             column.width(),
             column.flexible(),
-        ));
+        );
+        if let Some(write) = column.write() {
+            resolved_column = resolved_column.with_write(context.substitute(write, path)?);
+        }
+        resolved.push(resolved_column);
     }
     Ok(ControlSpec::Table {
         columns: resolved,

@@ -28,7 +28,14 @@ capture = [
     "dep:iced_wgpu",
     "dep:kithara-ui-capture",
 ]
-masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "kithara-ui-input/masonry", "vello"]
+masonry = [
+    "dep:futures-lite",
+    "dep:masonry",
+    "dep:winit",
+    "dep:window_clipboard",
+    "kithara-ui-input/masonry",
+    "vello",
+]
 # Test doubles the integration suites share: a hand-filled endpoint registry.
 mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
@@ -91,6 +98,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
+window_clipboard = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
 # The workspace hack is a desktop build cache: kithara-ui stays out of the hakari

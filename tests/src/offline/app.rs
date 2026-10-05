@@ -70,10 +70,8 @@ pub async fn insecure_app_queue() -> AppQueueFixture {
 pub async fn app_queue(document: Config) -> AppQueueFixture {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
-            .build(),
-    );
+    let client = HttpClient::new(net, pools.clone(), CancelToken::never());
+    let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
     let store = AssetStore::builder(pools.clone())
@@ -94,6 +92,7 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
                 .drm_policy()
                 .expect("the shipped providers are valid"),
         ))
+        .net(client)
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker.clone())
