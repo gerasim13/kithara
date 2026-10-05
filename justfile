@@ -1,9 +1,19 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Empty when absent: cargo reads that as "no wrapper", not as an error.
-sccache := `command -v sccache 2>/dev/null || true`
+# Empty when absent: cargo reads that as "no wrapper", not as an error. Empty on
+# Windows as well: sccache cannot spawn the compiler `ffmpeg-sys-next` asks for
+# there, and the wrapper below is a POSIX script.
+sccache := if os_family() == "windows" { "" } else { `command -v sccache 2>/dev/null || true` }
 
-export RUSTC_WRAPPER := sccache
+# sccache keys a Rust compile on every `CARGO_*` value, and Cargo builds at a
+# lane slot's own path, which native build tools record. The wrapper runs
+# sccache without the build directory, so that value no longer gives every
+# dependency a copy per slot and job directory. The path still reaches a
+# compile through `OUT_DIR` and through the proc macros a slot builds, so a
+# crate that reads `OUT_DIR`, uses a proc macro, or depends on one that does is
+# still kept once per slot.
+rustc_wrapper := justfile_directory() / ".config/sccache/rustc-wrapper"
+export RUSTC_WRAPPER := if sccache == "" { "" } else { rustc_wrapper }
 
 # A C compile's cache key includes the absolute paths in its preprocessor
 # output, so the same C source built in two worktrees hashes twice and neither
@@ -13,7 +23,7 @@ export RUSTC_WRAPPER := sccache
 # keyed on its raw working directory and every `CARGO_*` value, which this
 # does not touch: a workspace crate is keyed per checkout regardless, and a
 # dependency, which Cargo compiles inside its own home, shares its key across
-# checkouts only while no `CARGO_*` variable names a checkout path. This
+# checkouts as far as the wrapper above lets it share across slots. This
 # rewrites the cache key, not what the compiler is asked to compile.
 export SCCACHE_BASEDIRS := if sccache == "" { "" } else { justfile_directory() }
 

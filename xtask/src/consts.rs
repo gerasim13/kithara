@@ -616,6 +616,12 @@ pub(crate) const SCCACHE_SLOT_CACHE_NAMESPACE: &str = "sccache-slots";
 /// cache disappear and force concurrent clients to race its restart.
 pub(crate) const SCCACHE_IDLE_TIMEOUT: &str = "0";
 
+/// The compiler wrapper Cargo runs, relative to the checkout: sccache, minus
+/// the build directory. Cargo builds at a slot's own path, which native build
+/// tools record, and sccache keys a compilation on every `CARGO_*` variable,
+/// so that path would give every slot and job directory entries of its own.
+pub(crate) const COMPILER_CACHE_WRAPPER: &str = ".config/sccache/rustc-wrapper";
+
 /// How many `main` runs the journal keeps. One is not enough: a test that fails
 /// a quarter of the time would otherwise land in a branch's column whenever the
 /// single remembered run happened to be green, and block on its own noise.

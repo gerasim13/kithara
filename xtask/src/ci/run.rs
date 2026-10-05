@@ -62,6 +62,13 @@ pub(crate) enum CacheGroup {
 }
 
 impl CacheGroup {
+    /// Everywhere but Windows. `ffmpeg-sys-next` declares a `--cfg` for every
+    /// library version it knows, which is thousands of them, and the command
+    /// Cargo builds for it passes what Windows accepts. Cargo hands that to the
+    /// wrapper through a response file; sccache expands it and spawns the
+    /// compiler with the arguments themselves, which does not fit:
+    /// `failed to spawn rustc.exe: The filename or extension is too long.
+    /// (os error 206)`. The cache is worth less than the lane.
     pub(crate) const fn uses_sccache(self) -> bool {
         !matches!(self, Self::Windows)
     }

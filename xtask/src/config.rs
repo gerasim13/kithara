@@ -159,8 +159,8 @@ pub(crate) struct CiLaneStep {
     /// What the step needs the executor to be, rather than to run: a build-job
     /// cap the container cannot exceed, the browser a harness would otherwise
     /// guess. A value may name the checkout with `{root}` and a pinned version
-    /// with `{pin.<key>}`. It may not name the build directory: Cargo finds it
-    /// by itself, and the compiler cache keys every compilation on that name.
+    /// with `{pin.<key>}`. It may not name the build directory, which the
+    /// executor owns.
     pub(crate) env: BTreeMap<String, String>,
     /// The program for this step alone. A lane that installs a target before
     /// using it runs two, so the lane's own `program` is only the default.

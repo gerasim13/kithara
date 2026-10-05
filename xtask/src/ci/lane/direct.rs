@@ -188,10 +188,10 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     outcome.and(settled)
 }
 
-/// Where Cargo is told to build a directory of the fleet: always the
-/// checkout's `target`, linked to `dir`, so the compiler cache sees one path
-/// whichever directory the lane took. The job's later steps are told `dir`
-/// itself.
+/// Where Cargo is told to build a directory of the fleet: its own physical
+/// path, which native build tools record, with the checkout's `target` linked
+/// to it for whatever reads the build from there. The job's later steps are
+/// told `dir` itself.
 fn hand_over(root: &Path, dir: &Path, var: &dyn Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
     announce(dir, var);
     expose_build_target(root, dir, cfg!(windows), ci_in(var))
