@@ -1879,7 +1879,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2170,10 +2170,8 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 # The virtual clock collapses fixture delays, so order-of-service defects
-# cannot reproduce on the simulated-clock lane. Its own target directory: the
-# two builds differ. `{target}` keeps it inside the leased build-cache
-# directory rather than a fixed path under `{root}` that the lease eviction
-# and reclaim machinery would not know about.
+# cannot reproduce on the simulated-clock lane. The two builds differ, and each
+# lane builds in a slot pool of its own.
 # The rebuild check then asks cargo what the next job of this commit would build.
 # Its recipe is the simulated-clock lane's; see the note there.
 [ext.ci.lanes.linux-test-real-clock]
@@ -2201,7 +2199,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}/ci-tests-flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
@@ -2248,35 +2246,35 @@ steps = [
     "--lane=usdt-warp",
     "--profile",
     "ci",
-  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-play-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
+  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls",
     "--profile",
     "ci",
-  ], label = "USDT HLS contracts", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
+  ], label = "USDT HLS contracts", env = { CARGO_BUILD_JOBS = "2" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls-stress",
     "--profile",
     "ci",
-  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-queue",
     "--profile",
     "ci",
-  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2", CARGO_TARGET_DIR = "{target}" } },
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2680,9 +2678,8 @@ kinds = [
 ]
 timeout_minutes = 60
 
-# The off-flash suite owns its own checksum target directory: the two gates
-# differ by feature, and sharing one directory makes each run rebuild what the
-# other just replaced.
+# The off-flash suite differs from the flash gate by feature, and each lane
+# builds in a slot pool of its own, so neither rebuilds what the other replaced.
 [ext.ci.lanes.apple-test-flash-off]
 cache_group = "macos"
 label = "Apple"
@@ -2702,7 +2699,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "{target}/ci-tests-flash-off" } },
+  ], label = "Apple flash-off gate" },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

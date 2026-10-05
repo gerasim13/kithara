@@ -290,7 +290,7 @@ impl CiEnvironment {
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
         let target_scope = format!("{}-{platform}", trust.as_str());
         let cache_root = shared_root.join(trust.as_str()).join(&platform);
-        let (target, target_lease, lane_build) = prepare_build_target(
+        let build_target = prepare_build_target(
             &project_root,
             &shared_root,
             trust,
@@ -356,8 +356,10 @@ impl CiEnvironment {
         set_path(&mut vars, &home, config)?;
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
-        insert(&mut vars, "CARGO_TARGET_DIR", target);
-        if lane_build.is_some() {
+        if let Some(target) = build_target.named {
+            insert(&mut vars, consts::TARGET_DIR_ENV, target);
+        }
+        if build_target.lane_build.is_some() {
             insert(&mut vars, consts::MTIME_ON_USE_ENV, "true");
         }
         // Same reasoning as the justfile's: the system git fetches a large
@@ -445,8 +447,8 @@ impl CiEnvironment {
             temp,
             leases,
             sccache,
-            _target: target_lease,
-            lane_build,
+            _target: build_target.lease,
+            lane_build: build_target.lane_build,
             vars,
         })
     }
@@ -648,6 +650,16 @@ fn build_target_dir(
     ))
 }
 
+/// The directory a job builds in, as the job holds it.
+struct BuildTarget {
+    /// The directory Cargo has to be told about: none when Cargo finds it by
+    /// itself in the checkout.
+    named: Option<PathBuf>,
+    lease: Option<lease::Lease>,
+    lane_build: Option<LaneBuild>,
+}
+
+/// Claims the directory this job builds in.
 fn prepare_build_target(
     project_root: &FsPath,
     shared_root: &FsPath,
@@ -656,7 +668,7 @@ fn prepare_build_target(
     config: &CiConfig,
     isolated_target: bool,
     lane: Option<LaneTarget<'_>>,
-) -> Result<(PathBuf, Option<lease::Lease>, Option<LaneBuild>)> {
+) -> Result<BuildTarget> {
     let owner = target_owner(config, isolated_target, lane)?;
     let (backing, lane_build) =
         match build_target_dir(project_root, shared_root, trust, target_scope, owner)? {
@@ -674,17 +686,29 @@ fn prepare_build_target(
     // bytes still answer to the ceiling; the claim only prevents a live delete.
     let lease = lease::hold(&backing);
     let target = expose_build_target(project_root, &backing, cfg!(windows), is_ci())?;
-    Ok((target, lease, lane_build))
+    let named = if target == project_root.join("target") {
+        refuse_an_inherited_build_directory(env::var_os(consts::TARGET_DIR_ENV).as_deref())?;
+        None
+    } else {
+        Some(target)
+    };
+    Ok(BuildTarget {
+        named,
+        lease,
+        lane_build,
+    })
 }
 
 /// The path Cargo builds in: the checkout's `target`, linked to where the build
 /// really goes.
 ///
 /// The compiler cache keys a compilation on every `CARGO_*` variable as it
-/// reads it, `CARGO_TARGET_DIR` included. Handed the backing itself, Cargo
-/// would key the cache on which lane slot or job directory the build happened
-/// to take, and two builds of the same sources would share nothing. Windows
-/// builds in the checkout, which needs no link.
+/// reads it, `CARGO_TARGET_DIR` included. Named to Cargo, the backing would key
+/// the cache on which lane slot or job directory the build happened to take,
+/// and even the checkout's own `target` would key it on which checkout. Cargo
+/// finds `<checkout>/target` by itself, so on Unix no build directory is named
+/// at all and dependencies built in two checkouts share their entries. Windows
+/// builds in the backing, which is named.
 ///
 /// A directory already standing there is replaced only inside a CI job, whose
 /// checkout is the job's own. Anywhere else it is someone's build, and it is
@@ -1039,6 +1063,20 @@ mod tests {
         assert!(prepared.is_none());
     }
 
+    /// The executor names no build directory, so one the caller exported
+    /// would reach Cargo and send the build outside the leased slot.
+    #[test]
+    fn an_inherited_build_directory_is_refused() {
+        refuse_an_inherited_build_directory(None).expect("nothing inherited");
+        let error = refuse_an_inherited_build_directory(Some(OsStr::new("/elsewhere")))
+            .expect_err("an inherited build directory leaves the lease");
+        assert!(
+            error.to_string().contains(consts::TARGET_DIR_ENV)
+                && error.to_string().contains("/elsewhere"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn lease_names_use_the_job_or_local_process() {
         assert_eq!(lease_owner(Some("29"), 41).unwrap(), "job-29");
@@ -1108,12 +1146,12 @@ mod tests {
             let cache_root =
                 root.join("review")
                     .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            assert!(
+                !vars.contains_key(OsStr::new(consts::TARGET_DIR_ENV)),
+                "a named build directory enters every compiler-cache key"
+            );
             assert_eq!(
-                fs::canonicalize(
-                    vars.get(OsStr::new("CARGO_TARGET_DIR"))
-                        .expect("prepared environment names its Cargo target")
-                )
-                .unwrap(),
+                fs::canonicalize(project.join("target")).unwrap(),
                 fs::canonicalize(
                     root.join(consts::TARGET_SLOT_CACHE_NAMESPACE)
                         .join(format!(
@@ -1123,7 +1161,8 @@ mod tests {
                         ))
                         .join("cargo")
                 )
-                .unwrap()
+                .unwrap(),
+                "Cargo's own default directory is the claimed slot"
             );
 
             assert_eq!(
@@ -1202,6 +1241,7 @@ mod tests {
             .env("HOME", directory.path().join("home"))
             .env_remove("CI")
             .env_remove("CI_PROJECT_DIR")
+            .env_remove(consts::TARGET_DIR_ENV)
             .output()
             .unwrap();
 
@@ -1222,7 +1262,7 @@ mod tests {
         if env::var_os(consts::LANE_PREPARED).is_some() {
             let root = PathBuf::from(env::var_os(consts::CACHE_ROOT).unwrap());
             let project = root.join("project");
-            let ctx = Ctx::new(project, ProjectConfig::default());
+            let ctx = Ctx::new(project.clone(), ProjectConfig::default());
             let config = super::super::config::fixture();
 
             let environment = CiEnvironment::prepare(
@@ -1245,14 +1285,13 @@ mod tests {
                 env::consts::ARCH
             );
             let backing = slots.join(&slot).join("cargo");
+            assert!(
+                !environment
+                    .vars()
+                    .contains_key(OsStr::new(consts::TARGET_DIR_ENV))
+            );
             assert_eq!(
-                fs::canonicalize(
-                    environment
-                        .vars()
-                        .get(OsStr::new("CARGO_TARGET_DIR"))
-                        .expect("prepared environment names its Cargo target")
-                )
-                .unwrap(),
+                fs::canonicalize(project.join("target")).unwrap(),
                 fs::canonicalize(&backing).unwrap()
             );
             assert_eq!(
@@ -1299,6 +1338,7 @@ mod tests {
             .env("HOME", directory.path().join("home"))
             .env_remove("CI")
             .env_remove("CI_PROJECT_DIR")
+            .env_remove(consts::TARGET_DIR_ENV)
             .env_remove("GIT_DIR")
             .env_remove("GIT_INDEX_FILE")
             .env_remove("GIT_WORK_TREE")
@@ -1349,6 +1389,7 @@ mod tests {
             .env("HOME", directory.path().join("invalid:home"))
             .env_remove("CI")
             .env_remove("CI_PROJECT_DIR")
+            .env_remove(consts::TARGET_DIR_ENV)
             .output()
             .unwrap();
 
@@ -1659,6 +1700,28 @@ fn insert_android_environment(vars: &mut BTreeMap<OsString, OsString>, config: &
     if java_home.is_dir() {
         insert(vars, "JAVA_HOME", &java_home);
     }
+}
+
+/// Refuses to run when the job already names a build directory.
+///
+/// The executor builds in the checkout's `target`, linked to the directory it
+/// leased, and names no build directory to Cargo. A `CARGO_TARGET_DIR` the job
+/// inherited would reach every child unchanged and send the build outside the
+/// lease, where neither the eviction nor the reclaim machinery sees it.
+///
+/// # Errors
+///
+/// Returns an error naming the inherited directory.
+fn refuse_an_inherited_build_directory(inherited: Option<&OsStr>) -> Result<()> {
+    let Some(inherited) = inherited else {
+        return Ok(());
+    };
+    bail!(
+        "the job was given {TARGET_DIR_ENV} {}; the executor builds in the checkout's target \
+         linked to the directory it leased, so unset it",
+        FsPath::new(inherited).display(),
+        TARGET_DIR_ENV = consts::TARGET_DIR_ENV
+    )
 }
 
 fn refuse_a_divergent_cargo_home_from_env(expected: &FsPath) -> Result<()> {

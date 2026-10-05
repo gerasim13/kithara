@@ -463,6 +463,9 @@ pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNE
 /// The toolchain rustup runs a step's cargo with.
 pub(crate) const TOOLCHAIN_ENV: &str = "RUSTUP_TOOLCHAIN";
 
+/// Where Cargo builds when told; unset, it builds in `<workspace>/target`.
+pub(crate) const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+
 /// The commit web release packaging tells the FFI build it is built from.
 pub(crate) const BUILD_REVISION_ENV: &str = "KITHARA_BUILD_REVISION";
 
@@ -610,13 +613,6 @@ pub(crate) const SELF_PROGRAM: &str = "<xtask>";
 /// The checkout a lane resolves in. A compiler flag that has to name a file in
 /// the repository needs an absolute path, and only the runner knows it.
 pub(crate) const ROOT_PLACEHOLDER: &str = "{root}";
-
-/// The build-cache directory the process leased, i.e. `CARGO_TARGET_DIR` as
-/// the executor set it, not `{root}/target`. A lane that writes its own build
-/// under a fixed `{root}`-relative path escapes the lease the eviction and
-/// reclaim machinery tracks; one that asks for `{target}` stays inside it the
-/// same way the process's own build does.
-pub(crate) const TARGET_PLACEHOLDER: &str = "{target}";
 
 /// A reviewed pin, by name: `{pin.msrv_toolchain}` is the value that key holds
 /// in `.config/ci-pins.toml`.

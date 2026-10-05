@@ -5,17 +5,16 @@ sccache := `command -v sccache 2>/dev/null || true`
 
 export RUSTC_WRAPPER := sccache
 
-# A compiler cache key includes the absolute path rustc was given, so the same
-# crate built in two worktrees hashes twice and neither ever reads the other's
-# entry. Measured on this host: two identical crates differing only in their
-# directory produced two compile requests and zero hits; with the base
-# directory declared, the second was a hit. Across 142 worktrees that is the
-# difference between one shared artifact layer and 142 private ones, and it is
-# why a 60 GiB cache sat full at a 42% Rust hit rate. Each checkout names only
-# its own root: the prefix is then stripped from every path, and what is left
-# is the same workspace-relative path everywhere, so the keys coincide.
-# `--fix`-style tools and diagnostics are unaffected; this rewrites the cache
-# key, not what rustc is asked to compile.
+# A C compile's cache key includes the absolute paths in its preprocessor
+# output, so the same C source built in two worktrees hashes twice and neither
+# ever reads the other's entry. Each checkout names only its own root: the
+# prefix is then stripped from that output, and what is left is the same
+# workspace-relative path everywhere, so the keys coincide. A Rust compile is
+# keyed on its raw working directory and every `CARGO_*` value, which this
+# does not touch: a workspace crate is keyed per checkout regardless, and a
+# dependency, which Cargo compiles inside its own home, shares its key across
+# checkouts only while no `CARGO_*` variable names a checkout path. This
+# rewrites the cache key, not what the compiler is asked to compile.
 export SCCACHE_BASEDIRS := if sccache == "" { "" } else { justfile_directory() }
 
 # The cache was found sitting at exactly its ceiling - 60 GiB stored against a

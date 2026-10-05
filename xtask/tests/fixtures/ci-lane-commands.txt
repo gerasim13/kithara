@@ -478,7 +478,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / platforms
@@ -486,7 +485,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / merge-request
@@ -494,7 +492,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / quarantine
@@ -502,7 +499,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / main
@@ -510,7 +506,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / nightly
@@ -518,7 +513,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / weekly
@@ -526,7 +520,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / release
@@ -534,7 +527,6 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-xcframework / branch
@@ -2118,14 +2110,12 @@
   <require tools> cargo just sccache
   just test run --touched --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --touched --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2135,14 +2125,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2152,14 +2140,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2169,14 +2155,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2186,14 +2170,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2203,14 +2185,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2220,14 +2200,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2237,14 +2215,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2254,7 +2230,6 @@
   <require tools> cargo just sccache
   just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2264,7 +2239,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2274,7 +2248,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2284,7 +2257,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2294,7 +2266,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2304,7 +2275,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2314,7 +2284,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2324,7 +2293,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2390,27 +2358,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / platforms
@@ -2418,27 +2381,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / merge-request
@@ -2446,27 +2404,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / quarantine
@@ -2474,27 +2427,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / main
@@ -2502,27 +2450,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / nightly
@@ -2530,27 +2473,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / weekly
@@ -2558,27 +2496,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / release
@@ -2586,27 +2519,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-wasm / branch
