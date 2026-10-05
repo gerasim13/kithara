@@ -621,7 +621,9 @@ pub(crate) const SCCACHE_IDLE_TIMEOUT: &str = "0";
 /// the build directory. Cargo builds at a slot's own path, which native build
 /// tools record, and sccache keys a compilation on every `CARGO_*` variable,
 /// so that path would give every slot and job directory entries of its own.
-pub(crate) const COMPILER_CACHE_WRAPPER: &str = ".config/sccache/rustc-wrapper";
+/// cc-rs hands it a build script's C compiles only under a compiler cache's
+/// name.
+pub(crate) const COMPILER_CACHE_WRAPPER: &str = ".config/sccache/sccache";
 
 /// How many `main` runs the journal keeps. One is not enough: a test that fails
 /// a quarter of the time would otherwise land in a branch's column whenever the

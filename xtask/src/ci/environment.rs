@@ -957,6 +957,16 @@ mod tests {
         );
     }
 
+    /// cc-rs hands a build script's C compiles to the Rust wrapper only when
+    /// the wrapper is named after a compiler cache it knows.
+    #[test]
+    fn build_scripts_compile_c_through_the_compiler_cache_too() {
+        assert_eq!(
+            FsPath::new(consts::COMPILER_CACHE_WRAPPER).file_stem(),
+            Some(OsStr::new("sccache"))
+        );
+    }
+
     fn own_dir(target: Result<Target>) -> PathBuf {
         match target.unwrap() {
             Target::Dir(dir) => dir,

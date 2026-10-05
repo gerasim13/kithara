@@ -12,7 +12,7 @@ sccache := if os_family() == "windows" { "" } else { `command -v sccache 2>/dev/
 # compile through `OUT_DIR` and through the proc macros a slot builds, so a
 # crate that reads `OUT_DIR`, uses a proc macro, or depends on one that does is
 # still kept once per slot.
-rustc_wrapper := justfile_directory() / ".config/sccache/rustc-wrapper"
+rustc_wrapper := justfile_directory() / ".config/sccache/sccache"
 export RUSTC_WRAPPER := if sccache == "" { "" } else { rustc_wrapper }
 
 # A C compile's cache key includes the absolute paths in its preprocessor

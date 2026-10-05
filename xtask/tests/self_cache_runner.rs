@@ -59,8 +59,8 @@ impl Fixture {
         // is on `PATH`, and `cargo metadata` asks the compiler for its version.
         fs::create_dir_all(root.join(".config/sccache"))?;
         fs::copy(
-            repository.join(".config/sccache/rustc-wrapper"),
-            root.join(".config/sccache/rustc-wrapper"),
+            repository.join(".config/sccache/sccache"),
+            root.join(".config/sccache/sccache"),
         )?;
         fs::copy(
             repository.join("xtask/bootstrap_lease.rs"),
