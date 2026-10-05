@@ -113,14 +113,26 @@ impl<D: DriverIo> Resource<Active, D> {
             /// cannot finalize.
             #[call(commit_inner)]
             pub(crate) fn commit_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
-            /// Commit in place without publishing a snapshot, for a decorator
-            /// that republishes the resource itself right after.
+            /// Finalize bytes without publishing a snapshot or readiness, for
+            /// a decorator that publishes the canonical resource itself.
             ///
             /// # Errors
             /// Returns error if the resource is cancelled, failed, or the backend
             /// cannot flush.
             #[call(seal_inner)]
             pub(crate) fn seal_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
+            /// Notify the original observer after publishing the canonical
+            /// backing resource and releasing the decorator's handover lock.
+            #[call(notify_commit_inner)]
+            pub(crate) fn notify_commit_in_place(&self, final_len: Option<u64>);
+            /// Stage a reopened readable snapshot until its original observer
+            /// has recorded the commit, without reactivating its backing store.
+            #[call(stage_commit_inner)]
+            pub(crate) fn stage_commit_in_place(&self);
+            /// Publish readiness and wake waiters after the original observer
+            /// has recorded the successfully published backing resource.
+            #[call(publish_commit_inner)]
+            pub(crate) fn publish_commit_in_place(&self, final_len: Option<u64>);
             /// Release the writer without marking the resource failed.
             ///
             /// Dropping an uncommitted writer stamps the resource `Failed` so a

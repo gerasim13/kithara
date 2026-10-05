@@ -208,33 +208,55 @@ impl<D: DriverIo> AtomicChunked<D> {
         };
         let TmpClaim { path: tmp, file } = &claim;
 
-        self.inner.load().seal_in_place(final_len)?;
-        let _handover = self.handover.write();
-        self.inner.load().release_backing_in_place()?;
+        let handover = self.handover.write();
+        let inner = self.inner.load();
+        let result: StorageResult<_> = (|| {
+            inner.seal_in_place(final_len)?;
+            inner.release_backing_in_place()?;
 
-        if let Some(len) = final_len
-            && file.metadata().is_ok_and(|m| m.len() > len)
-        {
-            file.set_len(len).map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: trim {tmp:?}: {e}"))
+            if let Some(len) = final_len
+                && file.metadata().is_ok_and(|m| m.len() > len)
+            {
+                file.set_len(len).map_err(|e| {
+                    StorageError::Failed(format!("AtomicChunked commit: trim {tmp:?}: {e}"))
+                })?;
+            }
+            if self.barrier == Barrier::Inline {
+                file.sync_data().map_err(|e| {
+                    StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
+                })?;
+            }
+            fs::rename(tmp, &self.canonical_path).map_err(|e| {
+                StorageError::Failed(format!(
+                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
+                    self.canonical_path
+                ))
             })?;
-        }
-        if self.barrier == Barrier::Inline {
-            file.sync_data().map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
-            })?;
-        }
-        fs::rename(tmp, &self.canonical_path).map_err(|e| {
-            StorageError::Failed(format!(
-                "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
-                self.canonical_path
-            ))
-        })?;
 
-        if let Some(factory) = self.factory.as_ref() {
-            let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
-            self.inner.store(Arc::new(new_inner));
+            let new_inner = self
+                .factory
+                .as_ref()
+                .map(|factory| factory(&self.canonical_path, OpenIntent::Reopen))
+                .transpose()?;
+            let new_inner = new_inner.map(|resource| {
+                resource.stage_commit_in_place();
+                Arc::new(resource)
+            });
+            if let Some(new_inner) = &new_inner {
+                self.inner.store(Arc::clone(new_inner));
+            }
+            Ok(new_inner)
+        })();
+        if let Err(error) = &result {
+            inner.fail_in_place(error.to_string());
         }
+        drop(handover);
+        let new_inner = result?;
+        inner.notify_commit_in_place(final_len);
+        if let Some(new_inner) = new_inner {
+            new_inner.publish_commit_in_place(final_len);
+        }
+        inner.publish_commit_in_place(final_len);
         Ok(())
     }
 
