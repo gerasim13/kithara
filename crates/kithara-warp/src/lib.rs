@@ -36,14 +36,8 @@ pub use segment::{
 };
 pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-    RenderPublisher, RenderReader, RenderSnapshot, SpeedCurve,
+    RenderPublisher, RenderReader, RenderSnapshot, SpeedCurve, StretchKind, WarpCapabilities,
 };
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-pub use temporal::{StretchKind, WarpCapabilities};
 pub use warp::{
     Warp, WarpConfig, WarpConfigPatch, WarpConfigPatchError, WarpCursor, WarpMap, WarpMapRevision,
     WarpPlan, WarpPlanError, WarpPlanSlot, supports_playback_rate,
