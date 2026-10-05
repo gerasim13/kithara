@@ -316,21 +316,29 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // Both endpoints are built the same way — discard the backlog, block for
-    // a FRESH `PlaybackProgress`, read the cursor beside it — because
-    // `assert_playhead_tracks_renderer` spends its whole slack on the
-    // difference of the two reporting lags, and only identical sourcing makes
-    // that difference cancel.
+    // Sample the latest progress and cursor together on the render owner.
+    // Receiving an event alone does not keep it fresh while this task waits
+    // to be scheduled again.
     let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
-    let cursor_start = queue.host().position();
+    // Advance while the observer is delayed, as a contended runtime can do
+    // between receiving an event and reading the render cursor.
+    let observer_delay_frames = u64::from(queue.host().spec().await.sample_rate.get()) / 4;
+    queue.host().render_forward(observer_delay_frames).await;
+    let ((start_pos, mut rx), cursor_start) = queue
+        .host()
+        .observe(move || (drain_latest_position(&mut rx).unwrap_or(start_pos), rx))
+        .await;
     time::sleep(Duration::from_secs(2)).await;
     let _ = drain_latest_position(&mut rx);
     let end_pos = next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}"));
-    let cursor_end = queue.host().position();
+    let (end_pos, cursor_end) = queue
+        .host()
+        .observe(move || drain_latest_position(&mut rx).unwrap_or(end_pos))
+        .await;
     assert_playhead_tracks_renderer(
         end_pos - start_pos,
         cursor_end - cursor_start,

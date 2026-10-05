@@ -110,7 +110,7 @@ apple:swift-test:
   artifacts:
     when: always
     reports:
-      junit: target/xcresult/swift-test.junit.xml
+      junit: .ci-artifacts/junit/apple-swift-test.xml
     paths:
       - .ci-artifacts/junit/
 
@@ -145,7 +145,7 @@ apple:ios-test:
   artifacts:
     when: always
     reports:
-      junit: target/xcresult/ios-test.junit.xml
+      junit: .ci-artifacts/junit/apple-ios-test.xml
     paths:
       - .ci-artifacts/junit/
 

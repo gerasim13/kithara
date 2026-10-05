@@ -115,9 +115,8 @@ pub(crate) fn floating_tag(pinned: &str) -> Result<String> {
     Ok(format!("{repository}:{platform}-latest"))
 }
 
-/// Build one image with no context at all. Every Dockerfile here downloads what
-/// it needs and copies nothing, so the recipe arrives on standard input and the
-/// working tree is never sent to the daemon.
+/// Build images from their recipe alone; pinned dependencies are downloaded
+/// or copied from other build stages, without sending workspace files.
 fn build(
     process: &Process,
     dockerfile: &str,
@@ -148,6 +147,14 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("NIGHTLY_TOOLCHAIN", pins.nightly_toolchain.clone()),
         ("LOCKBUD_TOOLCHAIN", pins.lockbud_toolchain.clone()),
         ("LOCKBUD_REV", pins.lockbud_rev.clone()),
+        (
+            "MONKEYS_AUDIO_SOURCE_URL",
+            pins.monkeys_audio_source_url.clone(),
+        ),
+        (
+            "MONKEYS_AUDIO_SOURCE_SHA256",
+            pins.monkeys_audio_source_sha256.clone(),
+        ),
         ("CMAKE_VERSION", pins.cmake_version.clone()),
         ("CMAKE_AMD64_SHA256", pins.cmake_linux_amd64_sha256.clone()),
         ("CMAKE_ARM64_SHA256", pins.cmake_linux_arm64_sha256.clone()),

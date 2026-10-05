@@ -4,7 +4,7 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::{DecodeError, DecoderSeekOutcome, DropChunks, GaplessMode};
+use kithara_decode::{DecodeError, DecoderSeekOutcome, GaplessMode};
 use kithara_platform::{
     sync::Arc,
     time::Duration,
@@ -284,7 +284,7 @@ fn run<T: StreamType>(job: PendingJob<T>) {
             deps.gapless_mode,
         );
         if landing.is_some_and(|landing| !landing.is_zero()) {
-            generation.notify_seek(&DropChunks);
+            generation.notify_seek();
         }
         Ok(generation)
     }));

@@ -74,6 +74,16 @@ mod tests {
             );
         }
 
+        let ext = crate::config::KitharaExt::load(workspace_root()).unwrap();
+        for lane in ["apple-test", "apple-test-flash-off"] {
+            for step in &ext.ci.lanes[lane].steps {
+                assert!(
+                    !step.env.contains_key("CARGO_TARGET_DIR"),
+                    "{lane} must keep the executor target: nextest evidence is collected there"
+                );
+            }
+        }
+
         let produced = format!("target/nextest/ci/{path}");
         for lane in ["apple", "linux", "windows"] {
             let yaml = fs::read_to_string(workspace_root().join(format!(".gitlab/ci/{lane}.yml")))

@@ -176,3 +176,34 @@ async fn a_ready_playback_poll_files_no_demand() {
         "a ready poll must stay a pure snapshot even across a shell flush"
     );
 }
+
+#[kithara::test(tokio)]
+async fn a_readiness_wait_keeps_the_range_that_parked_the_decoder() {
+    let control = Arc::new(TestControl::new(media_info(0)));
+    control.enable_byte_map();
+    let source = TestSource::new(control);
+    *source.phase_handle().lock() = SourcePhase::WaitingDemand;
+    let waits = source.waits_handle();
+    let stream = Stream::<TestStream>::new(TestConfig { source })
+        .await
+        .unwrap();
+    let shared = SharedStream::new(stream);
+    shared.set_position(100);
+    let readiness = ReadinessGate::new(None);
+
+    assert!(!readiness.source_is_ready(&shared));
+    shared.flush_demand();
+    let parked_range = waits.lock().pop().unwrap();
+    assert_eq!(parked_range, 100..627);
+
+    assert_eq!(
+        source_phase_for_wait_context(&shared, &WaitContext::Playback),
+        SourcePhase::WaitingDemand,
+    );
+    shared.flush_demand();
+    assert_eq!(
+        waits.lock().as_slice(),
+        &[parked_range],
+        "resuming a readiness wait must not require the following segment",
+    );
+}

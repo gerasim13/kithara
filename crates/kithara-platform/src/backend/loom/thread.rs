@@ -1,4 +1,5 @@
 use core::num::NonZeroUsize;
+pub use std::convert::identity as wrap_pool_task;
 use std::sync::atomic::Ordering;
 
 use crate::{common::thread_id::ACTIVE_NAMED_THREADS, loom::thread as backend};

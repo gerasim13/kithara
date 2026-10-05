@@ -677,14 +677,9 @@ fn prepare_build_target(
     Ok((target, lease, lane_build))
 }
 
-/// The path Cargo builds in: the checkout's `target`, linked to where the build
-/// really goes.
-///
-/// The compiler cache keys a compilation on every `CARGO_*` variable as it
-/// reads it, `CARGO_TARGET_DIR` included. Handed the backing itself, Cargo
-/// would key the cache on which lane slot or job directory the build happened
-/// to take, and two builds of the same sources would share nothing. Windows
-/// builds in the checkout, which needs no link.
+/// Cargo builds at the backing directory's physical path. The checkout's
+/// `target` link exposes reports there without changing native build tools'
+/// absolute output paths when another checkout claims the same slot.
 ///
 /// A directory already standing there is replaced only inside a CI job, whose
 /// checkout is the job's own. Anywhere else it is someone's build, and it is
@@ -724,7 +719,8 @@ pub(crate) fn expose_build_target(
         }
     }
     create_target_link(backing, &target)?;
-    Ok(target)
+    fs::canonicalize(backing)
+        .with_context(|| format!("resolving CI build target {}", backing.display()))
 }
 
 #[cfg(unix)]
@@ -1569,7 +1565,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn jobs_keep_one_cargo_visible_target_over_private_backings() {
+    fn jobs_build_at_their_physical_backing_and_expose_reports_in_the_checkout() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         let first = root.path().join("cache/job-4711/cargo");
@@ -1586,8 +1582,12 @@ mod tests {
         let same_visible = expose_build_target(&project, &second, false, true).unwrap();
         fs::write(same_visible.join("second"), "owned by the second job").unwrap();
 
-        assert_eq!(visible, project.join("target"));
-        assert_eq!(same_visible, visible);
+        assert_eq!(visible, fs::canonicalize(&first).unwrap());
+        assert_eq!(same_visible, fs::canonicalize(&second).unwrap());
+        assert_eq!(
+            fs::canonicalize(project.join("target")).unwrap(),
+            same_visible
+        );
         assert!(!first.join("stale").exists());
         assert!(first.join("first").is_file());
         assert!(!first.join("second").exists());
@@ -1598,6 +1598,23 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_lane_slot_keeps_its_native_output_path_across_checkouts() {
+        let root = tempfile::tempdir().unwrap();
+        let backing = root.path().join("lane/cargo");
+        fs::create_dir_all(&backing).unwrap();
+        let mut targets = Vec::new();
+        for name in ["checkout-0", "checkout-1"] {
+            let checkout = root.path().join(name);
+            fs::create_dir_all(&checkout).unwrap();
+            let target = expose_build_target(&checkout, &backing, false, true).unwrap();
+            assert_eq!(fs::canonicalize(checkout.join("target")).unwrap(), target);
+            targets.push(target);
+        }
+        assert_eq!(targets[0], targets[1]);
     }
 
     #[test]
