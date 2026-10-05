@@ -146,7 +146,6 @@ struct InventorySuite {
 struct InventoryCase {
     #[serde(rename = "filter-match")]
     filter_match: InventoryMatch,
-    ignored: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -588,10 +587,10 @@ fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
                 bail!("stress inventory contains an empty test name");
             }
             match case.filter_match.status.as_str() {
-                "matches" if !case.ignored => {
+                "matches" => {
                     tests.insert((suite.clone(), name));
                 }
-                "matches" | "mismatch" => {}
+                "mismatch" => {}
                 status => bail!("stress inventory contains unknown filter status `{status}`"),
             }
         }
@@ -1246,6 +1245,9 @@ fn render(
     }
 
     render_quarantine(&mut out, &quarantined);
+    if result == "PASSED" {
+        render_passes(&mut out, &tests, budgets);
+    }
     render_flakes(&mut out, &tests, budgets);
     render_failures(&mut out, tests, budgets);
     RenderedReport {
@@ -1342,6 +1344,37 @@ fn render_quarantine(out: &mut String, quarantined: &BTreeMap<usize, (usize, usi
     );
     for (iteration, (failed, total)) in quarantined {
         let _ = writeln!(out, "| {iteration} | {failed} / {total} |");
+    }
+}
+
+fn render_passes(
+    out: &mut String,
+    tests: &BTreeMap<TestId, TestStats>,
+    budgets: &StressRenderBudgets,
+) {
+    let passed = tests
+        .iter()
+        .filter(|(_, stats)| {
+            !stats.observed_iterations.is_empty()
+                && stats.failed_iterations.is_empty()
+                && stats.flaky_iterations.is_empty()
+        })
+        .collect::<Vec<_>>();
+    if passed.is_empty() {
+        return;
+    }
+    out.push_str("\n## Tests with no failed attempts\n\n| test | attempts |\n|---|---:|\n");
+    for ((suite, name), stats) in passed.iter().take(budgets.failure_rows) {
+        let id = markdown_cell(&format!("{suite} {name}"), budgets);
+        let _ = writeln!(out, "| `{id}` | {} |", stats.observed_iterations.len());
+    }
+    if passed.len() > budgets.failure_rows {
+        let _ = writeln!(
+            out,
+            "\nShowing the first {} of {} tests with no failed attempts. The JUnit artifact is exhaustive.",
+            budgets.failure_rows,
+            passed.len(),
+        );
     }
 }
 
@@ -1743,6 +1776,35 @@ mod tests {
 
         assert!(
             report.markdown.contains("## Quarantined repeats"),
+            "{}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn an_entirely_quarantined_run_has_no_clean_pass_rows() {
+        let (mut cases, selected) = mass_failure_run();
+        cases.retain(|case| case.iteration == Some(0));
+
+        let report = render(
+            &cases,
+            &selected,
+            1,
+            None,
+            None,
+            &StressRenderBudgets::default(),
+        );
+
+        assert!(report.incomplete.is_some(), "{}", report.markdown);
+        assert!(
+            report.markdown.contains("Result: **INCOMPLETE**"),
+            "{}",
+            report.markdown
+        );
+        assert_eq!(report.quarantined, BTreeSet::from([0]));
+        assert!(report.rates.values().all(|rate| rate.attempts == 0));
+        assert!(
+            !report.markdown.contains("## Tests with no failed attempts"),
             "{}",
             report.markdown
         );
@@ -2398,7 +2460,7 @@ seek landed short of the requested frame
       "status": "listed",
       "testcases": {
         "selected": {"ignored": false, "filter-match": {"status": "matches"}},
-        "ignored": {"ignored": true, "filter-match": {"status": "matches"}},
+        "ignored": {"ignored": true, "filter-match": {"status": "mismatch", "reason": "ignored"}},
         "filtered": {"ignored": false, "filter-match": {"status": "mismatch"}}
       }
     }

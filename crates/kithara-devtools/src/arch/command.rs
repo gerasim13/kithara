@@ -9,7 +9,7 @@ use cargo_metadata::{Metadata, MetadataCommand};
 use clap::Args;
 
 use super::{
-    checks::{Check, Context, redundant_accessors::RedundantAccessors, registry},
+    checks::{Check, Context, ignored_test_owner, redundant_accessors::RedundantAccessors, registry},
     config::ArchConfig,
 };
 use crate::common::{
@@ -120,6 +120,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
     }
 
     let mut report = Report::default();
+    let mut test_ownership = Vec::new();
     let mut ran: Vec<&'static str> = Vec::new();
     for check in &registry {
         if let Some(filter) = &filter
@@ -129,7 +130,11 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
         }
         ran.push(check.id());
         let violations = check.run(&ctx)?;
-        report.extend(violations);
+        if check.id() == ignored_test_owner::consts::ID {
+            test_ownership.extend(violations);
+        } else {
+            report.extend(violations);
+        }
     }
 
     let project = ProjectConfig::load(&workspace_root)?;
@@ -139,6 +144,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
         &project.lint_exclude.modules,
         &workspace_root,
     );
+    report.extend(test_ownership);
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);

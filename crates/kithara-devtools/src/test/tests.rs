@@ -44,6 +44,45 @@ fn envs_of(cmd: &Command) -> Vec<(String, String)> {
         .collect()
 }
 
+#[test]
+fn an_ignored_audit_consumes_its_recipe_flags_and_keeps_runner_controls() {
+    let args = [
+        "--ignored-audit=red",
+        "--audit-output=/tmp/audit-contract",
+        "--lane=hls",
+        "--profile",
+        "ci",
+        "-E",
+        "test(seek)",
+        "--test-threads",
+        "4",
+    ]
+    .map(str::to_owned);
+
+    let request = TestRequest::parse(&args).expect("ordinary ignored audit request");
+
+    assert_eq!(request.lanes, ["hls"]);
+    assert_eq!(
+        request.passthrough,
+        ["--profile", "ci", "-E", "test(seek)", "--test-threads", "4"]
+    );
+}
+
+#[test]
+fn an_ignored_audit_rejects_unknown_kind() {
+    let args = ["--ignored-audit=manual", "--audit-output=/tmp/audit-contract"]
+        .map(str::to_owned);
+
+    assert!(TestRequest::parse(&args).is_err());
+}
+
+#[test]
+fn an_ignored_audit_requires_its_evidence_destination() {
+    let args = ["--ignored-audit=red"].map(str::to_owned);
+
+    assert!(TestRequest::parse(&args).is_err());
+}
+
 /// One lane's command under `caller`, with the lane's own defaults.
 fn command_of(
     project: &ProjectConfig,

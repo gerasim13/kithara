@@ -15,8 +15,8 @@ use super::{
     canonical_types, cfg_density, dead_exports, direction, duplicate_error_enums,
     field_always_constant, field_always_equals_other_field, field_passthrough, file_density,
     file_size, firewheel_dsp_facade, flat_directory, fn_arg_count, generic_param_count, god_module,
-    god_struct, god_trait, max_nesting, mixed_entities, module_fan_out, module_layers,
-    multi_constructor, no_lib_statics, platform_layer_hygiene, pub_struct_open_fields,
+    god_struct, god_trait, ignored_test_owner, max_nesting, mixed_entities, module_fan_out,
+    module_layers, multi_constructor, no_lib_statics, platform_layer_hygiene, pub_struct_open_fields,
     readme_presence, redundant_accessors, redundant_reexport, shared_state, single_impl_size,
     single_word_filenames, smoothing_primitive_sites, stray_rs_files, tokio_dep_quarantine,
     trait_impl_count,
@@ -58,7 +58,8 @@ impl<'a> ParsedFiles<'a> {
         if let Some(files) = self.files.get() {
             return Ok(files);
         }
-        let paths = workspace_rs_files_scoped(self.workspace_root, self.scope)?;
+        let scope = self.scope.clone().with_workspace_sources();
+        let paths = workspace_rs_files_scoped(self.workspace_root, &scope)?;
         Ok(self.files.get_or_init(|| {
             paths
                 .into_iter()
@@ -163,6 +164,7 @@ pub(crate) trait Check {
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
+        Box::new(ignored_test_owner::IgnoredTestOwner),
         Box::new(cancel_root_sites::CancelRootSites),
         Box::new(smoothing_primitive_sites::SmoothingPrimitiveSites),
         Box::new(firewheel_dsp_facade::FirewheelDspFacade),
