@@ -28,7 +28,7 @@ hack:
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith
     cargo check -p kithara-warp --lib --no-default-features --features stretch-bungee
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith,stretch-bungee
-    cargo check -p kithara-play --lib --no-default-features --features symphonia,client-reqwest,tls-rustls
+    cargo check -p kithara-play --lib --no-default-features --features symphonia,stretch-identity,client-reqwest,tls-rustls
 
 # Baseline is a revision here, not crates.io: the workspace is unpublished.
 # Routed through xtask so the lane holds the shared target directory's job
