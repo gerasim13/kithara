@@ -153,6 +153,7 @@ pub(crate) const CONTROL_PATHS: &[&str] = &[
     ".config/just/",
     ".config/mutation-suites.toml",
     ".config/nextest.toml",
+    ".config/sccache/",
     ".config/xtask.toml",
     "ci/",
     "docker/",
