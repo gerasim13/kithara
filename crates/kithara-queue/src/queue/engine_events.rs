@@ -402,7 +402,11 @@ mod tests {
         let (first, second) = selected_second(&queue);
         let reported = if paused { second } else { first };
         if paused {
+            queue.player.play();
+            assert!(queue.player.is_playing(), "setup must activate a player slot");
             queue.pause();
+            assert!(queue.player.is_paused(), "setup must pause the active player");
+            assert_eq!(queue.current().map(|entry| entry.id), Some(second));
         }
         let before = queue.track(reported).expect("the reported entry exists").status;
         let mut events = queue.subscribe::<QueueEvent>();
