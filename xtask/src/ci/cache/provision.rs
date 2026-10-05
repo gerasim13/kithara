@@ -6,7 +6,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::json;
 use tracing::info;
 
@@ -66,7 +66,7 @@ fn rc(arguments: &[&str], cancel: &Cancel) -> Result<()> {
     Ok(())
 }
 
-/// The disk a scope's bucket is allowed, which is not one number for the
+/// The bytes a scope's bucket is allowed, which is not one number for the
 /// fleet.
 ///
 /// The scopes hold different things: the trusted one carries the layers every
@@ -76,12 +76,37 @@ fn rc(arguments: &[&str], cancel: &Cancel) -> Result<()> {
 /// one value - measured as 200 and 800 gibibytes standing against an
 /// environment that still said 50. A scope may name its own, and the shared
 /// value is what a scope that does not is given.
-fn scope_quota(scope: &str, shared: &str) -> String {
+pub(super) fn scope_quota(scope: &str, shared: &str) -> Result<u64> {
     let named = format!(
         "CACHE_BUCKET_QUOTA_{}",
         scope.to_ascii_uppercase().replace('-', "_")
     );
-    env::var(&named).unwrap_or_else(|_| shared.to_owned())
+    let value = env::var(&named).unwrap_or_else(|_| shared.to_owned());
+    size(&value).with_context(|| format!("the quota of the {scope} scope"))
+}
+
+/// A size as the host writes it. The store is handed the bytes, so its quota
+/// and the evictor's budget cannot read one size two ways.
+fn size(value: &str) -> Result<u64> {
+    let count = value.trim_end_matches(|character: char| character.is_ascii_alphabetic());
+    let shift = match &value[count.len()..] {
+        "KiB" => 10,
+        "MiB" => 20,
+        "GiB" => 30,
+        "TiB" => 40,
+        _ => bail!("{value} is not a whole number of KiB, MiB, GiB or TiB"),
+    };
+    ensure!(
+        !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()),
+        "{value} is not a whole number of KiB, MiB, GiB or TiB"
+    );
+    let bytes = count
+        .parse::<u64>()?
+        .checked_mul(1 << shift)
+        .with_context(|| format!("{value} does not fit in 64 bits"))?;
+    // The store reads zero as no quota at all.
+    ensure!(bytes > 0, "a quota of {value} leaves the bucket no room");
+    Ok(bytes)
 }
 
 pub(super) fn scope_bucket(scope: &str) -> Result<String> {
@@ -107,9 +132,13 @@ pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
         matches!(url.scheme(), "http" | "https") && !endpoint.chars().any(char::is_whitespace),
         "cache endpoint must be an HTTP URL without whitespace"
     );
-    for scope in scopes.split_whitespace() {
-        scope_bucket(scope)?;
-    }
+    let scopes = scopes
+        .split_whitespace()
+        .map(|scope| {
+            scope_bucket(scope)?;
+            Ok((scope, scope_quota(scope, &quota)?))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let root = Path::new("/config");
     rc(
         &[
@@ -132,15 +161,15 @@ pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
         ],
         cancel,
     )?;
-    for scope in scopes.split_whitespace() {
-        initialize_scope(scope, &scope_quota(scope, &quota), &endpoint, uid, cancel)?;
+    for (scope, quota) in scopes {
+        initialize_scope(scope, quota, &endpoint, uid, cancel)?;
     }
     Ok(())
 }
 
 fn initialize_scope(
     scope: &str,
-    quota: &str,
+    quota: u64,
     endpoint: &str,
     uid: u32,
     cancel: &Cancel,
@@ -155,7 +184,10 @@ fn initialize_scope(
         &["bucket", "create", "--ignore-existing", &destination],
         cancel,
     )?;
-    rc(&["bucket", "quota", "set", &destination, quota], cancel)?;
+    rc(
+        &["bucket", "quota", "set", &destination, &quota.to_string()],
+        cancel,
+    )?;
     let mut lifecycle = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut lifecycle, &retention())?;
     rc(
@@ -328,8 +360,29 @@ mod tests {
             env::set_var("CACHE_BUCKET_QUOTA_REVIEW", "800GiB");
         }
 
-        assert_eq!(scope_quota("review", "50GiB"), "800GiB");
-        assert_eq!(scope_quota("trusted", "50GiB"), "50GiB");
+        assert_eq!(scope_quota("review", "50GiB").unwrap(), 800 << 30);
+        assert_eq!(scope_quota("trusted", "50GiB").unwrap(), 50 << 30);
+    }
+
+    /// The store is handed the bytes the evictor keeps the bucket under, so a
+    /// size the two could read apart is refused. The store reads zero as no
+    /// quota, and the evictor would read it as room for nothing.
+    #[test]
+    fn a_quota_is_a_whole_number_of_binary_units() {
+        assert_eq!(size("400GiB").unwrap(), 400 << 30);
+        assert_eq!(size("64MiB").unwrap(), 64 << 20);
+        for value in [
+            "400GB",
+            "400G",
+            "400",
+            "GiB",
+            "+4GiB",
+            "4 GiB",
+            "0GiB",
+            "16777216TiB",
+        ] {
+            assert!(size(value).is_err(), "{value}");
+        }
     }
 
     #[test]

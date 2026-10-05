@@ -267,9 +267,12 @@ there the whole time. The refusal named the bucket with an empty key, which is
 what a `ListBucket` denial always looks like - so it read as a broken client
 rather than a policy that had never been updated.
 
-Quotas are per scope and applied each time the stack starts. Changing one
-afterwards is `rc bucket quota set` against the live bucket; editing the
-environment file changes only what the next start applies.
+Quotas are per scope, written in the host's environment file as a whole number
+of KiB, MiB, GiB or TiB, and handed to the store as bytes each time the stack
+starts. The evictor keeps each bucket under the same number from the same
+file, so a quota changes in the file and takes effect at the next start. One
+set by hand with `rc bucket quota set` parts the store's backstop from the
+evictor's budget until that start puts it back.
 
 The two drift, and the drift is the danger: the live buckets had been raised by
 hand to 200 GiB trusted and 800 GiB review while the environment the stack was

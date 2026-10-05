@@ -21,17 +21,31 @@ use super::{
 };
 use crate::{ci::host::mac::read_secret, consts};
 
-/// Keeps each scope's compiler cache under its budget by evicting the entries
-/// used longest ago, as the store's audit log reports their use.
+/// Keeps each scope's compiler cache under the quota the setup gave its
+/// bucket by evicting the entries used longest ago, as the store's audit log
+/// reports their use.
+///
+/// The quota is read from the environment the setup applied, not asked of
+/// the store: after a start the store answers no quota question until it has
+/// counted the bucket, a minute or more.
 pub(in crate::ci::cache) fn run() -> Result<Infallible> {
+    let shared = required("CACHE_BUCKET_QUOTA")?;
     let buckets = required("CACHE_SCOPES")?
         .split_whitespace()
-        .map(provision::scope_bucket)
+        .map(|scope| {
+            Ok((
+                provision::scope_bucket(scope)?,
+                provision::scope_quota(scope, &shared)?,
+            ))
+        })
         .collect::<Result<Vec<_>>>()?;
     let server = Server::http(consts::EVICT_LISTEN)
         .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
     let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
-    let managed = buckets.clone();
+    let managed = buckets
+        .iter()
+        .map(|(bucket, _)| bucket.clone())
+        .collect::<Vec<_>>();
     thread::spawn(move || audit::receive(&server, &managed, &sender));
     let config = Path::new("/config");
     let store = Store::connect(
@@ -61,7 +75,7 @@ struct Scope {
     bucket: String,
     /// The second each entry was last read, as far as the log has said.
     reads: HashMap<Entry, u64>,
-    quota: Option<u64>,
+    quota: u64,
     /// Bytes deleted since the store last recounted the bucket, or none when
     /// the evictor does not know.
     unreconciled: Option<u64>,
@@ -113,16 +127,20 @@ impl Owner {
     /// whole is set aside, which only ages its entries; a store that cannot
     /// be read stops the start, and so does a scope listed twice, since the
     /// log credits each bucket to its first scope alone.
-    fn start(store: Store, buckets: Vec<String>, deliveries: Receiver<Delivery>) -> Result<Self> {
-        for (index, bucket) in buckets.iter().enumerate() {
+    fn start(
+        store: Store,
+        buckets: Vec<(String, u64)>,
+        deliveries: Receiver<Delivery>,
+    ) -> Result<Self> {
+        for (index, (bucket, _)) in buckets.iter().enumerate() {
             ensure!(
-                !buckets[..index].contains(bucket),
+                !buckets[..index].iter().any(|(other, _)| other == bucket),
                 "the scopes name {bucket} twice"
             );
         }
         let now = Instant::now();
         let mut scopes = Vec::with_capacity(buckets.len());
-        for bucket in buckets {
+        for (bucket, quota) in buckets {
             let reads = store
                 .get(consts::RECENCY_BUCKET, &bucket)?
                 .map_or_else(HashMap::new, |bytes| {
@@ -134,7 +152,7 @@ impl Owner {
             scopes.push(Scope {
                 bucket,
                 reads,
-                quota: None,
+                quota,
                 unreconciled: None,
                 active_at: now,
                 liveness: Liveness::Unknown,
@@ -217,12 +235,7 @@ impl Owner {
     fn pass(&mut self, index: usize) -> Result<()> {
         self.drain();
         let bucket = self.scopes[index].bucket.clone();
-        let quota = self.store.quota(&bucket)?;
-        self.scopes[index].quota = quota;
-        let Some(quota) = quota else {
-            warn!(%bucket, "the bucket has no quota to keep it under");
-            return Ok(());
-        };
+        let quota = self.scopes[index].quota;
         let started = Instant::now();
         let listing = self.listing(&bucket)?;
         let listing_ms = started.elapsed().as_millis();
@@ -321,10 +334,7 @@ impl Owner {
     fn tend(&mut self, index: usize) -> Result<()> {
         self.drain();
         let scope = &mut self.scopes[index];
-        let Some(quota) = scope.quota else {
-            return Ok(());
-        };
-        if !plan::recount_wanted(scope.unreconciled, quota)
+        if !plan::recount_wanted(scope.unreconciled, scope.quota)
             || scope.active_at.elapsed() < Self::QUIET
         {
             return Ok(());
@@ -377,9 +387,9 @@ mod tests {
         Entry::parse(&object(first, fill)).unwrap()
     }
 
-    /// A bucket at its quota: the startup probe, three entries of 300 bytes
-    /// written at seconds 100, 200 and 300, and an 87-byte snapshot.
-    /// `child_b` answers the listing under `sccache/b/`.
+    /// A bucket at the quota [`owner`] gives it: the startup probe, three
+    /// entries of 300 bytes written at seconds 100, 200 and 300, and an
+    /// 87-byte snapshot. `child_b` answers the listing under `sccache/b/`.
     fn bucket(child_b: &str) -> String {
         let item = |key: &str, size: u64, at: &str| {
             format!(
@@ -387,14 +397,12 @@ mod tests {
             )
         };
         format!(
-            r#"{quota}
-"--json object list ci/kithara-review/") printf '%s' '{{"items":[{{"key":"sccache/","is_dir":true}},{{"key":"target-snapshots/","is_dir":true}}],"truncated":false}}' ;;
+            r#""--json object list ci/kithara-review/") printf '%s' '{{"items":[{{"key":"sccache/","is_dir":true}},{{"key":"target-snapshots/","is_dir":true}}],"truncated":false}}' ;;
 "--json object list ci/kithara-review/sccache/") printf '%s' '{{"items":[{{"key":"sccache/a/","is_dir":true}},{{"key":"sccache/b/","is_dir":true}},{probe}],"truncated":false}}' ;;
 "--json object list --recursive ci/kithara-review/sccache/a/") printf '%s' '{{"items":[{a1},{a2}],"truncated":false}}' ;;
 "--json object list --recursive ci/kithara-review/sccache/b/") {child_b} ;;
 "--json object list --recursive ci/kithara-review/target-snapshots/") printf '%s' '{{"items":[{snapshot}],"truncated":false}}' ;;
 "object remove --force "*) ;;"#,
-            quota = consts::REVIEW_QUOTA_RC_CASE,
             probe = item("sccache/.sccache_check", 13, "00:00"),
             a1 = item(&object('a', '1'), 300, "01:40.5"),
             a2 = item(&object('a', '2'), 300, "03:20"),
@@ -448,7 +456,8 @@ esac
     fn owner(program: &Path) -> (Owner, mpsc::SyncSender<Delivery>) {
         let (sender, deliveries) = mpsc::sync_channel(16);
         let store = Store::connect(program, "user", "password").unwrap();
-        let owner = Owner::start(store, vec!["kithara-review".to_owned()], deliveries).unwrap();
+        let owner =
+            Owner::start(store, vec![("kithara-review".to_owned(), 1000)], deliveries).unwrap();
         (owner, sender)
     }
 
@@ -491,6 +500,28 @@ esac
         assert_eq!(record, HashMap::from([(entry('a', '1'), 400)]));
     }
 
+    /// After a start the store refuses every quota question until it has
+    /// counted the bucket, a minute or more; a pass that waited on that answer
+    /// left a full bucket full until the next pass, half an hour later.
+    #[test]
+    fn the_first_pass_evicts_before_the_store_has_counted_the_bucket() {
+        let directory = tempfile::tempdir().unwrap();
+        let uncounted = r#""--json bucket quota info ci/kithara-review") echo 'HTTP 503: authoritative bucket usage is not available yet' >&2; exit 1 ;;"#;
+        let program = rc(
+            directory.path(),
+            &format!("{uncounted}\n{}", bucket(&b1_listing())),
+        );
+        let (mut owner, _sender) = owner(&program);
+
+        owner.pass(0).unwrap();
+
+        let calls = calls(directory.path());
+        assert!(
+            calls.iter().any(|call| call.starts_with("object remove")),
+            "{calls:?}"
+        );
+    }
+
     #[test]
     fn a_pass_whose_listing_fails_evicts_nothing() {
         let directory = tempfile::tempdir().unwrap();
@@ -517,9 +548,8 @@ esac
     #[test]
     fn a_quiet_bucket_is_probed_and_recounted_once_the_log_echoes() {
         let directory = tempfile::tempdir().unwrap();
-        let program = rc(directory.path(), consts::REVIEW_QUOTA_RC_CASE);
+        let program = rc(directory.path(), "");
         let (mut owner, sender) = owner(&program);
-        owner.scopes[0].quota = Some(1000);
         owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
 
         owner.tend(0).unwrap();
@@ -554,9 +584,8 @@ esac
     #[test]
     fn a_request_after_the_probe_holds_the_recount() {
         let directory = tempfile::tempdir().unwrap();
-        let program = rc(directory.path(), consts::REVIEW_QUOTA_RC_CASE);
+        let program = rc(directory.path(), "");
         let (mut owner, sender) = owner(&program);
-        owner.scopes[0].quota = Some(1000);
         owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
 
         owner.tend(0).unwrap();
@@ -581,9 +610,8 @@ esac
     #[test]
     fn a_request_queued_behind_the_echo_holds_the_recount() {
         let directory = tempfile::tempdir().unwrap();
-        let program = rc(directory.path(), consts::REVIEW_QUOTA_RC_CASE);
+        let program = rc(directory.path(), "");
         let (mut owner, sender) = owner(&program);
-        owner.scopes[0].quota = Some(1000);
         owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
 
         owner.tend(0).unwrap();
@@ -623,7 +651,6 @@ esac
             ),
         );
         let (mut owner, _sender) = owner(&program);
-        owner.scopes[0].quota = Some(1000);
         owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
         owner.scopes[0].next_pass = Instant::now() + Owner::PASS_INTERVAL;
 
@@ -648,7 +675,10 @@ esac
 
         let started = Owner::start(
             store,
-            vec!["kithara-review".to_owned(), "kithara-review".to_owned()],
+            vec![
+                ("kithara-review".to_owned(), 1000),
+                ("kithara-review".to_owned(), 1000),
+            ],
             mpsc::sync_channel(1).1,
         );
 
@@ -674,7 +704,7 @@ esac
             let store = Store::connect(&program, "user", "password").unwrap();
             Owner::start(
                 store,
-                vec!["kithara-review".to_owned()],
+                vec![("kithara-review".to_owned(), 1000)],
                 mpsc::sync_channel(1).1,
             )
         };

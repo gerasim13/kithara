@@ -47,12 +47,6 @@ struct Item {
     last_modified: Option<String>,
 }
 
-/// What `rc --json bucket quota info` prints.
-#[derive(Deserialize)]
-struct Quota {
-    quota: Option<u64>,
-}
-
 impl Store {
     const ALIAS: &str = "ci";
     /// The exit status `rc` gives an object that does not exist.
@@ -81,16 +75,6 @@ impl Store {
         Ok(Self {
             program: program.to_owned(),
         })
-    }
-
-    /// The bucket's quota, or none when it has none.
-    pub(super) fn quota(&self, bucket: &str) -> Result<Option<u64>> {
-        let bucket = format!("{}/{bucket}", Self::ALIAS);
-        let output = self.output(&["--json", "bucket", "quota", "info", &bucket])?;
-        require_success(&output, "read the bucket quota")?;
-        let quota: Quota =
-            serde_json::from_slice(&output.stdout).context("read the bucket quota")?;
-        Ok(quota.quota)
     }
 
     pub(super) fn list(&self, bucket: &str, prefix: &str, recursive: bool) -> Result<Page> {
@@ -286,19 +270,6 @@ esac
         );
         store.probe("kithara-review", "absent").unwrap();
         assert!(store.probe("kithara-review", "denied").is_err());
-    }
-
-    #[test]
-    fn a_quota_reads_back_as_bytes_or_none() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = store(
-            directory.path(),
-            r#""--json bucket quota info ci/kithara-review") printf '%s' '{"bucket":"kithara-review","quota":1000,"quotaHuman":"1000 B","usage":10,"usageHuman":"10 B","quotaType":"HARD"}' ;;
-"--json bucket quota info ci/kithara-open") printf '%s' '{"bucket":"kithara-open","quota":null,"quotaHuman":null,"usage":0,"usageHuman":"0 B","quotaType":"HARD"}' ;;"#,
-        );
-
-        assert_eq!(store.quota("kithara-review").unwrap(), Some(1000));
-        assert_eq!(store.quota("kithara-open").unwrap(), None);
     }
 
     #[test]

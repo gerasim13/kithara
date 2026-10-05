@@ -265,10 +265,6 @@ pub(crate) const AUDIT_BODY_LIMIT: u64 = 1 << 20;
 pub(crate) const ENTRY_HASH: &str =
     "abc0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc";
 
-/// How a fake `rc` answers the quota of a review bucket holding 1000 bytes.
-#[cfg(test)]
-pub(crate) const REVIEW_QUOTA_RC_CASE: &str = r#""--json bucket quota info ci/kithara-review") printf '%s' '{"bucket":"kithara-review","quota":1000,"quotaHuman":"1000 B","usage":1000,"usageHuman":"1000 B","quotaType":"HARD"}' ;;"#;
-
 /// Keys nextest reads on a profile. Inside a `junit` table it drops them
 /// with a warning, which is how `[profile.ci.junit]` swallowed two of them.
 #[cfg(test)]
