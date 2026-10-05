@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
-use kithara_devtools::{Ctx, common::tools::ToolsConfig};
+use kithara_devtools::{
+    Ctx,
+    common::{project::ProjectConfig, tools::ToolsConfig},
+};
 use tracing::{info, warn};
 
 use super::{
@@ -172,7 +175,7 @@ impl PipelineKind {
     }
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 pub(crate) struct RunArgs {
     /// CI lane to execute, as `.config/xtask.toml` and the pipeline name it.
     lane: String,
@@ -184,6 +187,10 @@ pub(crate) struct RunArgs {
         default_value = "merge-request"
     )]
     kind: PipelineKind,
+    /// Narrow nextest-backed test steps to this expression. Unlike the global
+    /// KITHARA_TEST_FILTER environment value, this requires a test lane.
+    #[arg(long)]
+    test_filter: Option<String>,
     /// Packaging profile from `ext.release.packages`. Defaults to the strict
     /// release path, so a caller that forgets one is not silently weakened.
     #[arg(long, default_value = "release")]
@@ -383,6 +390,29 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // reads the executor, so a typo answers with the list of lanes rather than
     // with whatever the machine is missing.
     let lane = Lane::parse(&args.lane, &ext.ci.lanes)?;
+    if let Some(expression) = args.test_filter.as_deref() {
+        let declared = ext.ci.lanes.get(&args.lane).with_context(|| {
+            format!("CI lane `{}` has no nextest-backed test step to filter", args.lane)
+        })?;
+        if !super::lane::declared::validate_filter(
+            declared,
+            args.kind.name(),
+            expression,
+            &ctx.config,
+        )? {
+            bail!(
+                "CI lane `{}` has no nextest-backed test step to filter",
+                args.lane
+            );
+        }
+    }
+    let effective = RunArgs {
+        test_filter: args
+            .test_filter
+            .clone()
+            .or_else(|| env::var("KITHARA_TEST_FILTER").ok()),
+        ..args.clone()
+    };
     let host_config = env::var_os("KITHARA_CI_HOST_CONFIG")
         .map(PathBuf::from)
         .context(
@@ -425,10 +455,10 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         environment.settle_lane_build(false)?;
         return report_lane(
             &lane,
-            args.kind,
+            &effective,
             &ctx.root,
             &ci_config,
-            &ctx.config.tools,
+            &ctx.config,
             &swiftpm_cache,
             &ext.ci.lanes,
         );
@@ -454,10 +484,10 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             ),
             ref lane => command_lane(
                 lane,
-                args.kind,
+                &effective,
                 &process,
                 &ci_config,
-                &ctx.config.tools,
+                &ctx.config,
                 &swiftpm_cache,
                 &ext.ci.lanes,
             ),
@@ -471,21 +501,21 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
 /// this job actually run" from a laptop, and is what the lane snapshot reads.
 fn report_lane(
     lane: &Lane,
-    kind: PipelineKind,
+    args: &RunArgs,
     root: &Path,
     ci_config: &CiConfig,
-    tools: &ToolsConfig,
+    project: &ProjectConfig,
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
     let process = Process::recording(
         root,
         Recording::default().with_reply(
-            tools.program("xcodebuild"),
+            project.tools.program("xcodebuild"),
             &format!("Xcode {}", ci_config.pins.expected_xcode_version),
         ),
     );
-    let outcome = command_lane(lane, kind, &process, ci_config, tools, swiftpm_cache, lanes);
+    let outcome = command_lane(lane, args, &process, ci_config, project, swiftpm_cache, lanes);
     let recorded = process
         .recorded()
         .context("a recording process keeps its recording")?;
@@ -506,13 +536,14 @@ fn report_lane(
 /// the caller.
 fn command_lane(
     lane: &Lane,
-    kind: PipelineKind,
+    args: &RunArgs,
     process: &Process,
     ci_config: &CiConfig,
-    tools: &ToolsConfig,
+    project: &ProjectConfig,
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
+    let tools = &project.tools;
     match lane {
         Lane::ReleaseXcframework
         | Lane::ReleaseDocs
@@ -528,7 +559,15 @@ fn command_lane(
             let declared = lanes.get(name).with_context(|| {
                 format!("ext.ci.lanes.{name} is not declared in .config/xtask.toml")
             })?;
-            super::lane::declared::run(process, declared, &ci_config.pins, tools, kind, None)
+            super::lane::declared::run(
+                process,
+                declared,
+                &ci_config.pins,
+                project,
+                args.kind,
+                None,
+                args.test_filter.as_deref(),
+            )
         }
     }
 }
@@ -544,7 +583,7 @@ mod tests {
     };
 
     use clap::{Parser, ValueEnum};
-    use kithara_devtools::common::tools::ToolsConfig;
+    use kithara_devtools::{Ctx, common::tools::ToolsConfig};
     use tempfile::TempDir;
 
     use super::{
@@ -552,7 +591,7 @@ mod tests {
             config::fixture,
             process::{Recording, Step},
         },
-        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
+        CacheGroup, CompilerCache, Lane, PipelineKind, RunArgs, command_lane, compiler_cache_note,
         execute_lane, sccache_server_is_stopped,
     };
     use crate::{
@@ -644,6 +683,46 @@ mod tests {
         checkout
     }
 
+    #[test]
+    fn an_explicit_mac_lint_filter_is_refused_before_host_or_build_access() {
+        let checkout = checkout();
+        let ctx = Ctx::new(
+            checkout.path().to_owned(),
+            toml::from_str(
+                r#"
+[ext.ci]
+pins = "missing-ci-pins.toml"
+
+[ext.ci.lanes.apple-lint]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+program = "just"
+role = "platforms"
+timeout_minutes = 1
+steps = [{ args = ["lint", "gate"], label = "Apple lint gate" }]
+"#,
+            )
+            .expect("parse the unsupported Mac lane"),
+        );
+        let args = RunArgs {
+            lane: "apple-lint".to_owned(),
+            kind: PipelineKind::Branch,
+            test_filter: Some("test(contract)".to_owned()),
+            package: "release".to_owned(),
+            channel: "release".to_owned(),
+            dry_run: false,
+        };
+
+        let error = super::execute(&args, &ctx).expect_err("lint cannot accept a test filter");
+
+        assert!(
+            error.to_string().contains("has no nextest-backed test step to filter"),
+            "the request must fail before missing pins or host configuration: {error:#}"
+        );
+        assert!(!checkout.path().join("target").exists());
+    }
+
     /// One lane resolved in one pipeline kind: the program and arguments of
     /// each step it asks for, or the reason it refuses the kind.
     fn resolve(name: &str, kind: PipelineKind) -> (Result<(), String>, Vec<Step>) {
@@ -659,12 +738,20 @@ mod tests {
             &format!("Xcode {}", ci_config.pins.expected_xcode_version),
         );
         let process = Process::recording(root, recording);
+        let args = RunArgs {
+            lane: name.to_owned(),
+            kind,
+            test_filter: None,
+            package: "release".to_owned(),
+            channel: "release".to_owned(),
+            dry_run: false,
+        };
         let outcome = command_lane(
             &lane,
-            kind,
+            &args,
             &process,
             &ci_config,
-            &project.tools,
+            &project,
             &root.join("target/swiftpm"),
             &ext.ci.lanes,
         )
@@ -878,12 +965,20 @@ mod tests {
                     // real results is pinned where that conversion lives.
                     .with_reply("xcrun", r#"{"testNodes":[]}"#);
                 let process = Process::recording(root, recording);
+                let args = RunArgs {
+                    lane: name.clone(),
+                    kind: *kind,
+                    test_filter: None,
+                    package: "release".to_owned(),
+                    channel: "release".to_owned(),
+                    dry_run: false,
+                };
                 let outcome = command_lane(
                     &lane,
-                    *kind,
+                    &args,
                     &process,
                     &ci_config,
-                    &project.tools,
+                    &project,
                     &root.join("target/swiftpm"),
                     &ext.ci.lanes,
                 );

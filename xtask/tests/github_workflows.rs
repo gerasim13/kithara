@@ -2102,7 +2102,7 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
 
     let text = github_workflow_text("lane.yml");
     assert!(
-        text.contains("just ci lane \"${{ inputs.lane }}\" --kind \"${{ inputs.kind }}\""),
+        text.contains("just ci lane \"${args[@]}\""),
         "the executor runs the named lane"
     );
 
@@ -2118,8 +2118,8 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     );
     assert_eq!(
         mapping_field(job, "runs-on").as_str(),
-        Some("${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"),
-        "a lane runner label overrides only the shared pool selection"
+        Some("${{ fromJSON(needs.select.outputs.matrix || '[]')[0].runner || inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"),
+        "the catalog or rendered call supplies the lane runner before the shared pool"
     );
     let upload = named_step(job, "Upload the lane's report");
     let upload_inputs = mapping_field(upload, "with")
@@ -2127,7 +2127,7 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
         .expect("the lane upload has inputs");
     assert_eq!(
         mapping_field(upload_inputs, "name").as_str(),
-        Some("${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}")
+        Some("${{ env.LANE_ARTIFACT_NAME }}-${{ github.run_id }}-${{ github.run_attempt }}")
     );
 }
 
