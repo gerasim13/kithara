@@ -5,17 +5,11 @@ use crate::{
     mount::{Glyph, Readout, Select, Telemetry, Text},
 };
 
-pub(crate) fn text<'a>(
-    style: TextStyle,
-    _presentation: TextPresentation<'a>,
-) -> Text {
+pub(crate) fn text<'a>(style: TextStyle, _presentation: TextPresentation<'a>) -> Text {
     Text::builder().style(style).build()
 }
 
-pub(crate) fn glyph<'a>(
-    style: GlyphStyle,
-    _presentation: GlyphPresentation<'a>,
-) -> Glyph {
+pub(crate) fn glyph<'a>(style: GlyphStyle, _presentation: GlyphPresentation<'a>) -> Glyph {
     Glyph::builder().style(style).build()
 }
 

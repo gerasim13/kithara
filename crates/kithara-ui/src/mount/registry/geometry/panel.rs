@@ -18,9 +18,7 @@ pub(crate) fn sprite(_sheet: InternId, _seconds: f32) -> Sprite {
     Sprite::builder().build()
 }
 
-pub(crate) fn table<'a>(
-    _presentation: TablePresentation<'a>,
-) -> Table {
+pub(crate) fn table<'a>(_presentation: TablePresentation<'a>) -> Table {
     Table::builder().build()
 }
 
