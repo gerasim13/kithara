@@ -796,7 +796,7 @@ label = "run"
         let root = workspace_root();
         let direct = fs::read_to_string(root.join("xtask/src/ci/lane/direct.rs"))
             .expect("direct lane source is readable");
-        let declared = fs::read_to_string(root.join("xtask/src/ci/lane/declared.rs"))
+        let declared = fs::read_to_string(root.join("xtask/src/ci/lane/declared/execution.rs"))
             .expect("declared lane source is readable");
         let production = |source: String| {
             source
