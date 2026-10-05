@@ -56,6 +56,15 @@ where
                 "selected backend does not support keylock",
             ));
         }
+        if !kind.capabilities().contains(BackendCapabilities::RATE) {
+            drop(reusable);
+            let engine = Self::config_for(kind, backends, source_block_frames, spec, pools)
+                .and_then(build_engine)?;
+            return Ok(PreparedTarget {
+                engine: Some(engine),
+                ..PreparedTarget::default()
+            });
+        }
         let PreparedTarget {
             residency: reusable_residency,
             activation_scratch: reusable_activation_scratch,
@@ -78,6 +87,7 @@ where
         let measured = (|| -> Result<(), ElasticError> {
             for backend in StretchKind::all().iter().filter(|backend| {
                 measure_capabilities
+                    && backend.capabilities().contains(BackendCapabilities::RATE)
                     && (!keylock
                         || backend
                             .capabilities()
@@ -188,6 +198,10 @@ where
     }
 
     fn service_scratch(&mut self) {
+        if !self.requires_staging() {
+            drop(self.deferred_scratch.take());
+            return;
+        }
         if self.scratch.is_some() {
             drop(self.deferred_scratch.take());
             return;
@@ -298,6 +312,7 @@ where
                 if let Some(resident) = self.residency.as_mut() {
                     resident.samples.shrink_to_fit();
                     resident.replacement.shrink_to_fit();
+                    resident.next_replacement.shrink_to_fit();
                 }
             }
             let reusable = PreparedTarget {

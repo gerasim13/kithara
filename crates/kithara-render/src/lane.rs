@@ -4,13 +4,7 @@ use std::convert::Infallible;
 
 use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Protocol};
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use kithara_warp::StretchKind;
-use kithara_warp::{SpeedCurve, WarpRenderer};
+use kithara_warp::{SpeedCurve, StretchKind, WarpRenderer};
 
 /// What a player and its render lane say to each other.
 #[derive(Debug)]
@@ -28,18 +22,8 @@ pub enum LaneCommand {
     SetSpeed(SpeedCurve),
     /// Render from this frame on with a keylock engine, which keeps the
     /// pitch at any speed, when on and the backend has one.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     SetKeylock(bool),
     /// Render from this frame on with this backend's engine.
-    #[cfg(any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    ))]
     SetBackend(StretchKind),
 }
 
@@ -84,17 +68,7 @@ impl Lane {
             for command in due.commands() {
                 match *command {
                     LaneCommand::SetSpeed(curve) => warp.set_speed(curve, revision),
-                    #[cfg(any(
-                        feature = "stretch-signalsmith",
-                        feature = "stretch-bungee",
-                        feature = "stretch-glide"
-                    ))]
                     LaneCommand::SetKeylock(on) => warp.set_keylock(on),
-                    #[cfg(any(
-                        feature = "stretch-signalsmith",
-                        feature = "stretch-bungee",
-                        feature = "stretch-glide"
-                    ))]
                     LaneCommand::SetBackend(kind) => warp.set_backend(kind),
                 }
             }
