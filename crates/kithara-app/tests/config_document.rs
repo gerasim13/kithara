@@ -12,6 +12,7 @@ use tempfile::TempDir;
 /// providers' own validity and salt shapes are pinned in `document::policy`,
 /// which reads the baked document without expanding it.
 const NEUTRAL_DRM: &str = concat!(
+    "sources:\n  zvuk: null\n",
     "drm:\n  providers:\n    - name: test\n",
     "      domains: [keys.test]\n      cipher_key: not-a-secret\n",
 );

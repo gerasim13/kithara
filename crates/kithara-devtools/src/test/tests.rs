@@ -9,7 +9,7 @@ use anyhow::Result;
 use tempfile::TempDir;
 
 use super::{
-    command::{execute, lane_command, run_each},
+    command::{execute, lane_command, run_each, touched_command},
     request::TestRequest,
     selection::{lane_features, requested, select_lane, validate_config},
     *,
@@ -22,6 +22,7 @@ use crate::{
         TestNextestRunner, TestNoBlockConfig, TestRunner, WorkspaceScan,
     },
     consts,
+    touched::Touched,
     verdict::ChildFailure,
 };
 
@@ -1194,5 +1195,77 @@ fn a_caller_filterset_passes_through_an_unfiltered_lane() {
     assert!(
         args.ends_with(&["-E".to_owned(), "test(seek)".to_owned()]),
         "{args:?}"
+    );
+}
+
+/// A touched run narrowed to packages builds what the whole lane builds: its
+/// command is the whole lane's with one filterset more, and a caller's
+/// filterset narrows that one further.
+#[test]
+fn a_narrowed_touched_run_builds_what_the_whole_lane_builds() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&[
+        "--profile".to_owned(),
+        "ci".to_owned(),
+        "-E".to_owned(),
+        "test(seek)".to_owned(),
+    ])
+    .expect("parse request");
+    let narrowed = Touched::Narrowed {
+        lane: "workspace".to_owned(),
+        packages: BTreeSet::from(["demo".to_owned(), "demo-web".to_owned()]),
+    };
+    let without_filtersets = |args: Vec<String>| {
+        let mut kept = Vec::new();
+        let mut iter = args.into_iter();
+        while let Some(arg) = iter.next() {
+            if arg == "-E" {
+                iter.next();
+            } else {
+                kept.push(arg);
+            }
+        }
+        kept
+    };
+
+    let whole = args_of(
+        &touched_command(
+            &project.test,
+            &Touched::Whole("workspace".to_owned()),
+            &request,
+        )
+        .expect("whole command"),
+    );
+    let narrowed =
+        args_of(&touched_command(&project.test, &narrowed, &request).expect("narrowed command"));
+
+    assert_eq!(
+        without_filtersets(narrowed.clone()),
+        without_filtersets(whole)
+    );
+    assert!(
+        narrowed
+            .windows(2)
+            .any(|pair| pair == ["-E", "(package(demo) | package(demo-web)) & ((test(seek)))"]),
+        "{narrowed:?}"
+    );
+}
+
+/// A `cargo test` lane has no filterset to narrow it by package.
+#[test]
+fn a_cargo_test_lane_refuses_a_narrowed_run() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&[]).expect("parse request");
+    let narrowed = Touched::Narrowed {
+        lane: "browser".to_owned(),
+        packages: BTreeSet::from(["demo-web".to_owned()]),
+    };
+
+    let error = touched_command(&project.test, &narrowed, &request)
+        .expect_err("a cargo test lane narrowed by package");
+
+    assert!(
+        format!("{error:#}").contains("a filterset cannot narrow"),
+        "{error:#}"
     );
 }
