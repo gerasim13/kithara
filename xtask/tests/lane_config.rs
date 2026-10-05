@@ -6,40 +6,13 @@ fn workspace_root() -> &'static Path {
         .expect("xtask has a workspace root")
 }
 
+/// Every test package — the integration-tests root and each package under
+/// `tests/crates/` — keeps its own code at `opt-level = 1` under
+/// `test-release`, so a release test run optimises the product it exercises
+/// and not the test bodies.
 #[test]
-fn workspace_lane_builds_native_test_packages_in_one_cargo_graph() {
+fn every_test_package_keeps_its_code_at_opt_level_one_under_test_release() {
     let root = workspace_root();
-    let config: toml::Value = toml::from_str(
-        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
-    )
-    .expect("xtask config is valid TOML");
-    let test = &config["test"];
-    assert_eq!(
-        test["lanes"]["workspace"]["program"].as_str(),
-        Some("cargo")
-    );
-    assert_eq!(config["stress"]["lane"].as_str(), Some("workspace"));
-    let args = test["lanes"]["workspace"]["prefix_args"]
-        .as_array()
-        .expect("workspace lane has arguments");
-    let args: Vec<&str> = args.iter().filter_map(toml::Value::as_str).collect();
-    assert!(args.contains(&"--workspace"));
-    for package in [
-        "kithara-fuzz",
-        "kithara-ui",
-        "kithara-devtools",
-        "xtask",
-        "kithara-test-utils",
-        "kithara-test-macros",
-        "kithara-ffi-web-tests",
-        "kithara-ffi-web-analysis-tests",
-    ] {
-        assert!(
-            args.contains(&package),
-            "workspace lane must exclude {package}"
-        );
-    }
-
     let manifest: toml::Value = toml::from_str(
         &fs::read_to_string(root.join("Cargo.toml")).expect("workspace manifest is readable"),
     )
@@ -47,21 +20,24 @@ fn workspace_lane_builds_native_test_packages_in_one_cargo_graph() {
     let overrides = manifest["profile"]["test-release"]["package"]
         .as_table()
         .expect("test-release has package overrides");
-    assert!(overrides.contains_key("kithara-integration-tests"));
-    for entry in fs::read_dir(root.join("tests/crates")).expect("read test packages") {
-        let manifest = entry.expect("read test package").path().join("Cargo.toml");
-        if !manifest.is_file() {
-            continue;
-        }
+    let packages = fs::read_dir(root.join("tests/crates"))
+        .expect("read test packages")
+        .map(|entry| entry.expect("read test package").path().join("Cargo.toml"))
+        .filter(|manifest| manifest.is_file())
+        .chain([root.join("tests/Cargo.toml")]);
+    for manifest in packages {
         let package: toml::Value = toml::from_str(
-            &fs::read_to_string(manifest).expect("test package manifest is readable"),
+            &fs::read_to_string(&manifest).expect("test package manifest is readable"),
         )
         .expect("test package manifest is valid TOML");
         let name = package["package"]["name"]
             .as_str()
             .expect("test package has a name");
         assert_eq!(
-            overrides[name]["opt-level"].as_integer(),
+            overrides
+                .get(name)
+                .and_then(|package| package.get("opt-level"))
+                .and_then(toml::Value::as_integer),
             Some(1),
             "{name} must keep test code out of opt-level 3"
         );
@@ -437,4 +413,147 @@ fn every_test_lane_judges_freshness_by_checksum() {
         checked += 1;
     }
     assert!(checked > 0, "the catalog runs the suite");
+}
+
+/// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
+/// where it names any, the shared `kinds` otherwise, and none at all for a lane
+/// that is not Linux-only, because that fan-out has only Linux machines.
+fn github_membership(lane: &toml::Value) -> Vec<&str> {
+    let os = lane.get("os").map_or_else(Vec::new, strings);
+    if os != ["linux"] {
+        return Vec::new();
+    }
+    let own = lane.get("kinds_github").map_or_else(Vec::new, strings);
+    if own.is_empty() {
+        lane.get("kinds").map_or_else(Vec::new, strings)
+    } else {
+        own
+    }
+}
+
+fn strings(value: &toml::Value) -> Vec<&str> {
+    match value {
+        toml::Value::String(one) => vec![one.as_str()],
+        toml::Value::Array(many) => many.iter().filter_map(toml::Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn ci_lanes(config: &toml::Value) -> &toml::Table {
+    config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog declares lanes")
+}
+
+fn xtask_config() -> toml::Value {
+    toml::from_str(
+        &fs::read_to_string(workspace_root().join(".config/xtask.toml"))
+            .expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML")
+}
+
+/// On GitHub a push with a pull request ready for review is a `merge-request`
+/// pipeline and any other push a `branch` one. They differ in how much of the
+/// suite a lane runs, never in which lanes run: a ready pull request that also
+/// started what only the default branch pays for would make every review wait
+/// on suites no merge request needs.
+#[test]
+fn a_ready_pull_request_schedules_exactly_the_lanes_a_branch_push_does() {
+    let config = xtask_config();
+    for (name, lane) in ci_lanes(&config) {
+        let kinds = github_membership(lane);
+        assert_eq!(
+            kinds.contains(&"branch"),
+            kinds.contains(&"merge-request"),
+            "lane `{name}` runs on GitHub for one of a branch push and a ready pull request but not the other: {kinds:?}"
+        );
+    }
+}
+
+/// The product suite is what a `test run` naming no lane runs. Every lane a
+/// branch push schedules for it runs one command, apart from the toggles it
+/// asks for and the directory it builds in, so the clocks it is run under are
+/// the only difference between their counts. Only a branch push narrows it to
+/// the lanes the push touched; a ready pull request runs it whole, as the
+/// default branch does.
+#[test]
+fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_branch_push() {
+    let config = xtask_config();
+    let mut recipes = Vec::new();
+    for (name, lane) in ci_lanes(&config) {
+        if !github_membership(lane).contains(&"branch") {
+            continue;
+        }
+        let steps = lane
+            .get("steps")
+            .and_then(toml::Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        for step in steps {
+            let args = step.get("args").map_or_else(Vec::new, strings);
+            if !matches!(args.as_slice(), ["test", "run", ..])
+                || args.iter().any(|arg| arg.starts_with("--lane"))
+            {
+                continue;
+            }
+            assert!(
+                !args.contains(&"--touched"),
+                "lane `{name}` narrows the suite on kinds other than a branch push"
+            );
+            let by_kind = step
+                .get("args_by_kind")
+                .and_then(toml::Value::as_table)
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(
+                by_kind.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["branch"],
+                "lane `{name}` runs the suite whole on every kind but a branch push"
+            );
+            let branch = strings(&by_kind["branch"]);
+            assert!(
+                branch.contains(&"--touched"),
+                "lane `{name}` runs the whole suite on a branch push"
+            );
+            assert_eq!(
+                branch
+                    .iter()
+                    .copied()
+                    .filter(|arg| *arg != "--touched")
+                    .collect::<Vec<_>>(),
+                args,
+                "lane `{name}` narrows a different command than it runs whole"
+            );
+            let command: Vec<&str> = args
+                .iter()
+                .copied()
+                .filter(|arg| !arg.starts_with("--flash=") && !arg.starts_with("--no-block="))
+                .collect();
+            let mut env = step
+                .get("env")
+                .and_then(toml::Value::as_table)
+                .cloned()
+                .unwrap_or_default();
+            env.remove("CARGO_TARGET_DIR");
+            let tools = lane.get("tools").map_or_else(Vec::new, strings);
+            let depth = lane
+                .get("fetch_depth")
+                .and_then(toml::Value::as_integer)
+                .unwrap_or(0);
+            recipes.push((name, (command, env, tools, depth)));
+        }
+    }
+    let Some(((first, recipe), rest)) = recipes.split_first() else {
+        panic!("no lane a branch push schedules runs the product suite");
+    };
+    assert!(
+        !rest.is_empty(),
+        "the product suite runs under one clock only"
+    );
+    for (name, other) in rest {
+        assert_eq!(
+            other, recipe,
+            "lanes `{first}` and `{name}` build or run the product suite differently"
+        );
+    }
 }

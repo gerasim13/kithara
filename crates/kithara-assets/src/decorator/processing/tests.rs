@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration};
 use kithara_storage::{
-    MemOptions, MemResource, MmapOptions, MmapResource, Resource, StorageError, StorageResource,
-    WaitOutcome,
+    MemOptions, MemResource, MmapOptions, MmapResource, Resource, ResourceStatus, StorageError,
+    StorageResource, WaitOutcome,
 };
 use kithara_test_utils::kithara;
 use tempfile::tempdir;
@@ -188,21 +188,27 @@ fn reader_view_blocks_until_writer_commits() {
     let process_fn = xor_chunk_processor(0x55, Arc::clone(&call_count));
     let raw: Vec<u8> = (0..32u8).collect();
     let (writer, _dir) = mock_writer(&raw);
+    let reopened = ProcessedReader::wrap_ready()
+        .inner(writer.reader())
+        .processor(Arc::clone(&process_fn))
+        .pools(crate::test_pools::pools())
+        .call();
 
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
         .pools(crate::test_pools::pools())
         .build();
-    let reader = writer.reader();
     let raw_len = raw.len() as u64;
 
-    let handle = std::thread::spawn(move || {
-        let outcome = reader.wait_range(0..raw_len).unwrap();
-        assert_eq!(outcome, WaitOutcome::Ready);
-        let mut buf = vec![0u8; 32];
-        reader.read_at(0, &mut buf).unwrap();
-        buf
+    let waiters = [writer.reader(), reopened].map(|reader| {
+        std::thread::spawn(move || {
+            let outcome = reader.wait_range(0..raw_len).unwrap();
+            assert_eq!(outcome, WaitOutcome::Ready);
+            let mut buf = vec![0u8; 32];
+            reader.read_at(0, &mut buf).unwrap();
+            buf
+        })
     });
 
     thread::sleep(Duration::from_millis(50));
@@ -213,9 +219,14 @@ fn reader_view_blocks_until_writer_commits() {
     );
     let _committed = writer.commit(Some(raw_len)).unwrap();
 
-    let read = handle.join().unwrap();
     let expected: Vec<u8> = (0..32u8).map(|b| b ^ 0x55).collect();
-    assert_eq!(read, expected, "reader view must observe processed bytes");
+    for waiter in waiters {
+        assert_eq!(
+            waiter.join().unwrap(),
+            expected,
+            "every reader view must observe processed bytes"
+        );
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -412,7 +423,9 @@ fn reactivate_then_commit_reruns_processor_mem() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
-fn writer_drop_without_commit_fails_gate() {
+#[case::drop(false)]
+#[case::abandon(true)]
+fn ending_a_writer_without_commit_interrupts_its_readers(#[case] abandon: bool) {
     let call_count = Arc::new(AtomicUsize::new(0));
     let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
     let (writer, _dir) = mock_writer(&[7u8; 16]);
@@ -428,7 +441,11 @@ fn writer_drop_without_commit_fails_gate() {
 
     let handle = std::thread::spawn(move || reader.wait_range(0..16));
     thread::sleep(Duration::from_millis(50));
-    drop(writer);
+    if abandon {
+        writer.abandon();
+    } else {
+        drop(writer);
+    }
 
     let outcome = handle
         .join()
@@ -437,7 +454,7 @@ fn writer_drop_without_commit_fails_gate() {
     assert_eq!(
         outcome,
         WaitOutcome::Interrupted,
-        "dropping a writer without commit must wake a parked reader, not deadlock"
+        "ending a writer without commit must wake a parked reader, not deadlock"
     );
 
     let mut buf = [0u8; 16];
@@ -478,6 +495,42 @@ fn reopened_committed_processed_reader_is_readable_immediately() {
     assert_eq!(n, already_processed.len());
     assert_eq!(buf, already_processed);
     assert_eq!(call_count.load(Ordering::SeqCst), 0);
+}
+
+#[kithara::test]
+fn an_abandoned_generation_stays_unreadable_after_its_successor_commits() {
+    let pools = crate::test_pools::pools();
+    let processor = xor_chunk_processor(0x42, Arc::new(AtomicUsize::new(0)));
+    let writer = ProcessedWriter::builder()
+        .inner(mock_writer_mem(&pools, b"cipher"))
+        .processor(processor)
+        .pools(pools)
+        .build();
+    let reader = writer.reader();
+    writer.abandon();
+    assert!(
+        matches!(reader.status(), ResourceStatus::Active),
+        "abandon keeps the raw resource for a successor"
+    );
+
+    let committed = reader
+        .clone()
+        .reactivate()
+        .expect("successor acquires a fresh processing gate")
+        .commit(Some(6))
+        .expect("successor commits processed bytes");
+    let mut bytes = [0; 6];
+    committed
+        .read_at(0, &mut bytes)
+        .expect("successor reads processed bytes");
+    assert_eq!(bytes, (*b"cipher").map(|byte| byte ^ 0x42));
+    assert!(
+        matches!(
+            reader.read_at(0, &mut bytes),
+            Err(StorageError::NotReadable)
+        ),
+        "a successor commit cannot reopen the abandoned generation"
+    );
 }
 
 #[kithara::test]

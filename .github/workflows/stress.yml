@@ -27,6 +27,10 @@ on:
         description: configured stress mode; empty uses the project configuration
         required: false
         type: string
+      lane:
+        description: stressed test lane; empty uses every lane the project stresses
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       revision:
@@ -43,6 +47,10 @@ on:
         type: string
       mode:
         description: configured stress mode; empty uses the project configuration
+        required: false
+        type: string
+      lane:
+        description: stressed test lane; empty uses every lane the project stresses
         required: false
         type: string
 
@@ -147,6 +155,7 @@ jobs:
           COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
           FILTER: ${{ inputs.filter }}
           MODE: ${{ inputs.mode }}
+          LANE: ${{ inputs.lane }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
         run: |
           args=(
@@ -157,10 +166,11 @@ jobs:
           )
           [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
           [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-          # `--mode` repeats per lane; the input is a space-separated list, so
-          # one flag carrying the whole string would name a lane that does not
-          # exist and fail the run at argument parsing.
+          # `--mode` and `--lane` repeat per entry; each input is a space-separated
+          # list, so one flag carrying the whole string would name a mode or a lane
+          # that does not exist and fail the run at argument parsing.
           for mode in $MODE; do args+=(--mode "$mode"); done
+          for lane in $LANE; do args+=(--lane "$lane"); done
           just ci stress "${args[@]}"
 
       - name: Upload the raw stress evidence
@@ -218,6 +228,7 @@ jobs:
           EXECUTE_RESULT: ${{ needs.execute.result }}
           FILTER: ${{ inputs.filter }}
           MODE: ${{ inputs.mode }}
+          LANE: ${{ inputs.lane }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
         run: |
           args=(
@@ -230,6 +241,7 @@ jobs:
           [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
           [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
           for mode in $MODE; do args+=(--mode "$mode"); done
+          for lane in $LANE; do args+=(--lane "$lane"); done
           just ci stress-report "${args[@]}"
 
       - name: Add the stress summary

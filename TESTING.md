@@ -43,7 +43,7 @@ thread ceiling is a product contract, whatever helper counts the threads.
 
 Each lane returns to `just test` with a single edit:
 
-- `tooling`, `harness` — drop the crate's `--exclude` pair from
+- `tooling`, `harness` — drop the crate from `cargo.exclude` of
   `[test.lanes.workspace]` in `.config/xtask.toml`;
 - the harness meta-tests — add `harness` to that lane's `default_features`;
 - the targets inside product crates — drop their term from `default-filter` in
