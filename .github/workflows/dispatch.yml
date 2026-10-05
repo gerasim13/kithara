@@ -66,8 +66,6 @@ jobs:
     if: inputs.scope == 'all'
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/kithara-validation-347
     steps:
       - name: Checkout immutable subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,6 +85,7 @@ jobs:
             echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
             echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
           } >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/kithara-validation-$GITHUB_JOB" >> "$GITHUB_ENV"
       - name: Record provenance and run the existing owner harness
         run: |
           set -euo pipefail
@@ -109,8 +108,6 @@ jobs:
     if: inputs.scope == 'all'
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/kithara-validation-327
     steps:
       - name: Checkout immutable subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,6 +127,7 @@ jobs:
             echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
             echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
           } >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/kithara-validation-$GITHUB_JOB" >> "$GITHUB_ENV"
       - name: Record subject identity
         run: |
           mkdir -p validation
@@ -191,6 +189,7 @@ jobs:
             echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
             echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
           } >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/kithara-validation-$GITHUB_JOB" >> "$GITHUB_ENV"
       - name: Record subject identity and execute the existing UI lane
         run: |
           set -euo pipefail
@@ -214,8 +213,6 @@ jobs:
     needs: authorize
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/kithara-validation-source-gates
     steps:
       - name: Checkout immutable subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -235,6 +232,7 @@ jobs:
             echo 'GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader'
             echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
           } >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/kithara-validation-$GITHUB_JOB" >> "$GITHUB_ENV"
       - name: Record subject identity
         id: subject
         env:
