@@ -416,19 +416,16 @@ fn every_test_lane_judges_freshness_by_checksum() {
 }
 
 /// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
-/// where it names any, the shared `kinds` otherwise, and none at all for a lane
+/// where it is declared, the shared `kinds` otherwise, and none at all for a lane
 /// that is not Linux-only, because that fan-out has only Linux machines.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
     let os = lane.get("os").map_or_else(Vec::new, strings);
     if os != ["linux"] {
         return Vec::new();
     }
-    let own = lane.get("kinds_github").map_or_else(Vec::new, strings);
-    if own.is_empty() {
-        lane.get("kinds").map_or_else(Vec::new, strings)
-    } else {
-        own
-    }
+    lane.get("kinds_github")
+        .or_else(|| lane.get("kinds"))
+        .map_or_else(Vec::new, strings)
 }
 
 fn strings(value: &toml::Value) -> Vec<&str> {

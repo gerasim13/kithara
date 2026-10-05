@@ -2541,8 +2541,8 @@ kinds = ["nightly"]
 timeout_minutes = 120
 
 # Both Android lanes boot an emulator, which the Mac mini and the Linux KVM
-# runners each carry, so both name the two machines and neither declares
-# `kinds_github`: the shared GitHub fan-out has no emulator. GitHub starts the
+# runners each carry, so both name the two machines and leave `kinds_github`
+# empty: the shared GitHub fan-out has no emulator. GitHub starts the
 # emulator through `.github/workflows/android.yml`, which names the runner pool
 # the catalog cannot yet name.
 [ext.ci.lanes.android-build]
@@ -2565,6 +2565,7 @@ steps = [
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
+kinds_github = []
 timeout_minutes = 45
 
 # CI and prepared local runners execute the same complete baseline. The test
@@ -2591,6 +2592,7 @@ steps = [
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
+kinds_github = []
 timeout_minutes = 90
 
 # Every Apple job repeats the preflight instead of inheriting it from a

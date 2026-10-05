@@ -94,8 +94,9 @@ pub(crate) struct CiLaneConfig {
     pub(crate) kinds: Vec<String>,
     /// The GitHub fleet's answer where it honestly differs from `kinds`: 25
     /// runners on one host buy a check per push that a single Mac mini can
-    /// only afford weekly. Empty means both fleets agree.
-    pub(crate) kinds_github: Vec<String>,
+    /// only afford weekly. Omission uses `kinds`; an empty list leaves the
+    /// lane to its dedicated workflow.
+    pub(crate) kinds_github: Option<Vec<String>>,
     /// A stable GitHub runner label for lanes whose persistent build cache
     /// must stay on one runner slot. Empty keeps the lane on the shared pool.
     pub(crate) github_runner: Option<String>,
@@ -264,7 +265,12 @@ impl CiProjectConfig {
             // would be refused at selection and never run, which is a lane
             // declared into a schedule it cannot reach - the failure this
             // catalog exists to make impossible, not one to restate quietly.
-            if !lane.kinds_github.is_empty() && !lane.runs_only_on_linux() {
+            if lane
+                .kinds_github
+                .as_ref()
+                .is_some_and(|kinds| !kinds.is_empty())
+                && !lane.runs_only_on_linux()
+            {
                 bail!(
                     "ext.ci.lanes.{name}.kinds_github schedules a `{}` lane, and the GitHub fleet is Linux",
                     lane.os.join(" or ")
@@ -321,7 +327,13 @@ impl CiProjectConfig {
                     lane.role
                 );
             }
-            for (field, listed) in [("kinds", &lane.kinds), ("kinds_github", &lane.kinds_github)] {
+            for (field, listed) in [
+                ("kinds", lane.kinds.as_slice()),
+                (
+                    "kinds_github",
+                    lane.kinds_github.as_deref().unwrap_or_default(),
+                ),
+            ] {
                 for kind in listed {
                     if !consts::PIPELINE_KINDS.contains(&kind.as_str()) {
                         bail!("ext.ci.lanes.{name}.{field} names unknown kind `{kind}`");

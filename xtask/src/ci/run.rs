@@ -1437,7 +1437,10 @@ mod tests {
         for (name, lane) in declared_lanes() {
             assert!(
                 scheduled.contains(&name)
-                    || !lane.kinds_github.is_empty()
+                    || lane
+                        .kinds_github
+                        .as_ref()
+                        .is_some_and(|kinds| !kinds.is_empty())
                     || consts::BY_NAME_ONLY.contains(&name.as_str()),
                 "nothing reaches the {name} lane: no pipeline job runs it, it claims no \
                  GitHub pipeline kind, and it is not named as reachable by name alone"

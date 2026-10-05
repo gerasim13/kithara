@@ -79,8 +79,8 @@ pub(crate) struct Selection {
 /// The kinds this fleet reads: a lane's own answer where it gives one, the
 /// shared answer otherwise.
 fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
-    if fleet == Fleet::Github && !lane.kinds_github.is_empty() {
-        return &lane.kinds_github;
+    if fleet == Fleet::Github {
+        return lane.kinds_github.as_deref().unwrap_or(&lane.kinds);
     }
     &lane.kinds
 }
@@ -167,8 +167,8 @@ pub(crate) fn render(
     // still has to answer for this fleet's kind the same way a matrix lane
     // would, or a producer this fleet never runs would drag in a consumer it
     // never asked for either. By name (`--only` naming the producer), the
-    // consumer's own membership does not gate it, because that is the whole
-    // point of asking for one lane by name.
+    // consumer's own kind does not gate it. Empty membership still leaves the
+    // consumer in its dedicated workflow.
     let present: BTreeSet<&str> = matrix.iter().map(|entry| entry.lane.as_str()).collect();
     let dependent: Vec<Dependent> = lanes
         .iter()
@@ -181,10 +181,9 @@ pub(crate) fn render(
                 .any(|need| present.contains(need.as_str()))
         })
         .filter(|(_, lane)| {
-            !args.only.is_empty()
-                || membership(lane, args.fleet)
-                    .iter()
-                    .any(|entry| entry == kind)
+            let membership = membership(lane, args.fleet);
+            !membership.is_empty()
+                && (!args.only.is_empty() || membership.iter().any(|entry| entry == kind))
         })
         .map(|(name, lane)| Dependent {
             lane: name.clone(),
@@ -471,6 +470,55 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_empty_github_membership_leaves_android_in_its_dedicated_workflow() {
+        let device: CiLaneConfig = toml::from_str(
+            r#"
+role = "platforms"
+os = ["macos", "linux"]
+kinds = ["platforms", "main", "nightly"]
+kinds_github = []
+"#,
+        )
+        .expect("the device lane parses");
+        let lanes = BTreeMap::from([("android-test".to_owned(), device)]);
+        let mut request = args("platforms", PipelineKind::Nightly, &["android-test"]);
+
+        let github = render(&lanes, &request).expect("Android stays in its dedicated workflow");
+        assert!(github.matrix.is_empty());
+        assert!(github.dependent.is_empty());
+
+        request.fleet = Fleet::Gitlab;
+        let gitlab = render(&lanes, &request).expect("GitLab selects its Android lane");
+        assert_eq!(gitlab.matrix.len(), 1);
+        assert_eq!(gitlab.matrix[0].lane, "android-test");
+    }
+
+    #[test]
+    fn an_empty_github_membership_never_follows_its_selected_producer() {
+        let mut dependent = lane("deep", &["nightly"], &["deep-stress"]);
+        dependent.kinds_github = Some(Vec::new());
+        let mut lanes = catalog();
+        lanes.insert("dedicated-report".to_owned(), dependent);
+
+        for only in [&[][..], &["deep-stress"][..], &["all"][..]] {
+            let request = args("deep", PipelineKind::Nightly, only);
+            let selection = render(&lanes, &request).expect("the selected producers render");
+            assert!(
+                selection
+                    .dependent
+                    .iter()
+                    .all(|entry| entry.lane != "dedicated-report")
+            );
+            assert!(
+                selection
+                    .dependent
+                    .iter()
+                    .any(|entry| entry.lane == "deep-stress-report")
+            );
+        }
+    }
+
+    #[test]
     fn an_unknown_role_fails_with_the_roles_it_could_have_been() {
         let error = render(&catalog(), &args("gaet", PipelineKind::Main, &[]))
             .expect_err("a misspelled role is refused");
@@ -528,7 +576,7 @@ mod tests {
             .get_mut("linux-lint")
             .expect("the lint lane is in the catalog");
         deny.kinds = vec!["weekly".to_owned()];
-        deny.kinds_github = vec!["main".to_owned()];
+        deny.kinds_github = Some(vec!["main".to_owned()]);
 
         let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))
             .expect("the GitHub fleet renders");
