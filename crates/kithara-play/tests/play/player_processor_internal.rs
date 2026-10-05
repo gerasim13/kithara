@@ -511,6 +511,12 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
             item_id: preload_id,
         })
         .ok();
+    control
+        .send(DeckPart::Chain {
+            from: short_id,
+            to: preload_id,
+        })
+        .ok();
     control.send(DeckPart::StartAll).ok();
     block(&mut processor);
 
@@ -541,6 +547,55 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
     );
 }
 
+/// A track that ends starts the successor chained to it on the frame after its last, whatever
+/// else the deck holds preloaded.
+#[kithara::test(tokio)]
+async fn an_ending_track_starts_only_the_track_chained_to_it(constant_half: &'static [u8]) {
+    let (mut processor, mut control) = make_processor();
+    let leading_id = TrackId::allocate();
+    let other_id = TrackId::allocate();
+    let chained_id = TrackId::allocate();
+
+    for (src, secs, item_id) in [
+        ("leading.mp3", 0.01, leading_id),
+        ("other.mp3", 60.0, other_id),
+        ("chained.mp3", 60.0, chained_id),
+    ] {
+        control
+            .send(DeckPart::Attach {
+                resource: create_mock_player_resource_with_duration(constant_half, src, secs),
+                item_id,
+            })
+            .ok();
+    }
+    control
+        .send(DeckPart::Chain {
+            from: leading_id,
+            to: chained_id,
+        })
+        .ok();
+    control.send(DeckPart::StartAll).ok();
+    block(&mut processor);
+    processor
+        .track_mut(leading_id)
+        .expect("BUG: leading track must be loaded")
+        .play();
+
+    let (rendered, out_l, out_r) = render(&mut processor, MAX_BLOCK_FRAMES as usize);
+
+    assert!(rendered);
+    assert!(
+        out_l
+            .iter()
+            .chain(&out_r)
+            .all(|sample| (*sample - 0.5).abs() < f32::EPSILON),
+        "the chained track sounds from the frame after the leading track's last"
+    );
+    let state = |item_id| processor.track(item_id).map(|track| track.state());
+    assert_eq!(state(chained_id), Some(TrackState::Playing));
+    assert_eq!(state(other_id), Some(TrackState::Preloading));
+}
+
 /// A stitched-in successor that ends before its stitch block does hands the
 /// rest of the block to the next preloaded track, as a longer one would at
 /// its own end: once it has ended, no leading track is left to stitch it.
@@ -565,6 +620,12 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
                 item_id,
             })
             .ok();
+    }
+    for (from, to) in [
+        (leading_id, short_preload_id),
+        (short_preload_id, preload_id),
+    ] {
+        control.send(DeckPart::Chain { from, to }).ok();
     }
     control.send(DeckPart::StartAll).ok();
     block(&mut processor);
@@ -621,6 +682,12 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
             item_id: successor_id,
         })
         .ok();
+    control
+        .send(DeckPart::Chain {
+            from: leading_id,
+            to: successor_id,
+        })
+        .ok();
     control.send(DeckPart::StartAll).ok();
     block(&mut processor);
     processor
@@ -668,6 +735,12 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
         .send(DeckPart::Attach {
             resource: create_mock_player_resource(constant_half, "preload.mp3"),
             item_id: preload_id,
+        })
+        .ok();
+    control
+        .send(DeckPart::Chain {
+            from: short_id,
+            to: preload_id,
         })
         .ok();
     control.send(DeckPart::StartAll).ok();

@@ -49,6 +49,8 @@ pub enum DeckPart {
     /// have stitched it in at the end of the leading track before reading
     /// this; a promoted track keeps playing.
     Withdraw { item_id: TrackId },
+    /// Start `to`, a held track still preloading, on the frame after `from`'s last.
+    Chain { from: TrackId, to: TrackId },
     /// Take every track out of the deck and reset the position/duration
     /// snapshot to zero. Sent when the queue is explicitly cleared.
     Clear,
@@ -87,6 +89,11 @@ impl fmt::Debug for DeckPart {
             Self::Withdraw { item_id } => f
                 .debug_struct("Withdraw")
                 .field("item_id", item_id)
+                .finish(),
+            Self::Chain { from, to } => f
+                .debug_struct("Chain")
+                .field("from", from)
+                .field("to", to)
                 .finish(),
             Self::Clear => f.write_str("Clear"),
             Self::Fade(t) => f.debug_tuple("Fade").field(t).finish(),

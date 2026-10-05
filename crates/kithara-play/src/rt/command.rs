@@ -106,6 +106,11 @@ impl Deck {
                     self.unload_slot(slot);
                 }
             }
+            DeckPart::Chain { from, to } => {
+                if let Some(track) = self.tracks.get_mut(from) {
+                    track.chain(to);
+                }
+            }
             DeckPart::Clear => {
                 self.clear_all_tracks();
             }

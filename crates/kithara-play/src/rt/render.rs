@@ -14,14 +14,14 @@ use tracing::warn;
 use super::{
     DeckMixerConfig,
     processor::StreamShape,
-    track::{RtSink, TrackReadOutcome},
+    track::{PlayerTrack, RtSink, TrackReadOutcome},
 };
 use crate::{
     bridge::{PlayerNotification, RtMetrics, TrackState},
     rt::{TrackSlot, TrackSlots},
 };
 
-type ActiveTrackEntry = (usize, TrackSlot, bool);
+type ActiveTrackEntry = (TrackSlot, bool);
 
 #[derive(Clone, Copy)]
 struct Handover {
@@ -121,15 +121,11 @@ impl RenderPass {
         let mut bus_bufs = [&mut out_left[0][..frames], &mut out_right[0][..frames]];
         let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
         let RangeTracks {
-            loaded: loaded_tracks,
             active: active_tracks,
-            active_slots,
             skip: skip_tracks,
         } = &mut self.range_tracks;
 
-        for (track_idx, (_arena_slot, track_handle, was_leading)) in
-            active_tracks.iter().enumerate()
-        {
+        for (track_idx, (track_handle, was_leading)) in active_tracks.iter().enumerate() {
             if skip_tracks[track_idx] {
                 continue;
             }
@@ -156,10 +152,9 @@ impl RenderPass {
                 }
 
                 let mut handover = next_handover(&read_outcome, start);
+                let mut ending = *track_handle;
 
-                for (next_idx, (_, next_handle, next_is_leading)) in
-                    active_tracks.iter().enumerate()
-                {
+                for (next_idx, (next_handle, next_is_leading)) in active_tracks.iter().enumerate() {
                     let Some(handoff) = handover else {
                         break;
                     };
@@ -184,6 +179,7 @@ impl RenderPass {
                     };
                     read_outcome = outcome;
                     skip_tracks[next_idx] = true;
+                    ending = *next_handle;
 
                     if let Some(snapshot) = outcome_position_duration(&read_outcome) {
                         leading_outcome_pos_dur = Some(snapshot);
@@ -196,15 +192,16 @@ impl RenderPass {
                     && handoff.offset < frames
                 {
                     let mut offset = handoff.offset;
-                    for (next_arena_idx, (next_handle, next_state)) in
-                        loaded_tracks.iter().enumerate()
+                    while let Some(next_handle) = tracks
+                        .at(ending)
+                        .and_then(PlayerTrack::successor)
+                        .and_then(|successor| tracks.slot_of(successor))
                     {
-                        if *next_state != TrackState::Preloading || active_slots[next_arena_idx] {
-                            continue;
-                        }
-
-                        let Some(next_track) = tracks.at_mut(*next_handle) else {
-                            continue;
+                        let Some(next_track) = tracks
+                            .at_mut(next_handle)
+                            .filter(|track| track.state() == TrackState::Preloading)
+                        else {
+                            break;
                         };
                         next_track.play();
                         let outcome = next_track.render(
@@ -218,7 +215,10 @@ impl RenderPass {
                             leading_outcome_pos_dur = Some(snapshot);
                         }
                         match next_handover(&outcome, offset) {
-                            Some(next) if next.offset < frames => offset = next.offset,
+                            Some(next) if next.offset < frames => {
+                                offset = next.offset;
+                                ending = next_handle;
+                            }
                             _ => break,
                         }
                     }
@@ -278,13 +278,8 @@ impl RenderPass {
 /// The deck's tracks as one range sees them, in lists sized to the deck's slots so a range never
 /// allocates.
 struct RangeTracks {
-    /// Every held track and its state as the range begins, in slot order.
-    loaded: Vec<(TrackSlot, TrackState)>,
-    /// The playing tracks that are not stopped: their index in `loaded`, their slot, and whether
-    /// they lead.
+    /// The playing tracks that are not stopped: their slot and whether they lead.
     active: Vec<ActiveTrackEntry>,
-    /// Whether the track at each index of `loaded` is playing.
-    active_slots: Vec<bool>,
     /// Whether the playing track at each index of `active` already rendered as a handover.
     skip: Vec<bool>,
 }
@@ -292,30 +287,19 @@ struct RangeTracks {
 impl RangeTracks {
     fn new(slots: NonZeroUsize) -> Self {
         Self {
-            loaded: Vec::with_capacity(slots.get()),
             active: Vec::with_capacity(slots.get()),
-            active_slots: Vec::with_capacity(slots.get()),
             skip: Vec::with_capacity(slots.get()),
         }
     }
 
     fn refill(&mut self, tracks: &TrackSlots) {
-        self.loaded.clear();
-        self.loaded
-            .extend(tracks.iter().map(|(slot, track)| (slot, track.state())));
         self.active.clear();
         self.active.extend(
             tracks
                 .iter()
-                .enumerate()
-                .filter(|(_, (_, track))| track.state().is_playing() && !track.is_stopped())
-                .map(|(loaded_idx, (slot, track))| (loaded_idx, slot, track.state().is_leading())),
+                .filter(|(_, track)| track.state().is_playing() && !track.is_stopped())
+                .map(|(slot, track)| (slot, track.state().is_leading())),
         );
-        self.active_slots.clear();
-        self.active_slots.resize(self.loaded.len(), false);
-        for (loaded_idx, _, _) in &self.active {
-            self.active_slots[*loaded_idx] = true;
-        }
         self.skip.clear();
         self.skip.resize(self.active.len(), false);
     }

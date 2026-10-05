@@ -119,6 +119,12 @@ where
         let Some((item_id, src, duration_seconds)) = self.enqueue_to_processor(index)? else {
             return Ok(None);
         };
+        if let Some(leading) = self.core.items.item_id(current_index) {
+            let _ = self.send_to_slot(DeckPart::Chain {
+                from: leading,
+                to: item_id,
+            });
+        }
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 item_id,

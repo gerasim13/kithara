@@ -25,6 +25,9 @@ pub struct PlayerTrack {
     #[field(get, copy)]
     pub(super) state: TrackState,
     pub(super) triggers: TrackTriggers,
+    /// The track that starts on the frame after this one's last.
+    #[field(get, copy)]
+    pub(super) successor: Option<TrackId>,
     /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
     /// Marks a played-out track as eligible to be kept warm at end-of-queue
     /// and revived by a later in-range seek (Superpowered-style resume).
@@ -98,6 +101,7 @@ impl PlayerTrack {
             state: TrackState::Preloading,
             state_dirty: false,
             triggers: TrackTriggers::default(),
+            successor: None,
             fade: TrackFade::new(crossfade, sample_rate),
             gate: TrackGate::new(!stopped, declick, sample_rate),
             prefetch_duration: prefetch_duration.max(0.0),
@@ -122,6 +126,11 @@ impl PlayerTrack {
         self.set_state(TrackState::FadingOut);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
         self.fade.fade_out(settings, sample_rate);
+    }
+
+    /// Make `successor` the track that starts on the frame after this one's last.
+    pub const fn chain(&mut self, successor: TrackId) {
+        self.successor = Some(successor);
     }
 
     /// Re-base this track onto a slot seek epoch the processor has applied.
