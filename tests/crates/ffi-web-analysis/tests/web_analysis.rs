@@ -15,6 +15,9 @@ const CLICKS_PATH: &str = "/signal/signal_mp3_clicks126_30s.mp3";
 const POLL_MS: u64 = 50;
 const DEADLINE_MS: u64 = 30_000;
 const RESTART_SAMPLE: usize = 3;
+const CLICKS_BPM: f64 = 126.0;
+const CLICKS_BPM_RATIO_TOLERANCE: f64 = 0.10;
+const MIN_CLICK_BEATS: u32 = 32;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;
 
@@ -128,21 +131,42 @@ async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
 
     let beats: Float64Array = get(last, "beats").dyn_into().expect("beats copy");
     let downbeats: Float64Array = get(last, "downbeats").dyn_into().expect("downbeats copy");
+    assert!(
+        beats.length() >= MIN_CLICK_BEATS,
+        "a final grid must detect the 30-second click track, got {} beats",
+        beats.length()
+    );
     assert_eq!(
         downbeats.length(),
         0,
         "the DSP backend reports beats, never downbeats"
     );
+    let duration = number(last, "sourceFrames") / number(last, "sampleRate");
     for index in 0..beats.length() {
         let at = beats.get_index(index);
-        assert!(at >= 0.0, "a beat sits on the source timeline");
+        assert!(
+            at.is_finite() && at >= 0.0 && at < duration,
+            "a beat sits inside the decoded source timeline"
+        );
+        if index > 0 {
+            assert!(at > beats.get_index(index - 1), "beat positions strictly increase");
+        }
     }
+    assert!(beats.get_index(0) <= 5.0, "the decoder delay cannot erase the opening clicks");
+    assert!(
+        beats.get_index(beats.length() - 1) >= 25.0,
+        "a final grid must reach the closing clicks"
+    );
     let bpm = number(last, "bpm");
+    assert!(
+        ((bpm / CLICKS_BPM) - 1.0).abs() <= CLICKS_BPM_RATIO_TOLERANCE,
+        "the 126 BPM clicks report {bpm} BPM"
+    );
     web_sys::console::log_1(&JsValue::from_str(&format!(
         "measured bpm {bpm} over {} beats, settled after {waited} ms",
         beats.length()
     )));
-    let _ = boolean(last, "beatFinal");
+    assert!(boolean(last, "beatFinal"));
 
     let revisions = revisions(&events);
     for pair in revisions.windows(2) {

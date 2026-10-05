@@ -762,6 +762,190 @@ mod tests {
     }
 
     #[kithara::test]
+    fn a_decoder_delay_keeps_the_leading_partial_window(quarter_44100: Vec<f32>) {
+        const DELAY: u64 = 1105;
+
+        let mut pass = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+        let detector = detector(|mono| {
+            assert_eq!(mono.len(), consts::TARGET, "the full decoded second is heard");
+            RawBeats::new(vec![BeatMark::new(0.25, 0.9)], Vec::new())
+        });
+        assert!(pass.push_interleaved_deferred(&quarter_44100, 2, DELAY, Opens::Run));
+
+        let request = pass
+            .prepare_detection(true)
+            .expect("a delayed decoder head still supplies a detector window");
+        pass.apply_detection(request.detect(&detector));
+        let grid = pass.snapshot(&detector, true).expect("mock detects");
+        let expected = DELAY + u64::from(consts::SRC) / 4;
+        assert_eq!(grid.beats().len(), 1, "the leading partial yields its beat");
+        assert!(
+            grid.beats()[0].abs_diff(expected) <= 2,
+            "the beat stays on the delayed source axis: {:?}",
+            grid.beats()
+        );
+        assert_eq!(
+            pass.unanalysed(Some(DELAY + u64::from(consts::SRC))),
+            vec![0..DELAY],
+            "only the decoder's absent head remains unanalysed"
+        );
+    }
+
+    #[kithara::test]
+    fn releasing_a_full_window_preserves_an_undetected_run_head(quarter_176400: Vec<f32>) {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(consts::SRC)
+            .detector_window_seconds(2)
+            .detector_overlap_seconds(0)
+            .detector_min_window_seconds(1)
+            .build();
+        let mut pass = analyzer(consts::SRC, config);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let detector_seen = Arc::clone(&seen);
+        let detector = detector(move |mono| {
+            detector_seen.lock().push(mono.len());
+            empty_raw()
+        });
+        let at = u64::from(consts::SRC) / 2;
+        assert!(pass.push_interleaved_deferred(&quarter_176400, 2, at, Opens::Run));
+        pass.snapshot(&detector, true).expect("mock detects");
+
+        let seen = seen.lock();
+        assert_eq!(
+            seen.iter().sum::<usize>(),
+            quarter_176400.len() / 2,
+            "without overlap every offered sample is heard before release; window lengths: {seen:?}"
+        );
+        assert_eq!(
+            pass.unanalysed(Some(at + 4 * u64::from(consts::SRC))),
+            vec![0..at],
+            "no offered head disappears behind a later detected window"
+        );
+    }
+
+    #[kithara::test]
+    fn disjoint_runs_inside_one_hop_each_supply_their_own_window(quarter_44100: Vec<f32>) {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(consts::SRC)
+            .detector_window_seconds(8)
+            .detector_overlap_seconds(1)
+            .detector_min_window_seconds(1)
+            .build();
+        let mut pass = analyzer(consts::SRC, config);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let detector_seen = Arc::clone(&seen);
+        let detector = detector(move |mono| {
+            detector_seen.lock().push(mono.len());
+            RawBeats::new(vec![BeatMark::new(0.25, 0.9)], Vec::new())
+        });
+        assert!(pass.push_interleaved_deferred(&quarter_44100, 2, 0, Opens::Run));
+        let request = pass.prepare_detection(true).expect("the first run is heard");
+        pass.apply_detection(request.detect(&detector));
+
+        let second_run = 2 * u64::from(consts::SRC);
+        assert!(pass.push_interleaved_deferred(&quarter_44100, 2, second_run, Opens::Run));
+        let request = pass
+            .prepare_detection(true)
+            .expect("the first run's window cannot stand for a disjoint run");
+        pass.apply_detection(request.detect(&detector));
+        let grid = pass.snapshot(&detector, true).expect("mock detects");
+
+        assert_eq!(seen.lock().len(), 2, "the gap is never invented as PCM");
+        let expected = [u64::from(consts::SRC) / 4, second_run + u64::from(consts::SRC) / 4];
+        assert_eq!(grid.beats().len(), expected.len(), "both runs retain their beat");
+        assert!(
+            grid.beats().iter().zip(expected).all(|(got, want)| got.abs_diff(want) <= 1),
+            "each beat sits in the run that produced it: {:?}",
+            grid.beats()
+        );
+        assert_eq!(
+            pass.unanalysed(Some(3 * u64::from(consts::SRC))),
+            vec![u64::from(consts::SRC)..second_run],
+            "the undecoded gap stays outside detector coverage"
+        );
+    }
+
+    #[kithara::test]
+    fn detector_coverage_commits_only_after_a_window_result(quarter_44100: Vec<f32>) {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(consts::SRC)
+            .detector_window_seconds(1)
+            .detector_overlap_seconds(0)
+            .build();
+        let mut pass = analyzer(consts::SRC, config);
+        let detector = detector(|_| empty_raw());
+        let end = u64::from(consts::SRC);
+        assert!(pass.push_interleaved_deferred(&quarter_44100, 2, 0, Opens::Run));
+        assert!(
+            pass.analyzer.coverage().is_empty(),
+            "intake does not prove the detector read its buffered PCM"
+        );
+        assert_eq!(pass.unanalysed(Some(end)), vec![0..end]);
+
+        let request = pass.prepare_detection(false).expect("one full window is ready");
+        assert!(
+            pass.analyzer.coverage().is_empty(),
+            "preparing an outstanding request does not commit its result"
+        );
+        pass.apply_detection(request.detect(&detector));
+        assert!(pass.analyzer.coverage().covers(&(0..end)));
+        assert!(pass.unanalysed(Some(end)).is_empty());
+        assert!(pass.prepare_detection(true).is_none(), "completed audio is not heard twice");
+    }
+
+    #[kithara::test]
+    fn filling_a_gap_revisits_the_new_audio_in_a_partial_window(quarter_44100: Vec<f32>) {
+        let config = BeatAnalysisConfig::builder()
+            .resampler_backend(RubatoBackend::default())
+            .target_rate(consts::SRC)
+            .detector_window_seconds(4)
+            .detector_overlap_seconds(0)
+            .detector_min_window_seconds(1)
+            .build();
+        let mut pass = analyzer(consts::SRC, config);
+        let detector = detector(|mono| {
+            RawBeats::new(
+                (0..mono.len() / usize::try_from(consts::SRC).expect("test rate fits"))
+                    .map(|second| {
+                        let second: f32 = second.as_();
+                        BeatMark::new(second + 0.25, 0.9)
+                    })
+                    .collect(),
+                Vec::new(),
+            )
+        });
+        for at in [0, 2 * u64::from(consts::SRC)] {
+            assert!(pass.push_interleaved_deferred(&quarter_44100, 2, at, Opens::Run));
+            let request = pass.prepare_detection(true).expect("each disjoint run is heard");
+            pass.apply_detection(request.detect(&detector));
+        }
+
+        let gap = u64::from(consts::SRC)..2 * u64::from(consts::SRC);
+        assert!(!pass.analyzer.coverage().covers(&gap));
+        assert!(pass.push_interleaved_deferred(&quarter_44100, 2, gap.start, Opens::Run));
+        assert!(
+            !pass.analyzer.coverage().covers(&gap),
+            "filling the intake gap still leaves its detection outstanding"
+        );
+        let request = pass
+            .prepare_detection(true)
+            .expect("a prior partial result cannot hide newly decoded gap audio");
+        pass.apply_detection(request.detect(&detector));
+        let grid = pass.snapshot(&detector, true).expect("mock detects");
+
+        assert!(pass.analyzer.coverage().covers(&(0..3 * u64::from(consts::SRC))));
+        assert!(pass.unanalysed(Some(3 * u64::from(consts::SRC))).is_empty());
+        assert_eq!(
+            grid.beats(),
+            &[11_025, 55_125, 99_225],
+            "the filled gap contributes its beat while both earlier runs keep theirs"
+        );
+    }
+
+    #[kithara::test]
     fn detector_input_is_bounded_by_configured_window(quarter_132300: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())

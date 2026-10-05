@@ -259,6 +259,67 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPoo
     )
 }
 
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+#[kithara::test]
+async fn nonzero_decode_runs_finish_with_detected_beats(analysis_pcm: &'static [f32]) {
+    use kithara_resampler::rubato::RubatoBackend;
+    use unimock::{MockFn, Unimock, matching};
+
+    use crate::{
+        BeatState,
+        beat::{BeatDetectorMock, BeatMark, GridParams, RawBeats},
+    };
+
+    let sources = [
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).flooring(1105),
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT)
+            .snapping(30_000)
+            .failing_after(5),
+    ];
+    for source in sources {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let detector_heard = Arc::clone(&heard);
+        let detector = Unimock::new(
+            BeatDetectorMock
+                .each_call(matching!(_))
+                .answers_arc(Arc::new(move |_, mono| {
+                    detector_heard.lock().push(mono.len());
+                    Ok(RawBeats::new(vec![BeatMark::new(0.125, 0.9)], Vec::new()))
+                })),
+        );
+        let builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
+            .with_waveform(consts::NODE_BUCKETS)
+            .with_beat_detector(Box::new(detector), GridParams::default());
+        let mut pass = Pass::open(source, builder);
+        assert_eq!(pass.drive(consts::TICKS).await, Drive::Ended, "the pass ends");
+        assert!(
+            decoded_at(&pass.calls()).first().is_some_and(|at| *at > 0),
+            "the real schedule starts this run away from frame zero"
+        );
+
+        let analysis = pass.analysis();
+        assert!(analysis.is_settled(), "trailing work precedes settlement");
+        let beat = analysis.beat().expect("the beat slot is published");
+        assert_eq!(beat.state(), BeatState::Final);
+        assert!(!heard.lock().is_empty(), "a settled grid requires a real detector call");
+        assert!(
+            beat.artifact().beats().iter().any(|at| {
+                analysis.coverage().iter().any(|range| range.contains(at))
+            }),
+            "the nonzero run's detected marker is retained"
+        );
+        for covered in analysis.coverage().iter() {
+            assert!(
+                beat.unanalysed().iter().all(|missing| {
+                    covered.end <= missing.start || missing.end <= covered.start
+                }),
+                "every published source range was heard, covered {covered:?}, unanalysed {:?}",
+                beat.unanalysed()
+            );
+        }
+    }
+}
+
 /// How much of the analyser's own clock a drive lets a refusing node spend
 /// before it has taken any work at all.
 ///

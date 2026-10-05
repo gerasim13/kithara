@@ -617,6 +617,51 @@ mod tests {
         assert_eq!(ended.coverage().frames(), ended.extent().unwrap_or(0));
     }
 
+    #[kithara::test(native, flash(false))]
+    fn a_settled_pass_cannot_publish_unread_beat_audio_as_final(analysis_silence: Vec<f32>) {
+        let pools = pools();
+        let mock = Unimock::new(
+            BeatDetectorMock
+                .each_call(matching!(_))
+                .answers(&|_, _| Ok(RawBeats::new(vec![BeatMark::new(0.05, 0.9)], Vec::new()))),
+        );
+        let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
+            .with_waveform(8)
+            .with_beat_detector(Box::new(mock), GridParams::default());
+        let detector = builder.take_detector().expect("the configured detector exists");
+        let mut analyzers = builder
+            .build(spec().sample_rate, "delayed-head".into(), 0, AnalysisDemand::ALL)
+            .expect("analysis buffers fit the test region");
+        let at = 1105;
+        let end = at + 8192;
+        assert_eq!(
+            analyzers.push(
+                &chunk(&pools, &analysis_silence, 8192, at),
+                &mut Extent::default(),
+                None,
+            ),
+            Ingest::Accepted
+        );
+        analyzers.settle();
+        let unread = analyzers.snapshot(None, true, Some(end));
+        assert_eq!(unread.coverage().iter().collect::<Vec<_>>(), vec![at..end]);
+        assert_eq!(
+            unread.beat().expect("the beat slot remains open").state(),
+            BeatState::Provisional,
+            "read completion cannot make buffered but undetected PCM a final grid"
+        );
+
+        let request = analyzers
+            .prepare_detection(true)
+            .expect("the delayed head reaches trailing detection");
+        analyzers.apply_detection(request.detect(detector.as_ref()));
+        let detected = analyzers.snapshot(None, true, Some(end));
+        let beat = detected.beat().expect("the detected grid is published");
+        assert_eq!(beat.state(), BeatState::Final);
+        assert!(!beat.artifact().beats().is_empty(), "the heard beat is retained");
+        assert_eq!(beat.unanalysed(), &[0..at]);
+    }
+
     /// A detector that hears a beat every half second, whatever it is handed:
     /// the pass, not the hearing, is what this test is about.
     fn steady_detector() -> Box<dyn BeatDetector> {
