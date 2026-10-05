@@ -14,9 +14,7 @@ use super::support::{
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {
     let disk = DiskAssetStore::new(root_dir, CancelToken::never());
-    PinsIndex::open(&disk)
-        .map(|index| index.load())
-        .unwrap_or_default()
+    PinsIndex::open(&disk).load()
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]

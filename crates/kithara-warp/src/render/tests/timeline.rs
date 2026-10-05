@@ -192,7 +192,7 @@ fn one_frame_regions_accumulate_into_one_portable_request(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0)
             .keylock(true)
             .backend(backend)
@@ -248,7 +248,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0)
             .keylock(true)
             .backend(backend)
@@ -310,7 +310,7 @@ fn rendered_source_frontier_excludes_pending_source(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let probe = renderer(WarpConfig::builder().keylock(true).backend(backend).build());
+    let probe = renderer(&WarpConfig::builder().keylock(true).backend(backend).build());
     let source_latency = probe
         .engine
         .as_ref()
@@ -321,7 +321,7 @@ fn rendered_source_frontier_excludes_pending_source(
     assert!(source_latency <= probe.source_block_frames.get());
     let latency = u64::try_from(source_latency).expect("source latency fits u64");
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .keylock(true)
             .backend(backend)
             .region_plan(Arc::new(
@@ -361,7 +361,7 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0 / 0.75)
             .keylock(true)
             .backend(backend)
@@ -429,7 +429,7 @@ fn live_unity_transition_drains_active_backend_tail(
     let split = ACTIVE_FRAMES * usize::from(consts::CH);
 
     let mut reference = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(0.5)
             .keylock(true)
             .backend(backend)
@@ -570,7 +570,7 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
 ) {
     let source = warp_sine[..(3) * 2].to_vec();
     let mut reference = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(0.5)
             .keylock(true)
             .backend(backend)
@@ -640,7 +640,7 @@ fn reset_discards_pending_span_before_new_timeline(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0 / 0.75)
             .keylock(true)
             .backend(backend)
@@ -672,7 +672,7 @@ fn reset_discards_pending_span_before_new_timeline(
 fn moving_target_renderer() -> WarpRenderer {
     use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 
-    let mut fx = renderer(WarpConfig::builder().speed(1.0).build());
+    let mut fx = renderer(&WarpConfig::builder().speed(1.0).build());
     fx.applied_speed = Some(SmoothedParam::new(
         1.0,
         consts::SPEED_SMOOTHING_SPAN,
@@ -738,7 +738,7 @@ fn a_settled_target_keeps_its_exact_multiplier() {
 ))]
 #[kithara::test]
 fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
-    let mut fx = renderer(WarpConfig::builder().speed(1.0).build());
+    let mut fx = renderer(&WarpConfig::builder().speed(1.0).build());
     fx.applied_speed = moving_target_renderer().applied_speed;
     fx.set_speed(SpeedCurve::Constant(1.25), 1);
     let target = fx.rate;

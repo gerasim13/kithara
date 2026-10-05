@@ -13,6 +13,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::{TestTempDir, temp_dir};
+use num_traits::AsPrimitive;
 use url::Url;
 
 #[kithara::fixture]
@@ -61,7 +62,8 @@ async fn auto_advance_starts_next_track_without_explicit_play(
     let _ = harness.tick_and_drain().await;
 
     let deadline = Instant::now() + STARTUP_CLEAR_TIMEOUT;
-    let block_budget = Duration::from_secs_f64(BLOCK_FRAMES as f64 / f64::from(SAMPLE_RATE));
+    let block_frames: f64 = BLOCK_FRAMES.as_();
+    let block_budget = Duration::from_secs_f64(block_frames / f64::from(SAMPLE_RATE));
     let mut events = Vec::new();
     let mut rendered_frames = 0usize;
     let mut second_current_item_changed = None;

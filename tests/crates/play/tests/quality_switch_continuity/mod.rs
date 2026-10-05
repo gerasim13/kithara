@@ -10,21 +10,15 @@ mod underrun;
 use std::num::NonZeroU32;
 
 use kithara::{
-    abr::{AbrHandle, AbrMode},
-    audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
+    abr::AbrMode,
+    audio::DecoderChangeCause,
     decode::DecoderBackend,
-    events::{EventBus, EventReceiver},
+    events::EventBus,
     host::{HostConfig, HostSettings},
-    platform::{
-        time::{Duration, Instant, sleep},
-        tokio::sync::broadcast::error::TryRecvError,
-    },
-    play::{Resource, ResourceConfig},
-    stream::AudioCodec,
+    platform::time::{Duration, Instant},
 };
 use kithara_integration_tests::{HlsFixtureBuilder, offline::OfflinePlayer};
 use kithara_test_utils::TestTempDir;
-use num_traits::ToPrimitive;
 use switch::{
     AAC_HIGH, AAC_LOW, ACTIVE_SAMPLE_THRESHOLD, BLOCK_FRAMES, CHANNELS, COCHLEA_WINDOW_MS,
     ControlRender, DecoderObservation, FLAC, ORACLE_RATIO, ORACLE_SLACK, PreparedPlayer,

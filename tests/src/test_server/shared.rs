@@ -56,6 +56,17 @@ pub(crate) fn shared() -> &'static SharedTestServer {
     })
 }
 
+/// Bind the unified router on `127.0.0.1:0` on the current runtime and return
+/// its base URL. The serve task is detached (no shutdown handle) — intended for
+/// the process-global shared server that must serve for the whole run.
+async fn router_base_url_on_runtime(state: Arc<TestServerState>) -> Url {
+    let router = crate::test_server::router(state);
+    let server = TestHttpServer::new(router).await;
+    let url = server.base_url().clone();
+    std::mem::forget(server);
+    url
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,15 +82,4 @@ mod tests {
         assert_eq!(resp.status(), reqwest::StatusCode::OK);
         assert_eq!(resp.text().await.unwrap(), "ok");
     }
-}
-
-/// Bind the unified router on `127.0.0.1:0` on the current runtime and return
-/// its base URL. The serve task is detached (no shutdown handle) — intended for
-/// the process-global shared server that must serve for the whole run.
-async fn router_base_url_on_runtime(state: Arc<TestServerState>) -> Url {
-    let router = crate::test_server::router(state);
-    let server = TestHttpServer::new(router).await;
-    let url = server.base_url().clone();
-    std::mem::forget(server);
-    url
 }

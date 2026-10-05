@@ -206,9 +206,9 @@ fn concurrent_mmap_writers_publish_one_complete_payload() {
     let dir = TempDir::new().unwrap();
     let atomic = Arc::new(create_mmap_resource(&dir, "writers.bin"));
     let start = Arc::new(Barrier::new(3));
-    let writes: Vec<_> = [b'X', b'Y']
-        .into_iter()
-        .map(|byte| {
+    let writes: Vec<_> = b"XY"
+        .iter()
+        .map(|&byte| {
             let atomic = Arc::clone(&atomic);
             let start = Arc::clone(&start);
             thread::spawn(move || {

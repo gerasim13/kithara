@@ -109,7 +109,7 @@ async fn a_settled_hit_with_a_gap_is_served_without_a_pass(tone_mp3: String) {
     assert!(!settled.is_complete(), "a gap is left in the track");
     owner
         .cache
-        .put(target_of(&owner, &source), progress(settled));
+        .put(target_of(owner, &source), progress(settled));
 
     let rx = owner.subscribe(queue.clone(), track_id, source, axis());
 

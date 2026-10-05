@@ -108,8 +108,8 @@ fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
             bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0,
             "AAC output is missing an ADTS sync word"
         ),
-        BytesEncodeTarget::M4a => assert_mp4(bytes, b"mp4a", "M4A"),
-        BytesEncodeTarget::Alac => assert_mp4(bytes, b"alac", "ALAC"),
+        BytesEncodeTarget::M4a => assert_mp4(bytes, *b"mp4a", "M4A"),
+        BytesEncodeTarget::Alac => assert_mp4(bytes, *b"alac", "ALAC"),
         BytesEncodeTarget::Vorbis => {
             assert!(bytes.starts_with(b"OggS"));
             assert!(bytes.windows(7).any(|window| window == b"\x01vorbis"));
@@ -135,15 +135,15 @@ fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
 
 /// MP4 container boxes plus the sample-entry fourcc that names the codec. The
 /// boxes alone cannot tell an AAC body from a lossless one — both are `.m4a`.
-fn assert_mp4(bytes: &[u8], sample_entry: &[u8; 4], label: &str) {
+fn assert_mp4(bytes: &[u8], sample_entry: [u8; 4], label: &str) {
     let has = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
     assert!(
         has(b"ftyp") && has(b"mdat"),
         "{label} output is missing MP4 container boxes"
     );
     assert!(
-        has(sample_entry),
+        has(&sample_entry),
         "{label} output is missing its `{}` sample entry",
-        String::from_utf8_lossy(sample_entry)
+        String::from_utf8_lossy(&sample_entry)
     );
 }

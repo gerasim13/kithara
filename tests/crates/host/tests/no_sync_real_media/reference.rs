@@ -201,12 +201,7 @@ fn validate_reference_seek_barrier(
 }
 
 fn drain_reference_events(events: &mut EventReceiver<TestEvent>) {
-    loop {
-        match events.try_recv() {
-            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
-            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-        }
-    }
+    while let Ok(_) | Err(TryRecvError::Lagged(_)) = events.try_recv() {}
 }
 
 fn drain_reference_seek_events(

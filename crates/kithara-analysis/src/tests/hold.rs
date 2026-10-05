@@ -59,11 +59,11 @@ fn chunk_seconds() -> NonZeroU32 {
 }
 
 fn read_whole(track: Track) -> Result<TrackAnalysis, Livelock> {
-    read_whole_with(pools(), track, &mut |_| {})
+    read_whole_with(&pools(), track, &mut |_| {})
 }
 
 fn read_whole_with(
-    pools: Pools,
+    pools: &Pools,
     track: Track,
     on_full: &mut dyn FnMut(&Pools),
 ) -> Result<TrackAnalysis, Livelock> {
@@ -71,15 +71,15 @@ fn read_whole_with(
 }
 
 fn run(
-    pools: Pools,
+    pools: &Pools,
     track: Track,
     on_full: &mut dyn FnMut(&Pools),
     stop: &mut dyn FnMut(&AnalysisProgress) -> bool,
 ) -> Result<AnalysisProgress, Livelock> {
     let mut builder = builder(pools.clone());
-    let mut detector = builder.take_detector().expect("a detector is configured");
+    let detector = builder.take_detector().expect("a detector is configured");
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
-    let (_writer, ingest) = ring::open_for(&pools, rate()).expect("test ring fits the pools");
+    let (_writer, ingest) = ring::open_for(pools, rate()).expect("test ring fits the pools");
     let job = Job {
         ingest,
         tx,
@@ -107,17 +107,14 @@ fn run(
     loop {
         if task.is_ending() {
             while let Some(request) = task.prepare_detection() {
-                task.apply_detection(detect(request, &mut detector));
+                task.apply_detection(detect(request, &detector));
             }
         }
         ticks += 1;
         assert!(ticks < consts::TICK_LIMIT, "the pass reads without end");
         let result = task.tick(&builder, None);
         if matches!(results.has_changed(), Ok(true))
-            && results
-                .borrow_and_update()
-                .as_ref()
-                .is_some_and(|progress| stop(progress))
+            && results.borrow_and_update().as_ref().is_some_and(&mut *stop)
         {
             break;
         }
@@ -126,10 +123,10 @@ fn run(
             TickResult::Backpressured => {
                 if !filled {
                     filled = true;
-                    on_full(&pools);
+                    on_full(pools);
                 }
                 if let Some(request) = task.prepare_detection() {
-                    task.apply_detection(detect(request, &mut detector));
+                    task.apply_detection(detect(request, &detector));
                     waited = 0;
                 } else {
                     waited += 1;
@@ -157,7 +154,7 @@ fn exhaust(pools: &Pools, hog: &mut Vec<SampleBuffer>) {
 
 fn lost(analysis: &TrackAnalysis) -> u64 {
     analysis.beat().map_or(0, |beat| {
-        beat.unanalysed().iter().map(|range| range.frames()).sum()
+        beat.unanalysed().iter().map(FrameSpan::frames).sum()
     })
 }
 
@@ -216,7 +213,7 @@ fn a_pass_that_cannot_feed_its_detector_reads_on(analysis_silence: Vec<f32>) {
         330.0,
     );
     let mut hog = Vec::new();
-    let analysis = read_whole_with(pools.clone(), track, &mut |pools| exhaust(pools, &mut hog))
+    let analysis = read_whole_with(&pools, track, &mut |pools| exhaust(pools, &mut hog))
         .unwrap_or_else(|Livelock { ticks }| {
             panic!("the pass waits on a detector it cannot feed, after {ticks} ticks")
         });
@@ -280,7 +277,7 @@ async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more(analysis_si
     let pools = pools();
     let delivered = claiming(&analysis_silence, pools.clone()).frames();
     let checkpoint = run(
-        pools.clone(),
+        &pools,
         claiming(&analysis_silence, pools.clone()),
         &mut |_| {},
         &mut |progress| progress.is_resumable() && progress.analysis().extent() == Some(delivered),
@@ -339,7 +336,7 @@ fn a_source_that_cannot_deliver_its_head_is_settled_with_a_final_grid(analysis_s
     assert!(analysis.is_settled(), "nothing reachable is left");
     assert_eq!(
         analysis.missing(),
-        vec![0..0 + PRIMING],
+        vec![0..PRIMING],
         "the head the source cannot deliver is the only gap"
     );
     assert_eq!(

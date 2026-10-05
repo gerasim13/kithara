@@ -12,6 +12,7 @@ use firewheel::{
     },
 };
 use kithara_platform::sync::Arc;
+use num_traits::AsPrimitive;
 
 #[derive(Clone, Default)]
 pub(crate) struct CountingProbe {
@@ -139,7 +140,8 @@ impl FixtureState for () {
     fn process(&mut self, info: &ProcInfo, buffers: ProcBuffers) -> ProcessStatus {
         for frame in 0..info.frames {
             let absolute = info.clock_samples.0 + frame as i64;
-            let sample = absolute.rem_euclid(64) as f32 / 128.0 - 0.25;
+            let phase: f32 = absolute.rem_euclid(64).as_();
+            let sample = phase / 128.0 - 0.25;
             for output in &mut *buffers.outputs {
                 output[frame] = sample;
             }

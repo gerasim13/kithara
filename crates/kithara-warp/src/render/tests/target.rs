@@ -24,7 +24,7 @@ fn live_backend_swap_continues_and_keeps_pitch(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(0.5)
             .keylock(true)
             .backend(initial)
