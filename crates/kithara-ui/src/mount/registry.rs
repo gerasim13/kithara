@@ -8,6 +8,39 @@ pub(crate) use geometry as config;
 #[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) use host as config;
 
+use crate::{
+    expand::Binding,
+    ids::InternId,
+    module::{IconName, TableColumn, TableFrame, TextAlign},
+    skin::{ColorRole, FontFamily, FontWeight},
+};
+
+type TextPresentation<'a> = (
+    Option<InternId>,
+    Option<ColorRole>,
+    Option<ColorRole>,
+    Option<&'a Binding>,
+    TextAlign,
+    Option<FontFamily>,
+    Option<FontWeight>,
+);
+
+type GlyphPresentation<'a> = (
+    IconName,
+    Option<IconName>,
+    Option<ColorRole>,
+    Option<ColorRole>,
+    Option<&'a Binding>,
+);
+
+type TablePresentation<'a> = (
+    &'a [TableColumn],
+    Option<&'a Binding>,
+    Option<&'a Binding>,
+    TableFrame,
+    Option<&'a Binding>,
+);
+
 /// Dispatches every document control to its owned mount configuration.
 ///
 /// The variant/type mapping stays single. Constructors project the document

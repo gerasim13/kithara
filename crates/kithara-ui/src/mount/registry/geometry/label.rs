@@ -1,35 +1,20 @@
+use super::super::{GlyphPresentation, TextPresentation};
 use crate::{
-    expand::Binding,
     ids::InternId,
-    module::{GlyphStyle, IconName, ScalarFormat, TextAlign, TextStyle, Tone},
+    module::{GlyphStyle, ScalarFormat, TextStyle, Tone},
     mount::{Glyph, Readout, Select, Telemetry, Text},
-    skin::{ColorRole, FontFamily, FontWeight},
 };
 
 pub(crate) fn text<'a>(
     style: TextStyle,
-    _presentation: (
-        Option<InternId>,
-        Option<ColorRole>,
-        Option<ColorRole>,
-        Option<&'a Binding>,
-        TextAlign,
-        Option<FontFamily>,
-        Option<FontWeight>,
-    ),
+    _presentation: TextPresentation<'a>,
 ) -> Text {
     Text::builder().style(style).build()
 }
 
 pub(crate) fn glyph<'a>(
     style: GlyphStyle,
-    _presentation: (
-        IconName,
-        Option<IconName>,
-        Option<ColorRole>,
-        Option<ColorRole>,
-        Option<&'a Binding>,
-    ),
+    _presentation: GlyphPresentation<'a>,
 ) -> Glyph {
     Glyph::builder().style(style).build()
 }

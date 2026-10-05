@@ -1,7 +1,7 @@
+use super::super::TablePresentation;
 use crate::{
     expand::Binding,
     ids::InternId,
-    module::{TableColumn, TableFrame},
     mount::{ContextBar, Lottie, Sprite, Table, Tree},
 };
 
@@ -24,13 +24,7 @@ pub(crate) fn sprite(sheet: InternId, seconds: f32) -> Sprite {
 }
 
 pub(crate) fn table<'a>(
-    (columns, columns_state, status, frame, width): (
-        &'a [TableColumn],
-        Option<&'a Binding>,
-        Option<&'a Binding>,
-        TableFrame,
-        Option<&'a Binding>,
-    ),
+    (columns, columns_state, status, frame, width): TablePresentation<'a>,
 ) -> Table<'a> {
     Table::builder()
         .columns(columns)
