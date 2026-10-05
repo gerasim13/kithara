@@ -55,10 +55,10 @@ fn lookup<'a>(lanes: &'a BTreeMap<String, CiLaneConfig>, name: &str) -> Result<&
 /// What a lane is handed rather than works out: where this executor builds,
 /// and the kind of pipeline it runs in.
 ///
-/// A step spells its own build directory as `{target}`, and the checkout is
-/// the wrong answer wherever the executor named another one - Cargo would
-/// write where it was told while the lane looked for the binaries somewhere
-/// nothing had written. The kind arrives only as this process's argument, so a
+/// Cargo writes where `CARGO_TARGET_DIR` names, and [`Process::target_dir`]
+/// reads the same value, so the lane looks for its binaries where they were
+/// written; the checkout is the wrong answer wherever the executor named
+/// another directory. The kind arrives only as this process's argument, so a
 /// step that reads it - the weekly health report adds semver-checks - would
 /// otherwise never see it. Nothing else is copied: a child already inherits
 /// this process's environment, and [`Process`] layers what it is given on top.
@@ -233,8 +233,8 @@ mod tests {
     /// A lane builds where the executor said. These runners are ephemeral and
     /// the checkout is deleted before the lane starts, so a build directory
     /// named from the checkout is empty on every job; the executor names one
-    /// that outlives it, and a step's `{target}` has to mean that one or the
-    /// lane looks for its binaries where nothing wrote any.
+    /// that outlives it, and the lane has to look for its binaries in that
+    /// one.
     #[test]
     fn a_lane_builds_where_the_executor_said() {
         let root = Path::new("/runner/_work/kithara/kithara");

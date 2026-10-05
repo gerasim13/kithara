@@ -659,7 +659,10 @@ struct BuildTarget {
     lane_build: Option<LaneBuild>,
 }
 
-/// Claims the directory this job builds in.
+/// Claims the directory this job builds in. Cargo finds `<checkout>/target` by
+/// itself, so on Unix no build directory is named at all and dependencies
+/// built in two checkouts share their compiler-cache entries; named, even the
+/// checkout's own `target` would key them on which checkout.
 fn prepare_build_target(
     project_root: &FsPath,
     shared_root: &FsPath,
@@ -704,11 +707,10 @@ fn prepare_build_target(
 ///
 /// The compiler cache keys a compilation on every `CARGO_*` variable as it
 /// reads it, `CARGO_TARGET_DIR` included. Named to Cargo, the backing would key
-/// the cache on which lane slot or job directory the build happened to take,
-/// and even the checkout's own `target` would key it on which checkout. Cargo
-/// finds `<checkout>/target` by itself, so on Unix no build directory is named
-/// at all and dependencies built in two checkouts share their entries. Windows
-/// builds in the backing, which is named.
+/// the cache on which lane slot or job directory the build happened to take;
+/// the link keeps that choice out of the key, and whether to name the link is
+/// the caller's to decide. Windows builds in the backing, which comes back as
+/// it is.
 ///
 /// A directory already standing there is replaced only inside a CI job, whose
 /// checkout is the job's own. Anywhere else it is someone's build, and it is

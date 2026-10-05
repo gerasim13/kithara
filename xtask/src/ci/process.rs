@@ -164,8 +164,9 @@ impl Process {
     }
 
     /// Where the builds this process runs leave their output. A lane that runs
-    /// a binary it just built has to look where Cargo was told to write it,
-    /// which is not the default directory on an executor.
+    /// a binary it just built has to look where Cargo was told to write it:
+    /// wherever the executor named, or the checkout's `target` when it named
+    /// none.
     pub(crate) fn target_dir(&self) -> PathBuf {
         self.vars
             .get(OsStr::new("CARGO_TARGET_DIR"))

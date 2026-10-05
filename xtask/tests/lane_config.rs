@@ -474,9 +474,8 @@ fn a_ready_pull_request_schedules_exactly_the_lanes_a_branch_push_does() {
 /// The product suite is what a `test run` naming no lane runs. Every lane a
 /// branch push schedules for it runs one command, apart from the toggles it
 /// asks for, so the clocks it is run under are the only difference between
-/// their counts. Only a branch push narrows it to
-/// the lanes the push touched; a ready pull request runs it whole, as the
-/// default branch does.
+/// their counts. Only a branch push narrows it to the lanes the push touched;
+/// a ready pull request runs it whole, as the default branch does.
 #[test]
 fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_branch_push() {
     let config = xtask_config();

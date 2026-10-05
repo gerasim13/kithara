@@ -157,10 +157,10 @@ pub(crate) struct CiLaneStep {
     pub(crate) args: Vec<String>,
     pub(crate) label: String,
     /// What the step needs the executor to be, rather than to run: a build-job
-    /// cap the container cannot exceed, a target directory a gate owns, the
-    /// browser a harness would otherwise guess. A value may name the checkout
-    /// with `{root}`, or the leased build-cache directory with `{target}` -
-    /// the two things a lane cannot spell for itself.
+    /// cap the container cannot exceed, the browser a harness would otherwise
+    /// guess. A value may name the checkout with `{root}` and a pinned version
+    /// with `{pin.<key>}`. It may not name the build directory: Cargo finds it
+    /// by itself, and the compiler cache keys every compilation on that name.
     pub(crate) env: BTreeMap<String, String>,
     /// The program for this step alone. A lane that installs a target before
     /// using it runs two, so the lane's own `program` is only the default.
@@ -408,9 +408,9 @@ fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<(
     Ok(())
 }
 
-/// `{root}` and `{pin.<key>}` are the whole substitution vocabulary. A typo that reached the runner would be passed through as a
-/// literal brace and fail as a missing header or an unknown toolchain rather
-/// than as a bad config.
+/// `{root}` and `{pin.<key>}` are the whole substitution vocabulary. A typo
+/// that reached the runner would be passed through as a literal brace and fail
+/// as a missing header or an unknown toolchain rather than as a bad config.
 fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
     let mut rest = value.replace(consts::ROOT_PLACEHOLDER, "");
     while let Some(start) = rest.find(consts::PIN_PREFIX) {
