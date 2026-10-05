@@ -110,7 +110,7 @@ fn from_media_info(
 }
 
 /// Acceptable spec for a probed generated `{wav,mp3}` body.
-fn assert_spec(spec: &AudioSpec, ext: &str) {
+fn assert_spec(spec: AudioSpec, ext: &str) {
     match ext {
         "wav" => {
             assert_eq!(spec.sample_rate.get(), 44100);
@@ -136,7 +136,7 @@ fn spec_properties(#[case] ext: &str, tone_wav: &'static [u8], tone_mp3: &'stati
     let reader = Cursor::new(data);
 
     let decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
-    assert_spec(&decoder.spec(), ext);
+    assert_spec(decoder.spec(), ext);
 }
 
 #[kithara::test]
@@ -209,14 +209,11 @@ fn multiple_chunks_consistent(tone_mp3: &'static [u8]) {
         if chunk_count > 3
             && let Some(prev) = prev_len
         {
-            let ratio = chunk.samples.len() as f64 / prev as f64;
-            if !(0.01..=100.0).contains(&ratio) {
-                panic!(
-                    "Chunk size varies extremely: {} vs {}",
-                    chunk.samples.len(),
-                    prev
-                );
-            }
+            let len = chunk.samples.len();
+            assert!(
+                len.saturating_mul(100) >= prev && len <= prev.saturating_mul(100),
+                "Chunk size varies extremely: {len} vs {prev}"
+            );
         }
         prev_len = Some(chunk.samples.len());
 

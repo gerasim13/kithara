@@ -552,7 +552,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use kithara_signal::AudioSpec;
+    use kithara_signal::{AudioSpec, FrameCount};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -628,10 +628,8 @@ mod tests {
         renderer.projection.active = Some(plan);
         renderer.prepared_quantum = Some(prepared);
         assert_eq!(
-            renderer
-                .prepare_terminal_quantum(meta, 96)
-                .map(|frames| frames.get()),
-            Some(96)
+            renderer.prepare_terminal_quantum(meta, 96),
+            Some(FrameCount::new(96))
         );
         let terminal = renderer
             .prepared_quantum

@@ -1,8 +1,4 @@
 #![forbid(unsafe_code)]
-#![expect(
-    clippy::unwrap_used,
-    reason = "test binary - unwraps are acceptable in test code"
-)]
 
 use std::{
     num::{NonZeroU32, NonZeroUsize},
@@ -60,7 +56,7 @@ fn host_spec(channels: u16) -> AudioSpec {
     )
 }
 
-fn pcm_chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+fn pcm_chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
     let meta = AudioChunkInfo {
         spec,
         ..Default::default()
@@ -68,7 +64,7 @@ fn pcm_chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
     let mut pooled = pools
         .get_with_len::<f32>(samples.len())
         .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
-    pooled.copy_from_slice(&samples);
+    pooled.copy_from_slice(samples);
     AudioChunk::new(meta, pooled)
 }
 
@@ -84,11 +80,11 @@ fn eq_with_gain(pools: &Pools, gain_db: GainDb, band_count: usize, channels: u16
 }
 
 fn settle(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec, silence: &[f32]) {
-    let samples = silence[..SETTLE_FRAMES * usize::from(spec.channels)].to_vec();
+    let samples = &silence[..SETTLE_FRAMES * usize::from(spec.channels)];
     let _ = eq.process(pcm_chunk(pools, spec, samples));
 }
 
-fn process_eq(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> Vec<f32> {
+fn process_eq(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec, samples: &[f32]) -> Vec<f32> {
     eq.process(pcm_chunk(pools, spec, samples))
         .expect("EqEffect must emit the chunk it was handed")
         .samples
@@ -125,7 +121,7 @@ fn master_chain(
     eq: &mut EqEffect,
     limiter: &mut PeakLimiter,
     pools: &Pools,
-    interleaved: Vec<f32>,
+    interleaved: &[f32],
 ) -> Vec<f32> {
     let processed = process_eq(eq, pools, host_spec(2), interleaved);
     limit_stereo(limiter, &processed)
@@ -150,7 +146,7 @@ fn eq_maps_silence_to_exact_silence(dsp_silence: Vec<f32>, #[case] gain_db: Gain
     let spec = host_spec(2);
     let mut eq = eq_with_gain(&pools, gain_db, 5, spec.channels);
 
-    let output = process_eq(&mut eq, &pools, spec, dsp_silence[..4_096].to_vec());
+    let output = process_eq(&mut eq, &pools, spec, &dsp_silence[..4_096]);
 
     for (index, sample) in output.iter().enumerate() {
         assert_eq!(
@@ -179,7 +175,7 @@ fn master_chain_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     let mut eq = eq_with_gain(&pools, GainDb::MAX, 5, 2);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let output = master_chain(&mut eq, &mut limiter, &pools, dsp_silence[..4_096].to_vec());
+    let output = master_chain(&mut eq, &mut limiter, &pools, &dsp_silence[..4_096]);
 
     for (index, sample) in output.iter().enumerate() {
         assert_eq!(*sample, 0.0, "sample {index} = {sample}");
@@ -200,7 +196,7 @@ fn eq_at_zero_db_is_bit_exact_identity(
     let mut eq = eq_with_gain(&pools, GainDb::default(), band_count, channels);
     let input = dsp_tone_a440[..8_192 * usize::from(channels)].to_vec();
 
-    let output = process_eq(&mut eq, &pools, spec, input.clone());
+    let output = process_eq(&mut eq, &pools, spec, &input);
 
     assert_eq!(
         output, input,
@@ -224,7 +220,7 @@ fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip(
     settle(&mut eq, &pools, spec, &dsp_silence);
 
     let input = dsp_tone_a440[..8_192].to_vec();
-    let output = process_eq(&mut eq, &pools, spec, input.clone());
+    let output = process_eq(&mut eq, &pools, spec, &input);
 
     assert_eq!(
         output, input,
@@ -256,12 +252,10 @@ fn master_chain_at_unity_is_bit_exact_identity(dsp_tone_unity: Vec<f32>) {
     let mut eq = eq_with_gain(&pools, GainDb::default(), 5, 2);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let input = dsp_tone_unity;
-
-    let output = master_chain(&mut eq, &mut limiter, &pools, input.clone());
+    let output = master_chain(&mut eq, &mut limiter, &pools, &dsp_tone_unity);
 
     assert_eq!(
-        output, input,
+        output, dsp_tone_unity,
         "a flat EQ into a limiter with headroom must not touch the signal"
     );
 }
@@ -288,11 +282,11 @@ fn eq_output_stays_finite_on_pathological_input(
 
         let mut input = dsp_tone_a440[..1_024].to_vec();
         input[512] = poison;
-        let output = process_eq(&mut eq, &pools, spec, input);
+        let output = process_eq(&mut eq, &pools, spec, &input);
         violations.extend(non_finite_report(path, &output));
 
         let clean = dsp_tone_a440[..1_024].to_vec();
-        let recovered = process_eq(&mut eq, &pools, spec, clean);
+        let recovered = process_eq(&mut eq, &pools, spec, &clean);
         violations.extend(non_finite_report(&format!("{path}/recovered"), &recovered));
     }
 

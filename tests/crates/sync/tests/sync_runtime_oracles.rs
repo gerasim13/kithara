@@ -7,6 +7,7 @@ use kithara_integration_tests::{
     },
     kithara,
 };
+use num_traits::AsPrimitive;
 
 use super::sync_product_matrix::{
     Audible, BLOCK_FRAMES, CHANNELS, CUE, ONE_DECK, PreparedSources, ProductHarness,
@@ -72,8 +73,8 @@ async fn running_sync_run(
     let pre_frames = ONE_DECK.sample_rate as usize;
     let settled_frames = BLOCK_FRAMES * 96;
     let command_at_seconds = 8.0;
-    let seek_seconds =
-        command_at_seconds - (settled_frames + pre_frames) as f64 / f64::from(ONE_DECK.sample_rate);
+    let lead_frames: f64 = (settled_frames + pre_frames).as_();
+    let seek_seconds = command_at_seconds - lead_frames / f64::from(ONE_DECK.sample_rate);
     harness.decks[0]
         .seek(seek_seconds)
         .unwrap_or_else(|error| panic!("running SYNC fixture seek failed: {error}"));
@@ -433,7 +434,9 @@ async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> Co
             .failures
             .push("shared worker did not report active decode load".to_owned());
     }
-    let frames = (f64::from(case.sample_rate) * 60.0 / case.final_bpm() * 6.0).round() as usize;
+    let frames: usize = (f64::from(case.sample_rate) * 60.0 / case.final_bpm() * 6.0)
+        .round()
+        .as_();
     let samples = harness.capture_paced(case, frames).await;
     CommandRun {
         command_index: 0,

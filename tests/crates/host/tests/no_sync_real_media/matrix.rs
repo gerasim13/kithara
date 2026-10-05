@@ -24,6 +24,7 @@ use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
 };
+use num_traits::AsPrimitive;
 #[cfg(not(target_os = "android"))]
 use serde::Serialize;
 use url::Url;
@@ -215,16 +216,16 @@ async fn record_no_sync_real_media_artifacts(
 /// continuously across segments, so the two windows land in different bands,
 /// and its range clears the 440 Hz and 880 Hz tones the MP3 decks carry.
 async fn hls_ladder_url(server: &TestServerHelper) -> Url {
-    let deepest_capture = CAPTURE_START_SECS
-        + (CASES
-            .iter()
-            .map(|case| case.media.len())
-            .max()
-            .expect("the matrix has cases") as f64
-            - 1.0)
-            * CAPTURE_START_STEP_SECS
+    let most_decks: f64 = CASES
+        .iter()
+        .map(|case| case.media.len())
+        .max()
+        .expect("the matrix has cases")
+        .as_();
+    let deepest_capture = (most_decks - 1.0).mul_add(CAPTURE_START_STEP_SECS, CAPTURE_START_SECS)
         + f64::from(CAPTURE_SECS);
-    let ladder_secs = HLS_LADDER_SEGMENTS as f64 * HLS_LADDER_SEGMENT_SECS;
+    let ladder_segments: f64 = HLS_LADDER_SEGMENTS.as_();
+    let ladder_secs = ladder_segments * HLS_LADDER_SEGMENT_SECS;
     assert!(
         ladder_secs > deepest_capture,
         "the last deck captures through {deepest_capture} s but the ladder is only {ladder_secs} s",
@@ -367,40 +368,11 @@ async fn run_case(
         "real-media continuity assessment"
     );
 
-    let mut audio_levels = direct_references
+    let signals = listened_signals(&direct_references, &matched_mix, &final_mix);
+    let audio_levels = signals
         .iter()
-        .enumerate()
-        .map(|(deck_index, reference)| {
-            oracle::measure_audio_level(
-                &format!("direct-reference-{deck_index}"),
-                AudioRole::DirectReference,
-                case.host_rate,
-                reference,
-            )
-        })
+        .map(|(label, role, pcm)| oracle::measure_audio_level(label, *role, case.host_rate, pcm))
         .collect::<Vec<_>>();
-    audio_levels.extend(matched_mix.contributions.iter().enumerate().map(
-        |(deck_index, contribution)| {
-            oracle::measure_audio_level(
-                &format!("contribution-{deck_index}"),
-                AudioRole::Contribution,
-                case.host_rate,
-                contribution,
-            )
-        },
-    ));
-    audio_levels.push(oracle::measure_audio_level(
-        "reference-mix",
-        AudioRole::ReferenceMix,
-        case.host_rate,
-        &matched_mix.reference,
-    ));
-    audio_levels.push(oracle::measure_audio_level(
-        &final_mix.label,
-        AudioRole::FinalMix,
-        case.host_rate,
-        &final_mix.pcm,
-    ));
     oracle::assess_listening_levels(case.label, &audio_levels, &mut failures);
 
     #[cfg(target_os = "android")]
@@ -433,29 +405,9 @@ async fn run_case(
             decks: &observations,
             failures: &failures,
         };
-        let mut audio = direct_references
+        let audio_slices = signals
             .iter()
-            .enumerate()
-            .map(|(deck_index, reference)| {
-                (
-                    format!("direct-reference-{deck_index}"),
-                    reference.as_slice(),
-                )
-            })
-            .collect::<Vec<_>>();
-        audio.extend(matched_mix.contributions.iter().enumerate().map(
-            |(deck_index, contribution)| {
-                (
-                    format!("contribution-{deck_index}"),
-                    contribution.as_slice(),
-                )
-            },
-        ));
-        audio.push(("reference-mix".to_owned(), &matched_mix.reference));
-        audio.push((final_mix.label.clone(), &final_mix.pcm));
-        let audio_slices = audio
-            .iter()
-            .map(|(label, pcm)| (label.as_str(), *pcm))
+            .map(|(label, _, pcm)| (label.as_str(), *pcm))
             .collect::<Vec<_>>();
         let written = write_audio_artifact(
             case.label,
@@ -472,6 +424,53 @@ async fn run_case(
     }
     host.close().await;
     failures
+}
+
+/// Every signal a case listens to, labelled with its role: each deck's direct
+/// reference, each deck's contribution to the matched mix, the reference mix,
+/// and the final mix.
+fn listened_signals<'a>(
+    direct_references: &'a [Vec<f32>],
+    matched_mix: &'a oracle::MatchedMixAudio,
+    final_mix: &'a CapturedAudio,
+) -> Vec<(String, AudioRole, &'a [f32])> {
+    let references = direct_references
+        .iter()
+        .enumerate()
+        .map(|(deck_index, reference)| {
+            (
+                format!("direct-reference-{deck_index}"),
+                AudioRole::DirectReference,
+                reference.as_slice(),
+            )
+        });
+    let contributions =
+        matched_mix
+            .contributions
+            .iter()
+            .enumerate()
+            .map(|(deck_index, contribution)| {
+                (
+                    format!("contribution-{deck_index}"),
+                    AudioRole::Contribution,
+                    contribution.as_slice(),
+                )
+            });
+    references
+        .chain(contributions)
+        .chain([
+            (
+                "reference-mix".to_owned(),
+                AudioRole::ReferenceMix,
+                matched_mix.reference.as_slice(),
+            ),
+            (
+                final_mix.label.clone(),
+                AudioRole::FinalMix,
+                final_mix.pcm.as_slice(),
+            ),
+        ])
+        .collect()
 }
 
 async fn capture_pass(
@@ -531,6 +530,12 @@ async fn capture_pass(
         EventPolicy::AudiblePlayback,
         failures,
     );
+    if !zero_blocks.is_empty() {
+        failures.push(format!(
+            "{} {label}: capture contained exact-zero callback blocks at {zero_blocks:?}",
+            case.label,
+        ));
+    }
 
     let tapped = tap.drain();
     let tap_drops = tap.drops();
@@ -541,7 +546,6 @@ async fn capture_pass(
         &tapped,
         tap_drops,
         requested_frames,
-        &zero_blocks,
         failures,
     );
     detach_tap(case.label, label, host, failures).await;
@@ -582,6 +586,26 @@ async fn reset_for_capture(
         return false;
     }
 
+    if !pause_muted(case, host, decks, label, failures).await
+        || !request_capture_seeks(case, decks, label, failures)
+    {
+        return false;
+    }
+    let Some(seek_blocks) = render_until_seeked(case, host, decks, label, failures).await else {
+        return false;
+    };
+    seek_positions_within_budget(case, decks, label, seek_blocks, failures)
+        && restore_capture_levels(case, host, decks, label, levels, failures).await
+}
+
+/// Pause every deck and mute it, each change settled by a few rendered blocks.
+async fn pause_muted(
+    case: &Case,
+    host: &OfflineHostHarness<TestPools>,
+    decks: &mut [Deck],
+    label: &str,
+    failures: &mut Vec<String>,
+) -> bool {
     for deck in &*decks {
         deck.player.pause();
     }
@@ -613,7 +637,17 @@ async fn reset_for_capture(
         failures,
     )
     .await;
+    true
+}
 
+/// Seek every deck to its capture start; every request lands before EOF and
+/// reports its epoch.
+fn request_capture_seeks(
+    case: &Case,
+    decks: &mut [Deck],
+    label: &str,
+    failures: &mut Vec<String>,
+) -> bool {
     for deck in &mut *decks {
         deck.seek_request_epoch = None;
         deck.seek_complete_epoch = None;
@@ -663,7 +697,18 @@ async fn reset_for_capture(
         ));
         return false;
     }
+    true
+}
 
+/// Play the muted decks until every one commits its seek output, pausing each
+/// as it lands; returns how many blocks that took.
+async fn render_until_seeked(
+    case: &Case,
+    host: &OfflineHostHarness<TestPools>,
+    decks: &mut [Deck],
+    label: &str,
+    failures: &mut Vec<String>,
+) -> Option<u32> {
     play_decks(host, decks).await;
     let mut completed = false;
     let mut seek_blocks = 0_u32;
@@ -718,10 +763,22 @@ async fn reset_for_capture(
                 ))
                 .collect::<Vec<_>>(),
         ));
-        return false;
+        return None;
     }
+    Some(seek_blocks)
+}
 
-    let rendered_secs = f64::from(seek_blocks) * BLOCK_FRAMES as f64 / f64::from(case.host_rate);
+/// Every deck plays from its capture start, advanced by no more than the
+/// `seek_blocks` rendered while it landed.
+fn seek_positions_within_budget(
+    case: &Case,
+    decks: &[Deck],
+    label: &str,
+    seek_blocks: u32,
+    failures: &mut Vec<String>,
+) -> bool {
+    let block_frames: f64 = BLOCK_FRAMES.as_();
+    let rendered_secs = f64::from(seek_blocks) * block_frames / f64::from(case.host_rate);
     let mut positions_valid = true;
     for (deck_index, deck) in decks.iter().enumerate() {
         let Some(served) = deck.player.position_seconds() else {
@@ -743,10 +800,18 @@ async fn reset_for_capture(
             ));
         }
     }
-    if !positions_valid {
-        return false;
-    }
+    positions_valid
+}
 
+/// Settle the paused decks, then restore the capture `levels` and play.
+async fn restore_capture_levels(
+    case: &Case,
+    host: &OfflineHostHarness<TestPools>,
+    decks: &mut [Deck],
+    label: &str,
+    levels: &[f32],
+    failures: &mut Vec<String>,
+) -> bool {
     settle_controls(
         case,
         host,
@@ -840,7 +905,6 @@ fn assess_capture(
     tapped: &[f32],
     tap_drops: u64,
     requested_frames: usize,
-    zero_blocks: &[usize],
     failures: &mut Vec<String>,
 ) -> bool {
     let expected_samples = requested_frames * usize::from(CHANNELS);
@@ -848,11 +912,6 @@ fn assess_capture(
         failures.push(format!(
             "{case} {label}: PCM shape was {} samples, expected {expected_samples}",
             capture.len(),
-        ));
-    }
-    if !zero_blocks.is_empty() {
-        failures.push(format!(
-            "{case} {label}: capture contained exact-zero callback blocks at {zero_blocks:?}",
         ));
     }
     if tap_drops != 0 {
@@ -1015,6 +1074,8 @@ async fn prepare_deck(
         )
     });
 
+    let deck_offset: f64 = deck_index.as_();
+    let capture_target_secs = deck_offset.mul_add(CAPTURE_START_STEP_SECS, CAPTURE_START_SECS);
     Deck {
         player,
         reference,
@@ -1024,11 +1085,11 @@ async fn prepare_deck(
         seek_complete_epoch: None,
         muted_seek_underrun_epoch: None,
         seek_terminal: false,
-        capture_target_secs: CAPTURE_START_SECS + deck_index as f64 * CAPTURE_START_STEP_SECS,
+        capture_target_secs,
         observation: DeckObservation {
             hls: matches!(media, Media::Hls),
             label: media.label(),
-            capture_target_secs: CAPTURE_START_SECS + deck_index as f64 * CAPTURE_START_STEP_SECS,
+            capture_target_secs,
             ..DeckObservation::default()
         },
     }

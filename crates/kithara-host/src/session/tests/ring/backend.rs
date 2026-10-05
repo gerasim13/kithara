@@ -8,7 +8,8 @@ use firewheel::{
     ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
     processor::FirewheelProcessor,
 };
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
+use kithara_signal::AudioSpec;
 
 use super::buffer::RingWriter;
 
@@ -20,7 +21,7 @@ pub(crate) enum RingLayout {
 }
 
 impl RingLayout {
-    const fn channels(self) -> usize {
+    const fn channels(self) -> u16 {
         match self {
             Self::Stereo => 2,
         }
@@ -163,14 +164,15 @@ impl RingBackend {
             .checked_add(u64::from(self.block_frames))
             .ok_or(RingRenderError::FrameLedgerOverflow)?;
         let channels = self.layout.channels();
+        let duration_since_stream_start = AudioSpec::new(channels, self.session_rate)
+            .duration_for(clock_samples)
+            .map_err(|_| RingRenderError::FrameLedgerOverflow)?;
         let process_info = BackendProcessInfo {
             frames: self.block_frames_usize,
             // Firewheel stamps a block with its own clock type, so the
             // platform clock cannot be handed over here.
             process_timestamp: Some(bevy_platform::time::Instant::now()),
-            duration_since_stream_start: Duration::from_secs_f64(
-                clock_samples as f64 / f64::from(self.session_rate.get()),
-            ),
+            duration_since_stream_start,
             input_stream_status: StreamStatus::empty(),
             output_stream_status: StreamStatus::empty(),
             dropped_frames: 0,
@@ -183,9 +185,12 @@ impl RingBackend {
                 .ok_or(RingRenderError::Full)?;
             let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
                 .map_err(|_| RingRenderError::BlockShape)?;
-            let mut output =
-                InterleavedSlice::new_mut(block.as_mut_slice(), channels, self.block_frames_usize)
-                    .map_err(|_| RingRenderError::BlockShape)?;
+            let mut output = InterleavedSlice::new_mut(
+                block.as_mut_slice(),
+                usize::from(channels),
+                self.block_frames_usize,
+            )
+            .map_err(|_| RingRenderError::BlockShape)?;
             processor.process(&input, &mut output, process_info);
             block.commit();
         }
@@ -211,7 +216,7 @@ impl RingBackend {
                 max_block_frames,
                 sample_rate: config.session_rate,
                 num_stream_in_channels: 0,
-                num_stream_out_channels: channels as u32,
+                num_stream_out_channels: u32::from(channels),
                 input_to_output_latency_seconds: 0.0,
             })
             .map_err(|_| RingStartError::Activation)?;

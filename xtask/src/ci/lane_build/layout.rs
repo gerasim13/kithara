@@ -87,7 +87,7 @@ mod tests {
                 )
                 .unwrap(),
                 "current" => {
-                    fs::write(run.join("root-output"), run.join("out").to_str().unwrap()).unwrap()
+                    fs::write(run.join("root-output"), run.join("out").to_str().unwrap()).unwrap();
                 }
                 _ => {}
             }

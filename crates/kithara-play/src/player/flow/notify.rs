@@ -317,17 +317,18 @@ mod tests {
     /// slot's arena and already promoted over the outgoing track, exactly
     /// as `commit_next` leaves it.
     fn activate_pending(player: &PlayerImpl<TestPools>, item_id: TrackId, src: &str) {
-        let mut phase = player.phase.lock();
-        let Some(pending) = phase.pending_mut() else {
-            panic!("BUG: an active phase must carry a pending slot");
-        };
-        *pending = Some(PendingNext {
+        let next = PendingNext {
             item_id,
             src: Arc::from(src),
             state: PendingNextState::ActivatedReady,
             index: 1,
             duration_seconds: 60.0,
-        });
+        };
+        *player
+            .phase
+            .lock()
+            .pending_mut()
+            .expect("BUG: an active phase must carry a pending slot") = Some(next);
     }
 
     fn stop_notification(

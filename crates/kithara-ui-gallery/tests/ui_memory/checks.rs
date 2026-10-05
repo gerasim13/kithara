@@ -19,8 +19,7 @@
 
 use kithara_test_utils::kithara;
 use kithara_ui::render::gpu;
-
-use crate::{capture::Shot, fixture::consts};
+use kithara_ui_gallery::{capture::Shot, fixture::consts};
 
 /// How much graphics memory a settled page may hold, per host.
 ///
@@ -209,18 +208,18 @@ mod immediate {
     /// would answer a different, easier question.
     pub(super) fn pool(page: Shot) -> Stages {
         let device = read();
-        let mut gallery = crate::app::Gallery::mounted();
+        let mut gallery = kithara_ui_gallery::app::Gallery::mounted();
         gallery.select(page);
-        let theme = crate::app::theme(gallery.skin());
+        let theme = kithara_ui_gallery::app::theme(gallery.skin());
         let base = theme.base();
-        let logical = Size::from(crate::cli::WINDOW);
+        let logical = Size::from(kithara_ui_gallery::cli::WINDOW);
         let mut renderer = renderer();
         let mut cache = Cache::default();
         let renderer_bytes = read();
 
         let draw = |renderer: &mut iced::Renderer, cache: &mut Cache| {
             let mut interface = UserInterface::build(
-                crate::app::view(&gallery, window::Id::unique()),
+                kithara_ui_gallery::app::view(&gallery, window::Id::unique()),
                 logical,
                 mem::take(cache),
                 renderer,
@@ -313,14 +312,14 @@ mod retained {
         builtin,
         capture::Offscreen,
     };
-    use masonry::vello::peniko::Color;
-
-    use super::{Budget, Shot, Stages, device_bytes};
-    use crate::{
+    use kithara_ui_gallery::{
         custom, demo,
         fixture::resolver,
         host::{self, Gallery},
     };
+    use masonry::vello::peniko::Color;
+
+    use super::{Budget, Shot, Stages, device_bytes};
 
     pub(super) fn pool(page: Shot) -> Stages {
         let device = read();

@@ -153,7 +153,6 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
     let requested: Vec<u64> = resumed
         .coverage()
         .gaps(&(0..consts::RESUME_TESTS_EXTENT))
-        .into_iter()
         .map(|range| range.start)
         .collect();
     assert_eq!(
