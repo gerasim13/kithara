@@ -139,11 +139,13 @@ mod document_tests {
     fn the_arena_byte_cap_lands_without_moving_the_screen_cache() {
         let patch: UiConfigPatch =
             serde_yaml_ng::from_str("max_arena_bytes: 131072\n").expect("the document types");
-        let mut config = UiConfig::default();
         // Seeded off a value the default does not produce, so a whole-struct
         // `apply` that rebuilt every unnamed field from `Default` cannot pass
         // this assertion by coincidence.
-        config.screen_cache = 3;
+        let mut config = UiConfig {
+            screen_cache: 3,
+            ..UiConfig::default()
+        };
 
         config.apply(patch);
 

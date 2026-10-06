@@ -27,5 +27,6 @@ RUN --mount=type=cache,target=/build/target \
 COPY --from=server /usr/bin/rustfs /usr/bin/rustfs
 COPY --from=client /usr/bin/rc /usr/bin/rc
 WORKDIR /
-ENTRYPOINT ["/usr/bin/rustfs"]
-CMD ["server", "/data"]
+# xtask runs the stack whole: it starts the store, applies the setup, and
+# evicts by last use, all in this one container.
+ENTRYPOINT ["xtask", "ci", "cache", "serve"]

@@ -21,6 +21,7 @@ use kithara_integration_tests::{
     },
 };
 use kithara_test_utils::TestTempDir;
+use num_traits::AsPrimitive;
 use tracing::{info, warn};
 use url::Url;
 
@@ -88,10 +89,10 @@ async fn render_into(
 ) {
     const BATCH: u32 = 8;
     const TICK_MS: u64 = 10;
-    let target_blocks = num_traits::cast::<f64, u32>(
-        (target_secs * f64::from(out_rate) / BLOCK_FRAMES as f64).ceil(),
-    )
-    .unwrap_or(u32::MAX);
+    let block_frames: f64 = BLOCK_FRAMES.as_();
+    let target_blocks =
+        num_traits::cast::<f64, u32>((target_secs * f64::from(out_rate) / block_frames).ceil())
+            .unwrap_or(u32::MAX);
     let deadline = Instant::now() + Duration::from_millis(wall_budget_ms);
     let mut rendered = 0u32;
     while rendered < target_blocks {
@@ -195,7 +196,8 @@ async fn run_case(
     };
 
     let frames = pcm.len() / chan;
-    let played_secs = frames as f64 / f64::from(out_rate);
+    let frames_f: f64 = frames.as_();
+    let played_secs = frames_f / f64::from(out_rate);
     info!(
         ?scenario,
         ?backend,

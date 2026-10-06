@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
 #![recursion_limit = "256"]
-#![expect(
-    clippy::unwrap_used,
-    reason = "integration test crate - unwraps are acceptable in test code"
-)]
 
 use kithara_test_dylib as _;
 

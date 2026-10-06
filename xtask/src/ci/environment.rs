@@ -399,16 +399,6 @@ impl CiEnvironment {
             &config.pins.nightly_toolchain,
         );
         insert(&mut vars, "npm_config_cache", npm_cache);
-        // Everywhere but Windows. `ffmpeg-sys-next` declares a `--cfg` for
-        // every library version it knows, which is thousands of them, and the
-        // command Cargo builds for it passes what Windows accepts. Cargo hands
-        // that to the wrapper through a response file; sccache expands it and
-        // spawns the compiler with the arguments themselves, which does not
-        // fit: `failed to spawn rustc.exe: The filename or extension is too
-        // long. (os error 206)`. The cache is worth less than the lane.
-        if sccache.is_some() {
-            insert(&mut vars, "RUSTC_WRAPPER", "sccache");
-        }
         insert(
             &mut vars,
             "RUSTUP_HOME",
@@ -917,6 +907,66 @@ mod tests {
 
     use super::*;
 
+    /// Cargo builds at the claimed slot's own path and says so in
+    /// `CARGO_TARGET_DIR`; the compiler cache keys a compilation on every
+    /// `CARGO_*` variable it sees. Only the build directory is left out, so
+    /// that variable no longer gives a dependency an entry per slot or job
+    /// directory.
+    #[cfg(unix)]
+    #[test]
+    fn the_compiler_cache_is_not_told_the_build_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let seen = directory.path().join("seen");
+        crate::testing::install_script(
+            &directory.path().join("sccache"),
+            &format!(
+                "#!/bin/sh\n{{ printf '%s\\n' \"$@\"; env; }} > '{}'\n",
+                seen.display()
+            ),
+        );
+        let path = env::join_paths(
+            std::iter::once(directory.path().to_path_buf())
+                .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+        )
+        .unwrap();
+
+        let status = Command::new(
+            super::super::config::workspace_root().join(consts::COMPILER_CACHE_WRAPPER),
+        )
+        .args(["rustc", "--crate-name", "dependency"])
+        .env("PATH", path)
+        .env(consts::TARGET_DIR_ENV, "/lanes/slot-1/cargo")
+        .env("CARGO_PKG_NAME", "dependency")
+        .status()
+        .unwrap();
+
+        assert!(status.success());
+        let seen = fs::read_to_string(seen).unwrap();
+        let mut lines = seen.lines();
+        assert_eq!(
+            lines.by_ref().take(3).collect::<Vec<_>>(),
+            ["rustc", "--crate-name", "dependency"]
+        );
+        let environment = lines.collect::<Vec<_>>();
+        assert!(environment.contains(&"CARGO_PKG_NAME=dependency"), "{seen}");
+        assert!(
+            !environment
+                .iter()
+                .any(|line| line.starts_with(&format!("{}=", consts::TARGET_DIR_ENV))),
+            "{seen}"
+        );
+    }
+
+    /// cc-rs hands a build script's C compiles to the Rust wrapper only when
+    /// the wrapper is named after a compiler cache it knows.
+    #[test]
+    fn build_scripts_compile_c_through_the_compiler_cache_too() {
+        assert_eq!(
+            FsPath::new(consts::COMPILER_CACHE_WRAPPER).file_stem(),
+            Some(OsStr::new("sccache"))
+        );
+    }
+
     fn own_dir(target: Result<Target>) -> PathBuf {
         match target.unwrap() {
             Target::Dir(dir) => dir,
@@ -1131,7 +1181,12 @@ mod tests {
                     .map(OsString::as_os_str),
                 Some(project.as_os_str())
             );
-            assert!(vars.get(OsStr::new("SCCACHE_BASEDIR")).is_none());
+            assert!(!vars.contains_key(OsStr::new("SCCACHE_BASEDIR")));
+            assert_eq!(
+                vars.get(OsStr::new("RUSTC_WRAPPER"))
+                    .map(OsString::as_os_str),
+                Some(project.join(consts::COMPILER_CACHE_WRAPPER).as_os_str())
+            );
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_SERVER_UDS"))
                     .map(OsString::as_os_str),
@@ -1631,21 +1686,20 @@ mod tests {
     }
 }
 
-/// Reads the job's environment and applies the rule below.
-///
-/// # Errors
-///
-/// Returns an error if the environment names a different home.
-/// The Android toolchain a mac host carries. Only that fleet builds for the
-/// device, and the paths are the host profile's rather than this crate's.
 /// sccache takes its configuration from the environment it starts in, so
 /// what the host left out of its store's environment is filled in here rather
-/// than trusted to every host file.
+/// than trusted to every host file. Cargo reaches it through the checkout's
+/// wrapper, which keeps the build directory out of the cache key.
 fn insert_sccache_environment(
     vars: &mut BTreeMap<OsString, OsString>,
     paths: &SccachePaths,
     project_root: &FsPath,
 ) {
+    insert(
+        vars,
+        "RUSTC_WRAPPER",
+        project_root.join(consts::COMPILER_CACHE_WRAPPER),
+    );
     insert(vars, "SCCACHE_BASEDIRS", project_root);
     insert(vars, "SCCACHE_CACHE_SIZE", &paths.cache_size);
     insert(vars, "SCCACHE_DIR", &paths.directory);
@@ -1658,6 +1712,8 @@ fn insert_sccache_environment(
     }
 }
 
+/// The Android toolchain a mac host carries. Only that fleet builds for the
+/// device, and the paths are the host profile's rather than this crate's.
 fn insert_android_environment(vars: &mut BTreeMap<OsString, OsString>, config: &CiConfig) {
     let android_user_home = config.host.host_root.join("toolchains/android-user");
     insert(vars, "ANDROID_HOME", &config.host.android_home);
@@ -1678,6 +1734,11 @@ fn insert_android_environment(vars: &mut BTreeMap<OsString, OsString>, config: &
     }
 }
 
+/// Reads the job's environment and applies the rule below.
+///
+/// # Errors
+///
+/// Returns an error if the environment names a different home.
 fn refuse_a_divergent_cargo_home_from_env(expected: &FsPath) -> Result<()> {
     let root = env::var_os("KITHARA_CI_CACHE_ROOT").map(PathBuf::from);
     refuse_a_divergent_cargo_home(

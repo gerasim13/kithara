@@ -18,6 +18,7 @@ pub const FILE: &str = ".kithara-job-lease";
 
 /// A live claim on a build directory, released when this drops or the process
 /// dies.
+#[derive(Debug)]
 pub struct Lease {
     _lock: FileLock,
 }

@@ -15,6 +15,7 @@ use kithara_integration_tests::{
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::assets;
+use num_traits::AsPrimitive;
 
 use crate::bufpool_ext::TestPools;
 
@@ -44,7 +45,8 @@ fn mean_abs_window(pcm: &[f32], frame_offset: usize, frames: usize) -> Option<f3
     }
     let window = &pcm[start..end];
     let sum: f32 = window.iter().map(|s| s.abs()).sum();
-    Some(sum / window.len() as f32)
+    let len: f32 = window.len().as_();
+    Some(sum / len)
 }
 
 /// First frame where `|sample|` rises above `threshold`. The audio

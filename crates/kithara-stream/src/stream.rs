@@ -1132,7 +1132,7 @@ mod tests {
         // `Source::wait_range` probe — readiness without blocking, and the
         // cursor stays put so it can never masquerade as a read.
         let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], Vec::new())
-            .with_segments([0..8], 4);
+            .with_segments([Range { start: 0, end: 8 }], 4);
         let mut stream = Stream::<DummyType> { source };
 
         let ready = stream.probe_wait(0..4);

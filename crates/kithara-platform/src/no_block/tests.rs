@@ -21,6 +21,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use super::{
     clock::force_cpu_elapsed,
     mode::{Mode, force_blanket_budget, force_log_path, force_mode, force_no_log_path},
+    report::nextest_prefix,
     *,
 };
 use crate::consts;
@@ -321,7 +322,7 @@ fn census_writes_to_forced_log_path() {
 
     let contents = fs::read_to_string(&path).expect("read census log");
     assert!(
-        contents.starts_with(&super::report::nextest_prefix()),
+        contents.starts_with(&nextest_prefix()),
         "census line must carry current nextest correlation: {contents}"
     );
     assert!(contents.contains("census_file_task"), "got: {contents}");

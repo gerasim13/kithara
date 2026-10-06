@@ -720,6 +720,12 @@ mod tests {
     ))]
     use kithara_warp::WarpCapabilities;
     use kithara_warp::{SpeedCurve, StretchKind};
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    use num_traits::AsPrimitive;
 
     use super::*;
     use crate::{LaneCommand, LaneFrame, LaneProtocol, consts};
@@ -2082,8 +2088,9 @@ mod tests {
             let expected = if chunk.lane_start < AT {
                 chunk.lane_start
             } else {
-                let stretched = (chunk.lane_start - AT) as f64 * SPEED;
-                AT + stretched.round() as u64
+                let elapsed: f64 = (chunk.lane_start - AT).as_();
+                let stretched: u64 = (elapsed * SPEED).round().as_();
+                AT + stretched
             };
             assert!(
                 chunk.source_start.abs_diff(expected) <= 1,
@@ -2133,16 +2140,24 @@ mod tests {
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     fn chirp(frames: usize) -> Vec<f32> {
         let rate = 44_100.0_f64;
-        let span = frames as f64 / rate;
+        let length: f64 = frames.as_();
+        let span = length / rate;
         (0..frames)
             .flat_map(|frame| {
-                let time = frame as f64 / rate;
+                let frame: f64 = frame.as_();
+                let time = frame / rate;
                 let phase = std::f64::consts::TAU
                     * time.mul_add(220.0, (1_760.0 - 220.0) / (2.0 * span) * time * time);
-                let sample = (0.5 * phase.sin()) as f32;
+                let sample: f32 = (0.5 * phase.sin()).as_();
                 [sample, sample]
             })
             .collect()
+    }
+
+    /// A lane frame as an index into [`lane_pcm`].
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+    fn pcm_index(frame: u64) -> usize {
+        usize::try_from(frame).expect("test lane frame fits usize")
     }
 
     /// The left channel the lane emitted, indexed by lane frame.
@@ -2191,8 +2206,9 @@ mod tests {
     fn sine(frames: usize) -> Vec<f32> {
         (0..frames)
             .flat_map(|frame| {
-                let phase = std::f64::consts::TAU * 440.0 * frame as f64 / 44_100.0;
-                let sample = (0.5 * phase.sin()) as f32;
+                let frame: f64 = frame.as_();
+                let phase = std::f64::consts::TAU * 440.0 * frame / 44_100.0;
+                let sample: f32 = (0.5 * phase.sin()).as_();
                 [sample, sample]
             })
             .collect()
@@ -2210,7 +2226,7 @@ mod tests {
             const FIRST: u64 = 4_099;
             const SECOND: u64 = FIRST + 512;
             const SETTLE: u64 = 16_384;
-            let largest_step = (std::f64::consts::TAU * 440.0 / 44_100.0 * 0.5) as f32;
+            let largest_step: f32 = (std::f64::consts::TAU * 440.0 / 44_100.0 * 0.5).as_();
             let signal = sine(12 * consts::LANE_CHUNK_FRAMES as usize);
             let pools = pools();
             let (mut source, mut lane) = stretch_lane(&pools, (backend, true), &signal);
@@ -2221,7 +2237,7 @@ mod tests {
 
             let pcm = lane_pcm(&emit(&mut source, 0, SECOND + SETTLE));
 
-            let (frame, step) = pcm[FIRST as usize - 256..(SECOND + SETTLE) as usize]
+            let (frame, step) = pcm[pcm_index(FIRST) - 256..pcm_index(SECOND + SETTLE)]
                 .windows(2)
                 .map(|pair| (pair[1] - pair[0]).abs())
                 .enumerate()
@@ -2236,7 +2252,7 @@ mod tests {
                 step <= 3.0 * largest_step,
                 "{backend:?}: the output jumps {step:.3} at lane frame {} (the sine steps at most \
                  {largest_step:.3}); changes at {FIRST} and {SECOND}",
-                FIRST as usize - 256 + frame,
+                pcm_index(FIRST) - 256 + frame,
             );
         }
     }
@@ -2271,11 +2287,11 @@ mod tests {
                 .expect("the lane has room for the start");
             let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
-            let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+            let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
             let (offset, correlation) = alignment(
                 rendered,
                 &lane_pcm(&reference),
-                (cue + SETTLE) as usize,
+                pcm_index(cue + SETTLE),
                 REACH,
             );
             assert!(
@@ -2293,6 +2309,12 @@ mod tests {
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     #[kithara::test]
     fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame() {
+        const ENGAGE: u64 = 1_024;
+        /// At 1.25 the 3072 frames from ENGAGE play 3840 source frames whole.
+        const AT: u64 = 4_096;
+        const SETTLE: u64 = 16_384;
+        const WINDOW: usize = 4_096;
+        const REACH: usize = 2_048;
         for backend in keylock_backends() {
             for next in keylock_backends() {
                 let (from, command) = if backend == next {
@@ -2301,12 +2323,6 @@ mod tests {
                     ((backend, true), LaneCommand::SetBackend(next))
                 };
                 let to = (next, true);
-                const ENGAGE: u64 = 1_024;
-                /// At 1.25 the 3072 frames from ENGAGE play 3840 source frames whole.
-                const AT: u64 = 4_096;
-                const SETTLE: u64 = 16_384;
-                const WINDOW: usize = 4_096;
-                const REACH: usize = 2_048;
                 let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
                 let pools = pools();
                 let (mut changed, mut lane) = stretch_lane(&pools, from, &signal);
@@ -2324,11 +2340,11 @@ mod tests {
                     .expect("the lane has room for the start");
                 let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
-                let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+                let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
                 let (offset, correlation) = alignment(
                     rendered,
                     &lane_pcm(&reference),
-                    (cue + SETTLE) as usize,
+                    pcm_index(cue + SETTLE),
                     REACH,
                 );
                 assert!(
@@ -2380,11 +2396,11 @@ mod tests {
                 .expect("the lane has room for the start");
             let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
 
-            let rendered = &lane_pcm(&emitted)[(AT + SETTLE) as usize..][..WINDOW];
+            let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
             let (offset, correlation) = alignment(
                 rendered,
                 &lane_pcm(&reference),
-                (AT + SETTLE) as usize,
+                pcm_index(AT + SETTLE),
                 REACH,
             );
             assert!(

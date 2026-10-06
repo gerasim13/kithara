@@ -109,6 +109,15 @@ pub(super) struct RefreshLock {
     _lock: FileLock,
 }
 
+/// Held from the start of a build of `xtask` until the binary it built is
+/// copied into a generation: one checkout builds in the directory at a time,
+/// and the host budget leaves the directory alone meanwhile.
+#[derive(Debug)]
+pub(super) struct BuildLock {
+    _lock: FileLock,
+    _lease: Option<kithara_devtools::lease::Lease>,
+}
+
 pub(crate) fn lease_current() -> Result<Option<GenerationLease>> {
     let Some(generation) = layout::current()? else {
         return Ok(None);
@@ -131,6 +140,36 @@ pub(super) fn refresh(root: &Path) -> Result<RefreshLock> {
     )
     .with_context(|| format!("lock {subject}"))?;
     Ok(RefreshLock { _lock: lock })
+}
+
+/// The lock lives in the build directory, not the checkout: every runner of a
+/// CI host builds in one directory, and Cargo's own lock ends with the build,
+/// before the binary is copied out of it.
+pub(super) fn build(target: &Path) -> Result<BuildLock> {
+    fs::create_dir_all(target)
+        .with_context(|| format!("create xtask build directory {}", target.display()))?;
+    let path = target.join(consts::BUILD_LOCK);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("open xtask build lock {}", path.display()))?;
+    let subject = format!("xtask build {}", path.display());
+    let holder = crate::job::lock_holder();
+    let lock = FileLock::exclusive(
+        file,
+        &Wait {
+            subject: &subject,
+            holder: &holder,
+        },
+    )
+    .with_context(|| format!("lock {subject}"))?;
+    Ok(BuildLock {
+        _lock: lock,
+        _lease: kithara_devtools::lease::hold(target),
+    })
 }
 
 fn try_refresh(root: &Path) -> Result<Option<RefreshLock>> {
@@ -286,10 +325,17 @@ mod tests {
     use std::{
         fs::{self, FileTimes},
         path::{Path, PathBuf},
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
         time::{Duration, SystemTime},
     };
 
     use anyhow::Result;
+    use fs4::TryLockError;
+    use kithara_devtools::lock::FileLock;
 
     use super::{GenerationLease, LeaseCleanup, cleanup};
     use crate::{
@@ -519,6 +565,67 @@ mod tests {
 
         assert!(leased.is_dir());
         assert!(active.is_dir());
+        Ok(())
+    }
+
+    /// Every runner of a CI host builds `xtask` in one directory, and Cargo's
+    /// own lock ends with the build. A checkout that built there copies the
+    /// binary afterwards, so another checkout's build in between would have it
+    /// copy a binary built from other sources.
+    #[test]
+    fn checkouts_sharing_a_build_directory_build_one_at_a_time() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let target = temp.path().join("target");
+        let building = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(2));
+        let checkouts = (0..2)
+            .map(|_| {
+                let (target, building, most, barrier) = (
+                    target.clone(),
+                    Arc::clone(&building),
+                    Arc::clone(&most),
+                    Arc::clone(&barrier),
+                );
+                thread::spawn(move || -> Result<()> {
+                    barrier.wait();
+                    let _build = super::build(&target)?;
+                    let now = building.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(100));
+                    building.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            })
+            .collect::<Vec<_>>();
+        for checkout in checkouts {
+            checkout
+                .join()
+                .map_err(|_| anyhow::anyhow!("build thread panicked"))??;
+        }
+
+        assert_eq!(most.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    /// The host budget removes what no job leases, and between Cargo's build
+    /// and the copy into a generation Cargo holds no lock of its own there.
+    #[test]
+    fn the_host_budget_leaves_a_build_directory_alone_while_xtask_builds_there() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let target = temp.path().join("target");
+        let _build = super::build(&target)?;
+
+        let lease = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(target.join(kithara_devtools::lease::FILE))?;
+        assert!(matches!(
+            FileLock::try_exclusive(lease),
+            Err(TryLockError::WouldBlock)
+        ));
         Ok(())
     }
 }

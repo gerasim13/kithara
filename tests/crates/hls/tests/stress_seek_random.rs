@@ -20,6 +20,62 @@ use kithara_integration_tests::{
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use tracing::info;
 
+/// `count` seeded-random seek positions in `[1, max_seek)`.
+fn random_seek_positions(max_seek: u64, count: usize) -> Vec<u64> {
+    let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
+    let seek_positions: Vec<u64> = (0..count).map(|_| rng.range_u64(1, max_seek)).collect();
+    info!(
+        count = seek_positions.len(),
+        max_seek, "Generated seek positions"
+    );
+    seek_positions
+}
+
+/// The stream's first bytes are the fixture's first segment, or its init
+/// segment when it has one.
+fn assert_stream_prefix(stream: &mut Stream<Hls<TestPools>>, with_init: bool) {
+    let mut probe = [0u8; 64];
+    let probe_deadline = Instant::now() + Duration::from_secs(5);
+    let n = loop {
+        match stream.read(&mut probe) {
+            Ok(0) if Instant::now() < probe_deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(n) => break n,
+            Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < probe_deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => panic!("initial probe read failed: {e}"),
+        }
+    };
+    assert!(n > 0, "probe read returned 0");
+
+    if with_init {
+        assert_eq!(&probe[..8], b"V0-INIT:", "probe: init segment prefix");
+    } else {
+        assert_eq!(&probe[..9], b"V0-SEG-0:", "probe: first segment prefix");
+    }
+}
+
+/// A seek to the last `tail_len` bytes reads exactly those bytes, then EOF.
+fn assert_tail_to_eof(
+    stream: &mut Stream<Hls<TestPools>>,
+    server: &CreatedHls,
+    buf: &mut [u8],
+    tail_len: u64,
+) {
+    let final_seek = server.total_bytes() - tail_len;
+    info!(final_seek, "Final seek near end");
+
+    let remaining_bytes = read_final_tail(stream, server, buf, final_seek);
+
+    assert_eq!(
+        remaining_bytes, tail_len,
+        "tail read: expected {tail_len} bytes, got {remaining_bytes}"
+    );
+    info!(remaining_bytes, "Final read done — EOF confirmed");
+}
+
 #[derive(Default)]
 struct SeekStats {
     successful_reads: u64,
@@ -230,46 +286,17 @@ async fn stress_random_seek_read_hls(
     let result = spawn_blocking(move || {
         info!(total_bytes, "Stream byte length");
 
-        let mut probe = [0u8; 64];
-        let probe_deadline = Instant::now() + Duration::from_secs(5);
-        let n = loop {
-            match stream.read(&mut probe) {
-                Ok(0) if Instant::now() < probe_deadline => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Ok(n) => break n,
-                Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < probe_deadline => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => panic!("initial probe read failed: {e}"),
-            }
-        };
-        assert!(n > 0, "probe read returned 0");
-
-        if with_init {
-            assert_eq!(&probe[..8], b"V0-INIT:", "probe: init segment prefix");
-        } else {
-            assert_eq!(&probe[..9], b"V0-SEG-0:", "probe: first segment prefix");
-        }
+        assert_stream_prefix(&mut stream, with_init);
         stream.seek(SeekFrom::Start(0)).expect("seek back to 0");
 
-        let chunk_size = num_traits::cast::<f64, usize>(total_bytes as f64 * 0.005)
+        let chunk_size = usize::try_from(total_bytes / 200)
             .unwrap_or(usize::MAX)
             .clamp(1024, 65_536);
         info!(chunk_size, "Read chunk size");
 
-        let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
         let mut buf = vec![0u8; chunk_size];
-
-        let max_seek = total_bytes - chunk_size as u64;
-        let seek_positions: Vec<u64> = (0..seek_iterations)
-            .map(|_| rng.range_u64(1, max_seek))
-            .collect();
-
-        info!(
-            count = seek_positions.len(),
-            max_seek, "Generated seek positions"
-        );
+        let seek_positions =
+            random_seek_positions(total_bytes - chunk_size as u64, seek_iterations);
 
         let SeekStats {
             successful_reads,
@@ -290,27 +317,14 @@ async fn stress_random_seek_read_hls(
         );
 
         assert_eq!(successful_reads, seek_iterations as u64);
-        if !with_encryption {
+        if with_encryption {
+            info!("Skipping tail verification for encrypted stream (PKCS7 offset drift)");
+        } else {
             assert_eq!(
                 byte_mismatches, 0,
                 "{byte_mismatches} byte mismatches detected — data corruption"
             );
-        }
-
-        if !with_encryption {
-            let final_seek = total_bytes - chunk_size as u64;
-            info!(final_seek, "Final seek near end");
-
-            let remaining_bytes = read_final_tail(&mut stream, &server, &mut buf, final_seek);
-
-            let expected_remaining = total_bytes - final_seek;
-            assert_eq!(
-                remaining_bytes, expected_remaining,
-                "tail read: expected {expected_remaining} bytes, got {remaining_bytes}"
-            );
-            info!(remaining_bytes, "Final read done — EOF confirmed");
-        } else {
-            info!("Skipping tail verification for encrypted stream (PKCS7 offset drift)");
+            assert_tail_to_eof(&mut stream, &server, &mut buf, chunk_size as u64);
         }
     })
     .await;

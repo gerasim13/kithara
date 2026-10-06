@@ -117,9 +117,10 @@ pub(crate) struct CiLaneConfig {
     #[serde(default)]
     pub(crate) publishes_sources: bool,
     pub(crate) timeout_minutes: u32,
-    /// Checkout depth. Zero is full history, which a lane comparing against a
-    /// base revision needs and a shallow clone does not carry.
-    pub(crate) fetch_depth: u32,
+    /// Whether the lane reads the history of the commit it checks out, as a
+    /// comparison against an earlier revision does. Without it the lane runs
+    /// on the tip alone.
+    pub(crate) history: bool,
     pub(crate) artifact: Option<CiLaneArtifact>,
     /// The concurrency group a lane wanting the whole host queues in.
     pub(crate) queue: Option<String>,
@@ -157,10 +158,10 @@ pub(crate) struct CiLaneStep {
     pub(crate) args: Vec<String>,
     pub(crate) label: String,
     /// What the step needs the executor to be, rather than to run: a build-job
-    /// cap the container cannot exceed, a target directory a gate owns, the
-    /// browser a harness would otherwise guess. A value may name the checkout
-    /// with `{root}`, or the leased build-cache directory with `{target}` -
-    /// the two things a lane cannot spell for itself.
+    /// cap the container cannot exceed, the browser a harness would otherwise
+    /// guess. A value may name the checkout with `{root}` and a pinned version
+    /// with `{pin.<key>}`. It may not name the build directory, which the
+    /// executor owns.
     pub(crate) env: BTreeMap<String, String>,
     /// The program for this step alone. A lane that installs a target before
     /// using it runs two, so the lane's own `program` is only the default.
@@ -288,18 +289,6 @@ impl CiProjectConfig {
                     "ext.ci.lanes.{name}.publishes_sources requires a Linux-only lane: only a Linux runner is handed its trust scope and its cache credentials together"
                 );
             }
-            if lane.target_snapshot.is_some()
-                && lane.steps.iter().any(|step| {
-                    step.env
-                        .get("CARGO_TARGET_DIR")
-                        .is_some_and(|target| target != consts::TARGET_PLACEHOLDER)
-                })
-            {
-                bail!(
-                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must keep CARGO_TARGET_DIR at {TARGET_PLACEHOLDER}",
-                    TARGET_PLACEHOLDER = consts::TARGET_PLACEHOLDER
-                );
-            }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
             }
@@ -374,7 +363,10 @@ impl CiProjectConfig {
 }
 
 /// A step spells only the substitutions the lane understands, and leaves the
-/// freshness machinery to the lane that declares it.
+/// freshness machinery to the lane that declares it and the build directory to
+/// the executor: the compiler cache keys every compilation on each `CARGO_*`
+/// value, so a step that names its build directory splits every key it builds
+/// by checkout.
 fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<()> {
     for (key, value) in &step.env {
         validate_substitutions(name, key, value)?;
@@ -382,6 +374,12 @@ fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<(
     let by_kind = step.args_by_kind.values().flatten();
     for value in step.args.iter().chain(by_kind) {
         validate_substitutions(name, "an argument", value)?;
+    }
+    if step.env.contains_key(consts::TARGET_DIR_ENV) {
+        bail!(
+            "ext.ci.lanes.{name} sets {TARGET_DIR_ENV} in a step; the executor owns the build directory",
+            TARGET_DIR_ENV = consts::TARGET_DIR_ENV
+        );
     }
     if step.env.contains_key(consts::CHECKSUM_FRESHNESS_ENV) {
         bail!(
@@ -411,14 +409,11 @@ fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<(
     Ok(())
 }
 
-/// `{root}`, `{target}`, and `{pin.<key>}` are the whole substitution
-/// vocabulary. A typo that reached the runner would be passed through as a
-/// literal brace and fail as a missing header or an unknown toolchain rather
-/// than as a bad config.
+/// `{root}` and `{pin.<key>}` are the whole substitution vocabulary. A typo
+/// that reached the runner would be passed through as a literal brace and fail
+/// as a missing header or an unknown toolchain rather than as a bad config.
 fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
-    let mut rest = value
-        .replace(consts::ROOT_PLACEHOLDER, "")
-        .replace(consts::TARGET_PLACEHOLDER, "");
+    let mut rest = value.replace(consts::ROOT_PLACEHOLDER, "");
     while let Some(start) = rest.find(consts::PIN_PREFIX) {
         let Some(end) = rest[start..].find('}') else {
             bail!(
@@ -430,11 +425,10 @@ fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
     }
     if rest.contains('{') {
         bail!(
-            "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER}, \
-             {TARGET_PLACEHOLDER}, or {PIN_PREFIX}<key>}} in {whose}: `{value}`",
+            "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER} or \
+             {PIN_PREFIX}<key>}} in {whose}: `{value}`",
             PIN_PREFIX = consts::PIN_PREFIX,
-            ROOT_PLACEHOLDER = consts::ROOT_PLACEHOLDER,
-            TARGET_PLACEHOLDER = consts::TARGET_PLACEHOLDER
+            ROOT_PLACEHOLDER = consts::ROOT_PLACEHOLDER
         );
     }
     Ok(())
@@ -887,6 +881,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{AssetKey, KitharaExt, LaneFreshness, PublishStep, XtaskCacheConfig};
+    use crate::consts;
 
     fn config_root(body: &str) -> (TempDir, PathBuf) {
         let temp = tempfile::tempdir().expect("create fixture root");
@@ -1227,34 +1222,40 @@ timeout_minutes = 30
         assert!(!ci.lanes["device"].runs_only_on_linux());
     }
 
+    /// The compiler cache keys every compilation on each `CARGO_*` value, so a
+    /// step that names its build directory, even the checkout's own `target`,
+    /// splits every key it builds by checkout. The executor owns the build
+    /// directory: Cargo finds `<checkout>/target` by itself.
     #[test]
-    fn a_target_snapshot_lane_may_not_move_cargo_after_restore() {
-        let ctx = ctx_from_config(
-            r#"
+    fn a_lane_step_may_not_name_the_build_directory() {
+        for target in ["{root}/target", "/elsewhere"] {
+            let ctx = ctx_from_config(&format!(
+                r#"
 [ext.ci]
 pins = "ci-pins.toml"
 
-[ext.ci.lanes.snapshot]
+[ext.ci.lanes.suite]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
 program = "just"
-target_snapshot = "linux-test-release"
-steps = [{ args = ["test"], label = "suite", env = { CARGO_TARGET_DIR = "{target}/other" } }]
+steps = [{{ args = ["test"], label = "suite", env = {{ {name} = "{target}" }} }}]
 role = "gate"
 timeout_minutes = 30
 "#,
-        );
+                name = consts::TARGET_DIR_ENV,
+            ));
 
-        let error = KitharaExt::from_ctx(&ctx)
-            .expect("parse kithara extension")
-            .ci
-            .validate()
-            .expect_err("a snapshot must restore where Cargo will build");
-        assert!(
-            error.to_string().contains("must keep CARGO_TARGET_DIR"),
-            "the error must explain the snapshot/Cargo target contract: {error}"
-        );
+            let error = KitharaExt::from_ctx(&ctx)
+                .expect("parse kithara extension")
+                .ci
+                .validate()
+                .expect_err("the executor owns the build directory");
+            assert!(
+                error.to_string().contains(consts::TARGET_DIR_ENV),
+                "the refusal must name the variable: {error}"
+            );
+        }
     }
 
     #[test]

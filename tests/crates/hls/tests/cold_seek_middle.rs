@@ -114,7 +114,7 @@ async fn wait_for_post_seek_progress(
         loop {
             let pos = match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
-                    position_ms as f64 / 1000.0
+                    Duration::from_millis(position_ms).as_secs_f64()
                 }
                 Ok(_) => continue,
                 Err(RecvError::Lagged(_)) => match queue.position_seconds() {

@@ -34,6 +34,292 @@ use crate::{
     verdict::{ChildFailure, NotClean},
 };
 
+#[cfg(test)]
+mod subject {
+    use super::*;
+    use crate::{
+        common::project::{TestCargoOptions, TestRunner},
+        test::ResolvedLane,
+    };
+
+    const REPORT: &str = "command-junit.xml";
+    const STALE_REPORT: &str = "controller report from an earlier run";
+
+    fn subject_fixture(root: &Path) -> (Ctx, RunArgs) {
+        let controller = root.join("controller");
+        let subject = root.join("subject");
+        for (checkout, identity) in [(&controller, "controller"), (&subject, "subject")] {
+            fs::create_dir_all(checkout).expect("create checkout");
+            fs::write(checkout.join("identity"), identity).expect("write checkout identity");
+        }
+        fs::write(controller.join("nextest.toml"), "").expect("write nextest config");
+        fs::write(controller.join(REPORT), STALE_REPORT).expect("write stale controller report");
+        let executable = std::env::current_exe().expect("current test executable");
+        let mode = StressModeConfig {
+            command: std::iter::once(executable.to_string_lossy().into_owned())
+                .chain(crate::common::child_test_args(
+                    module_path!(),
+                    "record_subject_execution",
+                ))
+                .collect(),
+            attempt_junit: Some(REPORT.to_owned()),
+            ..StressModeConfig::default()
+        };
+        let project = ProjectConfig {
+            stress: StressConfig {
+                modes: BTreeMap::from([("command".to_owned(), mode)]),
+                default_modes: vec!["command".to_owned()],
+                default_filter: "all()".to_owned(),
+                build_dir: "target-stress".to_owned(),
+                nextest_config: "nextest.toml".to_owned(),
+                nextest_profile: "stress".to_owned(),
+                test_threads: "1".to_owned(),
+                default_count: 1,
+                max_count: 1,
+                max_test_threads: 1,
+                workflow_job_timeout_minutes: 1,
+                artifacts: StressArtifactConfig {
+                    log: "lane.log".to_owned(),
+                    manifest: "manifest.json".to_owned(),
+                    pressure: "pressure.jsonl".to_owned(),
+                    attempts: "attempts.json".to_owned(),
+                    subject_junit: "nextest-junit.xml".to_owned(),
+                    ..StressArtifactConfig::default()
+                },
+                ..StressConfig::default()
+            },
+            ..ProjectConfig::default()
+        };
+        let args = RunArgs {
+            count: None,
+            expected_controller_sha: None,
+            expected_subject_sha: None,
+            filter: None,
+            output: Some(root.join("raw")),
+            subject_root: subject,
+            modes: Vec::new(),
+            lanes: Vec::new(),
+        };
+        (Ctx::new(controller, project), args)
+    }
+
+    fn assert_subject_report(paths: &Paths, ctx: &Ctx, args: &RunArgs) {
+        let report = fs::read_to_string(paths.attempt_junit.join("attempt-0.xml"))
+            .expect("archive the subject command report");
+        let observed: Vec<String> = serde_json::from_str(&report).expect("execution record");
+        assert_eq!(Path::new(&observed[0]), args.subject_root);
+        assert_eq!(
+            Path::new(&observed[1]),
+            args.subject_root.join("target-stress")
+        );
+        assert_eq!(observed[2], "subject");
+        assert_eq!(
+            fs::read_to_string(ctx.root.join(REPORT)).expect("keep controller report"),
+            STALE_REPORT
+        );
+    }
+
+    #[test]
+    fn command_modes_execute_and_archive_the_subject_checkout() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (ctx, args) = subject_fixture(temp.path());
+        assert_ne!(ctx.root, args.subject_root);
+        let config = &ctx.config.stress;
+        let mode = config.mode("command").expect("command mode");
+        let paths = Paths::new(temp.path().join("raw"), &config.artifacts);
+        let environment = RunEnvironment::new(
+            &paths.raw,
+            &args.subject_root.join(&config.build_dir),
+            config,
+            mode,
+        )
+        .expect("subject environment");
+        fs::create_dir_all(&paths.raw).expect("create raw directory");
+
+        let codes = run_command_lane(&args.subject_root, mode, &paths, 1, &environment)
+            .expect("execute subject command mode");
+
+        assert_eq!(codes, [0]);
+        assert_subject_report(&paths, &ctx, &args);
+    }
+
+    #[test]
+    fn command_modes_reject_filtersets_before_creating_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (ctx, mut args) = subject_fixture(temp.path());
+        args.filter = Some("test(selected)".to_owned());
+
+        let error = execute_run(&args, &ctx).expect_err("command modes cannot narrow by filterset");
+
+        assert!(error.to_string().contains("--filter"), "{error:#}");
+        assert!(error.to_string().contains("command"), "{error:#}");
+        assert!(!args.output.expect("raw path").exists());
+        assert!(!ctx.root.join("target-stress").exists());
+        assert!(!args.subject_root.join("target-stress").exists());
+        assert!(!args.subject_root.join(REPORT).exists());
+    }
+
+    #[test]
+    fn command_reports_reject_filtersets_before_creating_output() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (ctx, _) = subject_fixture(temp.path());
+        let output = temp.path().join("report-output/report.md");
+        let args = ReportArgs {
+            execute_result: ExecuteResult::Success,
+            count: None,
+            filter: Some("test(selected)".to_owned()),
+            output: Some(output.clone()),
+            raw: temp.path().join("raw"),
+            expected_controller_sha: "a".repeat(40),
+            expected_subject_sha: "b".repeat(40),
+            modes: Vec::new(),
+            lanes: Vec::new(),
+        };
+
+        let error = run_report(&args, &ctx).expect_err("command reports cannot claim a filterset");
+
+        assert!(error.to_string().contains("--filter"), "{error:#}");
+        assert!(error.to_string().contains("command"), "{error:#}");
+        assert!(!output.parent().expect("report parent").exists());
+    }
+
+    #[test]
+    fn command_modes_reject_configured_filtersets_without_side_effects() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (mut ctx, args) = subject_fixture(temp.path());
+        ctx.config.stress.default_filter = "test(selected)".to_owned();
+
+        let error = execute_run(&args, &ctx).expect_err("configured command filterset");
+
+        assert!(
+            error.to_string().contains("stress.default_filter"),
+            "{error:#}"
+        );
+        assert!(!args.output.as_ref().expect("raw path").exists());
+        assert!(!args.subject_root.join("target-stress").exists());
+        assert_eq!(
+            fs::read_to_string(ctx.root.join(REPORT)).expect("keep controller report"),
+            STALE_REPORT
+        );
+        let output = temp.path().join("report-output/report.md");
+        let report = ReportArgs {
+            execute_result: ExecuteResult::Success,
+            count: None,
+            filter: None,
+            output: Some(output.clone()),
+            raw: temp.path().join("raw"),
+            expected_controller_sha: "a".repeat(40),
+            expected_subject_sha: "b".repeat(40),
+            modes: Vec::new(),
+            lanes: Vec::new(),
+        };
+
+        let error = run_report(&report, &ctx).expect_err("configured command report filterset");
+
+        assert!(
+            error.to_string().contains("stress.default_filter"),
+            "{error:#}"
+        );
+        assert!(!output.parent().expect("report parent").exists());
+    }
+
+    #[test]
+    fn filtersets_remain_supported_for_lane_modes() {
+        let mode = StressModeConfig::default();
+        let unit = Unit {
+            mode_name: "lane",
+            mode: &mode,
+            lane: Some("tests"),
+            runner: StressRunner::Lane(Box::new(ResolvedLane {
+                env: BTreeMap::new(),
+                backend: "local".to_owned(),
+                lane: "tests".to_owned(),
+                cargo: TestCargoOptions::default(),
+                runner: TestRunner::default(),
+                features: Vec::new(),
+            })),
+        };
+
+        validate_filter(Some("test(selected)"), "all()", std::slice::from_ref(&unit))
+            .expect("lane modes honor explicit filtersets");
+        validate_filter(None, "test(selected)", &[unit])
+            .expect("lane modes honor configured filtersets");
+        let command = StressModeConfig {
+            command: vec!["just".to_owned(), "test".to_owned(), "rtsan".to_owned()],
+            ..StressModeConfig::default()
+        };
+        let unit = Unit {
+            mode_name: "command",
+            mode: &command,
+            lane: None,
+            runner: StressRunner::Command(command.command.clone()),
+        };
+
+        validate_filter(None, "all()", &[unit]).expect("unfiltered command modes remain supported");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn command_mode_lifecycle_records_the_subject_build_and_revision() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (ctx, args) = subject_fixture(temp.path());
+        for root in [&ctx.root, &args.subject_root] {
+            for arguments in [
+                vec!["init"],
+                vec!["add", "identity"],
+                vec![
+                    "-c",
+                    "user.name=Stress Test",
+                    "-c",
+                    "user.email=stress@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-m",
+                    "checkout identity",
+                ],
+            ] {
+                let output = Command::new("git")
+                    .args(arguments)
+                    .current_dir(root)
+                    .output()
+                    .expect("prepare checkout revision");
+                assert!(output.status.success(), "{output:?}");
+            }
+        }
+        let config = &ctx.config.stress;
+        let paths = Paths::new(
+            args.output.clone().expect("raw path").join("command"),
+            &config.artifacts,
+        );
+
+        execute_run(&args, &ctx).expect("run command mode lifecycle");
+
+        assert_subject_report(&paths, &ctx, &args);
+        let manifest = Manifest::read(&paths.manifest).expect("read command manifest");
+        assert_eq!(
+            Path::new(&manifest.build.target_dir),
+            args.subject_root.join(&config.build_dir)
+        );
+        assert_eq!(
+            manifest.subject.sha,
+            revision(&args.subject_root, None, "subject").expect("subject revision")
+        );
+        assert_ne!(manifest.subject.sha, manifest.controller.sha);
+    }
+
+    #[test]
+    #[ignore = "subprocess entrypoint"]
+    fn record_subject_execution() {
+        let cwd = std::env::current_dir().expect("child cwd");
+        let target = std::env::var(consts::TARGET_DIR_ENV).expect("child build directory");
+        let identity = fs::read_to_string(cwd.join("identity")).expect("child checkout identity");
+        let record = serde_json::to_string(&[cwd.to_string_lossy().into_owned(), target, identity])
+            .expect("serialize execution record");
+        fs::write(cwd.join(REPORT), record).expect("write child command report");
+    }
+}
+
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
 pub enum StressCommand {
@@ -55,7 +341,7 @@ pub struct RunArgs {
     /// Trusted subject revision to compare with the checkout.
     #[arg(long)]
     expected_subject_sha: Option<String>,
-    /// Nextest filterset selecting tests to repeat.
+    /// Nextest filterset selecting tests to repeat; requires only lane modes.
     #[arg(long)]
     filter: Option<String>,
     /// Fresh raw evidence directory owned by this run.
@@ -83,6 +369,7 @@ pub struct ReportArgs {
     execute_result: ExecuteResult,
     #[arg(long)]
     count: Option<usize>,
+    /// Nextest filterset recorded by a run containing only lane modes.
     #[arg(long)]
     filter: Option<String>,
     /// Markdown report destination.
@@ -214,6 +501,7 @@ fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let modes = resolve_modes(&args.modes, config)?;
     let lanes = resolve_lanes(&args.lanes, config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
+    validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let root = absolute_from(
         &ctx.root,
         args.output
@@ -354,6 +642,21 @@ fn units<'a>(
     Ok(units)
 }
 
+fn validate_filter(filter: Option<&str>, default_filter: &str, units: &[Unit<'_>]) -> Result<()> {
+    let effective_filter = filter.unwrap_or(default_filter);
+    if filter.is_some() || effective_filter.trim() != "all()" {
+        for unit in units {
+            ensure!(
+                matches!(&unit.runner, StressRunner::Lane(_)),
+                "stress filtersets (--filter or stress.default_filter) cannot be applied to \
+                 command mode `{}`; select only lane modes when using a filterset",
+                unit.mode_name
+            );
+        }
+    }
+    Ok(())
+}
+
 /// What one mode actually invokes on `lane`, in the shape the manifest
 /// records.
 ///
@@ -407,7 +710,7 @@ fn write_attempts(path: &Path, codes: &[i32]) -> Result<()> {
 /// test; a command that cannot is launched once per repeat, and then an exit
 /// code per attempt is all there is to collect.
 fn run_command_lane(
-    ctx: &Ctx,
+    subject_root: &Path,
     mode: &StressModeConfig,
     paths: &Paths,
     count: usize,
@@ -420,7 +723,7 @@ fn run_command_lane(
     let report = mode
         .attempt_junit
         .as_deref()
-        .map(|path| ctx.root.join(path));
+        .map(|path| subject_root.join(path));
     let attempts = command_lane_attempts(mode, count);
     let mut codes = Vec::with_capacity(attempts);
     for attempt in 0..attempts {
@@ -433,7 +736,7 @@ fn run_command_lane(
                 .with_context(|| format!("clear command lane report {}", report.display()));
         }
         let mut command = Command::new(program);
-        command.args(arguments).current_dir(&ctx.root);
+        command.args(arguments).current_dir(subject_root);
         environment.apply(&mut command);
         if mode.owns_repeats {
             command.env(consts::REPEATS_ENV, count.to_string());
@@ -507,7 +810,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
     let subject_junit = subject_junit(&subject_root, config);
     let runner = unit.runner.clone();
     let commanded = unit.lane.is_none();
-    let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
+    let build = build_root(&subject_root, config);
     let _build_lease = lease::hold(&build);
     let spec = match &runner {
         StressRunner::Lane(lane) => Some(StressRunSpec {
@@ -565,18 +868,20 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
         (Ok(()), Ok(sampler)) => {
             let primary = spec.as_ref().map_or_else(
                 || {
-                    run_command_lane(ctx, mode, &paths, count, &environment).and_then(|codes| {
-                        write_attempts(&paths.attempts, &codes)?;
-                        let failed = codes.iter().filter(|code| **code != 0).count();
-                        if failed == 0 {
-                            Ok(())
-                        } else {
-                            Err(ChildFailure::inherited(
-                                format!("{failed} of {} attempts", codes.len()),
-                                codes.iter().copied().find(|code| *code != 0),
-                            ))
-                        }
-                    })
+                    run_command_lane(&subject_root, mode, &paths, count, &environment).and_then(
+                        |codes| {
+                            write_attempts(&paths.attempts, &codes)?;
+                            let failed = codes.iter().filter(|code| **code != 0).count();
+                            if failed == 0 {
+                                Ok(())
+                            } else {
+                                Err(ChildFailure::inherited(
+                                    format!("{failed} of {} attempts", codes.len()),
+                                    codes.iter().copied().find(|code| *code != 0),
+                                ))
+                            }
+                        },
+                    )
                 },
                 |spec| {
                     stress_run::run(spec, &subject_root, &paths.log, &|command| {
@@ -661,6 +966,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let modes = resolve_modes(&args.modes, config)?;
     let lanes = resolve_lanes(&args.lanes, config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
+    validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let filter = args
         .filter
         .clone()
@@ -1526,49 +1832,50 @@ mod tests {
             },
             ..TestLaneConfig::default()
         };
-        let mut project = ProjectConfig::default();
-        project.test = TestCommandConfig {
-            lanes: BTreeMap::from([
-                ("product".to_owned(), lane("product")),
-                (
-                    "tools".to_owned(),
-                    TestLaneConfig {
-                        default_backend: Some("local".to_owned()),
-                        undeclared_toggles: vec![consts::FLASH_TOGGLE.to_owned()],
-                        ..lane("tools")
-                    },
-                ),
-                (
-                    "detector".to_owned(),
-                    TestLaneConfig {
-                        default_no_block: Some(true),
-                        ..lane("detector")
-                    },
-                ),
-            ]),
-            net_backends: BTreeMap::from([
-                ("http".to_owned(), TestNetBackendConfig::default()),
-                (
-                    "local".to_owned(),
-                    TestNetBackendConfig {
-                        features: vec!["tools/local".to_owned()],
-                    },
-                ),
-            ]),
-            default_backend: "http".to_owned(),
-            default_lane: "product".to_owned(),
-            nextest_config: ".config/nextest.toml".to_owned(),
-            flash: TestFlashConfig {
-                features: vec!["virtual-time".to_owned()],
-                default: true,
+        ProjectConfig {
+            test: TestCommandConfig {
+                lanes: BTreeMap::from([
+                    ("product".to_owned(), lane("product")),
+                    (
+                        "tools".to_owned(),
+                        TestLaneConfig {
+                            default_backend: Some("local".to_owned()),
+                            undeclared_toggles: vec![consts::FLASH_TOGGLE.to_owned()],
+                            ..lane("tools")
+                        },
+                    ),
+                    (
+                        "detector".to_owned(),
+                        TestLaneConfig {
+                            default_no_block: Some(true),
+                            ..lane("detector")
+                        },
+                    ),
+                ]),
+                net_backends: BTreeMap::from([
+                    ("http".to_owned(), TestNetBackendConfig::default()),
+                    (
+                        "local".to_owned(),
+                        TestNetBackendConfig {
+                            features: vec!["tools/local".to_owned()],
+                        },
+                    ),
+                ]),
+                default_backend: "http".to_owned(),
+                default_lane: "product".to_owned(),
+                nextest_config: ".config/nextest.toml".to_owned(),
+                flash: TestFlashConfig {
+                    features: vec!["virtual-time".to_owned()],
+                    default: true,
+                },
+                no_block: TestNoBlockConfig {
+                    features: vec!["nb-detect".to_owned()],
+                    default: false,
+                },
+                ..TestCommandConfig::default()
             },
-            no_block: TestNoBlockConfig {
-                features: vec!["nb-detect".to_owned()],
-                default: false,
-            },
-            ..TestCommandConfig::default()
-        };
-        project
+            ..ProjectConfig::default()
+        }
     }
 
     /// A mode names the clock and the detector it is about; the rest of the
@@ -1837,9 +2144,8 @@ mod tests {
                 ..StressArtifactConfig::default()
             },
         );
-        let ctx = Ctx::new(temp.path().to_path_buf(), ProjectConfig::default());
-
-        run_command_lane(&ctx, &mode, &paths, count, &environment).expect("run command lane");
+        run_command_lane(temp.path(), &mode, &paths, count, &environment)
+            .expect("run command lane");
 
         fs::read_to_string(&record)
             .expect("read recorded repeats")
