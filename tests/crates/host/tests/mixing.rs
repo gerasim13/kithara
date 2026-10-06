@@ -56,8 +56,8 @@ struct MixHarness {
 }
 
 impl MixHarness {
-    // Players are built but not started, so a mix applied before `play` takes the
-    // never-started path and each node is created at its level, unramped.
+    // Players are built but not started, so a level set before `play` is kept for
+    // each player's first slot.
     async fn new(count: usize) -> Self {
         let pools = pools();
         let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero");
@@ -132,13 +132,19 @@ impl MixHarness {
     }
 
     async fn apply(&self, levels: &[f32]) -> Result<(), PlayError> {
+        let players: Vec<_> = self
+            .players
+            .iter()
+            .map(|player| player.control().clone())
+            .collect();
+        let levels = levels.to_vec();
         self.host
-            .apply_mix(
-                self.players
+            .run(move || {
+                players
                     .iter()
                     .zip(levels)
-                    .map(|(player, &level)| player.level(level)),
-            )
+                    .try_for_each(|(player, level)| player.set_level(level))
+            })
             .await
     }
 

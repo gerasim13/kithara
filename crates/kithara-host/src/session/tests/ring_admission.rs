@@ -77,7 +77,6 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
         session
             .exec(Cmd::StartPlayer {
                 player_id,
-                master_volume: 1.0,
                 render_quantum_frames: None,
                 response_budget_frames: NonZeroUsize::new(448),
             })

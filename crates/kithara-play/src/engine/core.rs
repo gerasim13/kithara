@@ -4,7 +4,7 @@ use kithara_effects::eq::EqBandConfig;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
-    atomic::{Acquire, AtomicValue, RelaxedAtomicF32, Release},
+    atomic::{Acquire, AtomicValue, Release},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -29,15 +29,12 @@ type SlotHandle = SlotControl;
 #[fieldwork(opt_in, get)]
 pub struct EngineImpl<S> {
     running: AtomicValue<bool, Acquire, Release>,
-    master_volume: RelaxedAtomicF32,
     pub(super) config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
     pub(super) bus: EventBus,
     pub(super) registration: Mutex<Option<RegisteredPlayer>>,
     slots: Mutex<SlotTable>,
-    #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
-    #[field(get, vis = "pub(crate)")]
     pub(super) session: SessionHandle<S>,
 }
 
@@ -54,7 +51,6 @@ impl<S> EngineImpl<S> {
             config,
             bus,
             session,
-            master_volume: RelaxedAtomicF32::new(1.0),
             registration: Mutex::default(),
             running: AtomicValue::<bool, Acquire, Release>::new(false),
             start_lock: Mutex::new(()),
@@ -135,12 +131,6 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    /// Store the desired gain without dispatching: the mixer batch already
-    /// actuated the graph.
-    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
-        self.master_volume.store(level);
-    }
-
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
         self.config.sample_rate.get()
     }
@@ -203,10 +193,6 @@ impl<S> EngineImpl<S> {
         self.session
             .sample_rate()
             .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
-    }
-
-    pub fn master_volume(&self) -> f32 {
-        self.master_volume.load()
     }
 
     pub const fn max_slots(&self) -> usize {
@@ -302,10 +288,8 @@ impl<S> EngineImpl<S> {
         }
 
         let player_id = self.ensure_player_id()?;
-        let master_volume = self.master_volume.load();
         self.session.start_player(
             player_id,
-            master_volume,
             self.config.render_quantum_frames,
             self.config.response_budget_frames,
         )?;

@@ -53,6 +53,9 @@ pub struct PlayerConfig<S> {
     /// Live output volume in `0.0..=1.0`, initially one.
     #[config(value(f32, self.volume.load()), builder(field = RelaxedAtomicF32::new(1.0)), patch(skip))]
     pub(super) volume: RelaxedAtomicF32,
+    /// Live mix level in `0.0..=1.0` the deck's owner scales the volume by, initially one.
+    #[config(value(f32, self.level.load()), builder(field = RelaxedAtomicF32::new(1.0)), patch(skip))]
+    pub(super) level: RelaxedAtomicF32,
     /// How resources created for this player trim leading/trailing audio.
     #[config(builder(default))]
     pub gapless_mode: GaplessMode,

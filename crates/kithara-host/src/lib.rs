@@ -13,7 +13,7 @@ mod session;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-pub use api::{CrossfaderBus, HostLevel, Tap, crossfader_gain};
+pub use api::{CrossfaderBus, Tap, crossfader_gain};
 pub use error::PlayError;
 pub(crate) use host::PlayerMember;
 pub use host::{

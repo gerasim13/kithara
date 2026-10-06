@@ -7,8 +7,8 @@ use kithara::{
     host::{HostConfig, HostSettings, Tap},
     platform::time::{self, Duration},
     play::{
-        CrossfadeSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
-        ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SelectionPlayback,
+        CrossfadeSettings, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+        Resource, ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SelectionPlayback,
     },
     signal::TransportRevision,
     warp::{StretchKind, WarpConfig},
@@ -621,10 +621,7 @@ async fn pause_muted(
         failures,
     )
     .await;
-    if let Err(error) = host
-        .apply_mix(decks.iter().map(|deck| deck.player.level(0.0)))
-        .await
-    {
+    if let Err(error) = set_levels(host, decks, vec![0.0; decks.len()]).await {
         failures.push(format!(
             "{} {label}: mute before seek failed: {error}",
             case.label,
@@ -839,15 +836,7 @@ async fn restore_capture_levels(
         ));
         return false;
     }
-    if let Err(error) = host
-        .apply_mix(
-            decks
-                .iter()
-                .zip(levels.iter().copied())
-                .map(|(deck, level)| deck.player.level(level)),
-        )
-        .await
-    {
+    if let Err(error) = set_levels(host, decks, levels.to_vec()).await {
         failures.push(format!(
             "{} {label}: apply capture levels failed: {error}",
             case.label,
@@ -987,6 +976,25 @@ async fn load_decks(
             panic!("{} deck {deck_index}: select resource: {error}", case.label)
         });
     }
+}
+
+/// Hand each deck its mix level from the host owner thread, stopping at the first refusal.
+async fn set_levels(
+    host: &OfflineHostHarness<TestPools>,
+    decks: &[Deck],
+    levels: Vec<f32>,
+) -> Result<(), PlayError> {
+    let players: Vec<_> = decks
+        .iter()
+        .map(|deck| deck.player.control().clone())
+        .collect();
+    host.run(move || {
+        players
+            .iter()
+            .zip(levels)
+            .try_for_each(|(player, level)| player.set_level(level))
+    })
+    .await
 }
 
 async fn play_decks(host: &OfflineHostHarness<TestPools>, decks: &[Deck]) {

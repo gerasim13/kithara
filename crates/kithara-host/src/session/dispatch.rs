@@ -14,9 +14,7 @@ use tracing::{debug, trace, warn};
 use super::protocol::HostCmdMsg;
 use super::{
     graph::{controls, lifecycle, player_index, slots, tap},
-    protocol::{
-        Cmd, HostCmd, HostReply, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
-    },
+    protocol::{Cmd, HostCmd, HostReply, PlayerId, Reply, SessionError, SessionSampleRate},
     queue::settle_receipts,
     state::{SessionState, register_player},
     transport,
@@ -24,7 +22,6 @@ use super::{
 };
 use crate::{
     PlayerMember,
-    api::HostLevel,
     host::{HostSettingsChange, HostSettingsExec},
 };
 
@@ -42,9 +39,6 @@ where
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Detach { grid_id } => detach_deck(state, grid_id)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
-        HostCmd::ApplyMix { levels } => {
-            apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
-        }
         HostCmd::Configure { change, at } => state
             .exec(change, at, &mut ())
             .map_or_else(HostReply::Err, |()| HostReply::Ok),
@@ -109,14 +103,12 @@ where
             Err(err) => Reply::Err(err),
         },
         Cmd::StartPlayer {
-            master_volume,
             player_id,
             render_quantum_frames,
             response_budget_frames,
         } => match lifecycle::start_player(
             state,
             player_id,
-            master_volume,
             render_quantum_frames,
             response_budget_frames,
         ) {
@@ -134,12 +126,6 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::SetPlayerMasterVolumes { levels } => {
-            match controls::set_player_master_volumes(state, &levels) {
-                Ok(()) => Reply::Ok,
-                Err(err) => Reply::Err(err),
-            }
-        }
         Cmd::SetPlayerEqGain {
             band,
             gain_db,
@@ -281,42 +267,6 @@ fn unregister_player<T, S>(
         players = state.graph.len(),
         "[KITHARA-ROUTE] player unregistered"
     );
-    Ok(())
-}
-
-fn apply_mix<T, S>(state: &mut SessionState<T, S>, levels: &[HostLevel]) -> Result<(), PlayError> {
-    let mut projected: Vec<PlayerLevel> = Vec::with_capacity(levels.len());
-    for (index, &HostLevel { grid_id, level }) in levels.iter().enumerate() {
-        if !level.is_finite() || !(0.0..=1.0).contains(&level) {
-            return Err(PlayError::MixLevel { level });
-        }
-        if levels[..index]
-            .iter()
-            .any(|candidate| candidate.grid_id == grid_id)
-        {
-            return Err(PlayError::MixDuplicatePlayer);
-        }
-        if state.root.member(grid_id).is_none() {
-            return Err(PlayError::MixForeignSession);
-        }
-        if let Some(deck_index) = state.graph.index_by_grid(grid_id) {
-            let player_id = state
-                .graph
-                .deck(deck_index)
-                .ok_or_else(|| PlayError::Internal("projected player is missing".into()))?
-                .player_id;
-            projected.push(PlayerLevel::new(player_id, level));
-        }
-    }
-
-    controls::set_player_master_volumes(state, &projected)?;
-    for &HostLevel { grid_id, level } in levels {
-        state
-            .root
-            .member(grid_id)
-            .ok_or(PlayError::MixForeignSession)?
-            .commit_host_level(level);
-    }
     Ok(())
 }
 
@@ -465,7 +415,6 @@ mod tests {
         rt::MetronomeConfigChange,
         session::{
             applied_spans,
-            graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, SessionState, TapSlot, add_graph_node},
             tests::{
@@ -655,7 +604,6 @@ mod tests {
     fn start_command(player_id: u64) -> Cmd<TestPools> {
         Cmd::StartPlayer {
             player_id,
-            master_volume: 1.0,
             render_quantum_frames: None,
             response_budget_frames: NonZeroUsize::new(448),
         }
@@ -990,7 +938,6 @@ mod tests {
         let player_id = register_player(&mut state);
         let command = Cmd::StartPlayer {
             player_id,
-            master_volume: 1.0,
             render_quantum_frames: NonZeroUsize::new(64),
             response_budget_frames: NonZeroUsize::new(441),
         };
@@ -1292,161 +1239,6 @@ mod tests {
             run_cmd(&mut *state, start_command(player_id),),
             Reply::Ok
         ));
-    }
-
-    fn master_volume_of(state: &TestState, player_id: u64) -> f32 {
-        state
-            .graph
-            .decks()
-            .find(|player| player.player_id == player_id)
-            .expect("player present")
-            .master_volume
-    }
-
-    fn apply_player_mix(
-        state: &mut TestState,
-        levels: impl IntoIterator<Item = (u64, f32)>,
-    ) -> HostReply {
-        let levels = levels
-            .into_iter()
-            .map(|(player_id, level)| {
-                HostLevel::new(deck_by_player_id(state, player_id).grid_id, level)
-            })
-            .collect();
-        run_host_cmd(state, HostCmd::ApplyMix { levels })
-    }
-
-    #[kithara::test]
-    fn host_mix_before_registration_becomes_the_start_level() {
-        route_loss(RouteLossProbe::reset);
-
-        let mut state = test_state(start_route_loss_stream);
-        let grid_id = attach_player(&mut state);
-        assert!(matches!(
-            run_host_cmd(
-                &mut state,
-                HostCmd::ApplyMix {
-                    levels: Box::new([HostLevel::new(grid_id, 0.4)]),
-                },
-            ),
-            HostReply::Ok
-        ));
-        let Reply::PlayerRegistered(registered) = run_cmd(&mut state, register_command(grid_id))
-        else {
-            panic!("player registration must succeed")
-        };
-        let player_id = registered.id;
-
-        start_player_cmd(&mut state, player_id);
-
-        assert_eq!(master_volume_of(&state, player_id), 0.4);
-        assert_eq!(
-            deck_by_player_id(&state, player_id)
-                .master_volume_memo
-                .as_ref()
-                .expect("started player has a volume node")
-                .volume,
-            master_gain(0.4),
-        );
-    }
-
-    #[kithara::test]
-    fn host_mix_updates_one_two_and_four_players_together() {
-        route_loss(RouteLossProbe::reset);
-
-        let mut state = test_state(start_route_loss_stream);
-        let ids: Vec<u64> = (0..4).map(|_| register_player(&mut state)).collect();
-        for &id in &ids {
-            start_player_cmd(&mut state, id);
-        }
-
-        assert!(matches!(
-            apply_player_mix(&mut state, [(ids[0], 0.1)]),
-            HostReply::Ok
-        ));
-        assert_eq!(master_volume_of(&state, ids[0]), 0.1);
-
-        assert!(matches!(
-            apply_player_mix(&mut state, [(ids[1], 0.2), (ids[2], 0.3)]),
-            HostReply::Ok
-        ));
-        assert_eq!(master_volume_of(&state, ids[1]), 0.2);
-        assert_eq!(master_volume_of(&state, ids[2]), 0.3);
-        assert_eq!(master_volume_of(&state, ids[3]), 1.0);
-
-        assert!(matches!(
-            apply_player_mix(
-                &mut state,
-                [(ids[0], 0.4), (ids[1], 0.5), (ids[2], 0.6), (ids[3], 0.7),],
-            ),
-            HostReply::Ok
-        ));
-        assert_eq!(master_volume_of(&state, ids[0]), 0.4);
-        assert_eq!(master_volume_of(&state, ids[3]), 0.7);
-    }
-
-    #[kithara::test]
-    fn host_mix_rejects_duplicate_player_without_mutation() {
-        route_loss(RouteLossProbe::reset);
-
-        let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
-
-        assert!(matches!(
-            apply_player_mix(&mut state, [(id, 0.3), (id, 0.4)]),
-            HostReply::Err(PlayError::MixDuplicatePlayer)
-        ));
-        assert_eq!(master_volume_of(&state, id), 1.0);
-    }
-
-    #[kithara::test]
-    fn host_mix_rejects_invalid_level_without_mutation() {
-        route_loss(RouteLossProbe::reset);
-
-        let mut state = test_state(start_route_loss_stream);
-        let a = register_player(&mut state);
-        let b = register_player(&mut state);
-        start_player_cmd(&mut state, a);
-        start_player_cmd(&mut state, b);
-
-        for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
-            assert!(matches!(
-                apply_player_mix(&mut state, [(a, 0.5), (b, bad)]),
-                HostReply::Err(PlayError::MixLevel { .. })
-            ));
-            assert_eq!(
-                master_volume_of(&state, a),
-                1.0,
-                "level {bad} leaked a mutation"
-            );
-            assert_eq!(master_volume_of(&state, b), 1.0);
-        }
-    }
-
-    #[kithara::test]
-    fn host_mix_rejects_foreign_member_leaving_known_unchanged() {
-        route_loss(RouteLossProbe::reset);
-
-        let mut state = test_state(start_route_loss_stream);
-        let known = register_player(&mut state);
-        start_player_cmd(&mut state, known);
-        let known_grid = deck_by_player_id(&state, known).grid_id;
-        let unknown_grid = BeatGridId::allocate().expect("foreign fixture grid id");
-
-        assert!(matches!(
-            run_host_cmd(
-                &mut state,
-                HostCmd::ApplyMix {
-                    levels: Box::new([
-                        HostLevel::new(known_grid, 0.2),
-                        HostLevel::new(unknown_grid, 0.3),
-                    ]),
-                },
-            ),
-            HostReply::Err(PlayError::MixForeignSession)
-        ));
-        assert_eq!(master_volume_of(&state, known), 1.0);
     }
 
     fn mix_tap_writer(drops: &Arc<AtomicU64>) -> MixTapWriter {

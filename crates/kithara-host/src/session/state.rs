@@ -6,7 +6,6 @@ use firewheel::{
     channel_config::ChannelCount,
     diff::Memo,
     node::{AudioNode, NodeID},
-    nodes::volume::VolumeNode,
 };
 use kithara_bufpool::PoolRegion;
 use kithara_command::Live;
@@ -48,8 +47,6 @@ pub(super) struct Deck<S> {
     pub(super) bus: EventBus,
     pub(super) master_eq_memo: Option<Memo<MasterEqNode<S>>>,
     pub(super) master_eq_node_id: Option<NodeID>,
-    pub(super) master_volume_memo: Option<Memo<VolumeNode>>,
-    pub(super) master_volume_node_id: Option<NodeID>,
     pub(super) player_id: PlayerId,
     pub(super) pools: PoolRegion<S>,
     pub(super) shared_eq: SharedEq,
@@ -57,7 +54,6 @@ pub(super) struct Deck<S> {
     pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) slots: Vec<SlotNodes>,
     pub(super) started: bool,
-    pub(super) master_volume: f32,
     pub(super) next_slot_id: u64,
 }
 
@@ -68,7 +64,6 @@ impl<S> Deck<S> {
         bus: EventBus,
         eq_layout: Vec<EqBandConfig>,
         pools: PoolRegion<S>,
-        master_volume: f32,
         mixer: DeckMixerConfig,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
@@ -82,12 +77,9 @@ impl<S> Deck<S> {
             pools,
             player_id,
             grid_id,
-            master_volume,
             shared_eq,
             master_eq_memo: None,
             master_eq_node_id: None,
-            master_volume_memo: None,
-            master_volume_node_id: None,
             next_slot_id: 1,
             slots: Vec::new(),
             started: false,
@@ -446,26 +438,10 @@ pub(super) fn register_player<T, S>(
     let next_player_id = player_id
         .checked_add(1)
         .ok_or(SessionError::PlayerIdExhausted)?;
-    let master_volume = state
-        .root
-        .member(grid_id)
-        .map(PlayerMember::host_level)
-        .ok_or(SessionError::DeckNotFound(grid_id))?;
-    if !master_volume.is_finite() || !(0.0..=1.0).contains(&master_volume) {
-        return Err(SessionError::MasterVolumeOutOfRange {
-            player_id,
-            level: master_volume,
-        });
+    if state.root.member(grid_id).is_none() {
+        return Err(SessionError::DeckNotFound(grid_id));
     }
-    let deck = Deck::new(
-        player_id,
-        grid_id,
-        bus,
-        eq_layout,
-        pools,
-        master_volume,
-        mixer,
-    );
+    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools, mixer);
     let registration = RegisteredPlayer {
         id: player_id,
         eq: deck.shared_eq.clone(),

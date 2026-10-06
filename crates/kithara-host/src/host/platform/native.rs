@@ -7,7 +7,7 @@ use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
 
 use super::{
-    super::{HeldPlayer, Host, HostOwned},
+    super::{Host, HostOwned},
     PlatformResult,
 };
 use crate::{
@@ -80,7 +80,7 @@ where
     {
         let (grid_id, control) = self.bind_player(&mut player)?;
         self.dispatcher
-            .attach(PlayerMember::new(grid_id, HeldPlayer::new(player)))?;
+            .attach(PlayerMember::new(grid_id, Box::new(player)))?;
         let owned = self.owned::<P>(grid_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;

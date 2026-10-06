@@ -203,18 +203,15 @@ impl DeckSet {
         self.mix = self.mix.resized(0);
     }
 
-    /// Actuate `next` in one session batch, storing it only on success.
+    /// Send each deck its level from `next`, storing `next` only when every deck takes it.
     ///
     /// # Errors
-    /// Returns [`PlayError`] when the mix is invalid or the session rejects it.
+    /// Returns [`PlayError`] when the mix is invalid or a deck refuses its level.
     pub fn commit(&mut self, next: MixState) -> Result<(), PlayError> {
         let levels = next.levels()?;
-        let inputs = self
-            .decks
-            .iter()
-            .zip(&levels)
-            .map(|(deck, &level)| deck.queue.level(level));
-        self.host.apply_mix(inputs)?;
+        for (deck, &level) in self.decks.iter().zip(&levels) {
+            deck.queue.set_level(level)?;
+        }
         self.mix = next;
         Ok(())
     }

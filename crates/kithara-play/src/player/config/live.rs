@@ -1,6 +1,7 @@
 use delegate::delegate;
+use kithara_config::LiveConfig;
 use kithara_events::EventBus;
-use kithara_render::bridge::{DeckMixSettingsChange, DeckPart};
+use kithara_render::bridge::{DeckMixSettings, DeckMixSettingsChange, DeckPart};
 use kithara_signal::FaderValue;
 use kithara_warp::MIN_SPEED;
 
@@ -24,6 +25,10 @@ impl<S> PlayerConfig<S> {
             #[call(load)]
             pub(crate) fn default_rate(&self) -> f32;
         }
+        to self.level {
+            #[call(load)]
+            pub(crate) fn level(&self) -> f32;
+        }
         to self.muted {
             #[call(load)]
             pub(crate) fn is_muted(&self) -> bool;
@@ -42,6 +47,21 @@ impl<S> PlayerConfig<S> {
         let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
         self.default_rate.store(clamped);
         clamped
+    }
+
+    /// Sends the deck its mix level and keeps it; an idle player keeps it for its next slot.
+    pub(crate) fn set_level(
+        &self,
+        level: f32,
+        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
+    ) -> Result<(), PlayError> {
+        let change = DeckMixSettings::check(DeckMixSettingsChange::Level(level))?;
+        match send(DeckPart::Mix(change)) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
+        }
+        self.level.store(level);
+        Ok(())
     }
 
     pub(crate) fn set_muted(
@@ -129,5 +149,34 @@ mod tests {
             events.try_recv().map(|event| event.event),
             Ok(PlayerEvent::VolumeChanged { volume }) if volume == 0.4
         ));
+    }
+
+    #[kithara::test]
+    #[case::not_a_number(f32::NAN)]
+    #[case::over_unity(1.5)]
+    #[case::below_silence(-0.25)]
+    fn a_refused_mix_level_never_reaches_the_deck(#[case] level: f32) {
+        let config = config();
+        let mut sent = false;
+
+        let refused = config.set_level(level, |_| {
+            sent = true;
+            Ok(())
+        });
+
+        assert!(matches!(refused, Err(PlayError::MixLevel { .. })));
+        assert!(!sent, "a refused level is never sent to the deck");
+        assert_eq!(config.values().level, 1.0);
+    }
+
+    #[kithara::test]
+    fn an_idle_player_keeps_its_level_for_the_next_slot() {
+        let config = config();
+
+        config
+            .set_level(0.5, |_| Err(PlayError::NoActiveSlot))
+            .expect("an idle player retains its next-slot level");
+
+        assert_eq!(config.values().level, 0.5);
     }
 }

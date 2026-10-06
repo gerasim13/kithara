@@ -29,7 +29,7 @@ pub use api::{
     TempoError, TimeControlStatus, TimeRange, TrackBinding, TrackRef, TransportRevision,
     WaitingReason,
 };
-pub use engine::{EngineConfig, EngineImpl, apply_mix};
+pub use engine::{EngineConfig, EngineImpl};
 pub use error::PlayError;
 use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
@@ -55,8 +55,8 @@ pub use resource::{
     PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
 };
 pub use session::{
-    AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionBinding, SessionDispatcher,
-    SessionError, SessionHandle, SessionSampleRate,
+    AllocatedSlot, Cmd, PlayerId, Reply, SessionBinding, SessionDispatcher, SessionError,
+    SessionHandle, SessionSampleRate,
 };
 pub use worker::{
     EngineLoad, EngineLoadSnapshot, LoadRefusal, PlayWorker, PlayWorkerConfig,

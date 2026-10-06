@@ -422,13 +422,11 @@ fn spawn_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPai
                     let position = f32::from_bits(requested);
                     let levels = [CrossfaderBus::A, CrossfaderBus::B]
                         .map(|bus| crossfader_gain(bus, position).expect("a valid position"));
-                    host.apply_mix(
-                        decks
-                            .iter()
-                            .zip(levels)
-                            .map(|(deck, level)| deck.level(level)),
-                    )
-                    .expect("apply the crossfader batch");
+                    for (deck, level) in decks.iter().zip(levels) {
+                        deck.control()
+                            .set_level(level)
+                            .expect("set the crossfader level");
+                    }
                     if applied == DeckPair::UNAPPLIED {
                         for deck in &decks {
                             deck.control().play();

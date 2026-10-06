@@ -81,6 +81,15 @@ where
         self.with_open_result(|queue| queue.player.set_eq_layout(layout))
     }
 
+    /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
+    ///
+    /// # Errors
+    /// Forwards `PlayError` from the underlying player: [`PlayError::MixLevel`] for a level
+    /// outside `0.0..=1.0`, or the deck's refusal of the change.
+    pub fn set_level(&self, level: f32) -> Result<(), PlayError> {
+        self.with_open_result(|queue| queue.player.set_level(level))
+    }
+
     /// Set the mute flag.
     pub fn set_muted(&self, muted: bool) {
         self.command(|queue| queue.player.set_muted(muted));

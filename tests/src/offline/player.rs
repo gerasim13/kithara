@@ -14,7 +14,7 @@ use kithara::{
     play::{
         CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, PlayWorker, PlayWorkerConfig, PlayerConfig,
         PlayerEvent, PlayerImpl, Resource, RtMetricsSnapshot, SelectionPlayback,
-        player::{Player, PlayerControl, PlayerControlSource},
+        player::{PlayerControl, PlayerControlSource},
     },
     queue::{Queue, QueueConfig, QueueControl},
     warp::WarpConfig,
@@ -224,18 +224,6 @@ impl OfflinePlayer {
     {
         let control = control.clone();
         self.host.run(move || f(&control)).await
-    }
-
-    /// # Panics
-    ///
-    /// Panics if the player was transferred to another facade.
-    pub fn set_host_level(&self, level: f32) {
-        match &*self.slot.lock() {
-            PlayerSlot::Pending(player) => player.set_host_level(level),
-            PlayerSlot::Resident | PlayerSlot::Transferred => {
-                panic!("offline harness player is no longer pending")
-            }
-        }
     }
 
     /// # Panics

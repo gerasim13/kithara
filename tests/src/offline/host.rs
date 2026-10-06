@@ -6,7 +6,7 @@ use std::{num::NonZeroU32, ops::Deref};
 use kithara::play::{SessionError, TransportRevision};
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{Host, HostConfig, HostLevel, HostOwned, HostSettingsControl, Tap},
+    host::{Host, HostConfig, HostOwned, HostSettingsControl, Tap},
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -333,16 +333,6 @@ where
     pub async fn detach_tap(&self, tap: Tap) -> Result<(), PlayError> {
         self.off
             .call(move |state| state.host.detach_outputs(tap))
-            .await
-    }
-
-    pub async fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
-    where
-        I: IntoIterator<Item = HostLevel>,
-    {
-        let levels: Vec<HostLevel> = levels.into_iter().collect();
-        self.off
-            .call(move |state| state.host.apply_mix(levels))
             .await
     }
 

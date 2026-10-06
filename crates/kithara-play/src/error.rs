@@ -1,6 +1,6 @@
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
-use kithara_render::{InvalidCrossfade, rt::BufferGeometryError};
+use kithara_render::{InvalidCrossfade, bridge::InvalidMixLevel, rt::BufferGeometryError};
 
 use crate::{
     api::{SlotId, TrackId},
@@ -94,9 +94,6 @@ pub enum PlayError {
     #[error("crossfader position {position} is not a finite value in 0.0..=1.0")]
     MixPosition { position: f32 },
 
-    #[error("mix input player belongs to a different audio session")]
-    MixForeignSession,
-
     #[error("player belongs to a different audio session")]
     ForeignSession,
 
@@ -111,9 +108,6 @@ pub enum PlayError {
 
     #[error("an audio session is already active on this thread")]
     SessionAlreadyActive,
-
-    #[error("mix input lists the same player more than once")]
-    MixDuplicatePlayer,
 
     #[error("end of resource")]
     Eof,
@@ -154,5 +148,11 @@ impl From<InvalidCrossfade> for PlayError {
             name: name.into(),
             value,
         }
+    }
+}
+
+impl From<InvalidMixLevel> for PlayError {
+    fn from(InvalidMixLevel { level }: InvalidMixLevel) -> Self {
+        Self::MixLevel { level }
     }
 }

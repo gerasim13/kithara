@@ -17,9 +17,6 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 
-    /// Read the desired host-applied deck level.
-    fn host_level(&self) -> f32;
-
     /// Pause playback.
     fn pause(&self);
 
@@ -31,9 +28,6 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
     /// Seek within the current item.
     fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
-
-    /// Commit the host-applied deck level after a validated graph batch.
-    fn set_host_level(&self, level: f32);
 
     /// Advance control-plane and audio-backend work.
     fn tick(&self) -> Result<(), PlayError>;
@@ -72,10 +66,6 @@ where
         self.make_control().close()
     }
 
-    fn host_level(&self) -> f32 {
-        self.runtime.core.engine.master_volume()
-    }
-
     fn pause(&self) {
         let _ = self.runtime.with_open(PlayerRuntime::pause);
     }
@@ -97,12 +87,6 @@ where
     fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         self.runtime
             .with_open_result(|runtime| runtime.seek_seconds(seconds))
-    }
-
-    fn set_host_level(&self, level: f32) {
-        if !self.runtime.is_closed() {
-            self.runtime.core.engine.commit_desired_master_volume(level);
-        }
     }
 
     fn tick(&self) -> Result<(), PlayError> {

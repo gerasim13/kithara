@@ -6,7 +6,7 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
 
-use super::super::{HeldPlayer, Host, HostOwned, owner::SessionRuntime};
+use super::super::{Host, HostOwned, owner::SessionRuntime};
 use crate::{
     HostSettings, PlayerMember,
     rt::SessionOutput,
@@ -157,10 +157,7 @@ where
     {
         self.session.platform().require_remote()?;
         let (grid_id, control) = self.bind_player(&mut player)?;
-        self.dispatcher.attach(PlayerMember::new(
-            grid_id,
-            HeldPlayer::new(player.host_level()),
-        ))?;
+        self.dispatcher.attach(PlayerMember::new(grid_id, ()))?;
         let resident: Resident = Box::new(move || player.close());
         if let Some(replaced) = self
             .session

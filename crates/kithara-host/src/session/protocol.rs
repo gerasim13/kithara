@@ -4,17 +4,12 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 pub(crate) use kithara_play::{
-    AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
-    SessionSampleRate,
+    AllocatedSlot, Cmd, PlayerId, Reply, SessionDispatcher, SessionError, SessionSampleRate,
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::BeatGridId;
 
-use crate::{
-    PlayerMember,
-    api::{HostLevel, Tap},
-    host::HostSettingsChange,
-};
+use crate::{PlayerMember, api::Tap, host::HostSettingsChange};
 
 /// Opens the audio stream a session runs on and hands back the object that
 /// owns it. Firewheel no longer holds the backend, so the session keeps the
@@ -29,9 +24,6 @@ pub(crate) enum HostCmd<S> {
     },
     Detach {
         grid_id: BeatGridId,
-    },
-    ApplyMix {
-        levels: Box<[HostLevel]>,
     },
     Configure {
         change: HostSettingsChange,

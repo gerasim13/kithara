@@ -2,13 +2,20 @@ use std::fmt;
 
 use kithara_warp::BeatGridId;
 
-use super::HeldPlayer;
+/// What the Host holds of a deck's player. The native Host owns the player:
+/// dropping it invalidates its controls, so it lives as long as its deck.
+#[cfg(not(target_arch = "wasm32"))]
+type HeldPlayer = Box<dyn kithara_play::player::Player>;
+/// What the Host holds of a deck's player: a web player stays on its own
+/// thread, held by the platform's residents, so the session holds nothing.
+#[cfg(target_arch = "wasm32")]
+type HeldPlayer = ();
 
 /// One deck as the Host's session holds it: the identity its player
-/// registered under, and the deck's Host level.
+/// registered under, and the player while the deck is attached.
 pub(crate) struct PlayerMember {
     grid_id: BeatGridId,
-    player: HeldPlayer,
+    _player: HeldPlayer,
 }
 
 impl PlayerMember {
@@ -16,23 +23,16 @@ impl PlayerMember {
     /// of it.
     #[must_use]
     pub(crate) const fn new(grid_id: BeatGridId, player: HeldPlayer) -> Self {
-        Self { grid_id, player }
+        Self {
+            grid_id,
+            _player: player,
+        }
     }
 
     /// The identity the deck registered under.
     #[must_use]
     pub(crate) const fn grid_id(&self) -> BeatGridId {
         self.grid_id
-    }
-
-    delegate::delegate! {
-        to self.player {
-            /// Commits the Host-applied level after its graph batch succeeds.
-            pub(crate) fn commit_host_level(&self, level: f32);
-            /// Reads the desired Host level used for later graph registration.
-            #[must_use]
-            pub(crate) fn host_level(&self) -> f32;
-        }
     }
 }
 

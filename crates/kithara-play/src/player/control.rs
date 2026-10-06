@@ -192,6 +192,16 @@ where
             .with_open_result(|runtime| runtime.set_eq_layout(layout))
     }
 
+    /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
+    ///
+    /// # Errors
+    /// Returns a closed-owner error, [`PlayError::MixLevel`] for a level outside
+    /// `0.0..=1.0`, or the deck's refusal of the change.
+    pub fn set_level(&self, level: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_level(level))
+    }
+
     /// Update mute state unless the owning player is closed.
     pub fn set_muted(&self, muted: bool) {
         self.command(|runtime| runtime.set_muted(muted));

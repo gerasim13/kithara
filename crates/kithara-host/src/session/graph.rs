@@ -1,9 +1,6 @@
 use std::num::NonZeroUsize;
 
-use firewheel::{
-    FirewheelContext, Volume, diff::Memo, dsp::volume::amp_to_linear_volume_clamped, node::NodeID,
-    nodes::volume::VolumeNode,
-};
+use firewheel::{FirewheelContext, diff::Memo, node::NodeID};
 use kithara_bufpool::HasPool;
 use kithara_effects::{
     GainDb,
@@ -14,7 +11,7 @@ use kithara_warp::MapAxis;
 use tracing::{debug, warn};
 
 use super::{
-    protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
+    protocol::{AllocatedSlot, PlayerId, Reply, SessionError},
     queue::settle_receipts,
     state::{
         Deck, GraphRegistry, SessionState, SlotNodes, TapSlot, Taps, add_graph_node, ensure_ctx,
@@ -26,11 +23,6 @@ use crate::{
     bridge::slot_channels,
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
-/// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
-/// squares its argument, so it must be converted rather than passed through.
-pub(super) fn master_gain(level: f32) -> Volume {
-    Volume::Linear(amp_to_linear_volume_clamped(level, 0.0))
-}
 pub(super) fn player_index<T, S>(
     state: &SessionState<T, S>,
     player_id: PlayerId,
@@ -160,14 +152,13 @@ pub(super) mod lifecycle {
     pub(in crate::session) fn start_player<T, S>(
         state: &mut SessionState<T, S>,
         player_id: PlayerId,
-        master_volume: f32,
         render_quantum_frames: Option<NonZeroUsize>,
         response_budget_frames: Option<NonZeroUsize>,
     ) -> Result<(), SessionError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        debug!(player_id, master_volume, "[KITHARA-ROUTE] starting player");
+        debug!(player_id, "[KITHARA-ROUTE] starting player");
         ensure_ctx(state)?;
         validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
         let idx = player_index(state, player_id)?;
@@ -187,33 +178,17 @@ pub(super) mod lifecycle {
         }
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = add_graph_node(fw_ctx, master_eq)?;
-        let master_volume = VolumeNode {
-            volume: master_gain(player.master_volume),
-            ..VolumeNode::default()
-        };
-        let master_volume_memo = Memo::new(master_volume);
-        let master_volume_id = add_graph_node(fw_ctx, master_volume)?;
-        let eq_to_volume = "connect player master_eq->master_vol";
-        connect_stereo(fw_ctx, master_eq_id, master_volume_id, eq_to_volume)?;
-        let volume_to_output = "connect player master_vol->session_output";
-        connect_stereo(
-            fw_ctx,
-            master_volume_id,
-            session_output_id,
-            volume_to_output,
-        )?;
+        let eq_to_output = "connect player master_eq->session_output";
+        connect_stereo(fw_ctx, master_eq_id, session_output_id, eq_to_output)?;
         if let Err(err) = fw_ctx.update() {
             warn!(player_id, "graph update after player start failed: {err:?}");
         }
         player.master_eq_node_id = Some(master_eq_id);
         player.master_eq_memo = Some(master_eq_memo);
-        player.master_volume_node_id = Some(master_volume_id);
-        player.master_volume_memo = Some(master_volume_memo);
         player.started = true;
         debug!(
             player_id,
             ?master_eq_id,
-            ?master_volume_id,
             "[KITHARA-ROUTE] player graph started"
         );
         Ok(())
@@ -351,11 +326,6 @@ pub(super) mod lifecycle {
                 warn!(player_id, ?err, "failed to remove slot player node");
             }
         }
-        if let Some(master_id) = player.master_volume_node_id.take()
-            && let Err(err) = fw_ctx.remove_node(master_id)
-        {
-            warn!(player_id, ?err, "failed to remove player master vol node");
-        }
         if let Some(master_eq_id) = player.master_eq_node_id.take()
             && let Err(err) = fw_ctx.remove_node(master_eq_id)
         {
@@ -365,7 +335,6 @@ pub(super) mod lifecycle {
     }
     pub(super) fn clear_player_graph_state<S>(player: &mut Deck<S>) {
         player.master_eq_memo = None;
-        player.master_volume_memo = None;
     }
 }
 
@@ -470,59 +439,6 @@ pub(super) mod slots {
 pub(super) mod controls {
     use super::*;
 
-    /// Validates the whole request before mutating anything, so an invalid
-    /// entry leaves the batch untouched. Omitted players are unchanged.
-    pub(in crate::session) fn set_player_master_volumes<T, S>(
-        state: &mut SessionState<T, S>,
-        levels: &[PlayerLevel],
-    ) -> Result<(), SessionError> {
-        let mut resolved: Vec<(usize, f32)> = Vec::with_capacity(levels.len());
-        for &PlayerLevel {
-            player_id, level, ..
-        } in levels
-        {
-            if !level.is_finite() || !(0.0..=1.0).contains(&level) {
-                return Err(SessionError::MasterVolumeOutOfRange { player_id, level });
-            }
-            let idx = player_index(state, player_id)?;
-            if resolved.iter().any(|&(seen, _)| seen == idx) {
-                return Err(SessionError::DuplicatePlayer(player_id));
-            }
-            let player = deck_at(state, idx)?;
-            if player.started
-                && (state.ctx.is_none()
-                    || player.master_volume_node_id.is_none()
-                    || player.master_volume_memo.is_none())
-            {
-                return Err(graph_state("player master vol graph is not initialised"));
-            }
-            resolved.push((idx, level));
-        }
-        for &(idx, level) in &resolved {
-            apply_master_volume(state, idx, level)?;
-        }
-        Ok(())
-    }
-
-    fn apply_master_volume<T, S>(
-        state: &mut SessionState<T, S>,
-        idx: usize,
-        volume: f32,
-    ) -> Result<(), SessionError> {
-        let (ctx, graph) = (&mut state.ctx, &mut state.graph);
-        let player = deck_at_mut(graph, idx)?;
-        player.master_volume = volume;
-        if let (Some(fw_ctx), Some(master_id), Some(memo)) = (
-            ctx,
-            player.master_volume_node_id,
-            &mut player.master_volume_memo,
-        ) {
-            memo.volume = master_gain(volume);
-            let mut queue = fw_ctx.event_queue(master_id);
-            memo.update_memo(&mut queue);
-        }
-        Ok(())
-    }
     pub(in crate::session) fn set_player_eq_gain<T, S>(
         state: &mut SessionState<T, S>,
         player_id: PlayerId,
@@ -776,7 +692,6 @@ mod tests {
                 player_id,
                 render_quantum_frames: None,
                 response_budget_frames: NonZeroUsize::new(448),
-                master_volume: 1.0,
             },
         ) {
             Reply::Ok => {}
@@ -890,9 +805,6 @@ mod tests {
         let previous_eq = deck_at(&state, 0)
             .expect("the registered deck is present")
             .master_eq_node_id;
-        let previous_volume = deck_at(&state, 0)
-            .expect("the registered deck is present")
-            .master_volume_node_id;
         let mut layout = generate_log_spaced_bands(4);
         for (band, gain) in layout.iter_mut().zip([-6.0, -3.0, 1.5, 4.0]) {
             band.set_gain_db(GainDb::from(gain));
@@ -915,7 +827,6 @@ mod tests {
         assert_eq!(player.slots.len(), 1);
         assert_eq!(player.slots[0].slot_id, slot);
         assert_eq!(player.master_eq_node_id, previous_eq);
-        assert_eq!(player.master_volume_node_id, previous_volume);
         assert_eq!(
             player.master_eq_memo.as_ref().map(|memo| memo.band_count()),
             Some(4)

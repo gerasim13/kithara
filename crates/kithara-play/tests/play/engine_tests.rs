@@ -109,12 +109,6 @@ fn engine_subscribe_works() {
 }
 
 #[kithara::test]
-fn engine_master_volume_default() {
-    let engine = make_engine();
-    assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-}
-
-#[kithara::test]
 #[case(NotRunningErrorScenario::Stop)]
 #[case(NotRunningErrorScenario::AllocateSlot)]
 #[case(NotRunningErrorScenario::ReleaseSlot)]

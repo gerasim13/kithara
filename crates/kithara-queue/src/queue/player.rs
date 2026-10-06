@@ -23,10 +23,6 @@ where
             #[call(tick_player)]
             fn tick(&self) -> Result<(), PlayError>;
         }
-        to self.player {
-            fn set_host_level(&self, level: f32);
-            fn host_level(&self) -> f32;
-        }
     }
 }
 

@@ -40,10 +40,6 @@ mod wire {
         NoContext,
         #[error("eq band out of range: {band} (bands: {bands})")]
         EqBandOutOfRange { band: usize, bands: usize },
-        #[error("master volume {level} out of range for player {player_id}")]
-        MasterVolumeOutOfRange { player_id: PlayerId, level: f32 },
-        #[error("duplicate player in master volume batch: {0}")]
-        DuplicatePlayer(PlayerId),
         #[error("stream start failed: {0}")]
         StreamStart(String),
         #[error("graph edit failed: {0}")]
@@ -80,7 +76,6 @@ mod wire {
             player_id: PlayerId,
         },
         StartPlayer {
-            master_volume: f32,
             player_id: PlayerId,
             render_quantum_frames: Option<NonZeroUsize>,
             response_budget_frames: Option<NonZeroUsize>,
@@ -94,9 +89,6 @@ mod wire {
         ReleaseSlot {
             player_id: PlayerId,
             slot: SlotId,
-        },
-        SetPlayerMasterVolumes {
-            levels: Vec<PlayerLevel>,
         },
         SetPlayerEqGain {
             band: usize,
@@ -117,22 +109,6 @@ mod wire {
         QuerySampleRate,
         QueryStreamShape,
         Tick,
-    }
-
-    /// One player's session-input level in a batch update. `level` is a linear
-    /// amplitude in `0.0..=1.0`.
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    #[non_exhaustive]
-    pub struct PlayerLevel {
-        pub player_id: PlayerId,
-        pub level: f32,
-    }
-
-    impl PlayerLevel {
-        #[must_use]
-        pub const fn new(player_id: PlayerId, level: f32) -> Self {
-            Self { player_id, level }
-        }
     }
 
     #[non_exhaustive]
@@ -206,9 +182,7 @@ mod handle {
     use kithara_render::rt::{DeckMixerConfig, StreamShape};
     use kithara_warp::BeatGridId;
 
-    use super::wire::{
-        AllocatedSlot, Cmd, PlayerId, PlayerLevel, RegisteredPlayer, Reply, SessionSampleRate,
-    };
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionSampleRate};
     use crate::{
         api::{SessionDuckingMode, SlotId},
         error::PlayError,
@@ -434,14 +408,6 @@ mod handle {
             .map(|_| ())
         }
 
-        pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
-            if levels.is_empty() {
-                return Ok(());
-            }
-            self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
-                .map(|_| ())
-        }
-
         pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
             self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
         }
@@ -449,12 +415,10 @@ mod handle {
         pub fn start_player(
             &self,
             player_id: PlayerId,
-            master_volume: f32,
             render_quantum_frames: Option<NonZeroUsize>,
             response_budget_frames: Option<NonZeroUsize>,
         ) -> Result<(), PlayError> {
             self.exec_ok(Cmd::StartPlayer {
-                master_volume,
                 player_id,
                 render_quantum_frames,
                 response_budget_frames,
@@ -520,8 +484,7 @@ mod handle {
 
 pub use handle::{SessionBinding, SessionDispatcher, SessionHandle};
 pub use wire::{
-    AllocatedSlot, Cmd, PlayerId, PlayerLevel, RegisteredPlayer, Reply, SessionError,
-    SessionSampleRate,
+    AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionError, SessionSampleRate,
 };
 
 #[cfg(test)]
@@ -649,7 +612,7 @@ mod tests {
             .expect("register player")
             .id;
         handle
-            .start_player(player_id, 1.0, None, NonZeroUsize::new(448))
+            .start_player(player_id, None, NonZeroUsize::new(448))
             .expect("start player");
 
         assert_eq!(capture.queries.load(Ordering::Relaxed), 0);

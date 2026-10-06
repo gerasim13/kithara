@@ -21,7 +21,7 @@ use super::super::{
     protocol::{Cmd, HostCmd, HostReply, Reply, SessionDispatcher},
     state::{HostRoot, RootView, SessionState},
 };
-use crate::{HostSettings, PlayerMember, host::HeldPlayer, rt::SessionOutput};
+use crate::{HostSettings, PlayerMember, rt::SessionOutput};
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
@@ -199,8 +199,8 @@ where
         .attach_session(SessionBinding::new(Arc::new(FixtureSession), sample_rate))
         .expect("fixture player binds its session");
     #[cfg(not(target_arch = "wasm32"))]
-    let held = HeldPlayer::new(player);
+    let held = Box::new(player);
     #[cfg(target_arch = "wasm32")]
-    let held = HeldPlayer::new(player.host_level());
+    let held = ();
     PlayerMember::new(grid_id, held)
 }

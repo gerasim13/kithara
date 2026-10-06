@@ -71,7 +71,10 @@ type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
 
 fn with_provenance_headroom(harness: OfflinePlayer) -> OfflinePlayer {
-    harness.set_host_level(PROVENANCE_LEVEL);
+    harness
+        .player()
+        .set_level(PROVENANCE_LEVEL)
+        .expect("set the mix level");
     harness
 }
 

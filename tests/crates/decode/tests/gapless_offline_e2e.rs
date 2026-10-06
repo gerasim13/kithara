@@ -807,7 +807,10 @@ async fn render_synthetic_fused_deficit_seam(
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
-    harness.set_host_level(FUSED_FIXTURE_MASTER_LEVEL);
+    harness
+        .player()
+        .set_level(FUSED_FIXTURE_MASTER_LEVEL)
+        .expect("set the mix level");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);
     let first_frame_count = first_frames.len();
     let first = Resource::from_reader(

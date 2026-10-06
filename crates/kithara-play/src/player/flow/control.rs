@@ -30,6 +30,7 @@ impl<S> PlayerRuntime<S> {
                     self.volume(),
                 ))),
                 DeckPart::Mix(DeckMixSettingsChange::Muted(self.is_muted())),
+                DeckPart::Mix(DeckMixSettingsChange::Level(self.core.config.level())),
             ],
         )?;
         Ok(id)
@@ -97,6 +98,17 @@ impl<S> PlayerRuntime<S> {
         self.core
             .engine
             .set_master_eq_gain(band, f32::from(gain_db))
+    }
+
+    /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::MixLevel`] for a level outside `0.0..=1.0` and the deck's refusal
+    /// of the change; the level stays as it was then.
+    pub fn set_level(&self, level: f32) -> Result<(), PlayError> {
+        self.core
+            .config
+            .set_level(level, |part| self.send_to_slot(part))
     }
 
     /// Set muted state.

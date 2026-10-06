@@ -334,7 +334,6 @@ mod tests {
         assert!(matches!(
             client.exec(Cmd::StartPlayer {
                 player_id,
-                master_volume: 1.0,
                 render_quantum_frames: None,
                 response_budget_frames: None,
             }),

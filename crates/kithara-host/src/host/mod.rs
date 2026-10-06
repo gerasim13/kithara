@@ -1,5 +1,4 @@
 mod config;
-mod held;
 mod member;
 #[cfg(feature = "offline")]
 mod offline;
@@ -8,7 +7,6 @@ mod platform;
 mod settings;
 
 pub use config::HostConfig;
-pub(crate) use held::HeldPlayer;
 pub(crate) use member::PlayerMember;
 pub use owner::{Host, HostOwned};
 pub(crate) use settings::HostSettingsExec;

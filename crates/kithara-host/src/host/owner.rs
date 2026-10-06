@@ -16,7 +16,7 @@ use super::{
     platform::{Platform, PlatformResult},
 };
 use crate::{
-    api::{HostLevel, Tap},
+    api::Tap,
     rt::SessionOutput,
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, HostRoot, Reply, RootView, SessionError,
@@ -34,14 +34,6 @@ pub struct HostOwned<P: PlayerControlSource> {
     #[field(get)]
     control: P::Control,
     marker: PhantomData<fn() -> P>,
-}
-
-impl<P: PlayerControlSource> HostOwned<P> {
-    /// Creates one input for [`Host::apply_mix`].
-    #[must_use]
-    pub const fn level(&self, level: f32) -> HostLevel {
-        HostLevel::new(self.id, level)
-    }
 }
 
 impl<P: PlayerControlSource> Deref for HostOwned<P> {
@@ -113,18 +105,6 @@ pub(super) struct SessionRoot {
 }
 
 impl<S> Host<S> {
-    /// Applies one validated, atomic batch of final player levels.
-    ///
-    /// # Errors
-    /// Returns an error for invalid members, levels, or graph dispatch failure.
-    pub fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
-    where
-        I: IntoIterator<Item = HostLevel>,
-    {
-        let levels = levels.into_iter().collect();
-        self.exec_host_ok(HostCmd::ApplyMix { levels }, "mix update")
-    }
-
     /// Binds `player` to this Host's session, answering the identity its deck
     /// registered under and its control.
     pub(super) fn bind_player<P>(
