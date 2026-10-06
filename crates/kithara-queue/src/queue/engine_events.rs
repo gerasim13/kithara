@@ -354,7 +354,7 @@ mod tests {
     }
 
     /// The tick that drains a natural end the queue pauses at pauses the deck
-    /// from inside the queue's own admission.
+    /// on the owner it runs on, posting nothing back to it.
     #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
     async fn a_tick_pauses_at_the_natural_end_it_drains() {
         let mut queue = make_queue();

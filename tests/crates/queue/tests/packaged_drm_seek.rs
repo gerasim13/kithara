@@ -193,9 +193,8 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     for i in 0..3 {
         let target = duration * rng.range_f64(0.05, 0.95);
         // Through the host owner, as the app seeks and as every other
-        // control call here does. Called directly, the seek takes the
-        // queue's admission gate on this thread, and the ticker holding
-        // it parks the test's own poll.
+        // control call here does. Called directly, the seek waits for the
+        // queue's owner inside the test's own poll.
         queue.run(move |q| q.seek(target)).await.expect("seek");
         wait_for_position_near(&queue, target, 1.0, Duration::from_secs(5))
             .await
