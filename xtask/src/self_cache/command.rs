@@ -39,7 +39,7 @@ use super::{
     manifest::{CacheManifest, Freshness},
     publish,
 };
-use crate::{config::XtaskCacheConfig, consts};
+use crate::{ci::config::CiPins, config::XtaskCacheConfig, consts};
 
 #[derive(Debug, Args)]
 pub(crate) struct SelfCacheArgs {
@@ -244,7 +244,7 @@ fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
         "self-cache build parent changed before Cargo started"
     );
     let signals = BuildSignals::install()?;
-    let mut command = cargo_build_command(root, release);
+    let mut command = cargo_build_command(root, release)?;
     command.process_group(0);
     run_cargo_build(root, &mut command, |child| {
         supervise(child, parent, &signals)
@@ -286,7 +286,7 @@ fn displace_running_executable(root: &Path) -> Result<()> {
 fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
     ensure!(parent > 1, "invalid self-cache build parent process");
     displace_running_executable(root)?;
-    let mut command = cargo_build_command(root, release);
+    let mut command = cargo_build_command(root, release)?;
     // Cargo stays on the same Windows console, so control events reach both processes.
     // std has no Windows parent-change probe, so that check remains Unix-only.
     run_cargo_build(root, &mut command, |child| {
@@ -296,12 +296,11 @@ fn build_worker(root: &Path, parent: u32, release: bool) -> Result<()> {
     })
 }
 
-fn cargo_build_command(root: &Path, release: bool) -> Command {
-    let cargo = env::var_os("XTASK_SELF_CACHE_CARGO")
-        .or_else(|| env::var_os("CARGO"))
-        .unwrap_or_else(|| "cargo".into());
-    let mut command = Command::new(cargo);
+fn cargo_build_command(root: &Path, release: bool) -> Result<Command> {
+    let pins = CiPins::load(&root.join(consts::PINS_PATH))?;
+    let mut command = Command::new("rustup");
     command
+        .args(["run", pins.nightly_toolchain.as_str(), "cargo"])
         .args(["run", "--locked", "--manifest-path"])
         .arg(root.join("Cargo.toml"))
         .args(["-p", "xtask", "--bin", "xtask"]);
@@ -311,10 +310,16 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
     command
         .args(["--", "self-cache", "artifact"])
         .current_dir(root)
+        .env(consts::TOOLCHAIN_ENV, &pins.nightly_toolchain)
+        .env(consts::CHECKSUM_FRESHNESS_ENV, "true")
+        .env_remove("RUSTC")
+        .env_remove("RUSTDOC")
+        .env_remove("CARGO_BUILD_RUSTC")
+        .env_remove("CARGO_BUILD_RUSTDOC")
         .env("CARGO_TARGET_DIR", layout::target_dir(root))
         .stdin(Stdio::null())
         .stdout(Stdio::piped());
-    command
+    Ok(command)
 }
 
 fn run_cargo_build<F>(root: &Path, command: &mut Command, wait: F) -> Result<()>
@@ -549,7 +554,7 @@ impl Drop for BuildSignals {
 mod tests {
     use std::{
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::{
             Arc, Barrier,
             atomic::{AtomicUsize, Ordering},
@@ -557,24 +562,27 @@ mod tests {
         thread,
     };
 
-    use anyhow::{Result, anyhow};
+    use anyhow::{Context, Result, anyhow};
 
     use super::{cargo_build_command, publish_unchanged, refresh_with};
     use crate::{
         config::XtaskCacheConfig,
+        consts,
         self_cache::{manifest::CacheManifest, publish},
     };
 
     /// A job that rebuilds this binary before its lane spends a minute or two
     /// on it, and a quiet build left that minute as a gap in the job's log.
     #[test]
-    fn a_rebuild_shows_its_progress_in_the_job_log() {
-        let command = cargo_build_command(std::path::Path::new("/repo"), false);
+    fn a_rebuild_shows_its_progress_in_the_job_log() -> Result<()> {
+        let (_temp, root, _source, _config) = fixture()?;
+        let command = cargo_build_command(&root, false)?;
 
         assert!(
             !command.get_args().any(|arg| arg == "--quiet"),
             "the build's progress must reach the log: {command:?}"
         );
+        Ok(())
     }
 
     fn fixture() -> Result<(tempfile::TempDir, PathBuf, PathBuf, XtaskCacheConfig)> {
@@ -584,6 +592,13 @@ mod tests {
         fs::create_dir_all(root.join(".git"))?;
         fs::create_dir_all(root.join(".config"))?;
         fs::create_dir_all(root.join("xtask/src"))?;
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .context("resolve repository root")?
+                .join(consts::PINS_PATH),
+            root.join(consts::PINS_PATH),
+        )?;
         fs::write(root.join("justfile"), b"")?;
         fs::write(
             root.join("Cargo.toml"),

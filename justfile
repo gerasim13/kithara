@@ -118,7 +118,7 @@ _xtask-unleased *ARGS: _xtask-ready
 _xtask-refresh:
     @target=$(just _xtask-self-target) || exit $?; export CARGO_TARGET_DIR="$target"; \
     if just _xtask-cached strict self-cache probe </dev/null >/dev/null 2>&1; then \
-      if just _xtask-cached strict self-cache refresh --force </dev/null; then exit 0; fi; \
+      if just _xtask-build-env just _xtask-cached strict self-cache refresh --force </dev/null; then exit 0; fi; \
       printf 'warning: cached xtask self-cache maintenance failed; rebuilding from source\n' >&2; \
     fi; exec just _xtask-bootstrap --force </dev/null
 
@@ -129,7 +129,16 @@ _xtask-ready:
     if state=$(just _xtask-cached strict self-cache status </dev/null); then \
       case "$state" in current) exit 0 ;; stale) ;; *) printf 'error: invalid xtask cache status: %s\n' "$state" >&2; exit 1 ;; esac; \
     fi; \
-    target=$(just _xtask-self-target) || exit $?; CARGO_TARGET_DIR="$target" exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null
+    target=$(just _xtask-self-target) || exit $?; CARGO_TARGET_DIR="$target" exec just _xtask-build-env just _xtask-cached strict self-cache refresh </dev/null >/dev/null
+
+# An older cached binary can still own the first refresh of new source. It
+# reads CARGO directly, so the transport must give it the pinned executable as
+# well as the checksum mode that binary's Cargo inherits.
+[no-exit-message]
+[positional-arguments]
+[private]
+_xtask-build-env *ARGS:
+    @toolchain=$(sed -n 's/^nightly_toolchain = "\([^"]*\)"$/\1/p' .config/ci-pins.toml); [[ "$toolchain" = nightly-* && "$toolchain" != *$'\n'* ]] || { printf 'error: invalid xtask bootstrap nightly pin\n' >&2; exit 1; }; cargo=$(rustup which --toolchain "$toolchain" cargo) || exit $?; exec env -u XTASK_SELF_CACHE_CARGO -u RUSTC -u RUSTDOC -u CARGO_BUILD_RUSTC -u CARGO_BUILD_RUSTDOC CARGO="$cargo" RUSTUP_TOOLCHAIN="$toolchain" CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true rustup run "$toolchain" "$@"
 
 # Where the self-cache builds: the checkout's own directory locally, and on
 # CI the bootstrap namespace the host cleaner owns, never a lane's directory.
@@ -151,7 +160,7 @@ _xtask-self-target:
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target=$(just _xtask-self-target) || exit $?; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then root="${target%/*}"; export SCCACHE_DIR="$root/sccache"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-${root##*/}-${target##*/target-}.sock"; fi; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target=$(just _xtask-self-target) || exit $?; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then root="${target%/*}"; export SCCACHE_DIR="$root/sccache"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-${root##*/}-${target##*/target-}.sock"; fi; fi; exec env CARGO_TARGET_DIR="$target" just _xtask-build-env cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 # The pointer to the active generation lives beside the generations it names,
 # inside the Git directory. A CI runner cleans the working tree before every
