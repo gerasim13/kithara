@@ -191,6 +191,46 @@ mod tests {
         );
     }
 
+    fn pace_due(flash: &FlashInner, base: u64) {
+        let mut core = flash.core.lock();
+        core.sched.real_io = 1;
+        core.sched.pace_anchor = Some((RealInstant::now() - Duration::from_secs(1), base));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_paced_async_grant_holds_the_clock_through_poll_entry() {
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let hold = flash.test_hold();
+        let gate = flash.async_acquire(std::panic::Location::caller());
+        let waker = std::task::Waker::noop().clone();
+        let (near, advance) = flash.register_sleep_async(ms(100), waker.clone());
+        advance.fire();
+        let (far, advance) = flash.register_sleep_async(ms(200), waker);
+        advance.fire();
+        pace_due(&flash, base);
+
+        drop(hold);
+        assert!(near.granted());
+        assert!(!far.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.advance_log(), vec![base + ms(100)]);
+
+        assert!(gate.try_enter_poll());
+        assert!(!far.granted());
+        assert_eq!(flash.clock.now_nanos(), base + ms(100));
+
+        drop(near);
+        assert!(far.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.advance_log(), vec![base + ms(100), base + ms(200)]);
+
+        drop(far);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.timed_count(), 0);
+        assert_eq!(flash.async_active_count(), 1);
+    }
+
     #[kithara::test(native, flash(false))]
     fn pacer_fires_on_time_under_pacing() {
         let _guard = guard();
