@@ -7,6 +7,7 @@ mod player_impl;
 mod protocol;
 mod staging;
 mod state;
+mod track;
 mod view;
 
 pub use core::PlayerRuntime;

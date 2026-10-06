@@ -45,7 +45,7 @@ where
             .is_some_and(|item| publish_notification(self, notification, item));
         self.settle_withdrawal(slot_id, notification);
         if let PlayerNotification::Unloaded { item_id, .. } = notification {
-            self.core.lanes.unload(*item_id);
+            self.core.tracks.lock().unload(*item_id);
         }
 
         match notification {

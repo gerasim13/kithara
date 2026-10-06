@@ -116,25 +116,35 @@ impl<S> PlayerRuntime<S> {
         let snapshot = self
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
-        let speed = self.core.lanes.set_speed(target, |seq| {
-            if let Some(snapshot) = &snapshot {
-                kithara::probe_event!(
-                    rate_requested,
-                    request_revision = seq.get(),
-                    target_rate_bits = target.to_bits(),
-                    session_epoch = u64::from(snapshot.context().output().session_epoch()),
-                    transport_revision = snapshot
-                        .context()
-                        .output()
-                        .transport_revision()
-                        .map_or(0, u64::from),
-                    session_frame = i64::from(snapshot.context().output().output_frames().end)
-                );
+        let change = self.core.tracks.lock().set_next_speed(target);
+        let change = match change {
+            Ok(change) => change,
+            Err(error) => {
+                warn!(%error, rate, "rate refused");
+                return;
             }
+        };
+        let configured = self.with_tracks(|tracks, out| {
+            tracks.configure(change, out, |seq| {
+                if let Some(snapshot) = &snapshot {
+                    kithara::probe_event!(
+                        rate_requested,
+                        request_revision = seq.get(),
+                        target_rate_bits = target.to_bits(),
+                        session_epoch = u64::from(snapshot.context().output().session_epoch()),
+                        transport_revision = snapshot
+                            .context()
+                            .output()
+                            .transport_revision()
+                            .map_or(0, u64::from),
+                        session_frame = i64::from(snapshot.context().output().output_frames().end)
+                    );
+                }
+            })
         });
-        if let Err(error) = speed {
-            warn!(%error, rate, "rate refused");
-            return;
+        match configured {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => warn!(%error, rate = target, "rate not sent to the lanes"),
         }
         match self.send_to_slot(DeckPart::SetRate(target)) {
             Ok(()) | Err(PlayError::NoActiveSlot) => {}

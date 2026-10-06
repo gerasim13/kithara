@@ -130,20 +130,40 @@ impl SlotControl {
     /// deck admits all of them or none.
     ///
     /// The receipts that came back since the last send are dropped first: they return the
-    /// credits, and every batch for the next block applies.
+    /// credits, and every batch for the next block applies. A resource crossing to the audio
+    /// thread leaves its seek handle and render reader here once the deck admits it, since
+    /// seeking takes locks; both unbind when the resource returns as trash.
     ///
     /// # Errors
     ///
     /// Returns the batch whole when the deck's capacity of batches is in flight.
     pub fn send_batch(&mut self, commands: Vec<DeckPart>) -> Result<Seq, SendError<DeckProtocol>> {
+        let bindings: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                DeckPart::Attach { resource, item_id } => {
+                    Some((*item_id, resource.seek_handle(), resource.render_reader()))
+                }
+                _ => None,
+            })
+            .collect();
         self.deck.receipts().for_each(drop);
-        self.deck.send(
+        let seq = self.deck.send(
             When::Next,
             Batch {
                 basis: Vec::new(),
                 commands,
             },
-        )
+        )?;
+        for (item_id, seek, render) in bindings {
+            if let Some(seek) = seek {
+                self.bind_seek(item_id, seek);
+            }
+            if let Some(render) = render {
+                self.bind_render(item_id, render);
+            }
+        }
+        Ok(seq)
     }
 
     pub(crate) fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {

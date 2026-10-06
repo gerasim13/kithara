@@ -244,47 +244,33 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    /// Sends `commands` to the slot's deck as one batch, applied together in its next block. A
-    /// resource crossing to the audio thread leaves its seek handle here, since seeking takes
-    /// locks. Bindings apply only once the batch is accepted; the resource releases when it
-    /// returns as trash.
+    /// Sends `commands` to the slot's deck as one batch, applied together in its next block.
     pub(crate) fn send_slot_cmd(
         &self,
         slot: SlotId,
         commands: Vec<DeckPart>,
     ) -> Result<(), PlayError> {
+        self.with_deck(slot, |deck| {
+            deck.send_batch(commands)
+                .map(drop)
+                .map_err(|_| PlayError::SlotChannelFull { slot })
+        })
+    }
+
+    /// Runs `send` on the control half of the slot's deck under the slots lock.
+    pub(crate) fn with_deck<R>(
+        &self,
+        slot: SlotId,
+        send: impl FnOnce(&mut SlotControl) -> Result<R, PlayError>,
+    ) -> Result<R, PlayError> {
         let mut slots = self.slots.lock();
         let result = slots
             .get_mut(slot)
-            .map_or(Err(PlayError::SlotNotFound(slot)), |handle| {
-                let bindings: Vec<_> = commands
-                    .iter()
-                    .filter_map(|command| match command {
-                        DeckPart::Attach { resource, item_id } => {
-                            Some((*item_id, resource.seek_handle(), resource.render_reader()))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                let result = handle
-                    .send_batch(commands)
-                    .map(drop)
-                    .map_err(|_| PlayError::SlotChannelFull { slot });
-                if result.is_ok() {
-                    for (item_id, seek, render) in bindings {
-                        if let Some(seek) = seek {
-                            handle.bind_seek(item_id, seek);
-                        }
-                        if let Some(render) = render {
-                            handle.bind_render(item_id, render);
-                        }
-                    }
-                }
-                result
-            });
+            .map_or(Err(PlayError::SlotNotFound(slot)), send);
         drop(slots);
         result
     }
+
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)

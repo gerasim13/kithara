@@ -3,10 +3,13 @@ use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
-use super::super::core::{EnqueuedItem, PlayerRuntime};
+use super::super::{
+    core::{EnqueuedItem, PlayerRuntime},
+    track::TrackCommand,
+};
 use crate::{
     api::{CrossfadeSettings, PlayerStatus, SelectionPlayback, TrackId},
-    bridge::{DeckPart, TrackTransition},
+    bridge::DeckPart,
     error::PlayError,
 };
 
@@ -97,7 +100,7 @@ where
     /// flight would mark the index current early and make a later select skip re-enqueuing the
     /// arriving resource.
     pub fn play(&self) {
-        let rate = self.core.lanes.next().speed();
+        let rate = self.core.tracks.lock().next().speed();
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -247,7 +250,8 @@ where
         self.ensure_engine_started()?;
         self.ensure_slot()?;
 
-        let _ = self.send_to_slot(DeckPart::SetRate(self.core.lanes.next().speed()));
+        let rate = self.core.tracks.lock().next().speed();
+        let _ = self.send_to_slot(DeckPart::SetRate(rate));
 
         if armed_for_index {
             self.commit_next(index, crossfade)?;
@@ -284,11 +288,11 @@ where
             return;
         };
         let led = playback.lead(duration_seconds, |epoch| {
-            self.send_to_slot(DeckPart::Fade(TrackTransition::FadeIn {
-                item_id,
-                settings,
-                epoch,
-            }))
+            self.with_tracks(|tracks, out| {
+                tracks
+                    .apply(item_id, TrackCommand::FadeIn { settings, epoch }, out)
+                    .map(drop)
+            })
         });
         if led.is_ok()
             && let Some(loads) = self.phase.lock().pending_loads_mut()

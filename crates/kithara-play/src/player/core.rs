@@ -12,7 +12,8 @@ use super::{
     PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
-    state::{ItemPresentation, ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
+    state::{ItemPresentation, ItemQueue, PlayerPhase, TrackGrid, Tracks},
+    track::Behind,
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
@@ -72,8 +73,8 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) staging: SyncStaging,
     /// Geometry this player publishes for the track it holds.
     pub(crate) track_grid: TrackGrid,
-    /// Render lanes of the tracks the processor holds.
-    pub(crate) lanes: TrackLanes,
+    /// The tracks the deck holds.
+    pub(crate) tracks: Mutex<Tracks>,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -145,22 +146,25 @@ impl<S> PlayerRuntime<S> {
             return Ok(None);
         };
         let src = Arc::clone(item.player_resource.src());
-        let mut commands = vec![DeckPart::Attach {
-            item_id: item.item_id,
-            resource: Box::new(item.player_resource),
-        }];
-        if let Some(from) = behind {
-            let playback = self.slot_playback().ok_or(PlayError::NoActiveSlot)?;
-            commands.push(DeckPart::Chain {
-                from,
-                to: item.item_id,
-                epoch: playback.issue_epoch(),
-            });
-        }
-        self.send_batch_to_slot(commands)?;
-        if let Some(lane) = item.lane {
-            self.core.lanes.load(item.item_id, lane);
-        }
+        let behind = match behind {
+            Some(track) => {
+                let playback = self.slot_playback().ok_or(PlayError::NoActiveSlot)?;
+                Some(Behind {
+                    track,
+                    epoch: playback.issue_epoch(),
+                })
+            }
+            None => None,
+        };
+        self.with_tracks(|tracks, out| {
+            tracks.load(
+                item.item_id,
+                Box::new(item.player_resource),
+                item.lane,
+                behind,
+                out,
+            )
+        })?;
         Ok(Some(EnqueuedItem {
             item_id: item.item_id,
             src,
@@ -646,7 +650,7 @@ mod tests {
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
-        assert!((player.core.lanes.next().speed() - 0.75).abs() < f32::EPSILON);
+        assert!((player.core.tracks.lock().next().speed() - 0.75).abs() < f32::EPSILON);
         assert_eq!(player.rate(), 0.0);
     }
 
@@ -655,7 +659,7 @@ mod tests {
         let player = player();
         player.set_rate(2.0);
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert!((player.core.lanes.next().speed() - 2.0).abs() < f32::EPSILON);
+        assert!((player.core.tracks.lock().next().speed() - 2.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -665,7 +669,7 @@ mod tests {
     fn a_rate_under_the_floor_requests_the_slowest_speed(#[case] rate: f32) {
         let player = player();
         player.set_rate(rate);
-        assert!((player.core.lanes.next().speed() - MIN_SPEED).abs() < f32::EPSILON);
+        assert!((player.core.tracks.lock().next().speed() - MIN_SPEED).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

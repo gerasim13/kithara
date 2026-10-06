@@ -3,7 +3,8 @@ use kithara_platform::sync::Arc;
 #[cfg(test)]
 use super::super::PlayerImpl;
 use super::{
-    super::core::PlayerRuntime,
+    super::{core::PlayerRuntime, track::Outbox},
+    Tracks,
     pending::{PendingLoads, PendingNext},
 };
 use crate::{
@@ -297,16 +298,23 @@ impl<S> PlayerRuntime<S> {
 
     /// Send a part to the current slot's deck for its next block.
     pub(crate) fn send_to_slot(&self, part: DeckPart) -> Result<(), PlayError> {
-        self.send_batch_to_slot(vec![part])
-    }
-
-    /// Send `commands` to the current slot's deck for its next block, admitted together or not
-    /// at all.
-    pub(crate) fn send_batch_to_slot(&self, commands: Vec<DeckPart>) -> Result<(), PlayError> {
         let slot_id = self
             .require_active_slot()
             .map_err(|TransitionError::WrongPhase| PlayError::NoActiveSlot)?;
-        self.core.engine.send_slot_cmd(slot_id, commands)
+        self.core.engine.send_slot_cmd(slot_id, vec![part])
+    }
+
+    /// Runs `apply` on the tracks the active slot's deck holds, with an outbox to that deck.
+    pub(crate) fn with_tracks<R>(
+        &self,
+        apply: impl FnOnce(&mut Tracks, &mut Outbox<'_>) -> Result<R, PlayError>,
+    ) -> Result<R, PlayError> {
+        let slot = self
+            .require_active_slot()
+            .map_err(|TransitionError::WrongPhase| PlayError::NoActiveSlot)?;
+        self.core.engine.with_deck(slot, |deck| {
+            apply(&mut self.core.tracks.lock(), &mut Outbox::new(slot, deck))
+        })
     }
 
     /// Snapshot of the active slot under a short phase lock.

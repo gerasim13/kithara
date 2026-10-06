@@ -8,10 +8,11 @@ use super::super::PlayerImpl;
 use super::super::{
     core::{EnqueuedItem, PlayerRuntime},
     state::{ItemPresentation, PendingLoads, PendingNext, PendingNextState, Played},
+    track::TrackCommand,
 };
 use crate::{
     api::{CrossfadeSettings, EngineEvent, SlotId, SuccessorLink, TrackId},
-    bridge::{DeckPart, PlayerNotification, TrackPlaybackStopReason},
+    bridge::{PlayerNotification, TrackPlaybackStopReason},
     error::PlayError,
 };
 
@@ -232,8 +233,11 @@ where
     fn unload_pending(&self, pending: &PendingNext) {
         let item_id = pending.item_id;
         if pending.state.activated() {
-            let _ = self.send_to_slot(DeckPart::Detach { item_id });
-        } else if self.send_to_slot(DeckPart::Withdraw { item_id }).is_err()
+            let _ =
+                self.with_tracks(|tracks, out| tracks.apply(item_id, TrackCommand::Release, out));
+        } else if self
+            .with_tracks(|tracks, out| tracks.apply(item_id, TrackCommand::Withdraw, out))
+            .is_err()
             && let Some(loads) = self.phase.lock().pending_loads_mut()
         {
             loads.cancel_refused(item_id);
@@ -354,7 +358,7 @@ mod tests {
     use crate::{
         PlayWorker, PlayWorkerConfig,
         api::{EngineEvent, PlayerEvent, SelectionPlayback},
-        bridge::PlaybackFault,
+        bridge::{DeckPart, PlaybackFault, TrackTransition},
         mock,
         player::PlayerConfig,
         resource::Resource,
@@ -480,36 +484,33 @@ mod tests {
     /// plays instead of waiting on a handover that will not happen.
     #[kithara::test]
     fn a_rejected_fade_in_leaves_the_playhead_on_the_playing_item() {
+        let (session, audio_thread) = mock::session_with_mock();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(mock::session())
+                .session(session)
                 .build(),
         );
-        player
-            .ensure_engine_started()
-            .expect("engine start must succeed");
-        player.ensure_slot().expect("slot allocation must succeed");
-        if let Some(pending_slot) = player.phase.lock().pending_mut() {
-            *pending_slot = Some(PendingNext {
-                item_id: TrackId::allocate(),
-                src: Arc::from("next.mp3"),
-                state: PendingNextState::Armed(ItemPresentation {
-                    beat_grid: Arc::default(),
-                    abr_handle: None,
-                    staging: None,
-                }),
-                index: 1,
-                duration_seconds: 162.0,
-            });
+        for src in ["first", "second"] {
+            player.insert(resource(src), TrackId::allocate(), None);
         }
+        player.play();
+        let lead = audio_thread
+            .take_commands()
+            .iter()
+            .find_map(|command| match command {
+                DeckPart::Fade(TrackTransition::FadeIn { epoch, .. }) => Some(*epoch),
+                _ => None,
+            })
+            .expect("play fades the first item in");
+        player
+            .arm_next(1, SuccessorLink::Gapless)
+            .expect("preload accepted");
         let playback = player
-            .slot()
-            .and_then(|slot| player.core.engine.slot_playback(slot))
+            .slot_playback()
             .expect("the slot must carry playback state");
-        playback.position.store(62.3);
-        playback.duration.store(64.295);
+        playback.adopt(lead, 62.3, 64.295);
         while player.send_to_slot(DeckPart::StartAll).is_ok() {}
 
         player

@@ -6,6 +6,9 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 
 #[cfg(test)]
+use crate::api::SlotId;
+
+#[cfg(test)]
 pub(crate) const BACKGROUND: TrackId = TrackId(9);
 
 #[cfg(test)]
@@ -20,6 +23,9 @@ pub(crate) const IDENTITY_DOMAIN: &[u8] = b"kithara.play.query-identity.v1\0";
 
 #[cfg(test)]
 pub(crate) const BLOCK_FRAMES: usize = 512;
+
+#[cfg(test)]
+pub(crate) const DECK_SLOT: SlotId = SlotId::new(0);
 
 #[cfg(test)]
 pub(crate) const SAMPLE_RATE: u32 = 44_100;

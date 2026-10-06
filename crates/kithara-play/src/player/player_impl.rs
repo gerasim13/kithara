@@ -24,7 +24,7 @@ use crate::{
         PlayerConfig, PlayerControl,
         config::TrackSettings,
         staging::SyncStaging,
-        state::{ItemQueue, PlayerPhase, TrackGrid, TrackLanes},
+        state::{ItemQueue, PlayerPhase, TrackGrid, Tracks},
     },
     worker::EngineLoad,
 };
@@ -112,7 +112,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .speed(config.default_rate())
             .keylock(config.warp.keylock())
             .backend(config.warp.backend());
-        let lanes = TrackLanes::new(settings.build());
+        let tracks = Mutex::new(Tracks::new(settings.build()));
         let grid_id = config.grid_id;
         let sample_rate = config.sample_rate;
         let core = PlayerCore {
@@ -124,7 +124,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             start_position: Mutex::default(),
             items: ItemQueue::new(bus),
             track_grid,
-            lanes,
+            tracks,
         };
         Self {
             grid_id,
