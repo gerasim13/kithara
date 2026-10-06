@@ -9,6 +9,7 @@ mod playable;
 mod source;
 
 pub use context::{Context, Factory, SectionError};
+use kithara_workspace_hack as _;
 pub use page::{Document, Endpoint, Registration, SourcePage};
 pub use playable::{NoSource, Playable};
 pub use source::{BranchNode, LibrarySource, PAGES, PageStatus, worded};

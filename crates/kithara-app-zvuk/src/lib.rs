@@ -9,6 +9,8 @@ mod model;
 mod page;
 mod ui;
 
+use kithara_workspace_hack as _;
+
 pub use crate::{client::Client, config::Config, ui::Source};
 pub(crate) use crate::{
     error::{Error, GraphQlError},
