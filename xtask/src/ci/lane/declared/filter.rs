@@ -27,11 +27,7 @@ pub(super) fn apply(
     expression: &str,
     project: &ProjectConfig,
 ) -> Result<bool> {
-    if role != "just"
-        || !args
-            .get(..2)
-            .is_some_and(|prefix| prefix == ["test", "run"])
-    {
+    if request(role, args).is_none() {
         return Ok(false);
     }
     let lane_name = args
@@ -52,7 +48,22 @@ pub(super) fn apply(
         return Ok(false);
     }
     intersect(args, expression)?;
+    let mut recipe = true;
+    args.retain(|arg| {
+        if arg == "--" {
+            recipe = false;
+        }
+        !recipe || arg != "--touched"
+    });
     Ok(true)
+}
+
+pub(super) fn request<'a>(role: &str, args: &'a [String]) -> Option<&'a [String]> {
+    if role == "just" && args.get(..2).is_some_and(|prefix| prefix == ["test", "run"]) {
+        Some(&args[2..])
+    } else {
+        None
+    }
 }
 
 /// Every caller filter is a union member in the test harness. Narrow each
@@ -227,5 +238,25 @@ doc = true
             assert!(!apply(role, &mut args, "test(contract)", &project()).unwrap());
             assert_eq!(args, before);
         }
+    }
+
+    #[test]
+    fn an_explicit_filter_runs_even_when_touched_paths_do_not_select_the_suite() {
+        let mut args = ["test", "run", "--touched", "--flash=off", "--timings"]
+            .map(str::to_owned)
+            .to_vec();
+        assert!(apply("just", &mut args, "test(contract)", &project()).unwrap());
+        assert!(!args.iter().any(|arg| arg == "--touched"));
+        assert_eq!(
+            args,
+            [
+                "test",
+                "run",
+                "--flash=off",
+                "--timings",
+                "-E",
+                "test(contract)"
+            ]
+        );
     }
 }

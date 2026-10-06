@@ -243,6 +243,7 @@ jobs:
           path: artifacts
 
       - name: Run the lane
+        id: run_lane
         env:
           GITHUB_FETCH_TOKEN: ${{ github.token }}
           LANE: ${{ inputs.lane }}
@@ -293,7 +294,7 @@ jobs:
       # will produce that file, and an upload that finds nothing is that
       # claim broken, not a reason to warn and move on.
       - name: Upload the lane's report
-        if: ${{ always() && env.LANE_ARTIFACT_PATH != '' && (env.LANE_ARTIFACT_WHEN == 'always' || failure()) }}
+        if: ${{ always() && env.LANE_ARTIFACT_PATH != '' && (env.LANE_ARTIFACT_WHEN == 'always' || steps.run_lane.outcome == 'failure') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.LANE_ARTIFACT_NAME }}-${{ github.run_id }}-${{ github.run_attempt }}
