@@ -310,6 +310,30 @@ pub(super) fn park_after_outcome(
     report: PassReport,
     progress_streak: &mut u32,
 ) {
+    // DIAG ONLY (#606), never merged: how long each park held the worker.
+    let parked = Instant::now();
+    let outcome = match report.outcome {
+        PassOutcome::Progress => 0_u64,
+        PassOutcome::Waiting => 1,
+        PassOutcome::UpstreamPending => 2,
+        PassOutcome::Backpressured => 3,
+        PassOutcome::Idle => 4,
+    };
+    park_by_outcome(wake, budgets, report, progress_streak);
+    kithara::probe_event!(
+        diag_park,
+        outcome = outcome,
+        active = u64::try_from(report.active_tasks).unwrap_or(u64::MAX),
+        waited_us = u64::try_from(parked.elapsed().as_micros()).unwrap_or(u64::MAX)
+    );
+}
+
+fn park_by_outcome(
+    wake: &Wake,
+    budgets: &DispatcherConfig,
+    report: PassReport,
+    progress_streak: &mut u32,
+) {
     match report.outcome {
         PassOutcome::Progress => {
             *progress_streak += 1;

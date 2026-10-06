@@ -5,10 +5,61 @@
 //! starved capture shows whether the deck's worker ran, waited for a CPU, or
 //! slept while the ring ran dry.
 
-use std::{fs, path::Path};
+use std::{fmt::Write as _, fs, path::Path};
 
-use kithara::platform::time::{Duration, WallInstant};
+use kithara::platform::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, WallInstant},
+};
+use kithara_integration_tests::usdt_trace;
 use serde::Serialize;
+
+/// Spinning threads per test process while a paced capture runs, standing in
+/// for the neighbours a contended runner's cores carry. Flash builds skip them:
+/// a spin the engine counts as running would freeze the virtual clock.
+const HOG_THREADS: usize = 2;
+
+struct Hog {
+    stop: Arc<AtomicBool>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Hog {
+    fn start() -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let count = if cfg!(feature = "flash") {
+            0
+        } else {
+            HOG_THREADS
+        };
+        let threads = (0..count)
+            .map(|index| {
+                let stop = Arc::clone(&stop);
+                std::thread::Builder::new()
+                    .name(format!("diag-hog-{index}"))
+                    .spawn(move || {
+                        while !stop.load(Ordering::Relaxed) {
+                            std::hint::spin_loop();
+                        }
+                    })
+                    .expect("diag hog thread")
+            })
+            .collect();
+        Self { stop, threads }
+    }
+}
+
+impl Drop for Hog {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
 
 #[derive(Serialize)]
 struct ThreadSample {
@@ -44,6 +95,10 @@ struct Dump<'a> {
 pub(crate) struct SchedLog {
     origin: WallInstant,
     blocks: Vec<BlockSample>,
+    /// The probe recording, type-erased: it lives exactly as long as the log,
+    /// which `finish` consumes.
+    _trace: Box<dyn std::any::Any>,
+    _hog: Box<dyn std::any::Any>,
 }
 
 impl SchedLog {
@@ -51,11 +106,22 @@ impl SchedLog {
         Self {
             origin: WallInstant::now(),
             blocks: Vec::new(),
+            _trace: Box::new(usdt_trace::scope()),
+            _hog: Box::new(Hog::start()),
         }
     }
 
     pub(crate) fn block(&mut self, block: usize, render: Duration, underruns: u64) {
         let at_us = micros(self.origin.elapsed());
+        kithara_test_utils::tracing::event!(
+            target: "kithara_test_probe",
+            kithara_test_utils::tracing::Level::TRACE,
+            probe = "diag_block",
+            block = u64::try_from(block).unwrap_or(u64::MAX),
+            at_us = at_us,
+            render_us = micros(render),
+            underruns = underruns,
+        );
         self.blocks.push(BlockSample {
             block,
             at_us,
@@ -69,7 +135,7 @@ impl SchedLog {
 
     /// Write the log beside the hang dumps the lane uploads, when the capture
     /// starved.
-    pub(crate) fn finish(&self, label: &str, starved: bool) {
+    pub(crate) fn finish(self, label: &str, starved: bool) {
         if !starved {
             return;
         }
@@ -90,12 +156,28 @@ impl SchedLog {
             return;
         };
         let _ = fs::create_dir_all(&dir);
-        let name = format!(
-            "warp-sched-{label}-{}-{}.json",
+        let stamp = format!(
+            "{label}-{}-{}",
             std::process::id(),
             micros(self.origin.elapsed())
         );
-        let _ = fs::write(Path::new(&dir).join(name), bytes);
+        let _ = fs::write(
+            Path::new(&dir).join(format!("warp-sched-{stamp}.json")),
+            bytes,
+        );
+        let (events, overflowed) = usdt_trace::recorded();
+        let mut timeline = format!("overflowed={overflowed} events={}\n", events.len());
+        for event in &events {
+            let _ = write!(timeline, "{:?} {}", event.thread, event.probe);
+            for (name, value) in event.fields() {
+                let _ = write!(timeline, " {name}={value}");
+            }
+            timeline.push('\n');
+        }
+        let _ = fs::write(
+            Path::new(&dir).join(format!("warp-trace-{stamp}.txt")),
+            timeline,
+        );
     }
 }
 

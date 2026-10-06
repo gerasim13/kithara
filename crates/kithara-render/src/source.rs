@@ -34,6 +34,45 @@ impl DrainState {
     }
 }
 
+/// DIAG ONLY (#606), never merged: the drain state as a probe field.
+const fn diag_drain(state: DrainState) -> u64 {
+    match state {
+        DrainState::Open => 0,
+        DrainState::LiveWarp(_) => 1,
+        DrainState::Warp(_) => 2,
+        DrainState::Effects(_) => 3,
+        DrainState::Exhausted(_) => 4,
+    }
+}
+
+/// DIAG ONLY (#606), never merged: a step's variant as a probe field.
+const fn diag_step<C>(step: &TrackStep<C>) -> u64 {
+    match step {
+        TrackStep::Produced(_) => 1,
+        TrackStep::StateChanged => 2,
+        TrackStep::Blocked(WaitingReason::Waiting) => 3,
+        TrackStep::Blocked(_) => 4,
+        TrackStep::Eof => 5,
+        TrackStep::Failed => 6,
+    }
+}
+
+/// DIAG ONLY (#606), never merged: a quantum preparation as a probe field.
+const fn diag_prepare(result: &Result<FrameCount, WarpRenderError>) -> u64 {
+    match result {
+        Ok(_) => 0,
+        Err(WarpRenderError::PendingActivation) => 1,
+        Err(WarpRenderError::Preroll { .. }) => 2,
+        Err(WarpRenderError::NeedsService) => 3,
+        Err(WarpRenderError::OutstandingQuantum) => 4,
+        Err(_) => 5,
+    }
+}
+
+fn diag_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 struct PendingInput {
     chunk: AudioChunk,
     epoch: u64,
@@ -418,8 +457,19 @@ where
         remaining: usize,
     ) -> Result<FrameCount, WarpRenderError> {
         self.lane.execute_due(&mut self.warp);
-        self.warp
-            .prepare_quantum(meta, remaining, self.lane.output_limit())
+        let output_limit = self.lane.output_limit();
+        let result = self.warp.prepare_quantum(meta, remaining, output_limit);
+        tracing::event!(
+            target: "kithara_render_probe",
+            tracing::Level::TRACE,
+            probe = "diag_prepare",
+            result = diag_prepare(&result),
+            frames = result.as_ref().map_or(0, |frames| diag_u64(frames.get())),
+            remaining = diag_u64(remaining),
+            output_limit = diag_u64(output_limit),
+            transition = u64::from(self.warp.transition_pending()),
+        );
+        result
     }
 
     fn prepare_renderers(&mut self, spec: AudioSpec) {
@@ -428,7 +478,15 @@ where
         if self.warp.transition_pending() && matches!(self.drain_state, DrainState::Open) {
             self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
         }
-        if !self.warp.transition_pending() {
+        if self.warp.transition_pending() {
+            tracing::event!(
+                target: "kithara_render_probe",
+                tracing::Level::TRACE,
+                probe = "diag_skip",
+                drain = diag_drain(self.drain_state),
+                pending = u64::from(self.pending_input.is_some()),
+            );
+        } else {
             self.prepare_staging();
         }
         for effect in &mut self.effects {
@@ -532,6 +590,97 @@ where
         reset_effects(&mut self.effects);
     }
 
+    fn diag_step_track(&mut self) -> TrackStep<AudioChunk> {
+        self.sync_discontinuity();
+        if self.cancel_stale_input() {
+            return TrackStep::StateChanged;
+        }
+        if self.cancel_stale_drain() {
+            return TrackStep::StateChanged;
+        }
+        if self.quantum_failed {
+            return TrackStep::Failed;
+        }
+
+        if matches!(self.drain_state, DrainState::Exhausted(_)) {
+            return TrackStep::Eof;
+        }
+        if let Some(step) = self.drain_step() {
+            return step;
+        }
+        if let Some(step) = self.render_whole_pending() {
+            return step;
+        }
+        if let Some(step) = self.render_full_quantum() {
+            return step;
+        }
+        if self.pending_input.is_some() {
+            if self.prepared_frames.is_none() {
+                return TrackStep::Blocked(WaitingReason::Waiting);
+            }
+            self.stage_pending();
+            return self
+                .render_full_quantum()
+                .unwrap_or(TrackStep::StateChanged);
+        }
+        if !self.warp.accepts_input() {
+            return TrackStep::Failed;
+        }
+
+        let inner = self.source.step_track();
+        tracing::event!(
+            target: "kithara_render_probe",
+            tracing::Level::TRACE,
+            probe = "diag_inner",
+            result = diag_step(&inner),
+        );
+        match inner {
+            TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
+                if data.spec() == self.spec
+                    && self.prepared_frames.is_none()
+                    && self
+                        .prepare_quantum(data.meta, data.frames())
+                        .is_ok_and(|frames| frames.get() == data.frames())
+                {
+                    return self
+                        .render_source_quantum(data, epoch)
+                        .map_or(TrackStep::StateChanged, TrackStep::Produced);
+                }
+                self.pending_input = Some(PendingInput {
+                    epoch,
+                    chunk: data,
+                    consumed_frames: 0,
+                });
+                TrackStep::StateChanged
+            }
+            TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
+            TrackStep::Eof => {
+                self.begin_drain(self.source.decode_epoch());
+                let frames = self.staged_frames();
+                if frames == 0 {
+                    TrackStep::StateChanged
+                } else {
+                    let Some(meta) = self.staged_meta else {
+                        self.quantum_failed = true;
+                        return TrackStep::Failed;
+                    };
+                    let Some(frames) = self.warp.prepare_terminal_quantum(meta, frames) else {
+                        self.quantum_failed = true;
+                        return TrackStep::Failed;
+                    };
+                    self.prepared_frames = Some(frames.get());
+                    self.render_staged(frames.get())
+                }
+            }
+            TrackStep::StateChanged => {
+                self.sync_discontinuity();
+                TrackStep::StateChanged
+            }
+            TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
+            TrackStep::Failed => TrackStep::Failed,
+        }
+    }
+
     fn sync_discontinuity(&mut self) {
         let next = self.source.discontinuity();
         let revision_changed = next.as_ref().map(SourceDiscontinuity::revision)
@@ -584,87 +733,20 @@ where
     }
 
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
-        self.sync_discontinuity();
-        if self.cancel_stale_input() {
-            return TrackStep::StateChanged;
-        }
-        if self.cancel_stale_drain() {
-            return TrackStep::StateChanged;
-        }
-        if self.quantum_failed {
-            return TrackStep::Failed;
-        }
-
-        if matches!(self.drain_state, DrainState::Exhausted(_)) {
-            return TrackStep::Eof;
-        }
-        if let Some(step) = self.drain_step() {
-            return step;
-        }
-        if let Some(step) = self.render_whole_pending() {
-            return step;
-        }
-        if let Some(step) = self.render_full_quantum() {
-            return step;
-        }
-        if self.pending_input.is_some() {
-            if self.prepared_frames.is_none() {
-                return TrackStep::Blocked(WaitingReason::Waiting);
-            }
-            self.stage_pending();
-            return self
-                .render_full_quantum()
-                .unwrap_or(TrackStep::StateChanged);
-        }
-        if !self.warp.accepts_input() {
-            return TrackStep::Failed;
-        }
-
-        match self.source.step_track() {
-            TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
-                if data.spec() == self.spec
-                    && self.prepared_frames.is_none()
-                    && self
-                        .prepare_quantum(data.meta, data.frames())
-                        .is_ok_and(|frames| frames.get() == data.frames())
-                {
-                    return self
-                        .render_source_quantum(data, epoch)
-                        .map_or(TrackStep::StateChanged, TrackStep::Produced);
-                }
-                self.pending_input = Some(PendingInput {
-                    epoch,
-                    chunk: data,
-                    consumed_frames: 0,
-                });
-                TrackStep::StateChanged
-            }
-            TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
-            TrackStep::Eof => {
-                self.begin_drain(self.source.decode_epoch());
-                let frames = self.staged_frames();
-                if frames == 0 {
-                    TrackStep::StateChanged
-                } else {
-                    let Some(meta) = self.staged_meta else {
-                        self.quantum_failed = true;
-                        return TrackStep::Failed;
-                    };
-                    let Some(frames) = self.warp.prepare_terminal_quantum(meta, frames) else {
-                        self.quantum_failed = true;
-                        return TrackStep::Failed;
-                    };
-                    self.prepared_frames = Some(frames.get());
-                    self.render_staged(frames.get())
-                }
-            }
-            TrackStep::StateChanged => {
-                self.sync_discontinuity();
-                TrackStep::StateChanged
-            }
-            TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-            TrackStep::Failed => TrackStep::Failed,
-        }
+        let step = self.diag_step_track();
+        tracing::event!(
+            target: "kithara_render_probe",
+            tracing::Level::TRACE,
+            probe = "diag_warp_step",
+            result = diag_step(&step),
+            drain = diag_drain(self.drain_state) * 10 + u64::from(self.warp.transition_pending()),
+            pending = self.pending_input.as_ref().map_or(0, |pending| {
+                diag_u64(pending.chunk.frames().saturating_sub(pending.consumed_frames)) + 1
+            }),
+            prepared = self.prepared_frames.map_or(0, |frames| diag_u64(frames) + 1),
+            staged = diag_u64(self.staged_frames()),
+        );
+        step
     }
 
     delegate::delegate! {

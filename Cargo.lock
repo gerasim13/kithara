@@ -5830,6 +5830,7 @@ dependencies = [
  "kithara-warp",
  "kithara-workspace-hack",
  "num-traits",
+ "tracing",
 ]
 
 [[package]]
