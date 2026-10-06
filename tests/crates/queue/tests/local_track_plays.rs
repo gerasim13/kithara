@@ -280,7 +280,7 @@ async fn local_track_plays_end_to_end(
     let mut rng = Xorshift64::new(rng_seed);
     for i in 0..3 {
         let target = duration * rng.range_f64(0.05, 0.95);
-        queue.seek(target).expect("seek");
+        queue.run(move |q| q.seek(target)).await.expect("seek");
         // `before` / `after` come from the sink-truth events (the wait
         // helpers' return values), NOT the REAL-clock tick cache, which
         // goes stale once these waits collapse real time.
@@ -305,7 +305,10 @@ async fn local_track_plays_end_to_end(
     // through no fault of the render cadence. Anchoring at 25% of duration
     // guarantees a full 2s of remaining audio for every fixture.
     let window_anchor = duration * 0.25;
-    queue.seek(window_anchor).expect("seek to window anchor");
+    queue
+        .run(move |q| q.seek(window_anchor))
+        .await
+        .expect("seek to window anchor");
     wait_for_position_near_event(&mut rx, &queue, window_anchor, 1.0, Duration::from_secs(5))
         .await
         .unwrap_or_else(|e| panic!("window anchor seek [{label}]: {e}"));
@@ -345,7 +348,10 @@ async fn local_track_plays_end_to_end(
         &label,
     );
 
-    queue.remove(track_id).expect("remove");
+    queue
+        .run(move |q| q.remove(track_id))
+        .await
+        .expect("remove");
     tick_handle.stop().await;
     queue.close().await;
 }
@@ -448,10 +454,13 @@ async fn local_queue_playlist_behavior(
         .await;
 
     queue
-        .set_crossfade_settings(kithara::play::CrossfadeSettings {
-            duration: 2.0,
-            ..Default::default()
+        .run(|q| {
+            q.set_crossfade_settings(kithara::play::CrossfadeSettings {
+                duration: 2.0,
+                ..Default::default()
+            })
         })
+        .await
         .expect("valid crossfade settings");
 
     let mut rx = queue.subscribe();
@@ -491,7 +500,7 @@ async fn local_queue_playlist_behavior(
         .await
         .expect("first track position");
 
-    queue.pause();
+    queue.run(QueueControl::pause).await;
     // Let the pause take effect on the same (virtual) clock as playback.
     // Raw `PlaybackProgress` carries no track id, so in a crossfade/preload
     // playlist the queue-visible pause position must come from the queue
@@ -524,7 +533,7 @@ async fn local_queue_playlist_behavior(
 
     let duration_0 = queue.duration_seconds().expect("duration for first track");
     let seek_target = duration_0 * 0.4;
-    queue.seek(seek_target).expect("seek");
+    queue.run(move |q| q.seek(seek_target)).await.expect("seek");
     wait_for_position_near_event(&mut rx, &queue, seek_target, 1.0, Duration::from_secs(5))
         .await
         .expect("seek landed near target");
@@ -579,7 +588,10 @@ async fn local_queue_playlist_behavior(
                         .duration_seconds()
                         .ok_or_else(|| "duration unknown".to_string())?;
                     let near_end = (dur - f64::from(xf_duration) - 2.0).max(0.0);
-                    queue.seek(near_end).map_err(|e| format!("seek: {e}"))?;
+                    queue
+                        .run(move |q| q.seek(near_end))
+                        .await
+                        .map_err(|e| format!("seek: {e}"))?;
                     wait_for_queue_event(
                     &mut rx,
                     |ev| matches!(
@@ -606,8 +618,10 @@ async fn local_queue_playlist_behavior(
         let dur = queue
             .duration_seconds()
             .ok_or_else(|| "duration unknown".to_string())?;
+        let target = (dur - 3.0).max(0.0);
         queue
-            .seek((dur - 3.0).max(0.0))
+            .run(move |q| q.seek(target))
+            .await
             .map_err(|e| format!("seek: {e}"))?;
         wait_for_queue_event(
             &mut rx,

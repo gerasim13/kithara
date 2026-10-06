@@ -329,6 +329,8 @@ impl Registry {
     /// No competing select arm may drop a batch and lose unspawned commands' completion callbacks.
     /// Latch an elapsed ABR deadline: re-polling its completed future after peer cancellation would panic.
     /// Returns [`FetchProgress`] so quiet completion wakes cannot trigger the downloader watchdog.
+    /// ABR deadlines, the tick timestamp, and batch enqueue stamps share the
+    /// session clock.
     #[kithara::flash(true)]
     pub(super) async fn tick(
         &mut self,

@@ -146,7 +146,8 @@ impl AbrState {
     const NO_BANDWIDTH_CAP: u64 = 0;
     const NO_SWITCH: u64 = 0;
 
-    /// Build an `AbrState` with the initial variant set from `mode`.
+    /// Build an `AbrState` with the initial variant set from `mode`. The
+    /// session starts on the clock its ticks are evaluated on.
     #[must_use]
     #[kithara::flash(true)]
     pub fn new(mode: AbrMode) -> Self {

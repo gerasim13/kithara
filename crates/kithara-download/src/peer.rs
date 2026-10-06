@@ -248,6 +248,8 @@ impl PeerHandle {
 
     /// Build a High-priority imperative `InternalCmd` paired with its
     /// response receiver. Shared by [`Self::execute`] and [`Self::batch`].
+    /// The enqueue stamp is read on the clock the batch measures its queue
+    /// wait on.
     #[kithara::flash(true)]
     fn make_imperative(
         &self,
