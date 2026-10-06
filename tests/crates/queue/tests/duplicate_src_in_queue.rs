@@ -193,7 +193,7 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         "the selected real source must have played"
     );
     assert_eq!(queue.current().map(|entry| entry.id), Some(playing));
-    assert_eq!(status_of(&queue, playing), TrackStatus::Loaded);
+    assert_eq!(status_of(&queue, playing), TrackStatus::Consumed);
     let sibling_status = status_of(&queue, first);
     let mut events = queue.subscribe::<TestEvent>();
 

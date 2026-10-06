@@ -229,7 +229,11 @@ fn observe_audio_event(
             if matches!(policy, EventPolicy::MutedSeekSetup)
                 && deck.seek_request_epoch == Some(*seek_epoch)
             {
-                if deck.muted_seek_underrun_epoch.replace(*seek_epoch).is_some() {
+                if deck
+                    .muted_seek_underrun_epoch
+                    .replace(*seek_epoch)
+                    .is_some()
+                {
                     failures.push(format!(
                         "deck {deck_index} ({}) reported duplicate muted seek underrun during {phase}",
                         deck.observation.label,

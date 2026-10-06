@@ -555,14 +555,20 @@ mod tests {
         assert!(data_tx.try_push(Fetch::failure(0, failure)).is_ok());
         drop(data_tx);
 
-        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_none());
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_none()
+        );
         assert!(matches!(
             ring.phase,
             ConsumerPhase::Failed {
                 source: FailureSource::Producer { failure: actual },
             } if actual == failure
         ));
-        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_none());
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_none()
+        );
         assert!(matches!(
             ring.phase,
             ConsumerPhase::Failed {
@@ -585,9 +591,15 @@ mod tests {
         assert!(data_tx.try_push(Fetch::data(chunk, 0)).is_ok());
         drop(data_tx);
 
-        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_some());
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_some()
+        );
         assert_eq!(ring.phase, ConsumerPhase::Buffering);
-        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_none());
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_none()
+        );
         assert!(matches!(
             ring.phase,
             ConsumerPhase::Failed {
