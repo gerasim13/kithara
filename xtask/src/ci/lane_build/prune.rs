@@ -19,10 +19,12 @@ use tracing::{info, warn};
 use super::layout::{profiles, subdirectories};
 use crate::consts;
 
-struct Unit {
-    profile: PathBuf,
-    hash: String,
-    used: SystemTime,
+/// A build unit and the time its builds last used it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UnitUse {
+    pub(crate) profile: PathBuf,
+    pub(crate) hash: String,
+    pub(crate) used: SystemTime,
 }
 
 /// Removes the units the slot's builds stopped using, the scratch its tests
@@ -30,10 +32,7 @@ struct Unit {
 pub(super) fn prune(dir: &Path, window: Duration) -> Result<()> {
     info!("pruning lane slot {}", dir.display());
     let started = Instant::now();
-    let mut units = Vec::new();
-    for profile in profiles(dir)? {
-        units.extend(units_of(&profile)?);
-    }
+    let units = unit_uses(dir)?;
     let cutoff = units
         .iter()
         .map(|unit| unit.used)
@@ -66,10 +65,20 @@ pub(super) fn prune(dir: &Path, window: Duration) -> Result<()> {
     Ok(())
 }
 
+/// Every build unit in `dir`, in each of its profiles, with the time its builds
+/// last used it.
+pub(crate) fn unit_uses(dir: &Path) -> Result<Vec<UnitUse>> {
+    let mut units = Vec::new();
+    for profile in profiles(dir)? {
+        units.extend(units_of(&profile)?);
+    }
+    Ok(units)
+}
+
 /// A profile's build units, each with the time its builds last used it. A name
 /// in `.fingerprint` or `build` that is not `<name>-<hash>` is an error: it is
 /// a toolchain laying units out in a way this pruning does not know.
-fn units_of(profile: &Path) -> Result<Vec<Unit>> {
+fn units_of(profile: &Path) -> Result<Vec<UnitUse>> {
     for entry in entries(&profile.join("build"))? {
         unit_hash(&entry)?;
     }
@@ -83,7 +92,7 @@ fn units_of(profile: &Path) -> Result<Vec<Unit>> {
                 .with_context(|| format!("reading when {} was last used", file.display()))?;
             used = used.max(modified);
         }
-        units.push(Unit {
+        units.push(UnitUse {
             profile: profile.to_path_buf(),
             hash,
             used,
@@ -111,16 +120,27 @@ fn entry_hash(path: &Path) -> Option<&str> {
         .then_some(hash)
 }
 
-/// Removes a profile's files of the given units. Cargo names each with the
-/// unit's hash; what it names without one, such as `deps/<crate>.d` of a
-/// cdylib or the `rmeta*` directories, stays.
-fn remove_units(profile: &Path, hashes: &BTreeSet<&str>) -> Result<u64> {
-    let mut bytes = 0_u64;
+/// The files and directories Cargo names after a unit in `profile`, each with
+/// that unit's hash. What it names without one, such as `deps/<crate>.d` of a
+/// cdylib or the `rmeta*` directories, belongs to no unit.
+pub(crate) fn unit_paths(profile: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut paths = Vec::new();
     for kind in [".fingerprint", "build", "deps", "examples"] {
         for path in entries(&profile.join(kind))? {
-            if entry_hash(&path).is_some_and(|hash| hashes.contains(hash)) {
-                bytes = bytes.saturating_add(remove(&path));
+            if let Some(hash) = entry_hash(&path).map(str::to_owned) {
+                paths.push((hash, path));
             }
+        }
+    }
+    Ok(paths)
+}
+
+/// Removes a profile's files of the given units.
+pub(crate) fn remove_units(profile: &Path, hashes: &BTreeSet<&str>) -> Result<u64> {
+    let mut bytes = 0_u64;
+    for (hash, path) in unit_paths(profile)? {
+        if hashes.contains(hash.as_str()) {
+            bytes = bytes.saturating_add(remove(&path));
         }
     }
     Ok(bytes)

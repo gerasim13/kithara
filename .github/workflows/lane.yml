@@ -72,13 +72,13 @@ on:
         description: How long the lane may take before the job is killed.
         required: true
         type: number
-      fetch-depth:
+      history:
         description: >-
-          How much history the lane reads. The tip alone is enough for
-          anything that does not compare against a revision; `0` is the whole
-          history, which a baseline comparison needs.
-        default: 1
-        type: number
+          Whether the lane reads the history of the commit it checks out, as a
+          comparison against an earlier revision does. Without it the lane
+          runs on the tip alone.
+        default: false
+        type: boolean
       artifact-name:
         description: Name of the artifact to upload, when the lane leaves one.
         default: ''
@@ -117,15 +117,15 @@ env:
   # What this run produces again rather than reads from the store; empty unless
   # the pipeline was dispatched to refill it.
   KITHARA_FIXTURE_REFRESH: ${{ inputs.fixture-refresh }}
-  # Bootstrap xtask beside the runner's persistent Cargo target. Without this,
-  # every fresh Actions checkout recompiles xtask before the lane can start.
-  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
-  # No build directory here. Everything before the lane, the xtask bootstrap
-  # included, builds in the runner's own `CARGO_TARGET_DIR`. `ci lane` takes
-  # the first free slot of the lane's pool under `KITHARA_CI_TARGET_ROOT`, so
-  # jobs of one lane build side by side instead of queueing for one
-  # directory, and exports the slot as `KITHARA_LANE_TARGET` for the steps
-  # after it.
+  # Bootstrap xtask under the build root every runner mounts. Without this,
+  # every fresh Actions checkout recompiles xtask before the lane can start;
+  # kept per runner, each runner held its own bootstrap build and Cargo home
+  # and compiled xtask again for a commit another runner had already built.
+  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
+  # No build directory here. `ci lane` takes the first free slot of the
+  # lane's pool under `KITHARA_CI_TARGET_ROOT`, so jobs of one lane build side
+  # by side instead of queueing for one directory, and exports the slot as
+  # `KITHARA_LANE_TARGET` for the steps after it.
 
 permissions:
   contents: read
@@ -229,7 +229,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: ${{ inputs.resolve && format('{0}', fromJSON(needs.select.outputs.matrix)[0].depth) || inputs.fetch-depth }}
+
+      # Not checkout's `fetch-depth: 0`: that fetches every branch and tag, and
+      # the runner keeps its checkout, with garbage collection off, for every
+      # job after this one.
+      - name: Fetch the history of the checked-out commit
+        if: ${{ fromJSON(needs.select.outputs.matrix || '[]')[0].history || inputs.history }}
+        run: git fetch --no-tags --quiet --depth=2147483647 origin "$(git rev-parse HEAD)"
+
+      # Checkout sets `gc.auto` to zero, so every fetch into the checkout the
+      # runner keeps left a pack behind for good. Git's default thresholds
+      # decide when they are repacked.
+      - name: Collect the checkout's garbage
+        run: git -c gc.auto=6700 -c gc.autoDetach=false gc --auto --quiet
 
       # The whole run's artifacts, not only the named ones: every upload below
       # suffixes its name with the run id and attempt so a re-run cannot collide

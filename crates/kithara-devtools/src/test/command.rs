@@ -52,7 +52,7 @@ pub fn is_selected(root: &Path, project: &ProjectConfig, args: &[String]) -> Res
     let test = &project.test;
     validate_config(test)?;
     if request.touched {
-        return Ok(!touched::lanes(root, test, &request.lanes)?.is_empty());
+        return Ok(!touched::lanes(test, root, &request.lanes)?.is_empty());
     }
     select_lane(test, &request)?;
     Ok(true)
@@ -60,7 +60,7 @@ pub fn is_selected(root: &Path, project: &ProjectConfig, args: &[String]) -> Res
 
 /// Run every lane the branch touched.
 fn run_touched(test: &TestCommandConfig, root: &Path, request: &TestRequest) -> Result<()> {
-    let selected = touched::lanes(root, test, &request.lanes)?;
+    let selected = touched::lanes(test, root, &request.lanes)?;
     if selected.is_empty() {
         println!("no owned path touched; the nightly sweep covers these lanes");
         return Ok(());

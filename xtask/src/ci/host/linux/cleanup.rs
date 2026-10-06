@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::{fs, io, path::PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
@@ -85,7 +85,7 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         ],
         "prune the build cache",
     );
-    let target_dirs = target_dirs(host);
+    let target_dirs = target_dirs(host)?;
     build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
 }
@@ -120,16 +120,39 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
 }
 
 /// Where the live build caches sit on disk, so their contents can be held to a
-/// budget: the root every runner claims a lane directory under, and the
-/// per-runner directory a job that claims no lane still builds in.
-fn target_dirs(host: &LinuxHost) -> Vec<PathBuf> {
+/// budget: the root every runner claims a lane directory under, the xtask
+/// bootstrap of each trust every runner shares, and the per-runner directory a
+/// job that claims no lane still builds in.
+fn target_dirs(host: &LinuxHost) -> Result<Vec<PathBuf>> {
     let mut dirs = vec![Container::lane_root(host)];
+    let bootstrap = Container::bootstrap_root(host);
+    match fs::read_dir(&bootstrap) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.with_context(|| {
+                    format!(
+                        "reading an entry in xtask bootstrap {}",
+                        bootstrap.display()
+                    )
+                })?;
+                if entry.file_type()?.is_dir() {
+                    dirs.push(entry.path());
+                }
+            }
+        }
+        // No job has bootstrapped xtask on this host yet.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading xtask bootstrap {}", bootstrap.display()));
+        }
+    }
     dirs.extend(
         host.runners
             .iter()
             .map(|runner| Container::target_dir(host, runner)),
     );
-    dirs
+    Ok(dirs)
 }
 
 #[cfg(test)]
@@ -166,6 +189,22 @@ mod tests {
         );
     }
 
+    /// Every runner of the host bootstraps xtask in one build per trust, and
+    /// that build answers to the budget like the lane slots beside it.
+    #[test]
+    fn the_xtask_bootstrap_every_runner_shares_answers_to_the_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let mut host = crate::ci::host::linux::profile::tests::host_fixture();
+        host.cache_root = root.path().to_path_buf();
+        let review = Container::bootstrap_root(&host).join("review");
+        fs::create_dir_all(&review).unwrap();
+
+        assert!(
+            target_dirs(&host).unwrap().contains(&review),
+            "the shared xtask bootstrap escapes the budget"
+        );
+    }
+
     #[test]
     fn build_cache_budget_uses_the_profile_storage_root() {
         let host = crate::ci::host::linux::profile::tests::host_fixture();
@@ -176,7 +215,7 @@ mod tests {
                     .map(|runner| host.cache_root.join("target").join(&runner.name)),
             )
             .collect();
-        assert_eq!(target_dirs(&host), expected);
+        assert_eq!(target_dirs(&host).unwrap(), expected);
     }
 
     #[test]

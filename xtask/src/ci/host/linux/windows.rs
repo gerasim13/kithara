@@ -483,4 +483,66 @@ mod tests {
             "{json}"
         );
     }
+
+    /// The guest signs itself in on every restart with a password nobody
+    /// types, and Windows expires a local password after 42 days. Once it
+    /// had, the sign-in failed and the runner, which starts in that session,
+    /// never came back. Provisioning ends in a restart, so the account is
+    /// settled before it runs.
+    #[test]
+    fn the_account_the_guest_signs_in_as_never_has_its_password_expire() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits inside the workspace");
+        let text = fs::read_to_string(root.join(consts::GUEST_ANSWER_FILE)).unwrap();
+        let answer = roxmltree::Document::parse(&text).unwrap();
+        let text_of = |node: roxmltree::Node<'_, '_>, name: &str| {
+            node.children()
+                .find(|child| child.has_tag_name(name))
+                .and_then(|child| child.text())
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        };
+        let user = answer
+            .descendants()
+            .find(|node| node.has_tag_name("AutoLogon"))
+            .map(|logon| text_of(logon, "Username"))
+            .expect("the guest signs itself in");
+        let mut commands: Vec<(u32, String)> = answer
+            .descendants()
+            .filter(|node| node.has_tag_name("FirstLogonCommands"))
+            .flat_map(|list| list.children().filter(roxmltree::Node::is_element))
+            .map(|command| {
+                (
+                    text_of(command, "Order").parse().unwrap(),
+                    text_of(command, "CommandLine"),
+                )
+            })
+            .collect();
+        commands.sort();
+
+        let provision = Path::new(consts::GUEST_PROVISION_SCRIPT)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap();
+        let provisions = commands
+            .iter()
+            .position(|(_, line)| line.contains(provision))
+            .expect("the first sign-in provisions the guest");
+        let settles = commands
+            .iter()
+            .position(|(_, line)| {
+                line.contains(&format!(
+                    "Set-LocalUser -Name {user} -PasswordNeverExpires $true"
+                ))
+            })
+            .unwrap_or_else(|| {
+                panic!("nothing keeps `{user}`'s password from expiring: {commands:?}")
+            });
+        assert!(
+            settles < provisions,
+            "the password is settled after provisioning restarts the guest: {commands:?}"
+        );
+    }
 }

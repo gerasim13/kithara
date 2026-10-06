@@ -8,10 +8,10 @@ use std::{
 use anyhow::{Context, Result};
 use tracing::info;
 
-/// Cargo's profile directories: `<profile>` and `<triple or nested target>/<profile>`,
-/// each told by its `.fingerprint`.
+/// Cargo's profile directories: `dir` itself, `<profile>` and
+/// `<triple or nested target>/<profile>`, each told by its `.fingerprint`.
 pub(super) fn profiles(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut candidates = Vec::new();
+    let mut candidates = vec![dir.to_path_buf()];
     for top in subdirectories(dir)? {
         candidates.extend(subdirectories(&top)?);
         candidates.push(top);
