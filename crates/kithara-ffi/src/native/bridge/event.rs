@@ -964,15 +964,19 @@ mod tests {
             .expect("insert task completes")
             .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
         let queue = owner.control().clone();
-        queue.set_repeat(kithara::queue::RepeatMode::One);
-        queue.set_rate(1.0);
         let mut events = queue.subscribe();
         let track = assets::sine_wav_a440_100_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
-        let id = queue
-            .append(track.to_string_lossy().into_owned())
-            .expect("open queue accepts a local track");
+        let setup = queue.clone();
+        let id = spawn_blocking(move || {
+            setup.set_repeat(kithara::queue::RepeatMode::One);
+            setup.set_rate(1.0);
+            setup.append(track.to_string_lossy().into_owned())
+        })
+        .await
+        .expect("setup task completes")
+        .expect("open queue accepts a local track");
         let loaded = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await;
         assert!(
             loaded.observed(),
