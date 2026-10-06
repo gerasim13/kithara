@@ -147,7 +147,7 @@ fn model_lock(cache: &Path, path: &Path) -> Option<fs::File> {
             return None;
         }
     };
-    if let Err(err) = lock.lock() {
+    if let Err(err) = fs4::FileExt::lock(&lock) {
         println!("cargo::error=cannot lock {}: {err}", lock_path.display());
         return None;
     }

@@ -37,7 +37,7 @@ mod script {
         let hash = env::var("KITHARA_TEST_MODEL_HASH").expect("pinned source hash");
         if mode == "fetch" {
             println!("probe-ready");
-            std::io::stdout().flush().expect("announce lock contender");
+            io::stdout().flush().expect("announce lock contender");
             println!(
                 "model-accepted={}",
                 fetch(&cache, &cache.join(super::consts::FILE), &url, &hash)
@@ -139,7 +139,7 @@ impl Fixture {
             .expect("workspace manifest")
             .parse()
             .expect("workspace dependency declarations");
-        let dependencies: toml::Table = ["hex", "sha2"]
+        let dependencies: toml::Table = ["fs4", "hex", "sha2"]
             .into_iter()
             .map(|name| {
                 (
@@ -317,7 +317,7 @@ fn a_corrupt_source_placed_by_another_lock_holder_is_validated() {
         .write(true)
         .open(fixture.cached_path().with_extension("onnx.lock"))
         .expect("source lock");
-    lock.lock().expect("hold the model name lock");
+    fs4::FileExt::lock(&lock).expect("hold the model name lock");
     let mut child = fixture
         .command("fetch", &fixture.out)
         .stdout(Stdio::piped())
