@@ -35,7 +35,11 @@ pub(crate) fn is_selected(
     for step in &lane.steps {
         let role = step.program.as_deref().unwrap_or(&lane.program);
         let args = step.args_by_kind.get(kind.name()).unwrap_or(&step.args);
-        if role != "just" || !args.get(..2).is_some_and(|prefix| prefix == ["test", "run"]) {
+        if role != "just"
+            || !args
+                .get(..2)
+                .is_some_and(|prefix| prefix == ["test", "run"])
+        {
             return Ok(true);
         }
         if kithara_devtools::test::is_selected(root, project, &args[2..])? {
