@@ -39,7 +39,7 @@ use super::{
     manifest::{CacheManifest, Freshness},
     publish,
 };
-use crate::{ci::config::CiPins, config::XtaskCacheConfig, consts};
+use crate::{ci::CiPins, config::XtaskCacheConfig, consts};
 
 #[derive(Debug, Args)]
 pub(crate) struct SelfCacheArgs {
