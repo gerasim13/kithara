@@ -228,4 +228,24 @@ doc = true
             assert_eq!(args, before);
         }
     }
+
+    #[test]
+    fn an_explicit_filter_runs_even_when_touched_paths_do_not_select_the_suite() {
+        let mut args = ["test", "run", "--touched", "--flash=off", "--timings"]
+            .map(str::to_owned)
+            .to_vec();
+        assert!(apply("just", &mut args, "test(contract)", &project()).unwrap());
+        assert!(!args.iter().any(|arg| arg == "--touched"));
+        assert_eq!(
+            args,
+            [
+                "test",
+                "run",
+                "--flash=off",
+                "--timings",
+                "-E",
+                "test(contract)"
+            ]
+        );
+    }
 }

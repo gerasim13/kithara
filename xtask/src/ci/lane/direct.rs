@@ -474,6 +474,133 @@ label = "run"
         );
     }
 
+    #[cfg(unix)]
+    fn touched_lane(root: &Path, changed: &str) -> (Ctx, LaneArgs, PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        git_init(root);
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .current_dir(root)
+                .args([
+                    "-c",
+                    "user.name=fixture",
+                    "-c",
+                    "user.email=fixture@example.test",
+                ])
+                .args(args)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_WORK_TREE")
+                .status()
+                .expect("run fixture git");
+            assert!(status.success(), "fixture git {args:?}");
+        };
+        git(&["branch", "-M", "main"]);
+        git(&["commit", "--allow-empty", "--no-gpg-sign", "-qm", "base"]);
+        git(&[
+            "remote",
+            "add",
+            "origin",
+            root.to_str().expect("UTF-8 fixture root"),
+        ]);
+        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&["checkout", "-qb", "topic"]);
+        let path = root.join(changed);
+        fs::create_dir_all(path.parent().expect("changed path has a parent")).unwrap();
+        fs::write(path, "changed").unwrap();
+        git(&["add", changed]);
+        git(&["commit", "--no-gpg-sign", "-qm", "change"]);
+
+        let called = root.join("called");
+        let just = root.join("just");
+        fs::write(
+            &just,
+            format!("#!/bin/sh\nprintf ran > '{}'\n", called.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
+        let (mut ctx, args) = lane_running(
+            root,
+            "just",
+            r#"args = ["test", "run", "--touched", "--timings"]"#,
+            "mtime",
+        );
+        ctx.config.tools = toml::from_str(&format!("[just]\nprogram = \"{}\"\n", just.display()))
+            .expect("fixture just tool");
+        ctx.config.test = toml::from_str(
+            r#"
+default_lane = "workspace"
+default_backend = "http"
+nextest_config = ".config/nextest.toml"
+[net_backends.http]
+[lanes.workspace.cargo]
+workspace = true
+exclude = ["tools"]
+[lanes.tooling]
+owns = ["xtask/"]
+cargo.packages = ["tools"]
+"#,
+        )
+        .expect("fixture test lanes");
+        (ctx, args, called)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_touched_lane_with_no_selected_tests_claims_no_build_slot() {
+        let temp = tempfile::tempdir().unwrap();
+        let lanes = tempfile::tempdir().unwrap();
+        let (ctx, args, called) = touched_lane(temp.path(), "xtask/probe.rs");
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").unwrap();
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                (consts::TARGET_ROOT_ENV, lanes.path().to_str().unwrap()),
+                ("GITHUB_ENV", github_env.to_str().unwrap()),
+            ]),
+        )
+        .expect("an unselected lane succeeds without building");
+
+        assert!(
+            !lanes.path().join("review-lane-trivial-0").exists(),
+            "a lane with no selected tests must not claim a build directory"
+        );
+        assert_eq!(fs::read_to_string(github_env).unwrap(), "");
+        assert!(!called.exists(), "a skipped lane executes no test command");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unowned_changed_path_keeps_the_touched_build_selected() {
+        let temp = tempfile::tempdir().unwrap();
+        let lanes = tempfile::tempdir().unwrap();
+        let (ctx, args, called) = touched_lane(temp.path(), "crates/probe.rs");
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").unwrap();
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                (consts::TARGET_ROOT_ENV, lanes.path().to_str().unwrap()),
+                ("GITHUB_ENV", github_env.to_str().unwrap()),
+            ]),
+        )
+        .expect("an unowned path selects the workspace build");
+
+        assert!(called.exists(), "the selected test step must run");
+        let slot = lanes.path().join("review-lane-trivial-0");
+        assert!(slot.exists());
+        assert_eq!(
+            fs::read_to_string(github_env).unwrap(),
+            format!("{}={}\n", consts::LANE_TARGET_ENV, slot.display())
+        );
+    }
+
     /// A checksum lane decides its build-script runs at the claim and records
     /// them at the settle, and keeps no record of the checkout's mtimes.
     #[test]
