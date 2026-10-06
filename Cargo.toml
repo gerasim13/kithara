@@ -429,6 +429,7 @@ gloo-timers = { version = "0.4", features = ["futures"] }
 hex = "0.4"
 hls_m3u8 = "0.7.0"
 hotpath = "0.19.1"
+humantime = "2.4.0"
 humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 

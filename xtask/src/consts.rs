@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    net::{Ipv4Addr, SocketAddrV4},
+    time::Duration,
+};
 
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
@@ -153,6 +156,7 @@ pub(crate) const CONTROL_PATHS: &[&str] = &[
     ".config/just/",
     ".config/mutation-suites.toml",
     ".config/nextest.toml",
+    ".config/sccache/",
     ".config/xtask.toml",
     "ci/",
     "docker/",
@@ -199,8 +203,9 @@ pub(crate) const CACHE_REGION: &str = "us-east-1";
 /// retention had to be a single unfiltered rule expiring everything after a
 /// day. That rule also governed the snapshot layers, so a multi-gigabyte
 /// source layer would have been republished daily. Naming the compiler cache
-/// makes retention expressible per layer. The cost is paid once: existing
-/// compiler-cache objects sit at the old keys and are not read again.
+/// gives each layer its own retention, and the evictor its own entries. The
+/// cost is paid once: existing compiler-cache objects sit at the old keys and
+/// are not read again.
 pub(crate) const SCCACHE_PREFIX: &str = "sccache";
 
 /// Directory every Unix executor reads the installed host profile from.
@@ -216,6 +221,49 @@ pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
 
 /// Repository-relative location of the cache stack's Compose file.
 pub(crate) const CACHE_COMPOSE_FILE: &str = "docker/ci-cache.compose.yml";
+
+/// Where the cache stack's own processes reach the store: beside them, in
+/// the one container the stack is.
+pub(crate) const CACHE_STORE_URL: &str = "http://127.0.0.1:9000";
+
+/// How long one request asking the starting store whether it is ready may
+/// take before the next one is due.
+pub(crate) const CACHE_READY_REQUEST: Duration = Duration::from_secs(2);
+
+/// How often the cache stack asks its starting store whether it is ready.
+pub(crate) const CACHE_READY_POLL: Duration = Duration::from_millis(250);
+
+/// Where the cache stack's evictor hears the store's audit log. It takes
+/// every delivery on trust, and loopback keeps every job out: the jobs share
+/// the network the store is published on.
+pub(crate) const EVICT_LISTEN: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9180);
+
+/// Bucket the evictor keeps each scope's record of last use in. It is no
+/// scope's bucket, so neither a quota nor eviction applies to it.
+pub(crate) const RECENCY_BUCKET: &str = "ci-cache-recency";
+
+/// Format of a scope's record of last reads: this byte, then each entry's
+/// hash and the second it was last read, big-endian, in hash order.
+pub(crate) const RECENCY_RECORD_VERSION: u8 = 1;
+
+/// Bytes each entry takes in a record of last reads: its hash, then its last
+/// read.
+pub(crate) const RECENCY_RECORD_BYTES: usize = 32 + 8;
+
+/// The object the evictor asks for to learn that the audit log is arriving,
+/// and writes to make the store recount a bucket. It is no compiler-cache
+/// entry.
+pub(crate) const EVICT_MARKER: &str = ".evict/recount";
+
+/// The largest body the evictor reads from one audit delivery. The store
+/// sends one request per delivery, a few hundred bytes; anything larger is
+/// not its audit log.
+pub(crate) const AUDIT_BODY_LIMIT: u64 = 1 << 20;
+
+/// The hash of a compiler-cache entry, as sccache names its objects.
+#[cfg(test)]
+pub(crate) const ENTRY_HASH: &str =
+    "abc0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc";
 
 /// Keys nextest reads on a profile. Inside a `junit` table it drops them
 /// with a warning, which is how `[profile.ci.junit]` swallowed two of them.
@@ -463,6 +511,9 @@ pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNE
 /// The toolchain rustup runs a step's cargo with.
 pub(crate) const TOOLCHAIN_ENV: &str = "RUSTUP_TOOLCHAIN";
 
+/// Where Cargo builds when told; unset, it builds in `<workspace>/target`.
+pub(crate) const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+
 /// The commit web release packaging tells the FFI build it is built from.
 pub(crate) const BUILD_REVISION_ENV: &str = "KITHARA_BUILD_REVISION";
 
@@ -524,6 +575,11 @@ pub(crate) const SCCACHE_MISSING_UDS_CODE: Option<&str> = if cfg!(unix) {
 
 pub(crate) const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
 
+/// How `simctl delete` refuses a device that does not exist.
+pub(crate) const SIMCTL_INVALID_DEVICE: &str = "Invalid device";
+
+pub(crate) const SIMCTL_INVALID_DEVICE_EXIT: i32 = 148;
+
 /// Lanes no pipeline schedules and no fleet claims. Each one is reached by
 /// name alone and says so with empty membership, which is a declaration
 /// rather than an oversight - and naming them here is what keeps a lane
@@ -568,6 +624,14 @@ pub(crate) const SCCACHE_SLOT_CACHE_NAMESPACE: &str = "sccache-slots";
 /// cache disappear and force concurrent clients to race its restart.
 pub(crate) const SCCACHE_IDLE_TIMEOUT: &str = "0";
 
+/// The compiler wrapper Cargo runs, relative to the checkout: sccache, minus
+/// the build directory. Cargo builds at a slot's own path, which native build
+/// tools record, and sccache keys a compilation on every `CARGO_*` variable,
+/// so that path would give every slot and job directory entries of its own.
+/// cc-rs hands it a build script's C compiles only under a compiler cache's
+/// name.
+pub(crate) const COMPILER_CACHE_WRAPPER: &str = ".config/sccache/sccache";
+
 /// How many `main` runs the journal keeps. One is not enough: a test that fails
 /// a quarter of the time would otherwise land in a branch's column whenever the
 /// single remembered run happened to be green, and block on its own noise.
@@ -605,13 +669,6 @@ pub(crate) const SELF_PROGRAM: &str = "<xtask>";
 /// The checkout a lane resolves in. A compiler flag that has to name a file in
 /// the repository needs an absolute path, and only the runner knows it.
 pub(crate) const ROOT_PLACEHOLDER: &str = "{root}";
-
-/// The build-cache directory the process leased, i.e. `CARGO_TARGET_DIR` as
-/// the executor set it, not `{root}/target`. A lane that writes its own build
-/// under a fixed `{root}`-relative path escapes the lease the eviction and
-/// reclaim machinery tracks; one that asks for `{target}` stays inside it the
-/// same way the process's own build does.
-pub(crate) const TARGET_PLACEHOLDER: &str = "{target}";
 
 /// A reviewed pin, by name: `{pin.msrv_toolchain}` is the value that key holds
 /// in `.config/ci-pins.toml`.
