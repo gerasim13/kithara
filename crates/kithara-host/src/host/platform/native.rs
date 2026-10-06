@@ -9,7 +9,7 @@ use kithara_warp::BeatGridId;
 use super::{
     super::{Host, HostOwned},
     PlatformResult,
-    deck_pass::{DeckPass, DeckThread},
+    deck_pass::{DeckThread, Pace},
     decks::Decks,
 };
 use crate::{
@@ -33,7 +33,7 @@ impl<S> PlatformResult<Self> for StartedPlatform<S> {
 }
 
 pub(in crate::host) struct Platform<S> {
-    decks: DeckPass,
+    decks: DeckThread,
     /// The decks the Host stopped ticking as it closed. They drop with the
     /// platform, after the session that renders them has shut down.
     retired: Decks,
@@ -49,10 +49,10 @@ impl<S> Platform<S> {
 
     #[cfg(feature = "offline")]
     pub(in crate::host) fn offline() -> Self {
-        Self::owner(DeckPass::Blocks(Decks::default()))
+        Self::owner(DeckThread::spawn(Pace::Blocks))
     }
 
-    fn owner(decks: DeckPass) -> Self {
+    fn owner(decks: DeckThread) -> Self {
         Self {
             decks,
             retired: Decks::default(),
@@ -78,10 +78,7 @@ impl<S> Platform<S> {
     {
         let dispatcher =
             crate::session::native::spawn::<S>(root, view, output_block_frames, output, settings);
-        (
-            dispatcher,
-            Self::owner(DeckPass::Clock(DeckThread::spawn())),
-        )
+        (dispatcher, Self::owner(DeckThread::spawn(Pace::Clock)))
     }
 }
 

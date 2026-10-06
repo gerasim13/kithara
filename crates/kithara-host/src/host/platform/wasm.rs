@@ -3,6 +3,7 @@ use std::{
     mem,
     num::NonZeroU32,
     rc::{Rc, Weak},
+    task::{Wake, Waker},
 };
 
 use kithara_bufpool::HasPool;
@@ -14,10 +15,11 @@ use kithara_platform::{
 };
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
+use send_wrapper::SendWrapper;
 
 use super::{
     super::{Host, HostOwned, owner::SessionRuntime},
-    decks::Decks,
+    decks::{Deck, Decks},
 };
 use crate::{
     HostSettings, consts,
@@ -42,7 +44,8 @@ impl<S> Platform<S> {
             route.close();
         }
         if let Some(decks) = platform.remote_decks.take() {
-            let decks = mem::take(&mut *decks.borrow_mut());
+            let mut decks = mem::take(&mut *decks.borrow_mut());
+            decks.release_all();
             let mut deck_count = 0_usize;
             for deck in decks {
                 deck_count += 1;
@@ -76,7 +79,7 @@ impl<S> Platform<S> {
     #[cfg(feature = "offline")]
     pub(in crate::host) fn tick_block(&self) {
         if let Some(decks) = &self.remote_decks {
-            decks.borrow().tick();
+            decks.borrow_mut().tick();
         }
     }
 
@@ -145,9 +148,40 @@ fn spawn_clock(decks: Weak<RefCell<Decks>>) {
             let Some(decks) = decks.upgrade() else {
                 break;
             };
-            decks.borrow().tick();
+            decks.borrow_mut().tick();
         }
     });
+}
+
+/// Drains one deck on the Worker that holds it, inside the wake: a caller on
+/// that Worker blocks on its answer, so nothing else would run the deck
+/// before the caller reads it.
+struct WorkerWake {
+    id: BeatGridId,
+    decks: SendWrapper<Weak<RefCell<Decks>>>,
+}
+
+impl WorkerWake {
+    fn waker(decks: &WorkerDecks, id: BeatGridId) -> Waker {
+        Waker::from(Arc::new(Self {
+            id,
+            decks: SendWrapper::new(Rc::downgrade(decks)),
+        }))
+    }
+}
+
+impl Wake for WorkerWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    /// Decks the Host already let go of released this one, so a wake that
+    /// finds them gone had nothing left to run.
+    fn wake_by_ref(self: &Arc<Self>) {
+        if let Some(decks) = self.decks.upgrade() {
+            decks.borrow_mut().drain(self.id);
+        }
+    }
 }
 
 impl<S> Host<S>
@@ -167,7 +201,9 @@ where
         let decks = Rc::clone(self.session.platform().worker_decks()?);
         let (grid_id, control) = self.bind_player(&mut player)?;
         self.dispatcher.attach(grid_id)?;
-        decks.borrow_mut().hold(grid_id, Box::new(player));
+        let mut deck: Deck = Box::new(player);
+        deck.hold(WorkerWake::waker(&decks, grid_id));
+        decks.borrow_mut().hold(grid_id, deck);
         let owned = self.owned::<P>(grid_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;
@@ -231,19 +267,17 @@ mod tests {
         cell::{Cell, RefCell},
         num::NonZeroU32,
         rc::Rc,
+        task::Waker,
     };
 
     use delegate::delegate;
-    use kithara_audio::{ConsumerWakeMode, SeekOutcome};
+    use kithara_audio::ConsumerWakeMode;
     use kithara_platform::{sync::Arc, time};
-    use kithara_play::{
-        PlayError, SessionDispatcher,
-        player::{PlaybackView, Player},
-    };
+    use kithara_play::{PlayError, SessionDispatcher, player::Player};
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::BeatGridId;
 
-    use super::{Host, Platform, SessionRuntime, WorkerDecks, spawn_clock};
+    use super::{Host, Platform, SessionRuntime, WorkerDecks, WorkerWake, spawn_clock};
     use crate::{
         HostSettings, consts,
         host::owner::SessionRoot,
@@ -271,10 +305,11 @@ mod tests {
         OtherError,
     }
 
-    /// A deck that closes with a chosen outcome and counts its ticks and
-    /// drops.
+    /// A deck that closes with a chosen outcome and counts its drains, ticks
+    /// and drops.
     struct DeckProbe {
         close: Outcome,
+        drains: Rc<Cell<usize>>,
         drops: Rc<RefCell<usize>>,
         ticks: Rc<Cell<usize>>,
     }
@@ -296,19 +331,15 @@ mod tests {
             }
         }
 
-        fn pause(&self) {}
-
-        fn play(&self) {}
-
-        fn playback_view(&self) -> PlaybackView {
-            PlaybackView::default()
+        fn drain(&mut self) {
+            self.drains.set(self.drains.get() + 1);
         }
 
-        fn seek_seconds(&self, _seconds: f64) -> Result<SeekOutcome, PlayError> {
-            Err(PlayError::Internal("a fixture deck does not seek".into()))
-        }
+        fn hold(&mut self, _waker: Waker) {}
 
-        fn tick(&self) -> Result<(), PlayError> {
+        fn release(&mut self) {}
+
+        fn tick(&mut self) -> Result<(), PlayError> {
             self.ticks.set(self.ticks.get() + 1);
             Ok(())
         }
@@ -317,6 +348,7 @@ mod tests {
     fn deck(close: Outcome, drops: &Rc<RefCell<usize>>) -> Box<DeckProbe> {
         Box::new(DeckProbe {
             close,
+            drains: Rc::default(),
             drops: Rc::clone(drops),
             ticks: Rc::default(),
         })
@@ -459,12 +491,30 @@ mod tests {
                 .platform()
                 .worker_decks()
                 .expect("a Worker Host holds decks")
-                .borrow()
+                .borrow_mut()
                 .tick();
             assert_eq!(ticks.get(), 1, "the Host still holds the deck");
             drop(host);
             assert_eq!(*drops.borrow(), 0);
         }
+    }
+
+    #[kithara::test(wasm)]
+    fn a_wake_drains_a_worker_deck_before_it_returns() {
+        let decks = WorkerDecks::default();
+        let probe = deck(Outcome::Ok, &Rc::default());
+        let drains = Rc::clone(&probe.drains);
+        let id = BeatGridId::allocate().expect("fixture deck grid id");
+        let waker = WorkerWake::waker(&decks, id);
+        decks.borrow_mut().hold(id, probe);
+
+        waker.wake_by_ref();
+
+        assert_eq!(
+            drains.get(),
+            1,
+            "a caller on the Worker reads its answer right after it posts"
+        );
     }
 
     #[kithara::test(wasm)]

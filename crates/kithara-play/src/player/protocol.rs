@@ -1,36 +1,36 @@
-use kithara_audio::SeekOutcome;
+use std::task::Waker;
+
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::BeatGridId;
 
-use super::{PlaybackView, PlayerImpl, PlayerRuntime};
+use super::{PlayerImpl, PlayerRuntime};
 use crate::{PlayError, SessionBinding};
 
-/// Canonical object-safe protocol implemented by a standalone player and its
-/// orchestration decorators.
+/// What an executor that holds a player or decorator calls on it.
 ///
-/// Queue-specific item, EQ, volume, and event APIs remain on their concrete
-/// facade. This contract contains only playback operations shared by every
-/// host member; the session binds through
+/// The executor owns the player for as long as it holds it: it runs the
+/// commands the player's handles post when the player wakes it, and ticks it
+/// at the executor's pace. Item, EQ, volume, and event APIs stay on the
+/// concrete handle; the session binds through
 /// [`PlayerControlSource::attach_session`].
 pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 
-    /// Pause playback.
-    fn pause(&self);
+    /// Run every command posted since the last drain.
+    fn drain(&mut self);
 
-    /// Start or resume playback.
-    fn play(&self);
+    /// An executor took the player: from now on its handles' commands reach
+    /// it, and `waker` tells the executor when to drain them.
+    fn hold(&mut self, waker: Waker);
 
-    /// Read one coherent playback view.
-    fn playback_view(&self) -> PlaybackView;
-
-    /// Seek within the current item.
-    fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
+    /// The executor let the player go: commands it had not drained are
+    /// dropped, and later ones are refused until an executor holds it again.
+    fn release(&mut self);
 
     /// Advance control-plane and audio-backend work.
-    fn tick(&self) -> Result<(), PlayError>;
+    fn tick(&mut self) -> Result<(), PlayError>;
 }
 
 /// Produces a cloneable command capability without sharing player identity.
@@ -58,6 +58,8 @@ pub trait PlayerControlSource: Player {
     fn prepare_control(control: &Self::Control) -> Result<(), PlayError>;
 }
 
+/// A bare player runs its control's commands on the caller, behind its own
+/// operations gate, so an executor that holds it has nothing to drain.
 impl<S> Player for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
@@ -66,30 +68,13 @@ where
         self.make_control().close()
     }
 
-    fn pause(&self) {
-        let _ = self.runtime.with_open(PlayerRuntime::pause);
-    }
+    fn drain(&mut self) {}
 
-    fn play(&self) {
-        let _ = self.runtime.with_open(PlayerRuntime::play);
-    }
+    fn hold(&mut self, _waker: Waker) {}
 
-    fn playback_view(&self) -> PlaybackView {
-        if self.runtime.is_closed() {
-            return PlaybackView::default();
-        }
-        self.runtime
-            .playback_snapshot()
-            .map(PlaybackView::from)
-            .unwrap_or_default()
-    }
+    fn release(&mut self) {}
 
-    fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.seek_seconds(seconds))
-    }
-
-    fn tick(&self) -> Result<(), PlayError> {
+    fn tick(&mut self) -> Result<(), PlayError> {
         self.runtime.with_open_result(PlayerRuntime::tick)
     }
 }

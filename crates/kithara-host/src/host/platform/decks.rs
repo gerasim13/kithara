@@ -33,18 +33,37 @@ impl Decks {
             .close()
     }
 
+    /// Runs the commands posted to the deck `id`. A deck let go before its
+    /// wake arrived dropped those commands as it was released.
+    pub(super) fn drain(&mut self, id: BeatGridId) {
+        if let Some((_, deck)) = self.0.iter_mut().find(|(held, _)| *held == id) {
+            deck.drain();
+        }
+    }
+
+    /// Lets go of the deck `id` and hands it back released.
     pub(super) fn release(&mut self, id: BeatGridId) -> Result<Deck, PlayError> {
         let index = self
             .0
             .iter()
             .position(|(held, _)| *held == id)
             .ok_or(SessionError::DeckNotFound(id))?;
-        Ok(self.0.remove(index).1)
+        let (_, mut deck) = self.0.remove(index);
+        deck.release();
+        Ok(deck)
+    }
+
+    /// Releases every deck while keeping it here, so none takes a command
+    /// after its holder stopped.
+    pub(super) fn release_all(&mut self) {
+        for (_, deck) in &mut self.0 {
+            deck.release();
+        }
     }
 
     /// Ticks every deck once; a deck whose tick fails stays held.
-    pub(super) fn tick(&self) {
-        for (id, deck) in &self.0 {
+    pub(super) fn tick(&mut self) {
+        for (id, deck) in &mut self.0 {
             if let Err(error) = deck.tick() {
                 warn!(?id, %error, "host deck tick failed");
             }

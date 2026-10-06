@@ -1,7 +1,9 @@
+use std::task::Waker;
+
 use kithara_bufpool::HasPool;
 use kithara_play::{
-    BeatGridId, PlayError, SeekOutcome, SessionBinding,
-    player::{PlaybackView, Player, PlayerControlSource},
+    BeatGridId, PlayError, SessionBinding,
+    player::{Player, PlayerControlSource},
 };
 
 use super::Queue;
@@ -10,18 +12,19 @@ impl<S> Player for Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    fn drain(&mut self) {}
+
+    fn hold(&mut self, _waker: Waker) {}
+
+    fn release(&mut self) {}
+
     delegate::delegate! {
         to self.control {
-            fn play(&self);
-            fn pause(&self);
-            fn playback_view(&self) -> PlaybackView;
             fn close(&mut self) -> Result<(), PlayError>;
         }
         to self {
-            #[call(seek_player)]
-            fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError>;
             #[call(tick_player)]
-            fn tick(&self) -> Result<(), PlayError>;
+            fn tick(&mut self) -> Result<(), PlayError>;
         }
     }
 }
