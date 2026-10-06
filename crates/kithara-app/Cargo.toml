@@ -125,7 +125,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 clap = { workspace = true }
 iced = { workspace = true, optional = true, features = ["tiny-skia"] }
 rfd = { workspace = true, optional = true }
-sha2 = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 # Desktop (non-Apple, non-Android, native) — fall back to symphonia
@@ -161,7 +160,6 @@ kithara = { workspace = true, default-features = false, features = ["usdt", "dow
 kithara-app = { path = ".", default-features = false, features = ["usdt"] }
 kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "temp-dir"] }
 
 futures = { workspace = true }

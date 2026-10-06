@@ -441,9 +441,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-url = { workspace = true }
 
 [lints]
 workspace = true

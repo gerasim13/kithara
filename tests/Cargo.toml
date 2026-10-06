@@ -7,9 +7,6 @@ license.workspace = true
 publish = false
 autotests = false
 
-[package.metadata.cargo-machete]
-ignored = ["serial_test"]
-
 [[bin]]
 name = "test_server"
 path = "bin/test_server.rs"
@@ -148,7 +145,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Testing framework
-serial_test = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -205,8 +201,6 @@ kithara-encode = { workspace = true, default-features = false, optional = true }
 kithara-record = { workspace = true, features = ["assets"], optional = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "hls", "hls-inputs", "signal"] }
 
-assert_no_alloc = { workspace = true }
-
 # HTTP server. The axum stack is not available on WASM, which is the whole
 # reason these are declared per target rather than plainly.
 axum = { workspace = true }
@@ -218,9 +212,7 @@ hotpath = { workspace = true, optional = true }
 
 # RSS memory profiling
 memory-stats = { workspace = true }
-
 # Storage
-mmap-io = { workspace = true }
 
 # Seeded RNG for user-simulation e2e scenarios. Tests in
 # `tests/crates/queue/tests/user_simulation/` need a deterministic
@@ -250,8 +242,6 @@ kithara = { workspace = true, default-features = false, optional = true }
 # fetching their bytes from the native test server.
 kithara-test-fixtures = { workspace = true, default-features = false }
 
-gloo-timers = { workspace = true }
-
 # WASM-specific
 js-sys = { workspace = true }
 reqwest = { workspace = true }
@@ -259,7 +249,6 @@ reqwest = { workspace = true }
 # The Web Audio backend reports its own start-up failures through `log`; without
 # the bridge a silent audio node is silent in the lane output too.
 tracing-log = { workspace = true }
-tracing-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
@@ -270,7 +259,6 @@ web-sys = { workspace = true }
 kithara = { workspace = true, features = ["download", "android"] }
 
 [dev-dependencies]
-toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-dylib = { workspace = true }

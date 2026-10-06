@@ -80,7 +80,6 @@ iced = { workspace = true, optional = true }
 iced_renderer = { workspace = true, optional = true }
 iced_runtime = { workspace = true, optional = true }
 iced_wgpu = { workspace = true, optional = true }
-kurbo = { workspace = true }
 lucide-icons = { workspace = true, optional = true }
 masonry = { workspace = true, optional = true }
 naga = { workspace = true, optional = true }

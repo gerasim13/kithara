@@ -619,7 +619,6 @@ bytemuck = { version = "1", default-features = false, features = ["aarch64_simd"
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
 firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
 futures-channel = { version = "0.3" }
-futures-core = { version = "0.3" }
 futures-util = { version = "0.3" }
 half = { version = "2" }
 js-sys = { version = "0.3" }
@@ -639,7 +638,6 @@ bytemuck = { version = "1", default-features = false, features = ["aarch64_simd"
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
 firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
 futures-channel = { version = "0.3" }
-futures-core = { version = "0.3" }
 futures-util = { version = "0.3" }
 half = { version = "2" }
 js-sys = { version = "0.3" }
