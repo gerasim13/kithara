@@ -1346,6 +1346,106 @@ fn ambient_blocking_closure_pins_virtual_clock() {
 /// 50ms real release, opposite verdict on the sibling's 10ms virtual park.
 #[kithara::test(native, flash(false))]
 fn a_yielding_blocking_closure_releases_the_virtual_clock() {
+    let waited = park_beside_a_waiting_closure(crate::thread::yield_now, park_for_10ms);
+    assert!(
+        waited < Duration::from_millis(40),
+        "a yielding blocking closure held the virtual clock for its whole real \
+         lifetime: a 10ms deadline took {waited:?} real to fire"
+    );
+}
+
+/// The backoff twin of [`a_yielding_blocking_closure_releases_the_virtual_clock`].
+/// Async code backs off through `spawn_blocking(|| paced_backoff(..))`, and on the
+/// pooled thread that backoff was a real sleep under the closure's credit. Each
+/// step held the clock still, so a poll loop that backs off until a timed
+/// producer delivers kept the producer's own deadlines from firing. That is how
+/// `packaged_abr_switch_keeps_player_continuity` reached its 30s wall timeout
+/// with a quarter of a virtual second spent.
+#[kithara::test(native, flash(false))]
+fn a_backing_off_blocking_closure_releases_the_virtual_clock() {
+    let waited = park_beside_a_waiting_closure(
+        || crate::thread::paced_backoff(Duration::from_millis(1)),
+        park_for_10ms,
+    );
+    assert!(
+        waited < Duration::from_millis(40),
+        "a backing-off blocking closure held the virtual clock for its whole real \
+         lifetime: a 10ms deadline took {waited:?} real to fire"
+    );
+}
+
+/// A gate poll is a deadline the clock owes a stop, not a backstop under an
+/// edge, even though it parks a thread. A yielder beside it used to be turned
+/// back at the current instant whenever every other park was a thread park,
+/// so a loop that backed off until a backpressured worker's poll moved its
+/// data froze the clock short of that poll. That is how
+/// `packaged_abr_switch_keeps_player_continuity` spun at 1.07 virtual seconds
+/// through millions of yields.
+#[kithara::test(native, flash(false))]
+fn a_yielding_closure_lets_the_clock_reach_a_gate_poll() {
+    let waited = park_beside_a_waiting_closure(crate::thread::yield_now, || {
+        let gate = ThreadGate::default();
+        assert!(!gate.wait_poll_timeout(gate.current(), Duration::from_millis(10)));
+    });
+    assert!(
+        waited < Duration::from_millis(40),
+        "a yielding blocking closure kept the clock short of a 10ms gate poll, \
+         which took {waited:?} real to fire"
+    );
+}
+
+/// A runnable yield is the opposite promise: the closure still has work, so it
+/// pins the clock as a spinning closure does
+/// ([`ambient_blocking_closure_pins_virtual_clock`]) and the sibling's 10ms
+/// park waits for the closure to finish.
+#[kithara::test(native, flash(false))]
+fn a_runnable_yield_holds_the_virtual_clock() {
+    let waited = park_beside_a_waiting_closure(crate::thread::yield_runnable, park_for_10ms);
+    assert!(
+        waited >= Duration::from_millis(40),
+        "the clock advanced past a closure that yielded with work in hand: a 10ms \
+         deadline fired after {waited:?} real"
+    );
+}
+
+/// The async twin of [`a_runnable_yield_holds_the_virtual_clock`]. A task that
+/// yields with work in hand stays counted across the turn, so a deadline
+/// registered before the yields does not come due. A yield that claimed the
+/// task had nothing to do sent the clock to the next deadline, past work
+/// already queued behind it: a stored `Notify` permit for a segment the reader
+/// was waiting on, skipped by a 30 s ABR re-tick.
+#[kithara::test(native, flash(false))]
+fn a_runnable_task_yield_holds_the_virtual_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let ((), took) = on_virtual_clock(async {
+        let mut deadline = std::pin::pin!(crate::time::sleep(Duration::from_secs(1)));
+        std::future::poll_fn(|cx| {
+            assert!(deadline.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        for _ in 0..4 {
+            crate::tokio::task::yield_runnable().await;
+        }
+    });
+    assert_eq!(
+        took,
+        Duration::ZERO,
+        "a runnable yield let the clock advance to a pending deadline"
+    );
+}
+
+fn park_for_10ms() {
+    forward::park_for(Duration::from_millis(10));
+}
+
+/// Run an ambient `spawn_blocking` closure that loops on `wait` until a helper
+/// releases it ~50ms real later, and return the real time a 10ms virtual engine
+/// `park` took meanwhile.
+fn park_beside_a_waiting_closure(wait: fn(), park: fn()) -> Duration {
     let _g = guard();
     reset();
     let _a = ambient_scope(true);
@@ -1360,7 +1460,7 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
     let handle = crate::tokio::task::spawn_blocking(move || {
         entered_in.store(1, Ordering::Release);
         while release_in.load(Ordering::Acquire) == 0 {
-            crate::thread::yield_now();
+            wait();
         }
     });
     while entered.load(Ordering::Acquire) == 0 {
@@ -1372,15 +1472,135 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
         release_timer.store(1, Ordering::Release);
     });
     let start = RealInstant::now();
-    forward::park_for(Duration::from_millis(10));
+    park();
     let waited = start.elapsed();
     releaser.join().expect("releaser thread");
     rt.block_on(handle).expect("blocking closure joined");
-    assert!(
-        waited < Duration::from_millis(40),
-        "a yielding blocking closure held the virtual clock for its whole real \
-         lifetime: a 10ms deadline took {waited:?} real to fire"
+    waited
+}
+
+/// Run `body` as the root task of a current-thread runtime, under flash, and
+/// return its output with the virtual time it took.
+fn on_virtual_clock<F: Future>(body: F) -> (F::Output, Duration) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let start = Instant::now();
+    let out = rt.block_on(participate(body, Location::caller()));
+    (out, start.elapsed())
+}
+
+/// The runtime wakes a joiner only after the joined work has returned, and
+/// the work used to give up its engine slot as it returned. In between, every
+/// participant looked parked, so the clock jumped to the joiner's own deadline
+/// before the joiner learned the work was done. That is how a cover read that
+/// took no virtual time missed a two-second wait in
+/// `only_the_current_attempt_places_its_cover`. The closure returns only
+/// once its joiner has parked on it, which opens exactly that window.
+#[kithara::test(native, flash(false))]
+fn a_joined_blocking_closure_holds_the_clock_until_its_joiner_wakes() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let (joined, took) = on_virtual_clock(async {
+        let handle = crate::tokio::task::spawn_blocking(|| {
+            while forward::async_active_count() != 0 {
+                thread::yield_now();
+            }
+        });
+        crate::time::timeout(Duration::from_secs(2), handle).await
+    });
+    assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
+    assert_eq!(
+        took,
+        Duration::ZERO,
+        "the clock moved between the closure's return and its joiner's wake"
     );
+}
+
+/// The same window for an async task: on a current-thread runtime the task
+/// first runs once its joiner has parked on it, and it finishes in that poll.
+#[kithara::test(native, flash(false))]
+fn a_joined_task_holds_the_clock_until_its_joiner_wakes() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let (joined, took) = on_virtual_clock(async {
+        let handle = crate::tokio::task::spawn(async {});
+        crate::time::timeout(Duration::from_secs(2), handle).await
+    });
+    assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
+    assert_eq!(
+        took,
+        Duration::ZERO,
+        "the clock moved between the task's completion and its joiner's wake"
+    );
+}
+
+/// The other half: work nobody is waiting on has no joiner to hold its slot
+/// for, so it gives the slot up as it finishes. Holding it until the handle is
+/// next polled would freeze the clock under a joiner that sleeps first.
+#[kithara::test(native, flash(false))]
+fn an_unjoined_task_lets_the_clock_advance_when_it_finishes() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let (joined, took) = on_virtual_clock(async {
+        let handle = crate::tokio::task::spawn(async {});
+        crate::time::sleep(Duration::from_secs(1)).await;
+        handle.await
+    });
+    assert!(joined.is_ok(), "{joined:?}");
+    assert_eq!(took, Duration::from_secs(1));
+}
+
+/// A poll of the handle that the task budget turns away registers no join
+/// wake, and a runtime that stops running drops the wake it deferred. A slot
+/// held for that poll would then have nothing to release it. Here the root
+/// task spends its budget, polls the handle once and returns while the closure
+/// is still running; the closure finishes with nobody waiting on it, and the
+/// clock must stay free.
+#[kithara::test(native, flash(false))]
+fn a_join_poll_the_budget_turns_away_holds_no_slot() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let release = Arc::new(AtomicUsize::new(0));
+    let release_in = Arc::clone(&release);
+    let body = async move {
+        let mut handle = crate::tokio::task::spawn_blocking(move || {
+            while release_in.load(Ordering::Acquire) == 0 {
+                crate::thread::yield_now();
+            }
+        });
+        std::future::poll_fn(|cx| {
+            while let std::task::Poll::Ready(spent) = tokio::task::coop::poll_proceed(cx) {
+                spent.made_progress();
+            }
+            assert!(std::pin::Pin::new(&mut handle).poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        handle
+    };
+    let handle = rt.block_on(participate(body, Location::caller()));
+    release.store(1, Ordering::Release);
+    while !handle.is_finished() {
+        thread::yield_now();
+    }
+    let start = Instant::now();
+    rt.block_on(participate(
+        crate::time::sleep(Duration::from_secs(1)),
+        Location::caller(),
+    ));
+    assert_eq!(start.elapsed(), Duration::from_secs(1));
 }
 
 /// A starved poll loop must not buy virtual time with its own backoff. A dated
@@ -1390,9 +1610,10 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
 /// the producer's own deadlines - the `phase_continuity` wall timeout, where an
 /// async pull raced the clock 1060 virtual seconds inside a 25s budget while
 /// every producer sat parked. Routed through `spawn_blocking` the same backoff
-/// is real work in flight: it dates nothing and leaves the clock where it found
-/// it. Distinct from `ambient_blocking_closure_pins_virtual_clock`, which pins
-/// the other half - that a sibling's deadline is HELD while such a closure runs.
+/// is an undated engine yield: with no deadline to reach, it leaves the clock
+/// where it found it. Distinct from
+/// `a_backing_off_blocking_closure_releases_the_virtual_clock`, which pins the
+/// other half - that the backoff lets a sibling's deadline fire.
 #[kithara::test(native, flash(false))]
 fn a_starved_backoff_loop_does_not_advance_the_virtual_clock() {
     const STARVED_BACKOFF_STEP_MS: u64 = 1;

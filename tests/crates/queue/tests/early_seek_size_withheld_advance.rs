@@ -298,8 +298,9 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
 
     // The user taps the slider immediately: seek into the gated segment's time
     // region while exact size is unavailable and the body may still be withheld.
-    queue
-        .seek(SEEK_TARGET_SECS)
+    harness
+        .run(&queue, |q| q.seek(SEEK_TARGET_SECS))
+        .await
         .expect("seek accepted by player");
 
     let mut trigger = Trigger::NoTerminal;
