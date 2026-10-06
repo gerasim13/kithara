@@ -2,12 +2,13 @@ use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_platform::sync::mpsc::Sender;
 use kithara_play::{
-    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, Resource, SeekOutcome,
-    SessionDuckingMode, player::Player,
+    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, SeekOutcome, SessionDuckingMode,
+    player::Player,
 };
 
 use super::{Queue, Transition};
 use crate::{
+    attempts::AttemptReport,
     error::QueueError,
     navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
     track::TrackSource,
@@ -16,7 +17,7 @@ use crate::{
 /// Where the queue sends a command's answer; the caller waits on the other end.
 pub(super) type Reply<T> = Sender<T>;
 
-/// What a [`QueueControl`](super::QueueControl) or a finished load asks the
+/// What a [`QueueControl`](super::QueueControl) or a load attempt asks the
 /// queue to do. The executor that holds the queue runs commands one at a
 /// time, in the order they were posted.
 pub(crate) enum QueueCommand<S>
@@ -86,11 +87,8 @@ where
     },
     Prepare(Reply<Result<(), PlayError>>),
     Close(Reply<Result<(), PlayError>>),
-    /// A track's load finished with `resource`.
-    Loaded {
-        id: TrackId,
-        resource: Box<Resource>,
-    },
+    /// A track's load attempt reports a transition.
+    Attempt(AttemptReport),
 }
 
 /// A player setting or platform notice the queue passes to its player.
@@ -176,7 +174,7 @@ where
             QueueCommand::Player { call, reply } => answer(&reply, self.call_player(call)),
             QueueCommand::Prepare(reply) => answer(&reply, self.prepare()),
             QueueCommand::Close(reply) => answer(&reply, Player::close(self)),
-            QueueCommand::Loaded { id, resource } => self.apply_loaded(id, *resource),
+            QueueCommand::Attempt(report) => self.apply_report(report),
         }
     }
 

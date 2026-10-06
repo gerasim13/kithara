@@ -40,7 +40,8 @@ where
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
-    /// `Arc<Tracks>`; every status transition goes through
+    /// `Arc<Tracks>`, whose attempts report to the queue instead of writing
+    /// it; every status transition goes through
     /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
     /// and the event stream stay in sync.
     pub(super) tracks: Arc<Tracks<S>>,
@@ -151,12 +152,14 @@ where
         let bus = player.bus().clone();
         let player_control = player.control();
         let tracks = Arc::new(Tracks::new(bus.clone()));
+        let (postbox, mailbox) = mailbox();
         let loader = Arc::new(Loader::new(
             player_control.clone(),
             runtime.or_else(|| RuntimeHandle::try_current().ok()),
             store,
             max_concurrent_loads,
             Arc::clone(&tracks),
+            postbox.clone(),
             cancel.child(),
         ));
         let player_rx = player.subscribe();
@@ -164,7 +167,6 @@ where
         navigation.set_playback_order(playback_order, &[]);
         let navigation = Arc::new(Mutex::new(navigation));
         config.navigation = Some(Arc::clone(&navigation));
-        let (postbox, mailbox) = mailbox();
         Self {
             resident: player,
             runtime: Arc::new(QueueRuntime {
@@ -272,6 +274,7 @@ pub(crate) mod tests {
     use kithara_platform::{
         thread,
         time::{Duration, Instant, timeout},
+        tokio::sync::mpsc::{UnboundedSender, unbounded_channel},
     };
     use kithara_play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, SessionBinding,
@@ -283,7 +286,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::{
         consts,
-        event::QueueEvent,
+        event::{QueueEvent, TrackStatus},
         navigation::{ActionAtItemEnd, PlaybackOrder},
         test_pools::{TestPools, pools},
     };
@@ -409,6 +412,46 @@ pub(crate) mod tests {
             control.append("https://example.com/b.mp3"),
             Err(crate::QueueError::Play(PlayError::Closed))
         ));
+    }
+
+    /// A holder's waker that reports each wake to an async waiter.
+    struct WakesTask(UnboundedSender<()>);
+
+    impl Wake for WakesTask {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+
+    /// A load's transitions reach its track on the queue's owner: whatever the
+    /// load did meanwhile, the track keeps the status the owner left it with
+    /// until the executor holding the queue drains it.
+    #[kithara::test(tokio)]
+    async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue() {
+        let mut queue = make_queue();
+        let (woke_tx, mut woke_rx) = unbounded_channel();
+        Player::hold(&mut queue, Waker::from(Arc::new(WakesTask(woke_tx))));
+        let id = queue
+            .append("/kithara/missing-track.wav")
+            .expect("an open queue appends");
+        let status =
+            |queue: &Queue<TestPools>| queue.track(id).expect("the track stays queued").status;
+
+        loop {
+            let left = status(&queue);
+            timeout(Duration::from_secs(5), woke_rx.recv())
+                .await
+                .expect("the load reports to the holder");
+            assert_eq!(
+                status(&queue),
+                left,
+                "a load's report waits for the holder to drain the queue"
+            );
+            Player::drain(&mut queue);
+            if matches!(status(&queue), TrackStatus::Failed(_)) {
+                break;
+            }
+        }
     }
 
     #[kithara::test]

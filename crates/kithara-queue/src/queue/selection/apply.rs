@@ -1,38 +1,31 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-use kithara_platform::tokio::task;
 use kithara_play::Resource;
 use tracing::{debug, warn};
 
 use crate::{
-    error::QueueError,
-    event::{QueueEvent, TrackStatus},
-    queue::{Queue, command::QueueCommand, types::SelectPhase},
+    attempts::AttemptReport,
+    event::QueueEvent,
+    queue::{Queue, types::SelectPhase},
 };
 
 impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    /// Apply what a load attempt reported, and admit the resource its live
+    /// attempt finished with.
+    pub(in crate::queue) fn apply_report(&mut self, report: AttemptReport) {
+        if let Some((id, resource)) = self.tracks.apply_report(report) {
+            self.apply_loaded(id, resource);
+        }
+    }
+
     /// Admit a finished load and apply the selection that waited for it.
     /// The executor holding the queue runs it as one command, so no select
-    /// interleaves between the `Cancelled` re-check and the selection.
+    /// interleaves between the finish and the selection.
     pub(in crate::queue) fn apply_loaded(&mut self, id: TrackId, resource: Resource) {
         if self.is_closed() {
-            return;
-        }
-
-        let was_cancelled = self
-            .tracks
-            .lock()
-            .iter()
-            .find(|entry| entry.id == id)
-            .is_some_and(|entry| matches!(entry.status, TrackStatus::Cancelled));
-        if was_cancelled {
-            debug!(
-                id = id.as_u64(),
-                "load was overridden by a later select; dropping its resource"
-            );
             return;
         }
 
@@ -82,45 +75,6 @@ where
             warn!(id = id.as_u64(), error = %error, "pending select failed");
         }
     }
-
-    pub(super) fn watch_apply(
-        &self,
-        id: TrackId,
-        handle: Option<task::JoinHandle<Result<Resource, QueueError>>>,
-    ) {
-        if self.is_closed() {
-            return;
-        }
-        let Some(handle) = handle else {
-            return;
-        };
-        let postbox = self.postbox.clone();
-        let watch = self.loader.spawn(async move {
-            let resource = match handle.await {
-                Ok(Ok(resource)) => resource,
-                Ok(Err(_)) => return,
-                Err(join_err) => {
-                    warn!(id = id.as_u64(), error = %join_err, "loader join failed");
-                    return;
-                }
-            };
-            if postbox
-                .post(QueueCommand::Loaded {
-                    id,
-                    resource: Box::new(resource),
-                })
-                .is_err()
-            {
-                debug!(
-                    id = id.as_u64(),
-                    "the queue is gone: dropping its finished load"
-                );
-            }
-        });
-        if let Err(error) = watch {
-            warn!(id = id.as_u64(), error = %error, "a finished load has no runtime to apply on");
-        }
-    }
 }
 
 #[cfg(test)]
@@ -133,7 +87,10 @@ mod tests {
     use kithara_test_utils::{cancel_token, kithara};
 
     use super::*;
-    use crate::queue::state::tests::{make_queue, make_store};
+    use crate::{
+        event::TrackStatus,
+        queue::state::tests::{make_queue, make_store},
+    };
 
     /// Admission keeps the caller's metadata and a cover placed before it,
     /// and fills only the fields they leave unset from the decoder's tags.

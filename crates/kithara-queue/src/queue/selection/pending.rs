@@ -18,9 +18,9 @@ where
     /// Synchronous-select counterpart to [`Self::override_pending_select`]:
     /// the user picked a `Loaded` track, so any other in-flight load is
     /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`],
-    /// which drops a resource it already loaded, so neither its
-    /// `spawn_apply_after_load` completion path nor the successor arming
-    /// barges in on top of the just-selected track.
+    /// which drops its live attempt and a resource it already loaded, so
+    /// neither its load's finish nor the successor arming barges in on top
+    /// of the just-selected track.
     pub(in crate::queue) fn cancel_stale_pending(&mut self, applying_id: TrackId) {
         let stale = match self.pending_select {
             SelectPhase::Pending(prev) if prev.id != applying_id => Some(prev.id),
@@ -37,8 +37,9 @@ where
     /// [`TrackStatus::Cancelled`] so the in-flight load — when it
     /// finishes — does not silently plant its resource into the queue
     /// and "barge in" via auto-advance. `TrackStatus::Cancelled` is the
-    /// single source of truth for this: `spawn_apply_after_load` reads
-    /// it on completion and `advance_to_next` reads it when iterating.
+    /// single source of truth for this: setting it drops the track's live
+    /// attempt, so that load's finish lands stale, and `advance_to_next`
+    /// reads it when iterating.
     /// See Bug B reproducer (`tests/.../track_switch_race.rs`).
     pub(in crate::queue) fn override_pending_select(&mut self, new: PendingSelect) {
         let prev_id = match self.pending_select {
@@ -53,8 +54,7 @@ where
 
     pub(in crate::queue) fn promote_pending_load(&self, id: TrackId) {
         if let Some(source) = self.tracks.source(id) {
-            let handle = self.loader.promote_load(id, source);
-            self.watch_apply(id, handle);
+            self.loader.promote_load(id, source);
         }
     }
 
@@ -64,7 +64,6 @@ where
         source: TrackSource<S>,
         class: LoadClass,
     ) {
-        let handle = self.loader.spawn_load(id, source, class);
-        self.watch_apply(id, handle);
+        self.loader.spawn_load(id, source, class);
     }
 }

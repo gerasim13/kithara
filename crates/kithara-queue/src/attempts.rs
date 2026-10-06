@@ -1,5 +1,8 @@
 use kithara_events::TrackId;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, sync::Arc};
+use kithara_play::Resource;
+
+use crate::error::QueueError;
 
 /// Which loader lane a load attempt occupies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,9 +17,33 @@ pub(crate) enum LoadClass {
 
 /// Claim ticket held by a spawned attempt task. Lifecycle reports are
 /// generation-checked, so a replaced ticket silently loses its claim.
+#[derive(Clone, Copy)]
 pub(crate) struct Ticket {
     pub(crate) id: TrackId,
     pub(crate) generation: u64,
+}
+
+/// What a load attempt reports to the queue that owns its track. The queue
+/// applies each report in the order its attempt posted them, and only while
+/// that attempt is still the track's live one.
+pub(crate) enum AttemptReport {
+    /// The attempt won its lane permit and started loading.
+    Started(Ticket),
+    /// The downloader found the attempt's transfer slow.
+    Slow(Ticket),
+    /// The attempt read its track's cover. `attempt` is the attempt's token,
+    /// which outlives the attempt in the resource it built: the audio never
+    /// waits for the cover.
+    Cover {
+        id: TrackId,
+        attempt: CancelToken,
+        cover: Arc<Vec<u8>>,
+    },
+    /// The attempt ended with a resource, a failure, or a cancel.
+    Finished {
+        ticket: Ticket,
+        outcome: Result<Box<Resource>, QueueError>,
+    },
 }
 
 /// A track's live load attempt. Dropping the guard armed cancels the

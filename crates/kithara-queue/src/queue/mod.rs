@@ -25,6 +25,7 @@ mod selection;
 mod state;
 mod types;
 
+pub(crate) use command::QueueCommand;
 use state::QueueRuntime;
 #[cfg(test)]
 pub(crate) use state::tests::test_session;
