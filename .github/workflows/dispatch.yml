@@ -14,11 +14,15 @@ name: Dispatch
 # scheduled workflows do not run in a fork until Actions is enabled there.
 on:
   schedule:
+    # Off the hour: GitHub starts a schedule late when load peaks, and it
+    # peaks at the top of every hour. A night declared for 01:00 started
+    # between 06:02 and 07:11, inside the morning's pushes.
+    #
     # The night: every lane whose membership names `nightly`.
-    - cron: '0 1 * * *'
+    - cron: '17 1 * * *'
     # The week: the lanes that cost hours - Miri, the deep assessment - and
     # would owe the machine a night it needs for lanes that answer faster.
-    - cron: '0 8 * * 6'
+    - cron: '17 8 * * 6'
   workflow_dispatch:
     inputs:
       kind:
@@ -46,6 +50,14 @@ on:
 
 permissions:
   contents: read
+
+# A newer run of the same selection on the same branch makes the older one
+# obsolete: without a group, a branch that dispatched on every push queued a
+# whole night per push for the fleet. Another selection, or the other cadence,
+# is another question and keeps its run.
+concurrency:
+  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.mutants || false }}-${{ inputs.test-filter != '' && github.run_id || 'unfiltered' }}
+  cancel-in-progress: true
 
 jobs:
   authorize:
@@ -80,7 +92,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: gate
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       test-filter: ${{ inputs.test-filter || '' }}
 
@@ -93,7 +105,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: platforms
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       test-filter: ${{ inputs.test-filter || '' }}
 
@@ -113,7 +125,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: deep
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       test-filter: ${{ inputs.test-filter || '' }}
 
@@ -131,7 +143,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: mutants
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || 'all' }}
       test-filter: ${{ inputs.test-filter || '' }}
 
@@ -145,7 +157,7 @@ jobs:
     uses: ./.github/workflows/run.yml
     with:
       role: quality
-      kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
+      kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
       test-filter: ${{ inputs.test-filter || '' }}
 
@@ -155,7 +167,7 @@ jobs:
     needs: authorize
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/network.yml
     # A called workflow starts with no secrets of its own, so the keys its
@@ -175,7 +187,7 @@ jobs:
     needs: authorize
     if: >-
       vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/windows.yml
 
@@ -192,7 +204,7 @@ jobs:
     needs: authorize
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && ((inputs.only || '') == '' || contains(inputs.only, 'deep-ui'))
     uses: ./.github/workflows/ui.yml
 
@@ -204,6 +216,6 @@ jobs:
     if: >-
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
+      && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/stress.yml

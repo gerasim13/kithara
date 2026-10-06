@@ -25,7 +25,7 @@ env:
   # itself, as the shared lane workflow does. Where the lane builds is
   # `ci lane`'s to choose: a slot of its pool under the runner's build root.
   KITHARA_FIXTURE_CACHE: /cache/fixtures
-  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
 
 concurrency:
   group: android-${{ github.ref }}

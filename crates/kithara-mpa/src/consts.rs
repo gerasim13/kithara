@@ -27,6 +27,9 @@ pub(crate) const MPEG_HEADER_LEN: usize = 4;
 /// The maximum length in bytes of an MPEG audio frame including the header.
 pub(crate) const MAX_MPEG_FRAME_SIZE: usize = 2881;
 
+pub(crate) const MAX_REF_FRAMES: usize = 4;
+pub(crate) const REF_FRAMES_MASK: usize = MAX_REF_FRAMES - 1;
+
 pub(crate) const BIT_RATES_INVALID_INDEX: u32 = 0xf;
 pub(crate) const BIT_RATES_INVALID_L2_MONO: [u32; 4] = [224_000, 256_000, 320_000, 384_000];
 pub(crate) const BIT_RATES_INVALID_L2_STEREO: [u32; 4] = [32_000, 48_000, 56_000, 80_000];
