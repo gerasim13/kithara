@@ -858,6 +858,23 @@ pub(crate) const GUEST_ENROLMENT_ATTEMPTS: u32 = 60;
 /// thirty-second attempts.
 pub(crate) const GUEST_FIRST_PHASE_ATTEMPTS: u32 = 60;
 
+/// How long to wait for a guest to provision itself, in thirty-second
+/// attempts. It installs the build tools and compiles its cargo tools from
+/// source, the larger part of the two hours a whole install takes; three hours
+/// tells slow from stuck.
+pub(crate) const GUEST_PROVISION_ATTEMPTS: u32 = 360;
+
+/// What starts every line a guest writes for the host on its first serial
+/// port. The firmware writes there too, so the host reads only these.
+pub(crate) const GUEST_CONSOLE_PREFIX: &str = "kithara-guest:";
+
+/// How many of a guest's own console lines a failure carries.
+pub(crate) const GUEST_CONSOLE_TAIL: usize = 20;
+
+/// With fewer whole days than this left on its evaluation licence, a guest is
+/// built again: a daily attempt gets a week of tries before it expires.
+pub(crate) const GUEST_RENEWAL_DAYS: u64 = 7;
+
 /// A tracked file a Windows guest is built from, rather than anything pasted
 /// into a machine by hand.
 pub(crate) const GUEST_ANSWER_FILE: &str = ".config/windows/autounattend.xml";
@@ -885,3 +902,7 @@ pub(crate) const SERVICE_SLICE: &str = "kithara-ci.slice";
 pub(crate) const SERVICE_CLEANUP_UNIT: &str = "kithara-ci-cleanup.service";
 
 pub(crate) const SERVICE_CLEANUP_TIMER: &str = "kithara-ci-cleanup.timer";
+
+pub(crate) const SERVICE_RENEWAL_UNIT: &str = "kithara-ci-windows-renewal.service";
+
+pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer";

@@ -19,12 +19,15 @@ use crate::{
 ///
 /// Each service configures its runner just before starting it, so a machine
 /// that has been off for a week still comes back with credentials that were
-/// minted seconds ago rather than ones that expired while it slept.
+/// minted seconds ago rather than ones that expired while it slept. A machine
+/// that hosts the Windows guest also gets the timer that rebuilds it from the
+/// repository at `root`.
 pub(super) fn install(
     process: &Process,
     host: &LinuxHost,
     pins: &CiPins,
     executable: &str,
+    root: &Path,
 ) -> Result<()> {
     require_pinned_images(process, host, pins)?;
     if Path::new(executable) != Path::new(consts::SERVICE_EXECUTABLE) {
@@ -58,6 +61,9 @@ pub(super) fn install(
     }
     install_slice()?;
     install_cleanup_timer(&installed_images(host, pins)?)?;
+    if host.windows.is_some() {
+        install_renewal_timer(root)?;
+    }
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
         process.run(
@@ -71,6 +77,13 @@ pub(super) fn install(
         &["enable", "--now", consts::SERVICE_CLEANUP_TIMER],
         "enable the cleanup timer",
     )?;
+    if host.windows.is_some() {
+        process.run(
+            "systemctl",
+            &["enable", "--now", consts::SERVICE_RENEWAL_TIMER],
+            "enable the Windows renewal timer",
+        )?;
+    }
     Ok(())
 }
 
@@ -196,6 +209,40 @@ fn cleanup_timer() -> &'static str {
      WantedBy=timers.target\n"
 }
 
+/// The guest is built from the answers, the provisioning script and the pins
+/// the repository tracks, so the unit runs in the checkout it was installed
+/// from. The command itself decides whether the guest needs rebuilding; the
+/// timer only asks once a day.
+fn renewal_unit(root: &Path) -> Result<String> {
+    let root = root
+        .to_str()
+        .with_context(|| format!("the repository path {} is not UTF-8", root.display()))?;
+    Ok(format!(
+        "[Unit]\n\
+         Description=Kithara CI Windows guest renewal\n\
+         After=libvirtd.service network-online.target\n\
+         Wants=network-online.target\n\n\
+         [Service]\n\
+         Type=oneshot\n\
+         WorkingDirectory={root}\n\
+         ExecStart={executable} ci host linux --config {config} renew-windows\n",
+        executable = consts::SERVICE_EXECUTABLE,
+        config = consts::LINUX_CONFIG_PATH,
+    ))
+}
+
+/// Daily: a licence runs for weeks and the rebuild waits for a free guest, so
+/// a day between looks leaves several chances inside the last week.
+fn renewal_timer() -> &'static str {
+    "[Unit]\n\
+     Description=Kithara CI Windows guest renewal\n\n\
+     [Timer]\n\
+     OnCalendar=daily\n\
+     Persistent=true\n\n\
+     [Install]\n\
+     WantedBy=timers.target\n"
+}
+
 /// The budget the whole fleet shares, generated here so that rewriting the
 /// units can never again leave them outside it.
 ///
@@ -251,6 +298,19 @@ fn install_cleanup_timer(keep: &[String]) -> Result<()> {
         let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(name);
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
         info!(unit = name, "cleanup unit installed");
+    }
+    Ok(())
+}
+
+fn install_renewal_timer(root: &Path) -> Result<()> {
+    let service = renewal_unit(root)?;
+    for (name, body) in [
+        (consts::SERVICE_RENEWAL_UNIT, service.as_str()),
+        (consts::SERVICE_RENEWAL_TIMER, renewal_timer()),
+    ] {
+        let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(name);
+        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        info!(unit = name, "Windows renewal unit installed");
     }
     Ok(())
 }
@@ -448,6 +508,25 @@ mod tests {
         let pins = &fixture().pins;
         let text = cleanup_unit(&installed_images(&host, pins).expect("the pins carry tags"));
 
+        let command = text
+            .lines()
+            .find_map(|line| line.strip_prefix("ExecStart="))
+            .expect("the unit must start something")
+            .split_whitespace()
+            .skip(1)
+            .collect::<Vec<_>>();
+        let argv = std::iter::once("xtask").chain(command.iter().copied());
+        assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
+    }
+
+    /// The guest is built from files the repository tracks, so the timer that
+    /// rebuilds it has to run where they are and say so: a unit runs from no
+    /// particular directory unless it is told one.
+    #[test]
+    fn the_renewal_unit_runs_a_command_this_executable_accepts_in_the_repository() {
+        let text = renewal_unit(Path::new("/srv/kithara")).expect("the unit must render");
+
+        assert!(text.contains("WorkingDirectory=/srv/kithara\n"), "{text}");
         let command = text
             .lines()
             .find_map(|line| line.strip_prefix("ExecStart="))

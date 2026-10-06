@@ -2589,25 +2589,33 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
 /// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
 /// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen
 /// loads no library. Either way a build script panics before a single test
-/// runs — which is what the lane did for as long as it existed. Where they sit
-/// is machine state, so both are read the way the pool's labels are: from a
-/// repository variable rather than pinned in the workflow.
+/// runs. Where they sit is decided by the script that installs them, so that
+/// script says it, machine-wide, the way it says where Monkey's Audio is. The
+/// libraries were once installed by hand and repository variables named
+/// where; rebuilding the guest took the libraries and left the variables
+/// pointing at nothing.
 #[test]
-fn the_windows_lane_is_told_where_the_guest_keeps_its_libraries() {
+fn the_guest_alone_says_where_its_libraries_are() {
     let workflow = github_workflow("windows.yml");
     let job = workflow_job(workflow_jobs(&workflow), "windows");
-    let environment = mapping_field(job, "env")
-        .as_mapping()
-        .expect("the lane names the environment its build scripts read");
+    let provision = fs::read_to_string(
+        workflows_dir()
+            .join("../../.config/windows/provision.ps1")
+            .as_path(),
+    )
+    .expect("the guest's provisioning script is readable");
 
-    for (name, variable) in [
-        ("FFMPEG_DIR", "KITHARA_WINDOWS_FFMPEG_DIR"),
-        ("LIBCLANG_PATH", "KITHARA_WINDOWS_LIBCLANG_PATH"),
-    ] {
-        assert_eq!(
-            mapping_field(environment, name).as_str(),
-            Some(format!("${{{{ vars.{variable} }}}}").as_str()),
-            "`{name}` pins a path instead of reading the machine's own"
+    for name in ["FFMPEG_DIR", "LIBCLANG_PATH"] {
+        assert!(
+            job.get("env").and_then(|env| env.get(name)).is_none(),
+            "the lane restates `{name}`, which the guest already says"
+        );
+        assert!(
+            provision.lines().any(|line| {
+                line.contains(&format!("SetEnvironmentVariable('{name}',"))
+                    && line.contains("'Machine'")
+            }),
+            "the guest's provisioning never says where `{name}` points"
         );
     }
 }
