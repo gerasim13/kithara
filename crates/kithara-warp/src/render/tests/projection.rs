@@ -1262,3 +1262,86 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     assert_eq!(snapshot.frontier().source(), 42);
     assert_eq!(snapshot.frontier().output(), SessionFrame::new(1_001));
 }
+
+#[kithara::test]
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(kithara_stretch::StretchKind::Signalsmith)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee(kithara_stretch::StretchKind::Bungee)
+)]
+fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
+    #[case] backend: kithara_stretch::StretchKind,
+) {
+    const ALTERNATING_CHUNKS: [usize; 2] = [1_023, 1];
+    const CHUNK_PAIRS: usize = 64;
+    const LAG_FRAMES: u64 = 16 * 1024;
+
+    fn source_span(
+        renderer: &WarpRenderer,
+        start: u64,
+        frames: usize,
+    ) -> kithara_signal::AudioChunk {
+        let samples: Vec<f32> = (start..)
+            .take(frames)
+            .flat_map(|frame| {
+                let value = f32::from(u16::try_from(frame % 97).unwrap_or(0));
+                [value / 97.0, -value / 97.0]
+            })
+            .collect();
+        let mut input = chunk(&renderer.pools, &samples);
+        input.meta.frame_offset = start;
+        input
+    }
+
+    let config = WarpConfig::builder()
+        .speed(1.0)
+        .backend(backend)
+        .keylock(true)
+        .build();
+    config
+        .plan()
+        .install(Some(Arc::new(crate::mock::projected_plan(
+            120.0,
+            100.0,
+            spec().sample_rate,
+        ))));
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+
+    let mut position = 0;
+    let mut audible = None;
+    for chunk_frames in ALTERNATING_CHUNKS
+        .iter()
+        .cycle()
+        .take(ALTERNATING_CHUNKS.len() * CHUNK_PAIRS)
+    {
+        let mut remaining = *chunk_frames;
+        while remaining > 0 {
+            renderer.prepare(spec());
+            let at = source_span(&renderer, position, remaining);
+            let frames = renderer
+                .prepare_quantum(at.meta, remaining, usize::MAX)
+                .expect("the projected source continues")
+                .get();
+            let mut input = source_span(&renderer, position, frames);
+            input.meta.frames = u32::try_from(frames).expect("span fits u32");
+            if let Some(output) = renderer
+                .render_quantum(input)
+                .continue_value()
+                .expect("prepared source shape")
+            {
+                audible = Some(output.meta.frame_offset);
+            }
+            position += u64::try_from(frames).expect("span fits u64");
+            remaining -= frames;
+        }
+    }
+    let audible = audible.expect("the slowed projection presents PCM");
+    assert!(
+        audible + LAG_FRAMES >= position,
+        "the audible source stalled at {audible} while {position} was decoded"
+    );
+}
