@@ -84,13 +84,14 @@ apple:xcframework:
     - apple:lint
   script:
     - just ci run apple-xcframework
-  # The simulator suite consumes this rather than building its own. The guest
-  # that runs it may be a different one, and a job cleans the checkout of
-  # everything the commit does not carry, so the framework has to travel.
+  # The simulator suite consumes this build's framework and generated bindings.
+  # Jobs clean the checkout and may run on different guests, so both outputs
+  # have to travel together.
   artifacts:
     expire_in: 1 day
     paths:
       - apple/KitharaFFIInternal.xcframework
+      - apple/Sources/KitharaFFI/KitharaFFI.swift
 
 # The Swift package's own tests, which rebuild the framework in order to run.
 # What a review needs from this layer is the simulator suite on
