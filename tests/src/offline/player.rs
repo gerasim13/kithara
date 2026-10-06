@@ -13,8 +13,7 @@ use kithara::{
     },
     play::{
         CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerEvent, PlayerImpl, Resource, SelectionPlayback,
-        bridge::RtMetricsSnapshot,
+        PlayerEvent, PlayerImpl, Resource, RtMetricsSnapshot, SelectionPlayback,
         player::{Player, PlayerControl, PlayerControlSource},
     },
     queue::{Queue, QueueConfig, QueueControl},

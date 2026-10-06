@@ -302,21 +302,15 @@ where
 pub(crate) mod tests {
     use std::sync::mpsc::{self, TryRecvError};
 
-    use kithara_audio::ConsumerWakeMode;
     use kithara_config::Config;
     use kithara_events::{Envelope, EventReceiver};
     use kithara_platform::{
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicU64, Ordering},
-        },
         thread,
         time::{Duration, Instant, WallInstant, timeout},
     };
     use kithara_play::{
-        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-        bridge::slot_channels, player::PlayerControlSource,
+        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, SessionBinding,
+        player::PlayerControlSource,
     };
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
@@ -343,46 +337,8 @@ pub(crate) mod tests {
         Queue::new(queue_config())
     }
 
-    struct TestSession {
-        next_slot: AtomicU64,
-        nodes: Mutex<Vec<NodeInputs>>,
-    }
-
-    impl SessionDispatcher<TestPools> for TestSession {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            let reply = match cmd {
-                Cmd::RegisterPlayer { .. } => {
-                    Reply::PlayerRegistered(kithara_play::session::RegisteredPlayer {
-                        id: 1,
-                        eq: SharedEq::new(10),
-                    })
-                }
-                Cmd::AllocateSlot { .. } => {
-                    let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
-                    let (inputs, control) = slot_channels(SharedEq::new(10));
-                    self.nodes.lock().push(inputs);
-                    Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
-                }
-                Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
-                Cmd::QueryStreamShape => Reply::StreamShape(None),
-                _ => Reply::Ok,
-            };
-            Ok(reply)
-        }
-    }
-
     pub(crate) fn test_session() -> SessionBinding<TestPools> {
-        SessionBinding::new(
-            Arc::new(TestSession {
-                next_slot: AtomicU64::new(0),
-                nodes: Mutex::default(),
-            }),
-            consts::TEST_SAMPLE_RATE,
-        )
+        kithara_play::mock::session()
     }
 
     fn queue_config() -> QueueConfig<TestPools> {

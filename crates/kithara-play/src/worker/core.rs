@@ -10,7 +10,7 @@ use kithara_decode::{DecodeError, DecodeResult};
 use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
-use kithara_render::{LaneProtocol, WarpSource};
+use kithara_render::{LaneProtocol, ServiceClass, WarpSource};
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
 use kithara_worker::{
@@ -20,7 +20,7 @@ use kithara_worker::{
 use super::{
     DecoderNode, PlayWorkerConfig, ReadinessProbe, RegisteredAudio, StagedSlot, TrackConfig,
     TrackLease,
-    scheduler::{PlaybackObserver, ServiceClass, Wake},
+    scheduler::{PlaybackObserver, Wake},
 };
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);

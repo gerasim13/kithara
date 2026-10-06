@@ -6,6 +6,7 @@ use kithara_platform::{
     sync::{Arc, ExclusiveGate, Mutex},
     time::Duration,
 };
+use kithara_render::{bridge::DeckPart, rt::track::PlayerResource};
 use tracing::{debug, warn};
 
 use super::{
@@ -17,11 +18,9 @@ use super::{
 };
 use crate::{
     api::{PlayerEvent, PlayerStatus, TrackId},
-    bridge::DeckPart,
     engine::EngineImpl,
     error::PlayError,
     resource::Resource,
-    rt::track::PlayerResource,
     session::SessionBinding,
     worker::EngineLoad,
 };
@@ -308,14 +307,13 @@ mod tests {
         sync::mpsc::{self, TryRecvError},
         thread,
     };
+    use kithara_render::bridge::DeckPart;
     use kithara_test_utils::kithara;
     use kithara_warp::MIN_SPEED;
 
     use super::{super::PlayerImpl, *};
     use crate::{
-        PlayWorker, PlayWorkerConfig,
-        bridge::DeckPart,
-        mock,
+        PlayWorker, PlayWorkerConfig, mock,
         player::{PlayerConfig, PlayerConfigPatch},
         resource::{ResourceConfig, ResourceSrc},
         test_pools::{TestPools, pools},

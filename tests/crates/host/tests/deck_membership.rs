@@ -4,7 +4,10 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     host::{HostConfig, HostSettings},
-    play::{PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionError},
+    play::{
+        BufferGeometryError, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+        SessionError,
+    },
     sync::SyncGroup,
     warp::WarpConfig,
 };
@@ -40,9 +43,9 @@ async fn failed_deck_preparation_releases_host_membership() {
     );
     assert!(matches!(
         host.insert(invalid).await,
-        Err(PlayError::Session(
-            SessionError::ResponseBudgetExceeded { .. }
-        ))
+        Err(PlayError::Session(SessionError::BufferGeometry(
+            BufferGeometryError::BudgetExceeded { .. }
+        )))
     ));
     host.with(|host| {
         assert!(host.topology().expect("host topology").members().is_empty());

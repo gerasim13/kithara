@@ -8,27 +8,12 @@ use kithara_command::Sender;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
-use kithara_render::LaneProtocol;
+use kithara_render::{LaneProtocol, TrackPriority};
 use kithara_signal::AudioSpec;
 use kithara_warp::{RenderPublisher, Warp};
-use kithara_worker::{TaskControl, TaskHandle};
+use kithara_worker::TaskHandle;
 
-use super::{PlayWorker, scheduler::ServiceClass};
-
-#[derive(Clone)]
-pub(crate) struct TrackPriority {
-    control: TaskControl,
-}
-
-impl TrackPriority {
-    pub(super) const fn new(control: TaskControl) -> Self {
-        Self { control }
-    }
-
-    pub(crate) fn set(&self, class: ServiceClass) {
-        self.control.set_priority(class.into());
-    }
-}
+use super::PlayWorker;
 
 pub(crate) struct TrackLease<S> {
     _worker: PlayWorker<S>,

@@ -17,6 +17,8 @@ use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{
     CrossfadeSettings, PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
+};
+use kithara_render::{
     bridge::RtMetrics,
     rt::track::{PlayerResource, PlayerTrack, RtSink, TrackReadOutcome},
 };

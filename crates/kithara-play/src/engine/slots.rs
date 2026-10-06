@@ -1,10 +1,8 @@
 use kithara_platform::sync::Arc;
+use kithara_render::bridge::{PlaybackShared, SlotControl};
 use kithara_warp::RenderSnapshot;
 
-use crate::{
-    api::SlotId,
-    bridge::{PlaybackShared, SlotControl},
-};
+use crate::api::SlotId;
 
 pub(super) struct SlotTable {
     slots: Vec<(SlotId, SlotControl)>,

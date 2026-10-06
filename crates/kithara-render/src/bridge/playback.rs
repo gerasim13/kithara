@@ -40,7 +40,7 @@ impl PlaybackSnapshot {
     /// value they held when the audio stopped; this is what they mean once
     /// nothing reaches the speakers.
     #[must_use]
-    pub(crate) const fn silenced(self) -> Self {
+    pub const fn silenced(self) -> Self {
         Self {
             playing: false,
             rate: 0.0,
@@ -117,11 +117,13 @@ impl PlaybackShared {
     /// Until the audio thread adopts that epoch, a snapshot describes the new item at its head
     /// with `duration`: the blocks rendered meanwhile still publish the item they were leading.
     /// A rejected send publishes nothing, since no `FadeIn` would ever adopt the epoch.
-    pub(crate) fn lead<E>(
-        &self,
-        duration: f64,
-        send: impl FnOnce(u64) -> Result<(), E>,
-    ) -> Result<(), E> {
+    ///
+    /// # Errors
+    /// Returns what `send` returns when it rejects the `FadeIn`.
+    pub fn lead<E, F>(&self, duration: f64, send: F) -> Result<(), E>
+    where
+        F: FnOnce(u64) -> Result<(), E>,
+    {
         let epoch = self.issue_epoch();
         send(epoch)?;
         self.take_on(epoch, duration);
@@ -130,7 +132,7 @@ impl PlaybackShared {
 
     /// A fresh epoch for an item that is to lead: a `FadeIn` carries it to make its item lead
     /// at once, a `Chain` to the successor the audio thread stitches in.
-    pub(crate) fn issue_epoch(&self) -> u64 {
+    pub fn issue_epoch(&self) -> u64 {
         self.issued_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
@@ -140,9 +142,14 @@ impl PlaybackShared {
     ///
     /// A stitched successor publishes its playhead only from here on: until the control side
     /// takes it on, a snapshot describes the item it still calls current, played to its end.
-    pub(crate) fn take_on(&self, epoch: u64, duration: f64) {
+    pub fn take_on(&self, epoch: u64, duration: f64) {
         self.leading_duration.store(duration.max(0.0));
         self.leading_epoch.fetch_max(epoch, Ordering::AcqRel);
+    }
+
+    /// A seek landed at `seconds`: the playhead reads there before the audio thread renders it.
+    pub fn land_seek(&self, seconds: f64) {
+        self.position.store(seconds);
     }
 
     /// The epochs whose track describes the playhead, read once per audio block.

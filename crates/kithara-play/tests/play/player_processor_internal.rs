@@ -19,8 +19,8 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_play::{
-    PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
+use kithara_play::{PlayerNotification, Resource, SharedEq, TrackState, TrackTransition};
+use kithara_render::{
     bridge::{DeckPart, SlotControl, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };
@@ -596,7 +596,7 @@ async fn an_ending_track_starts_only_the_track_chained_to_it(constant_half: &'st
     let state = |item_id| {
         processor
             .track(item_id)
-            .map(kithara_play::rt::track::PlayerTrack::state)
+            .map(kithara_render::rt::track::PlayerTrack::state)
     };
     assert_eq!(state(chained_id), Some(TrackState::Playing));
     assert_eq!(state(other_id), Some(TrackState::Preloading));
@@ -653,7 +653,7 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
     assert_eq!(
         processor
             .track(preload_id)
-            .map(kithara_play::rt::track::PlayerTrack::state),
+            .map(kithara_render::rt::track::PlayerTrack::state),
         Some(TrackState::Playing)
     );
 }
@@ -717,7 +717,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
     assert_eq!(
         processor
             .track(successor_id)
-            .map(kithara_play::rt::track::PlayerTrack::state),
+            .map(kithara_render::rt::track::PlayerTrack::state),
         after_cancel
     );
 }

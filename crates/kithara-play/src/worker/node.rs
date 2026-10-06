@@ -336,6 +336,7 @@ mod scheduler_tests {
         thread,
         time::{Duration, timeout as platform_timeout},
     };
+    use kithara_render::ServiceClass;
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
@@ -344,10 +345,7 @@ mod scheduler_tests {
     };
 
     use super::{tests::prepared_node, *};
-    use crate::{
-        test_pools::{Pools, pools, sample_buffer},
-        worker::scheduler::ServiceClass,
-    };
+    use crate::test_pools::{Pools, pools, sample_buffer};
 
     fn empty_chunk(pools: &Pools) -> AudioChunk {
         AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))

@@ -19,8 +19,9 @@ use kithara_play::{
     AllocatedSlot, Cmd, CrossfadeSettings, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
     PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome,
     SelectionPlayback, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-    SuccessorLink, bridge::slot_channels,
+    SuccessorLink,
 };
+use kithara_render::bridge::slot_channels;
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::{
     bufpool::{TestPools, pools},

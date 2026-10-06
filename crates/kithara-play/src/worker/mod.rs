@@ -13,7 +13,6 @@ pub use config::{PlayWorkerConfig, PlayWorkerConfigPatch};
 pub use load::{EngineLoad, EngineLoadSnapshot};
 pub(crate) use node::DecoderNode;
 pub use reader::RegisteredAudio;
-pub(crate) use reader::{TrackLease, TrackPriority};
-pub use scheduler::ServiceClass;
+pub(crate) use reader::TrackLease;
 pub(crate) use staged::{Readiness, ReadinessProbe, StagedSlot};
 pub use track::TrackConfig;

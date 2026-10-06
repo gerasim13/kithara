@@ -7,7 +7,9 @@ use firewheel::{
 };
 use kithara_command::{ChannelConfig, Sender, channel};
 use kithara_config::Config;
-use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
+use kithara_render::rt::{
+    install_render_context, invalidate_render_context, publish_render_context,
+};
 use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;

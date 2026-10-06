@@ -1,6 +1,6 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-use kithara_play::{SelectTransition, SelectionPlayback};
+use kithara_play::{PlayError, SelectTransition, SelectionPlayback};
 use smallvec::SmallVec;
 
 use super::super::{
@@ -108,7 +108,10 @@ where
             self.autoplay_target.disarm();
         }
         let default = self.config.crossfade_settings();
-        let settings = transition.settings(default).validate()?;
+        let settings = transition
+            .settings(default)
+            .validate()
+            .map_err(PlayError::from)?;
         let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)
     }

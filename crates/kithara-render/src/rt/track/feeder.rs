@@ -7,7 +7,8 @@ use kithara_signal::{FrameCount, SourceSpan};
 use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
 
-use crate::{bridge::RtMetrics, resource::PcmConsumer, worker::ServiceClass};
+use super::PcmConsumer;
+use crate::{ServiceClass, bridge::RtMetrics};
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
@@ -98,6 +99,9 @@ impl PlayerResource {
     ///
     /// Allocates two per-channel scratch buffers through the given pool facade,
     /// each holding [`Self::scratch_frames`] frames.
+    ///
+    /// # Errors
+    /// Returns the pool's error when it cannot hand out both buffers.
     pub fn new<S>(
         consumer: PcmConsumer,
         src: Arc<str>,

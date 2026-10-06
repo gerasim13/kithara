@@ -1,5 +1,7 @@
+use kithara_render::bridge::SharedEq;
+
 use super::EngineImpl;
-use crate::{bridge::SharedEq, error::PlayError, session::PlayerId};
+use crate::{error::PlayError, session::PlayerId};
 
 impl<S> EngineImpl<S> {
     pub(in crate::engine) fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {

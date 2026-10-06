@@ -10,14 +10,14 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant},
     },
-    play::{
-        Resource, SharedEq,
-        bridge::{DeckPart, SlotControl, slot_channels},
-        rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
-    },
+    play::Resource,
     signal::{AudioSpec, SessionFrame},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, pools};
+use kithara_render::{
+    bridge::{DeckPart, SharedEq, SlotControl, slot_channels},
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
+};
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 
 mod consts {

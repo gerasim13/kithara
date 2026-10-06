@@ -4,7 +4,7 @@ use kithara_warp::{
     PresentationFrontier, RenderContext, RenderPublisher, RenderReader, supports_playback_rate,
 };
 
-use crate::worker::{ServiceClass, TrackPriority};
+use crate::{ServiceClass, TrackPriority};
 
 /// The half of a load a deck slot reads: the decoded-audio reader, the render
 /// it publishes, its playback rate and the worker priority the slot sets by
@@ -12,7 +12,7 @@ use crate::worker::{ServiceClass, TrackPriority};
 ///
 /// Fields drop in declaration order, so the reader drops last.
 #[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, vis = "pub(crate)")]
+#[fieldwork(opt_in)]
 pub struct PcmConsumer {
     #[field(with, option_set_some)]
     priority: Option<TrackPriority>,
@@ -32,7 +32,7 @@ struct CancelGuard(Option<CancelToken>);
 struct ReaderOwner(CancelGuard, Box<dyn AudioReader>);
 
 /// Media seconds a reader consumes per output second.
-pub(crate) enum PlaybackRate {
+pub enum PlaybackRate {
     /// Its own tempo: no renderer changes its speed.
     Fixed,
     /// The speed its renderer was last asked for.
@@ -47,7 +47,10 @@ impl PlaybackRate {
         f32::from(&*self)
     }
 
-    pub(crate) fn for_warp(speed: f32) -> Self {
+    /// A Warp-driven rate starting at `speed`, or [`Self::Fixed`] where the
+    /// build has no Warp rate control.
+    #[must_use]
+    pub fn for_warp(speed: f32) -> Self {
         if supports_playback_rate() {
             Self::Warp(speed)
         } else {
@@ -95,7 +98,8 @@ impl From<PcmConsumer> for Box<dyn AudioReader> {
 impl PcmConsumer {
     /// A fixed-rate consumer of `reader` that publishes no render and cancels
     /// nothing on drop.
-    pub(crate) fn new(reader: Box<dyn AudioReader>) -> Self {
+    #[must_use]
+    pub fn new(reader: Box<dyn AudioReader>) -> Self {
         Self {
             priority: None,
             render_publisher: None,
@@ -109,7 +113,7 @@ impl PcmConsumer {
     }
 
     /// Cancel `cancel` when this consumer drops, before its reader does.
-    pub(crate) fn cancel_on_drop(&mut self, cancel: Option<CancelToken>) {
+    pub fn cancel_on_drop(&mut self, cancel: Option<CancelToken>) {
         self.reader.0 = CancelGuard(cancel);
     }
 
@@ -129,11 +133,14 @@ impl PcmConsumer {
         }
     }
 
-    pub(crate) fn reader(&self) -> &dyn AudioReader {
+    /// The decoded-audio reader this consumer reads.
+    #[must_use]
+    pub fn reader(&self) -> &dyn AudioReader {
         &*self.reader.1
     }
 
-    pub(crate) fn reader_mut(&mut self) -> &mut dyn AudioReader {
+    /// The decoded-audio reader this consumer reads, for control-side calls.
+    pub fn reader_mut(&mut self) -> &mut dyn AudioReader {
         &mut *self.reader.1
     }
 
@@ -145,5 +152,39 @@ impl PcmConsumer {
         if let Some(priority) = &self.priority {
             priority.set(class);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_audio::mock::TestPcmReader;
+    use kithara_signal::AudioSpec;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn reader() -> Box<dyn AudioReader> {
+        let rate = NonZeroU32::new(44_100).expect("static sample rate");
+        Box::new(TestPcmReader::new(AudioSpec::new(2, rate), 0.1))
+    }
+
+    #[kithara::test(native)]
+    fn playback_rate_reports_only_a_real_warp_control() {
+        let mut fixed = PcmConsumer::new(reader());
+        assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
+        assert_eq!(fixed.playback_rate(), 1.0);
+
+        let mut warped =
+            PcmConsumer::new(reader()).with_playback_rate(PlaybackRate::for_warp(1.25));
+        let (built, applied) = if supports_playback_rate() {
+            (1.25, 1.5)
+        } else {
+            (1.0, 1.0)
+        };
+        assert_eq!(warped.playback_rate(), built);
+        assert_eq!(warped.apply_playback_rate(1.5), applied);
+        assert_eq!(warped.playback_rate(), applied);
     }
 }

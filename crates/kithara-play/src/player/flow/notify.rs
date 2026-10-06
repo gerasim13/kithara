@@ -2,12 +2,10 @@ use std::{ops::Deref, sync::atomic::Ordering};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
+use kithara_render::bridge::{PlayerNotification, TrackPlaybackStopReason};
 
 use super::super::core::PlayerRuntime;
-use crate::{
-    api::{EngineEvent, ItemRole, PlayerEvent, SlotId, TrackRef},
-    bridge::{PlayerNotification, TrackPlaybackStopReason},
-};
+use crate::api::{EngineEvent, ItemRole, PlayerEvent, SlotId, TrackRef};
 
 struct Notifier<'a, S> {
     player: &'a PlayerRuntime<S>,

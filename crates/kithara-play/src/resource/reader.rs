@@ -10,14 +10,16 @@ use kithara_command::Sender;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task};
-use kithara_render::LaneProtocol;
+use kithara_render::{
+    LaneProtocol,
+    rt::track::{PcmConsumer, PlaybackRate},
+};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use tracing::warn;
 
 use super::{
-    ArtifactFetch, ArtifactSource, PcmConsumer, PlaybackRate, PreparedGrid, ResourceConfig,
-    SourceType, StagingRecipe,
+    ArtifactFetch, ArtifactSource, PreparedGrid, ResourceConfig, SourceType, StagingRecipe,
 };
 use crate::{PlayWorker, TrackConfig};
 
@@ -397,6 +399,10 @@ mod tests {
     use kithara_decode::TrackMetadata;
     use kithara_events::TrackId;
     use kithara_platform::{CancelToken, sync::Arc};
+    use kithara_render::{
+        bridge::{DeckPart, PlayerNotification, SharedEq, TrackTransition, slot_channels},
+        rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
+    };
     use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame};
     use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::kithara;
@@ -407,9 +413,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        bridge::{DeckPart, PlayerNotification, SharedEq, TrackTransition, slot_channels},
         consts,
-        rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
         test_pools::{TestPools, pools},
     };
 
@@ -606,7 +610,7 @@ mod tests {
         let _ = processor.process(&info, buffers, extra);
     }
 
-    fn rate_notifications(control: &mut crate::bridge::SlotControl) -> Vec<f32> {
+    fn rate_notifications(control: &mut kithara_render::bridge::SlotControl) -> Vec<f32> {
         let mut rates = Vec::new();
         while let Some(notification) = control.notif_rx.try_pop() {
             if let PlayerNotification::RateChanged { rate } = notification {
@@ -614,24 +618,6 @@ mod tests {
             }
         }
         rates
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn playback_rate_reports_only_a_real_warp_control() {
-        let mut fixed = PcmConsumer::new(Box::new(EofReader::default()));
-        assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
-        assert_eq!(fixed.playback_rate(), 1.0);
-
-        let mut warped = PcmConsumer::new(Box::new(EofReader::default()))
-            .with_playback_rate(PlaybackRate::for_warp(1.25));
-        let (built, applied) = if supports_playback_rate() {
-            (1.25, 1.5)
-        } else {
-            (1.0, 1.0)
-        };
-        assert_eq!(warped.playback_rate(), built);
-        assert_eq!(warped.apply_playback_rate(1.5), applied);
-        assert_eq!(warped.playback_rate(), applied);
     }
 
     #[kithara::test(native, flash(false))]
@@ -692,7 +678,7 @@ mod tests {
         let expected_advance =
             f64::from(block_frames) * f64::from(effective_rate) / f64::from(consts::SAMPLE_RATE);
         assert!((first_advance - expected_advance).abs() < f64::EPSILON);
-        assert_eq!(processor.playback().rate.load(), effective_rate);
+        assert_eq!(processor.playback().snapshot().rate(), effective_rate);
         let notifications = rate_notifications(&mut control);
         if supports_playback_rate() {
             assert_eq!(notifications, [1.5]);
@@ -718,7 +704,7 @@ mod tests {
 
         process_block(&mut processor, &mut extra);
 
-        assert_eq!(processor.playback().rate.load(), effective_rate);
+        assert_eq!(processor.playback().snapshot().rate(), effective_rate);
         assert_eq!(
             processor
                 .track(next_id)

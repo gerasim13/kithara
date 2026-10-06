@@ -166,7 +166,9 @@ impl SlotControl {
         Ok(seq)
     }
 
-    pub(crate) fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {
+    /// The newest render any bound track has published.
+    #[must_use]
+    pub fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {
         self.render
             .0
             .iter()
@@ -180,7 +182,8 @@ impl SlotControl {
             })
     }
 
-    pub(crate) fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
+    /// Forget the exact render reader returned by the processor.
+    pub fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
         self.render
             .0
             .retain(|(bound_id, bound_reader)| *bound_id != item_id || bound_reader != reader);

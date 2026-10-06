@@ -8,7 +8,7 @@ use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, gate::TrackGate};
-use crate::{CrossfadeSettings, bridge::TrackState, consts::DEFAULT_DECLICK, worker::ServiceClass};
+use crate::{CrossfadeSettings, ServiceClass, bridge::TrackState, consts::DEFAULT_DECLICK};
 
 /// Per-track state in the processor arena.
 ///
@@ -194,7 +194,9 @@ impl PlayerTrack {
             /// Control-plane handle used to begin this track's seeks off the audio thread.
             #[must_use]
             pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
-            pub(crate) fn render_reader(&self) -> Option<RenderReader>;
+            /// Reader of the render this track publishes, when it publishes one.
+            #[must_use]
+            pub fn render_reader(&self) -> Option<RenderReader>;
             /// Source identifier.
             #[must_use]
             pub fn src(&self) -> &Arc<str>;

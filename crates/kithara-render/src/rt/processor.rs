@@ -29,7 +29,6 @@ use crate::{
         TrackState,
     },
     rt::{LeadingPlayhead, RenderPass, RenderTargets, TrackSlot, TrackSlots},
-    session::SessionError,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -67,6 +66,22 @@ pub(super) struct Deck {
     last_notified_rate: f32,
 }
 
+/// Why a stream's geometry cannot size a deck's decoder buffers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum BufferGeometryError {
+    #[error("deck buffer geometry overflowed")]
+    Overflow,
+    #[error(
+        "deck needs {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
+    )]
+    BudgetExceeded {
+        max_block_frames: u32,
+        render_quantum_frames: usize,
+        required_frames: usize,
+        budget_frames: usize,
+    },
+}
+
 /// Stream dimensions needed to pre-size RT scratch buffers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamShape {
@@ -91,22 +106,22 @@ impl StreamShape {
         self,
         quantum: NonZeroUsize,
         budget: Option<NonZeroUsize>,
-    ) -> Result<(NonZeroUsize, NonZeroUsize), SessionError> {
+    ) -> Result<(NonZeroUsize, NonZeroUsize), BufferGeometryError> {
         let output_frames = usize::try_from(self.max_block_frames.get())
-            .map_err(|_| SessionError::ResponseGeometryOverflow)?;
+            .map_err(|_| BufferGeometryError::Overflow)?;
         let preload = output_frames.div_ceil(quantum.get());
         let ring = preload
             .checked_add(1)
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
+            .ok_or(BufferGeometryError::Overflow)?;
         let required_frames = ring
             .checked_add(1)
             .and_then(|chunks| chunks.checked_mul(quantum.get()))
             .and_then(|frames| frames.checked_sub(1))
-            .ok_or(SessionError::ResponseGeometryOverflow)?;
+            .ok_or(BufferGeometryError::Overflow)?;
         if let Some(budget) = budget
             && required_frames > budget.get()
         {
-            return Err(SessionError::ResponseBudgetExceeded {
+            return Err(BufferGeometryError::BudgetExceeded {
                 required_frames,
                 max_block_frames: self.max_block_frames.get(),
                 render_quantum_frames: quantum.get(),
@@ -114,8 +129,8 @@ impl StreamShape {
             });
         }
         Ok((
-            NonZeroUsize::new(preload).ok_or(SessionError::ResponseGeometryOverflow)?,
-            NonZeroUsize::new(ring).ok_or(SessionError::ResponseGeometryOverflow)?,
+            NonZeroUsize::new(preload).ok_or(BufferGeometryError::Overflow)?,
+            NonZeroUsize::new(ring).ok_or(BufferGeometryError::Overflow)?,
         ))
     }
 }
@@ -471,9 +486,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Resource,
         bridge::{DeckPart, SharedEq, slot_channels},
-        rt::track::PlayerResource,
+        rt::track::{PcmConsumer, PlayerResource},
         test_pools::pools,
     };
 
@@ -490,7 +504,7 @@ mod tests {
         assert_eq!((preload.get(), ring.get()), (16, 17));
         assert!(matches!(
             shape.playback_buffers(quantum, NonZeroUsize::new(448)),
-            Err(SessionError::ResponseBudgetExceeded {
+            Err(BufferGeometryError::BudgetExceeded {
                 required_frames: 575,
                 max_block_frames: 512,
                 render_quantum_frames: 32,
@@ -592,12 +606,8 @@ mod tests {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("static sample rate"));
         let reader = TestPcmReader::with_pcm(spec, seconds, constant_half);
         Box::new(
-            PlayerResource::new(
-                Resource::from_reader(reader, None).into(),
-                Arc::from(src),
-                &pools(),
-            )
-            .expect("player resource fits the test pool budget"),
+            PlayerResource::new(PcmConsumer::new(Box::new(reader)), Arc::from(src), &pools())
+                .expect("player resource fits the test pool budget"),
         )
     }
 

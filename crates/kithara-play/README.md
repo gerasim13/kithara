@@ -15,8 +15,8 @@
 # kithara-play
 
 The playback orchestration crate behind Kithara. It provides concrete player,
-engine, resource, session, and real-time rendering surfaces for queue, FFI, app,
-and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
+engine, resource, and session surfaces for queue, FFI, app, and test-harness
+crates; the real-time deck it drives lives in `kithara-render`. Enable `mock` for the `Equalizer` unimock helper.
 Enable `perf` on native profiling builds for permanent `hotpath` timing at the
 playback worker boundary; ordinary builds compile the probes out.
 
@@ -66,7 +66,8 @@ to the single `decoder` field.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, item
   handover, and one clone of its explicitly supplied `PlayWorker`.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
-- `PlayerNode` is the public real-time audio graph node.
+- `PlayerNode`, `CrossfadeSettings`, and the deck's bridge types are
+  re-exported from `kithara-render`, which owns them.
 - `policy` owns domain-aware cache identity and DRM request routing above the
   filesystem, network, and cryptography crates.
 - `Equalizer` is the remaining mockable trait surface.
@@ -97,9 +98,9 @@ to the single `decoder` field.
 File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
 
-The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
-`effects/`, `player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/`, and
-`worker/`, plus the target-gated `wasm` surface. Concrete output-session state,
+The role-first source tree is organized as `api/`, `engine/`,
+`player/{state,flow}/`, `resource/`, `session`, and `worker/`, plus the
+target-gated `wasm` surface. Concrete output-session state,
 graph dispatch, and platform clients live in `kithara-host`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-play) for detailed contracts, invariants, and internals.

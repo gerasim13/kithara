@@ -6,14 +6,14 @@ mod wire {
     use kithara_bufpool::PoolRegion;
     use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
+    use kithara_render::{
+        bridge::{SharedEq, SlotControl},
+        rt::{BufferGeometryError, DeckMixerConfig, StreamShape},
+    };
     use kithara_sync::{SyncError, SyncReceipt};
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
-    use crate::{
-        api::{SessionDuckingMode, SessionTransportSnapshot, SlotId},
-        bridge::{SharedEq, SlotControl},
-        rt::{DeckMixerConfig, StreamShape},
-    };
+    use crate::api::{SessionDuckingMode, SessionTransportSnapshot, SlotId};
 
     pub type PlayerId = u64;
 
@@ -55,17 +55,8 @@ mod wire {
         TransportNotProcessed,
         #[error("host command queue is full")]
         HostQueueFull,
-        #[error(
-            "session output requires {required_frames} response frames for block {max_block_frames} and quantum {render_quantum_frames}, exceeding budget {budget_frames}"
-        )]
-        ResponseBudgetExceeded {
-            max_block_frames: u32,
-            render_quantum_frames: usize,
-            required_frames: usize,
-            budget_frames: usize,
-        },
-        #[error("session output response geometry overflowed")]
-        ResponseGeometryOverflow,
+        #[error(transparent)]
+        BufferGeometry(#[from] BufferGeometryError),
         #[error(transparent)]
         Sync(#[from] SyncError),
         #[error(transparent)]
@@ -214,6 +205,7 @@ mod handle {
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
+    use kithara_render::rt::{DeckMixerConfig, StreamShape};
     use kithara_sync::SyncReceipt;
     use kithara_warp::BeatGridId;
 
@@ -223,7 +215,6 @@ mod handle {
     use crate::{
         api::{SessionDuckingMode, SlotId},
         error::PlayError,
-        rt::{DeckMixerConfig, StreamShape},
     };
 
     /// Handle used by resident players to reach their session owner.
@@ -556,13 +547,13 @@ mod tests {
     use kithara_audio::ConsumerWakeMode;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
+    use kithara_render::rt::DeckMixerConfig;
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
 
     use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
     use crate::{
         PlayError,
-        rt::DeckMixerConfig,
         test_pools::{TestPools, pools},
     };
 
@@ -604,7 +595,7 @@ mod tests {
                 Cmd::RegisterPlayer { .. } => {
                     Ok(Reply::PlayerRegistered(crate::session::RegisteredPlayer {
                         id: 1,
-                        eq: crate::bridge::SharedEq::new(10),
+                        eq: kithara_render::bridge::SharedEq::new(10),
                     }))
                 }
                 _ => Ok(Reply::Ok),

@@ -5,13 +5,11 @@ use std::{
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, Mutex};
-#[cfg(test)]
-use ringbuf::traits::Producer;
+use kithara_render::bridge::{NodeInputs, slot_channels};
 
 pub use crate::api::equalizer::EqualizerMock;
 use crate::{
     PlayError, SharedEq, SlotId, StreamShape,
-    bridge::{NodeInputs, slot_channels},
     session::{AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate},
 };
 
@@ -103,10 +101,10 @@ impl SessionMock {
 
     /// Answer as the audio thread of every allocated slot.
     #[cfg(test)]
-    pub(crate) fn notify(&self, notification: &crate::bridge::PlayerNotification) {
+    pub(crate) fn notify(&self, notification: &kithara_render::bridge::PlayerNotification) {
         for node in self.nodes.lock().iter_mut() {
             assert!(
-                node.notif_tx.try_push(notification.clone()).is_ok(),
+                kithara_render::mock::notify(node, notification.clone()).is_ok(),
                 "fixture notification ring has room"
             );
         }
@@ -114,17 +112,12 @@ impl SessionMock {
 
     /// Everything the audio threads of the allocated slots were sent, in order.
     #[cfg(test)]
-    pub(crate) fn take_commands(&self) -> Vec<crate::bridge::DeckPart> {
-        let mut commands = Vec::new();
-        for node in self.nodes.lock().iter_mut() {
-            node.deck
-                .run_block(kithara_signal::SessionFrame::default(), 1, |step| {
-                    if let kithara_command::Step::Due(mut due) = step {
-                        commands.append(due.commands_mut());
-                        due.apply(crate::bridge::DeckApplied::default());
-                    }
-                });
-        }
-        commands
+    pub(crate) fn take_commands(&self) -> Vec<kithara_render::bridge::DeckPart> {
+        self.nodes
+            .lock()
+            .iter_mut()
+            .flat_map(kithara_render::mock::take_batches)
+            .flatten()
+            .collect()
     }
 }

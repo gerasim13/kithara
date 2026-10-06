@@ -50,6 +50,7 @@ kithara-events = { workspace = true }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
+kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-sync = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }

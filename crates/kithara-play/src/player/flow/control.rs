@@ -1,5 +1,6 @@
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_platform::sync::atomic::Ordering;
+use kithara_render::bridge::{DeckMixSettingsChange, DeckPart};
 use kithara_signal::FaderValue;
 use kithara_test_macros as kithara;
 use kithara_warp::MIN_SPEED;
@@ -11,7 +12,6 @@ use crate::{
         InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
         SlotId,
     },
-    bridge::{DeckMixSettingsChange, DeckPart},
     error::PlayError,
 };
 
@@ -70,7 +70,7 @@ impl<S> PlayerRuntime<S> {
     /// Reset EQ gains to 0 dB for all bands.
     pub fn reset_eq(&self) -> Result<(), PlayError> {
         let eq = self.core.engine.eq().ok_or(PlayError::EngineNotRunning)?;
-        for band in 0..eq.len() {
+        for band in 0..eq.bands() {
             self.core.engine.set_master_eq_gain(band, 0.0)?;
         }
         Ok(())

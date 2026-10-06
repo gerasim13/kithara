@@ -1,5 +1,6 @@
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
+use kithara_render::{InvalidCrossfade, rt::BufferGeometryError};
 
 use crate::{
     api::{SlotId, TrackId},
@@ -137,6 +138,21 @@ impl From<SessionError> for PlayError {
                 Self::EqBandOutOfRange { band, bands }
             }
             error => Self::Session(error),
+        }
+    }
+}
+
+impl From<BufferGeometryError> for PlayError {
+    fn from(error: BufferGeometryError) -> Self {
+        Self::Session(error.into())
+    }
+}
+
+impl From<InvalidCrossfade> for PlayError {
+    fn from(InvalidCrossfade { name, value }: InvalidCrossfade) -> Self {
+        Self::InvalidParameter {
+            name: name.into(),
+            value,
         }
     }
 }

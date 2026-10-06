@@ -1,4 +1,5 @@
 use kithara_platform::sync::Arc;
+use kithara_render::bridge::{DeckPart, PlaybackShared};
 
 #[cfg(test)]
 use super::super::PlayerImpl;
@@ -9,7 +10,6 @@ use super::{
 };
 use crate::{
     api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
-    bridge::{DeckPart, PlaybackShared},
     error::PlayError,
 };
 

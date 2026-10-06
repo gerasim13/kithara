@@ -10,8 +10,8 @@ use firewheel::node::ProcBuffers;
 use kithara_audio::mock::TestPcmReader;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_play::{
-    CrossfadeSettings, Resource, SharedEq,
+use kithara_play::{CrossfadeSettings, Resource, SharedEq};
+use kithara_render::{
     bridge::{DeckPart, SlotControl, TrackTransition, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };

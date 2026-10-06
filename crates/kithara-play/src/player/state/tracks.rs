@@ -3,7 +3,7 @@
 use kithara_command::{Sender, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
-use kithara_render::LaneProtocol;
+use kithara_render::{LaneProtocol, rt::track::PlayerResource};
 
 use crate::{
     PlayError,
@@ -11,7 +11,6 @@ use crate::{
         config::{TrackSettings, TrackSettingsChange},
         track::{Behind, Outbox, Player, Track, TrackCommand},
     },
-    rt::track::PlayerResource,
 };
 
 /// Every track the deck holds, oldest first, and the settings the next track

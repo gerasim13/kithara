@@ -16,8 +16,8 @@ use kithara_audio::{
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{
-    Resource,
+use kithara_play::Resource;
+use kithara_render::{
     bridge::RtMetrics,
     rt::track::{PlayerResource, ReadOutcome as BlockReadOutcome},
 };

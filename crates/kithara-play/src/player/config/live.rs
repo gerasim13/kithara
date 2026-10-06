@@ -1,14 +1,11 @@
 use delegate::delegate;
 use kithara_events::EventBus;
+use kithara_render::bridge::{DeckMixSettingsChange, DeckPart};
 use kithara_signal::FaderValue;
 use kithara_warp::MIN_SPEED;
 
 use super::PlayerConfig;
-use crate::{
-    api::PlayerEvent,
-    bridge::{DeckMixSettingsChange, DeckPart},
-    error::PlayError,
-};
+use crate::{api::PlayerEvent, error::PlayError};
 
 impl<S> PlayerConfig<S> {
     pub(crate) const MIN_PLAYBACK_RATE: f32 = MIN_SPEED;

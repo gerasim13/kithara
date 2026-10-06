@@ -275,6 +275,7 @@ kithara = { workspace = true, features = ["download", "android"] }
 toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 
 criterion = { workspace = true }

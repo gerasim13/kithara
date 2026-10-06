@@ -4,12 +4,12 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
+use kithara_render::bridge::RtMetricsSnapshot;
 
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, InterruptionKind, PlayError, PlaybackSnapshot, PlayerStatus,
     Resource, ResourceConfig, SelectionPlayback, SessionDuckingMode, SuccessorLink,
-    bridge::RtMetricsSnapshot,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.

@@ -1,7 +1,9 @@
 use delegate::delegate;
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
-use kithara_play::{CrossfadeSettings, EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
+use kithara_play::{
+    CrossfadeSettings, EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus, SuccessorLink,
+};
 
 use super::QueueControl;
 use crate::event::QueueEvent;
@@ -45,7 +47,8 @@ where
         let settings = settings.validate()?;
         self.with_open_result(|queue| {
             queue.player.set_crossfade_duration(settings.duration);
-            let relinked = queue.config.crossfade_settings().link() != settings.link();
+            let relinked = SuccessorLink::from(queue.config.crossfade_settings())
+                != SuccessorLink::from(settings);
             queue.config.set_crossfade_settings(settings);
             if relinked && let Some(armed) = queue.player.armed_next() {
                 queue.disarm_successor(armed);

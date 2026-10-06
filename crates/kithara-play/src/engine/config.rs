@@ -4,9 +4,10 @@ use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
 use kithara_effects::eq::{EqBandConfig, generate_log_spaced_bands};
 use kithara_platform::{CancelToken, sync::Mutex};
+use kithara_render::rt::DeckMixerConfig;
 use kithara_warp::BeatGridId;
 
-use crate::{rt::DeckMixerConfig, session::SessionBinding};
+use crate::session::SessionBinding;
 
 /// Configuration for the audio engine.
 #[derive(Config)]

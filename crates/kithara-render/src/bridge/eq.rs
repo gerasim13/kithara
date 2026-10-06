@@ -4,7 +4,13 @@ use arc_swap::ArcSwap;
 use kithara_effects::GainDb;
 use kithara_platform::{atomic::RelaxedAtomicF32, sync::Arc};
 
-use crate::error::PlayError;
+/// A gain addressed a band the deck's EQ layout does not have.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("eq band out of range: {band} (bands: {bands})")]
+pub struct EqBandOutOfRange {
+    pub band: usize,
+    pub bands: usize,
+}
 
 #[derive(Clone, kithara_config::Config)]
 #[config(builder(existing))]
@@ -40,10 +46,10 @@ impl SharedEq {
     ///
     /// # Errors
     /// Returns an error when the band is outside the current layout.
-    pub fn set_gain(&self, band: usize, gain_db: GainDb) -> Result<(), PlayError> {
+    pub fn set_gain(&self, band: usize, gain_db: GainDb) -> Result<(), EqBandOutOfRange> {
         let gains = self.gains.load();
         let Some(current) = gains.get(band) else {
-            return Err(PlayError::EqBandOutOfRange {
+            return Err(EqBandOutOfRange {
                 band,
                 bands: gains.len(),
             });
@@ -62,8 +68,13 @@ impl SharedEq {
         to self.gains.load() {
             #[expr($.map(load_gain))]
             #[call(get)]
-            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
-            pub(crate) fn len(&self) -> usize;
+            /// The gain of `band`, when the layout has it.
+            #[must_use]
+            pub fn gain(&self, band: usize) -> Option<f32>;
+            /// How many bands the layout has.
+            #[must_use]
+            #[call(len)]
+            pub fn bands(&self) -> usize;
         }
     }
 }
@@ -101,7 +112,7 @@ mod tests {
         assert_eq!(handle.values().gains, vec![0.0, 4.0, 0.0]);
 
         eq.replace(&[-6.0f32, -2.0, 2.0, 5.0].map(GainDb::from));
-        assert_eq!(handle.len(), 4);
+        assert_eq!(handle.bands(), 4);
         assert_eq!(handle.gain(2), Some(2.0));
         handle.set_gain(3, GainDb::from(1.0)).unwrap();
         assert_eq!(eq.snapshot(), vec![-6.0, -2.0, 2.0, 1.0]);

@@ -10,8 +10,8 @@ use firewheel::node::ProcBuffers;
 use kithara_audio::mock::{Fault, MockReader, TEST_PCM_DEFAULT_VALUE, TestPcmReader};
 use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{
-    Resource, SharedEq,
+use kithara_play::{Resource, SharedEq};
+use kithara_render::{
     bridge::{DeckPart, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };

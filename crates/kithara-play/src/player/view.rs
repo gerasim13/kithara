@@ -1,4 +1,4 @@
-use crate::bridge::PlaybackSnapshot;
+use kithara_render::bridge::PlaybackSnapshot;
 
 /// One coherent view of a player's live playback state.
 ///
@@ -30,17 +30,16 @@ impl From<PlaybackSnapshot> for PlaybackView {
 
 #[cfg(test)]
 mod tests {
+    use kithara_render::{bridge::PlaybackShared, mock};
     use kithara_test_utils::kithara;
 
     use super::*;
 
     fn view_of(frontier: f64, cached: f64) -> PlaybackView {
-        PlaybackView::from(PlaybackSnapshot {
-            duration: 200.0,
-            frontier,
-            cached,
-            ..PlaybackSnapshot::default()
-        })
+        let playback = PlaybackShared::default();
+        mock::publish_playhead(&playback, 0.0, 200.0);
+        mock::publish_buffered(&playback, frontier, cached);
+        PlaybackView::from(playback.snapshot())
     }
 
     /// A fully downloaded track must report its cached span, not the sliver

@@ -507,7 +507,7 @@ mod tests {
         },
         time::Duration,
     };
-    use kithara_play::{DeckMixerConfig, Tempo};
+    use kithara_play::{BufferGeometryError, DeckMixerConfig, Tempo};
     use kithara_sync::SyncGroupSnapshot;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -1095,12 +1095,14 @@ mod tests {
 
         assert!(matches!(
             run_cmd(&mut state, command),
-            Reply::Err(SessionError::ResponseBudgetExceeded {
-                max_block_frames: 512,
-                render_quantum_frames: 64,
-                required_frames: 639,
-                budget_frames: 441,
-            })
+            Reply::Err(SessionError::BufferGeometry(
+                BufferGeometryError::BudgetExceeded {
+                    max_block_frames: 512,
+                    render_quantum_frames: 64,
+                    required_frames: 639,
+                    budget_frames: 441,
+                }
+            ))
         ));
         assert!(!deck_by_player_id(&state, player_id).started);
     }

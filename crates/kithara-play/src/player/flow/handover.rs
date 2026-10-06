@@ -2,6 +2,7 @@ use std::ops::Deref;
 
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
+use kithara_render::bridge::{PlayerNotification, TrackPlaybackStopReason};
 
 #[cfg(test)]
 use super::super::PlayerImpl;
@@ -11,8 +12,8 @@ use super::super::{
     track::TrackCommand,
 };
 use crate::{
-    api::{CrossfadeSettings, EngineEvent, SlotId, SuccessorLink, TrackId},
-    bridge::{PlayerNotification, TrackPlaybackStopReason},
+    CrossfadeSettings,
+    api::{EngineEvent, SlotId, SuccessorLink, TrackId},
     error::PlayError,
     resource::Resource,
 };
@@ -334,6 +335,7 @@ mod tests {
     use kithara_audio::mock::{AudioControlMock, AudioReadMock, AudioSessionMock};
     use kithara_events::{Envelope, EventBus};
     use kithara_platform::sync::Arc;
+    use kithara_render::bridge::{DeckPart, PlaybackFault, TrackTransition};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGrid;
@@ -343,7 +345,6 @@ mod tests {
     use crate::{
         PlayWorker, PlayWorkerConfig,
         api::{EngineEvent, PlayerEvent, SelectionPlayback},
-        bridge::{DeckPart, PlaybackFault, TrackTransition},
         mock,
         player::PlayerConfig,
         resource::Resource,
@@ -455,8 +456,7 @@ mod tests {
             .slot()
             .and_then(|slot| player.core.engine.slot_playback(slot))
             .expect("the slot must carry playback state");
-        playback.position.store(62.3);
-        playback.duration.store(64.295);
+        kithara_render::mock::publish_playhead(&playback, 62.3, 64.295);
 
         assert_eq!(player.duration_seconds(), Some(162.0));
         assert_eq!(player.position_seconds(), Some(0.0));
@@ -493,7 +493,7 @@ mod tests {
         let playback = player
             .slot_playback()
             .expect("the slot must carry playback state");
-        playback.adopt(lead, 62.3, 64.295);
+        kithara_render::mock::adopt(&playback, lead, 62.3, 64.295);
         while player.send_to_slot(DeckPart::StartAll).is_ok() {}
 
         player
@@ -806,14 +806,14 @@ mod tests {
         let playback = player
             .slot_playback()
             .expect("the slot must carry playback state");
-        assert!(!playback.publishing().admit(epoch));
+        assert!(!kithara_render::mock::publishes(&playback, epoch));
 
         audio_thread.notify(&ended("first", ids[0]));
         audio_thread.notify(&started("third", ids[2], epoch));
         player.process_notifications();
 
         assert_eq!(player.current_item(), Some(ids[2]));
-        assert!(playback.publishing().admit(epoch));
+        assert!(kithara_render::mock::publishes(&playback, epoch));
     }
 
     /// Arming ahead leaves the playing item's geometry published; the armed

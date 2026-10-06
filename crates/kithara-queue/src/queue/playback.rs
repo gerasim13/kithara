@@ -101,10 +101,11 @@ where
                 self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
             }
             TrackStatus::Loaded => {
-                if armed != Some(next.id) && !self.arm_successor(next.id, settings.link()) {
+                let link = SuccessorLink::from(settings);
+                if armed != Some(next.id) && !self.arm_successor(next.id, link) {
                     return;
                 }
-                if settings.link() == SuccessorLink::Fade && time.ends_within(settings.duration) {
+                if link == SuccessorLink::Fade && time.ends_within(settings.duration) {
                     self.cross_fade_into(next.id);
                 }
             }

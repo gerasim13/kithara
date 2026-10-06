@@ -1,12 +1,12 @@
 use delegate::delegate;
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::sync::atomic::Ordering;
+use kithara_render::bridge::{PlaybackSnapshot, RtMetricsSnapshot};
 
 use super::super::core::PlayerRuntime;
 use crate::{
     EngineLoadSnapshot, PlayWorker,
     api::{PlayerStatus, TrackId},
-    bridge::{PlaybackSnapshot, RtMetricsSnapshot},
     engine::EngineImpl,
 };
 
@@ -30,7 +30,7 @@ impl<S> PlayerRuntime<S> {
     /// queue auto-advance) need the `None` to avoid false-EOF on a freshly-
     /// loaded track whose demuxer has not yet seen the metadata box.
     pub fn duration_seconds(&self) -> Option<f64> {
-        let dur = self.playback_snapshot()?.duration;
+        let dur = self.playback_snapshot()?.duration();
         (dur > 0.0).then_some(dur)
     }
 
@@ -77,7 +77,7 @@ impl<S> PlayerRuntime<S> {
     #[must_use]
     pub fn position_seconds(&self) -> Option<f64> {
         if let Some(snapshot) = self.playback_snapshot() {
-            return Some(snapshot.position);
+            return Some(snapshot.position());
         }
         self.core
             .start_position
@@ -139,11 +139,11 @@ impl<S> PlayerRuntime<S> {
         }
         to self {
             /// Returns `true` if the player is in playing state.
-            #[expr($.is_some_and(|s| s.playing))]
+            #[expr($.is_some_and(|s| s.is_playing()))]
             #[call(playback_snapshot)]
             pub fn is_playing(&self) -> bool;
             /// Current effective playback rate (`0.0` while paused or without a slot).
-            #[expr($.map_or(0.0, |snapshot| snapshot.rate))]
+            #[expr($.map_or(0.0, |snapshot| snapshot.rate()))]
             #[call(playback_snapshot)]
             pub fn rate(&self) -> f32;
         }

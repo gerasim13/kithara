@@ -8,6 +8,10 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use kithara_render::{
+    bridge::{DeckPart, PlaybackShared, PlayerNotification, SlotControl},
+    rt::StreamShape,
+};
 use kithara_warp::RenderSnapshot;
 use ringbuf::traits::Consumer;
 use tracing::{debug, info};
@@ -15,9 +19,7 @@ use tracing::{debug, info};
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SessionDuckingMode, SlotId},
-    bridge::{DeckPart, PlaybackShared, PlayerNotification, SlotControl},
     error::PlayError,
-    rt::StreamShape,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
 };
 

@@ -4,9 +4,8 @@ use std::{cmp, hash, ops};
 
 use kithara_events::{Event, SlotId, TrackId};
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_render::bridge::PlaybackFault;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
-
-use crate::bridge::PlaybackFault;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PlayerStatus {

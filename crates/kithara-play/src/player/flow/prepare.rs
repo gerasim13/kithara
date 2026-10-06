@@ -110,6 +110,7 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
+    use kithara_render::rt::{BufferGeometryError, StreamShape};
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
 
@@ -118,7 +119,6 @@ mod tests {
         PlayError, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, mock,
         player::PlayerConfig,
         resource::ResourceSrc,
-        rt::StreamShape,
         session::SessionError,
         test_pools::{TestPools, pools},
     };
@@ -310,12 +310,14 @@ mod tests {
 
         assert!(matches!(
             player.prepare_config(resource_config("https://example.com/song.mp3")),
-            Err(PlayError::Session(SessionError::ResponseBudgetExceeded {
-                max_block_frames,
-                render_quantum_frames,
-                required_frames: actual_required_frames,
-                budget_frames,
-            })) if max_block_frames == output_buffer
+            Err(PlayError::Session(SessionError::BufferGeometry(
+                BufferGeometryError::BudgetExceeded {
+                    max_block_frames,
+                    render_quantum_frames,
+                    required_frames: actual_required_frames,
+                    budget_frames,
+                }
+            ))) if max_block_frames == output_buffer
                 && render_quantum_frames == quantum
                 && actual_required_frames == required_frames
                 && budget_frames == response_budget

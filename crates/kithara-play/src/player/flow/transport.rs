@@ -1,6 +1,7 @@
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
+use kithara_render::bridge::DeckPart;
 use tracing::{debug, warn};
 
 use super::super::{
@@ -8,8 +9,8 @@ use super::super::{
     track::TrackCommand,
 };
 use crate::{
-    api::{CrossfadeSettings, PlayerStatus, SelectionPlayback, TrackId},
-    bridge::DeckPart,
+    CrossfadeSettings,
+    api::{PlayerStatus, SelectionPlayback, TrackId},
     error::PlayError,
     resource::Resource,
 };
@@ -166,7 +167,7 @@ where
         }
 
         if matches!(outcome, SeekOutcome::Landed { .. }) {
-            playback.position.store(target_secs);
+            playback.land_seek(target_secs);
         }
 
         Ok(outcome)

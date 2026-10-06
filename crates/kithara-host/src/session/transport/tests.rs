@@ -14,7 +14,7 @@ use firewheel::{
 use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
 use kithara_config::{Config, ConfigOwner};
 use kithara_platform::time::Duration;
-use kithara_play::rt::{install_render_context, read_render_context};
+use kithara_render::rt::{install_render_context, read_render_context};
 use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::{Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition};

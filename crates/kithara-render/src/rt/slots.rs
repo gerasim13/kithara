@@ -91,34 +91,29 @@ impl TrackSlots {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::mock::{AudioControlMock, AudioReadMock, AudioSessionMock};
-    use kithara_events::EventBus;
+    use kithara_audio::mock::{AudioReadMock, AudioSessionMock};
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
-    use crate::{resource::Resource, rt::track::PlayerResource, test_pools::pools};
+    use crate::{
+        rt::track::{PcmConsumer, PlayerResource},
+        test_pools::pools,
+    };
 
     fn track(item_id: TrackId, src: Arc<str>) -> PlayerTrack {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
         let reader = Unimock::new((
-            AudioSessionMock::event_bus
-                .each_call(matching!())
-                .answers(&|mock| mock.make_ref(EventBus::new(1))),
             AudioSessionMock::duration
                 .each_call(matching!())
                 .returns(Some(Duration::from_secs(1))),
             AudioReadMock::spec
                 .each_call(matching!())
                 .returns(AudioSpec::new(2, sample_rate)),
-            AudioControlMock::preload
-                .next_call(matching!())
-                .returns(Ok(())),
         ));
-        let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
-        let resource = PlayerResource::new(resource.into(), src, &pools())
+        let resource = PlayerResource::new(PcmConsumer::new(Box::new(reader)), src, &pools())
             .map_or_else(|error| panic!("test player resource: {error}"), Box::new);
 
         PlayerTrack::builder()

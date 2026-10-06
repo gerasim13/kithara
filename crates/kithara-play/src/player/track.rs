@@ -3,15 +3,17 @@
 use kithara_command::{Live, LiveError, Outcome, Sender, Seq, When};
 use kithara_config::ConfigOwner;
 use kithara_events::TrackId;
-use kithara_render::{LaneCommand, LaneFrame, LaneProtocol};
+use kithara_render::{
+    LaneCommand, LaneFrame, LaneProtocol,
+    bridge::{DeckPart, SlotControl, TrackTransition},
+    rt::track::PlayerResource,
+};
 use tracing::warn;
 
 use crate::{
-    PlayError,
-    api::{CrossfadeSettings, SlotId},
-    bridge::{DeckPart, SlotControl, TrackTransition},
+    CrossfadeSettings, PlayError,
+    api::SlotId,
     player::config::{TrackSettings, TrackSettingsChange, TrackSettingsExec},
-    rt::track::PlayerResource,
 };
 
 /// A player: it changes its own state and reaches the executors only through
@@ -218,20 +220,16 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_audio::mock::TestPcmReader;
-    use kithara_command::{ChannelConfig, Inbox, Step, channel};
+    use kithara_command::{ChannelConfig, Inbox, channel};
     use kithara_platform::sync::Arc;
-    use kithara_signal::{AudioSpec, SessionFrame};
+    use kithara_render::bridge::{SharedEq, slot_channels};
+    use kithara_signal::AudioSpec;
     use kithara_test_fixtures::integration_fixtures::constant_half;
     use kithara_test_utils::kithara;
     use kithara_warp::{SpeedCurve, StretchKind};
 
     use super::*;
-    use crate::{
-        Resource,
-        bridge::{DeckApplied, NodeInputs, SharedEq, slot_channels},
-        consts::DECK_SLOT,
-        test_pools::pools,
-    };
+    use crate::{Resource, consts::DECK_SLOT, test_pools::pools};
 
     fn settings() -> TrackSettings {
         TrackSettings::builder()
@@ -256,18 +254,6 @@ mod tests {
 
     fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
         channel(ChannelConfig::builder().build())
-    }
-
-    /// The batches the deck takes in its next block, each as its parts.
-    fn deck_batches(inputs: &mut NodeInputs) -> Vec<Vec<DeckPart>> {
-        let mut batches = Vec::new();
-        inputs.deck.run_block(SessionFrame::default(), 1, |step| {
-            if let Step::Due(mut due) = step {
-                batches.push(std::mem::take(due.commands_mut()));
-                due.apply(DeckApplied::default());
-            }
-        });
-        batches
     }
 
     /// The commands the lane takes in its next block, in order.
@@ -311,7 +297,7 @@ mod tests {
             )
             .expect("the deck has room");
 
-        let batches = deck_batches(&mut inputs);
+        let batches = kithara_render::mock::take_batches(&mut inputs);
         let id = track.item_id();
         assert!(
             matches!(
@@ -345,7 +331,10 @@ mod tests {
             track.apply(command, &mut out).expect("the deck has room");
         }
 
-        let parts: Vec<_> = deck_batches(&mut inputs).into_iter().flatten().collect();
+        let parts: Vec<_> = kithara_render::mock::take_batches(&mut inputs)
+            .into_iter()
+            .flatten()
+            .collect();
         let id = track.item_id();
         assert!(
             matches!(

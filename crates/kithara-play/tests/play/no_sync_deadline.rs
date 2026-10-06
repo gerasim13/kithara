@@ -6,8 +6,8 @@ use firewheel::node::ProcBuffers;
 use kithara_audio::mock::TestPcmReader;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_play::{
-    Resource, SharedEq,
+use kithara_play::{Resource, SharedEq};
+use kithara_render::{
     bridge::{DeckPart, SlotControl, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };
