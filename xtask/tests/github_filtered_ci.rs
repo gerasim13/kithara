@@ -5,18 +5,21 @@ use std::{fs, path::Path};
 use serde_yaml_ng::Value;
 
 fn workflow(name: &str) -> Value {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let source = fs::read_to_string(root.join(".github/workflows").join(name)).unwrap();
-    serde_yaml_ng::from_str(&source).unwrap()
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace parent");
+    let source = fs::read_to_string(root.join(".github/workflows").join(name))
+        .expect("workflow is readable");
+    serde_yaml_ng::from_str(&source).expect("workflow is valid YAML")
 }
 
 fn step<'a>(job: &'a Value, name: &str) -> &'a Value {
     job["steps"]
         .as_sequence()
-        .unwrap()
+        .expect("workflow steps are a sequence")
         .iter()
         .find(|step| step["name"].as_str() == Some(name))
-        .unwrap()
+        .expect("workflow has the named step")
 }
 
 #[test]
