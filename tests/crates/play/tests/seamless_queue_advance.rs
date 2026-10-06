@@ -15,7 +15,9 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
-    fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
+    fixture_protocol::{
+        GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
+    },
     offline::{
         OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent, append_source_loaded,
         offline_queue_fixture_with_options,
@@ -448,9 +450,8 @@ fn silence_runs(samples: &[f32], min_len: usize) -> Vec<(usize, usize)> {
     runs
 }
 
-/// Longest run of near-zero samples in `[start..end)`. Used to detect audible
-/// gaps without depending on phase alignment.
-
+/// Strongest `freq_hz` Goertzel magnitude over `window_frames`-long windows of
+/// `[start..end)`.
 fn max_windowed_goertzel_magnitude(
     samples: &[f32],
     start: usize,
@@ -501,7 +502,7 @@ async fn source_url(server: &TestServerHelper, signal: PackagedSignal, start_fra
                     encoder_delay: NonZeroU32::new(AAC_GAPLESS_ENCODER_DELAY),
                     trailing_delay: NonZeroU32::new(AAC_GAPLESS_TRAILING_DELAY),
                     source,
-                    gapless_encoding: Default::default(),
+                    gapless_encoding: GaplessEncoding::default(),
                     variant_overrides: Vec::new(),
                 }),
         )

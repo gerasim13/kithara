@@ -23,6 +23,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::saw_segments};
 use kithara_test_utils::temp_dir;
+use num_traits::AsPrimitive;
 use tracing::info;
 
 use crate::{
@@ -48,7 +49,8 @@ async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
     const HLS_SAMPLE_RATE: f64 = 44_100.0;
     const HLS_CHANNELS: f64 = 2.0;
 
-    let segment_duration = HLS_SEGMENT_SIZE as f64 / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
+    let segment_size: f64 = HLS_SEGMENT_SIZE.as_();
+    let segment_duration = segment_size / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
     TestServerHelper::new()
         .await
         .create_hls(

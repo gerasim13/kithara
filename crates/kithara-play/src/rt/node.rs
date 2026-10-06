@@ -177,19 +177,22 @@ mod tests {
                 },
             )
             .expect("the deck channel has room");
-        let received = {
-            let mut guard = node.inputs.lock();
-            let inputs = (*guard).as_mut().expect("inputs not yet taken");
-            inputs.deck.drain();
-            inputs
-                .deck
-                .next_due(kithara_signal::SessionFrame::default(), 1)
-                .map(|due| {
-                    let parts = due.commands().len();
-                    due.apply(crate::bridge::DeckApplied::default());
-                    parts
-                })
-        };
+        let received = node
+            .inputs
+            .lock()
+            .as_mut()
+            .map(|inputs| {
+                inputs.deck.drain();
+                inputs
+                    .deck
+                    .next_due(kithara_signal::SessionFrame::default(), 1)
+                    .map(|due| {
+                        let parts = due.commands().len();
+                        due.apply(crate::bridge::DeckApplied::default());
+                        parts
+                    })
+            })
+            .expect("inputs not yet taken");
         assert_eq!(received, Some(1));
     }
 

@@ -25,6 +25,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::signal::rms;
 use kithara_test_utils::temp_dir;
+use num_traits::AsPrimitive;
 use url::Url;
 
 use crate::{
@@ -84,8 +85,8 @@ async fn render_and_collect(
     stage: &str,
 ) -> WindowStats {
     const ACTIVE_THRESHOLD: f32 = 0.001;
-    let block_budget =
-        Duration::from_secs_f64(consts::BLOCK_FRAMES as f64 / f64::from(consts::SAMPLE_RATE));
+    let block_frames: f64 = consts::BLOCK_FRAMES.as_();
+    let block_budget = Duration::from_secs_f64(block_frames / f64::from(consts::SAMPLE_RATE));
 
     let window_start_sample = samples_out.len();
     let mut silent_blocks = 0u32;
@@ -128,13 +129,7 @@ async fn render_and_collect(
 /// from lagging while the render loop parks on the virtual clock; a lagged
 /// receiver would otherwise wedge later `try_recv` reads.
 fn drain_events(events: &mut EventReceiver<TestEvent>) {
-    loop {
-        match events.try_recv().map(|env| env.event) {
-            Ok(_) => continue,
-            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-            Err(TryRecvError::Lagged(_)) => continue,
-        }
-    }
+    while let Ok(_) | Err(TryRecvError::Lagged(_)) = events.try_recv() {}
 }
 
 /// Drive the offline render pull until the decode worker has actually
@@ -160,8 +155,8 @@ async fn render_until_audio(
     deadline: Instant,
     stage: &str,
 ) {
-    let block_budget =
-        Duration::from_secs_f64(consts::BLOCK_FRAMES as f64 / f64::from(consts::SAMPLE_RATE));
+    let block_frames: f64 = consts::BLOCK_FRAMES.as_();
+    let block_budget = Duration::from_secs_f64(block_frames / f64::from(consts::SAMPLE_RATE));
     // ms threshold computed via `Duration` so no float→int cast is needed.
     let min_position_ms = Duration::from_secs_f64(min_position_secs).as_millis();
 
@@ -176,9 +171,8 @@ async fn render_until_audio(
                         advanced = true;
                     }
                 }
-                Ok(_) => continue,
+                Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                Err(TryRecvError::Lagged(_)) => continue,
             }
         }
         if advanced {

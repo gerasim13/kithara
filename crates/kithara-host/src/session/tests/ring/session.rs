@@ -157,10 +157,7 @@ impl ManualRingSession {
         if let Some(snapshot) = reply.snapshot {
             *self.snapshot.lock() = snapshot;
         }
-        match reply.error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        reply.error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn drain(&self, frames: usize) -> Result<Vec<f32>, RingSessionError> {
@@ -199,10 +196,7 @@ impl ManualRingSession {
         if sent.is_err() {
             return self.worker_failure();
         }
-        match reply_rx.recv() {
-            Ok(reply) => Ok(reply),
-            Err(_) => self.worker_failure(),
-        }
+        reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
     /// Synchronous Host command-reply bridge; call from a blocking control thread.
@@ -216,10 +210,7 @@ impl ManualRingSession {
         if sent.is_err() {
             return self.worker_failure();
         }
-        match reply_rx.recv() {
-            Ok(reply) => Ok(reply),
-            Err(_) => self.worker_failure(),
-        }
+        reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
     fn join_worker(&self) -> Result<(), RingSessionError> {

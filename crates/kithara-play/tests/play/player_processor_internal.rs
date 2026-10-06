@@ -593,7 +593,11 @@ async fn an_ending_track_starts_only_the_track_chained_to_it(constant_half: &'st
             .all(|sample| (*sample - 0.5).abs() < f32::EPSILON),
         "the chained track sounds from the frame after the leading track's last"
     );
-    let state = |item_id| processor.track(item_id).map(|track| track.state());
+    let state = |item_id| {
+        processor
+            .track(item_id)
+            .map(kithara_play::rt::track::PlayerTrack::state)
+    };
     assert_eq!(state(chained_id), Some(TrackState::Playing));
     assert_eq!(state(other_id), Some(TrackState::Preloading));
 }
@@ -647,7 +651,9 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
         "the block is filled end to end"
     );
     assert_eq!(
-        processor.track(preload_id).map(|track| track.state()),
+        processor
+            .track(preload_id)
+            .map(kithara_play::rt::track::PlayerTrack::state),
         Some(TrackState::Playing)
     );
 }
@@ -709,7 +715,9 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
     block(&mut processor);
 
     assert_eq!(
-        processor.track(successor_id).map(|track| track.state()),
+        processor
+            .track(successor_id)
+            .map(kithara_play::rt::track::PlayerTrack::state),
         after_cancel
     );
 }

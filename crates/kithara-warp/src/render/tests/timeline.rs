@@ -1,13 +1,49 @@
-use kithara_platform::{sync::Arc, time::Duration};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara_platform::sync::Arc;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use kithara_platform::time::Duration;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_signal::AudioChunk;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 use kithara_stretch::StretchKind;
-use kithara_test_fixtures::unit_fixtures::{warp_constant, warp_sine};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara_test_fixtures::unit_fixtures::warp_constant;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{WarpRenderer, chunk, f64_of, flush_serviced, render_serviced, renderer, spec};
-use crate::{GridSegment, RegionPlan, SpeedCurve, Warp, WarpConfig, consts};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use super::flush_serviced;
+use super::{WarpRenderer, f64_of};
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use super::{chunk, render_serviced, renderer, spec};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use crate::{GridSegment, RegionPlan, Warp};
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use crate::{SpeedCurve, WarpConfig, consts};
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
     first: AudioChunk,
@@ -144,6 +180,7 @@ fn exact_output_frames_do_not_drift_across_partitions() {
     assert_eq!(remainder, 0.0);
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -155,7 +192,7 @@ fn one_frame_regions_accumulate_into_one_portable_request(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0)
             .keylock(true)
             .backend(backend)
@@ -199,6 +236,7 @@ fn one_frame_regions_accumulate_into_one_portable_request(
     );
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -210,7 +248,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0)
             .keylock(true)
             .backend(backend)
@@ -261,6 +299,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     assert_eq!(second_output.meta.source_bytes, 0);
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -271,7 +310,7 @@ fn rendered_source_frontier_excludes_pending_source(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let probe = renderer(WarpConfig::builder().keylock(true).backend(backend).build());
+    let probe = renderer(&WarpConfig::builder().keylock(true).backend(backend).build());
     let source_latency = probe
         .engine
         .as_ref()
@@ -282,7 +321,7 @@ fn rendered_source_frontier_excludes_pending_source(
     assert!(source_latency <= probe.source_block_frames.get());
     let latency = u64::try_from(source_latency).expect("source latency fits u64");
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .keylock(true)
             .backend(backend)
             .region_plan(Arc::new(
@@ -310,6 +349,7 @@ fn rendered_source_frontier_excludes_pending_source(
     );
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -321,7 +361,7 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0 / 0.75)
             .keylock(true)
             .backend(backend)
@@ -371,6 +411,7 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     assert!(flush_serviced(&mut fx).is_none());
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -388,7 +429,7 @@ fn live_unity_transition_drains_active_backend_tail(
     let split = ACTIVE_FRAMES * usize::from(consts::CH);
 
     let mut reference = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(0.5)
             .keylock(true)
             .backend(backend)
@@ -516,6 +557,7 @@ fn live_unity_transition_drains_active_backend_tail(
     assert!(flush_serviced(&mut live).is_none());
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -528,7 +570,7 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
 ) {
     let source = warp_sine[..(3) * 2].to_vec();
     let mut reference = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(0.5)
             .keylock(true)
             .backend(backend)
@@ -581,7 +623,13 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
+#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -592,7 +640,7 @@ fn reset_discards_pending_span_before_new_timeline(
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
-        WarpConfig::builder()
+        &WarpConfig::builder()
             .speed(1.0 / 0.75)
             .keylock(true)
             .backend(backend)
@@ -616,10 +664,15 @@ fn reset_discards_pending_span_before_new_timeline(
     assert_eq!(&output.samples[..], &expected);
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 fn moving_target_renderer() -> WarpRenderer {
     use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 
-    let mut fx = renderer(WarpConfig::builder().speed(1.0).build());
+    let mut fx = renderer(&WarpConfig::builder().speed(1.0).build());
     fx.applied_speed = Some(SmoothedParam::new(
         1.0,
         consts::SPEED_SMOOTHING_SPAN,
@@ -629,6 +682,11 @@ fn moving_target_renderer() -> WarpRenderer {
     fx
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 fn moving_target_advance(blocks: usize, frames: usize) -> f64 {
     let mut fx = moving_target_renderer();
     (0..blocks)
@@ -640,6 +698,11 @@ fn moving_target_advance(blocks: usize, frames: usize) -> f64 {
         .sum()
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test(native, flash(false))]
 fn a_moving_target_advances_the_same_whatever_the_partitioning() {
     let one_block = moving_target_advance(1, 2_048);
@@ -652,6 +715,11 @@ fn a_moving_target_advances_the_same_whatever_the_partitioning() {
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test(native, flash(false))]
 fn a_settled_target_keeps_its_exact_multiplier() {
     let fx = moving_target_renderer();
@@ -663,9 +731,14 @@ fn a_settled_target_keeps_its_exact_multiplier() {
     );
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 #[kithara::test]
 fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
-    let mut fx = renderer(WarpConfig::builder().speed(1.0).build());
+    let mut fx = renderer(&WarpConfig::builder().speed(1.0).build());
     fx.applied_speed = moving_target_renderer().applied_speed;
     fx.set_speed(SpeedCurve::Constant(1.25), 1);
     let target = fx.rate;

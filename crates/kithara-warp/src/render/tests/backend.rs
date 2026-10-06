@@ -1,11 +1,41 @@
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
-use super::playback::{render, vinyl};
-use crate::consts;
+use super::{
+    playback::{render, vinyl},
+    renderer,
+};
+#[cfg(feature = "stretch-glide")]
+use crate::WarpCapabilities;
+use crate::{WarpConfig, consts};
 
+#[cfg(feature = "stretch-glide")]
 #[kithara::test]
+fn glide_masks_unsupported_keylock_from_its_prepared_engine() {
+    let renderer = renderer(
+        &WarpConfig::builder()
+            .backend(StretchKind::Glide)
+            .keylock(true)
+            .speed(0.5)
+            .build(),
+    );
+
+    assert!(renderer.requested_keylock);
+    assert_eq!(renderer.current_kind, StretchKind::Glide);
+    assert!(!renderer.current_keylock);
+    assert_eq!(
+        renderer
+            .engine
+            .as_ref()
+            .expect("Glide is compiled")
+            .capabilities()
+            .functions(),
+        WarpCapabilities::RATE
+    );
+}
+
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
+#[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

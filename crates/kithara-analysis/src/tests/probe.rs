@@ -99,7 +99,7 @@ fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
     let progress = results.borrow().clone().expect("the pass publishes");
     let analysis = progress.analysis();
     let beat = analysis.beat().expect("the beat slot is filled");
-    let lost: u64 = beat.unanalysed().iter().map(|range| range.frames()).sum();
+    let lost: u64 = beat.unanalysed().iter().map(FrameSpan::frames).sum();
     eprintln!(
         "{:.1}s track, wall {:.1}s, {ticks} ticks, covered {} of {frames}, lost {lost}, bpm {:.4}, beats {}",
         frames.to_f64().unwrap_or(0.0) / f64::from(consts::FIXTURES_SR),

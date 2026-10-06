@@ -140,18 +140,20 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     // orphan is already gone — assert directly, no wait/poll (the Err IS the
     // cleanup-done signal).
     let leftover = collect_cache_files(temp_dir.path());
-    let suspicious: Vec<std::path::PathBuf> = match orphan_prefix {
-        None => leftover.clone(),
-        Some(prefix) => leftover
-            .iter()
-            .filter(|p| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|n| n.starts_with(prefix))
-            })
-            .cloned()
-            .collect(),
-    };
+    let suspicious: Vec<std::path::PathBuf> = orphan_prefix.map_or_else(
+        || leftover.clone(),
+        |prefix| {
+            leftover
+                .iter()
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|n| n.starts_with(prefix))
+                })
+                .cloned()
+                .collect()
+        },
+    );
 
     assert!(
         suspicious.is_empty(),

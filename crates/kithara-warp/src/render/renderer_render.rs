@@ -16,6 +16,9 @@ where
         target: f32,
         output_frames: usize,
     ) -> Result<(), ElasticError> {
+        if !self.requires_staging() {
+            return Ok(());
+        }
         let Some(applied) = self.applied_speed else {
             return Ok(());
         };
@@ -35,6 +38,9 @@ where
         target: f32,
         output_frames: usize,
     ) -> Result<f32, ElasticError> {
+        if !self.requires_staging() {
+            return Ok(1.0);
+        }
         let Some(applied) = self.applied_speed else {
             return Ok(target);
         };
@@ -282,12 +288,13 @@ where
             && self.pending_frames(usize::from(self.spec.channels.max(1))) == 0
             && self.unity_passthrough(speed)
         {
-            return Ok((
+            let frames = if self.requires_staging() {
                 self.render_quantum_frames
                     .map_or(remaining, |frames| remaining.min(frames.get()))
-                    .min(output_limit),
-                None,
-            ));
+            } else {
+                remaining
+            };
+            return Ok((frames.min(output_limit), None));
         }
 
         let channels = usize::from(self.spec.channels.max(1));

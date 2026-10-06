@@ -7,7 +7,7 @@ use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};
-use crate::{StretchKind, consts};
+use crate::{BackendCapabilities, StretchKind, consts};
 
 /// Signalsmith preparation geometry.
 ///
@@ -105,7 +105,10 @@ impl ElasticSpanConfig {
 #[non_exhaustive]
 pub struct ElasticConfig<S> {
     #[config(nested)]
-    #[field(get(copy), vis = "pub(crate)")]
+    #[cfg_attr(
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee"),
+        field(get(copy), vis = "pub(crate)")
+    )]
     backends: ElasticBackendConfig,
     #[config(skip = "effective prepared geometry")]
     #[field(get(copy), vis = "pub(crate)")]
@@ -165,6 +168,7 @@ impl<S> ElasticConfig<S> {
             max_source_frames,
             sample_rate,
             ElasticRateEnvelope::try_from(rate_envelope)?,
+            backend.capabilities(),
         )?;
         Ok(Self {
             backends,
@@ -213,6 +217,7 @@ impl ElasticShape {
         max_source_frames: usize,
         sample_rate: u32,
         configured_rate_envelope: ElasticRateEnvelope,
+        functions: BackendCapabilities,
     ) -> Result<Self, ElasticError> {
         let max_output_frames_f64 = max_output_frames
             .to_f64()
@@ -220,13 +225,22 @@ impl ElasticShape {
         let max_source_frames_f64 = max_source_frames
             .to_f64()
             .ok_or(ElasticError::SourceFrameLimitOutOfRange(max_source_frames))?;
+        let (backend_min_rate, backend_max_rate) = if functions.contains(BackendCapabilities::RATE)
+        {
+            (
+                consts::MIN_SOURCE_FRAMES_PER_OUTPUT,
+                consts::MAX_SOURCE_FRAMES_PER_OUTPUT,
+            )
+        } else {
+            (1.0, 1.0)
+        };
         let min_rate = configured_rate_envelope
             .min_source_frames_per_output()
-            .max(consts::MIN_SOURCE_FRAMES_PER_OUTPUT)
+            .max(backend_min_rate)
             .max(1.0 / max_output_frames_f64);
         let max_rate = configured_rate_envelope
             .max_source_frames_per_output()
-            .min(consts::MAX_SOURCE_FRAMES_PER_OUTPUT)
+            .min(backend_max_rate)
             .min(max_source_frames_f64);
         let rate_envelope = ElasticRateEnvelope::try_from(min_rate..=max_rate)?;
         if !rate_envelope.has_representable_request(max_source_frames, max_output_frames) {
@@ -359,7 +373,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn config_defaults_to_the_common_practical_rate_envelope() {
+    fn config_defaults_to_the_backend_rate_envelope() {
         let config = ElasticConfig::builder()
             .pools(pools())
             .sample_rate(48_000)
@@ -371,8 +385,18 @@ mod tests {
         let envelope = config.rate_envelope();
 
         assert_eq!(config.backend(), StretchKind::default());
-        assert_eq!(envelope.min_source_frames_per_output(), 0.05);
-        assert_eq!(envelope.max_source_frames_per_output(), 4.0);
+        let supports_rate = config
+            .backend()
+            .capabilities()
+            .contains(BackendCapabilities::RATE);
+        assert_eq!(
+            envelope.min_source_frames_per_output(),
+            if supports_rate { 0.05 } else { 1.0 }
+        );
+        assert_eq!(
+            envelope.max_source_frames_per_output(),
+            if supports_rate { 4.0 } else { 1.0 }
+        );
     }
 
     #[kithara::test]
@@ -408,7 +432,7 @@ mod tests {
             .build()
             .expect("fixture backend geometry is valid");
 
-        assert_eq!(config.backends(), backends);
+        assert_eq!(config.backends, backends);
         assert_eq!(
             config.values().backends.signalsmith.block_frames,
             backends.signalsmith().block_frames()
@@ -462,8 +486,18 @@ mod tests {
             .expect("valid elastic config");
         let envelope = config.rate_envelope();
 
-        assert_eq!(envelope.min_source_frames_per_output(), 0.05);
-        assert_eq!(envelope.max_source_frames_per_output(), 2.0);
+        let supports_rate = config
+            .backend()
+            .capabilities()
+            .contains(BackendCapabilities::RATE);
+        assert_eq!(
+            envelope.min_source_frames_per_output(),
+            if supports_rate { 0.05 } else { 1.0 }
+        );
+        assert_eq!(
+            envelope.max_source_frames_per_output(),
+            if supports_rate { 2.0 } else { 1.0 }
+        );
     }
 
     #[kithara::test]
@@ -477,10 +511,18 @@ mod tests {
             .rate_envelope(5.0..=6.0)
             .build();
 
-        assert!(matches!(
-            result,
-            Err(ElasticError::InvalidRateEnvelope { min: 5.0, max: 4.0 })
-        ));
+        let max = if StretchKind::default()
+            .capabilities()
+            .contains(BackendCapabilities::RATE)
+        {
+            4.0
+        } else {
+            1.0
+        };
+        assert_eq!(
+            result.err(),
+            Some(ElasticError::InvalidRateEnvelope { min: 5.0, max })
+        );
     }
 
     #[kithara::test]
@@ -494,15 +536,25 @@ mod tests {
             .rate_envelope(0.051..=0.052)
             .build();
 
-        assert!(matches!(
-            result,
-            Err(ElasticError::InvalidRateEnvelope {
-                min: 0.051,
-                max: 0.052
-            })
-        ));
+        let min = if StretchKind::default()
+            .capabilities()
+            .contains(BackendCapabilities::RATE)
+        {
+            0.051
+        } else {
+            1.0
+        };
+        assert_eq!(
+            result.err(),
+            Some(ElasticError::InvalidRateEnvelope { min, max: 0.052 })
+        );
     }
 
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test]
     fn config_preserves_a_continuous_window_with_a_discrete_request() {
         let config = ElasticConfig::builder()
@@ -522,6 +574,11 @@ mod tests {
         );
     }
 
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test]
     fn config_accepts_a_request_on_the_tolerated_ulp_boundary() {
         let boundary = 0.75_f64.next_up();
@@ -538,6 +595,11 @@ mod tests {
         assert!(config.rate_envelope().contains_rate(0.75));
     }
 
+    #[cfg(any(
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
     #[kithara::test]
     fn config_accounts_for_rounding_the_request_rate() {
         let config = ElasticConfig::builder()
@@ -551,5 +613,52 @@ mod tests {
             .expect("2/3 rounds to the accepted upper boundary");
 
         assert!(config.rate_envelope().contains_rate(2.0 / 3.0));
+    }
+
+    #[cfg(feature = "stretch-identity")]
+    #[kithara::test]
+    #[case::broad(0.05..=4.0)]
+    #[case::unity(1.0..=1.0)]
+    fn identity_intersects_policy_with_unity(#[case] rate_envelope: RangeInclusive<f64>) {
+        let config = ElasticConfig::builder()
+            .backend(StretchKind::Identity)
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(7)
+            .max_output_frames(4)
+            .rate_envelope(rate_envelope)
+            .build()
+            .expect("the policy contains unity");
+
+        assert_eq!(config.max_source_frames(), 7);
+        assert_eq!(config.max_output_frames(), 4);
+        assert_eq!(config.rate_envelope().min_source_frames_per_output(), 1.0);
+        assert_eq!(config.rate_envelope().max_source_frames_per_output(), 1.0);
+    }
+
+    #[cfg(feature = "stretch-identity")]
+    #[kithara::test]
+    #[case::below(0.05..=0.5, 1.0, 0.5)]
+    #[case::above(2.0..=4.0, 2.0, 1.0)]
+    fn identity_rejects_policy_excluding_unity(
+        #[case] rate_envelope: RangeInclusive<f64>,
+        #[case] min: f64,
+        #[case] max: f64,
+    ) {
+        let result = ElasticConfig::builder()
+            .backend(StretchKind::Identity)
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(4)
+            .max_output_frames(4)
+            .rate_envelope(rate_envelope)
+            .build();
+
+        assert_eq!(
+            result.err(),
+            Some(ElasticError::InvalidRateEnvelope { min, max })
+        );
     }
 }

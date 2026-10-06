@@ -25,6 +25,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::{
     analysis_beat_fixtures::sine_440_long, integration_fixtures::constant_half,
 };
+use num_traits::AsPrimitive;
 
 use super::mix_tap::{ROOMY_CAPACITY, play_resource, playing_harness, render_blocks};
 
@@ -432,10 +433,12 @@ async fn a_click_a_route_restart_interrupts_ends_when_it_would_have_at_the_new_r
         panic!("only the interrupted click sounds after the restart: {tail:?}");
     };
     let scale = f64::from(consts::DOUBLE_RATE) / f64::from(consts::SAMPLE_RATE);
-    let expected = (span - head_frames) as f64 * scale;
+    let remaining: f64 = (span - head_frames).as_();
+    let expected = remaining * scale;
+    let tail_frames: f64 = tail.frames.as_();
     assert_eq!(tail.frame, 0, "the click carries on across the restart");
     assert!(
-        (tail.frames as f64 - expected).abs() <= scale,
+        (tail_frames - expected).abs() <= scale,
         "the click ends when it would have: {} frames at the new rate, expected {expected:.0}",
         tail.frames
     );
@@ -600,7 +603,9 @@ async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
     constant_half: &'static [u8],
 ) {
     let harness = playing_harness(constant_half).await;
-    harness.with_player(|player| player.pause()).await;
+    harness
+        .with_player(kithara::play::player::PlayerControl::pause)
+        .await;
     render_blocks(&harness, consts::SETTLE_BLOCKS).await;
 
     let mut master = harness
@@ -990,7 +995,8 @@ async fn a_full_duck_mutes_the_deck_through_the_hold_and_returns_it_over_the_rel
     );
     let hold_end = consts::CLICK_FRAMES + consts::HOLD_FRAMES;
     let release_end = hold_end + consts::RELEASE_FRAMES;
-    let max_step = std::f32::consts::PI / (2.0 * consts::RELEASE_FRAMES as f32);
+    let release_frames: f32 = consts::RELEASE_FRAMES.as_();
+    let max_step = std::f32::consts::PI / (2.0 * release_frames);
     for (index, &beat) in beats.iter().enumerate() {
         let next = beats.get(index + 1).copied().unwrap_or(frames);
         assert!(
