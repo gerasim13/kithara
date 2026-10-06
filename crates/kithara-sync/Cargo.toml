@@ -10,7 +10,7 @@ keywords = ["audio", "beatgrid", "dj", "synchronization", "topology"]
 categories = ["multimedia::audio"]
 
 [features]
-default = []
+default = ["stretch-signalsmith"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
 stretch-glide = ["kithara-warp/stretch-glide"]

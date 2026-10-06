@@ -638,9 +638,6 @@ cargo.profile = "test-release"
 
 [test.lanes.sync]
 default_backend = "none"
-# kithara-sync takes kithara-warp without a stretch backend; built alone it
-# names the default one.
-default_features = ["kithara-sync/stretch-signalsmith"]
 owns = ["crates/kithara-sync/"]
 cargo.packages = ["kithara-sync"]
 cargo.profile = "test-release"
