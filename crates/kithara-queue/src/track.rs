@@ -159,8 +159,7 @@ where
 }
 
 /// One track as the queue's handles read it: what [`TrackEntry`] shows, the
-/// source to rebuild it from, the slot that reaches its decoder, and whether
-/// the user's selection wants its live load attempt.
+/// source to rebuild it from, and the slot that reaches its decoder.
 pub(crate) struct TrackRow<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -168,7 +167,6 @@ where
     pub(crate) entry: TrackEntry,
     pub(crate) source: TrackSource<S>,
     pub(crate) observer: AudioObserverSlot,
-    pub(crate) selected: bool,
 }
 
 /// Authoritative store for the queue's track list.
@@ -253,6 +251,10 @@ where
                 self.advance(&ticket, |_| TrackStatus::Slow);
                 None
             }
+            AttemptReport::Retrying { ticket, error } => {
+                self.answer_retry(&ticket, &error);
+                None
+            }
             AttemptReport::Cover { id, attempt, cover } => {
                 self.place_cover(id, &attempt, cover);
                 None
@@ -260,6 +262,29 @@ where
             AttemptReport::Finished { ticket, outcome } => self
                 .finish_attempt(&ticket, outcome)
                 .map(|resource| (ticket.id, resource)),
+        }
+    }
+
+    /// A live attempt asks again on a failure a later ask can answer. While
+    /// the selection wants it, it goes on; an attempt nobody selected ends
+    /// here, its track failed with `error`. Dropping its guard armed cuts the
+    /// ask off, which frees its lane permit, and leaves the attempt's own
+    /// `Finished` stale.
+    fn answer_retry(&mut self, ticket: &Ticket, error: &QueueError) {
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| record.id == ticket.id);
+        let abandoned = record.and_then(|record| {
+            record.load.take_if(|attempt| {
+                attempt.generation == ticket.generation
+                    && !attempt.selected
+                    && !attempt.is_cancelled()
+            })
+        });
+        if abandoned.is_some() {
+            drop(abandoned);
+            self.set_status(ticket.id, TrackStatus::Failed(error.to_string()));
         }
     }
 
@@ -293,7 +318,9 @@ where
     /// Attempt finished. While the ticket is its track's live attempt, the
     /// guard is disarmed and removed (the token now belongs to the built
     /// `Resource`, or died with the dropped load future), a failure flips the
-    /// track to `Failed`, and a resource is handed back for admission. A stale
+    /// track to `Failed`, and a resource is handed back for admission. A
+    /// cancel is the last word on the attempt, whatever it finished with: its
+    /// track turns `Cancelled` and a resource it built is dropped. A stale
     /// ticket's outcome is dropped: the track moved on, and dropping its guard
     /// cancelled that resource's token.
     fn finish_attempt(
@@ -313,10 +340,14 @@ where
             );
             return None;
         };
+        let cancelled = attempt.is_cancelled() || matches!(outcome, Err(QueueError::Cancelled(_)));
         attempt.disarm();
         match outcome {
+            _ if cancelled => {
+                self.set_status(ticket.id, TrackStatus::Cancelled);
+                None
+            }
             Ok(resource) => Some(*resource),
-            Err(QueueError::Cancelled(_)) => None,
             Err(error) => {
                 self.set_status(ticket.id, TrackStatus::Failed(error.to_string()));
                 None
@@ -393,7 +424,6 @@ where
                 entry: record.entry(),
                 source: record.source.clone(),
                 observer: record.observer.clone(),
-                selected: record.load.as_ref().is_some_and(|attempt| attempt.selected),
             })
             .collect()
     }
@@ -462,16 +492,19 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_assets::AssetStore;
-    use kithara_audio::{AudioObserveError, AudioObserver};
+    use kithara_audio::{AudioObserveError, AudioObserver, mock::TestPcmReader};
     use kithara_platform::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    use kithara_signal::{AudioChunk, AudioChunkInfo};
+    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{TestPools, pools, sample_buffer};
+    use crate::{
+        consts::TEST_SAMPLE_RATE,
+        test_pools::{TestPools, pools, sample_buffer},
+    };
 
     #[kithara::test]
     #[case::from_str("https://example.com/song.mp3")]
@@ -608,13 +641,60 @@ mod tests {
         CancelToken::never().child()
     }
 
-    /// Whether the published row of `id` says the selection wants its
-    /// attempt.
+    /// Whether the selection wants `id`'s live attempt.
     fn selected(tracks: &Tracks<TestPools>, id: TrackId) -> bool {
-        tracks
-            .rows()
-            .iter()
-            .any(|row| row.entry.id == id && row.selected)
+        tracks.records().iter().any(|record| {
+            record.id == id && record.load.as_ref().is_some_and(|attempt| attempt.selected)
+        })
+    }
+
+    /// `ticket`'s attempt failed on `reason`, which a later ask can answer.
+    fn retrying(ticket: Ticket, reason: &str) -> AttemptReport {
+        AttemptReport::Retrying {
+            ticket,
+            error: QueueError::Resource(reason.to_owned()),
+        }
+    }
+
+    /// Nobody selected the attempt that would ask again, so nobody waits
+    /// for it: its track fails with the failure, and the ask is cut off
+    /// rather than holding a lane permit against a network that is not
+    /// answering.
+    #[kithara::test]
+    fn an_unselected_attempt_asking_again_fails_its_track() {
+        let mut tracks = tracks_with(TrackId(1));
+        let cancel = token();
+        let ticket = tracks
+            .begin_attempt(TrackId(1), cancel.clone(), false)
+            .expect("BUG: vacant record must accept an attempt");
+        tracks.apply_report(AttemptReport::Started(ticket));
+
+        tracks.apply_report(retrying(ticket, "connection refused"));
+
+        assert_eq!(
+            status(&tracks),
+            TrackStatus::Failed(QueueError::Resource("connection refused".into()).to_string())
+        );
+        assert!(cancel.is_cancelled(), "the abandoned ask keeps running");
+    }
+
+    /// The selection reached the track after its prefetch had started. The
+    /// queue answers the attempt against the selection as it stands, so the
+    /// track keeps loading through the failure.
+    #[kithara::test]
+    fn an_attempt_selected_after_it_started_keeps_asking() {
+        let mut tracks = tracks_with(TrackId(1));
+        let cancel = token();
+        let ticket = tracks
+            .begin_attempt(TrackId(1), cancel.clone(), false)
+            .expect("BUG: vacant record must accept an attempt");
+        tracks.apply_report(AttemptReport::Started(ticket));
+        assert!(tracks.promote_attempt(TrackId(1), token()).is_none());
+
+        tracks.apply_report(retrying(ticket, "connection refused"));
+
+        assert_eq!(status(&tracks), TrackStatus::Loading);
+        assert!(!cancel.is_cancelled(), "the wanted attempt was cut off");
     }
 
     #[kithara::test]
@@ -742,6 +822,50 @@ mod tests {
             .expect("BUG: vacant record must accept an attempt");
         tracks.records_mut().clear();
         assert!(cancel.is_cancelled(), "dropping the record aborts the load");
+    }
+
+    /// The caller's cancel reached the attempt's token while its outcome was
+    /// on its way to the queue. The attempt is over, and its track says so
+    /// instead of loading forever.
+    #[kithara::test]
+    fn an_attempt_ended_by_its_cancel_leaves_its_track_cancelled() {
+        let mut tracks = tracks_with(TrackId(1));
+        let cancel = token();
+        let ticket = tracks
+            .begin_attempt(TrackId(1), cancel.clone(), false)
+            .expect("BUG: vacant record must accept an attempt");
+        tracks.apply_report(AttemptReport::Started(ticket));
+
+        cancel.cancel();
+        tracks.apply_report(cancelled(ticket));
+
+        assert_eq!(status(&tracks), TrackStatus::Cancelled);
+    }
+
+    /// A resource the attempt finished before the caller cancelled it, and
+    /// that the queue takes only afterwards, is not admitted: the cancel is
+    /// the last word on that attempt.
+    #[kithara::test]
+    fn a_resource_whose_attempt_was_cancelled_is_not_admitted() {
+        let mut tracks = tracks_with(TrackId(1));
+        let cancel = token();
+        let ticket = tracks
+            .begin_attempt(TrackId(1), cancel.clone(), false)
+            .expect("BUG: vacant record must accept an attempt");
+        tracks.apply_report(AttemptReport::Started(ticket));
+        let reader = TestPcmReader::new(AudioSpec::new(2, TEST_SAMPLE_RATE), 0.01);
+        let finished = AttemptReport::Finished {
+            ticket,
+            outcome: Ok(Box::new(Resource::from_reader(reader, None))),
+        };
+
+        cancel.cancel();
+
+        assert!(
+            tracks.apply_report(finished).is_none(),
+            "a cancelled attempt's resource reached admission"
+        );
+        assert_eq!(status(&tracks), TrackStatus::Cancelled);
     }
 
     #[kithara::test]

@@ -24,7 +24,7 @@ use crate::{
     attempts::{AttemptReport, LoadClass, Ticket},
     error::QueueError,
     event::TrackStatus,
-    queue::{QueueCommand, QueueView},
+    queue::QueueCommand,
     track::{TrackSource, Tracks},
 };
 
@@ -40,9 +40,6 @@ where
     interactive_lane: Arc<Semaphore>,
     /// Background prefetch lane (`max_concurrent_loads` permits).
     prefetch_lane: Arc<Semaphore>,
-    /// What the queue last published: whether the selection still wants an
-    /// attempt that failed on a cause a later ask can answer.
-    view: QueueView<S>,
     /// Where an attempt's task reports to the queue.
     postbox: Postbox<QueueCommand<S>>,
     store: AssetStore<S>,
@@ -63,7 +60,6 @@ where
         runtime: Option<RuntimeHandle>,
         store: AssetStore<S>,
         max_concurrent_loads: NonZeroUsize,
-        view: QueueView<S>,
         postbox: Postbox<QueueCommand<S>>,
         cancel: CancelToken,
     ) -> Self {
@@ -71,7 +67,6 @@ where
             cancel,
             player,
             runtime,
-            view,
             postbox,
             store,
             interactive_lane: Arc::new(Semaphore::new(1)),
@@ -135,17 +130,19 @@ where
     /// for admitting it into the track list and emitting [`TrackStatus::Loaded`].
     ///
     /// A load that failed on something the network can answer later is not a
-    /// verdict on the track: while the selection wants it the ask repeats, so a
-    /// track chosen during an outage plays when connectivity returns instead of
-    /// waiting to be chosen a second time. An HLS segment already gets exactly
-    /// this — a transient failure returns its slot to the pool and the next
-    /// dispatch asks again.
+    /// verdict on the track: the attempt reports the failure and asks again,
+    /// so a track chosen during an outage plays when connectivity returns
+    /// instead of waiting to be chosen a second time. An HLS segment already
+    /// gets exactly this — a transient failure returns its slot to the pool
+    /// and the next dispatch asks again. Whether anyone waits for the track
+    /// is the queue's call, not the attempt's: the queue owns the selection.
     ///
     /// Nothing here polls for the network's state: each ask spends the
     /// downloader's own retry budget before returning, which is what paces the
     /// repeat, and the per-track cancel ends it the moment the selection moves
-    /// on. An attempt nobody selected gives up instead, so it never holds its
-    /// lane permit against a network that is not answering.
+    /// on, or the moment the queue answers that nobody selected the attempt,
+    /// so it never holds its lane permit against a network that is not
+    /// answering.
     #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn load(
         &self,
@@ -169,9 +166,11 @@ where
                 Ok(resource) => return Ok(resource),
                 Err(err) => err,
             };
-            if !can_answer_later(&err, self.view.attempt_selected(id)) {
-                return Err(QueueError::Resource(format!("{err}")));
+            let error = QueueError::Resource(format!("{err}"));
+            if !can_answer_later(&err) {
+                return Err(error);
             }
+            Self::report(&self.postbox, AttemptReport::Retrying { ticket, error });
             hang_tick!();
             debug!(?id, error = %err, "load failed on a cause a later ask can answer; asking again");
         }
@@ -293,9 +292,13 @@ where
         let ticket = attempt.ticket;
         self.read_cover(runtime, ticket.id, &attempt.config, &attempt.cancel);
         let this = Arc::clone(self);
+        let finish = Finish {
+            ticket,
+            postbox: self.postbox.clone(),
+            outcome: None,
+        };
         drop(spawn_on(runtime, async move {
-            let outcome = this.run_attempt(attempt, class).await.map(Box::new);
-            Self::report(&this.postbox, AttemptReport::Finished { ticket, outcome });
+            finish.settle(this.run_attempt(attempt, class).await.map(Box::new));
         }));
     }
 
@@ -387,17 +390,49 @@ where
     observer: AudioObserverSlot,
 }
 
+/// Reports its attempt's `Finished` to the queue however the attempt's task
+/// ends: with the outcome the attempt returned, or with a failure when a
+/// panic or a runtime going away dropped the task first, so the queue never
+/// waits on an attempt nothing runs.
+struct Finish<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    ticket: Ticket,
+    postbox: Postbox<QueueCommand<S>>,
+    /// `None` until the attempt returns.
+    outcome: Option<Result<Box<Resource>, QueueError>>,
+}
+
+impl<S> Finish<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    /// The attempt returned `outcome`: report it.
+    fn settle(mut self, outcome: Result<Box<Resource>, QueueError>) {
+        self.outcome = Some(outcome);
+    }
+}
+
+impl<S> Drop for Finish<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    fn drop(&mut self) {
+        let ticket = self.ticket;
+        let outcome = self.outcome.take().unwrap_or_else(|| {
+            Err(QueueError::Resource(format!(
+                "track {:?}: its load ended without an outcome",
+                ticket.id
+            )))
+        });
+        Loader::report(&self.postbox, AttemptReport::Finished { ticket, outcome });
+    }
+}
+
 /// Whether a failed load is worth asking for again as it stands.
 ///
-/// Two conditions, both required.
-///
-/// Someone must be waiting: `selected` comes from the attempt record, not
-/// from the lane the attempt was spawned into. Selecting a track whose
-/// background prefetch is already running does not move that attempt to
-/// another lane, so the lane says nothing about who is waiting.
-///
-/// And the failure must be one a later ask can answer, which is
-/// [`NetError::can_answer_later`]'s question — the same one an HLS segment
+/// That is [`NetError::can_answer_later`]'s question — the same one an HLS segment
 /// slot asks about its own re-dispatch. It is read off the typed `NetError`
 /// the load carries down its source chain: never a message match, and never a
 /// verdict read back off the bus, which another task publishes and so is not
@@ -406,10 +441,7 @@ where
 /// asked again — connectivity does not change that answer — and neither is a
 /// transfer that stopped delivering, which is the verdict
 /// `stalled_master_playlist_fails_load` pins.
-fn can_answer_later(error: &(dyn StdError + 'static), selected: bool) -> bool {
-    if !selected {
-        return false;
-    }
+fn can_answer_later(error: &(dyn StdError + 'static)) -> bool {
     net_cause(error).is_some_and(NetError::can_answer_later)
 }
 
@@ -474,7 +506,6 @@ mod tests {
     use crate::{
         consts,
         event::QueueEvent,
-        navigation::NavigationState,
         test_pools::{TestPools, pools},
         track::TrackRecord,
     };
@@ -505,7 +536,7 @@ mod tests {
             }),
         };
         // `io::Error` hides its payload from the source chain; the classifier looks inside.
-        assert!(can_answer_later(&Error::other(refused), true));
+        assert!(can_answer_later(&Error::other(refused)));
     }
 
     /// A vanished transport is the same answer: nothing was reached, so the whole
@@ -513,7 +544,7 @@ mod tests {
     #[kithara::test]
     fn a_vanished_host_can_answer_later() {
         let gone = NetError::Network("connection closed".to_string());
-        assert!(can_answer_later(&Error::other(gone), true));
+        assert!(can_answer_later(&Error::other(gone)));
     }
 
     /// A transfer that established and then stopped delivering is the net layer's
@@ -525,7 +556,7 @@ mod tests {
             max_retries: 1,
             source: Box::new(NetError::Timeout),
         };
-        assert!(!can_answer_later(&Error::other(stalled), true));
+        assert!(!can_answer_later(&Error::other(stalled)));
     }
 
     /// A missing resource answers the same however long one waits.
@@ -536,7 +567,7 @@ mod tests {
             url: None,
             body: None,
         };
-        assert!(!can_answer_later(&Error::other(missing), true));
+        assert!(!can_answer_later(&Error::other(missing)));
     }
 
     /// A failure the network had no part in — an unparseable container, a codec
@@ -544,15 +575,7 @@ mod tests {
     #[kithara::test]
     fn a_failure_with_no_network_cause_is_not_asked_again() {
         let local = Error::other("unsupported container");
-        assert!(!can_answer_later(&local, true));
-    }
-
-    /// Nobody is waiting for an unselected attempt, so it gives up rather than
-    /// hold its lane permit against a network that is not answering.
-    #[kithara::test]
-    fn an_unselected_attempt_is_not_asked_again() {
-        let refused = NetError::Network("connection refused".to_string());
-        assert!(!can_answer_later(&Error::other(refused), false));
+        assert!(!can_answer_later(&local));
     }
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
@@ -561,6 +584,8 @@ mod tests {
     #[fieldwork(with, vis = "")]
     struct LoaderFixtureSpec {
         cap: NonZeroUsize,
+        /// What the loader runs its attempts on.
+        runtime: Option<RuntimeHandle>,
     }
 
     impl Default for LoaderFixtureSpec {
@@ -569,8 +594,44 @@ mod tests {
                 Some(n) => n,
                 None => unreachable!(),
             };
-            Self { cap: CAP_3 }
+            Self {
+                cap: CAP_3,
+                runtime: RuntimeHandle::try_current().ok(),
+            }
         }
+    }
+
+    /// A runtime that goes away drops the tasks it never ran to the end.
+    /// An attempt's task still reports how it ended, so the queue never
+    /// waits on an attempt nothing runs any more.
+    #[kithara::test]
+    fn an_attempt_its_runtime_dropped_fails_its_track() {
+        let attempts = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime for the attempt");
+        let mut fixture = LoaderFixtureSpec::default()
+            .with_runtime(Some(attempts.handle().clone()))
+            .build();
+        let id = TrackId::allocate();
+        let source = TrackSource::Uri("https://example.com/abandoned.mp3".into());
+        fixture
+            .tracks
+            .records_mut()
+            .push(TrackRecord::new(id, "abandoned".into(), source.clone()));
+        fixture
+            .loader
+            .spawn_load(&mut fixture.tracks, id, source, LoadClass::Prefetch);
+
+        drop(attempts);
+        for report in posted(&mut fixture.mailbox) {
+            fixture.tracks.apply_report(report);
+        }
+
+        assert!(
+            matches!(fixture.tracks.records()[0].status, TrackStatus::Failed(_)),
+            "the track waits on an attempt nothing runs: {:?}",
+            fixture.tracks.records()[0].status
+        );
     }
 
     #[kithara::test(tokio)]
@@ -825,17 +886,15 @@ mod tests {
             );
             let bus = player.bus().clone();
             let tracks = Tracks::default();
-            let view = QueueView::new(&tracks, &NavigationState::new(1));
             let store = AssetStore::builder(player.pools().clone()).build();
             let (postbox, mut mailbox) = mailbox();
             let (woke_tx, woke) = unbounded_channel();
             mailbox.hold(Waker::from(Arc::new(Wakes(woke_tx))));
             let loader = Arc::new(Loader::new(
                 player.control(),
-                RuntimeHandle::try_current().ok(),
+                self.runtime,
                 store,
                 self.cap,
-                view,
                 postbox,
                 CancelToken::root(),
             ));
@@ -1094,14 +1153,12 @@ mod tests {
                 .build(),
         );
         let tracks = Tracks::default();
-        let view = QueueView::new(&tracks, &NavigationState::new(1));
         let (postbox, _no_attempt_reports) = mailbox();
         let loader = Arc::new(Loader::new(
             player.control(),
             None,
             AssetStore::builder(player.pools().clone()).build(),
             NonZeroUsize::MIN,
-            view,
             postbox,
             CancelToken::root(),
         ));

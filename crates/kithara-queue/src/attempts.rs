@@ -31,6 +31,11 @@ pub(crate) enum AttemptReport {
     Started(Ticket),
     /// The downloader found the attempt's transfer slow.
     Slow(Ticket),
+    /// The attempt failed on a cause a later ask can answer, and asks again.
+    /// Whether anyone still waits for it is the queue's call, made against
+    /// its selection as it stands: an attempt nobody selected ends, its
+    /// track failed with `error`.
+    Retrying { ticket: Ticket, error: QueueError },
     /// The attempt read its track's cover. `attempt` is the attempt's token,
     /// which outlives the attempt in the resource it built: the audio never
     /// waits for the cover.

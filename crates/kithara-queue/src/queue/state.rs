@@ -157,7 +157,6 @@ where
             runtime.or_else(|| RuntimeHandle::try_current().ok()),
             store,
             max_concurrent_loads,
-            view.clone(),
             postbox.clone(),
             cancel.child(),
         ));

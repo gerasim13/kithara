@@ -347,7 +347,8 @@ mod tests {
 
     use crate::{
         event::{QueueEvent, TrackStatus},
-        queue::{state::tests::make_queue, types::SelectPhase},
+        queue::{Queue, state::tests::make_queue, types::SelectPhase},
+        test_pools::TestPools,
         track::{TrackRecord, TrackSource},
     };
 
@@ -445,10 +446,17 @@ mod tests {
             queue.append("https://example.com/a.mp3")
         }
         .expect("open queue accepts a track");
-        assert!(!queue.view.attempt_selected(id));
+        assert!(!attempt_selected(&queue, id));
 
         queue.play();
 
-        assert!(queue.view.attempt_selected(id));
+        assert!(attempt_selected(&queue, id));
+    }
+
+    /// Whether the selection wants `id`'s live load attempt.
+    fn attempt_selected(queue: &Queue<TestPools>, id: TrackId) -> bool {
+        queue.tracks.records().iter().any(|record| {
+            record.id == id && record.load.as_ref().is_some_and(|attempt| attempt.selected)
+        })
     }
 }

@@ -330,6 +330,7 @@ mod tests {
             queue.navigation.select(first, &[first, second]);
             queue.player.play();
             queue.set_action_at_item_end(action);
+            queue.publish();
             let mut events = queue.subscribe();
 
             queue.handle_item_did_play_to_end(&ItemRole::Leading(TrackRef::new(
@@ -337,6 +338,7 @@ mod tests {
                 SlotId::new(0),
                 Arc::from("first"),
             )));
+            queue.publish();
 
             assert_eq!(queue.current().map(|entry| entry.id), Some(first));
             assert!(matches!(queue.pending_select, SelectPhase::Idle));
@@ -441,9 +443,11 @@ mod tests {
             .select(last, Transition::None)
             .expect("the last track is selected");
         queue.navigation.finish();
+        queue.publish();
 
         let mut events = queue.subscribe();
         queue.handle_current_item_changed();
+        queue.publish();
 
         assert_eq!(queue.current().map(|entry| entry.id), None);
         assert!(

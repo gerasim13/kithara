@@ -82,15 +82,6 @@ where
         }
     }
 
-    /// Whether the user's selection wants `id`'s live load attempt.
-    pub(crate) fn attempt_selected(&self, id: TrackId) -> bool {
-        self.0
-            .load()
-            .tracks
-            .iter()
-            .any(|row| row.entry.id == id && row.selected)
-    }
-
     pub(super) fn current(&self) -> Option<TrackEntry> {
         let id = self.0.load().current?;
         self.track(id)
