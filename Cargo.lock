@@ -5658,10 +5658,8 @@ dependencies = [
 name = "kithara-play"
 version = "0.0.1-alpha5"
 dependencies = [
- "arc-swap",
  "assert_no_alloc",
  "axum",
- "bon",
  "bytes",
  "delegate",
  "derive-where",
@@ -5683,13 +5681,11 @@ dependencies = [
  "kithara-derive",
  "kithara-download",
  "kithara-drm",
- "kithara-dsp",
  "kithara-effects",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
  "kithara-net",
- "kithara-output",
  "kithara-platform",
  "kithara-play",
  "kithara-render",
