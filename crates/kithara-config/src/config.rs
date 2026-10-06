@@ -26,6 +26,17 @@ pub trait Config {
 ///
 /// Consumers should read settings through this reference. A snapshot from
 /// [`Config::values`] is for observation, not a second mutable source.
+/// The derive accepts exactly one configuration binding.
+///
+/// ```compile_fail
+/// #[derive(kithara_config::Config)]
+/// #[config(builder(none), fields(value))]
+/// struct Settings { level: u8 }
+/// #[derive(kithara_config::ConfigOwner)]
+/// #[config_owner(inner)]
+/// #[config_owner(delegate(inner))]
+/// struct Owner { inner: Settings }
+/// ```
 pub trait ConfigOwner {
     /// The retained configuration type.
     type Config: Config;

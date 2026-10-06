@@ -14,6 +14,7 @@ use clap::Args;
 use crate::{
     common::{project::ProjectConfig, timestamp::utc_timestamp},
     consts,
+    touched::FETCH_MAIN,
 };
 
 #[derive(Debug, Args)]
@@ -162,7 +163,7 @@ fn build_stages(project: &ProjectConfig) -> Result<Vec<Stage>> {
     };
     let mut stages = build_stages_with(&resolved);
     if !includes_semver(std::env::var("KITHARA_PIPELINE_KIND").ok().as_deref()) {
-        stages.retain(|stage| stage.name != "semver-checks");
+        stages.retain(|stage| !matches!(stage.name, "semver-baseline" | "semver-checks"));
     }
     Ok(stages)
 }
@@ -249,6 +250,8 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         Stage::new("machete", "cargo", &["machete"]).paths(machete_paths),
         Stage::new("deny", "cargo", &["deny", "check"]),
         Stage::new("hack-feature-powerset", "cargo", &["xtask", "powerset"]),
+        // The lane checks out its own commit and nothing else.
+        Stage::new("semver-baseline", "git", &FETCH_MAIN),
         Stage::new(
             "semver-checks",
             "cargo",
@@ -867,6 +870,38 @@ mod tests {
             !semver.args.iter().any(|a| a == "--workspace"),
             "one target directory and one full dependency build per package \
              puts the workspace form beyond any nightly budget"
+        );
+    }
+
+    /// A lane checks out its own commit and nothing else, so the remote ref
+    /// semver compares against exists only once a stage before it fetched
+    /// that ref.
+    #[test]
+    fn the_semver_baseline_is_fetched_before_semver_compares_against_it() {
+        let stages = build_stages_with(&Resolved {
+            semver_packages: vec!["kithara".to_owned()],
+            ..Resolved::default()
+        });
+        let semver = stages
+            .iter()
+            .position(|s| s.name == "semver-checks")
+            .expect("semver-checks stage exists");
+        let baseline = stages[semver]
+            .args
+            .windows(2)
+            .find(|w| w[0] == "--baseline-rev")
+            .map(|w| format!("refs/remotes/{}", w[1]))
+            .expect("semver names its baseline");
+        assert!(
+            stages[..semver].iter().any(|stage| {
+                stage.program == "git"
+                    && stage.args.first().is_some_and(|a| a == "fetch")
+                    && stage
+                        .args
+                        .iter()
+                        .any(|a| a.ends_with(&format!(":{baseline}")))
+            }),
+            "nothing fetches `{baseline}` before semver reads it"
         );
     }
 

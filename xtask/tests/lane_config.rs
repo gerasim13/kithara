@@ -534,11 +534,11 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
                 .cloned()
                 .unwrap_or_default();
             let tools = lane.get("tools").map_or_else(Vec::new, strings);
-            let depth = lane
-                .get("fetch_depth")
-                .and_then(toml::Value::as_integer)
-                .unwrap_or(0);
-            recipes.push((name, (command, env, tools, depth)));
+            let history = lane
+                .get("history")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+            recipes.push((name, (command, env, tools, history)));
         }
     }
     let Some(((first, recipe), rest)) = recipes.split_first() else {

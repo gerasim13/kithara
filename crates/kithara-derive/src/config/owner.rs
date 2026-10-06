@@ -76,16 +76,22 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             "ConfigOwner can only be derived for a struct",
         ));
     };
-    let Some(spec_attr) = input
+    let mut owner_attributes = input
         .attrs
         .iter()
-        .find(|attr| attr.path().is_ident("config_owner"))
-    else {
+        .filter(|attr| attr.path().is_ident("config_owner"));
+    let Some(spec_attr) = owner_attributes.next() else {
         return Err(syn::Error::new_spanned(
             &input.ident,
             "expected #[config_owner(field)], #[config_owner(ConfigType, field.path)] or #[config_owner(delegate(field))]",
         ));
     };
+    if let Some(duplicate) = owner_attributes.next() {
+        return Err(syn::Error::new_spanned(
+            duplicate,
+            "duplicate config_owner attribute",
+        ));
+    }
     let spec: OwnerSpec = spec_attr.parse_args()?;
     let Some(first) = spec.path.first() else {
         return Err(syn::Error::new_spanned(
@@ -171,6 +177,22 @@ mod tests {
     use quote::quote;
 
     use super::expand;
+
+    #[kithara::test(native)]
+    fn duplicate_owner_attributes_are_refused() {
+        for second in [
+            quote!(#[config_owner(inner)]),
+            quote!(#[config_owner(delegate(inner))]),
+        ] {
+            let input = quote! {
+                #[config_owner(inner)]
+                #second
+                struct Owner { inner: Inner }
+            };
+            let refusal = expand(input).expect_err("one owner declares one configuration");
+            assert_eq!(refusal.to_string(), "duplicate config_owner attribute");
+        }
+    }
 
     #[kithara::test(native)]
     fn delegate_names_exactly_one_field_of_the_struct() {
