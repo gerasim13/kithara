@@ -99,7 +99,7 @@ fn observe_event(
 ) {
     match event {
         TestEvent::Audio(event) => {
-            observe_audio_event(deck_index, deck, event, phase, policy, failures);
+            observe_audio_event(deck_index, deck, &event, phase, policy, failures);
         }
         TestEvent::Decoder(DecoderEvent::DecoderChanged {
             sample_rate,
@@ -176,7 +176,7 @@ fn observe_event(
 fn observe_audio_event(
     deck_index: usize,
     deck: &mut Deck,
-    event: AudioEvent,
+    event: &AudioEvent,
     phase: &str,
     policy: EventPolicy,
     failures: &mut Vec<String>,
@@ -187,7 +187,7 @@ fn observe_audio_event(
             seek_epoch,
             ..
         } => {
-            if deck.seek_request_epoch.replace(seek_epoch).is_some() {
+            if deck.seek_request_epoch.replace(*seek_epoch).is_some() {
                 failures.push(format!(
                     "deck {deck_index} ({}) observed duplicate seek request during {phase}",
                     deck.observation.label,
@@ -201,14 +201,14 @@ fn observe_audio_event(
             deck.observation
                 .seek_positions_secs
                 .push(position.as_secs_f64());
-            if deck.seek_request_epoch != Some(seek_epoch) {
+            if deck.seek_request_epoch != Some(*seek_epoch) {
                 failures.push(format!(
                     "deck {deck_index} ({}) completed stale seek epoch {seek_epoch} during {phase}; expected {:?}",
                     deck.observation.label, deck.seek_request_epoch,
                 ));
                 deck.seek_terminal = true;
             } else {
-                deck.seek_complete_epoch = Some(seek_epoch);
+                deck.seek_complete_epoch = Some(*seek_epoch);
             }
         }
         AudioEvent::SeekRejected { epoch, target } => {
@@ -218,7 +218,7 @@ fn observe_audio_event(
                 deck.observation.label,
                 target.as_secs_f64(),
             ));
-            if deck.seek_request_epoch != Some(epoch) {
+            if deck.seek_request_epoch != Some(*epoch) {
                 failures.push(format!(
                     "deck {deck_index} ({}) rejected stale seek epoch {epoch}; expected {:?}",
                     deck.observation.label, deck.seek_request_epoch,
@@ -227,9 +227,9 @@ fn observe_audio_event(
         }
         AudioEvent::UnderrunStarted { seek_epoch, .. } => {
             if matches!(policy, EventPolicy::MutedSeekSetup)
-                && deck.seek_request_epoch == Some(seek_epoch)
+                && deck.seek_request_epoch == Some(*seek_epoch)
             {
-                if deck.muted_seek_underrun_epoch.replace(seek_epoch).is_some() {
+                if deck.muted_seek_underrun_epoch.replace(*seek_epoch).is_some() {
                     failures.push(format!(
                         "deck {deck_index} ({}) reported duplicate muted seek underrun during {phase}",
                         deck.observation.label,
@@ -244,7 +244,7 @@ fn observe_audio_event(
             }
         }
         AudioEvent::UnderrunEnded { seek_epoch, .. } => {
-            if deck.muted_seek_underrun_epoch == Some(seek_epoch) {
+            if deck.muted_seek_underrun_epoch == Some(*seek_epoch) {
                 deck.muted_seek_underrun_epoch = None;
                 if !matches!(policy, EventPolicy::MutedSeekSetup) {
                     failures.push(format!(
@@ -270,10 +270,10 @@ fn observe_audio_event(
             .observation
             .playback_resamplers
             .push(ResamplerObservation {
-                active,
-                backend: resampler_name(backend),
-                host_sample_rate,
-                source_sample_rate,
+                active: *active,
+                backend: resampler_name(*backend),
+                host_sample_rate: *host_sample_rate,
+                source_sample_rate: *source_sample_rate,
             }),
         _ => {}
     }
