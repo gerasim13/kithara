@@ -1,5 +1,7 @@
 use std::panic::Location;
 
+/// Yield a scheduling opportunity to another runnable task.
+pub use super::backend::task::yield_now as yield_runnable;
 pub use super::backend::task::*;
 use super::runtime::Handle;
 use crate::maybe_send::MaybeSend;

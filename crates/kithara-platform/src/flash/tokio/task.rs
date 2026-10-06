@@ -12,11 +12,18 @@ pub use crate::{
 };
 use crate::{
     backend::tokio::{backend::task, runtime::Handle, task as native_task},
-    flash::system::credit::DedicatedSlot,
+    flash::{Yield, system::credit::DedicatedSlot},
     maybe_send::MaybeSend,
     sync::Arc,
     system::lock::Mutex,
 };
+
+/// Yield a scheduling opportunity while a participating task retains runnable credit.
+/// Its immediate wake keeps Flash's task gate runnable across the pending poll.
+#[inline]
+pub fn yield_runnable() -> Yield {
+    Yield::Real { yielded: false }
+}
 
 /// Spawn a participating task with the caller's ambient and dynamic clock mode.
 /// Reassert both modes per poll and restore the worker's previous context afterward.
@@ -186,7 +193,7 @@ impl<R> Future for BlockingJoinHandle<R> {
         let waker = Waker::from(Arc::clone(completion));
         let outcome = Pin::new(&mut this.inner).poll(&mut Context::from_waker(&waker));
         if outcome.is_ready() {
-            completion.settle();
+            completion.settle(None);
         }
         outcome
     }
@@ -195,7 +202,7 @@ impl<R> Future for BlockingJoinHandle<R> {
 impl<R> Drop for BlockingJoinHandle<R> {
     fn drop(&mut self) {
         if let Some(completion) = &self.completion {
-            completion.settle();
+            completion.settle(None);
         }
     }
 }
@@ -210,6 +217,8 @@ pub(in crate::flash) struct BlockingCompletion {
 #[derive(Default)]
 struct CompletionState {
     receiver: Option<Waker>,
+    /// Equal wakers can belong to distinct polls that defer native readiness.
+    registration: u64,
     native: Option<task::AbortHandle>,
     finishing: bool,
     credit: Option<DedicatedSlot>,
@@ -220,6 +229,7 @@ impl BlockingCompletion {
     /// scheduling handoff holds credit until the receiver wakes or the poll is Ready.
     fn register(&self, receiver: &Waker) {
         let mut state = self.state.lock();
+        state.registration += 1;
         state.receiver = Some(receiver.clone());
         if state.finishing && state.credit.is_none() {
             state.credit = Some(DedicatedSlot::reserve(self.origin));
@@ -236,13 +246,31 @@ impl BlockingCompletion {
         }
     }
 
-    fn settle(&self) {
-        let credit = {
+    /// A completed join settles unconditionally; a wake settles only the poll it forwarded.
+    fn settle(&self, registration: Option<u64>) {
+        let wakes = {
             let mut state = self.state.lock();
+            if registration.is_some_and(|registration| registration != state.registration) {
+                return;
+            }
             state.receiver = None;
-            state.credit.take()
+            state.credit.take().map(DedicatedSlot::release)
         };
-        drop(credit);
+        if let Some(wakes) = wakes {
+            wakes.fire();
+        }
+    }
+}
+
+/// Return the forwarded poll's credit after its terminal wake, including unwind.
+struct CompletionNotification<'a> {
+    completion: &'a BlockingCompletion,
+    registration: u64,
+}
+
+impl Drop for CompletionNotification<'_> {
+    fn drop(&mut self) {
+        self.completion.settle(Some(self.registration));
     }
 }
 
@@ -250,21 +278,24 @@ impl Wake for BlockingCompletion {
     /// Forward readiness and cooperative wakes. Published results return completion
     /// credit only after the receiver's participating waker acquires runnable credit.
     fn wake(self: Arc<Self>) {
-        let (receiver, credit) = {
+        let (receiver, registration) = {
             let mut state = self.state.lock();
             if state
                 .native
                 .as_ref()
                 .is_some_and(task::AbortHandle::is_finished)
             {
-                (state.receiver.take(), state.credit.take())
+                (state.receiver.take(), Some(state.registration))
             } else {
                 (state.receiver.clone(), None)
             }
         };
         if let Some(receiver) = receiver {
+            let _notification = registration.map(|registration| CompletionNotification {
+                completion: &self,
+                registration,
+            });
             receiver.wake();
         }
-        drop(credit);
     }
 }

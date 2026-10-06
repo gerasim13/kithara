@@ -3,6 +3,8 @@ pub use std::convert::identity as wrap_pool_task;
 use std::sync::atomic::Ordering;
 pub use std::time::Duration;
 
+/// Scheduling-only yield to another runnable thread.
+pub use self::yield_now as yield_runnable;
 pub use crate::common::thread_id::active_named_thread_count;
 use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
 

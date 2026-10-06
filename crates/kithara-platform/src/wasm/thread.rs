@@ -9,6 +9,8 @@ use parking_lot_core as _;
 use wasm_bindgen::JsCast;
 use wasm_safe_thread::Builder as WasmThreadBuilder;
 
+/// Scheduling-only yield, a no-op on WebAssembly workers.
+pub use self::yield_now as yield_runnable;
 pub use crate::common::thread_id::active_named_thread_count;
 use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
 

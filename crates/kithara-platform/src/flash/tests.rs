@@ -1831,6 +1831,175 @@ fn a_pooled_backoff_releases_the_virtual_clock() {
     assert_eq!(super::system::FLASH.timed_count(), 0);
 }
 
+#[kithara::test(native, flash(false))]
+fn blocking_join_settles_credit_while_terminal_wake_is_in_flight() {
+    struct PausedWake {
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl Wake for PausedWake {
+        fn wake(self: Arc<Self>) {
+            self.entered.send(()).expect("terminal wake entered");
+            self.release
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .recv()
+                .expect("release terminal wake");
+        }
+    }
+
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build controlled blocking runtime");
+    let _rt = rt.enter();
+    let (run, run_rx) = mpsc::channel();
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let waker = Waker::from(Arc::new(PausedWake {
+        entered,
+        release: Mutex::new(release_rx),
+    }));
+    let mut cx = Context::from_waker(&waker);
+    let mut handle = Box::pin(crate::tokio::task::spawn_blocking(move || {
+        run_rx.recv().expect("release pooled work");
+        7_u8
+    }));
+    assert!(handle.as_mut().poll(&mut cx).is_pending());
+    run.send(()).expect("finish pooled work");
+    entered_rx.recv().expect("terminal receiver wake is paused");
+
+    let native_finished = handle.is_finished();
+    let result = rt.block_on(handle);
+    let active_after_join = super::system::FLASH.active_count();
+    let async_active_after_join = forward::async_active_count();
+    let timed_after_join = super::system::FLASH.timed_count();
+    release.send(()).expect("resume terminal receiver wake");
+
+    assert!(native_finished, "the native result was already published");
+    assert_eq!(result.expect("published native result joins"), 7);
+    assert_eq!(
+        active_after_join, 0,
+        "a completed join must settle its credit while the terminal wake is in flight"
+    );
+    assert_eq!(async_active_after_join, 0);
+    assert_eq!(timed_after_join, 0);
+}
+
+#[kithara::test(native, flash(false))]
+fn blocking_join_old_terminal_wake_preserves_new_pending_credit() {
+    struct PausedFirstWake {
+        calls: AtomicUsize,
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl Wake for PausedFirstWake {
+        fn wake(self: Arc<Self>) {
+            if self.calls.fetch_add(1, Ordering::AcqRel) == 0 {
+                self.entered.send(()).expect("first terminal wake entered");
+                self.release
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .recv()
+                    .expect("release first terminal wake");
+            }
+        }
+    }
+
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .build()
+        .expect("build single-worker blocking runtime");
+    let _rt = rt.enter();
+    let (run, run_rx) = mpsc::channel();
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let notification = Arc::new(PausedFirstWake {
+        calls: AtomicUsize::new(0),
+        entered,
+        release: Mutex::new(release_rx),
+    });
+    let waker = Waker::from(Arc::clone(&notification));
+    let mut cx = Context::from_waker(&waker);
+    let mut handle = Box::pin(crate::tokio::task::spawn_blocking(move || {
+        run_rx.recv().expect("release pooled work");
+        7_u8
+    }));
+    assert!(handle.as_mut().poll(&mut cx).is_pending());
+    run.send(()).expect("finish pooled work");
+    entered_rx
+        .recv()
+        .expect("first terminal receiver wake is paused");
+    let native_finished = handle.is_finished();
+    let (settled, settled_rx) = mpsc::channel();
+    let sentinel = tokio::task::spawn_blocking(move || {
+        settled.send(()).expect("old terminal callback completed");
+    });
+    let same_waker = waker.clone();
+    let notification_in = Arc::clone(&notification);
+    let (handle, pending, elapsed, active, calls) = rt
+        .block_on(tokio::task::spawn(async move {
+            let start = Instant::now_virtual();
+            let noop = Waker::from(Arc::new(NoopWake));
+            let mut noop_cx = Context::from_waker(&noop);
+            let mut sibling = std::pin::pin!(FlashSleep::new(Duration::from_millis(10)));
+            let sibling_pending = sibling.as_mut().poll(&mut noop_cx).is_pending();
+            loop {
+                let mut budget = std::pin::pin!(tokio::task::consume_budget());
+                if budget.as_mut().poll(&mut noop_cx).is_pending() {
+                    break;
+                }
+            }
+            let mut same_cx = Context::from_waker(&same_waker);
+            let pending = handle.as_mut().poll(&mut same_cx).is_pending();
+            release.send(()).expect("resume old terminal receiver wake");
+            settled_rx
+                .recv()
+                .expect("old terminal notification guard returned");
+            let elapsed = Instant::now_virtual().duration_since(start);
+            let active = super::system::FLASH.active_count();
+            let calls = notification_in.calls.load(Ordering::Acquire);
+            assert!(
+                sibling_pending,
+                "completion credit holds the sibling deadline"
+            );
+            (handle, pending, elapsed, active, calls)
+        }))
+        .expect("poll published join with exhausted native budget");
+    rt.block_on(sentinel).expect("raw sentinel joined");
+    assert!(native_finished, "the native result was already published");
+    assert!(pending, "native cooperative budget deferred the new poll");
+    assert_eq!(
+        calls, 1,
+        "the deferred wake cannot run within its current poll"
+    );
+    assert_eq!(
+        elapsed,
+        Duration::ZERO,
+        "an old wake released the newer wait's clock credit"
+    );
+    assert_eq!(
+        active, 1,
+        "the newer pending join still owns completion credit"
+    );
+    rt.block_on(tokio::task::yield_now());
+    assert!(notification.calls.load(Ordering::Acquire) >= 2);
+    assert_eq!(
+        rt.block_on(handle).expect("published native result joins"),
+        7
+    );
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+}
+
 /// A starved poll loop must not buy virtual time with its own backoff. A dated
 /// backoff registers a free `Timed` deadline that the engine services in
 /// isolation: each wake re-polls and re-sleeps, so a consumer whose producer is

@@ -2,6 +2,8 @@ use core::num::NonZeroUsize;
 pub use std::convert::identity as wrap_pool_task;
 use std::sync::atomic::Ordering;
 
+/// Scheduling-only yield to another runnable thread.
+pub use self::yield_now as yield_runnable;
 use crate::{common::thread_id::ACTIVE_NAMED_THREADS, loom::thread as backend};
 pub use crate::{
     common::{thread_id::active_named_thread_count, time::Duration},

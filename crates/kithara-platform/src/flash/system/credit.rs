@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, mem, panic::Location, sync::atomic::Ordering};
 
-use super::{Core, FLASH, FlashInner, SyncHolder};
+use super::{Core, FLASH, FlashInner, SyncHolder, sched::WakeBatch};
 use crate::{
     backend::thread::current,
     common::thread_id::ACTIVE_NAMED_THREADS,
@@ -135,6 +135,17 @@ impl DedicatedSlot {
         }
     }
 
+    /// Settle this reservation before returning the wakes an enclosing owner fires off-lock.
+    pub(in crate::flash) fn release(self) -> WakeBatch {
+        let named = self.named;
+        mem::forget(self);
+        let wakes = FLASH.release_unclaimed_slot();
+        if named {
+            ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
+        }
+        wakes
+    }
+
     /// Reserve for a `spawn_named` pacer thread: the `active` slot AND the
     /// named-thread count, both returned by Drop if the slot is never claimed.
     pub(crate) fn reserve_named(origin: &'static Location<'static>) -> Self {
@@ -151,7 +162,7 @@ impl Drop for DedicatedSlot {
     /// An unconsumed reservation returns the raw `active` count directly on drop, since no thread
     /// ever claimed the slot as credit; this release may itself be the quiescent edge.
     fn drop(&mut self) {
-        FLASH.release_unclaimed_slot();
+        FLASH.release_unclaimed_slot().fire();
         if self.named {
             ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         }
@@ -381,10 +392,9 @@ impl FlashInner {
         self.core.lock().registry.active += 1;
     }
 
-    /// Return a reservation no thread ever claimed ([`DedicatedSlot`] Drop):
-    /// undo the raw `active += 1` and fire any advance the release unblocks.
+    /// Return a reservation no thread ever claimed and collect the wakes to fire off-lock.
     /// No credit is touched — the slot never became any thread's `Running`.
-    fn release_unclaimed_slot(&self) {
+    fn release_unclaimed_slot(&self) -> WakeBatch {
         let mut s = self.core.lock();
         debug_assert!(
             s.registry.active > 0,
@@ -393,7 +403,7 @@ impl FlashInner {
         s.registry.active -= 1;
         let adv = s.try_advance(&self.clock);
         drop(s);
-        adv.fire();
+        adv
     }
 
     /// Resume accounting after a wrapped sync wait's `token.wait()` returned. The firer

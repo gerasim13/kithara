@@ -6,7 +6,6 @@ use kithara_platform::{
     maybe_send::{MaybeSend, MaybeSync},
     sync::Arc,
     time::Duration,
-    tokio::task,
 };
 
 use super::format_change_segment_range;
@@ -69,7 +68,6 @@ impl<T: StreamType> Stream<T> {
     /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, SourceError> {
         let source = T::create(config).await?;
-        task::yield_now().await;
         Ok(Self { source })
     }
 
@@ -166,6 +164,7 @@ mod tests {
         io::{Error as IoError, Read, Seek, SeekFrom},
         num::NonZeroUsize,
         sync::atomic::{AtomicU64, Ordering},
+        task::{Context, Poll, Waker},
     };
 
     use kithara_platform::sync::Arc;
@@ -432,13 +431,34 @@ mod tests {
     struct DummyType;
 
     impl StreamType for DummyType {
-        type Config = ();
+        type Config = ScriptSource;
         type Events = ();
         type Source = ScriptSource;
 
-        async fn create(_config: Self::Config) -> Result<Self::Source, SourceError> {
-            Err(SourceError::other(IoError::other("not used in unit tests")))
+        async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+            Ok(config)
         }
+    }
+
+    #[kithara::test]
+    fn completed_source_construction_does_not_wait_for_a_scheduler_turn() {
+        let seek = Arc::new(SeekState::new());
+        let source = ScriptSource::new(
+            Arc::clone(&seek),
+            [WaitOutcome::Ready],
+            [ScriptRead::Data(4)],
+            vec![1, 2, 3, 4],
+        );
+        let mut open = std::pin::pin!(Stream::<DummyType>::new(source));
+        let mut context = Context::from_waker(Waker::noop());
+
+        let Poll::Ready(result) = open.as_mut().poll(&mut context) else {
+            panic!("completed source creation must return without another scheduling event");
+        };
+        let stream = result.expect("the configured source is already constructed");
+        assert!(Arc::ptr_eq(&stream.source.seek, &seek));
+        assert_eq!(stream.len(), Some(4));
+        assert_eq!(stream.phase_at(0..4), SourcePhase::Waiting);
     }
 
     struct SeekDuringWaitType;

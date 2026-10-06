@@ -191,6 +191,14 @@ pub fn yield_now() {
     }
 }
 
+/// Yield a scheduling opportunity while this thread still has runnable work.
+/// Under Flash the thread retains its quiescence credit, so fairness cannot
+/// advance virtual time past work it can perform now.
+#[inline]
+pub fn yield_runnable() {
+    crate::backend::thread::yield_now();
+}
+
 /// Wrap `f` to bracket its execution with the named-thread counter and the
 /// quiescence credit, both owned by a [`credit::DedicatedSlot`] reserved at
 /// the call site (before spawn) and claimed by the child. The claim's
