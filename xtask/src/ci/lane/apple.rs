@@ -1,7 +1,8 @@
-use std::path::Path;
+use std::{path::Path, process::Output};
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::{common::tools::ToolsConfig, verdict::ChildFailure};
+use tracing::warn;
 
 use crate::{
     child,
@@ -23,6 +24,7 @@ fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Resul
         tools.program("swift"),
         xcodebuild,
         tools.program("xcodegen"),
+        tools.program("xcrun"),
     ])?;
     let version = process.capture(xcodebuild, &["-version"], "xcodebuild -version")?;
     let actual = version
@@ -68,8 +70,14 @@ pub(crate) fn swift_test(
     process.run_command(&mut command, "Swift package tests")
 }
 
-/// Run simulator tests with an owned fixture server and cancellation cleanup.
-pub(crate) fn ios_test(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Result<()> {
+/// Run simulator tests on a device of their own, with an owned fixture server
+/// and cancellation cleanup.
+pub(crate) fn ios_test(
+    process: &Process,
+    config: &CiConfig,
+    tools: &ToolsConfig,
+    device_name: &str,
+) -> Result<()> {
     preflight(process, config, tools)?;
     let cancel = child::Cancel::install()?;
     let server = TestServer::start(
@@ -78,8 +86,15 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig, tools: &ToolsConfig
         &process.root().join("target/xcresult/test-server.log"),
         Some(&cancel),
     )?;
+    let simulator = Simulator::create(
+        process,
+        tools.program("xcrun"),
+        device_name,
+        &config.pins.ios_simulator_device_type,
+    )?;
     let mut command = process.command(tools.program("just"));
     command
+        .env("KITHARA_IOS_DESTINATION", simulator.destination())
         .env("KITHARA_LOCAL_DEV", "1")
         .env("KITHARA_TEST_SERVER_URL", server.url())
         // The framework comes from the job that builds it. This one holds the
@@ -103,6 +118,7 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig, tools: &ToolsConfig
             Ok(())
         });
     let stopped = server.stop();
+    let deleted = simulator.delete();
     // A failing run is exactly the one whose report matters, so the bundle is
     // converted either way and the test outcome is returned afterwards.
     let bundle = process.root().join("target/xcresult/ios-test.xcresult");
@@ -114,7 +130,77 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig, tools: &ToolsConfig
             &process.root().join("target/xcresult/ios-test.junit.xml"),
         )?;
     }
-    outcome.and(stopped)
+    outcome.and(stopped).and(deleted)
+}
+
+/// A simulator the lane created for one run. A device keeps every app
+/// container a reinstall retires and every symbol cache a run grows, so it
+/// lives exactly as long as the run: deleted when the run ends, and replaced by
+/// name when a killed run could not delete it.
+struct Simulator<'a> {
+    process: &'a Process,
+    xcrun: &'a str,
+    uuid: String,
+    live: bool,
+}
+
+impl<'a> Simulator<'a> {
+    fn create(process: &'a Process, xcrun: &'a str, name: &str, device_type: &str) -> Result<Self> {
+        process.ensure(
+            xcrun,
+            &["simctl", "delete", name],
+            "delete the simulator a killed run left",
+            device_absent,
+        )?;
+        let uuid = process.capture(
+            xcrun,
+            &["simctl", "create", name, device_type],
+            "create the run's simulator",
+        )?;
+        Ok(Self {
+            process,
+            xcrun,
+            uuid: uuid.trim().to_owned(),
+            live: true,
+        })
+    }
+
+    /// The `xcodebuild` destination naming this device and no other.
+    fn destination(&self) -> String {
+        format!("platform=iOS Simulator,id={}", self.uuid)
+    }
+
+    /// [`Drop`] does the same, logging rather than returning, for a run that
+    /// leaves early.
+    fn delete(mut self) -> Result<()> {
+        self.take_down()
+    }
+
+    fn take_down(&mut self) -> Result<()> {
+        if !std::mem::take(&mut self.live) {
+            return Ok(());
+        }
+        self.process.run(
+            self.xcrun,
+            &["simctl", "delete", &self.uuid],
+            "delete the run's simulator",
+        )
+    }
+}
+
+impl Drop for Simulator<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self.take_down() {
+            warn!(%error, uuid = %self.uuid, "the run's simulator was not deleted");
+        }
+    }
+}
+
+/// `simctl` refuses to delete a device that does not exist, which is the state
+/// the delete is there to reach.
+fn device_absent(output: &Output) -> bool {
+    output.status.code() == Some(consts::SIMCTL_INVALID_DEVICE_EXIT)
+        && String::from_utf8_lossy(&output.stderr).contains(consts::SIMCTL_INVALID_DEVICE)
 }
 
 fn build_xcframework(process: &Process, tools: &ToolsConfig) -> Result<()> {
@@ -123,4 +209,106 @@ fn build_xcframework(process: &Process, tools: &ToolsConfig) -> Result<()> {
         &["platform", "apple", "xcframework", "--profile", "debug"],
         "Apple XCFramework",
     )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+    };
+
+    use self::consts::UUID;
+    use super::Simulator;
+    use crate::{ci::process::Process, testing::install_script};
+
+    mod consts {
+        pub(super) const UUID: &str = "5F1C0B6E-0000-4000-8000-000000000001";
+    }
+
+    /// An `xcrun` that creates one device and answers a delete the way
+    /// `simctl` does: the created device goes, an unknown name is an invalid
+    /// device, and a `refused-` name is a refusal of any other kind.
+    fn xcrun(directory: &Path) -> (PathBuf, PathBuf) {
+        let trace = directory.join("trace");
+        let program = directory.join("xcrun");
+        install_script(
+            &program,
+            &format!(
+                "#!/bin/sh\n\
+                 echo \"$*\" >> '{trace}'\n\
+                 case \"$2\" in\n\
+                 create) echo {UUID} ;;\n\
+                 delete) case \"$3\" in\n\
+                 {UUID}) ;;\n\
+                 refused-*) echo 'Unable to delete a device in use' >&2; exit 1 ;;\n\
+                 *) echo \"Invalid device: $3\" >&2; exit 148 ;;\n\
+                 esac ;;\n\
+                 esac\n",
+                trace = trace.display()
+            ),
+        );
+        (program, trace)
+    }
+
+    /// No earlier run left a device, which `simctl` answers with a refusal;
+    /// the run still gets a device of its own, and deletes exactly that one.
+    #[test]
+    fn a_run_owns_a_fresh_simulator_and_deletes_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (program, trace) = xcrun(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+
+        let simulator =
+            Simulator::create(&process, program.to_str().unwrap(), "project-lane", "type").unwrap();
+        let destination = simulator.destination();
+        simulator.delete().unwrap();
+
+        assert_eq!(destination, format!("platform=iOS Simulator,id={UUID}"));
+        assert_eq!(
+            fs::read_to_string(&trace).unwrap(),
+            format!(
+                "simctl delete project-lane\n\
+                 simctl create project-lane type\n\
+                 simctl delete {UUID}\n"
+            )
+        );
+    }
+
+    /// A run that leaves early still gives its device back.
+    #[test]
+    fn a_simulator_dropped_without_a_delete_is_still_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let (program, trace) = xcrun(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+
+        drop(
+            Simulator::create(&process, program.to_str().unwrap(), "project-lane", "type").unwrap(),
+        );
+
+        let trace = fs::read_to_string(&trace).unwrap();
+        assert!(
+            trace.ends_with(&format!("simctl delete {UUID}\n")),
+            "{trace}"
+        );
+    }
+
+    /// Only an absent device lets the run go on: a leftover that refuses to go
+    /// would sit next to the new one under the same name.
+    #[test]
+    fn a_leftover_that_refuses_to_go_stops_the_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let (program, trace) = xcrun(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+
+        let created =
+            Simulator::create(&process, program.to_str().unwrap(), "refused-lane", "type");
+
+        assert!(created.is_err());
+        assert_eq!(
+            fs::read_to_string(&trace).unwrap(),
+            "simctl delete refused-lane\n"
+        );
+    }
 }

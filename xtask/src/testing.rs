@@ -1,11 +1,26 @@
 //! Test doubles for the external programs `xtask` spawns.
 
-#[cfg(unix)]
-use std::process::Command;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
+#[cfg(unix)]
+use std::{
+    process::Command,
+    sync::{Mutex, MutexGuard, PoisonError},
+};
+
+/// Hold the process's stop signals for one test.
+///
+/// A stop signal reaches every [`Cancel`](crate::child::Cancel) installed in
+/// the process, and `cargo test` runs every test in one process: a test that
+/// raises one would cancel its neighbours. A test that installs a `Cancel`
+/// holds this for as long as the `Cancel` lives.
+#[cfg(unix)]
+pub(crate) fn signals() -> MutexGuard<'static, ()> {
+    static SIGNALS: Mutex<()> = Mutex::new(());
+    SIGNALS.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Put the workspace's `fake-tool` where the code under test will look.
 ///

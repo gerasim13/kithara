@@ -4,10 +4,10 @@ use std::{
     fs::{self, File},
     io::Read,
     path::{Component, Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 use kithara_devtools::lease;
 use serde::Deserialize;
@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use tracing::info;
 
-use super::current_client_environment;
+use super::{current_client_environment, require_success};
 use crate::consts;
 
 struct Snapshot;
@@ -502,16 +502,6 @@ fn sha256(path: &Path) -> Result<String> {
 fn run_command(command: &mut Command, what: &str) -> Result<()> {
     let output = command.output().with_context(|| format!("start {what}"))?;
     require_success(&output, what)
-}
-
-fn require_success(output: &Output, what: &str) -> Result<()> {
-    if output.status.success() {
-        return Ok(());
-    }
-    bail!(
-        "{what} failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
 }
 
 /// What `rc --json object list` prints: one entry per object or common
