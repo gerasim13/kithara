@@ -1770,11 +1770,14 @@ timeout_minutes = 360
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
 # can act on. Values stay redacted, so neither the log nor the report repeats a
-# secret while naming the rule, the file and the commit.
+# secret while naming the rule, the file and the commit. It scans every commit
+# behind the one checked out: a secret added and removed again is still in the
+# history that gets pushed.
 [ext.ci.lanes.linux-secrets]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+history = true
 tools = ["gitleaks"]
 program = "gitleaks"
 steps = [
@@ -2378,8 +2381,8 @@ kinds = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 240
 
-# `just ci health` fetches the `main` baseline itself with `git fetch
-# --depth=1`, so the checkout ahead of it only needs the tip.
+# `just ci health` fetches the `main` baseline itself before semver compares
+# against it, so the checkout ahead of it only needs the tip.
 [ext.ci.lanes.quality-health]
 cache_group = "linux"
 label = "Linux"

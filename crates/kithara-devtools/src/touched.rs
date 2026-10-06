@@ -9,6 +9,18 @@ use anyhow::{Context, Result, bail};
 
 use crate::common::project::{TestCargoOptions, TestCommandConfig, TestLaneConfig};
 
+/// Brings `origin/main` up to date. The infinite depth also deepens a checkout
+/// of the tip alone down to where its branch left `main`; on a complete clone
+/// it is a plain fetch.
+pub(crate) const FETCH_MAIN: [&str; 6] = [
+    "fetch",
+    "--no-tags",
+    "--quiet",
+    "--depth=2147483647",
+    "origin",
+    "+refs/heads/main:refs/remotes/origin/main",
+];
+
 /// One run a touched selection asks for.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Touched {
@@ -61,18 +73,9 @@ pub(crate) fn lanes(
         bail!("test lane `{unknown}` is not configured");
     }
     let scope = &scoped(scope, &test.default_lane);
-    // The infinite depth also deepens a checkout of the tip alone down to
-    // where the branch left `main`; on a complete clone it is a plain fetch.
     let _ = Command::new("git")
         .current_dir(root)
-        .args([
-            "fetch",
-            "--no-tags",
-            "--quiet",
-            "--depth=2147483647",
-            "origin",
-            "+refs/heads/main:refs/remotes/origin/main",
-        ])
+        .args(FETCH_MAIN)
         .status();
     let base = git(root, &["merge-base", "origin/main", "HEAD"])?;
     if base == git(root, &["rev-parse", "HEAD"])? {
