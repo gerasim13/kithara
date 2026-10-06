@@ -171,8 +171,16 @@
           <CommandLine>reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f</CommandLine>
           <Description>Allow paths longer than 260 characters</Description>
         </SynchronousCommand>
+        <!-- Windows expires a local password after 42 days, and an expired
+             one stops the automatic sign-in the runner lives in. Before
+             provisioning, which ends in a restart. -->
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>2</Order>
+          <CommandLine>powershell -NoProfile -Command "Set-LocalUser -Name ci -PasswordNeverExpires $true"</CommandLine>
+          <Description>Keep the signed-in account's password from expiring</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>3</Order>
           <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -File E:\provision.ps1</CommandLine>
           <Description>Install the toolchain and the runner</Description>
         </SynchronousCommand>

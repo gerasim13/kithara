@@ -46,7 +46,7 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
 
 /// Run every lane the branch touched.
 fn run_touched(test: &TestCommandConfig, root: &Path, request: &TestRequest) -> Result<()> {
-    let selected = touched::lanes(test, &request.lanes)?;
+    let selected = touched::lanes(test, root, &request.lanes)?;
     if selected.is_empty() {
         println!("no owned path touched; the nightly sweep covers these lanes");
         return Ok(());

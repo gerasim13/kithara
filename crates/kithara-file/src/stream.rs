@@ -259,10 +259,6 @@ where
         config: Arc<FileConfig<S>>,
         cancel: CancelToken,
     ) -> Result<FileSource<S>, SourceError> {
-        let downloader = config
-            .downloader
-            .clone()
-            .unwrap_or_else(|| default_downloader(&cancel, config.pools.clone()));
         let backend = &config.store;
         let key = remote_key(
             backend,
@@ -286,14 +282,20 @@ where
                 tracing::debug!("file already cached, skipping download");
                 Ok(cached_source(reader, bus, cancel.child(), config))
             }
-            AcquisitionResult::Pending(attachment) => Ok(RemoteFileOpen {
-                config,
-                coord,
-                cancel,
-                downloader,
-                bus,
+            AcquisitionResult::Pending(attachment) => {
+                let downloader = config
+                    .downloader
+                    .clone()
+                    .unwrap_or_else(|| default_downloader(&cancel, config.pools.clone()));
+                Ok(RemoteFileOpen {
+                    config,
+                    coord,
+                    cancel,
+                    downloader,
+                    bus,
+                }
+                .into_source(attachment))
             }
-            .into_source(attachment)),
             _ => Err(SourceError::UnexpectedAcquisitionState),
         }
     }
