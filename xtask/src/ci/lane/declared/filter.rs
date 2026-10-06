@@ -27,11 +27,7 @@ pub(super) fn apply(
     expression: &str,
     project: &ProjectConfig,
 ) -> Result<bool> {
-    if role != "just"
-        || !args
-            .get(..2)
-            .is_some_and(|prefix| prefix == ["test", "run"])
-    {
+    if request(role, args).is_none() {
         return Ok(false);
     }
     let lane_name = args
@@ -52,7 +48,22 @@ pub(super) fn apply(
         return Ok(false);
     }
     intersect(args, expression)?;
+    let mut recipe = true;
+    args.retain(|arg| {
+        if arg == "--" {
+            recipe = false;
+        }
+        !recipe || arg != "--touched"
+    });
     Ok(true)
+}
+
+pub(super) fn request<'a>(role: &str, args: &'a [String]) -> Option<&'a [String]> {
+    if role == "just" && args.get(..2).is_some_and(|prefix| prefix == ["test", "run"]) {
+        Some(&args[2..])
+    } else {
+        None
+    }
 }
 
 /// Every caller filter is a union member in the test harness. Narrow each

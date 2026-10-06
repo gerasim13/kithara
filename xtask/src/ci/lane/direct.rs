@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use kithara_devtools::{Ctx, lease};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::declared;
 use crate::{
@@ -150,6 +150,16 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
             "CI lane `{}` has no nextest-backed test step to filter",
             args.lane
         );
+    }
+    if !declared::is_selected(
+        &ctx.root,
+        lane,
+        &ctx.config,
+        args.kind,
+        args.test_filter.as_deref(),
+    )? {
+        info!(lane = %args.lane, "no test run selected; no build slot claimed");
+        return Ok(());
     }
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
     let (dir, cargo_dir, build) = match target(&args.lane, lane, var)? {

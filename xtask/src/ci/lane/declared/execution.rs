@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::{OsStr, OsString},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -19,6 +19,35 @@ use crate::{
     config::{CiLaneConfig, CiLanePin, CiLaneStep, LaneFreshness},
     consts,
 };
+
+pub(crate) fn is_selected(
+    root: &Path,
+    lane: &CiLaneConfig,
+    project: &ProjectConfig,
+    kind: PipelineKind,
+    test_filter: Option<&str>,
+) -> Result<bool> {
+    if let Some(reason) = lane.kinds_refused.get(kind.name()) {
+        bail!("{reason}");
+    }
+    if lane.steps.is_empty() {
+        return Ok(true);
+    }
+    for step in &lane.steps {
+        let role = step.program.as_deref().unwrap_or(&lane.program);
+        let mut args = step.args_by_kind.get(kind.name()).unwrap_or(&step.args).clone();
+        if let Some(expression) = test_filter {
+            super::filter::apply(role, &mut args, expression, project)?;
+        }
+        let Some(request) = super::filter::request(role, &args) else {
+            return Ok(true);
+        };
+        if kithara_devtools::test::is_selected(root, project, request)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
 /// declines, the platform it refuses to run anywhere but on, the tools it needs,
