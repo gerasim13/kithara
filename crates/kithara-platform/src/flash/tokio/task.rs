@@ -122,6 +122,9 @@ where
 /// A blocking task's native result handle with its virtual-clock completion handoff.
 /// Dropping the handle detaches the work, matching Tokio's join contract.
 #[must_use = "dropping a blocking join handle detaches its task"]
+#[derive(derive_more::Debug)]
+#[debug(bound(R: fmt::Debug))]
+#[debug("{:?}", inner)]
 pub struct BlockingJoinHandle<R> {
     inner: JoinHandle<R>,
     completion: Option<Arc<BlockingCompletion>>,
@@ -197,12 +200,6 @@ impl<R> Drop for BlockingJoinHandle<R> {
         if let Some(completion) = &self.completion {
             completion.settle();
         }
-    }
-}
-
-impl<R: fmt::Debug> fmt::Debug for BlockingJoinHandle<R> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.fmt(f)
     }
 }
 

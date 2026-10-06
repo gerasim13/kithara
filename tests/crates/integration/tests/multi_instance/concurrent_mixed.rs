@@ -7,7 +7,7 @@ use kithara::{
         CancelToken,
         sync::Arc,
         time::Duration,
-        tokio::task::{JoinHandle, spawn_blocking},
+        tokio::task::{BlockingJoinHandle, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -43,7 +43,7 @@ async fn spawn_file_instance(
     id: usize,
     url: Url,
     temp_path: &std::path::Path,
-) -> JoinHandle<InstanceResult> {
+) -> BlockingJoinHandle<InstanceResult> {
     let pools = pools();
     let file_config = FileConfig::for_src(url.into())
         .store(
@@ -76,7 +76,7 @@ async fn spawn_hls_instance(
     id: usize,
     wav_data: Arc<Vec<u8>>,
     temp_path: &std::path::Path,
-) -> (CreatedHls, JoinHandle<InstanceResult>) {
+) -> (CreatedHls, BlockingJoinHandle<InstanceResult>) {
     let server = TestServerHelper::new()
         .await
         .create_hls(
@@ -139,7 +139,7 @@ async fn run_mixed(
     let wav_data = Arc::new(concurrent_wav.to_vec());
     let (_file_server, file_url) = source;
 
-    let mut handles: Vec<JoinHandle<InstanceResult>> = Vec::new();
+    let mut handles: Vec<BlockingJoinHandle<InstanceResult>> = Vec::new();
     let mut temps = Vec::new();
     let mut servers = Vec::new();
 

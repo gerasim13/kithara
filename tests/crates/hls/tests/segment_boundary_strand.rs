@@ -304,6 +304,6 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
 
 /// Join a `spawn_blocking` decode handle, surfacing a panic as a test
 /// failure (mirrors `.await.expect(...)` but keeps the call site terse).
-async fn spawn_blocking_join<T: Send + 'static>(handle: tokio::task::JoinHandle<T>) -> T {
+async fn spawn_blocking_join<T: Send + 'static>(handle: tokio::task::BlockingJoinHandle<T>) -> T {
     handle.await.expect("decode task joins without panicking")
 }
