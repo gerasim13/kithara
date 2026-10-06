@@ -135,7 +135,7 @@ impl Fixture {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("repository root");
-        let workspace: toml::Value = fs::read_to_string(repository.join("Cargo.toml"))
+        let workspace: toml::Table = fs::read_to_string(repository.join("Cargo.toml"))
             .expect("workspace manifest")
             .parse()
             .expect("workspace dependency declarations");
