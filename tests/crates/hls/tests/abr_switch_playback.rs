@@ -295,10 +295,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
                 count, position, ..
             }) => {
                 if !switch_seen {
-                    let pace = position.saturating_sub(consumed);
-                    spawn_blocking(move || paced_backoff(pace))
-                        .await
-                        .expect("packaged ABR pace");
+                    time::sleep(position.saturating_sub(consumed)).await;
                 }
                 consumed = position;
                 if !reevaluated && consumed >= Duration::from_secs(2) {
