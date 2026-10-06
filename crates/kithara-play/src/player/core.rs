@@ -150,7 +150,7 @@ impl<S> PlayerRuntime<S> {
         }
         resource.set_consumer_wake_mode(self.core.engine.consumer_wake_mode());
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, src, self.core.engine.pools())?;
+        let player_resource = PlayerResource::new(resource.into(), src, self.core.engine.pools())?;
         let behind = match behind {
             Some(track) => {
                 let playback = self.slot_playback().ok_or(PlayError::NoActiveSlot)?;

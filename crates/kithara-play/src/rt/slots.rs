@@ -118,7 +118,7 @@ mod tests {
                 .returns(Ok(())),
         ));
         let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
-        let resource = PlayerResource::new(resource, src, &pools())
+        let resource = PlayerResource::new(resource.into(), src, &pools())
             .map_or_else(|error| panic!("test player resource: {error}"), Box::new);
 
         PlayerTrack::builder()

@@ -60,7 +60,7 @@ fn processor() -> (DeckMixer, SlotControl) {
 fn track(src: &str, input: &'static [u8]) -> Box<PlayerResource> {
     Box::new(
         PlayerResource::new(
-            Resource::from_reader(TestPcmReader::with_pcm(spec(), TRACK_SECS, input), None),
+            Resource::from_reader(TestPcmReader::with_pcm(spec(), TRACK_SECS, input), None).into(),
             Arc::from(src),
             &pools(),
         )

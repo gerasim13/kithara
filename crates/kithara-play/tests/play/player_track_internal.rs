@@ -65,7 +65,7 @@ fn make_track_with(
 }
 
 fn make_track_from_resource(resource: Resource, src: Arc<str>, item_id: TrackId) -> PlayerTrack {
-    let player_resource = PlayerResource::new(resource, src, &pools())
+    let player_resource = PlayerResource::new(resource.into(), src, &pools())
         .expect("player resource fits the test pool budget");
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     PlayerTrack::builder()

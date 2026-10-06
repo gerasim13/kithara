@@ -9,22 +9,17 @@ use kithara_bufpool::HasPool;
 use kithara_command::Sender;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::{CancelToken, sync::Arc, time::Duration, tokio::task};
+use kithara_platform::{sync::Arc, time::Duration, tokio::task};
 use kithara_render::LaneProtocol;
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{
-    PresentationFrontier, RenderContext, RenderPublisher, RenderReader, supports_playback_rate,
-};
 use tracing::warn;
 
 use super::{
-    ArtifactFetch, ArtifactSource, PreparedGrid, ResourceConfig, SourceType, StagingRecipe,
+    ArtifactFetch, ArtifactSource, PcmConsumer, PlaybackRate, PreparedGrid, ResourceConfig,
+    SourceType, StagingRecipe,
 };
-use crate::{
-    PlayWorker, TrackConfig,
-    worker::{ServiceClass, TrackPriority},
-};
+use crate::{PlayWorker, TrackConfig};
 
 /// The prepared beat grid this load starts with, and the read that fills it
 /// in when the track named a source instead of handing one over.
@@ -117,76 +112,13 @@ pub struct Resource {
     src: Arc<str>,
     #[field(get = event_bus)]
     bus: EventBus,
-    priority: Option<TrackPriority>,
     /// Player end of the render lane of a reader opened on a play worker.
     lane: Option<Sender<LaneProtocol>>,
-    render_publisher: Option<RenderPublisher>,
-    #[field(with)]
-    playback_rate: PlaybackRate,
     /// How to open a staged lane of this recording; `None` for a reader
     /// handed over whole, or where no renderer can enter a plan.
     staging: Option<StagingRecipe>,
-    reader: ReaderOwner,
-}
-
-/// Cancels the wrapped per-track token on drop. A `Resource` field rather than
-/// a `Resource: Drop` impl so the `From<Resource>` reader unwrap can move
-/// `inner` out of the wrapper after [`disarm`](CancelGuard::disarm)ing. Passive
-/// when `None`.
-struct CancelGuard(Option<CancelToken>);
-
-/// Cancels before dropping the reader; tuple fields drop in declaration order.
-struct ReaderOwner(CancelGuard, Box<dyn AudioReader>);
-
-/// Media seconds a reader consumes per output second.
-enum PlaybackRate {
-    /// Its own tempo: no renderer changes its speed.
-    Fixed,
-    /// The speed its renderer was last asked for.
-    Warp(f32),
-}
-
-impl PlaybackRate {
-    fn apply(&mut self, requested: f32) -> f32 {
-        if let Self::Warp(rate) = self {
-            *rate = requested;
-        }
-        f32::from(&*self)
-    }
-
-    fn for_warp(speed: f32) -> Self {
-        if supports_playback_rate() {
-            Self::Warp(speed)
-        } else {
-            Self::Fixed
-        }
-    }
-}
-
-impl From<&PlaybackRate> for f32 {
-    fn from(rate: &PlaybackRate) -> Self {
-        match rate {
-            PlaybackRate::Fixed => 1.0,
-            PlaybackRate::Warp(rate) => *rate,
-        }
-    }
-}
-
-impl CancelGuard {
-    /// Disarm so dropping the guard cancels nothing — used when the live reader
-    /// outlives this wrapper (handed to the analysis worker), where teardown
-    /// rides the analysis run-scope cancel (a parent of this token) instead.
-    fn disarm(&mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for CancelGuard {
-    fn drop(&mut self) {
-        if let Some(cancel) = &self.0 {
-            cancel.cancel();
-        }
-    }
+    /// What the deck slot reads; dropped last.
+    consumer: PcmConsumer,
 }
 
 impl Resource {
@@ -208,18 +140,8 @@ impl Resource {
         Self::open(config, None).await
     }
 
-    pub(crate) fn apply_playback_rate(&mut self, rate: f32) -> f32 {
-        self.playback_rate.apply(rate)
-    }
-
     pub(crate) fn staging(&self) -> Option<StagingRecipe> {
         self.staging.clone()
-    }
-
-    pub(crate) fn clear_render(&self) {
-        if let Some(publisher) = &self.render_publisher {
-            publisher.clear();
-        }
     }
 
     /// Create a resource from any `AudioReader`.
@@ -236,20 +158,16 @@ impl Resource {
     pub fn from_reader<R: AudioReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
         let preload = reader.preload_gate().is_none();
         let bus = reader.event_bus().clone();
-        let inner: Box<dyn AudioReader> = Box::new(reader);
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
         let mut resource = Self {
             src,
             bus,
-            priority: None,
-            playback_rate: PlaybackRate::Fixed,
-            reader: ReaderOwner(CancelGuard(None), inner),
             lane: None,
-            render_publisher: None,
             staging: None,
             beat_grid: Arc::default(),
+            consumer: PcmConsumer::new(Box::new(reader)),
         };
-        if preload && let Err(error) = resource.reader.1.preload() {
+        if preload && let Err(error) = resource.consumer.reader_mut().preload() {
             warn!(src = %resource.src, %error, "resource preload failed");
         }
         resource
@@ -280,14 +198,16 @@ impl Resource {
         let lane = audio.take_lane().ok_or(DecodeError::InvalidData {
             detail: "registered render lane was already taken",
         })?;
-        let mut resource =
-            Self::from_reader(audio, Some(src)).with_playback_rate(PlaybackRate::for_warp(speed));
+        let mut resource = Self::from_reader(audio, Some(src));
         if let Err(error) = resource.preload().await {
             warn!(src = %resource.src, %error, "resource preload failed");
         }
-        resource.priority = Some(priority);
         resource.lane = Some(lane);
-        resource.render_publisher = Some(render_publisher);
+        resource.consumer = resource
+            .consumer
+            .with_playback_rate(PlaybackRate::for_warp(speed))
+            .with_priority(priority)
+            .with_render_publisher(render_publisher);
         Ok(resource)
     }
 
@@ -345,14 +265,10 @@ impl Resource {
                 Self::from_stream_audio(track, src, &worker).await?
             }
         };
-        resource.reader.0 = CancelGuard(cancel);
+        resource.consumer.cancel_on_drop(cancel);
         resource.beat_grid = beat_grid;
         resource.staging = staging;
         Ok(resource)
-    }
-
-    pub(crate) fn playback_rate(&self) -> f32 {
-        (&self.playback_rate).into()
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
@@ -365,30 +281,15 @@ impl Resource {
     /// producer channel closed or the initial fill hit a decoder
     /// failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
-        if let Some(gate) = self.reader.1.preload_gate() {
-            gate.wait_for_epoch(self.reader.1.preload_epoch()).await;
+        let reader = self.consumer.reader_mut();
+        if let Some(gate) = reader.preload_gate() {
+            gate.wait_for_epoch(reader.preload_epoch()).await;
         }
-        self.reader.1.preload()
-    }
-
-    pub(crate) fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
-        if let Some(publisher) = &self.render_publisher {
-            publisher.publish(context, frontier);
-        }
+        reader.preload()
     }
 
     pub(crate) fn take_lane(&mut self) -> Option<Sender<LaneProtocol>> {
         self.lane.take()
-    }
-
-    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
-        self.render_publisher.as_ref().map(RenderPublisher::reader)
-    }
-
-    pub(crate) fn set_service_class(&self, class: ServiceClass) {
-        if let Some(priority) = &self.priority {
-            priority.set(class);
-        }
     }
 
     /// Subscribe to unified events.
@@ -401,7 +302,7 @@ impl Resource {
     }
 
     delegate! {
-        to self.reader.1 {
+        to self.consumer.reader() {
             /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
             #[must_use]
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
@@ -417,11 +318,22 @@ impl Resource {
             /// Get track metadata.
             #[must_use]
             pub fn metadata(&self) -> &TrackMetadata;
-            /// Read the next decoded chunk with full metadata.
-            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
             /// Get current playback position.
             #[must_use]
             pub fn position(&self) -> Duration;
+            /// Control-plane handle that begins a seek without touching the reader. `None` for
+            /// readers with no worker-backed seek.
+            #[must_use]
+            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            /// Set the target sample rate of the audio host.
+            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+            /// Get the current decoded-audio specification.
+            #[must_use]
+            pub fn spec(&self) -> AudioSpec;
+        }
+        to self.consumer.reader_mut() {
+            /// Read the next decoded chunk with full metadata.
+            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
             /// Read interleaved samples.
             pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
             /// Read deinterleaved (planar) samples.
@@ -433,20 +345,11 @@ impl Resource {
             /// thread only. Audio-thread callers begin through [`seek_handle`](Self::seek_handle)
             /// instead.
             pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
-            /// Control-plane handle that begins a seek without touching the reader. `None` for
-            /// readers with no worker-backed seek.
-            #[must_use]
-            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
             /// Adopt the wake capability of the consumer that will read this
             /// resource.
             pub fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
             /// Adopt a seek epoch begun through `seek_handle`. Lock-free.
             pub fn sync_seek(&mut self);
-            /// Set the target sample rate of the audio host.
-            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Get the current decoded-audio specification.
-            #[must_use]
-            pub fn spec(&self) -> AudioSpec;
         }
     }
 }
@@ -459,10 +362,15 @@ impl Resource {
 /// loops. Teardown then rides the analysis run-scope cancel.
 impl From<Resource> for Box<dyn AudioReader> {
     fn from(resource: Resource) -> Self {
-        let Resource { reader, .. } = resource;
-        let ReaderOwner(mut cancel, inner) = reader;
-        cancel.disarm();
-        inner
+        resource.consumer.into()
+    }
+}
+
+/// The half of a load the deck slot reads. The rest — the lane, the staging
+/// recipe, the prepared grid — stays with whoever took it before.
+impl From<Resource> for PcmConsumer {
+    fn from(resource: Resource) -> Self {
+        resource.consumer
     }
 }
 
@@ -492,7 +400,9 @@ mod tests {
     use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame};
     use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::kithara;
-    use kithara_warp::{Warp, WarpConfig};
+    use kithara_warp::{
+        PresentationFrontier, RenderContext, Warp, WarpConfig, supports_playback_rate,
+    };
     use ringbuf::traits::Consumer;
 
     use super::*;
@@ -653,9 +563,10 @@ mod tests {
         src: &str,
         samples: Vec<f32>,
     ) -> Box<PlayerResource> {
-        let resource = Resource::from_reader(EofReader::with_frames(samples), None)
-            .with_playback_rate(PlaybackRate::for_warp(speed));
-        PlayerResource::new(resource, Arc::from(src), pools)
+        let consumer =
+            PcmConsumer::from(Resource::from_reader(EofReader::with_frames(samples), None))
+                .with_playback_rate(PlaybackRate::for_warp(speed));
+        PlayerResource::new(consumer, Arc::from(src), pools)
             .map_or_else(|error| panic!("test player resource: {error}"), Box::new)
     }
 
@@ -707,11 +618,11 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn playback_rate_reports_only_a_real_warp_control() {
-        let mut fixed = Resource::from_reader(EofReader::default(), None);
+        let mut fixed = PcmConsumer::new(Box::new(EofReader::default()));
         assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
         assert_eq!(fixed.playback_rate(), 1.0);
 
-        let mut warped = Resource::from_reader(EofReader::default(), None)
+        let mut warped = PcmConsumer::new(Box::new(EofReader::default()))
             .with_playback_rate(PlaybackRate::for_warp(1.25));
         let (built, applied) = if supports_playback_rate() {
             (1.25, 1.5)
@@ -832,7 +743,7 @@ mod tests {
         let audio_sub = track.child(); // Audio subtree A = T.child()
 
         let mut resource = Resource::from_reader(EofReader::default(), None);
-        resource.reader.0 = CancelGuard(Some(track.clone()));
+        resource.consumer.cancel_on_drop(Some(track.clone()));
 
         assert!(!stream_sub.is_cancelled() && !audio_sub.is_cancelled());
         drop(resource);
@@ -858,7 +769,7 @@ mod tests {
         let state = Arc::new(AtomicU8::new(consts::NOT_DROPPED));
         let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
         let mut resource = Resource::from_reader(reader, None);
-        resource.reader.0 = CancelGuard(Some(track));
+        resource.consumer.cancel_on_drop(Some(track));
 
         drop(resource);
 
@@ -871,7 +782,7 @@ mod tests {
         let state = Arc::new(AtomicU8::new(consts::NOT_DROPPED));
         let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
         let mut resource = Resource::from_reader(reader, None);
-        resource.reader.0 = CancelGuard(Some(track.clone()));
+        resource.consumer.cancel_on_drop(Some(track.clone()));
 
         let reader: Box<dyn AudioReader> = resource.into();
 
@@ -891,7 +802,7 @@ mod tests {
             .take_publisher()
             .expect("fixture Warp owns its publisher");
         let reader = publisher.reader();
-        let mut resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
+        let resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
         let output = OutputContext::new(
             SessionFrame::new(0)..SessionFrame::new(1),
             NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
@@ -908,8 +819,8 @@ mod tests {
                 .build(),
         );
         assert!(reader.load().is_some());
-        resource.render_publisher = Some(publisher);
-        let mut resource = PlayerResource::new(resource, Arc::from("seek"), &pools())
+        let consumer = PcmConsumer::from(resource).with_render_publisher(publisher);
+        let mut resource = PlayerResource::new(consumer, Arc::from("seek"), &pools())
             .unwrap_or_else(|error| panic!("test player resource: {error}"));
 
         resource.reset_for_seek();

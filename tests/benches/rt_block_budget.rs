@@ -95,7 +95,7 @@ fn load_tracks(processor: &mut DeckMixer, control: &mut SlotControl, pools: &Poo
             control,
             DeckPart::Attach {
                 resource: Box::new(
-                    PlayerResource::new(resource, Arc::clone(src), pools)
+                    PlayerResource::new(resource.into(), Arc::clone(src), pools)
                         .expect("bench player resource fits the pool budget"),
                 ),
                 item_id: *item_id,

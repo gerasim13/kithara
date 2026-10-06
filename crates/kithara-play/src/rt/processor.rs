@@ -593,7 +593,7 @@ mod tests {
         let reader = TestPcmReader::with_pcm(spec, seconds, constant_half);
         Box::new(
             PlayerResource::new(
-                Resource::from_reader(reader, None),
+                Resource::from_reader(reader, None).into(),
                 Arc::from(src),
                 &pools(),
             )

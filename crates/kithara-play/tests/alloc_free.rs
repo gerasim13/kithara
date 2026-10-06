@@ -48,7 +48,7 @@ fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
     let settings = CrossfadeSettings::default();
     let spec = AudioSpec::new(2, SAMPLE_RATE);
     let resource = PlayerResource::new(
-        Resource::from_reader(TestPcmReader::with_pcm(spec, 60.0, constant_half), None),
+        Resource::from_reader(TestPcmReader::with_pcm(spec, 60.0, constant_half), None).into(),
         Arc::from("held.mp3"),
         &pools(),
     )

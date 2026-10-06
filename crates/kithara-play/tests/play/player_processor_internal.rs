@@ -90,7 +90,7 @@ fn create_mock_player_resource_with_duration(
     let reader = TestPcmReader::with_pcm(AUDIO_SPEC, duration_secs, constant_half);
     let resource = Resource::from_reader(reader, None);
     Box::new(
-        PlayerResource::new(resource, Arc::from(src), &pools())
+        PlayerResource::new(resource.into(), Arc::from(src), &pools())
             .expect("player resource fits the test pool budget"),
     )
 }
@@ -99,7 +99,7 @@ fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerR
     let (reader, _recorded) = MockReader::sample_rate_tracking_with_duration(AUDIO_SPEC, duration);
     let resource = Resource::from_reader(reader, None);
     Box::new(
-        PlayerResource::new(resource, Arc::from(src), &pools())
+        PlayerResource::new(resource.into(), Arc::from(src), &pools())
             .expect("player resource fits the test pool budget"),
     )
 }
@@ -110,7 +110,7 @@ fn create_tracking_player_resource(
 ) -> Box<PlayerResource> {
     let resource = Resource::from_reader(MockReader::seek_tracking(seek_log), None);
     Box::new(
-        PlayerResource::new(resource, Arc::from(src), &pools())
+        PlayerResource::new(resource.into(), Arc::from(src), &pools())
             .expect("player resource fits the test pool budget"),
     )
 }
@@ -121,7 +121,7 @@ async fn load_track_propagates_host_sample_rate() {
     let (reader, recorded) = MockReader::sample_rate_tracking(AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(
-        PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
+        PlayerResource::new(resource.into(), Arc::from("track.mp3"), &pools())
             .expect("player resource fits the test pool budget"),
     );
 

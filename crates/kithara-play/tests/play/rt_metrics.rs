@@ -68,7 +68,7 @@ fn healthy_track(constant_half: &'static [u8], src: &str) -> Box<PlayerResource>
 
 fn boxed(resource: Resource, src: &str) -> Box<PlayerResource> {
     Box::new(
-        PlayerResource::new(resource, Arc::from(src), &pools())
+        PlayerResource::new(resource.into(), Arc::from(src), &pools())
             .expect("player resource fits the test pool budget"),
     )
 }

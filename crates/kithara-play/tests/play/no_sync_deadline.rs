@@ -96,7 +96,7 @@ fn load_tracks(
             control,
             DeckPart::Attach {
                 resource: Box::new(
-                    PlayerResource::new(resource, Arc::clone(src), &pools)
+                    PlayerResource::new(resource.into(), Arc::clone(src), &pools)
                         .expect("player resource fits the test pool budget"),
                 ),
                 item_id: *item_id,

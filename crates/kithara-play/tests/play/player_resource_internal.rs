@@ -30,7 +30,7 @@ use crate::support::AUDIO_SPEC;
 fn make_player_resource(constant_half: &'static [u8], seconds: f64) -> PlayerResource {
     let reader = TestPcmReader::with_pcm(AUDIO_SPEC, seconds, constant_half);
     let resource = Resource::from_reader(reader, None);
-    PlayerResource::new(resource, Arc::from("test.mp3"), &pools())
+    PlayerResource::new(resource.into(), Arc::from("test.mp3"), &pools())
         .expect("player resource fits the test pool budget")
 }
 
@@ -248,7 +248,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
     let emitted = Arc::new(AtomicU64::new(0));
     let reader = ChunkReader::new(Arc::clone(&emitted));
     let resource = Resource::from_reader(reader, None);
-    let mut player = PlayerResource::new(resource, Arc::from("chunked"), &pools())
+    let mut player = PlayerResource::new(resource.into(), Arc::from("chunked"), &pools())
         .expect("player resource fits the test pool budget");
     let mut left = vec![0.0f32; CALLBACK_FRAMES];
     let mut right = vec![0.0f32; CALLBACK_FRAMES];
@@ -273,7 +273,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
 async fn reset_for_seek_drops_buffered_samples() {
     let reader = PositionReader::new(1.0);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("position.mp3"), &pools())
+    let mut pr = PlayerResource::new(resource.into(), Arc::from("position.mp3"), &pools())
         .expect("player resource fits the test pool budget");
 
     let mut left = vec![0.0f32; 128];
@@ -306,7 +306,7 @@ async fn reset_for_seek_drops_buffered_samples() {
 async fn read_zeroes_output_when_no_data_available() {
     let reader = MockReader::faulty(AUDIO_SPEC, Fault::Stall);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("pending"), &pools())
+    let mut pr = PlayerResource::new(resource.into(), Arc::from("pending"), &pools())
         .expect("player resource fits the test pool budget");
 
     let mut left = vec![0.999f32; 128];
@@ -333,7 +333,7 @@ async fn read_zeroes_output_when_no_data_available() {
 async fn full_read_prefetches_buffered_eof(constant_half: &'static [u8]) {
     let reader = TestPcmReader::with_pcm(AUDIO_SPEC, 900.0 / 44100.0, constant_half);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &pools())
+    let mut pr = PlayerResource::new(resource.into(), Arc::from("short.mp3"), &pools())
         .expect("player resource fits the test pool budget");
 
     let mut left = vec![0.0f32; 512];
@@ -353,7 +353,7 @@ async fn full_read_prefetches_buffered_eof(constant_half: &'static [u8]) {
 async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8]) {
     let reader = TestPcmReader::with_pcm(AUDIO_SPEC, 0.01, constant_half);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &pools())
+    let mut pr = PlayerResource::new(resource.into(), Arc::from("short.mp3"), &pools())
         .expect("player resource fits the test pool budget");
 
     let mut left = vec![0.0f32; 4096];
@@ -391,7 +391,7 @@ async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8
 async fn read_returns_failed_not_eof_on_decoder_error() {
     let reader = MockReader::faulty(AUDIO_SPEC, Fault::DecodeError);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("failing.mp3"), &pools())
+    let mut pr = PlayerResource::new(resource.into(), Arc::from("failing.mp3"), &pools())
         .expect("player resource fits the test pool budget");
 
     let mut left = vec![0.0f32; 4096];

@@ -51,7 +51,8 @@ pub use player::{
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
-    PlaybackResamplerBackend, PreparedGrid, Resource, ResourceConfig, ResourceSrc, SourceType,
+    PcmConsumer, PlaybackResamplerBackend, PreparedGrid, Resource, ResourceConfig, ResourceSrc,
+    SourceType,
 };
 pub use rt::{DeckMixerConfig, PlayerNode, StreamShape};
 pub use worker::{

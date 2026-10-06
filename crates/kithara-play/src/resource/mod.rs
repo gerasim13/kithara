@@ -2,6 +2,7 @@ mod access;
 mod artifact;
 mod build;
 mod config;
+mod consumer;
 mod reader;
 mod resampler;
 mod source;
@@ -12,6 +13,8 @@ pub use artifact::{
     PreparedGrid,
 };
 pub use config::ResourceConfig;
+pub use consumer::PcmConsumer;
+pub(crate) use consumer::PlaybackRate;
 pub use reader::Resource;
 pub use resampler::PlaybackResamplerBackend;
 pub use source::{ResourceSrc, SourceType};
