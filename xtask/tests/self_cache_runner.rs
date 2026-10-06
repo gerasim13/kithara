@@ -345,6 +345,66 @@ exec "$SELF_CACHE_TEST_XTASK" "$@"
         )
     }
 
+    fn prepare_real_cargo_workspace(&self) -> Result<()> {
+        fs::create_dir_all(self.root.join("dependency/src"))?;
+        fs::write(
+            self.root.join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"xtask\", \"dependency\"]\n",
+        )?;
+        fs::write(
+            self.root.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"dependency\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"xtask\"\nversion = \"0.0.0\"\ndependencies = [\"dependency\"]\n",
+        )?;
+        fs::write(
+            self.root.join("dependency/Cargo.toml"),
+            "[package]\nname = \"dependency\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(
+            self.root.join("xtask/Cargo.toml"),
+            "[package]\nname = \"xtask\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ndependency = { path = \"../dependency\" }\n",
+        )?;
+        fs::write(
+            self.root.join(".config/xtask.toml"),
+            "[ext.xtask.cache]\nextra_inputs = [\".config/ci-pins.toml\", \"justfile\"]\nkeep_generations = 2\ngeneration_grace_secs = 3600\n",
+        )?;
+        Ok(())
+    }
+
+    fn write_real_cargo_sources(
+        &self,
+        function: &str,
+        value: u8,
+        modified: SystemTime,
+    ) -> Result<(u64, u64)> {
+        let dependency = self.root.join("dependency/src/lib.rs");
+        let caller = self.root.join("xtask/src/main.rs");
+        fs::write(
+            &dependency,
+            format!("pub fn {function}() -> u8 {{ {value} }}\n"),
+        )?;
+        fs::write(
+            &caller,
+            r#"fn main() {
+    let value = dependency::FUNCTION();
+    match std::env::args().nth(1).as_deref() {
+        Some("self-cache") => println!("{}", std::env::current_exe().unwrap().display()),
+        Some("compiler") => println!("{}", env!("RUSTUP_TOOLCHAIN")),
+        _ => println!("{value}"),
+    }
+}
+"#
+            .replace("FUNCTION", function),
+        )?;
+        for path in [&dependency, &caller] {
+            fs::File::open(path)?.set_modified(modified)?;
+            assert_eq!(fs::metadata(path)?.modified()?, modified);
+        }
+        Ok((
+            fs::metadata(&dependency)?.len(),
+            fs::metadata(&caller)?.len(),
+        ))
+    }
+
     fn fake_path(&self) -> Result<std::ffi::OsString> {
         let mut paths = vec![self.fake_bin.clone()];
         if let Some(path) = env::var_os("PATH") {
@@ -1197,60 +1257,10 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
     let stable_cargo = String::from_utf8(stable_cargo.stdout)?;
     let stable_cargo = stable_cargo.trim();
     let real_path = env::var_os("PATH").context("real Cargo fixture PATH")?;
-    fs::create_dir_all(fixture.root.join("dependency/src"))?;
-    fs::write(
-        fixture.root.join("Cargo.toml"),
-        "[workspace]\nresolver = \"3\"\nmembers = [\"xtask\", \"dependency\"]\n",
-    )?;
-    fs::write(
-        fixture.root.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"dependency\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"xtask\"\nversion = \"0.0.0\"\ndependencies = [\"dependency\"]\n",
-    )?;
-    fs::write(
-        fixture.root.join("dependency/Cargo.toml"),
-        "[package]\nname = \"dependency\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
-    )?;
-    fs::write(
-        fixture.root.join("xtask/Cargo.toml"),
-        "[package]\nname = \"xtask\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ndependency = { path = \"../dependency\" }\n",
-    )?;
-    fs::write(
-        fixture.root.join(".config/xtask.toml"),
-        "[ext.xtask.cache]\nextra_inputs = [\".config/ci-pins.toml\", \"justfile\"]\nkeep_generations = 2\ngeneration_grace_secs = 3600\n",
-    )?;
-    let dependency = fixture.root.join("dependency/src/lib.rs");
-    let caller = fixture.root.join("xtask/src/main.rs");
-    let write_sources = |function: &str, value: u8, modified: SystemTime| -> Result<()> {
-        fs::write(
-            &dependency,
-            format!("pub fn {function}() -> u8 {{ {value} }}\n"),
-        )?;
-        fs::write(
-            &caller,
-            r#"fn main() {
-    let value = dependency::FUNCTION();
-    match std::env::args().nth(1).as_deref() {
-        Some("self-cache") => println!("{}", std::env::current_exe().unwrap().display()),
-        Some("compiler") => println!("{}", env!("RUSTUP_TOOLCHAIN")),
-        _ => println!("{value}"),
-    }
-}
-"#
-            .replace("FUNCTION", function),
-        )?;
-        for path in [&dependency, &caller] {
-            fs::File::open(path)?.set_modified(modified)?;
-            assert_eq!(fs::metadata(path)?.modified()?, modified);
-        }
-        Ok(())
-    };
+    fixture.prepare_real_cargo_workspace()?;
     let initial_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
     let older_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(9);
-    write_sources("original", 1, initial_mtime)?;
-    let lengths = (
-        fs::metadata(&dependency)?.len(),
-        fs::metadata(&caller)?.len(),
-    );
+    let lengths = fixture.write_real_cargo_sources("original", 1, initial_mtime)?;
     let cold = || -> Result<Output> {
         fixture
             .just_command(&fixture.root, &["_xtask-bootstrap"])?
@@ -1267,12 +1277,8 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
     assert_success(&initial);
     assert_eq!(initial.stdout, b"1\n");
     assert!(fs::metadata(&fixture.bootstrap_artifact)?.modified()? > initial_mtime);
-    write_sources("replaced", 2, older_mtime)?;
     assert_eq!(
-        (
-            fs::metadata(&dependency)?.len(),
-            fs::metadata(&caller)?.len()
-        ),
+        fixture.write_real_cargo_sources("replaced", 2, older_mtime)?,
         lengths
     );
     assert_success(&cold()?);
@@ -1284,7 +1290,10 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
         &legacy_selector,
         "#!/bin/sh\nset -eu\nexec \"${XTASK_SELF_CACHE_CARGO:-$CARGO}\" \"$@\"\n",
     )?;
-    write_sources("legacyxx", 3, older_mtime)?;
+    assert_eq!(
+        fixture.write_real_cargo_sources("legacyxx", 3, older_mtime)?,
+        lengths
+    );
     let legacy = fixture
         .just_command(&fixture.root, &["_xtask-build-env"])?
         .arg(&legacy_selector)
@@ -1337,12 +1346,8 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
         manifest["extra_inputs"],
         serde_json::json!([".config/ci-pins.toml", "justfile"])
     );
-    write_sources("updatedx", 4, older_mtime)?;
     assert_eq!(
-        (
-            fs::metadata(&dependency)?.len(),
-            fs::metadata(&caller)?.len()
-        ),
+        fixture.write_real_cargo_sources("updatedx", 4, older_mtime)?,
         lengths
     );
     assert_success(&refresh("refresh")?);
