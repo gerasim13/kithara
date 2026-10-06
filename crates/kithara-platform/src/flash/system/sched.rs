@@ -1,8 +1,5 @@
 use std::{
-    backtrace::Backtrace,
-    panic::Location,
-    sync::atomic::AtomicBool,
-    task::Waker,
+    backtrace::Backtrace, panic::Location, sync::atomic::AtomicBool, task::Waker,
     time::Duration as StdDuration,
 };
 
