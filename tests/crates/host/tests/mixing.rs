@@ -131,6 +131,22 @@ impl MixHarness {
             .await;
     }
 
+    // Removing every item stops the player's engine: its slots and their mixers go.
+    async fn remove_all_items(&self) {
+        let players: Vec<_> = self
+            .players
+            .iter()
+            .map(|player| player.control().clone())
+            .collect();
+        self.host
+            .run(move || {
+                for player in &players {
+                    player.remove_all_items();
+                }
+            })
+            .await;
+    }
+
     async fn apply(&self, levels: &[f32]) -> Result<(), PlayError> {
         let players: Vec<_> = self
             .players
@@ -317,6 +333,23 @@ async fn rejected_mix_changes_no_rendered_gain(
         expected,
         "rejected mix changed a gain",
     );
+    harness.close().await;
+}
+
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+async fn a_mix_level_outlives_an_engine_stop_and_restart(constant_four: &'static [u8]) {
+    let harness = MixHarness::new(1).await;
+    harness.play(&[constant_four]).await;
+    harness.apply(&[0.5]).await.expect("apply mix");
+    assert_near(
+        harness.steady_peak().await,
+        0.2,
+        "level set on the playing deck",
+    );
+
+    harness.remove_all_items().await;
+    harness.play(&[constant_four]).await;
+    assert_near(harness.steady_peak().await, 0.2, "level after the restart");
     harness.close().await;
 }
 
