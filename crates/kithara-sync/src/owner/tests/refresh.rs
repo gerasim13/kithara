@@ -17,8 +17,8 @@ use super::{
     },
 };
 use crate::{
-    SyncAdmission, SyncEffect, SyncError, SyncGroup, SyncIntent, SyncMemberKind, SyncMode,
-    SyncPreparation, owner::preparation::Pending,
+    SyncAdmission, SyncEffect, SyncGroup, SyncIntent, SyncMemberKind, SyncMode, SyncPreparation,
+    owner::preparation::Pending,
 };
 
 /// A deck following `anchor` as revision one of the parent `parent`.
@@ -309,31 +309,4 @@ fn leaving_the_timeline_withdraws_every_preparation() {
     };
     assert!(transition.issued().is_empty());
     assert_eq!(transition.withdrawn(), [planned.stamp()]);
-}
-
-#[kithara::test]
-fn a_child_refusing_the_segment_keeps_every_preparation() {
-    let mut root = group_in(SyncMode::Off, SyncMemberKind::Group);
-    let (accepting, _, _) = prepared_deck();
-    let mut refusing = group_in(SyncMode::HostSync, SyncMemberKind::Grid);
-    refusing
-        .accept_parent(parent_update(
-            parent_stamp(root.id(), 5),
-            anchor_at_rate(2.0, 48_000),
-        ))
-        .expect("a later root segment reached this child first");
-    let accepting_id = accepting.id();
-    attach_group(&mut root, accepting);
-    attach_group(&mut root, refusing);
-    let read = |root: &Group| nested(root, &[accepting_id], |deck| deck.pending.clone());
-    let before = read(&root);
-
-    assert!(matches!(
-        root.publish_session(parent_update(
-            parent_stamp(root.id(), 2),
-            anchor_at_rate(2.5, 48_000),
-        )),
-        Err(SyncError::StaleGridRevision { .. })
-    ));
-    assert_eq!(read(&root), before);
 }

@@ -25,21 +25,16 @@ pub(super) struct ProjectionState {
     pub(super) retired: Option<Arc<WarpPlan>>,
     pub(super) selected: Option<Arc<WarpPlan>>,
     pub(super) output_frames: usize,
-    /// The plan was entered at its activation before any output reached it,
-    /// so decoded audio before the activation source is history, not output.
-    pub(super) entering: bool,
 }
 
 impl ProjectionState {
     pub(super) fn new(config: &crate::WarpConfig) -> Self {
         let selected = config.plan().load();
-        let entering = config.enters_plan();
         Self {
             active: selected
                 .clone()
-                .filter(|plan| entering || plan.activation().output() == SessionFrame::new(0)),
+                .filter(|plan| plan.activation().output() == SessionFrame::new(0)),
             selected,
-            entering,
             ..Self::default()
         }
     }
@@ -50,9 +45,6 @@ pub(super) enum ProjectionPreparation {
     Service,
     Manual(usize),
     Projected(PreparedQuantum),
-    /// Decoded audio before an entered activation: the caller admits exactly
-    /// this many frames as history and renders none of them.
-    Preroll(NonZeroUsize),
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
@@ -86,13 +78,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                     .load()
                     .map(|snapshot| snapshot.frontier().output())
             });
-        if self.projection.entering
-            && same
-            && self.projection.cursor.is_none()
-            && let Some(entry) = self.entry_boundary(activation, meta)?
-        {
-            return Ok(entry);
-        }
         let reached = output.map_or_else(
             || activation.output() == SessionFrame::new(0),
             |output| output >= activation.output(),

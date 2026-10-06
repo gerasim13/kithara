@@ -1,17 +1,9 @@
-use kithara_platform::sync::Arc;
+use crate::api::TrackId;
 
-use crate::{
-    api::TrackId,
-    resource::{PreparedGrid, StagingRecipe},
-};
-
-/// What the player publishes about the item it plays: its beat grid, its
-/// staging recipe and its ABR handle. An armed successor holds it until it
-/// becomes the current item.
+/// What the player publishes about the item it plays: its ABR handle. An
+/// armed successor holds it until it becomes the current item.
 pub(crate) struct ItemPresentation {
-    pub(crate) beat_grid: Arc<PreparedGrid>,
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
-    pub(crate) staging: Option<StagingRecipe>,
 }
 
 /// Whether the successor is armed behind the current item or already
@@ -151,11 +143,7 @@ mod tests {
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
-        let presentation = ItemPresentation {
-            beat_grid: Arc::default(),
-            abr_handle: None,
-            staging: None,
-        };
+        let presentation = ItemPresentation { abr_handle: None };
         assert!(!PendingNextState::Armed(presentation).activated());
         assert!(PendingNextState::ActivatedReady.activated());
     }

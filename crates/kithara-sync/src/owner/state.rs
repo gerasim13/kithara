@@ -2,22 +2,21 @@ use std::num::NonZeroU32;
 
 use kithara_signal::SessionEpoch;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
-    BeatsPerMinute, MapAxis, SessionAxis, WarpMapRevision,
+    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatsPerMinute,
+    MapAxis, SessionAxis, WarpMapRevision,
 };
 
 use super::{
-    descent::{Parent, Takeover},
+    descent::Parent,
     lifecycle::Applied,
     mutation::{materialize_topology, routed_group},
     preparation::Pending,
     timeline::{Blocked, Timeline},
 };
 use crate::{
-    ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncOperationId,
-    SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition, TopologyRevision,
-    TopologyStamp,
+    ParentFact, SyncAdmission, SyncError, SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind,
+    SyncMode, SyncOperation, SyncOperationId, SyncReceipt, SyncRejected, SyncStaged,
+    SyncStatusSnapshot, SyncTransition, TopologyRevision, TopologyStamp,
 };
 
 /// Canonical mutable state for one recursive synchronization group.
@@ -75,92 +74,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             .tempo(self.parent.and_then(Parent::segment).as_ref())
     }
 
-    /// Publishes the session trajectory of a group in [`SyncMode::Off`] from
-    /// its external timeline owner, and passes it on to every direct child
-    /// group as its parent segment.
-    ///
-    /// Returns every preparation the publication issued and withdrew across
-    /// the subtree.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncError`] when the group derives its own grid, when the
-    /// segment does not succeed the current grid, or when any child group
-    /// refuses it; nothing changes then.
-    pub fn publish_session(
-        &mut self,
-        update: ParentGridUpdate,
-    ) -> Result<SyncTransition, SyncError> {
-        let stamp = update.parent();
-        let candidate = BeatGridSnapshot::session(
-            stamp.grid_id(),
-            stamp.revision(),
-            update.epoch(),
-            update.anchor(),
-            update.meter(),
-        );
-        self.publish(candidate, Some(ParentFact::Segment(update)))
-    }
-
-    /// Publishes a later unavailable session-axis snapshot, moving every
-    /// direct child group onto the axis when it changes.
-    ///
-    /// Returns every preparation the publication issued and withdrew across
-    /// the subtree.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncError`] when the group derives its own grid, when the
-    /// snapshot does not succeed the current grid, or when any child group
-    /// refuses the axis; nothing changes then.
-    pub fn publish_unavailable_grid(
-        &mut self,
-        stamp: BeatGridStamp,
-        sample_rate: NonZeroU32,
-        epoch: SessionEpoch,
-    ) -> Result<SyncTransition, SyncError> {
-        self.publish_grid(BeatGridSnapshot::unavailable(
-            stamp.grid_id(),
-            stamp.revision(),
-            MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
-        ))
-    }
-
-    /// Publishes a later immutable grid snapshot from the external timeline
-    /// owner of a group in [`SyncMode::Off`].
-    pub(super) fn publish_grid(
-        &mut self,
-        candidate: BeatGridSnapshot,
-    ) -> Result<SyncTransition, SyncError> {
-        let descent = match candidate.axis() {
-            MapAxis::Session(axis) if candidate.axis() != self.grid.axis() => {
-                Some(ParentFact::Axis(SessionAxisUpdate::new(axis)))
-            }
-            _ => None,
-        };
-        self.publish(candidate, descent)
-    }
-
-    fn publish(
-        &mut self,
-        candidate: BeatGridSnapshot,
-        descent: Option<ParentFact>,
-    ) -> Result<SyncTransition, SyncError> {
-        if !matches!(self.timeline, Timeline::Off) {
-            return Err(SyncError::GridOwnedByMode { mode: self.mode() });
-        }
-        if candidate.stamp() == self.grid.stamp() {
-            return Ok(SyncTransition::default());
-        }
-        validate_successor(&self.grid, &candidate, Withdrawal::Refused)?;
-        let takeover = Takeover {
-            commit: None,
-            next_operation: self.next_operation,
-        };
-        let staged = self.stage(candidate, self.timeline, self.parent, descent, takeover)?;
-        Ok(self.apply(Some(staged)))
-    }
-
     /// Creates an empty group whose session-axis grid is not available yet.
     #[must_use]
     pub fn unavailable(
@@ -179,27 +92,6 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
             member_kind,
         );
         group.timeline = Timeline::without_geometry(mode);
-        group
-    }
-
-    /// Creates a group that owns `member` from birth, with a session-axis
-    /// grid that is not available yet.
-    ///
-    /// The member is the group's own rather than one a caller attached, so
-    /// there is no topology transaction to reject: it is admitted under the
-    /// kind it already is, and it carries no alignment to restamp. A group
-    /// whose one member is its own stable grid never changes topology, which
-    /// is what lets that grid state a later revision on every load.
-    #[must_use]
-    pub fn owning(
-        id: BeatGridId,
-        sample_rate: NonZeroU32,
-        epoch: SessionEpoch,
-        member: SyncMember<G>,
-    ) -> Self {
-        let member_kind = member.kind();
-        let mut group = Self::unavailable(id, sample_rate, epoch, member_kind, SyncMode::Off);
-        group.members.push(member);
         group
     }
 

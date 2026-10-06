@@ -147,11 +147,6 @@ pub mod stretch {
     pub use kithara_stretch::*;
 }
 
-#[cfg(feature = "sync")]
-pub mod sync {
-    pub use kithara_sync::*;
-}
-
 #[cfg(feature = "ui")]
 pub mod ui {
     pub use kithara_ui::*;

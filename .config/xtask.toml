@@ -145,7 +145,6 @@ lockbud_exclude = [
   "kithara-play-tests",
   "kithara-queue-tests",
   "kithara-stream-tests",
-  "kithara-sync-tests",
   "kithara-warp-tests",
   "kithara-test-macros",
   "kithara-test-utils",
@@ -588,7 +587,6 @@ cargo.packages = [
   "kithara-queue-tests",
   "kithara-stream-tests",
   "kithara-warp-tests",
-  "kithara-sync-tests",
 ]
 cargo.profile = "test-release"
 
@@ -639,9 +637,16 @@ cargo.profile = "test-release"
 
 
 [test.lanes.sync]
-owns = ["crates/kithara-sync/", "tests/crates/sync/"]
-cargo.packages = ["kithara-sync", "kithara-sync-tests"]
+default_backend = "none"
+# kithara-sync takes kithara-warp without a stretch backend; built alone it
+# names the default one.
+default_features = ["kithara-sync/stretch-signalsmith"]
+owns = ["crates/kithara-sync/"]
+cargo.packages = ["kithara-sync"]
 cargo.profile = "test-release"
+# kithara-sync's own tests drive no clock or poll, and its only package
+# declares neither toggle.
+undeclared_toggles = ["flash", "no-block"]
 
 [test.lanes.warp]
 default_backend = "none"
@@ -1298,21 +1303,6 @@ pins = ".config/ci-pins.toml"
 "kithara-bufpool-tests::bufpool::" = "kithara-bufpool::bufpool::"
 "suite_light::kithara_play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
 "kithara-integration-tests::suite_light::kithara_play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
-"suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
-"kithara-integration-tests::suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
-"suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
-"kithara-integration-tests::suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
-"suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
-"kithara-integration-tests::suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
-"suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
-"kithara-integration-tests::suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
-"suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
-"kithara-integration-tests::suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
-"kithara-play-tests::play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
-"kithara-play-tests::play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
-"kithara-play-tests::play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
-"kithara-play-tests::play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
-"kithara-play-tests::play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
 "kithara-play-tests::play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
 "kithara-warp::warp::render::region_tests::" = "kithara-warp-tests::warp::region::"
 "suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"

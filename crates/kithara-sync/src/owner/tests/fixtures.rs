@@ -7,41 +7,12 @@ use kithara_warp::{
 
 use crate::{
     GroupState, ParentFact, ParentGridUpdate, SessionAxisUpdate, SyncAdmission, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt,
-    SyncRejected, SyncStaged, SyncStatusSnapshot, SyncTransition,
+    SyncGroup, SyncGroupSnapshot, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
+    SyncStatusSnapshot, SyncTransition,
 };
 
 /// Test-only recursive group that delegates to the real owner state.
-///
-/// The production nested-group representation lives in `kithara-play`, which
-/// this crate must not depend on.
 pub(super) struct TestGroup(pub(super) GroupState<Self>);
-
-impl TestGroup {
-    fn unavailable(
-        id: BeatGridId,
-        sample_rate: NonZeroU32,
-        epoch: SessionEpoch,
-        member_kind: SyncMemberKind,
-    ) -> Self {
-        Self(GroupState::unavailable(
-            id,
-            sample_rate,
-            epoch,
-            member_kind,
-            SyncMode::Off,
-        ))
-    }
-
-    delegate::delegate! {
-        to self.0 {
-            pub(super) fn publish_grid(
-                &mut self,
-                candidate: BeatGridSnapshot,
-            ) -> Result<SyncTransition, SyncError>;
-        }
-    }
-}
 
 /// Stages one parent fact on a group and commits it, as its parent does.
 pub(super) trait Accept: SyncGroup {
@@ -127,13 +98,4 @@ pub(super) fn session_grid_at_rate(
     )
     .expect("invariant: fixture session anchor is valid");
     BeatGridSnapshot::session(id, revision, epoch, anchor, None)
-}
-
-pub(super) fn fixture_group() -> TestGroup {
-    TestGroup::unavailable(
-        BeatGridId::allocate().expect("invariant: fixture group id is available"),
-        NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero"),
-        SessionEpoch::new(0),
-        SyncMemberKind::Grid,
-    )
 }

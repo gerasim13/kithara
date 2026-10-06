@@ -9,15 +9,14 @@ use kithara_output::{
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_play::PlayError;
 use kithara_signal::AudioSpec;
-use kithara_sync::GroupState;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
 use super::{Host, HostConfig};
 use crate::{
-    HostSettings, PlayerMember,
+    HostSettings,
     rt::SessionOutput,
     session::{
-        HostDispatcher, RootView,
+        HostDispatcher, HostRoot, RootView,
         offline::{OfflineSessionClient, OfflineTaskConfig},
     },
 };
@@ -100,7 +99,7 @@ where
 {
     pub(super) fn new(
         config: HostConfig<S>,
-        root: GroupState<PlayerMember>,
+        root: HostRoot,
         root_view: RootView,
     ) -> Result<StartedOfflineRuntime<S>, PlayError> {
         let HostConfig::Offline {

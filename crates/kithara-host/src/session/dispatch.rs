@@ -7,10 +7,7 @@ use kithara_config::ConfigOwner;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
 use kithara_play::{PlayError, StreamShape};
-use kithara_sync::{
-    SyncCapability, SyncError, SyncGroup, SyncOperation, SyncReceipt, SyncRejected,
-    SyncStatusSnapshot, TopologyOperation,
-};
+use kithara_warp::BeatGridId;
 use tracing::{debug, trace, warn};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -19,7 +16,6 @@ use super::{
     graph::{controls, lifecycle, player_index, slots, tap},
     protocol::{
         Cmd, HostCmd, HostReply, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
-        SyncCmd,
     },
     queue::settle_receipts,
     state::{SessionState, register_player},
@@ -42,7 +38,10 @@ where
     settle_receipts(state);
     match cmd {
         HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
-        HostCmd::Sync(cmd) => run_sync_cmd(state, cmd),
+        HostCmd::Attach { member } => attach_deck(state, member)
+            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        HostCmd::Detach { grid_id } => detach_deck(state, grid_id)
+            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::ApplyMix { levels } => {
             apply_mix(state, &levels).map_or_else(HostReply::Err, |()| HostReply::Ok)
         }
@@ -62,81 +61,32 @@ where
     }
 }
 
-fn run_sync_cmd<T, S>(state: &mut SessionState<T, S>, cmd: SyncCmd) -> HostReply {
-    let operation = match cmd {
-        SyncCmd::Transact(operation) => match transport::observe_commits(state) {
-            Ok(()) => operation,
-            Err(error) => return HostReply::Admission(Err(SyncRejected::new(error, operation))),
-        },
-        SyncCmd::TransactCurrent(operations) => {
-            let topology =
-                match transport::observe_commits(state).and_then(|()| state.root.topology()) {
-                    Ok(topology) => topology,
-                    Err(error) => return HostReply::Err(SessionError::from(error).into()),
-                };
-            SyncOperation::Topology {
-                operations,
-                base: topology.stamp(),
-            }
-        }
-        SyncCmd::Acknowledge(receipt) => {
-            return HostReply::Acknowledged(acknowledge_root(state, receipt));
-        }
-    };
-    let result = transact_root(state, operation);
-    if result.is_ok() {
-        state.publish_root();
-    }
-    HostReply::Admission(result)
-}
-
-/// Records one executor receipt on the root group and publishes the state it
-/// leaves; a refused receipt changes nothing and publishes nothing.
-fn acknowledge_root<T, S>(
+/// Adds one deck to the session; an identity the session or its graph
+/// already holds is refused.
+fn attach_deck<T, S>(
     state: &mut SessionState<T, S>,
-    receipt: SyncReceipt,
-) -> Result<SyncStatusSnapshot, SyncError> {
-    transport::observe_commits(state)?;
-    let result = state.root.acknowledge(receipt);
-    if result.is_ok() {
-        state.publish_root();
+    member: PlayerMember,
+) -> Result<(), SessionError> {
+    let grid_id = member.grid_id();
+    if state.graph.index_by_grid(grid_id).is_some() {
+        return Err(SessionError::DeckAttached(grid_id));
     }
-    result
+    state.root.attach(member)?;
+    state.publish_root();
+    Ok(())
 }
 
-fn transact_root<T, S>(
+/// Removes one deck from the session once its graph registration is gone.
+fn detach_deck<T, S>(
     state: &mut SessionState<T, S>,
-    operation: SyncOperation<PlayerMember>,
-) -> Result<kithara_sync::SyncAdmission, SyncRejected<PlayerMember>> {
-    if topology_conflicts_with_graph(state, &operation) {
-        return Err(SyncRejected::new(
-            SyncError::CapabilityUnavailable {
-                capability: SyncCapability::Topology,
-            },
-            operation,
-        ));
+    grid_id: BeatGridId,
+) -> Result<(), SessionError> {
+    if state.graph.index_by_grid(grid_id).is_some() {
+        return Err(SessionError::DeckRegistered(grid_id));
     }
-    state.root.transact(operation)
-}
-
-fn topology_conflicts_with_graph<T, S>(
-    state: &SessionState<T, S>,
-    operation: &SyncOperation<PlayerMember>,
-) -> bool {
-    let SyncOperation::Topology { operations, .. } = operation else {
-        return false;
-    };
-    operations.iter().any(|operation| match operation {
-        TopologyOperation::Attach { member } => state.graph.index_by_grid(member.id()).is_some(),
-        TopologyOperation::Detach { member } => state.graph.index_by_grid(*member).is_some(),
-        TopologyOperation::Replace {
-            member,
-            replacement,
-        } => {
-            state.graph.index_by_grid(*member).is_some()
-                || state.graph.index_by_grid(replacement.id()).is_some()
-        }
-    })
+    state.root.detach(grid_id)?;
+    state.publish_root();
+    Ok(())
 }
 
 pub(crate) fn run_cmd<T, S>(state: &mut SessionState<T, S>, cmd: Cmd<S>) -> Reply
@@ -226,10 +176,6 @@ where
         }
         Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
         Cmd::Tick => tick_session(state),
-        Cmd::AcknowledgeSync { receipt } => match acknowledge_root(state, receipt) {
-            Ok(_) => Reply::Ok,
-            Err(error) => Reply::Err(SessionError::Sync(error)),
-        },
     }
 }
 
@@ -286,12 +232,9 @@ pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Reply {
     if stream_died(state) {
         return restart_dead_stream(state);
     }
-    let observed = transport::observe_commits(state);
+    transport::observe_commits(state);
     settle_receipts(state);
-    match observed {
-        Ok(()) => Reply::Ok,
-        Err(error) => Reply::Err(error.into()),
-    }
+    Reply::Ok
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -353,7 +296,7 @@ fn apply_mix<T, S>(state: &mut SessionState<T, S>, levels: &[HostLevel]) -> Resu
         {
             return Err(PlayError::MixDuplicatePlayer);
         }
-        if state.root.with_group(grid_id, |_| ()).is_none() {
+        if state.root.member(grid_id).is_none() {
             return Err(PlayError::MixForeignSession);
         }
         if let Some(deck_index) = state.graph.index_by_grid(grid_id) {
@@ -368,12 +311,11 @@ fn apply_mix<T, S>(state: &mut SessionState<T, S>, levels: &[HostLevel]) -> Resu
 
     controls::set_player_master_volumes(state, &projected)?;
     for &HostLevel { grid_id, level } in levels {
-        let updated = state.root.with_group(grid_id, |member| {
-            member.commit_host_level(level);
-        });
-        if updated.is_none() {
-            return Err(PlayError::MixForeignSession);
-        }
+        state
+            .root
+            .member(grid_id)
+            .ok_or(PlayError::MixForeignSession)?
+            .commit_host_level(level);
     }
     Ok(())
 }
@@ -508,12 +450,11 @@ mod tests {
         time::Duration,
     };
     use kithara_play::{BufferGeometryError, DeckMixerConfig, Tempo};
-    use kithara_sync::SyncGroupSnapshot;
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,
     };
-    use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
+    use kithara_warp::{BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
     use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
@@ -528,7 +469,7 @@ mod tests {
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, SessionState, TapSlot, add_graph_node},
             tests::{
-                graph::{attach_player, state as test_state},
+                graph::{attach_player, fixture_member, state as test_state},
                 ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
             },
         },
@@ -677,7 +618,7 @@ mod tests {
         })
     }
 
-    fn register_command(grid_id: kithara_warp::BeatGridId) -> Cmd<TestPools> {
+    fn register_command(grid_id: BeatGridId) -> Cmd<TestPools> {
         Cmd::RegisterPlayer {
             grid_id,
             bus: EventBus::default(),
@@ -731,17 +672,8 @@ mod tests {
         state.graph.len()
     }
 
-    fn member_count(state: &TestState) -> usize {
-        state
-            .root
-            .topology()
-            .expect("the host topology remains valid")
-            .members()
-            .len()
-    }
-
     fn host_grid(state: &TestState) -> BeatGridSnapshot {
-        state.root.snapshot()
+        state.root.grid().clone()
     }
 
     fn assert_route_boundary(before: &BeatGridSnapshot, boundary: &BeatGridSnapshot) {
@@ -771,70 +703,46 @@ mod tests {
     }
 
     #[kithara::test]
-    fn registration_projects_the_canonical_member_grid() {
+    fn registration_projects_an_attached_deck_and_unregistration_keeps_it() {
         route_loss(RouteLossProbe::reset);
         let mut state = test_state(start_route_loss_stream);
         let host_id = state.root.id();
 
         let player_id = register_player(&mut state);
-        let registered = state.root.topology().expect("the host topology is valid");
-        let deck = deck_by_player_id(&state, player_id);
-        assert_eq!(registered.members().len(), 1);
-        assert_eq!(registered.members()[0].grid().id(), deck.grid_id);
-        assert!(registered.members()[0].group_topology().is_some());
+        let grid_id = deck_by_player_id(&state, player_id).grid_id;
+        assert!(state.root.member(grid_id).is_some());
+        assert!(state.root_view.holds(grid_id));
 
         assert!(matches!(
             run_cmd(&mut state, start_command(player_id),),
             Reply::Ok
         ));
         assert!(deck_by_player_id(&state, player_id).started);
-        let started = state
-            .root
-            .topology()
-            .expect("the host topology remains valid");
-        assert_eq!(started.stamp(), registered.stamp());
-        // The stream may open a new session epoch at any time; each deck
-        // grid descends onto the host's axis without a topology change, so
-        // members are compared by identity and by the axis they follow.
-        let identity = |topology: &SyncGroupSnapshot| {
-            topology
-                .members()
-                .iter()
-                .map(|member| {
-                    assert_eq!(member.grid().axis(), topology.group_grid().axis());
-                    (
-                        member.grid().id(),
-                        member.group_topology().map(SyncGroupSnapshot::stamp),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(identity(&started), identity(&registered));
-
         assert!(matches!(
             run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
             Reply::Ok
         ));
 
         assert_eq!(state.root.id(), host_id);
-        let retained = state
-            .root
-            .topology()
-            .expect("the canonical member outlives its graph projection");
-        assert_eq!(retained.stamp(), started.stamp());
-        assert_eq!(identity(&retained), identity(&started));
+        assert!(
+            state.root.member(grid_id).is_some(),
+            "the deck outlives its graph registration"
+        );
         assert_eq!(deck_count(&state), 0);
     }
 
     #[kithara::test]
-    fn registration_rejects_a_player_before_canonical_attachment() {
+    fn registration_rejects_a_player_before_its_deck_is_attached() {
         let mut state = test_state(start_route_loss_stream);
-        let grid_id = kithara_warp::BeatGridId::allocate().expect("fixture player grid id");
+        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
 
         let reply = run_cmd(&mut state, register_command(grid_id));
 
-        assert!(matches!(reply, Reply::Err(SessionError::Graph(_))));
-        assert_eq!(member_count(&state), 0);
+        assert!(matches!(
+            reply,
+            Reply::Err(SessionError::DeckNotFound(refused)) if refused == grid_id
+        ));
+        assert!(state.root_view.is_empty());
         assert_eq!(deck_count(&state), 0);
     }
 
@@ -855,7 +763,7 @@ mod tests {
         ));
 
         assert_eq!(state.next_player_id, next_player_id);
-        assert_eq!(member_count(&state), 1);
+        assert!(state.root.member(grid_id).is_some());
         assert_eq!(deck_count(&state), 1);
     }
 
@@ -868,87 +776,81 @@ mod tests {
             panic!("fixture player is registered")
         };
         let player_id = registered.id;
-        let detach = |state: &TestState| SyncOperation::Topology {
-            base: state.root.topology().expect("fixture topology").stamp(),
-            operations: Box::new([TopologyOperation::Detach { member: grid_id }]),
-        };
 
-        let operation = detach(&state);
-        let HostReply::Admission(Err(rejected)) =
-            run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation)))
-        else {
-            panic!("live graph projection rejects canonical detach")
-        };
-        let (error, _) = <(SyncError, SyncOperation<PlayerMember>)>::from(rejected);
-        assert_eq!(
-            error,
-            SyncError::CapabilityUnavailable {
-                capability: SyncCapability::Topology,
-            }
-        );
-        assert_eq!(member_count(&state), 1);
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
+            HostReply::Err(PlayError::Session(SessionError::DeckRegistered(refused)))
+                if refused == grid_id
+        ));
+        assert!(state.root.member(grid_id).is_some());
         assert_eq!(deck_count(&state), 1);
 
         assert!(matches!(
             run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
             Reply::Ok
         ));
-        let operation = detach(&state);
         assert!(matches!(
-            run_host_cmd(&mut state, HostCmd::Sync(SyncCmd::Transact(operation))),
-            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
+            run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
+            HostReply::Ok
         ));
-        assert_eq!(member_count(&state), 0);
+        assert!(state.root.member(grid_id).is_none());
         assert_eq!(deck_count(&state), 0);
     }
 
     #[kithara::test]
-    fn owner_side_topology_commands_resolve_the_base_when_executed() {
+    fn attach_refuses_an_identity_the_session_already_holds() {
         let mut state = test_state(start_route_loss_stream);
-        let first = attach_player(&mut state);
-        let second = attach_player(&mut state);
-        let before = state.root.topology().expect("fixture topology").stamp();
-        let detach = |member| {
-            HostCmd::Sync(SyncCmd::TransactCurrent(Box::new([
-                TopologyOperation::Detach { member },
-            ])))
-        };
+        let grid_id = attach_player(&mut state);
+        let sample_rate = state.settings.config().sample_rate();
 
         assert!(matches!(
-            run_host_cmd(&mut state, detach(first)),
-            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
+            run_host_cmd(
+                &mut state,
+                HostCmd::Attach {
+                    member: fixture_member(grid_id, sample_rate),
+                },
+            ),
+            HostReply::Err(PlayError::Session(SessionError::DeckAttached(refused)))
+                if refused == grid_id
         ));
-        let after_first = state.root.topology().expect("updated topology").stamp();
-        assert_ne!(after_first, before);
-        assert!(matches!(
-            run_host_cmd(&mut state, detach(second)),
-            HostReply::Admission(Ok(kithara_sync::SyncAdmission::TopologyChanged { .. }))
-        ));
-
-        let after_second = state.root.topology().expect("updated topology");
-        assert_ne!(after_second.stamp(), after_first);
-        assert!(after_second.members().is_empty());
-        assert_eq!(state.root_view.topology(), Ok(after_second));
+        assert!(state.root_view.holds(grid_id));
     }
 
     #[kithara::test]
-    fn root_view_publishes_the_canonical_topology() {
+    fn detach_refuses_a_deck_the_session_does_not_hold() {
         let mut state = test_state(start_route_loss_stream);
-        let grid_id = attach_player(&mut state);
+        let held = attach_player(&mut state);
+        let grid_id = BeatGridId::allocate().expect("fixture foreign grid id");
 
-        let topology = state.root.topology().expect("canonical topology");
-        let published = state.root_view.topology().expect("published topology");
-
-        assert_eq!(published, topology);
-        assert_eq!(published.members().len(), 1);
-        assert_eq!(published.members()[0].grid().id(), grid_id);
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
+            HostReply::Err(PlayError::Session(SessionError::DeckNotFound(refused)))
+                if refused == grid_id
+        ));
+        assert!(state.root_view.holds(held));
     }
 
     #[kithara::test]
-    fn exhausted_player_identity_preserves_the_canonical_root() {
+    fn root_view_publishes_the_decks_the_session_holds() {
+        let mut state = test_state(start_route_loss_stream);
+        assert!(state.root_view.is_empty());
+        let grid_id = attach_player(&mut state);
+
+        assert!(state.root_view.holds(grid_id));
+        assert!(!state.root_view.is_empty());
+
+        assert!(matches!(
+            run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
+            HostReply::Ok
+        ));
+        assert!(!state.root_view.holds(grid_id));
+        assert!(state.root_view.is_empty());
+    }
+
+    #[kithara::test]
+    fn exhausted_player_identity_preserves_the_attached_deck() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let topology = state.root.topology().expect("fixture topology");
         state.next_player_id = u64::MAX;
 
         let reply = run_cmd(&mut state, register_command(grid_id));
@@ -956,7 +858,7 @@ mod tests {
         assert!(matches!(reply, Reply::Err(SessionError::PlayerIdExhausted)));
         assert_eq!(state.next_player_id, u64::MAX);
         assert_eq!(deck_count(&state), 0);
-        assert_eq!(state.root.topology().expect("fixture topology"), topology);
+        assert!(state.root.member(grid_id).is_some());
         assert!(state.reserved_session_grid.is_some());
     }
 
@@ -1530,7 +1432,7 @@ mod tests {
         let known = register_player(&mut state);
         start_player_cmd(&mut state, known);
         let known_grid = deck_by_player_id(&state, known).grid_id;
-        let unknown_grid = kithara_warp::BeatGridId::allocate().expect("foreign fixture grid id");
+        let unknown_grid = BeatGridId::allocate().expect("foreign fixture grid id");
 
         assert!(matches!(
             run_host_cmd(

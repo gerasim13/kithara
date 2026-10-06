@@ -110,24 +110,14 @@ pub struct PlayerConfig<S> {
     /// Default: 4.
     #[config(builder(default = consts::DEFAULT_MAX_SLOTS))]
     pub max_slots: usize,
-    /// Stable synchronization-group identity owned by this player.
+    /// Stable identity the player's deck registers under in its session.
     #[config(
-        skip = "player-owned synchronization identity",
+        skip = "player-owned deck identity",
         builder(default = allocate_grid_id()),
         patch(skip),
         debug(skip)
     )]
     pub(crate) grid_id: BeatGridId,
-    /// Stable identity of the track grid this player publishes as its own
-    /// member. Distinct from [`Self::grid_id`]: the group and the geometry it
-    /// holds are two grids, and a member is found by an identity of its own.
-    #[config(
-        skip = "player-owned track-grid identity",
-        builder(default = allocate_grid_id()),
-        patch(skip),
-        debug(skip)
-    )]
-    pub(crate) track_grid_id: BeatGridId,
     /// Shared ABR controller. When absent, the player creates its default.
     #[config(skip = "injected ABR controller", patch(skip), debug(skip))]
     pub(crate) abr: Option<Arc<AbrController>>,

@@ -1,7 +1,7 @@
 use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
-use kithara_sync::SyncAttachment;
+use kithara_warp::BeatGridId;
 
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
 use crate::{PlayError, SessionBinding};
@@ -11,7 +11,7 @@ use crate::{PlayError, SessionBinding};
 ///
 /// Queue-specific item, EQ, volume, and event APIs remain on their concrete
 /// facade. This contract contains only playback operations shared by every
-/// host member; synchronization attaches through
+/// host member; the session binds through
 /// [`PlayerControlSource::attach_session`].
 pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Stop owned work and detach the player from its playback session.
@@ -39,8 +39,7 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     fn tick(&self) -> Result<(), PlayError>;
 }
 
-/// Produces a cloneable command capability without sharing player identity or
-/// synchronization topology.
+/// Produces a cloneable command capability without sharing player identity.
 pub trait PlayerControlSource: Player {
     /// Concrete command capability retained by typed host-owned handles.
     type Control: Clone + MaybeSend + MaybeSync + 'static;
@@ -49,13 +48,11 @@ pub trait PlayerControlSource: Player {
     type Schema;
 
     /// Attaches the resident Player to its canonical session exactly once and
-    /// hands that owner the player's synchronization attachment: the group
-    /// identity, the track geometry and the executor of its staged lanes. The
-    /// session is the only owner the attachment ever exists for.
+    /// returns the identity its deck registers under there.
     fn attach_session(
         &mut self,
         binding: SessionBinding<Self::Schema>,
-    ) -> Result<SyncAttachment, PlayError>;
+    ) -> Result<BeatGridId, PlayError>;
 
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
@@ -120,14 +117,9 @@ where
     type Control = crate::player::PlayerControl<S>;
     type Schema = S;
 
-    fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<SyncAttachment, PlayError> {
+    fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<BeatGridId, PlayError> {
         self.runtime.attach_session(binding)?;
-        Ok(SyncAttachment::new(
-            self.grid_id,
-            self.sample_rate,
-            Box::new(self.runtime.core.track_grid.clone()),
-            self.runtime.core.staging.execution(),
-        ))
+        Ok(self.grid_id)
     }
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {

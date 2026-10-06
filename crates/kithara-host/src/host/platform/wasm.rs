@@ -4,16 +4,13 @@ use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{PlayError, player::PlayerControlSource};
-use kithara_sync::{
-    GroupState, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
-};
 use kithara_warp::BeatGridId;
 
 use super::super::{HeldPlayer, Host, HostOwned, owner::SessionRuntime};
 use crate::{
     HostSettings, PlayerMember,
     rt::SessionOutput,
-    session::{HostDispatcher, HostProtocol, RootView, web::WebSessionState},
+    session::{HostDispatcher, HostProtocol, HostRoot, RootView, web::WebSessionState},
     wasm::HostRoute,
 };
 type Resident = Box<dyn FnMut() -> Result<(), PlayError>>;
@@ -86,7 +83,7 @@ impl<S> Platform<S> {
     }
 
     pub(in crate::host) fn realtime(
-        group: GroupState<PlayerMember>,
+        root: HostRoot,
         view: RootView,
         _output_block_frames: Option<NonZeroU32>,
         output: SessionOutput,
@@ -96,7 +93,7 @@ impl<S> Platform<S> {
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(group, view, output, settings)?;
+            crate::session::web::spawn::<S>(root, view, output, settings)?;
         Ok((dispatcher, Self::owner(web_state)))
     }
 
@@ -142,22 +139,6 @@ impl<S> Platform<S> {
             "wasm players must be inserted from their owning Worker".into(),
         ))
     }
-
-    pub(in crate::host) fn transact(
-        _platform: &Self,
-        dispatcher: &Arc<dyn HostDispatcher<S>>,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        if matches!(&operation, SyncOperation::Topology { .. }) {
-            return Err(SyncRejected::new(
-                SyncError::CapabilityUnavailable {
-                    capability: SyncCapability::Topology,
-                },
-                operation,
-            ));
-        }
-        dispatcher.transact(operation)
-    }
 }
 
 impl<S> Host<S>
@@ -175,10 +156,9 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         self.session.platform().require_remote()?;
-        let (attachment, control) = self.bind_player(&mut player)?;
-        let grid_id = attachment.id();
-        self.attach_member(PlayerMember::new(
-            attachment,
+        let (grid_id, control) = self.bind_player(&mut player)?;
+        self.dispatcher.attach(PlayerMember::new(
+            grid_id,
             HeldPlayer::new(player.host_level()),
         ))?;
         let resident: Resident = Box::new(move || player.close());
@@ -240,7 +220,7 @@ where
         self.session
             .platform_mut()
             .release_on_session_gone(id, close_result)?;
-        let detach_result = self.detach_member(id);
+        let detach_result = self.dispatcher.detach(id);
         self.session
             .platform_mut()
             .release_on_session_gone(id, detach_result)?;
@@ -260,19 +240,16 @@ mod tests {
     use kithara_audio::ConsumerWakeMode;
     use kithara_platform::sync::Arc;
     use kithara_play::{PlayError, SessionDispatcher};
-    use kithara_sync::{
-        GroupState, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
-    };
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::BeatGridId;
 
     use super::{Host, Platform, Resident, SessionRuntime};
     use crate::{
-        HostSettings, PlayerMember,
+        HostSettings,
         host::owner::SessionRoot,
         session::{
-            HostCmd, HostDispatcher, HostReply, Reply,
-            protocol::{HostDispatchError, SyncCmd},
+            HostCmd, HostDispatcher, HostReply, HostRoot, Reply,
+            protocol::HostDispatchError,
             tests::graph::{FixtureSession, fixture_member},
         },
     };
@@ -317,7 +294,7 @@ mod tests {
     struct Dispatcher {
         session: FixtureSession,
         detach: Outcome,
-        root: RefCell<GroupState<PlayerMember>>,
+        root: RefCell<HostRoot>,
     }
 
     impl SessionDispatcher<TestPools> for Dispatcher {
@@ -336,7 +313,7 @@ mod tests {
             &self,
             cmd: HostCmd<TestPools>,
         ) -> Result<HostReply, HostDispatchError<TestPools>> {
-            let HostCmd::Sync(SyncCmd::TransactCurrent(operations)) = cmd else {
+            let HostCmd::Detach { grid_id } = cmd else {
                 panic!("unexpected fixture Host command")
             };
             match self.detach {
@@ -344,18 +321,16 @@ mod tests {
                     PlayError::SessionGone {
                         reason: "fixture detach",
                     },
-                    HostCmd::Sync(SyncCmd::TransactCurrent(operations)),
+                    HostCmd::Detach { grid_id },
                 )),
                 Outcome::OtherError => Ok(HostReply::Err(PlayError::Internal(
                     "fixture detach failed".into(),
                 ))),
-                Outcome::Ok => {
-                    let mut root = self.root.borrow_mut();
-                    let base = root.topology().expect("fixture topology").stamp();
-                    Ok(HostReply::Admission(
-                        root.transact(SyncOperation::Topology { base, operations }),
-                    ))
-                }
+                Outcome::Ok => Ok(self
+                    .root
+                    .borrow_mut()
+                    .detach(grid_id)
+                    .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok)),
             }
         }
     }
@@ -367,26 +342,15 @@ mod tests {
         let sample_rate = NonZeroU32::new(44_100).expect("fixture sample rate");
         let SessionRoot {
             id: host_id,
-            group: mut root,
+            mut root,
             view: root_view,
         } = Host::<TestPools>::session_root(
             HostSettings::builder().sample_rate(sample_rate).build(),
         )
         .expect("fixture Host session");
         let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
-        let base = root.topology().expect("fixture root topology").stamp();
-        let admission = root
-            .transact(SyncOperation::Topology {
-                base,
-                operations: Box::new([TopologyOperation::Attach {
-                    member: SyncMember::Group {
-                        alignment: None,
-                        group: Box::new(fixture_member(resident_id, sample_rate)),
-                    },
-                }]),
-            })
+        root.attach(fixture_member(resident_id, sample_rate))
             .expect("fixture resident attachment");
-        assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
 
         let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
             detach,

@@ -13,7 +13,6 @@ use kithara_platform::{
     time::Instant,
 };
 use kithara_play::{SessionSampleRate, StreamShape};
-use kithara_sync::GroupState;
 use tracing::{debug, warn};
 
 use super::{
@@ -23,9 +22,9 @@ use super::{
         SessionDispatcher,
     },
     queue::HostProtocol,
-    state::{RootView, SessionState},
+    state::{HostRoot, RootView, SessionState},
 };
-use crate::{HostSettings, PlayerMember, consts, error::PlayError, rt::SessionOutput};
+use crate::{HostSettings, consts, error::PlayError, rt::SessionOutput};
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
@@ -61,7 +60,7 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
             HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
+            HostReply::Ok => Err(PlayError::Internal(
                 "unexpected host reply for player session command".into(),
             )),
         }
@@ -127,7 +126,7 @@ fn service_due_tick<T, S>(state: &mut SessionState<T, S>, deadline: &mut Instant
 
 fn engine_thread<T, S>(
     cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
-    root: GroupState<PlayerMember>,
+    root: HostRoot,
     root_view: RootView,
     requested_max_block_frames: Option<NonZeroU32>,
     output: SessionOutput,
@@ -169,7 +168,7 @@ fn engine_thread<T, S>(
 
 fn spawn_session_client<T, S>(
     thread_name: &'static str,
-    root: GroupState<PlayerMember>,
+    root: HostRoot,
     root_view: RootView,
     requested_max_block_frames: Option<NonZeroU32>,
     output: SessionOutput,
@@ -231,7 +230,7 @@ fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> Cpa
 }
 
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
-    root: GroupState<PlayerMember>,
+    root: HostRoot,
     root_view: RootView,
     output_block_frames: Option<NonZeroU32>,
     output: SessionOutput,

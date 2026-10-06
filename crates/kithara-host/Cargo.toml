@@ -37,7 +37,7 @@ stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
 stretch-glide = ["kithara-play/stretch-glide"]
 stretch-identity = ["kithara-play/stretch-identity"]
-usdt = ["kithara-effects/usdt", "kithara-play/usdt", "kithara-sync/usdt"]
+usdt = ["kithara-effects/usdt", "kithara-play/usdt"]
 
 [dependencies]
 kithara-audio = { workspace = true, default-features = false }
@@ -52,7 +52,6 @@ kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-sync = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false }
 kithara-worker = { workspace = true, optional = true }

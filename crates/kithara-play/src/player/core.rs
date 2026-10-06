@@ -12,8 +12,7 @@ use tracing::{debug, warn};
 use super::{
     PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
-    staging::SyncStaging,
-    state::{CurrentItem, ItemPresentation, PlayerPhase, TrackGrid, Tracks},
+    state::{CurrentItem, ItemPresentation, PlayerPhase, Tracks},
     track::Behind,
 };
 use crate::{
@@ -31,17 +30,6 @@ pub(crate) struct EnqueuedItem {
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
     pub(crate) presentation: ItemPresentation,
-}
-
-/// Decoded frames a load of `duration_seconds` covers on a `rate` axis.
-///
-/// A track that states no length has none: an end nobody established is no
-/// end of file, and the geometry stays uncovered past what the model reaches
-/// rather than being cut at a number this player invented.
-fn track_frames(duration_seconds: f64, rate: u32) -> Option<u64> {
-    (duration_seconds > 0.0)
-        .then(|| num_traits::cast(duration_seconds * f64::from(rate)))
-        .flatten()
 }
 
 /// Phase-neutral state shared across every player phase.
@@ -68,10 +56,6 @@ pub(crate) struct PlayerCore<S> {
     /// Set by a seek that arrives before the player holds a slot, consumed
     /// by the load that starts playback.
     pub(crate) start_position: Mutex<Option<Duration>>,
-    /// Executor of the preparations the player's group issues for its track.
-    pub(crate) staging: SyncStaging,
-    /// Geometry this player publishes for the track it holds.
-    pub(crate) track_grid: TrackGrid,
     /// The tracks the deck holds.
     pub(crate) tracks: Mutex<Tracks>,
 }
@@ -139,9 +123,7 @@ impl<S> PlayerRuntime<S> {
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64());
         let presentation = ItemPresentation {
-            beat_grid: Arc::clone(resource.beat_grid()),
             abr_handle: resource.abr_handle(),
-            staging: resource.staging(),
         };
         let lane = resource.take_lane();
         if let Some(sample_rate) = NonZeroU32::new(self.core.engine.master_sample_rate()) {
@@ -170,25 +152,9 @@ impl<S> PlayerRuntime<S> {
         })
     }
 
-    /// The track geometry the player publishes now belongs to the item that
-    /// became current: the prepared grid, on the axis the engine decodes onto,
-    /// spans the length this load states.
-    pub(crate) fn adopt_presentation(
-        &self,
-        item_id: TrackId,
-        duration_seconds: f64,
-        presentation: ItemPresentation,
-    ) {
+    /// The item that became current publishes its ABR handle.
+    pub(crate) fn adopt_presentation(&self, presentation: ItemPresentation) {
         self.phase.lock().set_abr_handle(presentation.abr_handle);
-        self.core.staging.load(item_id, presentation.staging);
-        let rate = self.core.engine.master_sample_rate();
-        if let Some(sample_rate) = NonZeroU32::new(rate) {
-            self.core.track_grid.load(
-                &presentation.beat_grid,
-                sample_rate,
-                track_frames(duration_seconds, rate),
-            );
-        }
     }
 
     /// Terminal teardown: close the player and cancel its subtree.
@@ -202,7 +168,6 @@ impl<S> PlayerRuntime<S> {
     /// an admitted operation rather than to queue behind one. `close` still
     /// takes the gate, so the orderly path keeps its ordering.
     pub(super) fn invalidate(&self) {
-        self.core.staging.unload();
         self.finish_close();
         self.core.engine.cancel();
     }
@@ -217,8 +182,6 @@ impl<S> PlayerRuntime<S> {
         S: HasPool<f32>,
     {
         self.unarm_next();
-        self.core.staging.unload();
-        self.core.track_grid.release();
         self.core.current.clear();
         self.set_status(PlayerStatus::Unknown);
         *self.core.start_position.lock() = None;

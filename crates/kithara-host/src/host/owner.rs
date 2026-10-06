@@ -6,12 +6,7 @@ use kithara_config::{ConfigOwner, Configure};
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, SessionBinding, SessionDispatcher, player::PlayerControlSource};
-use kithara_signal::{SessionEpoch, SessionFrame};
-use kithara_sync::{
-    GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncReceipt, SyncRejected, SyncStaged,
-    SyncStatusSnapshot, SyncTransition, TopologyOperation,
-};
+use kithara_signal::SessionFrame;
 use kithara_warp::{BeatGrid, BeatGridId};
 
 #[cfg(feature = "offline")]
@@ -21,11 +16,11 @@ use super::{
     platform::{Platform, PlatformResult},
 };
 use crate::{
-    PlayerMember,
     api::{HostLevel, Tap},
     rt::SessionOutput,
     session::{
-        Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
+        Cmd, HostCmd, HostDispatcher, HostReply, HostRoot, Reply, RootView, SessionError,
+        SessionSampleRate,
     },
 };
 
@@ -89,6 +84,7 @@ impl<S> SessionRuntime<S> {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(super) const fn platform(&self) -> &Platform<S> {
         match self {
             Self::Realtime(platform) => platform,
@@ -112,7 +108,7 @@ impl<S> SessionRuntime<S> {
 
 pub(super) struct SessionRoot {
     pub(super) id: BeatGridId,
-    pub(super) group: GroupState<PlayerMember>,
+    pub(super) root: HostRoot,
     pub(super) view: RootView,
 }
 
@@ -129,34 +125,27 @@ impl<S> Host<S> {
         self.exec_host_ok(HostCmd::ApplyMix { levels }, "mix update")
     }
 
-    pub(super) fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
-        let operations = Box::new([TopologyOperation::Attach {
-            member: SyncMember::Group {
-                alignment: None,
-                group: Box::new(member),
-            },
-        }]);
-        require_topology_change(self.dispatcher.transact_current(operations))
-    }
-
+    /// Binds `player` to this Host's session, answering the identity its deck
+    /// registered under and its control.
     pub(super) fn bind_player<P>(
         &self,
         player: &mut P,
-    ) -> Result<(SyncAttachment, P::Control), PlayError>
+    ) -> Result<(BeatGridId, P::Control), PlayError>
     where
         P: PlayerControlSource<Schema = S>,
     {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        let attachment = player.attach_session(SessionBinding::new(
+        let grid_id = player.attach_session(SessionBinding::new(
             dispatcher,
             self.settings().sample_rate(),
         ))?;
-        Ok((attachment, player.control()))
+        Ok((grid_id, player.control()))
     }
 
-    pub(super) fn detach_member(&self, member: BeatGridId) -> Result<(), PlayError> {
-        let operations = Box::new([TopologyOperation::Detach { member }]);
-        require_topology_change(self.dispatcher.transact_current(operations))
+    /// Whether the session holds no deck.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.root_view.is_empty()
     }
 
     fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
@@ -173,7 +162,7 @@ impl<S> Host<S> {
         match self.dispatcher.exec_host(cmd).map_err(PlayError::from)? {
             HostReply::Ok => Ok(()),
             HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(format!(
+            HostReply::Play(_) => Err(PlayError::Internal(format!(
                 "unexpected host reply for {what}"
             ))),
         }
@@ -254,16 +243,10 @@ impl<S> Host<S> {
 
     pub(super) fn session_root(settings: HostSettings) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
-        let group = GroupState::unavailable(
-            grid_id,
-            settings.sample_rate(),
-            SessionEpoch::new(0),
-            SyncMemberKind::Group,
-            SyncMode::Off,
-        );
-        let view = RootView::new(&group, settings);
+        let root = HostRoot::new(grid_id, settings.sample_rate());
+        let view = RootView::new(&root, settings);
         Ok(SessionRoot {
-            group,
+            root,
             view,
             id: grid_id,
         })
@@ -277,19 +260,10 @@ impl<S> Host<S> {
         if player.host_id != self.id {
             return Err(PlayError::ForeignSession);
         }
-        let topology = self.topology().map_err(SessionError::from)?;
-        if topology
-            .members()
-            .iter()
-            .any(|member| member.grid().id() == player.id())
-        {
+        if self.root_view.holds(player.id()) {
             return Ok(());
         }
-        Err(SessionError::from(SyncError::MemberNotFound {
-            group_id: self.id,
-            member_id: player.id(),
-        })
-        .into())
+        Err(SessionError::DeckNotFound(player.id()).into())
     }
 }
 
@@ -314,7 +288,7 @@ where
                 let settings = Live::new(settings)?;
                 let root = Self::session_root(*settings.config())?;
                 let (dispatcher, platform) = Platform::realtime(
-                    root.group,
+                    root.root,
                     root.view.clone(),
                     output_block_frames,
                     SessionOutput::new(limiter),
@@ -333,7 +307,7 @@ where
                 let platform = Platform::offline().resolve()?;
                 let root = Self::session_root(config.settings())?;
                 let (dispatcher, runtime) =
-                    OfflineRuntime::new(config, root.group, root.view.clone())?;
+                    OfflineRuntime::new(config, root.root, root.view.clone())?;
                 Ok(Self::owner(
                     root.id,
                     root.view,
@@ -383,96 +357,13 @@ impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
     }
 }
 
-impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
-    type NestedGroup = PlayerMember;
-
-    /// The Host's session transport owns its axis and tempo; no parent fact
-    /// can reach it.
-    fn stage_fact(&self, _fact: ParentFact) -> Result<SyncStaged, SyncError> {
-        Err(SyncError::SessionRoot { group_id: self.id })
-    }
-
-    /// Nothing is ever staged on a session root, so nothing is applied.
-    fn apply_staged(&mut self, _staged: SyncStaged) -> SyncTransition {
-        SyncTransition::default()
-    }
-
-    fn transact(
-        &mut self,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        Platform::transact(self.session.platform(), &self.dispatcher, operation)
-    }
-
-    delegate::delegate! {
-        to self.root_view {
-            fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
-            fn status(&self) -> SyncStatusSnapshot;
-        }
-        to self.dispatcher {
-            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
-        }
-    }
-}
-
-fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(), PlayError> {
-    match result {
-        Ok(SyncAdmission::TopologyChanged { .. }) => Ok(()),
-        Ok(_) => Err(PlayError::Internal(
-            "host topology operation did not change topology".into(),
-        )),
-        Err(error) => Err(error),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_sync::{ParentGridUpdate, ParentWithdrawal, SessionAxisUpdate};
     use kithara_test_utils::{bufpool::TestPools, kithara};
-    use kithara_warp::{BeatGridStamp, MapAxis, SessionAnchor, SessionBeat};
 
     use super::*;
-
-    #[kithara::test(native, flash(false))]
-    fn a_host_is_a_session_root_and_refuses_every_parent_fact() {
-        let host =
-            Host::<TestPools>::new(HostConfig::builder().build()).expect("fixture realtime Host");
-        let grid = host.snapshot();
-        let MapAxis::Session(axis) = grid.axis() else {
-            panic!("a Host grid lives on the session axis");
-        };
-        let axis_update = SessionAxisUpdate::new(axis);
-        let segment = ParentGridUpdate::new(
-            BeatGridStamp::new(
-                BeatGridId::allocate().expect("parent identity"),
-                grid.revision(),
-            ),
-            axis.epoch(),
-            SessionAnchor::new(
-                SessionFrame::new(0),
-                SessionBeat::default(),
-                2.0,
-                axis.sample_rate(),
-            )
-            .expect("parent anchor"),
-            None,
-        );
-        let refusal = SyncError::SessionRoot {
-            group_id: host.id(),
-        };
-
-        let withdrawal = ParentWithdrawal::new(segment.parent(), SessionFrame::new(0), None);
-        for fact in [
-            ParentFact::Axis(axis_update),
-            ParentFact::Segment(segment),
-            ParentFact::Withdrawn(withdrawal),
-        ] {
-            assert_eq!(host.stage_fact(fact).err(), Some(refusal.clone()));
-        }
-        assert_eq!(host.snapshot().stamp(), grid.stamp());
-    }
 
     #[kithara::test]
     fn realtime_config_preserves_output_block_default_and_allows_override() {

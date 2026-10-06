@@ -278,7 +278,7 @@ fn player_keeps_explicit_worker_and_shared_pools() {
 }
 
 #[kithara::test]
-fn a_player_hands_its_sync_attachment_only_to_the_first_session_it_binds() {
+fn a_player_binds_only_the_first_session_and_registers_its_deck_there() {
     let grid_id = BeatGridId::allocate().expect("fixture grid id");
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
@@ -288,15 +288,15 @@ fn a_player_hands_its_sync_attachment_only_to_the_first_session_it_binds() {
             .build(),
     );
 
-    let attachment = PlayerControlSource::attach_session(&mut player, mock::session())
+    let deck = PlayerControlSource::attach_session(&mut player, mock::session())
         .expect("the first session binds the player");
-    assert_eq!(attachment.id(), grid_id);
+    assert_eq!(deck, grid_id);
     assert!(
         matches!(
             PlayerControlSource::attach_session(&mut player, mock::session()),
             Err(PlayError::SessionAlreadyBound)
         ),
-        "no second owner can take the player's synchronization group"
+        "no second session can bind the player"
     );
 }
 

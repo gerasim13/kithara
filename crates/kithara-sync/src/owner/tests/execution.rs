@@ -12,14 +12,14 @@ use kithara_test_utils::kithara;
 use kithara_warp::{BeatGridId, WarpPlan};
 
 use super::{
-    TestGrid, TestGroup,
-    modes::{Group, rate, synced_deck},
+    TestGroup,
+    modes::{Group, synced_deck},
     preparation::{asset_grid, attach_grid, cue, window},
 };
 use crate::{
-    ExecutedGroup, LoadGeneration, ReceiptSink, StagePort, SyncAdmission, SyncAttachment,
-    SyncCapability, SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup,
-    SyncOperation, SyncReceipt,
+    ExecutedGroup, LoadGeneration, ReceiptSink, StagePort, SyncAdmission, SyncCapability,
+    SyncError, SyncExecutionReject, SyncExecutionStamp, SyncExecutor, SyncGroup, SyncOperation,
+    SyncReceipt,
 };
 
 /// The first session frame no caller can use.
@@ -251,31 +251,4 @@ async fn a_staged_preparation_needs_an_owner_and_a_stageable_load() {
             capability: SyncCapability::Alignment,
         }
     );
-}
-
-/// A group built from a player's attachment owns the track geometry as its
-/// only member from birth, so no load has to change its topology.
-#[kithara::test]
-fn an_attached_group_owns_its_track_geometry_as_its_only_member() {
-    let deck = BeatGridId::allocate().expect("grid id");
-    let track = BeatGridId::allocate().expect("grid id");
-    let executor = SyncExecutor::<Port>::new(track, None, CancelToken::root());
-    let group = SyncAttachment::new(
-        deck,
-        rate(48_000),
-        Box::new(TestGrid(asset_grid(track, 960_000, 24_000))),
-        executor.execution(),
-    )
-    .into_group::<TestGroup>();
-
-    let topology = group.topology().expect("an attached group has a topology");
-    assert_eq!(topology.group_grid().id(), deck);
-    let [member] = topology.members() else {
-        panic!("the group owns exactly its track grid");
-    };
-    assert!(
-        member.group_topology().is_none(),
-        "a track grid is an ordinary member, not a nested group"
-    );
-    assert_eq!(member.grid().id(), track);
 }

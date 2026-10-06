@@ -8,10 +8,7 @@ pub(crate) use kithara_play::{
     SessionSampleRate,
 };
 use kithara_signal::SessionFrame;
-use kithara_sync::{
-    SyncAdmission, SyncError, SyncOperation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
-    TopologyOperation,
-};
+use kithara_warp::BeatGridId;
 
 use crate::{
     PlayerMember,
@@ -27,7 +24,12 @@ pub(crate) type StartStreamFn<T> =
 
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
-    Sync(SyncCmd),
+    Attach {
+        member: PlayerMember,
+    },
+    Detach {
+        grid_id: BeatGridId,
+    },
     ApplyMix {
         levels: Box<[HostLevel]>,
     },
@@ -45,16 +47,8 @@ pub(crate) enum HostCmd<S> {
     Shutdown,
 }
 
-pub(crate) enum SyncCmd {
-    Transact(SyncOperation<PlayerMember>),
-    TransactCurrent(Box<[TopologyOperation<PlayerMember>]>),
-    Acknowledge(SyncReceipt),
-}
-
 pub(crate) enum HostReply {
     Play(Reply),
-    Admission(Result<SyncAdmission, SyncRejected<PlayerMember>>),
-    Acknowledged(Result<SyncStatusSnapshot, SyncError>),
     Ok,
     Err(PlayError),
 }
@@ -98,64 +92,37 @@ impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
 }
 
 pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
-    fn acknowledge(&self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError> {
-        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(receipt))) {
-            Ok(HostReply::Acknowledged(result)) => result,
-            Err(error) => {
-                let (reason, command) = error.into();
-                if command.as_deref().is_some_and(|command| {
-                    matches!(command, HostCmd::Sync(SyncCmd::Acknowledge(_)))
-                }) {
-                    return Err(SyncError::OwnerUnavailable);
-                }
-                owner_thread_fail_fast(&reason)
-            }
-            Ok(_) => owner_thread_fail_fast("unexpected acknowledgement reply"),
-        }
+    /// Adds one deck to the session on its owner thread.
+    fn attach(&self, member: PlayerMember) -> Result<(), PlayError> {
+        change_members(self, HostCmd::Attach { member })
+    }
+
+    /// Removes the deck `grid_id` from the session on its owner thread.
+    fn detach(&self, grid_id: BeatGridId) -> Result<(), PlayError> {
+        change_members(self, HostCmd::Detach { grid_id })
     }
 
     fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>>;
+}
 
-    fn transact(
-        &self,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        match self.exec_host(HostCmd::Sync(SyncCmd::Transact(operation))) {
-            Ok(HostReply::Admission(result)) => result,
-            Err(error) => {
-                let (reason, command) = error.into();
-                if let Some(command) = command
-                    && let HostCmd::Sync(SyncCmd::Transact(operation)) = *command
-                {
-                    return Err(SyncRejected::new(SyncError::OwnerUnavailable, operation));
-                }
-                owner_thread_fail_fast(&reason)
+/// Runs one membership change on the owner thread. A change that never
+/// reached it fails with the reason; one the owner took and never answered
+/// leaves the deck's ownership unknown, so the process stops.
+fn change_members<S, D>(dispatcher: &D, cmd: HostCmd<S>) -> Result<(), PlayError>
+where
+    D: HostDispatcher<S> + ?Sized,
+{
+    match dispatcher.exec_host(cmd) {
+        Ok(HostReply::Ok) => Ok(()),
+        Ok(HostReply::Err(error)) => Err(error),
+        Err(error) => {
+            let (reason, command) = error.into();
+            if command.is_some() {
+                return Err(reason);
             }
-            Ok(_) => owner_thread_fail_fast("unexpected transaction reply"),
+            owner_thread_fail_fast(&reason)
         }
-    }
-
-    fn transact_current(
-        &self,
-        operations: Box<[TopologyOperation<PlayerMember>]>,
-    ) -> Result<SyncAdmission, PlayError> {
-        match self.exec_host(HostCmd::Sync(SyncCmd::TransactCurrent(operations))) {
-            Ok(HostReply::Admission(result)) => result.map_err(|rejected| {
-                let (error, _) = <(SyncError, SyncOperation<PlayerMember>)>::from(rejected);
-                SessionError::from(error).into()
-            }),
-            Ok(HostReply::Err(error)) => Err(error),
-            Err(error) => {
-                let (reason, command) = error.into();
-                if command.as_deref().is_some_and(|command| {
-                    matches!(command, HostCmd::Sync(SyncCmd::TransactCurrent(_)))
-                }) {
-                    return Err(reason);
-                }
-                owner_thread_fail_fast(&reason)
-            }
-            Ok(_) => owner_thread_fail_fast("unexpected current-topology transaction reply"),
-        }
+        Ok(HostReply::Play(_)) => owner_thread_fail_fast("unexpected membership reply"),
     }
 }
 

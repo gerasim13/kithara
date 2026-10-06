@@ -15,9 +15,9 @@ pub mod wasm;
 
 pub use api::{CrossfaderBus, HostLevel, Tap, crossfader_gain};
 pub use error::PlayError;
+pub(crate) use host::PlayerMember;
 pub use host::{
     Host, HostConfig, HostOwned, HostSettings, HostSettingsChange, HostSettingsControl,
-    PlayerMember,
 };
 pub use kithara_play::SessionSampleRate;
 pub use rt::{MetronomeConfig, MetronomeConfigChange, MetronomeConfigControl};

@@ -1,30 +1,28 @@
 use std::fmt;
 
-use kithara_sync::{
-    ExecutedGroup, GroupState, ParentFact, SyncAdmission, SyncAttachment, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncReceipt, SyncRejected, SyncStaged, SyncStatusSnapshot,
-    SyncTransition,
-};
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
+use kithara_warp::BeatGridId;
 
 use super::HeldPlayer;
 
-/// One deck as the Host's session group owns it: the synchronization group
-/// its player attached, and the deck's Host level.
-pub struct PlayerMember {
-    group: ExecutedGroup<GroupState<Self>>,
+/// One deck as the Host's session holds it: the identity its player
+/// registered under, and the deck's Host level.
+pub(crate) struct PlayerMember {
+    grid_id: BeatGridId,
     player: HeldPlayer,
 }
 
 impl PlayerMember {
-    /// The member of a player that attached `attachment`, the Host holding
-    /// `player` of it.
+    /// The deck a player registered as `grid_id`, the Host holding `player`
+    /// of it.
     #[must_use]
-    pub(crate) fn new(attachment: SyncAttachment, player: HeldPlayer) -> Self {
-        Self {
-            group: attachment.into_group(),
-            player,
-        }
+    pub(crate) const fn new(grid_id: BeatGridId, player: HeldPlayer) -> Self {
+        Self { grid_id, player }
+    }
+
+    /// The identity the deck registered under.
+    #[must_use]
+    pub(crate) const fn grid_id(&self) -> BeatGridId {
+        self.grid_id
     }
 
     delegate::delegate! {
@@ -42,34 +40,7 @@ impl fmt::Debug for PlayerMember {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PlayerMember")
-            .field("grid_id", &self.id())
+            .field("grid_id", &self.grid_id)
             .finish_non_exhaustive()
-    }
-}
-
-impl BeatGrid for PlayerMember {
-    delegate::delegate! {
-        to self.group {
-            fn id(&self) -> BeatGridId;
-            fn snapshot(&self) -> BeatGridSnapshot;
-        }
-    }
-}
-
-impl SyncGroup for PlayerMember {
-    type NestedGroup = Self;
-
-    delegate::delegate! {
-        to self.group {
-            fn stage_fact(&self, fact: ParentFact) -> Result<SyncStaged, SyncError>;
-            fn status(&self) -> SyncStatusSnapshot;
-            fn apply_staged(&mut self, staged: SyncStaged) -> SyncTransition;
-            fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
-            fn transact(
-                &mut self,
-                operation: SyncOperation<Self>,
-            ) -> Result<SyncAdmission, SyncRejected<Self>>;
-            fn acknowledge(&mut self, receipt: SyncReceipt) -> Result<SyncStatusSnapshot, SyncError>;
-        }
     }
 }

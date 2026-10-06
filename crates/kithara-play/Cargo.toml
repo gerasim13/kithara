@@ -71,7 +71,6 @@ usdt = [
     "kithara-effects/usdt",
     "kithara-render/usdt",
     "kithara-test-utils/usdt",
-    "kithara-sync/usdt",
     "kithara-warp/usdt",
     "kithara-worker/usdt",
 ]
@@ -83,7 +82,6 @@ perf = [
     "hotpath/hotpath",
     "kithara-audio/perf",
     "kithara-decode/perf",
-    "kithara-sync/perf",
     "kithara-warp/perf",
     "kithara-worker/perf",
 ]
@@ -112,7 +110,6 @@ kithara-platform = { workspace = true }
 kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
-kithara-sync = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }

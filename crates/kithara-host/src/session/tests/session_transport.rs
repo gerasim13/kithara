@@ -74,7 +74,7 @@ fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<Ses
     {
         HostReply::Ok => {}
         HostReply::Err(error) => panic!("tempo command failed: {error}"),
-        _ => panic!("unexpected tempo command reply"),
+        HostReply::Play(_) => panic!("unexpected tempo command reply"),
     }
 }
 

@@ -16,8 +16,10 @@ use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{DeckMixerConfig, SessionSampleRate, StreamShape, session::RegisteredPlayer};
-use kithara_sync::{GroupState, SyncError, SyncGroup, SyncGroupSnapshot, SyncStatusSnapshot};
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
+use kithara_signal::SessionEpoch;
+use kithara_warp::{
+    BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, MapAxis, SessionAxis,
+};
 use tracing::{debug, warn};
 
 use super::{
@@ -167,33 +169,121 @@ impl Taps {
     }
 }
 
+/// The Host's session grid, which its transport publishes into, and the
+/// decks attached to the session.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+pub(crate) struct HostRoot {
+    /// The session grid the transport last committed.
+    #[field(get, vis = "pub(crate)")]
+    grid: BeatGridSnapshot,
+    members: Vec<PlayerMember>,
+}
+
+impl HostRoot {
+    /// A root `id` with no deck, its grid not yet live on a session axis at
+    /// `sample_rate`.
+    pub(crate) fn new(id: BeatGridId, sample_rate: NonZeroU32) -> Self {
+        Self {
+            grid: BeatGridSnapshot::unavailable(
+                id,
+                BeatGridRevision::first(),
+                MapAxis::Session(SessionAxis::new(sample_rate, SessionEpoch::new(0))),
+            ),
+            members: Vec::new(),
+        }
+    }
+
+    pub(crate) fn id(&self) -> BeatGridId {
+        self.grid.id()
+    }
+
+    /// Takes the session grid the transport committed.
+    pub(super) fn publish(&mut self, grid: BeatGridSnapshot) {
+        self.grid = grid;
+    }
+
+    /// Takes the grid of a route boundary: a later revision `stamp` names,
+    /// on the session axis of `epoch` at `sample_rate`, with no geometry
+    /// until the transport commits one.
+    pub(super) fn publish_unavailable(
+        &mut self,
+        stamp: BeatGridStamp,
+        sample_rate: NonZeroU32,
+        epoch: SessionEpoch,
+    ) {
+        self.publish(BeatGridSnapshot::unavailable(
+            stamp.grid_id(),
+            stamp.revision(),
+            MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
+        ));
+    }
+
+    pub(super) fn member(&self, grid_id: BeatGridId) -> Option<&PlayerMember> {
+        self.members
+            .iter()
+            .find(|member| member.grid_id() == grid_id)
+    }
+
+    /// Adds one deck.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::DeckAttached`] when its identity is already
+    /// in the session.
+    pub(crate) fn attach(&mut self, member: PlayerMember) -> Result<(), SessionError> {
+        if self.member(member.grid_id()).is_some() {
+            return Err(SessionError::DeckAttached(member.grid_id()));
+        }
+        self.members.push(member);
+        Ok(())
+    }
+
+    /// Removes the deck `grid_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::DeckNotFound`] when no deck has that identity.
+    pub(crate) fn detach(&mut self, grid_id: BeatGridId) -> Result<(), SessionError> {
+        let index = self
+            .members
+            .iter()
+            .position(|member| member.grid_id() == grid_id)
+            .ok_or(SessionError::DeckNotFound(grid_id))?;
+        self.members.remove(index);
+        Ok(())
+    }
+
+    fn decks(&self) -> Box<[BeatGridId]> {
+        self.members.iter().map(PlayerMember::grid_id).collect()
+    }
+}
+
 struct RootSnapshot {
+    decks: Box<[BeatGridId]>,
     grid: BeatGridSnapshot,
     settings: HostSettings,
     stream_shape: Option<StreamShape>,
-    topology: Result<SyncGroupSnapshot, SyncError>,
     sample_rate: SessionSampleRate,
-    status: SyncStatusSnapshot,
 }
 
 #[derive(Clone)]
 pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
 
 impl RootView {
-    pub(crate) fn new(root: &GroupState<PlayerMember>, settings: HostSettings) -> Self {
+    pub(crate) fn new(root: &HostRoot, settings: HostSettings) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
             settings,
-            grid: root.snapshot(),
+            decks: root.decks(),
+            grid: root.grid.clone(),
             stream_shape: None,
             sample_rate: SessionSampleRate::new(None, settings.sample_rate().get()),
-            status: root.status(),
-            topology: root.topology(),
         })))
     }
 
     fn publish(
         &self,
-        root: &GroupState<PlayerMember>,
+        root: &HostRoot,
         settings: HostSettings,
         stream_shape: Option<StreamShape>,
         sample_rate: SessionSampleRate,
@@ -202,10 +292,19 @@ impl RootView {
             settings,
             stream_shape,
             sample_rate,
-            grid: root.snapshot(),
-            status: root.status(),
-            topology: root.topology(),
+            decks: root.decks(),
+            grid: root.grid.clone(),
         }));
+    }
+
+    /// Whether the deck `grid_id` is in the session.
+    pub(crate) fn holds(&self, grid_id: BeatGridId) -> bool {
+        self.0.load().decks.contains(&grid_id)
+    }
+
+    /// Whether the session holds no deck.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.load().decks.is_empty()
     }
 
     delegate::delegate! {
@@ -222,19 +321,13 @@ impl RootView {
             #[call(load)]
             #[expr($.stream_shape)]
             pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
-            #[call(load)]
-            #[expr($.status)]
-            pub(crate) fn status(&self) -> SyncStatusSnapshot;
-            #[call(load)]
-            #[expr($.topology.clone())]
-            pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
         }
     }
 }
 
 pub(crate) struct SessionState<T, S> {
     pub(super) graph: GraphRegistry<S>,
-    pub(super) root: GroupState<PlayerMember>,
+    pub(super) root: HostRoot,
     pub(super) output: SessionOutput,
     pub(super) session_metronome_node_id: Option<NodeID>,
     pub(super) ctx: Option<FirewheelContext>,
@@ -281,7 +374,7 @@ impl<T, S> SessionState<T, S> {
     /// the output at the sample rate its settings name.
     #[must_use]
     pub(crate) fn new<F>(
-        root: GroupState<PlayerMember>,
+        root: HostRoot,
         root_view: RootView,
         requested_max_block_frames: Option<NonZeroU32>,
         requested_declick_frames: Option<NonZeroU32>,
@@ -355,12 +448,9 @@ pub(super) fn register_player<T, S>(
         .ok_or(SessionError::PlayerIdExhausted)?;
     let master_volume = state
         .root
-        .with_group(grid_id, PlayerMember::host_level)
-        .ok_or_else(|| {
-            SessionError::Graph(
-                "player must be attached to the host before graph registration".to_owned(),
-            )
-        })?;
+        .member(grid_id)
+        .map(PlayerMember::host_level)
+        .ok_or(SessionError::DeckNotFound(grid_id))?;
     if !master_volume.is_finite() || !(0.0..=1.0).contains(&master_volume) {
         return Err(SessionError::MasterVolumeOutOfRange {
             player_id,

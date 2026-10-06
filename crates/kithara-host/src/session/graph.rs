@@ -10,7 +10,7 @@ use kithara_effects::{
     eq::{EqBandConfig, EqConfig},
 };
 use kithara_output::OutputGroup;
-use kithara_warp::{BeatGrid, MapAxis};
+use kithara_warp::MapAxis;
 use tracing::{debug, warn};
 
 use super::{
@@ -313,17 +313,17 @@ pub(super) mod lifecycle {
             let session_stamp = session_grid_generation
                 .stamp()
                 .map_err(|error| graph_state(error.message()))?;
-            let MapAxis::Session(axis) = state.root.snapshot().axis() else {
+            let MapAxis::Session(axis) = state.root.grid().axis() else {
                 return Err(graph_state(
                     "session host published a non-session grid during idle shutdown",
                 ));
             };
             let sample_rate = axis.sample_rate();
-            state.root.publish_unavailable_grid(
+            state.root.publish_unavailable(
                 session_stamp,
                 sample_rate,
                 session_grid_generation.epoch(),
-            )?;
+            );
             state.publish_root();
             state.reserved_session_grid = Some(session_grid_generation);
             state
@@ -629,8 +629,8 @@ mod tests {
         kithara,
     };
     use kithara_warp::{
-        Beat, BeatGrid, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable,
-        MapAxis, MapPoint, MapPosition, SessionAxis,
+        Beat, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable, MapAxis,
+        MapPoint, MapPosition, SessionAxis,
     };
 
     use super::*;
@@ -978,7 +978,7 @@ mod tests {
         });
         let mut state = test_state(start_test_stream);
         let first_player = register(&mut state);
-        let initial = state.root.snapshot();
+        let initial = state.root.grid().clone();
         assert_eq!(initial.revision(), BeatGridRevision::first());
         assert_eq!(
             initial.state(),
@@ -1002,7 +1002,7 @@ mod tests {
         );
         start(&mut state, first_player);
         let before = render_and_read_session_grid(&mut state);
-        let first_live = state.root.snapshot();
+        let first_live = state.root.grid().clone();
         assert_eq!(first_live, before.session_grid());
         assert_eq!(
             first_live.revision(),
@@ -1018,7 +1018,7 @@ mod tests {
 
         invalidate_audio_route(&mut state, "deferred route before idle teardown")
             .expect("the route restarts");
-        let route_boundary = state.root.snapshot();
+        let route_boundary = state.root.grid().clone();
         assert_eq!(
             state
                 .reserved_session_grid
@@ -1030,7 +1030,7 @@ mod tests {
         assert!(state.stream_needs_restart);
 
         unregister(&mut state, first_player);
-        let unavailable = state.root.snapshot();
+        let unavailable = state.root.grid().clone();
         assert_eq!(
             unavailable.revision(),
             first_live
@@ -1074,7 +1074,7 @@ mod tests {
         let second_player = register(&mut state);
         start(&mut state, second_player);
         let after = render_and_read_session_grid(&mut state);
-        let second_live = state.root.snapshot();
+        let second_live = state.root.grid().clone();
         assert_eq!(second_live, after.session_grid());
         assert_eq!(
             second_live.revision(),
@@ -1116,7 +1116,7 @@ mod tests {
         let live = render_and_read_session_grid(&mut state);
 
         invalidate_audio_route(&mut state, "test route restart").expect("the route restarts");
-        let reserved = state.root.snapshot();
+        let reserved = state.root.grid().clone();
         assert!(reserved.revision() > live.session_grid_stamp().revision());
         assert_eq!(
             state
@@ -1137,7 +1137,7 @@ mod tests {
             Reply::Err(SessionError::TransportNotProcessed)
         ));
         assert_eq!(
-            state.root.snapshot(),
+            state.root.grid().clone(),
             reserved,
             "a stale transport observation must not replace the route reservation"
         );
@@ -1149,7 +1149,7 @@ mod tests {
             "a change for the next block waits in the queue across a route restart"
         );
         assert_eq!(
-            state.root.snapshot(),
+            state.root.grid().clone(),
             reserved,
             "a queued change must not touch an unfinished route boundary"
         );
@@ -1189,7 +1189,7 @@ mod tests {
             Reply::Err(error) => panic!("restarted transport snapshot failed: {error}"),
             _ => panic!("restarted transport query returned an unexpected reply"),
         };
-        let published = state.root.snapshot();
+        let published = state.root.grid().clone();
         assert_eq!(published.state(), BeatGridState::Live);
         let MapAxis::Session(reserved_axis) = reserved.axis() else {
             panic!("the route reservation uses the session axis")
@@ -1218,7 +1218,7 @@ mod tests {
 
         unregister(&mut state, player);
 
-        let unavailable = state.root.snapshot();
+        let unavailable = state.root.grid().clone();
         assert!(unavailable.revision() > reserved.revision());
         assert_eq!(
             unavailable.state(),

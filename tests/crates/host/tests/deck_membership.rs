@@ -8,7 +8,6 @@ use kithara::{
         BufferGeometryError, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         SessionError,
     },
-    sync::SyncGroup,
     warp::WarpConfig,
 };
 use kithara_integration_tests::{offline::OfflineHostHarness, smoothing::consts};
@@ -48,7 +47,7 @@ async fn failed_deck_preparation_releases_host_membership() {
         )))
     ));
     host.with(|host| {
-        assert!(host.topology().expect("host topology").members().is_empty());
+        assert!(host.is_empty());
         assert!(
             host.output_sample_rate()
                 .expect("host sample rate")

@@ -1,7 +1,6 @@
 use firewheel::FirewheelContext;
 use kithara_config::ConfigOwner;
-use kithara_sync::{ParentGridUpdate, SyncError};
-use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
+use kithara_warp::{BeatGridState, MapAxis};
 
 use super::{
     commit::{SessionGridGeneration, TransportObservation},
@@ -37,7 +36,7 @@ pub(crate) fn prepare_route_restart<T, S>(
         .as_ref()
         .ok_or(SessionError::NoContext)?
         .is_active();
-    let current = state.root.snapshot();
+    let current = state.root.grid();
     let MapAxis::Session(axis) = current.axis() else {
         return Err(SessionError::Graph(
             "session host published a non-session grid axis".to_owned(),
@@ -81,7 +80,7 @@ pub(crate) fn prepare_route_restart<T, S>(
         let sample_rate = state.settings.config().sample_rate();
         state
             .root
-            .publish_unavailable_grid(stamp, sample_rate, target.epoch())?;
+            .publish_unavailable(stamp, sample_rate, target.epoch());
         state.publish_root();
         state.reserved_session_grid = Some(target);
         target
@@ -130,8 +129,7 @@ fn finish_route_restart<T, S>(
         .promote(actual)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     if promoted != target {
-        let published = state.root.snapshot();
-        let MapAxis::Session(published_axis) = published.axis() else {
+        let MapAxis::Session(published_axis) = state.root.grid().axis() else {
             return Err(SessionError::Graph(
                 "session host published a non-session grid axis".to_owned(),
             ));
@@ -139,11 +137,9 @@ fn finish_route_restart<T, S>(
         let stamp = promoted
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        state.root.publish_unavailable_grid(
-            stamp,
-            published_axis.sample_rate(),
-            promoted.epoch(),
-        )?;
+        state
+            .root
+            .publish_unavailable(stamp, published_axis.sample_rate(), promoted.epoch());
         state.publish_root();
         state.reserved_session_grid = Some(promoted);
     }
@@ -172,48 +168,35 @@ fn refresh_observation<T, S>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
-    publish_committed(state, &observation)?;
+    publish_committed(state, &observation);
     Ok(observation)
 }
 
-/// Brings the root group up to what the render graph has committed: on every
-/// session tick and offline block, and before a synchronization command reads
-/// it, so the Host grid follows the tempo it clicks with no deck ticking.
+/// Brings the Host grid up to what the render graph has committed: on every
+/// session tick and offline block, so the Host grid follows the tempo it
+/// clicks with no deck ticking.
 ///
 /// Nothing is committed while no graph runs or a route restart holds the
 /// session grid.
-///
-/// # Errors
-///
-/// Returns the root group's refusal of the committed session grid.
-pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) -> Result<(), SyncError> {
+pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) {
     if state.reserved_session_grid.is_some() {
-        return Ok(());
+        return;
     }
     let Some(control) = state.transport_control.as_mut() else {
-        return Ok(());
+        return;
     };
     let observation = control.observation();
-    publish_committed(state, &observation)
+    publish_committed(state, &observation);
 }
 
-/// Publishes the committed session grid on the root group; idempotent.
-fn publish_committed<T, S>(
-    state: &mut SessionState<T, S>,
-    observation: &TransportObservation,
-) -> Result<(), SyncError> {
+/// Publishes the committed session grid as the Host grid; idempotent.
+fn publish_committed<T, S>(state: &mut SessionState<T, S>, observation: &TransportObservation) {
     if let Some(snapshot) = observation.snapshot()
-        && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
+        && state.root.grid().stamp() != snapshot.session_grid_stamp()
     {
-        state.root.publish_session(ParentGridUpdate::new(
-            snapshot.session_grid_stamp(),
-            snapshot.session_epoch(),
-            snapshot.anchor(),
-            None,
-        ))?;
+        state.root.publish(snapshot.session_grid());
         state.publish_root();
     }
-    Ok(())
 }
 
 pub(crate) fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {

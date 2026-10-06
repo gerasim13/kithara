@@ -21,7 +21,7 @@ pub(crate) use protocol::{
     Cmd, HostCmd, HostDispatcher, HostReply, Reply, SessionError, SessionSampleRate,
 };
 pub(crate) use queue::HostProtocol;
-pub(crate) use state::RootView;
+pub(crate) use state::{HostRoot, RootView};
 pub use transport::TransportEvent;
 pub(crate) use transport::{Span, applied_spans};
 #[cfg(target_arch = "wasm32")]

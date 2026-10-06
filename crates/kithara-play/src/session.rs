@@ -10,7 +10,6 @@ mod wire {
         bridge::{SharedEq, SlotControl},
         rt::{BufferGeometryError, DeckMixerConfig, StreamShape},
     };
-    use kithara_sync::{SyncError, SyncReceipt};
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
     use crate::api::{SessionDuckingMode, SessionTransportSnapshot, SlotId};
@@ -57,8 +56,12 @@ mod wire {
         HostQueueFull,
         #[error(transparent)]
         BufferGeometry(#[from] BufferGeometryError),
-        #[error(transparent)]
-        Sync(#[from] SyncError),
+        #[error("deck {0:?} is not in this session")]
+        DeckNotFound(BeatGridId),
+        #[error("deck {0:?} is already in this session")]
+        DeckAttached(BeatGridId),
+        #[error("deck {0:?} still has its graph registration")]
+        DeckRegistered(BeatGridId),
         #[error(transparent)]
         BeatGridIdAllocation(#[from] BeatGridIdAllocationError),
         #[error("stream stopped: {reason}; restart failed: {source}")]
@@ -114,11 +117,6 @@ mod wire {
         QuerySampleRate,
         QueryStreamShape,
         Tick,
-        /// Reports one executor outcome to the group that issued the
-        /// preparation; answered with the owner's own acknowledgement result.
-        AcknowledgeSync {
-            receipt: SyncReceipt,
-        },
     }
 
     /// One player's session-input level in a batch update. `level` is a linear
@@ -206,7 +204,6 @@ mod handle {
         sync::{Arc, Mutex},
     };
     use kithara_render::rt::{DeckMixerConfig, StreamShape};
-    use kithara_sync::SyncReceipt;
     use kithara_warp::BeatGridId;
 
     use super::wire::{
@@ -506,16 +503,6 @@ mod handle {
 
         pub fn tick(&self) -> Result<(), PlayError> {
             self.exec_ok(Cmd::Tick).map(|_| ())
-        }
-
-        /// Delivers one executor receipt to the session's group owner.
-        ///
-        /// # Errors
-        ///
-        /// Returns [`PlayError::SessionUnbound`] before the player joins a
-        /// session, and the owner's refusal of a stale or unknown receipt.
-        pub fn acknowledge_sync(&self, receipt: SyncReceipt) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::AcknowledgeSync { receipt }).map(|_| ())
         }
 
         pub fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {

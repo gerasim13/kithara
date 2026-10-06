@@ -8,7 +8,6 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_play::PlayError;
-use kithara_sync::{GroupState, SyncError};
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
 use thiserror::Error;
 use tracing::warn;
@@ -18,13 +17,13 @@ use super::{
         dispatch::run_host_cmd,
         protocol::{HostCmd, HostCmdMsg, HostReply},
         queue::{HostProtocol, settle_receipts},
-        state::{RootView, SessionState, ensure_ctx},
+        state::{HostRoot, RootView, SessionState, ensure_ctx},
         transport,
     },
     OfflineSessionClient,
     backend::{BackendConfig, OfflineStream},
 };
-use crate::{HostSettings, PlayerMember, rt::SessionOutput};
+use crate::{HostSettings, rt::SessionOutput};
 
 pub(crate) mod consts {
     pub(crate) const CHANNELS: usize = 2;
@@ -178,7 +177,7 @@ where
 pub(crate) fn spawn<S>(
     dispatcher: &Dispatcher,
     task_config: TaskConfig,
-    root: GroupState<PlayerMember>,
+    root: HostRoot,
     root_view: RootView,
     config: OfflineTaskConfig<S>,
 ) -> Result<(Arc<OfflineSessionClient<S>>, TaskHandle), PlayError>
@@ -269,7 +268,7 @@ where
             usize::try_from(frames).map_err(|_| OfflineSessionError::TimelineOverflow)?,
             &mut output,
         )?;
-    transport::observe_commits(state)?;
+    transport::observe_commits(state);
     settle_receipts(state);
     Ok(output)
 }
@@ -294,8 +293,6 @@ pub(crate) enum OfflineSessionError {
     SampleCountOverflow,
     #[error("offline session is gone")]
     SessionGone,
-    #[error("offline session grid was refused: {0}")]
-    SessionGrid(#[from] SyncError),
     #[error("offline timeline overflow")]
     TimelineOverflow,
 }

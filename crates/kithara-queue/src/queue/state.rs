@@ -388,7 +388,7 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_hands_its_session_the_resident_players_sync_attachment() {
+    fn queue_registers_its_resident_players_deck_with_the_session() {
         let grid_id = BeatGridId::allocate().expect("fixture grid id");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
@@ -400,10 +400,10 @@ pub(crate) mod tests {
         );
         let mut queue = Queue::new(QueueConfig::builder().player(player).build());
 
-        let attachment = queue
+        let deck = queue
             .attach_session(test_session())
             .expect("the queue binds its session");
-        assert_eq!(attachment.id(), grid_id);
+        assert_eq!(deck, grid_id);
     }
 
     #[kithara::test]

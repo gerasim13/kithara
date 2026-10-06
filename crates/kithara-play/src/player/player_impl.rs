@@ -1,7 +1,4 @@
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    ops::Deref,
-};
+use std::{num::NonZeroUsize, ops::Deref};
 
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
@@ -23,8 +20,7 @@ use crate::{
     player::{
         PlayerConfig, PlayerControl,
         config::TrackSettings,
-        staging::SyncStaging,
-        state::{CurrentItem, PlayerPhase, TrackGrid, Tracks},
+        state::{CurrentItem, PlayerPhase, Tracks},
     },
     worker::EngineLoad,
 };
@@ -34,9 +30,8 @@ use crate::{
 #[config_owner(PlayerConfig<S>, runtime.core.config)]
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
-    /// Identity of the synchronization group the player's owner builds.
+    /// Identity the player's deck registers under in its session.
     pub(super) grid_id: BeatGridId,
-    pub(super) sample_rate: NonZeroU32,
 }
 
 impl<S> Deref for PlayerImpl<S> {
@@ -67,10 +62,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
                 .expect("only a nonzero render quantum changes on valid backend geometry");
         }
         let pools = config.worker.pools().clone();
-        // The player's one member is its own track geometry: a grid it keeps
-        // for its whole life, so loading, replacing and releasing a track all
-        // state a later revision instead of changing the group's topology.
-        let track_grid = TrackGrid::new(config.track_grid_id, config.sample_rate);
 
         let bus = config
             .bus
@@ -95,14 +86,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .cancel(cancel.clone())
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
-        // A web session is not `Send`, so it cannot take receipts from the
-        // staging runtime: a web player stages nothing.
-        #[cfg(not(target_arch = "wasm32"))]
-        let owner: Option<Arc<dyn kithara_sync::ReceiptSink>> =
-            Some(Arc::new(engine.session().clone()));
-        #[cfg(target_arch = "wasm32")]
-        let owner = None;
-        let staging = SyncStaging::new(config.track_grid_id, owner, cancel.clone());
         if config.abr.is_none() {
             let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
             config.abr = Some(AbrController::new(abr_settings));
@@ -114,21 +97,17 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .backend(config.warp.backend());
         let tracks = Mutex::new(Tracks::new(settings.build()));
         let grid_id = config.grid_id;
-        let sample_rate = config.sample_rate;
         let core = PlayerCore {
             engine,
             config,
-            staging,
             engine_load: Arc::new(EngineLoad::default()),
             status: Mutex::default(),
             start_position: Mutex::default(),
             current: CurrentItem::new(bus),
-            track_grid,
             tracks,
         };
         Self {
             grid_id,
-            sample_rate,
             runtime: Arc::new(PlayerRuntime {
                 core,
                 lifecycle: PlayerLifecycle::open(),

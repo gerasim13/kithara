@@ -1,7 +1,6 @@
 mod error;
 mod renderer;
 mod renderer_activation;
-mod renderer_entry;
 mod renderer_lifecycle;
 mod renderer_projection;
 mod renderer_render;

@@ -3,8 +3,7 @@ use std::{num::NonZeroU32, sync::OnceLock};
 use kithara::{
     host::{HostConfig, HostOwned, HostSettingsControl},
     platform::sync::Mutex,
-    play::{PlayError, SessionError, player::PlayerControlSource},
-    sync::SyncGroup,
+    play::{PlayError, player::PlayerControlSource},
 };
 
 use crate::pools::{FfiHost, FfiPools};
@@ -50,12 +49,7 @@ where
         reason: "process audio Host is unavailable",
     })?;
     active.remove(player)?;
-    let empty = active
-        .topology()
-        .map_err(|error| PlayError::from(SessionError::from(error)))?
-        .members()
-        .is_empty();
-    if empty {
+    if active.is_empty() {
         drop(slot.take());
     }
     drop(slot);

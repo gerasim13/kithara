@@ -18,8 +18,7 @@ use kithara_worker::{
 };
 
 use super::{
-    DecoderNode, PlayWorkerConfig, ReadinessProbe, RegisteredAudio, StagedSlot, TrackConfig,
-    TrackLease,
+    DecoderNode, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
     scheduler::{PlaybackObserver, Wake},
 };
 
@@ -151,36 +150,7 @@ where
                 TaskError::Capacity { capacity } => LoadRefusal::Capacity { capacity },
                 error => LoadRefusal::Open(DecodeError::audio_stream("play worker load", error)),
             })?;
-        Ok(self.open_lane(config, slot, None).await?)
-    }
-
-    /// Holds a worker slot for one staged lane before anything is opened.
-    pub(crate) fn reserve_staged(&self, cancel: CancelToken) -> Result<StagedSlot, TaskError> {
-        self.0
-            .dispatcher
-            .reserve(Self::task_config(Some(cancel)))
-            .map(StagedSlot)
-    }
-
-    /// Opens a lane whose configuration enters a plan, positions it at the
-    /// renderer's entry source, and starts it in the held `slot` with a
-    /// probe that proves its prepared PCM.
-    ///
-    /// # Errors
-    ///
-    /// Returns decode/setup errors, a configuration that enters no plan, or
-    /// a start refused by cancellation or dispatcher shutdown.
-    pub(crate) async fn open_staged<T, B>(
-        &self,
-        config: TrackConfig<T, B>,
-        slot: StagedSlot,
-        probe: ReadinessProbe,
-    ) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
-    where
-        T: StreamType<Events = EventBus>,
-        B: Default + ResamplerBackend,
-    {
-        self.open_lane(config, slot.0, Some(probe)).await
+        Ok(self.open_lane(config, slot).await?)
     }
 
     /// Opens the lane's source and starts it in its held `slot`.
@@ -188,7 +158,6 @@ where
         &self,
         config: TrackConfig<T, B>,
         slot: PendingTask,
-        probe: Option<ReadinessProbe>,
     ) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
     where
         T: StreamType<Events = EventBus>,
@@ -219,20 +188,9 @@ where
             );
             (warp, source)
         });
-        let (mut audio, lane) = prepared.into();
-        if probe.is_some() {
-            let entry = lane
-                .source
-                .entry_position()
-                .ok_or_else(|| DecodeError::InvalidData {
-                    detail: "staged lane enters no plan",
-                })?;
-            if !entry.is_zero() {
-                audio.source_mut().seek(entry)?;
-            }
-        }
+        let (audio, lane) = prepared.into();
         let task = slot
-            .start(|_| DecoderNode::new(lane, engine_load, probe))
+            .start(|_| DecoderNode::new(lane, engine_load))
             .map_err(|error| DecodeError::audio_stream("play worker start", error))?;
         Ok(RegisteredAudio::new(
             audio,

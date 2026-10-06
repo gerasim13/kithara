@@ -4386,7 +4386,6 @@ dependencies = [
  "kithara-storage",
  "kithara-stream",
  "kithara-stretch",
- "kithara-sync",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
@@ -5451,7 +5450,6 @@ dependencies = [
  "kithara-play",
  "kithara-render",
  "kithara-signal",
- "kithara-sync",
  "kithara-test-dylib",
  "kithara-test-utils",
  "kithara-warp",
@@ -5697,7 +5695,6 @@ dependencies = [
  "kithara-render",
  "kithara-signal",
  "kithara-stream",
- "kithara-sync",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
@@ -5760,7 +5757,6 @@ dependencies = [
  "kithara-play",
  "kithara-queue",
  "kithara-signal",
- "kithara-sync",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-waveform",
@@ -6016,22 +6012,6 @@ dependencies = [
  "num-traits",
  "thiserror 2.0.18",
  "tracing",
-]
-
-[[package]]
-name = "kithara-sync-tests"
-version = "0.0.1-alpha5"
-dependencies = [
- "delegate",
- "futures",
- "kithara",
- "kithara-app",
- "kithara-integration-tests",
- "kithara-test-dylib",
- "kithara-test-fixtures",
- "kithara-test-utils",
- "num-traits",
- "serde_json",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ use kithara_stretch::{
     ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError, StretchKind,
 };
 
-use crate::{RegionPlan, WarpPlan, WarpPlanSlot, consts};
+use crate::{RegionPlan, WarpPlanSlot, consts};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -64,33 +64,9 @@ pub struct WarpConfig {
     /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[config(get(copy))]
     render_quantum_frames: Option<NonZeroUsize>,
-    /// Whether a renderer built from this configuration enters its plan at
-    /// the plan's activation rather than waiting for a presented output to
-    /// reach it. Only [`WarpConfig::entering`] sets it.
-    #[config(skip = "staged renderer activation state", builder(skip), patch(skip))]
-    entering: bool,
 }
 
 impl WarpConfig {
-    /// A copy that renders `plan` from its activation on through a plan slot
-    /// of its own: a staged lane prepares audio the plan will present, while
-    /// the lane that sounds now keeps its slot and its selection.
-    #[must_use]
-    pub fn entering(&self, plan: Arc<WarpPlan>) -> Self {
-        let slot = WarpPlanSlot::default();
-        slot.install(Some(plan));
-        Self {
-            plan: Arc::new(slot),
-            entering: true,
-            ..self.clone()
-        }
-    }
-
-    #[cfg(feature = "render")]
-    pub(crate) const fn enters_plan(&self) -> bool {
-        self.entering
-    }
-
     /// A copy whose renderer starts at `speed` on `backend`, keylocked where
     /// `keylock`: where a track's render lane stands when it opens, before
     /// the lane's first command.

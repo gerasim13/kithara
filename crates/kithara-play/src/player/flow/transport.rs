@@ -74,7 +74,7 @@ where
             duration_seconds,
             presentation,
         } = self.enqueue_to_processor(item, resource, None)?;
-        self.adopt_presentation(item_id, duration_seconds, presentation);
+        self.adopt_presentation(presentation);
         self.start_playback_with(item_id, duration_seconds, crossfade);
         self.apply_start_position();
         Ok(())

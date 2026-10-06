@@ -147,11 +147,7 @@ where
             return Ok(());
         };
 
-        self.adopt_presentation(
-            activated.item_id,
-            activated.duration_seconds,
-            activated.presentation,
-        );
+        self.adopt_presentation(activated.presentation);
         self.start_playback_with(activated.item_id, activated.duration_seconds, settings);
         self.publish_crossfade_started(settings.duration);
         self.core.current.announce(item);
@@ -301,7 +297,7 @@ where
                 duration_seconds,
                 presentation,
             }) => {
-                self.adopt_presentation(played, duration_seconds, presentation);
+                self.adopt_presentation(presentation);
                 duration_seconds
             }
             Some(Played::Withdrawn) => 0.0,
@@ -338,7 +334,6 @@ mod tests {
     use kithara_render::bridge::{DeckPart, PlaybackFault, TrackTransition};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
-    use kithara_warp::BeatGrid;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -389,11 +384,7 @@ mod tests {
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 item_id: next,
-                state: PendingNextState::Armed(ItemPresentation {
-                    beat_grid: Arc::default(),
-                    abr_handle: None,
-                    staging: None,
-                }),
+                state: PendingNextState::Armed(ItemPresentation { abr_handle: None }),
                 duration_seconds: 162.0,
             });
         }
@@ -440,11 +431,7 @@ mod tests {
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 item_id: next,
-                state: PendingNextState::Armed(ItemPresentation {
-                    beat_grid: Arc::default(),
-                    abr_handle: None,
-                    staging: None,
-                }),
+                state: PendingNextState::Armed(ItemPresentation { abr_handle: None }),
                 duration_seconds: 162.0,
             });
         }
@@ -814,31 +801,6 @@ mod tests {
 
         assert_eq!(player.current_item(), Some(ids[2]));
         assert!(kithara_render::mock::publishes(&playback, epoch));
-    }
-
-    /// Arming ahead leaves the playing item's geometry published; the armed
-    /// successor's grid takes over only once the processor plays it.
-    #[kithara::test]
-    fn an_armed_successor_publishes_its_grid_only_once_the_processor_plays_it() {
-        let (player, audio_thread, ids) = deck_with_armed_successor();
-        let playing = player.core.track_grid.snapshot().revision();
-
-        player
-            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
-            .expect("re-arm accepted");
-        assert_eq!(
-            player.core.track_grid.snapshot().revision(),
-            playing,
-            "arming a successor must not publish its grid"
-        );
-
-        audio_thread.notify(&ended("first", ids[0]));
-        audio_thread.notify(&started("third", ids[2], 0));
-        player.process_notifications();
-        assert!(
-            player.core.track_grid.snapshot().revision() > playing,
-            "the successor the processor plays publishes its grid"
-        );
     }
 
     /// Only a gapless successor is chained behind the leading item; a

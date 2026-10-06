@@ -5,5 +5,5 @@ mod port;
 
 pub use command::SyncExecution;
 pub use executor::SyncExecutor;
-pub use group::{ExecutedGroup, SyncAttachment};
+pub use group::ExecutedGroup;
 pub use port::{ReceiptSink, StagePort};

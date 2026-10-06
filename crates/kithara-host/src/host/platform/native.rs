@@ -4,7 +4,6 @@ use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, player::PlayerControlSource};
-use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
 use kithara_warp::BeatGridId;
 
 use super::{
@@ -14,7 +13,7 @@ use super::{
 use crate::{
     HostSettings, PlayerMember,
     rt::SessionOutput,
-    session::{HostDispatcher, HostProtocol, RootView},
+    session::{HostDispatcher, HostProtocol, HostRoot, RootView},
 };
 
 type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
@@ -50,7 +49,7 @@ impl<S> Platform<S> {
     }
 
     pub(in crate::host) fn realtime(
-        group: GroupState<PlayerMember>,
+        root: HostRoot,
         view: RootView,
         output_block_frames: Option<NonZeroU32>,
         output: SessionOutput,
@@ -60,16 +59,8 @@ impl<S> Platform<S> {
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let dispatcher =
-            crate::session::native::spawn::<S>(group, view, output_block_frames, output, settings);
+            crate::session::native::spawn::<S>(root, view, output_block_frames, output, settings);
         (dispatcher, Self::owner())
-    }
-
-    pub(in crate::host) fn transact(
-        _platform: &Self,
-        dispatcher: &Arc<dyn HostDispatcher<S>>,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        dispatcher.transact(operation)
     }
 }
 
@@ -87,9 +78,9 @@ where
     where
         P: PlayerControlSource<Schema = S>,
     {
-        let (attachment, control) = self.bind_player(&mut player)?;
-        let grid_id = attachment.id();
-        self.attach_member(PlayerMember::new(attachment, HeldPlayer::new(player)))?;
+        let (grid_id, control) = self.bind_player(&mut player)?;
+        self.dispatcher
+            .attach(PlayerMember::new(grid_id, HeldPlayer::new(player)))?;
         let owned = self.owned::<P>(grid_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;
@@ -109,6 +100,6 @@ where
     {
         self.validate_removal(player)?;
         P::close_control(player.control())?;
-        self.detach_member(player.id())
+        self.dispatcher.detach(player.id())
     }
 }

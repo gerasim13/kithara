@@ -1,9 +1,8 @@
 use kithara_bufpool::HasPool;
 use kithara_play::{
-    PlayError, SeekOutcome, SessionBinding,
+    BeatGridId, PlayError, SeekOutcome, SessionBinding,
     player::{PlaybackView, Player, PlayerControlSource},
 };
-use kithara_sync::SyncAttachment;
 
 use super::Queue;
 
@@ -55,7 +54,7 @@ where
             fn attach_session(
                 &mut self,
                 binding: SessionBinding<S>,
-            ) -> Result<SyncAttachment, PlayError>;
+            ) -> Result<BeatGridId, PlayError>;
         }
     }
 }

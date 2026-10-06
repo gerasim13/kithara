@@ -52,7 +52,7 @@ pub use player::{
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
-    PlaybackResamplerBackend, PreparedGrid, Resource, ResourceConfig, ResourceSrc, SourceType,
+    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
 };
 pub use session::{
     AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionBinding, SessionDispatcher,

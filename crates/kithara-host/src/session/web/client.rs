@@ -5,11 +5,10 @@ use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
 use kithara_play::{SessionSampleRate, StreamShape};
-use kithara_sync::GroupState;
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
-    HostSettings, PlayerMember,
+    HostSettings,
     error::PlayError,
     rt::SessionOutput,
     session::{
@@ -19,7 +18,7 @@ use crate::{
             Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
             SessionDispatcher,
         },
-        state::{RootView, SessionState},
+        state::{HostRoot, RootView, SessionState},
     },
 };
 
@@ -120,7 +119,7 @@ thread_local! {
 }
 
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
-    root: GroupState<PlayerMember>,
+    root: HostRoot,
     root_view: RootView,
     output: SessionOutput,
     settings: Live<HostSettings, HostProtocol>,
