@@ -596,6 +596,35 @@ async fn pausing_at_the_end_takes_back_the_armed_successor_at_once() {
     harness.close().await;
 }
 
+/// The deck hands a gapless successor over on its own. A pause before the
+/// next tick gates the end report, so the queue must follow the deck's
+/// announcement of the successor, not wait for the end.
+#[kithara::test(tokio)]
+async fn a_pause_after_the_deck_stitches_in_the_successor_leaves_the_queue_on_it() {
+    /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
+    const TRACK_FRAMES: usize = 66_150;
+
+    let (harness, queue, _, id_b) = gapless_queue_with_an_armed_successor().await;
+    for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
+        let _ = harness.render(BLOCK_FRAMES).await;
+    }
+    harness.run(&queue, QueueControl::pause).await;
+    let _ = harness.run(&queue, QueueControl::tick).await;
+
+    assert_eq!(
+        queue.current().map(|entry| entry.id),
+        Some(id_b),
+        "the queue's current track is the one the deck stitched in"
+    );
+    assert_eq!(
+        queue.track(id_b).map(|entry| entry.status),
+        Some(TrackStatus::Consumed),
+        "the deck holds the stitched successor, so the queue has consumed it"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
 /// Selecting the track that already plays leaves the successor armed behind
 /// it where it is.
 #[kithara::test(tokio)]

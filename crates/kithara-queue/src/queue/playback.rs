@@ -378,9 +378,10 @@ where
             pub fn seek(&self, seconds: f64) -> Result<SeekOutcome, QueueError>;
 
             /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
-            /// events to act on `ItemDidPlayToEnd` (filtered) and forward
-            /// `CurrentItemChanged` as
-            /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
+            /// events: the cursor follows `CurrentItemChanged` to an item the
+            /// deck led on to, which is forwarded as
+            /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged),
+            /// and `ItemDidPlayToEnd` (filtered) acts where the deck led nowhere.
             ///
             /// # Errors
             /// Forwards `PlayError` from `PlayerImpl::tick`.

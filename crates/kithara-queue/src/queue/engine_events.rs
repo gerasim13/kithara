@@ -1,6 +1,6 @@
 use kithara_audio::AudioEvent;
 use kithara_bufpool::HasPool;
-use kithara_events::{Envelope, EventSet};
+use kithara_events::{Envelope, EventSet, TrackId};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use kithara_play::{ItemRole, PlaybackFault, PlayerEvent};
 use tracing::debug;
@@ -65,13 +65,47 @@ where
         true
     }
 
+    /// Whether the deck left `track` for the successor it held behind it.
+    /// The deck reports the end it left first, so it already leads the
+    /// successor when the queue reads that end, and its announcement, not the
+    /// end, moves the cursor there.
+    fn deck_led_on_from(&self, track: TrackId) -> bool {
+        let deck_item = self.player.current_item();
+        let led_on = deck_item.is_some_and(|item| item != track);
+        if led_on {
+            debug!(%track, ?deck_item, "the deck led on to its successor: the end moves nothing");
+        }
+        led_on
+    }
+
     /// The deck announces every item it starts, a removed one included, so
-    /// the queue names only an item it still holds.
+    /// the queue names only an item it still holds. A queued item the
+    /// cursor has not reached is one the deck took on its own, the successor
+    /// held behind the track that ended or failed: the cursor follows it
+    /// there, so a pause that gates that end's report cannot leave it
+    /// behind, and the deck now holds the item.
     pub(super) fn handle_current_item_changed(&self) {
         let id = self
             .player
             .current_item()
             .filter(|id| self.lock_tracks().iter().any(|entry| entry.id == *id));
+        let left = self.current();
+        if let Some(id) = id
+            && left.as_ref().map(|entry| entry.id) != Some(id)
+        {
+            let reason = if left.is_some_and(|entry| matches!(entry.status, TrackStatus::Failed(_)))
+            {
+                AdvanceReason::TrackFailed
+            } else {
+                AdvanceReason::NaturalEof
+            };
+            self.commit_navigation_to(id);
+            self.bus.publish(QueueEvent::CurrentTrackAdvance {
+                reason,
+                id: Some(id),
+            });
+            self.set_status(id, TrackStatus::Consumed);
+        }
         self.write_cached_position(CachedPosition::Unknown);
         self.bus.publish(QueueEvent::CurrentTrackChanged { id });
     }
@@ -100,7 +134,7 @@ where
             auto_skipped: action == ActionAtItemEnd::Advance,
         });
         match action {
-            ActionAtItemEnd::Advance => {
+            ActionAtItemEnd::Advance if !self.deck_led_on_from(track.id) => {
                 if let Err(error) =
                     self.advance_to_next_inner(Transition::None, AdvanceReason::TrackFailed)
                 {
@@ -108,7 +142,7 @@ where
                 }
             }
             ActionAtItemEnd::Pause => self.pause_inner(),
-            ActionAtItemEnd::None => {}
+            ActionAtItemEnd::Advance | ActionAtItemEnd::None => {}
         }
     }
 
@@ -123,7 +157,7 @@ where
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
         debug!(%track, pos, dur, "ItemDidPlayToEnd received");
-        if !self.end_of_item_is_actionable(item, pos, dur) {
+        if !self.end_of_item_is_actionable(item, pos, dur) || self.deck_led_on_from(track.id) {
             return;
         }
         match self.action_at_item_end() {
@@ -166,14 +200,16 @@ mod tests {
     use kithara_audio::{DecodeErrorKind, mock::TestPcmReader};
     use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
     use kithara_platform::{sync::Arc, time::Duration};
-    use kithara_play::{ItemRole, PlaybackFault, PlayerEvent, Resource, TrackRef};
+    use kithara_play::{
+        ItemRole, PlaybackFault, PlayerEvent, Resource, SelectionPlayback, TrackRef,
+    };
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use crate::{
         ActionAtItemEnd, QueueControl,
         consts::TEST_SAMPLE_RATE,
-        event::{QueueEvent, TrackStatus},
+        event::{AdvanceReason, QueueEvent, TrackStatus},
         queue::{
             state::tests::{make_queue, wait_for_queue_event},
             types::{SelectPhase, Transition},
@@ -344,17 +380,62 @@ mod tests {
         assert!(queue.is_paused());
     }
 
+    /// A track the queue holds a finished load for.
+    fn admitted(queue: &QueueControl<TestPools>, url: &str) -> TrackId {
+        let id = queue.append(url).expect("open queue accepts a track");
+        let reader = TestPcmReader::new(AudioSpec::new(2, TEST_SAMPLE_RATE), 0.01);
+        queue
+            .tracks
+            .admit(id, Resource::from_reader(reader, Some(Arc::from(url))));
+        id
+    }
+
+    /// The deck leads on past a track that failed as it does past one that
+    /// ended, and the cursor's move names the failure.
+    #[kithara::test(tokio)]
+    async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
+        let queue = make_queue();
+        let failed = admitted(&queue, "https://example.com/failed.mp3");
+        let successor = admitted(&queue, "https://example.com/successor.mp3");
+        queue
+            .select(failed, Transition::None)
+            .expect("the first track is selected");
+        queue.set_status(failed, TrackStatus::Failed("decode".into()));
+        let resource = queue.tracks.take_resource(successor);
+        queue
+            .player
+            .select(successor, resource, SelectionPlayback::Play)
+            .expect("the deck takes the successor");
+
+        let mut events = queue.subscribe();
+        queue.handle_current_item_changed();
+
+        let advanced = wait_for_queue_event(
+            &mut events,
+            |event| {
+                matches!(
+                    event,
+                    QueueEvent::CurrentTrackAdvance {
+                        reason: AdvanceReason::TrackFailed,
+                        id: Some(id),
+                    } if *id == successor
+                )
+            },
+            200,
+        )
+        .await;
+        assert!(
+            advanced,
+            "the cursor leaves the failed track for its failure"
+        );
+    }
+
     /// A lagged receiver lost the deck's announcement, so recovery names
     /// the item the deck holds.
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
-        const URL: &str = "https://example.com/lagged-events.mp3";
         let queue = make_queue();
-        let id = queue.append(URL).expect("open queue accepts a track");
-        let reader = TestPcmReader::new(AudioSpec::new(2, TEST_SAMPLE_RATE), 0.01);
-        queue
-            .tracks
-            .admit(id, Resource::from_reader(reader, Some(Arc::from(URL))));
+        let id = admitted(&queue, "https://example.com/lagged-events.mp3");
         queue
             .select(id, Transition::None)
             .expect("the loaded track is selected");
