@@ -153,8 +153,10 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         config.cancel().is_none(),
         "only the file source owns this cancellation"
     );
-    let audio = harness.worker().load(config).await.expect("real file lane");
-    let mut resource = Resource::from_reader(audio, Some(Arc::from(source.clone())));
+    let mut resource =
+        Resource::from_stream_audio(config.into(), Arc::from(source.clone()), harness.worker())
+            .await
+            .expect("real file lane");
     resource
         .preload()
         .await

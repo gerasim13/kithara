@@ -255,12 +255,19 @@ impl Resource {
         resource
     }
 
-    /// Create a resource from a concrete stream-backed audio config.
+    /// Create a registered resource from a concrete stream-backed audio config.
     ///
-    /// Generic over any [`StreamType`] whose config carries an optional
-    /// `kithara_events::EventBus`. Callers wanting fine-grained control
-    /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
-    pub(crate) async fn from_stream_audio<T, B, S>(
+    /// Preserves the worker's priority, resident render lane and Warp rate.
+    /// The config controls source and decoded-audio cancellation independently.
+    /// This low-level path omits resource cancellation, staging and prepared
+    /// beat grids. Preload failures are logged; call [`Self::preload`] to
+    /// require success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading fails or the registered render controls
+    /// have already been taken.
+    pub async fn from_stream_audio<T, B, S>(
         config: TrackConfig<T, B>,
         src: Arc<str>,
         worker: &PlayWorker<S>,
