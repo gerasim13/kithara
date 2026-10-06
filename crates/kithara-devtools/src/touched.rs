@@ -1,12 +1,25 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    path::Path,
     process::Command,
 };
 
 use anyhow::{Context, Result, bail};
 
 use crate::common::project::{TestCargoOptions, TestCommandConfig, TestLaneConfig};
+
+/// Brings `origin/main` up to date. The infinite depth also deepens a checkout
+/// of the tip alone down to where its branch left `main`; on a complete clone
+/// it is a plain fetch.
+pub(crate) const FETCH_MAIN: [&str; 6] = [
+    "fetch",
+    "--no-tags",
+    "--quiet",
+    "--depth=2147483647",
+    "origin",
+    "+refs/heads/main:refs/remotes/origin/main",
+];
 
 /// One run a touched selection asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -51,20 +64,25 @@ impl fmt::Display for Touched {
 /// The default branch runs the whole scope. A path with no reviewed owner
 /// runs the default lane whole, so a narrow run is an opt-in coverage
 /// reduction, never the result of failing to classify a changed path.
-pub(crate) fn lanes(test: &TestCommandConfig, scope: &[String]) -> Result<Vec<Touched>> {
+pub(crate) fn lanes(
+    test: &TestCommandConfig,
+    root: &Path,
+    scope: &[String],
+) -> Result<Vec<Touched>> {
     if let Some(unknown) = scope.iter().find(|name| !test.lanes.contains_key(*name)) {
         bail!("test lane `{unknown}` is not configured");
     }
     let scope = &scoped(scope, &test.default_lane);
     let _ = Command::new("git")
-        .args(["fetch", "--no-tags", "--quiet", "origin", "main"])
+        .current_dir(root)
+        .args(FETCH_MAIN)
         .status();
-    let base = git(&["merge-base", "origin/main", "HEAD"])?;
-    if base == git(&["rev-parse", "HEAD"])? {
+    let base = git(root, &["merge-base", "origin/main", "HEAD"])?;
+    if base == git(root, &["rev-parse", "HEAD"])? {
         return Ok(everything(scope));
     }
     let range = format!("{base}...HEAD");
-    let changed = git(&["diff", "--name-only", &range])?;
+    let changed = git(root, &["diff", "--name-only", &range])?;
     let changed: Vec<&str> = changed.lines().collect();
     Ok(select(
         &test.lanes,
@@ -81,7 +99,7 @@ pub(crate) fn lanes(test: &TestCommandConfig, scope: &[String]) -> Result<Vec<To
 ///
 /// Returns an error for an unknown scoped lane or unreadable Git history.
 pub fn touches(test: &TestCommandConfig, scope: &[String]) -> Result<bool> {
-    Ok(!lanes(test, scope)?.is_empty())
+    Ok(!lanes(test, Path::new("."), scope)?.is_empty())
 }
 
 /// What the touched paths select from `scope`.
@@ -168,8 +186,9 @@ fn everything(scope: &[String]) -> Vec<Touched> {
     scope.iter().cloned().map(Touched::Whole).collect()
 }
 
-fn git(args: &[&str]) -> Result<String> {
+fn git(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
+        .current_dir(root)
         .args(args)
         .output()
         .with_context(|| format!("running git {}", args.join(" ")))?;
@@ -444,5 +463,77 @@ mod tests {
                 "the UI scope does not own {path}"
             );
         }
+    }
+
+    /// A CI checkout carries the branch tip alone. Where the branch left
+    /// `main` is history the checkout lacks, so the selection reads it itself
+    /// rather than every lane checking out the history of every branch.
+    #[test]
+    fn a_checkout_of_the_tip_alone_still_finds_what_its_branch_touched() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("work");
+        let origin = dir.path().join("origin.git");
+        let checkout = dir.path().join("checkout");
+        std::fs::create_dir_all(work.join("crates/host"))?;
+        std::fs::create_dir_all(work.join("crates/play"))?;
+        commit_file(&work, "crates/host/lib.rs", None)?;
+        commit_file(&work, "README.md", None)?;
+        commit_file(&work, "crates/play/lib.rs", Some("feature"))?;
+        run_git(dir.path(), &["clone", "-q", "--bare", "work", "origin.git"])?;
+        let url = format!("file://{}", origin.display());
+        run_git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--depth=1",
+                "--branch",
+                "feature",
+                &url,
+                "checkout",
+            ],
+        )?;
+        let test = TestCommandConfig {
+            lanes: product(),
+            default_lane: WORKSPACE.to_owned(),
+            ..TestCommandConfig::default()
+        };
+
+        let selected = lanes(&test, &checkout, &[])?;
+
+        assert_eq!(selected, vec![narrowed(&["play", "play-tests"])]);
+        Ok(())
+    }
+
+    /// Commits `path` in `work`, on a new `branch` when one is named.
+    fn commit_file(work: &Path, path: &str, branch: Option<&str>) -> Result<()> {
+        if !work.join(".git").exists() {
+            run_git(work, &["init", "-q", "-b", "main"])?;
+        }
+        if let Some(branch) = branch {
+            run_git(work, &["checkout", "-q", "-b", branch])?;
+        }
+        std::fs::write(work.join(path), path)?;
+        run_git(work, &["add", path])?;
+        run_git(work, &["commit", "-q", "-m", path])
+    }
+
+    fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
+        let status = Command::new("git")
+            .current_dir(dir)
+            .args([
+                "-c",
+                "user.name=kithara",
+                "-c",
+                "user.email=kithara@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .status()?;
+        assert!(status.success(), "git {args:?} must succeed");
+        Ok(())
     }
 }

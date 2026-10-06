@@ -99,6 +99,13 @@ impl Container<'_> {
         host.cache_root.join("lanes")
     }
 
+    /// Where every runner bootstraps xtask: one build per trust, under the CI
+    /// cache root the workflows name (`KITHARA_CI_CACHE_ROOT`) beside the lane
+    /// slots, so a commit's xtask is compiled once for the whole host.
+    pub(super) fn bootstrap_root(host: &LinuxHost) -> PathBuf {
+        Self::lane_root(host).join(".kithara-ci").join("bootstrap")
+    }
+
     pub(super) fn mount_type(source: &str) -> &'static str {
         if Path::new(source).is_absolute() {
             "bind"
