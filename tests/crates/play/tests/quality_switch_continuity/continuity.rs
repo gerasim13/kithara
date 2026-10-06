@@ -7,6 +7,7 @@ use kithara_test_fixtures::integration_fixtures::{
 };
 use num_traits::ToPrimitive;
 
+use super::switch::SwitchRender;
 use super::*;
 
 #[derive(Clone, Copy, Debug)]
