@@ -185,7 +185,7 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
          actually downloaded"
     );
 
-    queue.clear();
+    queue.run(move |q| q.clear()).await;
     ticker.stop().await;
     queue.close().await;
 }

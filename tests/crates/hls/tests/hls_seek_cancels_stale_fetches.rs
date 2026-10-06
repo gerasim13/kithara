@@ -244,7 +244,10 @@ async fn hls_seek_near_end_skips_prefix(
     let pre_seek = probe_recorder.events().len();
 
     let seek_at = Instant::now();
-    queue.seek(target_seconds).expect("seek");
+    queue
+        .run(move |q| q.seek(target_seconds))
+        .await
+        .expect("seek");
 
     // Observe post-seek bus events AND wait for the scheduler to record the
     // epoch reset, concurrently. Awaiting the scope parks the test body until

@@ -283,7 +283,7 @@ async fn run_one_attempt(
         let target = (duration - target_offset).max(0.0);
         let pos_before = queue.position_seconds().unwrap_or(0.0);
 
-        if let Err(e) = queue.seek(target) {
+        if let Err(e) = queue.run(move |q| q.seek(target)).await {
             return IterOutcome::Errored {
                 iter,
                 target,

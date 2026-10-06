@@ -278,7 +278,10 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTe
         seek_target > pos_before_seek + 2.0,
         "seek target must be ahead of current play head (pos={pos_before_seek:.2}, target={seek_target:.2})"
     );
-    queue.seek(seek_target).expect("seek accepted by player");
+    queue
+        .run(move |q| q.seek(seek_target))
+        .await
+        .expect("seek accepted by player");
 
     // Park on PlaybackProgress (drives the virtual clock) and accept progress
     // relative to where the seek ACTUALLY landed — segment-aligned, typically
@@ -417,7 +420,10 @@ async fn queue_seek_long_cold_cache_far_segment(
     eprintln!("[long-cold] pre-seek pos={pos_before:.3}s");
 
     let seek_target = 40.0;
-    queue.seek(seek_target).expect("seek accepted");
+    queue
+        .run(move |q| q.seek(seek_target))
+        .await
+        .expect("seek accepted");
     eprintln!("[long-cold] seek issued target={seek_target:.1}s");
 
     observe_seek_advance_or_panic(
@@ -506,7 +512,10 @@ async fn queue_seek_multi_variant_cold_far(
     eprintln!("[multi-variant-cold] pre-seek pos={pos_before:.3}s");
 
     let seek_target = 80.0;
-    queue.seek(seek_target).expect("seek accepted");
+    queue
+        .run(move |q| q.seek(seek_target))
+        .await
+        .expect("seek accepted");
     eprintln!("[multi-variant-cold] seek issued target={seek_target:.1}s");
 
     observe_seek_advance_or_panic(

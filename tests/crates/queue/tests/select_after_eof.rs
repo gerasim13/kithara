@@ -125,7 +125,10 @@ async fn seek_updates_cached_position_optimistically() {
         .await
         .expect("select track");
 
-    queue.seek(54.689_879_542).expect("seek must land");
+    harness
+        .run(&queue, |q| q.seek(54.689_879_542))
+        .await
+        .expect("seek must land");
 
     assert_eq!(queue.position_seconds(), Some(54.689_879_542));
     drop(queue);
