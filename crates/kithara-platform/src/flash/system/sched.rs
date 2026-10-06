@@ -308,12 +308,18 @@ impl Core {
             self.sched.advance_counts.blocked += 1;
             return WakeBatch(Vec::new());
         }
+        // A yielder re-checks at this instant while every parked deadline is
+        // only a backstop under an edge: crossing one would observe nothing
+        // new. A deadline the clock owes a stop is what a yielder may be
+        // waiting on, so the advance below reaches it and wakes the yielders
+        // with it. This holds for a thread park too: a gate poll owes its
+        // stop as a sleep does.
         if !self.sched.yielders.is_empty()
             && self
                 .sched
                 .timed
                 .values()
-                .all(|e| matches!(e.kind, WaitKind::Thread(_)))
+                .all(|e| e.role == ParkRole::Backstop)
         {
             let woken: Vec<Wake> = std::mem::take(&mut self.sched.yielders)
                 .into_values()
