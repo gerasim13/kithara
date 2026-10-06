@@ -942,7 +942,7 @@ mod tests {
         let mut failed = RingFixture::new(true);
         failed
             .data_tx
-            .try_push(Fetch::failure(0, crate::TrackFailureKind::SourceCancelled))
+            .try_push(Fetch::failure(0, TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
         let _chunk = failed.recv();
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
@@ -950,7 +950,7 @@ mod tests {
             failed.ring.phase,
             ConsumerPhase::Failed {
                 source: FailureSource::Producer {
-                    failure: crate::TrackFailureKind::SourceCancelled,
+                    failure: TrackFailureKind::SourceCancelled,
                 }
             }
         );
@@ -961,7 +961,7 @@ mod tests {
         let mut fixture = RingFixture::new(true);
         fixture
             .data_tx
-            .try_push(Fetch::failure(0, crate::TrackFailureKind::SourceCancelled))
+            .try_push(Fetch::failure(0, TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
 
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
@@ -970,7 +970,7 @@ mod tests {
             fixture.ring.phase,
             ConsumerPhase::Failed {
                 source: FailureSource::ProducerAfterSeek {
-                    failure: crate::TrackFailureKind::SourceCancelled,
+                    failure: TrackFailureKind::SourceCancelled,
                 }
             }
         );
@@ -995,7 +995,7 @@ mod tests {
         fixture.ring.validator.epoch = 3;
         fixture
             .data_tx
-            .try_push(Fetch::failure(0, crate::TrackFailureKind::SourceCancelled))
+            .try_push(Fetch::failure(0, TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
 
         let _chunk = fixture.recv();
@@ -1004,7 +1004,7 @@ mod tests {
             fixture.ring.phase,
             ConsumerPhase::Failed {
                 source: FailureSource::Producer {
-                    failure: crate::TrackFailureKind::SourceCancelled,
+                    failure: TrackFailureKind::SourceCancelled,
                 }
             }
         );
