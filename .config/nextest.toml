@@ -48,12 +48,12 @@ slow-timeout = { period = "120s", terminate-after = 1 }
 # munmap of a 46MB test binary + stdout flush can exceed it even for
 # sync tests that spawn no threads. A real leak (live worker thread
 # blocked on channel) would still exceed 2s and get caught.
-leak-timeout = "2s"
+leak-timeout = { period = "2s", result = "fail" }
 
 [profile.ci]
 fail-fast = false
 test-threads = "num-cpus"
-leak-timeout = "2s"
+leak-timeout = { period = "2s", result = "fail" }
 # One retry, and a retried pass still fails the lane: `test.known_flakes` in
 # `.config/xtask.toml` owns the exceptions, and starts empty. What the extra
 # attempt buys is evidence — nextest keeps the failing attempt inside
@@ -78,7 +78,7 @@ test-threads = 1
 retries = 0
 fail-fast = false
 slow-timeout = { period = "600s" }
-leak-timeout = "2s"
+leak-timeout = { period = "2s", result = "fail" }
 
 [profile.android.junit]
 path = "junit.xml"
@@ -88,7 +88,7 @@ store-failure-output = true
 [profile.fast]
 fail-fast = false
 test-threads = "num-cpus"
-leak-timeout = "2s"
+leak-timeout = { period = "2s", result = "fail" }
 
 # Stress-evidence profile: repeat the exact inventory selected by the caller.
 # No thread limit — a real audio player shares the machine with many
@@ -101,7 +101,7 @@ test-threads = "num-cpus"
 # nextest's termination grace follows. The test-owned watchdog should write its
 # attempt-correlated dump first.
 slow-timeout = { period = "60s", terminate-after = 11 }
-leak-timeout = "2s"
+leak-timeout = { period = "2s", result = "fail" }
 # A run repeats thousands of tests tens of times, and printing the body of
 # every failure turns its console into something no one reads. The bodies are
 # not lost: `store-failure-output` keeps them in the JUnit below, which is what
@@ -136,7 +136,7 @@ path = "junit.xml"
 default-filter = 'all()'
 fail-fast = false
 slow-timeout = { period = "120s", terminate-after = 2 }
-leak-timeout = "2s"
+leak-timeout = { period = "2s", result = "fail" }
 
 [profile.rtsan.junit]
 path = "junit.xml"

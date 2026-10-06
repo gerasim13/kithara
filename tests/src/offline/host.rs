@@ -336,14 +336,17 @@ where
             .await
     }
 
-    /// The canonical transport revision the running session last committed,
-    /// read from the `render_committed` probe the renderer fires on every
-    /// committed render. The probe recorder is native-only, so this reads the
-    /// revision on the hosts that carry it and the wasm suites ask other
-    /// questions.
+    /// The callback transport revision after a renderer commit was recorded.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
         usdt_trace::last("render_committed")
+            .and_then(|event| event.field("transport_revision"))
+            .and_then(NonZeroU64::new)
+            .ok_or(PlayError::Session(SessionError::TransportNotProcessed))?;
+        kithara_test_utils::test::usdt::events_of("publish")
+            .into_iter()
+            .rev()
+            .find(|event| event.target == "kithara_warp_probe")
             .and_then(|event| event.field("transport_revision"))
             .and_then(NonZeroU64::new)
             .map(TransportRevision::from)

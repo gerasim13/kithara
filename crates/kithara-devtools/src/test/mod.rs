@@ -4,6 +4,8 @@ mod resolve;
 mod selection;
 
 #[cfg(test)]
+mod leak_tests;
+#[cfg(test)]
 pub(crate) mod repository_tests;
 #[cfg(test)]
 mod tests;

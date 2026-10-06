@@ -719,6 +719,48 @@ mod tests {
         );
     }
 
+    /// The judge runs every compile through the checkout's compiler wrapper,
+    /// so a pull request that edits it chooses how the judge compiles.
+    #[test]
+    fn the_compiler_wrapper_is_judged_from_the_base() {
+        let (state, repo, _base, _product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        let wrapper = work.join(consts::COMPILER_CACHE_WRAPPER);
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, "trusted\n").unwrap();
+        git(&work, &["add", "--all"]);
+        git(&work, &["commit", "--quiet", "-m", "wrapper"]);
+        let trusted = String::from_utf8(git_in(&work, &["rev-parse", "HEAD"]).unwrap())
+            .unwrap()
+            .trim()
+            .to_owned();
+        git(&work, &["checkout", "--quiet", "-b", "wrapper-edit"]);
+        fs::write(&wrapper, "from patch\n").unwrap();
+        git(&work, &["add", "--all"]);
+        git(&work, &["commit", "--quiet", "-m", "wrapper edit"]);
+        let edited = String::from_utf8(git_in(&work, &["rev-parse", "HEAD"]).unwrap())
+            .unwrap()
+            .trim()
+            .to_owned();
+        git(
+            &work,
+            &[
+                "push",
+                "--quiet",
+                repo.root.to_str().unwrap(),
+                "main",
+                "wrapper-edit",
+            ],
+        );
+
+        let judged = judged(&repo, &trusted, &edited, true);
+
+        assert_eq!(
+            blob(&repo, &judged, consts::COMPILER_CACHE_WRAPPER),
+            "trusted\n"
+        );
+    }
+
     #[test]
     fn control_path_changes_are_detected_before_judging() {
         let (_state, repo, base, _product, head, _additive) = repository();

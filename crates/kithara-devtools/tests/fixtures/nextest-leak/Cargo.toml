@@ -1,0 +1,10 @@
+[package]
+name = "nextest-leak-contract"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[[test]]
+name = "leak"
+path = "leak.rs"
