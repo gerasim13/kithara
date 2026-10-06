@@ -250,11 +250,6 @@ pub(crate) const RECENCY_RECORD_VERSION: u8 = 1;
 /// read.
 pub(crate) const RECENCY_RECORD_BYTES: usize = 32 + 8;
 
-/// The object the evictor asks for to learn that the audit log is arriving,
-/// and writes to make the store recount a bucket. It is no compiler-cache
-/// entry.
-pub(crate) const EVICT_MARKER: &str = ".evict/recount";
-
 /// The largest body the evictor reads from one audit delivery. The store
 /// sends one request per delivery, a few hundred bytes; anything larger is
 /// not its audit log.

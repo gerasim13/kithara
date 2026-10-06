@@ -49,9 +49,9 @@ pub(super) fn credentials() -> Result<()> {
 }
 
 /// Runs one administration step; a stop signal ends it and the setup.
-fn rc(arguments: &[&str], cancel: &Cancel) -> Result<()> {
+fn rc(program: &Path, arguments: &[&str], cancel: &Cancel) -> Result<()> {
     let status = child::run(
-        Command::new("rc")
+        Command::new(program)
             .args(arguments)
             .stdout(Stdio::null())
             .stderr(Stdio::null()),
@@ -85,8 +85,8 @@ pub(super) fn scope_quota(scope: &str, shared: &str) -> Result<u64> {
     size(&value).with_context(|| format!("the quota of the {scope} scope"))
 }
 
-/// A size as the host writes it. The store is handed the bytes, so its quota
-/// and the evictor's budget cannot read one size two ways.
+/// A size as the host writes it, in binary units alone, so one size cannot be
+/// read two ways.
 fn size(value: &str) -> Result<u64> {
     let count = value.trim_end_matches(|character: char| character.is_ascii_alphabetic());
     let shift = match &value[count.len()..] {
@@ -104,7 +104,7 @@ fn size(value: &str) -> Result<u64> {
         .parse::<u64>()?
         .checked_mul(1 << shift)
         .with_context(|| format!("{value} does not fit in 64 bits"))?;
-    // The store reads zero as no quota at all.
+    // The evictor would keep nothing at all.
     ensure!(bytes > 0, "a quota of {value} leaves the bucket no room");
     Ok(bytes)
 }
@@ -124,7 +124,6 @@ pub(super) fn scope_bucket(scope: &str) -> Result<String> {
 
 pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
     let scopes = required("CACHE_SCOPES")?;
-    let quota = required("CACHE_BUCKET_QUOTA")?;
     let endpoint = required("CACHE_CLIENT_ENDPOINT")?;
     let uid = required("CACHE_CLIENT_UID")?.parse::<u32>()?;
     let url = reqwest::Url::parse(&endpoint)?;
@@ -136,11 +135,13 @@ pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
         .split_whitespace()
         .map(|scope| {
             scope_bucket(scope)?;
-            Ok((scope, scope_quota(scope, &quota)?))
+            Ok(scope)
         })
         .collect::<Result<Vec<_>>>()?;
+    let program = Path::new("rc");
     let root = Path::new("/config");
     rc(
+        program,
         &[
             "alias",
             "set",
@@ -153,6 +154,7 @@ pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
         cancel,
     )?;
     rc(
+        program,
         &[
             "bucket",
             "create",
@@ -161,53 +163,34 @@ pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
         ],
         cancel,
     )?;
-    for (scope, quota) in scopes {
-        initialize_scope(scope, quota, &endpoint, uid, cancel)?;
+    for scope in scopes {
+        initialize_scope(program, scope, &endpoint, uid, cancel)?;
     }
     Ok(())
 }
 
 fn initialize_scope(
+    program: &Path,
     scope: &str,
-    quota: u64,
     endpoint: &str,
     uid: u32,
     cancel: &Cancel,
 ) -> Result<()> {
     let bucket = scope_bucket(scope)?;
-    let destination = format!("ci/{bucket}");
     let directory = Path::new("/clients").join(scope);
     fs::create_dir_all(&directory)?;
     let key = secret(&directory.join("access-key"))?;
     let password = secret(&directory.join("secret-key"))?;
+    initialize_bucket(program, &format!("ci/{bucket}"), cancel)?;
     rc(
-        &["bucket", "create", "--ignore-existing", &destination],
+        program,
+        &["admin", "user", "add", "ci", &key, &password],
         cancel,
     )?;
-    rc(
-        &["bucket", "quota", "set", &destination, &quota.to_string()],
-        cancel,
-    )?;
-    let mut lifecycle = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(&mut lifecycle, &retention())?;
-    rc(
-        &[
-            "bucket",
-            "lifecycle",
-            "rule",
-            "import",
-            &destination,
-            lifecycle
-                .path()
-                .to_str()
-                .context("cache lifecycle path must be UTF-8")?,
-        ],
-        cancel,
-    )?;
-    rc(&["admin", "user", "add", "ci", &key, &password], cancel)?;
     let mut policy_file = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut policy_file, &policy(scope, &bucket))?;
     rc(
+        program,
         &[
             "admin",
             "policy",
@@ -222,6 +205,7 @@ fn initialize_scope(
         cancel,
     )?;
     rc(
+        program,
         &["admin", "policy", "attach", "ci", &bucket, "--user", &key],
         cancel,
     )?;
@@ -235,6 +219,37 @@ fn initialize_scope(
     ensure!(status.success(), "cache client ownership failed: {status}");
     info!(%scope, "compiler cache scope initialized");
     Ok(())
+}
+
+/// Creates a scope's bucket and gives it its retention, with no quota: a
+/// quota makes the store pass every write to the bucket through one lock it
+/// waits on for five seconds at most, and under a fleet's load the writes
+/// that wait longer are refused. The evictor keeps the bucket under its
+/// budget instead.
+fn initialize_bucket(program: &Path, destination: &str, cancel: &Cancel) -> Result<()> {
+    rc(
+        program,
+        &["bucket", "create", "--ignore-existing", destination],
+        cancel,
+    )?;
+    rc(program, &["bucket", "quota", "clear", destination], cancel)?;
+    let mut lifecycle = tempfile::NamedTempFile::new()?;
+    serde_json::to_writer(&mut lifecycle, &retention())?;
+    rc(
+        program,
+        &[
+            "bucket",
+            "lifecycle",
+            "rule",
+            "import",
+            destination,
+            lifecycle
+                .path()
+                .to_str()
+                .context("cache lifecycle path must be UTF-8")?,
+        ],
+        cancel,
+    )
 }
 
 /// How long each snapshot layer in a scope's bucket lives.
@@ -328,14 +343,46 @@ mod tests {
         let cancel = Cancel::install().unwrap();
 
         signal_hook::low_level::raise(signal_hook::consts::signal::SIGTERM).unwrap();
-        let error = rc(&["alias", "list"], &cancel).expect_err("the setup went on");
+        let error =
+            rc(Path::new("rc"), &["alias", "list"], &cancel).expect_err("the setup went on");
 
         assert!(format!("{error:#}").contains("cancelled"), "{error:#}");
     }
 
+    /// A quota makes the store pass every write to the bucket through one
+    /// lock, and a write that waits five seconds for it is refused: ten
+    /// thousand refused writes a day under the fleet's load. The evictor holds
+    /// the budget instead. Leaving the quota unset would keep the one an
+    /// earlier setup stored, so the setup clears it.
+    #[cfg(unix)]
+    #[test]
+    fn a_scope_bucket_carries_no_store_quota() {
+        let _signals = crate::testing::signals();
+        let cancel = Cancel::install().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("rc");
+        let log = directory.path().join("log");
+        crate::testing::install_script(
+            &program,
+            &format!("#!/bin/sh\necho \"$*\" >> '{}'\n", log.display()),
+        );
+
+        initialize_bucket(&program, "ci/kithara-review", &cancel).unwrap();
+
+        let calls = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|call| call.contains("quota"))
+                .collect::<Vec<_>>(),
+            ["bucket quota clear ci/kithara-review"],
+            "{calls}"
+        );
+    }
+
     /// The evictor removes only what sits under the compiler-cache prefix, so
     /// a runner whose environment drops the prefix writes to the bucket root,
-    /// where nothing is evicted, until the quota refuses every write.
+    /// where nothing is evicted, until the disk is full.
     #[test]
     fn a_provisioned_environment_reaches_the_client_with_its_key_prefix() {
         let directory = tempfile::tempdir().unwrap();
@@ -364,9 +411,9 @@ mod tests {
         assert_eq!(scope_quota("trusted", "50GiB").unwrap(), 50 << 30);
     }
 
-    /// The store is handed the bytes the evictor keeps the bucket under, so a
-    /// size the two could read apart is refused. The store reads zero as no
-    /// quota, and the evictor would read it as room for nothing.
+    /// `400GB` and `400G` name a different number of bytes to each reader, so
+    /// only binary units are taken; zero would leave the bucket room for
+    /// nothing.
     #[test]
     fn a_quota_is_a_whole_number_of_binary_units() {
         assert_eq!(size("400GiB").unwrap(), 400 << 30);
