@@ -1171,6 +1171,17 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
     let stable = pins["stable_toolchain"]
         .as_str()
         .context("fixture stable pin")?;
+    let active_toolchain = Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .env("RUSTUP_TOOLCHAIN", nightly)
+        .output()?;
+    assert_success(&active_toolchain);
+    let active_toolchain = String::from_utf8(active_toolchain.stdout)?;
+    let canonical_toolchain = active_toolchain
+        .split_whitespace()
+        .next()
+        .context("canonical fixture nightly toolchain")?;
+    let compiler_tag = format!("{canonical_toolchain}\n");
     let compiler = Command::new("rustup")
         .args(["run", nightly, "rustc", "-vV"])
         .output()?;
@@ -1304,7 +1315,7 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
         .arg("compiler")
         .output()?;
     assert_success(&legacy_compiler);
-    assert_eq!(legacy_compiler.stdout, format!("{nightly}\n").as_bytes());
+    assert_eq!(legacy_compiler.stdout, compiler_tag.as_bytes());
     let refresh = |action: &str| -> Result<Output> {
         Command::new(env!("CARGO_BIN_EXE_xtask"))
             .args(["self-cache", action])
@@ -1343,7 +1354,7 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
         .arg("compiler")
         .output()?;
     assert_success(&refresh_compiler);
-    assert_eq!(refresh_compiler.stdout, format!("{nightly}\n").as_bytes());
+    assert_eq!(refresh_compiler.stdout, compiler_tag.as_bytes());
     let current = fixture.active_generation()?;
     assert_success(&refresh("refresh")?);
     assert_eq!(fixture.active_generation()?, current);
