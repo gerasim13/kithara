@@ -1162,8 +1162,9 @@ fn concurrent_cold_bootstraps_publish_one_generation() -> Result<()> {
 #[test]
 fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Result<()> {
     let fixture = Fixture::new()?;
-    let pins: toml::Value =
-        toml::from_str(&fs::read_to_string(fixture.root.join(".config/ci-pins.toml"))?)?;
+    let pins: toml::Value = toml::from_str(&fs::read_to_string(
+        fixture.root.join(".config/ci-pins.toml"),
+    )?)?;
     let nightly = pins["nightly_toolchain"]
         .as_str()
         .context("fixture nightly pin")?;
@@ -1235,7 +1236,10 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
     let initial_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
     let older_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(9);
     write_sources("original", 1, initial_mtime)?;
-    let lengths = (fs::metadata(&dependency)?.len(), fs::metadata(&caller)?.len());
+    let lengths = (
+        fs::metadata(&dependency)?.len(),
+        fs::metadata(&caller)?.len(),
+    );
     let cold = || -> Result<Output> {
         fixture
             .just_command(&fixture.root, &["_xtask-bootstrap"])?
@@ -1254,7 +1258,10 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
     assert!(fs::metadata(&fixture.bootstrap_artifact)?.modified()? > initial_mtime);
     write_sources("replaced", 2, older_mtime)?;
     assert_eq!(
-        (fs::metadata(&dependency)?.len(), fs::metadata(&caller)?.len()),
+        (
+            fs::metadata(&dependency)?.len(),
+            fs::metadata(&caller)?.len()
+        ),
         lengths
     );
     assert_success(&cold()?);
@@ -1272,7 +1279,15 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
         .arg(&legacy_selector)
         .args(["run", "--locked", "--manifest-path"])
         .arg(fixture.root.join("Cargo.toml"))
-        .args(["-p", "xtask", "--bin", "xtask", "--", "self-cache", "artifact"])
+        .args([
+            "-p",
+            "xtask",
+            "--bin",
+            "xtask",
+            "--",
+            "self-cache",
+            "artifact",
+        ])
         .env("PATH", &real_path)
         .env("CARGO", stable_cargo)
         .env("RUSTUP_TOOLCHAIN", stable)
@@ -1313,7 +1328,10 @@ fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Res
     );
     write_sources("updatedx", 4, older_mtime)?;
     assert_eq!(
-        (fs::metadata(&dependency)?.len(), fs::metadata(&caller)?.len()),
+        (
+            fs::metadata(&dependency)?.len(),
+            fs::metadata(&caller)?.len()
+        ),
         lengths
     );
     assert_success(&refresh("refresh")?);
