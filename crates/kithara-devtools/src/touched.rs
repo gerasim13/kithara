@@ -52,7 +52,11 @@ impl fmt::Display for Touched {
 /// The default branch runs the whole scope. A path with no reviewed owner
 /// runs the default lane whole, so a narrow run is an opt-in coverage
 /// reduction, never the result of failing to classify a changed path.
-pub(crate) fn lanes(root: &Path, test: &TestCommandConfig, scope: &[String]) -> Result<Vec<Touched>> {
+pub(crate) fn lanes(
+    root: &Path,
+    test: &TestCommandConfig,
+    scope: &[String],
+) -> Result<Vec<Touched>> {
     if let Some(unknown) = scope.iter().find(|name| !test.lanes.contains_key(*name)) {
         bail!("test lane `{unknown}` is not configured");
     }

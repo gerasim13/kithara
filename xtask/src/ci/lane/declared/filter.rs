@@ -59,7 +59,11 @@ pub(super) fn apply(
 }
 
 pub(super) fn request<'a>(role: &str, args: &'a [String]) -> Option<&'a [String]> {
-    if role == "just" && args.get(..2).is_some_and(|prefix| prefix == ["test", "run"]) {
+    if role == "just"
+        && args
+            .get(..2)
+            .is_some_and(|prefix| prefix == ["test", "run"])
+    {
         Some(&args[2..])
     } else {
         None

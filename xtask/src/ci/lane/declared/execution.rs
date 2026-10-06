@@ -36,7 +36,11 @@ pub(crate) fn is_selected(
     }
     for step in &lane.steps {
         let role = step.program.as_deref().unwrap_or(&lane.program);
-        let mut args = step.args_by_kind.get(kind.name()).unwrap_or(&step.args).clone();
+        let mut args = step
+            .args_by_kind
+            .get(kind.name())
+            .unwrap_or(&step.args)
+            .clone();
         if let Some(expression) = test_filter {
             super::filter::apply(role, &mut args, expression, project)?;
         }
