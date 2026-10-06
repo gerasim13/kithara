@@ -125,9 +125,10 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     })
     .await
     .expect("create playback host");
+    owner
+        .call(|(queue, _)| queue.set_volume(kithara_integration_tests::e2e::volume()))
+        .await;
     let queue = owner.call(|(queue, _)| queue.control().clone()).await;
-    let volume = kithara_integration_tests::e2e::volume();
-    owner.call(move |(q, _)| q.set_volume(volume)).await;
 
     let queue_for_tick = queue.clone();
     let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(16));

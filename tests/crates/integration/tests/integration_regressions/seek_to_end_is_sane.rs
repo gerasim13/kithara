@@ -8,7 +8,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
-    queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
+    queue::{PlaybackView, Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
@@ -47,7 +47,7 @@ struct SeekEvents {
 
 async fn render_and_tick(queue: &OfflineQueue<TestPools>) {
     queue.render(BLOCK_FRAMES).await;
-    queue.run(|q| q.tick()).await.expect("tick queue");
+    queue.run(QueueControl::tick).await.expect("tick queue");
 }
 
 fn drain_warmup(
@@ -148,7 +148,7 @@ async fn run_case(
         .run(move |q| q.select(id, Transition::None))
         .await
         .expect("select HLS track");
-    queue.run(|q| q.play()).await;
+    queue.run(QueueControl::play).await;
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("precondition: {error}"));
@@ -249,7 +249,7 @@ async fn run_case(
          after seeking to {target:.3}s"
     );
 
-    queue.run(|q| q.clear()).await;
+    queue.run(QueueControl::clear).await;
     queue.close().await;
 }
 

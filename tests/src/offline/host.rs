@@ -138,6 +138,8 @@ where
     }
 }
 
+/// Reads the control in place. A command goes through [`OfflineResident::run`]:
+/// it waits for the control's owner, which an async test body must not.
 impl<P, S> Deref for OfflineResident<P, S>
 where
     P: PlayerControlSource<Schema = S>,

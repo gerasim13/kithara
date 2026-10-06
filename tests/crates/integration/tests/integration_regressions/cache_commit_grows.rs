@@ -9,7 +9,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper,
@@ -108,9 +108,9 @@ async fn load_and_observe(
     store: &AssetStore<TestPools>,
     name: &str,
 ) -> Transfer {
-    let cfg = resource_config(handle, downloader, store, name);
+    let source = TrackSource::Config(Box::new(resource_config(handle, downloader, store, name)));
     let id = queue
-        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .run(move |q| q.append(source))
         .await
         .expect("queue is open while loading the fixture");
     queue
@@ -235,6 +235,6 @@ async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir:
          ({after_first} -> {after_second} bytes)"
     );
 
-    queue.run(|q| q.clear()).await;
+    queue.run(QueueControl::clear).await;
     queue.close().await;
 }

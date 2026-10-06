@@ -173,9 +173,9 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
     let mut warmed = None;
     for block in 0..TOTAL_BLOCKS {
         if let Some((_, speed)) = CHANGES.iter().find(|(at, _)| *at == block) {
-            let rate = *speed;
+            let speed = *speed;
             harness
-                .run(queue.control(), move |q| q.set_rate(rate))
+                .run(queue.control(), move |q| q.set_rate(speed))
                 .await;
             if let Some(recording) = recording.as_mut() {
                 recording.mark(&format!("speed {speed}"));

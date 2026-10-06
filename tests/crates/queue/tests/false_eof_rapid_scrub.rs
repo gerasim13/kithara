@@ -453,6 +453,6 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
         }
     }
 
-    ctx.queue.run(|q| q.clear()).await;
+    ctx.queue.run(QueueControl::clear).await;
     drop(ctx);
 }
