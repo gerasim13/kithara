@@ -533,10 +533,7 @@ async fn local_queue_playlist_behavior(
 
     let duration_0 = queue.duration_seconds().expect("duration for first track");
     let seek_target = duration_0 * 0.4;
-    queue
-        .run(move |q| q.seek(seek_target))
-        .await
-        .expect("seek");
+    queue.run(move |q| q.seek(seek_target)).await.expect("seek");
     wait_for_position_near_event(&mut rx, &queue, seek_target, 1.0, Duration::from_secs(5))
         .await
         .expect("seek landed near target");
