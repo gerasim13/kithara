@@ -33,7 +33,10 @@ use kithara::{
         tokio::sync::broadcast::error::RecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    queue::{
+        ActionAtItemEnd, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
+        Transition,
+    },
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper,
@@ -537,8 +540,8 @@ fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
 /// short window after `select(slow)` lands `slow`'s loader completion right
 /// around `select(fast)`. The completion reads+consumes `pending_select` then
 /// runs `select_item`; the superseding `select(fast)` runs concurrently. The
-/// auto-advance tick is intentionally OMITTED so a track can become `current`
-/// only via `select` or a loader completion — never via end-of-`fast`
+/// queue pauses at the end of an item, so a track can become `current` only
+/// via `select` or a loader completion — never via end-of-`fast`
 /// auto-advance — which isolates a genuine barge-in (slow stomping the
 /// already-current fast) from the legitimate next-in-queue auto-advance.
 ///
@@ -572,9 +575,12 @@ async fn concurrent_completion_race_does_not_barge_in(
 
     for iter in 0..consts::STRESS_ITERATIONS {
         let temp = temp_dir();
-        // No tick: auto-advance is disabled, so `slow` can only become current
-        // via the loader-completion race we are probing.
         let (queue, downloader, store) = build_queue(&temp).await;
+        // The queue pauses where `fast` ends, so `slow` can only become
+        // current via the loader-completion race we are probing.
+        queue
+            .run(|q| q.set_action_at_item_end(ActionAtItemEnd::Pause))
+            .await;
 
         let fast_id = queue
             .run({
@@ -608,7 +614,7 @@ async fn concurrent_completion_race_does_not_barge_in(
 
         // Watch the bounded window by following `CurrentTrackChanged` on the
         // bus instead of polling `current()`: once fast becomes current it must
-        // stay current (no auto-advance exists to move off it), so slow
+        // stay current (the queue pauses at its end), so slow
         // appearing *after* fast is the barge-in. `RACE_OBSERVE` bounds the
         // watch as a hard safety cap, not as a pacing wait — every step blocks
         // on the next real current-track change. The initial `current()`

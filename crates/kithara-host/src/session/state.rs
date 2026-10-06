@@ -29,7 +29,6 @@ use super::{
     transport::{SessionGridGeneration, TransportControl, install},
 };
 use crate::{
-    PlayerMember,
     api::{SlotId, Tap},
     bridge::SharedEq,
     host::HostSettings,
@@ -169,7 +168,7 @@ pub(crate) struct HostRoot {
     /// The session grid the transport last committed.
     #[field(get, vis = "pub(crate)")]
     grid: BeatGridSnapshot,
-    members: Vec<PlayerMember>,
+    decks: Vec<BeatGridId>,
 }
 
 impl HostRoot {
@@ -182,7 +181,7 @@ impl HostRoot {
                 BeatGridRevision::first(),
                 MapAxis::Session(SessionAxis::new(sample_rate, SessionEpoch::new(0))),
             ),
-            members: Vec::new(),
+            decks: Vec::new(),
         }
     }
 
@@ -211,10 +210,9 @@ impl HostRoot {
         ));
     }
 
-    pub(super) fn member(&self, grid_id: BeatGridId) -> Option<&PlayerMember> {
-        self.members
-            .iter()
-            .find(|member| member.grid_id() == grid_id)
+    /// Whether the deck `grid_id` is attached.
+    pub(super) fn holds(&self, grid_id: BeatGridId) -> bool {
+        self.decks.contains(&grid_id)
     }
 
     /// Adds one deck.
@@ -223,11 +221,11 @@ impl HostRoot {
     ///
     /// Returns [`SessionError::DeckAttached`] when its identity is already
     /// in the session.
-    pub(crate) fn attach(&mut self, member: PlayerMember) -> Result<(), SessionError> {
-        if self.member(member.grid_id()).is_some() {
-            return Err(SessionError::DeckAttached(member.grid_id()));
+    pub(crate) fn attach(&mut self, grid_id: BeatGridId) -> Result<(), SessionError> {
+        if self.holds(grid_id) {
+            return Err(SessionError::DeckAttached(grid_id));
         }
-        self.members.push(member);
+        self.decks.push(grid_id);
         Ok(())
     }
 
@@ -238,16 +236,16 @@ impl HostRoot {
     /// Returns [`SessionError::DeckNotFound`] when no deck has that identity.
     pub(crate) fn detach(&mut self, grid_id: BeatGridId) -> Result<(), SessionError> {
         let index = self
-            .members
+            .decks
             .iter()
-            .position(|member| member.grid_id() == grid_id)
+            .position(|held| *held == grid_id)
             .ok_or(SessionError::DeckNotFound(grid_id))?;
-        self.members.remove(index);
+        self.decks.remove(index);
         Ok(())
     }
 
     fn decks(&self) -> Box<[BeatGridId]> {
-        self.members.iter().map(PlayerMember::grid_id).collect()
+        self.decks.as_slice().into()
     }
 }
 
@@ -438,7 +436,7 @@ pub(super) fn register_player<T, S>(
     let next_player_id = player_id
         .checked_add(1)
         .ok_or(SessionError::PlayerIdExhausted)?;
-    if state.root.member(grid_id).is_none() {
+    if !state.root.holds(grid_id) {
         return Err(SessionError::DeckNotFound(grid_id));
     }
     let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools, mixer);

@@ -68,10 +68,11 @@ impl<S> SessionRuntime<S> {
         Self::Offline { platform, runtime }
     }
 
+    /// The offline runtime beside the platform holding its decks.
     #[cfg(feature = "offline")]
-    pub(super) const fn offline_runtime_mut(&mut self) -> Option<&mut OfflineRuntime<S>> {
+    pub(super) const fn offline_mut(&mut self) -> Option<(&Platform<S>, &mut OfflineRuntime<S>)> {
         match self {
-            Self::Offline { runtime, .. } => Some(runtime),
+            Self::Offline { platform, runtime } => Some((platform, runtime)),
             Self::Realtime(_) => None,
         }
     }

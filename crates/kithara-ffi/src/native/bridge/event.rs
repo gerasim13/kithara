@@ -240,8 +240,8 @@ impl EventBridge {
         });
     }
 
-    /// Dedicated OS thread that drives `Queue::tick` and polls current
-    /// time / duration / decoded frontier at ~10 Hz. Uses a plain thread
+    /// Dedicated OS thread that polls current time / duration / decoded
+    /// frontier at ~10 Hz; the Host ticks the queue itself. Uses a plain thread
     /// instead of an async task to avoid blocking the single-threaded
     /// tokio runtime with sync locks held inside the engine.
     fn spawn_time_thread(
@@ -257,8 +257,6 @@ impl EventBridge {
 
             while !cancel.is_cancelled() {
                 sleep(interval);
-                let _ = queue.tick();
-                queue.process_notifications();
                 let view = queue.playback_view();
                 router.emit_if_changed(view.position, &mut last_time, |seconds| {
                     FfiPlayerEvent::TimeChanged { seconds }
@@ -945,9 +943,10 @@ mod tests {
         .await
     }
 
-    /// The polling thread drives `Queue::tick`, including repeat-one replay.
+    /// The process Host's deck clock drives `Queue::tick`, including
+    /// repeat-one replay, with no FFI thread ticking the queue.
     #[kithara::test(tokio, flash(false))]
-    async fn polling_thread_replays_a_consumed_track_after_eof() {
+    async fn the_process_host_replays_a_consumed_repeat_one_track_after_eof() {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
@@ -980,17 +979,6 @@ mod tests {
             "real local track must load before playback; wait: {loaded}"
         );
 
-        let cancel = CancelToken::root();
-        let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
-        let thread = EventBridge::spawn_time_thread(
-            queue.clone(),
-            Arc::new(Router::new(
-                observer,
-                Arc::new(Mutex::new(ItemRegistry::default())),
-            )),
-            cancel.clone(),
-        );
-
         let selecting = queue.clone();
         spawn_blocking(move || selecting.select(id, Transition::None))
             .await
@@ -999,12 +987,10 @@ mod tests {
 
         let replay = wait_for_eof_advance(&mut events, id, 2000).await;
         let status = queue.track(id).map(|entry| entry.status);
-        cancel.cancel();
-        let (joined, owner) = spawn_blocking(move || {
-            let joined = thread.join();
+        let owner = spawn_blocking(move || {
             crate::native::session::remove(&owner)
                 .expect("INVARIANT: the FFI test Queue detaches from its Host");
-            (joined, owner)
+            owner
         })
         .await
         .expect("teardown task completes");
@@ -1013,10 +999,6 @@ mod tests {
         assert!(
             replay.observed(),
             "tick after EOF must replay the consumed repeat-one track; wait: {replay}, status: {status:?}"
-        );
-        assert!(
-            joined.is_ok(),
-            "polling thread must survive the reload it starts"
         );
     }
 

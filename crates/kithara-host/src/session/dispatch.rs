@@ -20,10 +20,7 @@ use super::{
     transport,
     transport::RouteRestartStatus,
 };
-use crate::{
-    PlayerMember,
-    host::{HostSettingsChange, HostSettingsExec},
-};
+use crate::host::{HostSettingsChange, HostSettingsExec};
 
 /// Runs one Host command after settling the transport's receipts, so the
 /// queue's credits come back and the settings catch up even while no tick
@@ -35,7 +32,7 @@ where
     settle_receipts(state);
     match cmd {
         HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
-        HostCmd::Attach { member } => attach_deck(state, member)
+        HostCmd::Attach { grid_id } => attach_deck(state, grid_id)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Detach { grid_id } => detach_deck(state, grid_id)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
@@ -59,13 +56,12 @@ where
 /// already holds is refused.
 fn attach_deck<T, S>(
     state: &mut SessionState<T, S>,
-    member: PlayerMember,
+    grid_id: BeatGridId,
 ) -> Result<(), SessionError> {
-    let grid_id = member.grid_id();
     if state.graph.index_by_grid(grid_id).is_some() {
         return Err(SessionError::DeckAttached(grid_id));
     }
-    state.root.attach(member)?;
+    state.root.attach(grid_id)?;
     state.publish_root();
     Ok(())
 }
@@ -418,7 +414,7 @@ mod tests {
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, SessionState, TapSlot, add_graph_node},
             tests::{
-                graph::{attach_player, fixture_member, state as test_state},
+                graph::{attach_player, state as test_state},
                 ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
             },
         },
@@ -658,7 +654,7 @@ mod tests {
 
         let player_id = register_player(&mut state);
         let grid_id = deck_by_player_id(&state, player_id).grid_id;
-        assert!(state.root.member(grid_id).is_some());
+        assert!(state.root.holds(grid_id));
         assert!(state.root_view.holds(grid_id));
 
         assert!(matches!(
@@ -673,7 +669,7 @@ mod tests {
 
         assert_eq!(state.root.id(), host_id);
         assert!(
-            state.root.member(grid_id).is_some(),
+            state.root.holds(grid_id),
             "the deck outlives its graph registration"
         );
         assert_eq!(deck_count(&state), 0);
@@ -711,7 +707,7 @@ mod tests {
         ));
 
         assert_eq!(state.next_player_id, next_player_id);
-        assert!(state.root.member(grid_id).is_some());
+        assert!(state.root.holds(grid_id));
         assert_eq!(deck_count(&state), 1);
     }
 
@@ -730,7 +726,7 @@ mod tests {
             HostReply::Err(PlayError::Session(SessionError::DeckRegistered(refused)))
                 if refused == grid_id
         ));
-        assert!(state.root.member(grid_id).is_some());
+        assert!(state.root.holds(grid_id));
         assert_eq!(deck_count(&state), 1);
 
         assert!(matches!(
@@ -741,7 +737,7 @@ mod tests {
             run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
             HostReply::Ok
         ));
-        assert!(state.root.member(grid_id).is_none());
+        assert!(!state.root.holds(grid_id));
         assert_eq!(deck_count(&state), 0);
     }
 
@@ -749,15 +745,9 @@ mod tests {
     fn attach_refuses_an_identity_the_session_already_holds() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let sample_rate = state.settings.config().sample_rate();
 
         assert!(matches!(
-            run_host_cmd(
-                &mut state,
-                HostCmd::Attach {
-                    member: fixture_member(grid_id, sample_rate),
-                },
-            ),
+            run_host_cmd(&mut state, HostCmd::Attach { grid_id }),
             HostReply::Err(PlayError::Session(SessionError::DeckAttached(refused)))
                 if refused == grid_id
         ));
@@ -806,7 +796,7 @@ mod tests {
         assert!(matches!(reply, Reply::Err(SessionError::PlayerIdExhausted)));
         assert_eq!(state.next_player_id, u64::MAX);
         assert_eq!(deck_count(&state), 0);
-        assert!(state.root.member(grid_id).is_some());
+        assert!(state.root.holds(grid_id));
         assert!(state.reserved_session_grid.is_some());
     }
 

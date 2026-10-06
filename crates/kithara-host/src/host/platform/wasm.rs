@@ -1,24 +1,38 @@
-use std::{collections::HashMap, mem, num::NonZeroU32};
+use std::{
+    cell::RefCell,
+    mem,
+    num::NonZeroU32,
+    rc::{Rc, Weak},
+};
 
 use kithara_bufpool::HasPool;
 use kithara_command::Live;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time,
+    tokio::task,
+};
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
 
-use super::super::{Host, HostOwned, owner::SessionRuntime};
+use super::{
+    super::{Host, HostOwned, owner::SessionRuntime},
+    decks::Decks,
+};
 use crate::{
-    HostSettings, PlayerMember,
+    HostSettings, consts,
     rt::SessionOutput,
     session::{HostDispatcher, HostProtocol, HostRoot, RootView, web::WebSessionState},
     wasm::HostRoute,
 };
-type Resident = Box<dyn FnMut() -> Result<(), PlayError>>;
+/// The decks a Worker Host holds. The Worker is one thread: the Host borrows
+/// them between its calls, its clock between two sleeps.
+type WorkerDecks = Rc<RefCell<Decks>>;
 type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
 
 pub(in crate::host) struct Platform<S> {
     remote_routes: Mutex<Vec<Arc<HostRoute<S>>>>,
-    remote_residents: Option<HashMap<BeatGridId, Resident>>,
+    remote_decks: Option<WorkerDecks>,
     web_state: Option<WebSessionState<S>>,
 }
 
@@ -27,41 +41,25 @@ impl<S> Platform<S> {
         for route in mem::take(&mut *platform.remote_routes.lock()) {
             route.close();
         }
-        if let Some(residents) = platform.remote_residents.take()
-            && !residents.is_empty()
-        {
-            let resident_count = residents.len();
-            for resident in residents.into_values() {
-                mem::forget(resident);
+        if let Some(decks) = platform.remote_decks.take() {
+            let decks = mem::take(&mut *decks.borrow_mut());
+            let mut deck_count = 0_usize;
+            for deck in decks {
+                deck_count += 1;
+                mem::forget(deck);
             }
-            tracing::error!(
-                ?host_id,
-                resident_count,
-                "remote wasm Host dropped before its players detached; retaining residents"
-            );
+            if deck_count > 0 {
+                tracing::error!(
+                    ?host_id,
+                    deck_count,
+                    "remote wasm Host dropped before its players detached; retaining decks"
+                );
+            }
         }
     }
 
-    fn close_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        let resident = self
-            .remote_residents
-            .as_mut()
-            .and_then(|residents| residents.get_mut(&id))
-            .ok_or_else(|| PlayError::Internal("attached wasm player lost its owner".into()))?;
-        resident()
-    }
-
-    fn insert_resident(
-        &mut self,
-        id: BeatGridId,
-        resident: Resident,
-    ) -> Result<Option<Resident>, PlayError> {
-        self.remote_residents
-            .as_mut()
-            .ok_or_else(|| {
-                PlayError::Internal("wasm Worker resident registry is unavailable".into())
-            })
-            .map(|residents| residents.insert(id, resident))
+    fn close_deck(&self, id: BeatGridId) -> Result<(), PlayError> {
+        self.worker_decks()?.borrow_mut().close(id)
     }
 
     #[cfg(feature = "offline")]
@@ -71,14 +69,22 @@ impl<S> Platform<S> {
                 reason: "offline Host must run in a Web Worker".to_owned(),
             });
         }
-        Ok(Self::remote())
+        Ok(Self::remote(WorkerDecks::default()))
+    }
+
+    /// Ticks the decks of an offline session ahead of one rendered block.
+    #[cfg(feature = "offline")]
+    pub(in crate::host) fn tick_block(&self) {
+        if let Some(decks) = &self.remote_decks {
+            decks.borrow().tick();
+        }
     }
 
     pub(in crate::host) fn owner(web_state: WebSessionState<S>) -> Self {
         Self {
             web_state: Some(web_state),
             remote_routes: Mutex::default(),
-            remote_residents: None,
+            remote_decks: None,
         }
     }
 
@@ -97,48 +103,51 @@ impl<S> Platform<S> {
         Ok((dispatcher, Self::owner(web_state)))
     }
 
+    fn release_deck(&self, id: BeatGridId) -> Result<(), PlayError> {
+        self.worker_decks()?.borrow_mut().release(id).map(drop)
+    }
+
     fn release_on_session_gone<T>(
-        &mut self,
+        &self,
         id: BeatGridId,
         result: Result<T, PlayError>,
     ) -> Result<T, PlayError> {
         match result {
             Err(error @ PlayError::SessionGone { .. }) => {
-                self.release_resident(id)?;
+                self.release_deck(id)?;
                 Err(error)
             }
             result => result,
         }
     }
 
-    fn release_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        let resident = self
-            .remote_residents
-            .as_mut()
-            .and_then(|residents| residents.remove(&id))
-            .ok_or_else(|| {
-                PlayError::Internal("detached wasm player lost its Worker resident".into())
-            })?;
-        drop(resident);
-        Ok(())
-    }
-
-    fn remote() -> Self {
+    fn remote(decks: WorkerDecks) -> Self {
         Self {
             web_state: None,
             remote_routes: Mutex::default(),
-            remote_residents: Some(HashMap::new()),
+            remote_decks: Some(decks),
         }
     }
 
-    fn require_remote(&self) -> Result<(), PlayError> {
-        if self.remote_residents.is_some() {
-            return Ok(());
-        }
-        Err(PlayError::Internal(
-            "wasm players must be inserted from their owning Worker".into(),
-        ))
+    fn worker_decks(&self) -> Result<&WorkerDecks, PlayError> {
+        self.remote_decks.as_ref().ok_or_else(|| {
+            PlayError::Internal("wasm players must be inserted from their owning Worker".into())
+        })
     }
+}
+
+/// Ticks a realtime Worker Host's decks once per session pump interval, on
+/// the Worker that holds them, until the Host lets them go.
+fn spawn_clock(decks: Weak<RefCell<Decks>>) {
+    task::spawn(async move {
+        loop {
+            time::sleep(consts::SESSION_PUMP_INTERVAL).await;
+            let Some(decks) = decks.upgrade() else {
+                break;
+            };
+            decks.borrow().tick();
+        }
+    });
 }
 
 impl<S> Host<S>
@@ -155,20 +164,10 @@ where
     where
         P: PlayerControlSource<Schema = S>,
     {
-        self.session.platform().require_remote()?;
+        let decks = Rc::clone(self.session.platform().worker_decks()?);
         let (grid_id, control) = self.bind_player(&mut player)?;
-        self.dispatcher.attach(PlayerMember::new(grid_id, ()))?;
-        let resident: Resident = Box::new(move || player.close());
-        if let Some(replaced) = self
-            .session
-            .platform_mut()
-            .insert_resident(grid_id, resident)?
-        {
-            mem::forget(replaced);
-            return Err(PlayError::Internal(
-                "wasm player residence changed during insertion".into(),
-            ));
-        }
+        self.dispatcher.attach(grid_id)?;
+        decks.borrow_mut().hold(grid_id, Box::new(player));
         let owned = self.owned::<P>(grid_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;
@@ -186,12 +185,14 @@ where
         root_view: RootView,
         dispatcher: Arc<dyn HostDispatcher<S>>,
     ) -> Self {
+        let decks = WorkerDecks::default();
+        spawn_clock(Rc::downgrade(&decks));
         Self {
             id,
             root_view,
             dispatcher,
             owns_session: false,
-            session: SessionRuntime::realtime(Platform::remote()),
+            session: SessionRuntime::realtime(Platform::remote(decks)),
         }
     }
 
@@ -199,8 +200,8 @@ where
         (self.id, self.root_view.clone())
     }
 
-    /// Closes the lower runtime on the caller thread, then detaches its
-    /// canonical member after graph unregistration has completed.
+    /// Closes the deck where the Host holds it, detaches it after graph
+    /// unregistration has completed, then drops it.
     ///
     /// # Errors
     /// Returns an error when close or canonical detachment fails.
@@ -209,19 +210,14 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         self.validate_removal(player)?;
-        self.remove_resident(player.id())
+        self.remove_deck(player.id())
     }
 
-    fn remove_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        let close_result = self.session.platform_mut().close_resident(id);
-        self.session
-            .platform_mut()
-            .release_on_session_gone(id, close_result)?;
-        let detach_result = self.dispatcher.detach(id);
-        self.session
-            .platform_mut()
-            .release_on_session_gone(id, detach_result)?;
-        self.session.platform_mut().release_resident(id)
+    fn remove_deck(&self, id: BeatGridId) -> Result<(), PlayError> {
+        let platform = self.session.platform();
+        platform.release_on_session_gone(id, platform.close_deck(id))?;
+        platform.release_on_session_gone(id, self.dispatcher.detach(id))?;
+        platform.release_deck(id)
     }
 
     pub(crate) fn web_state(&self) -> Option<&WebSessionState<S>> {
@@ -231,25 +227,42 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        num::NonZeroU32,
+        rc::Rc,
+    };
 
     use delegate::delegate;
-    use kithara_audio::ConsumerWakeMode;
-    use kithara_platform::sync::Arc;
-    use kithara_play::{PlayError, SessionDispatcher};
+    use kithara_audio::{ConsumerWakeMode, SeekOutcome};
+    use kithara_platform::{sync::Arc, time};
+    use kithara_play::{
+        PlayError, SessionDispatcher,
+        player::{PlaybackView, Player},
+    };
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::BeatGridId;
 
-    use super::{Host, Platform, Resident, SessionRuntime};
+    use super::{Host, Platform, SessionRuntime, WorkerDecks, spawn_clock};
     use crate::{
-        HostSettings,
+        HostSettings, consts,
         host::owner::SessionRoot,
         session::{
-            HostCmd, HostDispatcher, HostReply, HostRoot, Reply,
-            protocol::HostDispatchError,
-            tests::graph::{FixtureSession, fixture_member},
+            Cmd, HostCmd, HostDispatcher, HostReply, HostRoot, Reply, protocol::HostDispatchError,
         },
     };
+
+    struct FixtureSession;
+
+    impl<S> SessionDispatcher<S> for FixtureSession {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
+        fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
+            Ok(Reply::Ok)
+        }
+    }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Outcome {
@@ -258,34 +271,55 @@ mod tests {
         OtherError,
     }
 
-    struct ResidentProbe {
+    /// A deck that closes with a chosen outcome and counts its ticks and
+    /// drops.
+    struct DeckProbe {
         close: Outcome,
         drops: Rc<RefCell<usize>>,
+        ticks: Rc<Cell<usize>>,
     }
 
-    impl Drop for ResidentProbe {
+    impl Drop for DeckProbe {
         fn drop(&mut self) {
             *self.drops.borrow_mut() += 1;
         }
     }
 
-    impl ResidentProbe {
+    impl Player for DeckProbe {
         fn close(&mut self) -> Result<(), PlayError> {
             match self.close {
                 Outcome::Ok => Ok(()),
                 Outcome::SessionGone => Err(PlayError::SessionGone {
-                    reason: "fixture resident close",
+                    reason: "fixture deck close",
                 }),
-                Outcome::OtherError => {
-                    Err(PlayError::Internal("fixture resident close failed".into()))
-                }
+                Outcome::OtherError => Err(PlayError::Internal("fixture deck close failed".into())),
             }
+        }
+
+        fn pause(&self) {}
+
+        fn play(&self) {}
+
+        fn playback_view(&self) -> PlaybackView {
+            PlaybackView::default()
+        }
+
+        fn seek_seconds(&self, _seconds: f64) -> Result<SeekOutcome, PlayError> {
+            Err(PlayError::Internal("a fixture deck does not seek".into()))
+        }
+
+        fn tick(&self) -> Result<(), PlayError> {
+            self.ticks.set(self.ticks.get() + 1);
+            Ok(())
         }
     }
 
-    fn resident(close: Outcome, drops: Rc<RefCell<usize>>) -> Resident {
-        let mut probe = ResidentProbe { close, drops };
-        Box::new(move || probe.close())
+    fn deck(close: Outcome, drops: &Rc<RefCell<usize>>) -> Box<DeckProbe> {
+        Box::new(DeckProbe {
+            close,
+            drops: Rc::clone(drops),
+            ticks: Rc::default(),
+        })
     }
 
     struct Dispatcher {
@@ -332,10 +366,14 @@ mod tests {
         }
     }
 
-    fn fixture(
-        close: Outcome,
-        detach: Outcome,
-    ) -> (Host<TestPools>, BeatGridId, Rc<RefCell<usize>>) {
+    struct Fixture {
+        host: Host<TestPools>,
+        deck: BeatGridId,
+        drops: Rc<RefCell<usize>>,
+        ticks: Rc<Cell<usize>>,
+    }
+
+    fn fixture(close: Outcome, detach: Outcome) -> Fixture {
         let sample_rate = NonZeroU32::new(44_100).expect("fixture sample rate");
         let SessionRoot {
             id: host_id,
@@ -345,36 +383,41 @@ mod tests {
             HostSettings::builder().sample_rate(sample_rate).build(),
         )
         .expect("fixture Host session");
-        let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
-        root.attach(fixture_member(resident_id, sample_rate))
-            .expect("fixture resident attachment");
+        let deck_id = BeatGridId::allocate().expect("fixture deck grid id");
+        root.attach(deck_id).expect("fixture deck attachment");
 
         let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
             detach,
             session: FixtureSession,
             root: RefCell::new(root),
         });
-        let drops = Rc::new(RefCell::new(0));
-        let mut platform = Platform::remote();
-        let replaced = platform
-            .insert_resident(resident_id, resident(close, Rc::clone(&drops)))
-            .expect("fixture resident registry");
-        assert!(replaced.is_none());
+        let drops = Rc::default();
+        let probe = deck(close, &drops);
+        let ticks = Rc::clone(&probe.ticks);
+        let decks = WorkerDecks::default();
+        decks.borrow_mut().hold(deck_id, probe);
         let host = Host {
             root_view,
             dispatcher,
             id: host_id,
             owns_session: false,
-            session: SessionRuntime::realtime(platform),
+            session: SessionRuntime::realtime(Platform::remote(decks)),
         };
-        (host, resident_id, drops)
+        Fixture {
+            host,
+            deck: deck_id,
+            drops,
+            ticks,
+        }
     }
 
     #[kithara::test(wasm, flash(false))]
-    fn successful_remove_releases_resident() {
-        let (mut host, resident, drops) = fixture(Outcome::Ok, Outcome::Ok);
+    fn successful_remove_releases_the_deck() {
+        let Fixture {
+            host, deck, drops, ..
+        } = fixture(Outcome::Ok, Outcome::Ok);
 
-        host.remove_resident(resident).expect("remove resident");
+        host.remove_deck(deck).expect("remove deck");
 
         assert_eq!(*drops.borrow(), 1);
     }
@@ -382,38 +425,73 @@ mod tests {
     #[kithara::test(wasm, flash(false))]
     #[case::closing(Outcome::SessionGone, Outcome::Ok)]
     #[case::detaching(Outcome::Ok, Outcome::SessionGone)]
-    fn session_gone_releases_resident(#[case] close: Outcome, #[case] detach: Outcome) {
-        let (mut host, resident, drops) = fixture(close, detach);
+    fn session_gone_releases_the_deck(#[case] close: Outcome, #[case] detach: Outcome) {
+        let Fixture {
+            host, deck, drops, ..
+        } = fixture(close, detach);
 
         assert!(matches!(
-            host.remove_resident(resident),
+            host.remove_deck(deck),
             Err(PlayError::SessionGone { .. })
         ));
         assert_eq!(*drops.borrow(), 1);
     }
 
     #[kithara::test(wasm, flash(false))]
-    fn other_errors_retain_resident() {
+    fn other_errors_retain_the_deck() {
         for (close, detach) in [
             (Outcome::OtherError, Outcome::Ok),
             (Outcome::Ok, Outcome::OtherError),
         ] {
-            let (mut host, resident, drops) = fixture(close, detach);
+            let Fixture {
+                host,
+                deck,
+                drops,
+                ticks,
+            } = fixture(close, detach);
 
             assert!(matches!(
-                host.remove_resident(resident),
+                host.remove_deck(deck),
                 Err(PlayError::Internal(_))
             ));
             assert_eq!(*drops.borrow(), 0);
-            assert!(
-                host.session
-                    .platform()
-                    .remote_residents
-                    .as_ref()
-                    .is_some_and(|residents| residents.contains_key(&resident))
-            );
+            host.session
+                .platform()
+                .worker_decks()
+                .expect("a Worker Host holds decks")
+                .borrow()
+                .tick();
+            assert_eq!(ticks.get(), 1, "the Host still holds the deck");
             drop(host);
             assert_eq!(*drops.borrow(), 0);
         }
+    }
+
+    #[kithara::test(wasm)]
+    async fn the_worker_clock_ticks_a_held_deck_until_it_is_released() {
+        let decks = WorkerDecks::default();
+        spawn_clock(Rc::downgrade(&decks));
+        let drops = Rc::default();
+        let probe = deck(Outcome::Ok, &drops);
+        let ticks = Rc::clone(&probe.ticks);
+        let id = BeatGridId::allocate().expect("fixture deck grid id");
+
+        decks.borrow_mut().hold(id, probe);
+        while ticks.get() < 2 {
+            time::sleep(consts::SESSION_PUMP_INTERVAL).await;
+        }
+        let released = decks
+            .borrow_mut()
+            .release(id)
+            .expect("the Host takes the deck back");
+        let at_release = ticks.get();
+        time::sleep(consts::SESSION_PUMP_INTERVAL * 3).await;
+
+        assert_eq!(
+            ticks.get(),
+            at_release,
+            "a released deck is no longer ticked"
+        );
+        drop(released);
     }
 }

@@ -1,4 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
+mod deck_pass;
+mod decks;
+#[cfg(not(target_arch = "wasm32"))]
 mod native;
 mod result;
 #[cfg(target_arch = "wasm32")]

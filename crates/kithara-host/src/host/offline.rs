@@ -11,7 +11,7 @@ use kithara_play::PlayError;
 use kithara_signal::AudioSpec;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
-use super::{Host, HostConfig};
+use super::{Host, HostConfig, platform::Platform};
 use crate::{
     HostSettings,
     rt::SessionOutput,
@@ -150,8 +150,11 @@ where
         self.client.position().map_err(OfflineRenderError::backend)
     }
 
+    /// Renders `request` block by block, the Host's decks ticking ahead of
+    /// each block.
     fn render(
         &mut self,
+        decks: &Platform<S>,
         request: &OfflineRenderRequest,
         spec: AudioSpec,
         cancel: &CancelToken,
@@ -179,6 +182,7 @@ where
             let remaining = request.frames().start - position;
             let frames = remaining.min(u64::from(self.max_block_frames.get()));
             let frames = u32::try_from(frames).map_err(OfflineRenderError::backend)?;
+            decks.tick_block();
             let _ = self.render_at(position, frames)?;
             position = position
                 .checked_add(u64::from(frames))
@@ -193,6 +197,7 @@ where
             let remaining = request.frames().end - position;
             let frames = remaining.min(u64::from(self.max_block_frames.get()));
             let frames = u32::try_from(frames).map_err(OfflineRenderError::backend)?;
+            decks.tick_block();
             let block = self.render_at(position, frames)?;
             if cancel.is_cancelled() {
                 return Err(OfflineRenderError::Cancelled { rendered_frames });
@@ -252,10 +257,11 @@ where
             ))
         })?;
         let spec = AudioSpec::new(consts::CHANNELS, rate);
-        self.session
-            .offline_runtime_mut()
-            .ok_or(OfflineRenderError::SessionModeUnavailable)?
-            .render(request, spec, cancel, sink)
+        let (platform, runtime) = self
+            .session
+            .offline_mut()
+            .ok_or(OfflineRenderError::SessionModeUnavailable)?;
+        runtime.render(platform, request, spec, cancel, sink)
     }
 }
 

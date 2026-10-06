@@ -1,27 +1,19 @@
 use std::num::NonZeroU32;
 
 use firewheel::FirewheelContext;
-use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_effects::LimiterConfig;
-use kithara_platform::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use kithara_play::player::Player;
-use kithara_play::{
-    PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    player::PlayerControlSource,
-};
 #[cfg(test)]
-use kithara_test_utils::bufpool::{TestPools, pools};
+use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::BeatGridId;
 
 use super::super::{
     dispatch::{run_cmd, run_host_cmd},
-    protocol::{Cmd, HostCmd, HostReply, Reply, SessionDispatcher},
+    protocol::{Cmd, HostCmd, HostReply, Reply},
     state::{HostRoot, RootView, SessionState},
 };
-use crate::{HostSettings, PlayerMember, rt::SessionOutput};
+use crate::{HostSettings, rt::SessionOutput};
 /// Test-only owner for the real Host graph running on an injected backend.
 ///
 /// The production Host surface never exposes its raw session state. This
@@ -54,10 +46,10 @@ where
 
     #[must_use]
     pub(crate) fn exec(&mut self, cmd: Cmd<S>) -> Reply {
-        if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
-            && self.state.root.member(*grid_id).is_none()
+        if let Cmd::RegisterPlayer { grid_id, .. } = &cmd
+            && !self.state.root.holds(*grid_id)
         {
-            attach_player_with_id(&mut self.state, *grid_id, pools.clone());
+            attach_player_with_id(&mut self.state, *grid_id);
         }
         run_cmd(&mut self.state, cmd)
     }
@@ -79,18 +71,6 @@ where
         Self {
             state: state_for(sample_rate, start_stream_fn),
         }
-    }
-}
-
-pub(crate) struct FixtureSession;
-
-impl<S> SessionDispatcher<S> for FixtureSession {
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
-        Ok(Reply::Ok)
     }
 }
 
@@ -127,7 +107,7 @@ where
 #[cfg(test)]
 pub(crate) fn attach_player<T>(state: &mut SessionState<T, TestPools>) -> BeatGridId {
     let grid_id = BeatGridId::allocate().expect("fixture player grid id");
-    attach_player_with_id(state, grid_id, pools());
+    attach_player_with_id(state, grid_id);
     grid_id
 }
 
@@ -136,7 +116,8 @@ pub(crate) fn root_with_player(sample_rate: NonZeroU32) -> (HostRoot, RootView, 
     let host_grid_id = BeatGridId::allocate().expect("fixture host grid id");
     let mut root = HostRoot::new(host_grid_id, sample_rate);
     let player_grid_id = BeatGridId::allocate().expect("fixture player grid id");
-    attach_member(&mut root, player_grid_id, pools(), sample_rate);
+    root.attach(player_grid_id)
+        .expect("fixture player attachment");
     let root_view = RootView::new(
         &root,
         HostSettings::builder().sample_rate(sample_rate).build(),
@@ -144,63 +125,10 @@ pub(crate) fn root_with_player(sample_rate: NonZeroU32) -> (HostRoot, RootView, 
     (root, root_view, player_grid_id)
 }
 
-fn attach_player_with_id<T, S>(
-    state: &mut SessionState<T, S>,
-    grid_id: BeatGridId,
-    pools: PoolRegion<S>,
-) where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let sample_rate = state.root_view.grid().axis().sample_rate();
-    attach_member(&mut state.root, grid_id, pools, sample_rate);
-    state.publish_root();
-}
-
-fn attach_member<S>(
-    root: &mut HostRoot,
-    grid_id: BeatGridId,
-    pools: PoolRegion<S>,
-    sample_rate: NonZeroU32,
-) where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .grid_id(grid_id)
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .build(),
-    );
-    root.attach(target_member(player, sample_rate))
+fn attach_player_with_id<T, S>(state: &mut SessionState<T, S>, grid_id: BeatGridId) {
+    state
+        .root
+        .attach(grid_id)
         .expect("fixture player attachment");
-}
-
-#[cfg(test)]
-pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> PlayerMember {
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .grid_id(grid_id)
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .build(),
-    );
-    target_member(player, sample_rate)
-}
-
-/// The member the Host builds for `player` once it binds to a session at
-/// `sample_rate`.
-fn target_member<S>(mut player: PlayerImpl<S>, sample_rate: NonZeroU32) -> PlayerMember
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let grid_id = player
-        .attach_session(SessionBinding::new(Arc::new(FixtureSession), sample_rate))
-        .expect("fixture player binds its session");
-    #[cfg(not(target_arch = "wasm32"))]
-    let held = Box::new(player);
-    #[cfg(target_arch = "wasm32")]
-    let held = ();
-    PlayerMember::new(grid_id, held)
+    state.publish_root();
 }

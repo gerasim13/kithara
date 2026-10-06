@@ -337,6 +337,64 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     harness.close().await;
 }
 
+/// The Host ticks the decks it holds: a queue moves on to its next track,
+/// announces it and sounds it while the Host renders, with no caller ticking
+/// the queue.
+#[kithara::test(tokio)]
+async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let queue = harness
+        .insert_control(Queue::new(queue_config(&harness, 0.0)))
+        .await;
+    let a = assets::constant_wav_quiet_0_4s();
+    let id_a = append_loaded(&harness, &queue, &a).await;
+    let b = assets::constant_wav_loud_0_4s();
+    let id_b = append_loaded(&harness, &queue, &b).await;
+    let mut events = queue.subscribe();
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select track A");
+
+    let mut announced = false;
+    let mut pcm = Vec::new();
+    for _ in 0..MAX_BLOCKS {
+        pcm.extend(harness.render(BLOCK_FRAMES).await);
+        while let Ok(envelope) = events.try_recv() {
+            announced |= matches!(
+                envelope.event,
+                TestEvent::Queue(QueueEvent::CurrentTrackChanged { id }) if id == Some(id_b)
+            );
+        }
+        if announced {
+            break;
+        }
+    }
+
+    assert!(
+        announced,
+        "the queue announces track B with no caller ticking it"
+    );
+    let onset = first_onset_frame(&pcm, 0.005).expect("track A sounds");
+    let loud = pcm
+        .chunks_exact(usize::from(CHANNELS))
+        .skip(onset)
+        .any(|frame| frame.iter().any(|sample| sample.abs() > 0.5));
+    assert!(
+        loud,
+        "track B sounds after track A with no caller ticking the queue"
+    );
+    assert_eq!(queue.current_index(), Some(1));
+    drop(queue);
+    harness.close().await;
+}
+
 /// A gapless queue hands the next track to the deck before the current one
 /// ends, chained behind it, so the next track's first frame follows the
 /// current one's last with no silence between them, and it becomes current
@@ -448,9 +506,9 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
     const TRACK_B_LEVEL: f32 = 0.45;
     const STITCH_TOLERANCE_FRAMES: usize = BLOCK_FRAMES / 8;
     const LEAD_SECS: f32 = 0.5;
-    /// Blocks A plays before the first tick that arms: ≈1.1 s, inside the
-    /// lead of its 1.5 s end.
-    const UNTICKED_BLOCKS: usize = 95;
+    /// Blocks A plays before its end comes inside the lead: ≈0.93 s of its
+    /// 1.5 s.
+    const OUTSIDE_LEAD_BLOCKS: usize = 80;
     /// More batches than the deck's command ring holds.
     const FLOOD: usize = 64;
 
@@ -480,35 +538,40 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
         .await
         .expect("select track A");
 
-    // A tick takes A's start on, so its playhead is published; A is far from
-    // its end, so nothing is armed yet.
-    let mut pcm = harness.render(BLOCK_FRAMES).await;
-    let _ = harness.run(&queue, QueueControl::tick).await;
-    for _ in 1..UNTICKED_BLOCKS {
+    // The Host ticks the deck ahead of every block it renders; A is far from
+    // its end for these, so nothing is armed yet.
+    let mut pcm = Vec::new();
+    for _ in 0..OUTSIDE_LEAD_BLOCKS {
         pcm.extend(harness.render(BLOCK_FRAMES).await);
     }
-    harness
-        .run(&queue, |q| {
-            for _ in 0..FLOOD {
-                q.set_volume(1.0);
-            }
-        })
-        .await;
-    let _ = harness.run(&queue, QueueControl::tick).await;
-    assert_eq!(
-        queue.track(id_b).map(|entry| entry.status),
-        Some(TrackStatus::Consumed),
-        "B's resource went with the attach the deck refused, so B must reload"
-    );
+    // Fill the deck's command ring ahead of each block from here, so the tick
+    // that first finds A's end inside the lead has no room to arm B. An arm
+    // that went through would leave B loaded and A ending.
+    while queue.track(id_b).map(|entry| entry.status) != Some(TrackStatus::Consumed) {
+        assert!(
+            pcm.len() < TRACK_FRAMES * usize::from(CHANNELS),
+            "B's resource went with the attach the deck refused, so B must reload \
+             before A ends"
+        );
+        harness
+            .run(&queue, |q| {
+                for _ in 0..FLOOD {
+                    q.set_volume(1.0);
+                }
+            })
+            .await;
+        pcm.extend(harness.render(BLOCK_FRAMES).await);
+    }
 
+    // Subscribe only now: the refused arm already published B's `Consumed`,
+    // which the wait would take for a finished reload. The tick ahead of the
+    // next block starts that reload.
     let mut events = queue.subscribe();
     pcm.extend(harness.render(BLOCK_FRAMES).await);
-    let _ = harness.run(&queue, QueueControl::tick).await;
     wait_for_loader_done_event(&mut events, &queue, id_b, LOCAL_LOAD_DEADLINE)
         .await
         .expect("track B reloads");
     for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
-        let _ = harness.run(&queue, QueueControl::tick).await;
         pcm.extend(harness.render(BLOCK_FRAMES).await);
     }
 
@@ -566,6 +629,23 @@ async fn gapless_queue_with_an_armed_successor()
     (harness, queue, id_a, id_b)
 }
 
+/// Renders blocks until the one in which the deck stitches in the loud
+/// successor behind the quiet track it plays. The Host ticks the queue only
+/// ahead of a block, so no tick has read the stitch yet.
+async fn render_through_the_stitch(harness: &OfflinePlayer, block_budget: usize) {
+    /// Between `constant_wav_quiet_1_5s` (≈0.1) and `constant_wav_loud_1_5s`
+    /// (≈0.8).
+    const LOUD_LEVEL: f32 = 0.45;
+
+    for _ in 0..block_budget {
+        let block = harness.render(BLOCK_FRAMES).await;
+        if block.iter().any(|sample| sample.abs() > LOUD_LEVEL) {
+            return;
+        }
+    }
+    panic!("the deck must stitch in its successor within {block_budget} blocks");
+}
+
 /// Asking the queue to pause at the current track's end takes effect at
 /// once: the deck stops at that end even when no tick comes before it,
 /// instead of stitching in the gapless successor armed behind it.
@@ -576,10 +656,15 @@ async fn pausing_at_the_end_takes_back_the_armed_successor_at_once() {
     /// Between A's level (≈0.1) and B's (≈0.8).
     const TRACK_B_LEVEL: f32 = 0.45;
 
-    let (harness, queue, _, _) = gapless_queue_with_an_armed_successor().await;
+    let (harness, queue, _, id_b) = gapless_queue_with_an_armed_successor().await;
     harness
         .run(&queue, |q| q.set_action_at_item_end(ActionAtItemEnd::Pause))
         .await;
+    assert_eq!(
+        queue.track(id_b).map(|entry| entry.status),
+        Some(TrackStatus::Consumed),
+        "the call itself takes B off the deck, ahead of any tick"
+    );
 
     let mut pcm = Vec::new();
     for _ in 0..TRACK_FRAMES / BLOCK_FRAMES + ARMING_BLOCKS {
@@ -604,10 +689,13 @@ async fn a_pause_after_the_deck_stitches_in_the_successor_leaves_the_queue_on_it
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
 
-    let (harness, queue, _, id_b) = gapless_queue_with_an_armed_successor().await;
-    for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
-        let _ = harness.render(BLOCK_FRAMES).await;
-    }
+    let (harness, queue, id_a, id_b) = gapless_queue_with_an_armed_successor().await;
+    render_through_the_stitch(&harness, TRACK_FRAMES / BLOCK_FRAMES).await;
+    assert_eq!(
+        queue.current().map(|entry| entry.id),
+        Some(id_a),
+        "no tick has read the stitch before the pause"
+    );
     harness.run(&queue, QueueControl::pause).await;
     let _ = harness.run(&queue, QueueControl::tick).await;
 
@@ -633,12 +721,15 @@ async fn removing_a_successor_the_deck_already_stitched_in_advances_past_it() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
 
-    let (harness, queue, _, id_b) = gapless_queue_with_an_armed_successor().await;
+    let (harness, queue, id_a, id_b) = gapless_queue_with_an_armed_successor().await;
     let c = assets::constant_wav_four_1_5s();
     let id_c = append_loaded(&harness, &queue, &c).await;
-    for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
-        let _ = harness.render(BLOCK_FRAMES).await;
-    }
+    render_through_the_stitch(&harness, TRACK_FRAMES / BLOCK_FRAMES).await;
+    assert_eq!(
+        queue.current().map(|entry| entry.id),
+        Some(id_a),
+        "no tick has read the stitch before the removal"
+    );
     harness
         .run(&queue, move |q| q.remove(id_b))
         .await
@@ -662,13 +753,18 @@ async fn a_track_inserted_after_the_playing_one_follows_it_without_a_tick_before
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
 
-    let (harness, queue, id_a, _) = gapless_queue_with_an_armed_successor().await;
+    let (harness, queue, id_a, id_b) = gapless_queue_with_an_armed_successor().await;
     let c = assets::constant_wav_four_1_5s();
     let mut events = queue.subscribe();
     let id_c = harness
         .run(&queue, move |q| q.insert(asset_source(&c), Some(id_a)))
         .await
         .expect("insert track C after A");
+    assert_eq!(
+        queue.track(id_b).map(|entry| entry.status),
+        Some(TrackStatus::Consumed),
+        "the insert itself takes the displaced B off the deck, ahead of any tick"
+    );
     wait_for_loader_done_event(&mut events, &queue, id_c, LOCAL_LOAD_DEADLINE)
         .await
         .expect("track C loads");

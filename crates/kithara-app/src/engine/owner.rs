@@ -289,7 +289,6 @@ impl Engine {
         self.broadcast.poll(self.session.host());
         self.finish_drain();
         for deck in &self.decks {
-            let _ = deck.controller.queue().tick();
             deck.controller.refresh_continuous();
         }
     }

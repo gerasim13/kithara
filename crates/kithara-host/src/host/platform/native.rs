@@ -6,12 +6,15 @@ use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
 
+#[cfg(feature = "offline")]
+use super::decks::Decks;
 use super::{
     super::{Host, HostOwned},
     PlatformResult,
+    deck_pass::{DeckPass, DeckThread},
 };
 use crate::{
-    HostSettings, PlayerMember,
+    HostSettings,
     rt::SessionOutput,
     session::{HostDispatcher, HostProtocol, HostRoot, RootView},
 };
@@ -31,21 +34,32 @@ impl<S> PlatformResult<Self> for StartedPlatform<S> {
 }
 
 pub(in crate::host) struct Platform<S> {
+    decks: DeckPass,
     marker: PhantomData<fn() -> S>,
 }
 
 impl<S> Platform<S> {
-    pub(in crate::host) const fn close(_platform: &mut Self, _host_id: BeatGridId) {}
-
-    #[cfg(feature = "offline")]
-    pub(in crate::host) const fn offline() -> Self {
-        Self::owner()
+    /// Drops the Host's decks while the session they talk to still runs.
+    pub(in crate::host) fn close(platform: &mut Self, _host_id: BeatGridId) {
+        platform.decks.close();
     }
 
-    pub(in crate::host) const fn owner() -> Self {
+    #[cfg(feature = "offline")]
+    pub(in crate::host) fn offline() -> Self {
+        Self::owner(DeckPass::Blocks(Decks::default()))
+    }
+
+    const fn owner(decks: DeckPass) -> Self {
         Self {
+            decks,
             marker: PhantomData,
         }
+    }
+
+    /// Ticks the decks of an offline session ahead of one rendered block.
+    #[cfg(feature = "offline")]
+    pub(in crate::host) fn tick_block(&self) {
+        self.decks.tick_block();
     }
 
     pub(in crate::host) fn realtime(
@@ -60,7 +74,10 @@ impl<S> Platform<S> {
     {
         let dispatcher =
             crate::session::native::spawn::<S>(root, view, output_block_frames, output, settings);
-        (dispatcher, Self::owner())
+        (
+            dispatcher,
+            Self::owner(DeckPass::Clock(DeckThread::spawn())),
+        )
     }
 }
 
@@ -79,8 +96,16 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         let (grid_id, control) = self.bind_player(&mut player)?;
-        self.dispatcher
-            .attach(PlayerMember::new(grid_id, Box::new(player)))?;
+        self.dispatcher.attach(grid_id)?;
+        if let Err(error) = self
+            .session
+            .platform_mut()
+            .decks
+            .hold(grid_id, Box::new(player))
+        {
+            self.dispatcher.detach(grid_id)?;
+            return Err(error);
+        }
         let owned = self.owned::<P>(grid_id, control);
         if let Err(error) = P::prepare_control(owned.control()) {
             self.remove(&owned)?;
@@ -89,8 +114,9 @@ where
         Ok(owned)
     }
 
-    /// Closes the lower runtime on the caller thread, then detaches its
-    /// canonical member after graph unregistration has completed.
+    /// Closes the lower runtime on the caller thread, detaches its deck once
+    /// graph unregistration has completed, then takes the deck back and drops
+    /// it.
     ///
     /// # Errors
     /// Returns an error when close or canonical detachment fails.
@@ -100,6 +126,11 @@ where
     {
         self.validate_removal(player)?;
         P::close_control(player.control())?;
-        self.dispatcher.detach(player.id())
+        self.dispatcher.detach(player.id())?;
+        self.session
+            .platform_mut()
+            .decks
+            .release(player.id())
+            .map(drop)
     }
 }

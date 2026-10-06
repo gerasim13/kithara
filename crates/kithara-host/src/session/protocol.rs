@@ -9,7 +9,7 @@ pub(crate) use kithara_play::{
 use kithara_signal::SessionFrame;
 use kithara_warp::BeatGridId;
 
-use crate::{PlayerMember, api::Tap, host::HostSettingsChange};
+use crate::{api::Tap, host::HostSettingsChange};
 
 /// Opens the audio stream a session runs on and hands back the object that
 /// owns it. Firewheel no longer holds the backend, so the session keeps the
@@ -20,7 +20,7 @@ pub(crate) type StartStreamFn<T> =
 pub(crate) enum HostCmd<S> {
     Play(Cmd<S>),
     Attach {
-        member: PlayerMember,
+        grid_id: BeatGridId,
     },
     Detach {
         grid_id: BeatGridId,
@@ -85,8 +85,8 @@ impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
 
 pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
     /// Adds one deck to the session on its owner thread.
-    fn attach(&self, member: PlayerMember) -> Result<(), PlayError> {
-        change_members(self, HostCmd::Attach { member })
+    fn attach(&self, grid_id: BeatGridId) -> Result<(), PlayError> {
+        change_members(self, HostCmd::Attach { grid_id })
     }
 
     /// Removes the deck `grid_id` from the session on its owner thread.

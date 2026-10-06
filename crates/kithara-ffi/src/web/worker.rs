@@ -9,7 +9,6 @@ use kithara::{
     platform::{
         sync::{Arc, mpsc},
         thread::{assert_not_main_thread, keep_worker_alive},
-        time::{Duration, sleep},
         tokio::task::spawn as task_spawn,
     },
     play::{
@@ -78,12 +77,12 @@ macro_rules! clog {
 /// Entry called inside a Web Worker thread (via `thread::spawn`).
 ///
 /// Inserts and owns one [`FfiQueue`] member in the canonical Host (mirroring
-/// [`NativeInner`](crate::native::inner::NativeInner)'s construction), spawns
-/// a periodic `tick` loop, then drives the command channel.
+/// [`NativeInner`](crate::native::inner::NativeInner)'s construction), then
+/// drives the command channel. The Host ticks the queue it holds.
 ///
 /// `keep_worker_alive` is required: without it the Worker's spawn closure returns immediately since
 /// it only spawns async tasks, and `wasm_safe_thread` then closes the Worker, killing the command
-/// and tick loops.
+/// loop and the Host's deck clock.
 pub(crate) fn worker_main(
     cmd_rx: mpsc::Receiver<WorkerCmd>,
     host_sender: wasm::HostSender<FfiPools>,
@@ -126,7 +125,6 @@ pub(crate) fn worker_main(
 
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
-        spawn_tick_loop(queue.clone());
         crate::web::observer::source::spawn(&queue);
 
         while let Ok(cmd) = cmd_rx.recv_async().await {
@@ -139,29 +137,6 @@ pub(crate) fn worker_main(
             Err(error) => {
                 clog!("[WORKER] host queue removal failed; resident retained: {error}");
             }
-        }
-    });
-}
-
-/// Spawn the periodic `FfiQueue::tick` loop. `tick` is synchronous; the
-/// loop awaits a `setTimeout`-backed `sleep` between ticks so it yields
-/// to the worker's task executor without busy-spinning.
-fn spawn_tick_loop(queue: FfiQueueControl) {
-    /// Tick cadence for the queue's internal `tick()` loop, in
-    /// milliseconds. Drives auto-advance / crossfade arming and drains
-    /// engine events. Wall clock; not tied to the audio-thread process
-    /// callback.
-    const TICK_INTERVAL_MS: u64 = 100;
-
-    task_spawn(async move {
-        loop {
-            if queue.is_closed() {
-                break;
-            }
-            if let Err(err) = queue.tick() {
-                clog!("[WORKER] queue tick error: {err}");
-            }
-            sleep(Duration::from_millis(TICK_INTERVAL_MS)).await;
         }
     });
 }

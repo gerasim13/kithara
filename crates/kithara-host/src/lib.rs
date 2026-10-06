@@ -15,7 +15,6 @@ pub mod wasm;
 
 pub use api::{CrossfaderBus, Tap, crossfader_gain};
 pub use error::PlayError;
-pub(crate) use host::PlayerMember;
 pub use host::{
     Host, HostConfig, HostOwned, HostSettings, HostSettingsChange, HostSettingsControl,
 };

@@ -23,12 +23,6 @@ where
         self.config.crossfade_settings()
     }
 
-    /// Drain pending player-side notifications. Called by FFI tick
-    /// loops after [`Self::tick`].
-    pub fn process_notifications(&self) {
-        self.command(|queue| queue.player.process_notifications());
-    }
-
     /// Reset all EQ bands to 0 dB.
     ///
     /// # Errors

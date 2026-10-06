@@ -96,11 +96,13 @@ fn complete_shutdown<T, S>(
     }
 }
 
-fn receive_message<S>(
-    cmd_rx: &mpsc::Receiver<HostCmdMsg<S>>,
+/// Waits for the next message: until `deadline` while `active`, so the caller
+/// can pump on its interval, and with no deadline otherwise.
+pub(crate) fn receive_message<M>(
+    cmd_rx: &mpsc::Receiver<M>,
     active: bool,
     deadline: Instant,
-) -> Result<Option<HostCmdMsg<S>>, mpsc::RecvTimeoutError> {
+) -> Result<Option<M>, mpsc::RecvTimeoutError> {
     if active {
         match cmd_rx.recv_timeout(deadline) {
             Ok(message) => Ok(Some(message)),
