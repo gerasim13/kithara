@@ -1,21 +1,30 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Empty when absent: cargo reads that as "no wrapper", not as an error.
-sccache := `command -v sccache 2>/dev/null || true`
+# Empty when absent: cargo reads that as "no wrapper", not as an error. Empty on
+# Windows as well: sccache cannot spawn the compiler `ffmpeg-sys-next` asks for
+# there, and the wrapper below is a POSIX script.
+sccache := if os_family() == "windows" { "" } else { `command -v sccache 2>/dev/null || true` }
 
-export RUSTC_WRAPPER := sccache
+# sccache keys a Rust compile on every `CARGO_*` value, and Cargo builds at a
+# lane slot's own path, which native build tools record. The wrapper runs
+# sccache without the build directory, so that value no longer gives every
+# dependency a copy per slot and job directory. The path still reaches a
+# compile through `OUT_DIR` and through the proc macros a slot builds, so a
+# crate that reads `OUT_DIR`, uses a proc macro, or depends on one that does is
+# still kept once per slot.
+rustc_wrapper := justfile_directory() / ".config/sccache/sccache"
+export RUSTC_WRAPPER := if sccache == "" { "" } else { rustc_wrapper }
 
-# A compiler cache key includes the absolute path rustc was given, so the same
-# crate built in two worktrees hashes twice and neither ever reads the other's
-# entry. Measured on this host: two identical crates differing only in their
-# directory produced two compile requests and zero hits; with the base
-# directory declared, the second was a hit. Across 142 worktrees that is the
-# difference between one shared artifact layer and 142 private ones, and it is
-# why a 60 GiB cache sat full at a 42% Rust hit rate. Each checkout names only
-# its own root: the prefix is then stripped from every path, and what is left
-# is the same workspace-relative path everywhere, so the keys coincide.
-# `--fix`-style tools and diagnostics are unaffected; this rewrites the cache
-# key, not what rustc is asked to compile.
+# A C compile's cache key includes the absolute paths in its preprocessor
+# output, so the same C source built in two worktrees hashes twice and neither
+# ever reads the other's entry. Each checkout names only its own root: the
+# prefix is then stripped from that output, and what is left is the same
+# workspace-relative path everywhere, so the keys coincide. A Rust compile is
+# keyed on its raw working directory and every `CARGO_*` value, which this
+# does not touch: a workspace crate is keyed per checkout regardless, and a
+# dependency, which Cargo compiles inside its own home, shares its key across
+# checkouts as far as the wrapper above lets it share across slots. This
+# rewrites the cache key, not what the compiler is asked to compile.
 export SCCACHE_BASEDIRS := if sccache == "" { "" } else { justfile_directory() }
 
 # The cache was found sitting at exactly its ceiling - 60 GiB stored against a
@@ -97,7 +106,7 @@ _desktop-ready:
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; system=$(uname -s); arch=$(uname -m); build_target="${CARGO_TARGET_DIR:-$PWD/target}"; if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then if [[ "$system" = Linux ]]; then job="${CI_JOB_ID:-${GITHUB_RUN_ID:-$$}}"; build_target="$KITHARA_CI_CACHE_ROOT/target-slots/$trust-linux-$arch-job-$job/cargo"; else build_target=$(just _xtask-self-target) || exit $?; fi; fi; mkdir -p "$build_target"; export CARGO_HOME="$KITHARA_CI_CACHE_ROOT/$trust/$(rustc --print cfg | sed -n 's/^target_os="\(.*\)"$/\1/p')-$(rustc --print cfg | sed -n 's/^target_arch="\(.*\)"$/\1/p')/cargo"; mkdir -p "$CARGO_HOME"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then build_target="$CARGO_TARGET_DIR"; else build_target=$(just _xtask-self-target) || exit $?; fi; mkdir -p "$build_target"; export CARGO_HOME="$KITHARA_CI_CACHE_ROOT/$trust/$(rustc --print cfg | sed -n 's/^target_os="\(.*\)"$/\1/p')-$(rustc --print cfg | sed -n 's/^target_arch="\(.*\)"$/\1/p')/cargo"; mkdir -p "$CARGO_HOME"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]
