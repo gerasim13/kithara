@@ -5,7 +5,6 @@ use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, StreamResult};
 
 use crate::{
-    handle::ResourceHandle,
     segment::{MediaSegment, Segment},
     variant::HlsVariant,
 };
@@ -76,14 +75,6 @@ where
         self.segments
             .get(seg_idx as usize)
             .is_some_and(|s| s.state().is_failed())
-    }
-
-    pub(in crate::variant) fn segment_handle(&self, seg_idx: u32) -> Option<ResourceHandle<'_, S>> {
-        Some(
-            self.segments
-                .get(seg_idx as usize)?
-                .resource(&self.segments.scope),
-        )
     }
 
     /// Whether media segment `seg_idx` is fully on disk.

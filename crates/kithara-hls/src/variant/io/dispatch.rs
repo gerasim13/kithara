@@ -176,7 +176,8 @@ where
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(mut cmd) = self.build_fetch_cmd(ctx, init, handle, cancel.clone()) else {
+                    let Some(mut cmd) = self.build_fetch_cmd(ctx, init, handle, cancel.clone())
+                    else {
                         if !init.state().is_loaded() && !init.state().is_failed() {
                             deferred.push((planned, plan_revision));
                         }
