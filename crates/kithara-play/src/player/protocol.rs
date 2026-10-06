@@ -21,12 +21,13 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     /// Run every command posted since the last drain.
     fn drain(&mut self);
 
-    /// An executor took the player: from now on its handles' commands reach
-    /// it, and `waker` tells the executor when to drain them.
+    /// An executor took the player: `waker` tells it when the player's
+    /// handles post a command. Commands posted while no executor held the
+    /// player woke no one, so the executor drains them once it holds it.
     fn hold(&mut self, waker: Waker);
 
-    /// The executor let the player go: commands it had not drained are
-    /// dropped, and later ones are refused until an executor holds it again.
+    /// The executor let the player go: later commands wake no one and wait
+    /// for the next executor to hold it.
     fn release(&mut self);
 
     /// Advance control-plane and audio-backend work.

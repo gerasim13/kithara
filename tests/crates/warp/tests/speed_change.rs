@@ -116,7 +116,9 @@ async fn playing_deck(
     .await;
     let queue = Queue::new(QueueConfig::builder().player(harness.take_player()).build());
     let queue = harness.insert(queue).await;
-    queue.set_default_rate(START_SPEED);
+    harness
+        .run(queue.control(), |q| q.set_default_rate(START_SPEED))
+        .await;
     let path = rhythm_wav_deck_b_120bpm_48k()
         .path()
         .expect("the pulse track lives on disk");
@@ -171,7 +173,10 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
     let mut warmed = None;
     for block in 0..TOTAL_BLOCKS {
         if let Some((_, speed)) = CHANGES.iter().find(|(at, _)| *at == block) {
-            queue.set_rate(*speed);
+            let rate = *speed;
+            harness
+                .run(queue.control(), move |q| q.set_rate(rate))
+                .await;
             if let Some(recording) = recording.as_mut() {
                 recording.mark(&format!("speed {speed}"));
             }

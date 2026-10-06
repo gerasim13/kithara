@@ -4,7 +4,7 @@ use kithara_play::{PlayError, SelectTransition, SelectionPlayback};
 use smallvec::SmallVec;
 
 use super::super::{
-    QueueControl,
+    Queue,
     types::{PendingSelect, Transition},
 };
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
     event::{AdvanceReason, QueueEvent, TrackStatus},
 };
 
-impl<S> QueueControl<S>
+impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -31,15 +31,7 @@ where
         self.lock_navigation_mut().select(id, &ids);
     }
 
-    /// Select a track by id, applying the given [`Transition`]. If the
-    /// track is still loading or pending, both the id and the
-    /// transition are stashed and applied when loading finishes.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue,
-    /// [`QueueError::NotReady`] if the track is in a terminal failed state,
-    /// or [`QueueError::Play`] if the deck refuses the selection.
-    pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
+    pub(crate) fn select(&mut self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
         self.with_open_result(|queue| {
             queue.select_with(
                 id,
@@ -88,11 +80,8 @@ where
         Ok(())
     }
 
-    /// Serializes the whole select against a concurrent `spawn_apply_after_load` completion so
-    /// marking the prior pending attempt `Cancelled` and a loading track's apply never interleave,
-    /// which would let the superseded track barge in.
     pub(in crate::queue) fn select_with(
-        &self,
+        &mut self,
         id: TrackId,
         transition: Transition,
         reason: AdvanceReason,
@@ -105,19 +94,18 @@ where
                 | AdvanceReason::UserPrev
                 | AdvanceReason::RemovedCurrent
         ) {
-            self.autoplay_target.disarm();
+            self.autoplay_target = None;
         }
         let default = self.config.crossfade_settings();
         let settings = transition
             .settings(default)
             .validate()
             .map_err(PlayError::from)?;
-        let _apply = self.lock_select_apply();
         self.select_with_reason_locked(id, settings, reason, playback)
     }
 
     pub(in crate::queue) fn select_with_reason(
-        &self,
+        &mut self,
         id: TrackId,
         transition: Transition,
         reason: AdvanceReason,
@@ -141,7 +129,7 @@ where
     /// the natural end but clears the flag only at the next `process`, so a repeat-one advance must
     /// re-select the item that just ended despite the flag.
     pub(in crate::queue) fn select_with_reason_locked(
-        &self,
+        &mut self,
         id: TrackId,
         settings: kithara_play::CrossfadeSettings,
         reason: AdvanceReason,
@@ -233,7 +221,7 @@ mod tests {
         queue::state::tests::{make_queue, wait_for_queue_event},
     };
 
-    fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
+    fn append(queue: &mut Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue
             .append(source)
             .expect("BUG: open queue must accept a track")
@@ -241,7 +229,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn select_unknown_id_errors() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let err = queue
             .select(TrackId(999), Transition::None)
             .expect_err("unknown id should error");
@@ -250,10 +238,10 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn select_pending_track_stashes_pending_select() {
-        let queue = make_queue();
-        let id = append(&queue, "https://example.com/a.mp3");
+        let mut queue = make_queue();
+        let id = append(&mut queue, "https://example.com/a.mp3");
         let _ = queue.select(id, Transition::None);
-        let phase = *queue.pending_select.lock();
+        let phase = queue.pending_select;
         match phase {
             SelectPhase::Pending(pending) => {
                 assert_eq!(pending.id, id);
@@ -265,7 +253,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn advance_to_next_on_empty_emits_queue_ended() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let mut rx = queue.subscribe();
         assert!(
             queue
@@ -280,7 +268,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn manual_next_at_exhaustion_does_not_emit_queue_ended() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let mut rx = queue.subscribe();
         assert_eq!(queue.next(Transition::None).expect("manual next"), None);
         assert!(
@@ -290,9 +278,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn advance_to_next_cycles_then_emits_queue_ended() {
-        let queue = make_queue();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let b = append(&queue, "https://example.com/b.mp3");
+        let mut queue = make_queue();
+        let a = append(&mut queue, "https://example.com/a.mp3");
+        let b = append(&mut queue, "https://example.com/b.mp3");
         queue.lock_navigation_mut().select(b, &[a, b]);
         let mut rx = queue.subscribe();
 
@@ -310,9 +298,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn admitted_pending_successor_becomes_navigation_authority() {
-        let queue = make_queue();
-        let first = append(&queue, "https://example.com/a.mp3");
-        let second = append(&queue, "https://example.com/b.mp3");
+        let mut queue = make_queue();
+        let first = append(&mut queue, "https://example.com/a.mp3");
+        let second = append(&mut queue, "https://example.com/b.mp3");
         queue.lock_navigation_mut().select(first, &[first, second]);
         queue.set_status(first, TrackStatus::Consumed);
         queue.set_status(second, TrackStatus::Pending);
@@ -328,7 +316,7 @@ mod tests {
             Some(second),
             "admitted automatic successor must remain authoritative while loading"
         );
-        let SelectPhase::Pending(pending) = *queue.lock_pending_select_mut() else {
+        let SelectPhase::Pending(pending) = queue.pending_select else {
             panic!("successor selection must remain pending")
         };
         assert_eq!(pending.playback, SelectionPlayback::Play);
@@ -337,8 +325,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn pending_override_latches_profile_without_mutating_default() {
-        let queue = make_queue();
-        let id = append(&queue, "https://example.com/a.mp3");
+        let mut queue = make_queue();
+        let id = append(&mut queue, "https://example.com/a.mp3");
         let configured = kithara_play::CrossfadeSettings::new(
             2.0,
             kithara_play::CrossfadeCurve::EqualPower,
@@ -368,7 +356,7 @@ mod tests {
             .set_crossfade_settings(kithara_play::CrossfadeSettings::default())
             .expect("valid settings");
 
-        let SelectPhase::Pending(pending) = *queue.lock_pending_select_mut() else {
+        let SelectPhase::Pending(pending) = queue.pending_select else {
             panic!("selection must remain pending")
         };
         assert_eq!(pending.settings, override_settings);

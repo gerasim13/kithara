@@ -64,8 +64,9 @@ impl DeckThread {
         })
     }
 
-    /// Hands `deck` to the thread. The deck is held before it leaves, so a
-    /// command posted as soon as this returns reaches it.
+    /// Hands `deck` to the thread, which drains it once it holds it: a
+    /// command posted before then woke no one. The deck is held before it
+    /// leaves, so a command posted as soon as this returns reaches it.
     pub(super) fn hold(&self, id: BeatGridId, mut deck: Deck) -> Result<(), PlayError> {
         deck.hold(Waker::from(Arc::new(DeckWake {
             id,
@@ -321,6 +322,23 @@ mod tests {
         assert!(control.is_closed(), "the deck drops with its holder");
     }
 
+    /// Commands posted before the deck was held woke no one, so the thread
+    /// runs them as soon as it holds the deck.
+    #[kithara::test]
+    fn the_deck_thread_drains_a_deck_as_it_takes_it() {
+        let (id, held, seen) = probe();
+        let thread = DeckThread::spawn(Pace::Clock);
+
+        thread.hold(id, held).expect("the thread takes the deck");
+
+        assert!(matches!(next(&seen), Seen::Held(_)));
+        assert!(
+            matches!(next(&seen), Seen::Drained),
+            "the thread drains a deck it takes before ticking it"
+        );
+        drop(thread);
+    }
+
     #[kithara::test]
     fn a_deck_the_thread_lets_go_is_released_before_it_is_handed_back() {
         let (id, held, seen) = probe();
@@ -385,6 +403,11 @@ mod tests {
         let Seen::Held(waker) = next(&seen) else {
             panic!("the thread holds the deck before anything else");
         };
+
+        assert!(
+            matches!(next(&seen), Seen::Drained),
+            "drained as it is held"
+        );
 
         waker.wake_by_ref();
 

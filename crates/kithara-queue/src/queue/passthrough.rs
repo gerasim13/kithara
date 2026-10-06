@@ -1,14 +1,12 @@
 use delegate::delegate;
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
-use kithara_play::{
-    CrossfadeSettings, EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus, SuccessorLink,
-};
+use kithara_play::{CrossfadeSettings, EngineLoadSnapshot, PlayError, PlayerStatus, SuccessorLink};
 
-use super::QueueControl;
+use super::{Queue, QueueRuntime};
 use crate::event::QueueEvent;
 
-impl<S> QueueControl<S>
+impl<S> QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -21,83 +19,6 @@ where
     #[must_use]
     pub fn crossfade_settings(&self) -> CrossfadeSettings {
         self.config.crossfade_settings()
-    }
-
-    /// Reset all EQ bands to 0 dB.
-    ///
-    /// # Errors
-    /// Forwards `PlayError` from the underlying player.
-    pub fn reset_eq(&self) -> Result<(), PlayError> {
-        self.with_open_result(|queue| queue.player.reset_eq())
-    }
-
-    /// Update the profile captured by future transitions. A successor armed
-    /// for the other kind of link comes off the deck, to be armed again for
-    /// this one.
-    ///
-    /// # Errors
-    /// Returns an error when any profile value is invalid.
-    pub fn set_crossfade_settings(&self, settings: CrossfadeSettings) -> Result<(), PlayError> {
-        let settings = settings.validate()?;
-        self.with_open_result(|queue| {
-            queue.player.set_crossfade_duration(settings.duration);
-            let relinked = SuccessorLink::from(queue.config.crossfade_settings())
-                != SuccessorLink::from(settings);
-            queue.config.set_crossfade_settings(settings);
-            if relinked && let Some(armed) = queue.player.armed_next() {
-                queue.disarm_successor(armed);
-            }
-            queue
-                .bus
-                .publish(QueueEvent::CrossfadeSettingsChanged { settings });
-            Ok(())
-        })
-    }
-
-    /// Set the default playback rate.
-    pub fn set_default_rate(&self, rate: f32) {
-        self.command(|queue| queue.player.set_default_rate(rate));
-    }
-
-    /// Set gain for an EQ band.
-    ///
-    /// # Errors
-    /// Forwards `PlayError` from the underlying player.
-    pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        self.with_open_result(|queue| queue.player.set_eq_gain(band, gain_db))
-    }
-
-    /// Replace the live player's EQ band layout.
-    ///
-    /// # Errors
-    /// Forwards `PlayError` from the underlying player.
-    pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError> {
-        self.with_open_result(|queue| queue.player.set_eq_layout(layout))
-    }
-
-    /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
-    ///
-    /// # Errors
-    /// Forwards `PlayError` from the underlying player: [`PlayError::MixLevel`] for a level
-    /// outside `0.0..=1.0`, or the deck's refusal of the change.
-    pub fn set_level(&self, level: f32) -> Result<(), PlayError> {
-        self.with_open_result(|queue| queue.player.set_level(level))
-    }
-
-    /// Set the mute flag.
-    pub fn set_muted(&self, muted: bool) {
-        self.command(|queue| queue.player.set_muted(muted));
-    }
-
-    /// Set the live playback rate (mirrors into the tempo-mode sibling
-    /// so a running key-locked stretch tracks the move).
-    pub fn set_rate(&self, rate: f32) {
-        self.command(|queue| queue.player.set_rate(rate));
-    }
-
-    /// Set the volume (0.0..=1.0).
-    pub fn set_volume(&self, volume: f32) {
-        self.command(|queue| queue.player.set_volume(volume));
     }
 
     delegate! {
@@ -133,5 +54,30 @@ where
             #[must_use]
             pub fn duration_seconds(&self) -> Option<f64>;
         }
+    }
+}
+
+impl<S> Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(crate) fn set_crossfade_settings(
+        &mut self,
+        settings: CrossfadeSettings,
+    ) -> Result<(), PlayError> {
+        let settings = settings.validate()?;
+        self.with_open_result(|queue| {
+            queue.player.set_crossfade_duration(settings.duration);
+            let relinked = SuccessorLink::from(queue.config.crossfade_settings())
+                != SuccessorLink::from(settings);
+            queue.config.set_crossfade_settings(settings);
+            if relinked && let Some(armed) = queue.player.armed_next() {
+                queue.disarm_successor(armed);
+            }
+            queue
+                .bus
+                .publish(QueueEvent::CrossfadeSettingsChanged { settings });
+            Ok(())
+        })
     }
 }

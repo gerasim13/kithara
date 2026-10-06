@@ -5,13 +5,13 @@ use crate::{
     attempts::LoadClass,
     event::TrackStatus,
     queue::{
-        QueueControl,
+        Queue,
         types::{PendingSelect, SelectPhase},
     },
     track::TrackSource,
 };
 
-impl<S> QueueControl<S>
+impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -21,16 +21,12 @@ where
     /// which drops a resource it already loaded, so neither its
     /// `spawn_apply_after_load` completion path nor the successor arming
     /// barges in on top of the just-selected track.
-    pub(in crate::queue) fn cancel_stale_pending(&self, applying_id: TrackId) {
-        let stale = {
-            let mut p = self.lock_pending_select_mut();
-            let result = match *p {
-                SelectPhase::Pending(prev) if prev.id != applying_id => Some(prev.id),
-                _ => None,
-            };
-            *p = SelectPhase::Idle;
-            result
+    pub(in crate::queue) fn cancel_stale_pending(&mut self, applying_id: TrackId) {
+        let stale = match self.pending_select {
+            SelectPhase::Pending(prev) if prev.id != applying_id => Some(prev.id),
+            _ => None,
         };
+        self.pending_select = SelectPhase::Idle;
         if let Some(stale_id) = stale {
             self.set_status(stale_id, TrackStatus::Cancelled);
         }
@@ -44,14 +40,12 @@ where
     /// single source of truth for this: `spawn_apply_after_load` reads
     /// it on completion and `advance_to_next` reads it when iterating.
     /// See Bug B reproducer (`tests/.../track_switch_race.rs`).
-    pub(in crate::queue) fn override_pending_select(&self, new: PendingSelect) {
-        let mut pending = self.lock_pending_select_mut();
-        let prev_id = match *pending {
+    pub(in crate::queue) fn override_pending_select(&mut self, new: PendingSelect) {
+        let prev_id = match self.pending_select {
             SelectPhase::Pending(prev) if prev.id != new.id => Some(prev.id),
             _ => None,
         };
-        *pending = SelectPhase::Pending(new);
-        drop(pending);
+        self.pending_select = SelectPhase::Pending(new);
         if let Some(prev_id) = prev_id {
             self.set_status(prev_id, TrackStatus::Cancelled);
         }

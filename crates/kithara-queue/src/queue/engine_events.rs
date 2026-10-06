@@ -6,7 +6,7 @@ use kithara_play::{ItemRole, PlaybackFault, PlayerEvent};
 use tracing::debug;
 
 use super::{
-    QueueControl,
+    Queue,
     types::{CachedPosition, Transition},
 };
 use crate::{
@@ -14,22 +14,19 @@ use crate::{
     event::{AdvanceReason, ItemEvent, QueueEvent, TrackStatus},
 };
 
-impl<S> QueueControl<S>
+impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     /// `CurrentItemChanged` is edge-triggered and de-duplicated by the deck,
     /// so a dropped event cannot be recovered by waiting again.
-    pub(super) fn drain_player_events(&self) {
+    pub(super) fn drain_player_events(&mut self) {
         let mut lagged = false;
-        {
-            let mut rx = self.player_rx.lock();
-            loop {
-                match rx.try_recv() {
-                    Ok(Envelope { event: ev, .. }) => self.process_player_event(&ev),
-                    Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                    Err(TryRecvError::Lagged(_)) => lagged = true,
-                }
+        loop {
+            match self.player_rx.try_recv() {
+                Ok(Envelope { event: ev, .. }) => self.process_player_event(&ev),
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(_)) => lagged = true,
             }
         }
         if lagged {
@@ -88,7 +85,7 @@ where
     /// follows it there, so a pause that gates that end's report cannot
     /// leave it behind, and the deck now holds the item. A queue that ran
     /// out has no cursor to move, though the deck keeps its last item.
-    pub(super) fn handle_current_item_changed(&self) {
+    pub(super) fn handle_current_item_changed(&mut self) {
         let id = self
             .player
             .current_item()
@@ -119,7 +116,7 @@ where
     /// failure may skip and flag, and it flags the entry the event names —
     /// never one merely sharing its source, which a playlist repeating a
     /// track would take out of selection for the rest of the session.
-    pub(super) fn handle_item_did_fail(&self, item: &ItemRole, fault: PlaybackFault) {
+    pub(super) fn handle_item_did_fail(&mut self, item: &ItemRole, fault: PlaybackFault) {
         let track = item.track();
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
@@ -154,7 +151,7 @@ where
     /// one item, so an end says nothing on its own: an orphaned slot or
     /// the outgoing half of a crossfade reports its own end while the
     /// item being heard has minutes left. Only `Leading` advances.
-    pub(super) fn handle_item_did_play_to_end(&self, item: &ItemRole) {
+    pub(super) fn handle_item_did_play_to_end(&mut self, item: &ItemRole) {
         let track = item.track();
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
@@ -176,7 +173,7 @@ where
         }
     }
 
-    pub(super) fn process_player_event(&self, ev: &PlayerBusEvent) {
+    pub(super) fn process_player_event(&mut self, ev: &PlayerBusEvent) {
         match ev {
             PlayerBusEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                 self.handle_item_did_play_to_end(item);
@@ -210,7 +207,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use crate::{
-        ActionAtItemEnd, QueueControl,
+        ActionAtItemEnd, Queue,
         consts::TEST_SAMPLE_RATE,
         event::{AdvanceReason, QueueEvent, TrackStatus},
         queue::{
@@ -221,7 +218,7 @@ mod tests {
         track::{TrackRecord, TrackSource},
     };
 
-    fn selected_second(queue: &QueueControl<TestPools>) -> (TrackId, TrackId) {
+    fn selected_second(queue: &mut Queue<TestPools>) -> (TrackId, TrackId) {
         let first = queue
             .append("https://example.com/repeated.mp3")
             .expect("open queue accepts first repeated source");
@@ -236,8 +233,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn leading_failure_marks_the_played_entry_when_sources_repeat() {
-        let queue = make_queue();
-        let (first, second) = selected_second(&queue);
+        let mut queue = make_queue();
+        let (first, second) = selected_second(&mut queue);
 
         queue.handle_item_did_fail(
             &ItemRole::Leading(TrackRef::new(
@@ -273,8 +270,8 @@ mod tests {
     /// report could then say which defect ended the track.
     #[kithara::test(tokio)]
     async fn a_leading_failure_records_the_fault_the_player_reported() {
-        let queue = make_queue();
-        let (_first, second) = selected_second(&queue);
+        let mut queue = make_queue();
+        let (_first, second) = selected_second(&mut queue);
 
         queue.handle_item_did_fail(
             &ItemRole::Leading(TrackRef::new(
@@ -297,8 +294,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn background_end_and_failure_leave_the_current_entry_untouched() {
-        let queue = make_queue();
-        let (background, current) = selected_second(&queue);
+        let mut queue = make_queue();
+        let (background, current) = selected_second(&mut queue);
         let item = ItemRole::Background(TrackRef::new(
             background,
             SlotId::new(1),
@@ -321,14 +318,14 @@ mod tests {
     #[kithara::test(tokio)]
     async fn pause_and_none_suppress_natural_eof_progression() {
         for action in [ActionAtItemEnd::Pause, ActionAtItemEnd::None] {
-            let queue = make_queue();
+            let mut queue = make_queue();
             let first = TrackId::allocate();
             let second = TrackId::allocate();
             queue.tracks.lock().extend([
                 TrackRecord::new(first, "first".into(), TrackSource::from("first")),
                 TrackRecord::new(second, "second".into(), TrackSource::from("second")),
             ]);
-            *queue.lock_pending_select_mut() = SelectPhase::Idle;
+            queue.pending_select = SelectPhase::Idle;
             queue.lock_navigation_mut().select(first, &[first, second]);
             queue.player.play();
             queue.set_action_at_item_end(action);
@@ -341,10 +338,7 @@ mod tests {
             )));
 
             assert_eq!(queue.current().map(|entry| entry.id), Some(first));
-            assert!(matches!(
-                *queue.lock_pending_select_mut(),
-                SelectPhase::Idle
-            ));
+            assert!(matches!(queue.pending_select, SelectPhase::Idle));
             if action == ActionAtItemEnd::Pause {
                 assert!(queue.is_paused());
             }
@@ -363,14 +357,14 @@ mod tests {
     /// from inside the queue's own admission.
     #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
     async fn a_tick_pauses_at_the_natural_end_it_drains() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let first = TrackId::allocate();
         let second = TrackId::allocate();
         queue.tracks.lock().extend([
             TrackRecord::new(first, "first".into(), TrackSource::from("first")),
             TrackRecord::new(second, "second".into(), TrackSource::from("second")),
         ]);
-        *queue.lock_pending_select_mut() = SelectPhase::Idle;
+        queue.pending_select = SelectPhase::Idle;
         queue.lock_navigation_mut().select(first, &[first, second]);
         queue.player.play();
         queue.set_action_at_item_end(ActionAtItemEnd::Pause);
@@ -384,7 +378,7 @@ mod tests {
     }
 
     /// A track the queue holds a finished load for.
-    fn admitted(queue: &QueueControl<TestPools>, url: &str) -> TrackId {
+    fn admitted(queue: &mut Queue<TestPools>, url: &str) -> TrackId {
         let id = queue.append(url).expect("open queue accepts a track");
         let reader = TestPcmReader::new(AudioSpec::new(2, TEST_SAMPLE_RATE), 0.01);
         queue
@@ -397,9 +391,9 @@ mod tests {
     /// ended, and the cursor's move names the failure.
     #[kithara::test(tokio)]
     async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
-        let queue = make_queue();
-        let failed = admitted(&queue, "https://example.com/failed.mp3");
-        let successor = admitted(&queue, "https://example.com/successor.mp3");
+        let mut queue = make_queue();
+        let failed = admitted(&mut queue, "https://example.com/failed.mp3");
+        let successor = admitted(&mut queue, "https://example.com/successor.mp3");
         queue
             .select(failed, Transition::None)
             .expect("the first track is selected");
@@ -437,8 +431,8 @@ mod tests {
     /// last one: recovery from a lag finds no handover there.
     #[kithara::test(tokio)]
     async fn lag_recovery_keeps_an_ended_queue_ended() {
-        let queue = make_queue();
-        let last = admitted(&queue, "https://example.com/last.mp3");
+        let mut queue = make_queue();
+        let last = admitted(&mut queue, "https://example.com/last.mp3");
         queue
             .select(last, Transition::None)
             .expect("the last track is selected");
@@ -463,8 +457,8 @@ mod tests {
     /// the item the deck holds.
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
-        let queue = make_queue();
-        let id = admitted(&queue, "https://example.com/lagged-events.mp3");
+        let mut queue = make_queue();
+        let id = admitted(&mut queue, "https://example.com/lagged-events.mp3");
         queue
             .select(id, Transition::None)
             .expect("the loaded track is selected");

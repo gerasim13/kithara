@@ -122,7 +122,10 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
     while !stop.is_cancelled() {
         let random_byte = rng.next_u64().to_le_bytes()[0];
         let rate = consts::RATE_PATTERN[usize::from(random_byte) % consts::RATE_PATTERN.len()];
-        queue.set_rate(rate);
+        let control = queue.clone();
+        task::spawn_blocking(move || control.set_rate(rate))
+            .await
+            .expect("rate change");
         changes += 1;
         sleep(consts::RATE_CHANGE_INTERVAL).await;
     }
@@ -174,11 +177,12 @@ async fn observe_playback(
     Ok(stats)
 }
 
-async fn seek_and_require_read(queue: &QueueControl<TestPools>, stage: &str, target: f64) {
+async fn seek_and_require_read(queue: &OfflineQueue<TestPools>, stage: &str, target: f64) {
     let mut progress_rx = queue.subscribe();
     let trace = usdt_trace::scope();
     queue
-        .seek(target)
+        .run(move |q| q.seek(target))
+        .await
         .unwrap_or_else(|error| panic!("{stage}: seek to {target:.2}s: {error}"));
 
     let seek_output = |event: &usdt_trace::ProbeEvent| {

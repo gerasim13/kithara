@@ -123,7 +123,7 @@ async fn play_queue(
         .run(&queue, move |q| q.select(first, transition))
         .await
         .expect("select the first track");
-    queue.play();
+    harness.run(&queue, QueueControl::play).await;
 
     let mut log = QueueLog::default();
     for _ in 0..BLOCK_BUDGET {

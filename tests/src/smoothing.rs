@@ -130,16 +130,17 @@ pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
     let harness = OfflineQueue::new(session, queue)
         .await
         .expect("create offline queue");
-    let deck = harness.control();
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SINE440_60S);
     let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");
-    let id = deck
-        .append(TrackSource::Config(Box::new(
-            ResourceConfig::for_src(src)
-                .store(AssetStore::builder(pools).build())
-                .build(),
-        )))
+    let source = TrackSource::Config(Box::new(
+        ResourceConfig::for_src(src)
+            .store(AssetStore::builder(pools).build())
+            .build(),
+    ));
+    let id = harness
+        .run(move |deck| deck.append(source))
+        .await
         .expect("append sine fixture");
     harness
         .run(move |deck| {

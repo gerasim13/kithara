@@ -1,30 +1,46 @@
 use std::task::Waker;
 
 use kithara_bufpool::HasPool;
+use kithara_platform::sync::Arc;
 use kithara_play::{
     BeatGridId, PlayError, SessionBinding,
     player::{Player, PlayerControlSource},
 };
 
-use super::Queue;
+use super::{Queue, QueueControl};
+
+impl<S> Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(super) fn prepare(&self) -> Result<(), PlayError> {
+        self.ensure_open()?;
+        self.player.prepare()
+    }
+}
 
 impl<S> Player for Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    fn drain(&mut self) {}
-
-    fn hold(&mut self, _waker: Waker) {}
-
-    fn release(&mut self) {}
+    /// Closes the resident player, then irreversibly cancels queue-owned
+    /// work. A failed close leaves the queue open, so its holder can retry.
+    fn close(&mut self) -> Result<(), PlayError> {
+        self.player.close()?;
+        self.shutdown.cancel();
+        Ok(())
+    }
 
     delegate::delegate! {
-        to self.control {
-            fn close(&mut self) -> Result<(), PlayError>;
-        }
         to self {
+            #[call(drain_commands)]
+            fn drain(&mut self);
             #[call(tick_player)]
             fn tick(&mut self) -> Result<(), PlayError>;
+        }
+        to self.mailbox {
+            fn hold(&mut self, waker: Waker);
+            fn release(&mut self);
         }
     }
 }
@@ -33,7 +49,7 @@ impl<S> PlayerControlSource for Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    type Control = super::QueueControl<S>;
+    type Control = QueueControl<S>;
     type Schema = S;
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
@@ -41,15 +57,18 @@ where
     }
 
     fn control(&self) -> Self::Control {
-        self.control.clone()
+        QueueControl {
+            postbox: self.postbox.clone(),
+            runtime: Arc::clone(&self.runtime),
+        }
     }
 
     fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
-        control.with_open_result(|queue| queue.player.prepare())
+        control.prepare()
     }
 
     delegate::delegate! {
-        to self.player {
+        to self.resident {
             fn attach_session(
                 &mut self,
                 binding: SessionBinding<S>,

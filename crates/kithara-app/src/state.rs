@@ -760,7 +760,8 @@ mod tests {
         tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
-        queue.remove(track_id).expect("remove test track");
+        host.call(move |(_, queue)| queue.remove(track_id).expect("remove test track"))
+            .await;
 
         for _ in 0..2_000 {
             if tx.receiver_count() == 0 && state.lock().analysis.is_none() {
@@ -855,7 +856,8 @@ mod tests {
         let (_state, mut requests, cancel) = deck(&queue);
         let first = answer_subscribe(&mut requests, first_id).await;
 
-        queue.remove(first_id).expect("remove test track");
+        host.call(move |(_, queue)| queue.remove(first_id).expect("remove test track"))
+            .await;
         let (asked, reply) = time::timeout(Duration::from_secs(2), next_subscribe(&mut requests))
             .await
             .expect("the deck asks for the track it moved to");

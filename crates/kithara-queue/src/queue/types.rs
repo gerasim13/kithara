@@ -93,48 +93,6 @@ impl From<CachedPosition> for Option<f64> {
     }
 }
 
-/// Lock-free cell holding at most one armed track. The `u64::MAX` bit
-/// pattern encodes "disarmed"; real ids are allocated monotonically from
-/// `0`, so the top of the range is free as the sentinel. Orderings: `Release`
-/// store, `AcqRel` compare-exchange.
-pub(super) struct AtomicTrackId(AtomicU64);
-
-impl AtomicTrackId {
-    const NONE_BITS: u64 = u64::MAX;
-
-    /// Arm `track` unless another track is armed; `true` when it was armed.
-    pub(super) fn arm_if_disarmed(&self, track: TrackId) -> bool {
-        self.0
-            .compare_exchange(
-                Self::NONE_BITS,
-                track.as_u64(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-
-    /// Disarm `track`; `true` when it was the armed track.
-    pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
-        self.0
-            .compare_exchange(
-                track.as_u64(),
-                Self::NONE_BITS,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-
-    pub(super) fn disarmed() -> Self {
-        Self(AtomicU64::new(Self::NONE_BITS))
-    }
-
-    pub(super) fn disarm(&self) {
-        self.0.store(Self::NONE_BITS, Ordering::Release);
-    }
-}
-
 /// Lock-free [`CachedPosition`] cell for the `tick` hot path. The
 /// `f64::NAN` bit pattern encodes [`CachedPosition::Unknown`]; any `NaN`
 /// observed on load (including a `NaN` written through `store`)
@@ -230,27 +188,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    #[kithara::test]
-    fn atomic_track_id_cas_arm_then_disarm() {
-        let cell = AtomicTrackId::disarmed();
-        assert!(cell.arm_if_disarmed(TrackId(3)));
-        assert!(
-            !cell.arm_if_disarmed(TrackId(4)),
-            "a second arm must not replace the armed track"
-        );
-        assert!(!cell.disarm_if_matches(TrackId(4)));
-        assert!(cell.disarm_if_matches(TrackId(3)));
-        assert!(cell.arm_if_disarmed(TrackId(4)), "disarmed again");
-    }
-
-    #[kithara::test]
-    fn disarm_clears_the_armed_track() {
-        let cell = AtomicTrackId::disarmed();
-        assert!(cell.arm_if_disarmed(TrackId(7)));
-        cell.disarm();
-        assert!(cell.arm_if_disarmed(TrackId(8)));
-    }
 
     #[kithara::test]
     #[case::remaining_equals_window(157.0, 162.0, 1.0, 5.0, true)]

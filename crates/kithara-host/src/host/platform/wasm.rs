@@ -507,12 +507,13 @@ mod tests {
         let id = BeatGridId::allocate().expect("fixture deck grid id");
         let waker = WorkerWake::waker(&decks, id);
         decks.borrow_mut().hold(id, probe);
+        assert_eq!(drains.get(), 1, "held, the deck runs what waited for it");
 
         waker.wake_by_ref();
 
         assert_eq!(
             drains.get(),
-            1,
+            2,
             "a caller on the Worker reads its answer right after it posts"
         );
     }

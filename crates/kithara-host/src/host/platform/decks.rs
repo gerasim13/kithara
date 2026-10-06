@@ -12,7 +12,10 @@ pub(super) type Deck = Box<dyn Player>;
 pub(super) struct Decks(Vec<(BeatGridId, Deck)>);
 
 impl Decks {
-    pub(super) fn hold(&mut self, id: BeatGridId, deck: Deck) {
+    /// Holds `deck` and runs the commands posted to it before it was held,
+    /// which woke no one.
+    pub(super) fn hold(&mut self, id: BeatGridId, mut deck: Deck) {
+        deck.drain();
         self.0.push((id, deck));
     }
 

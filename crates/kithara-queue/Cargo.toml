@@ -39,6 +39,7 @@ kithara-abr = { workspace = true, default-features = false }
 kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
+kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["patch"] }

@@ -1544,7 +1544,10 @@ async fn render_seek_near_end_until_b_with_postroll(
             && let Some(duration) = queue.duration_seconds()
             && duration > 7.0
         {
-            queue.seek(duration - SEEK_OFFSET_SECS).expect("seek");
+            harness
+                .run(queue, move |q| q.seek(duration - SEEK_OFFSET_SECS))
+                .await
+                .expect("seek");
             seek_issue_frame = Some(progress.rendered_frames());
             seek_duration = Some(duration);
         }

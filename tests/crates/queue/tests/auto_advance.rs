@@ -173,7 +173,7 @@ async fn repeat_one_natural_advance_keeps_current_track() {
         .await
         .expect("select repeat-one track");
     let mut receiver: EventReceiver<QueueEvent> = queue.subscribe();
-    queue.set_repeat(RepeatMode::One);
+    harness.run(&queue, |q| q.set_repeat(RepeatMode::One)).await;
 
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),
@@ -246,7 +246,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         .await
         .expect("select last repeat-all track");
     let mut receiver: EventReceiver<QueueEvent> = queue.subscribe();
-    queue.set_repeat(RepeatMode::All);
+    harness.run(&queue, |q| q.set_repeat(RepeatMode::All)).await;
 
     assert!(matches!(
         receiver.try_recv().map(|envelope| envelope.event),

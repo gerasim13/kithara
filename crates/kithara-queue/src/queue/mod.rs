@@ -2,9 +2,10 @@
 //!
 //! This module groups the implementation by responsibility:
 //!
-//! - [`mod@state`] — the [`Queue`] struct, its constructor, and the
-//!   inherent helpers shared by the impl-block split (lock helpers,
-//!   atomic accessors).
+//! - [`mod@state`] — the [`Queue`] owner, the [`QueueControl`] handle, the
+//!   state both read, and the inherent helpers shared by the impl-block split.
+//! - [`mod@command`] — the commands a [`QueueControl`] posts and the owner runs.
+//! - [`mod@handle`] — the [`QueueControl`] methods that post them.
 //! - [`mod@types`] — shared free items (`Transition`, helpers, internal shapes).
 //! - [`mod@access`] — read-only API (`len`, `current`, `subscribe`, navigation getters).
 //! - [`mod@lifecycle`] — track creation/removal (`append`, `insert`, `remove`, …).
@@ -13,9 +14,10 @@
 //! - [`mod@passthrough`] — `delegate!`-forwarded `PlayerImpl` controls.
 
 mod access;
+mod command;
 mod engine_events;
+mod handle;
 mod lifecycle;
-mod owner;
 mod passthrough;
 mod playback;
 mod player;
@@ -23,6 +25,7 @@ mod selection;
 mod state;
 mod types;
 
+use state::QueueRuntime;
 #[cfg(test)]
 pub(crate) use state::tests::test_session;
 

@@ -4,7 +4,7 @@ use kithara_play::SelectionPlayback;
 use smallvec::SmallVec;
 
 use super::{
-    QueueControl,
+    Queue,
     types::{
         CachedPosition, PendingSelect, Placement, SelectPhase, Transition, extract_track_name,
     },
@@ -17,35 +17,27 @@ use crate::{
     track::{TrackRecord, TrackSource},
 };
 
-impl<S> QueueControl<S>
+impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Append a track. Loading starts immediately in the background.
-    /// The id is allocated from the global counter via
-    /// [`TrackId::allocate`]; use [`Self::append_with_id`] when the
-    /// caller owns the id (FFI item pre-allocation).
+    /// Append a track, as [`QueueControl::append`](super::QueueControl::append)
+    /// does, while the caller still owns this queue.
     ///
     /// # Errors
     ///
     /// Returns [`QueueError::Play`] after the resident player is closed.
-    pub fn append<T: Into<TrackSource<S>>>(&self, source: T) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.with_open(|queue| queue.insert_entry(TrackId::allocate(), source, Placement::Append))
-            .map_err(QueueError::from)
+    pub fn append<T: Into<TrackSource<S>>>(&mut self, source: T) -> Result<TrackId, QueueError> {
+        self.append_with_id(TrackId::allocate(), source)
     }
 
-    /// Append a track with a caller-supplied id. The id MUST come from
-    /// [`TrackId::allocate`] so it stays inside the process-wide
-    /// monotonic address space. Used by the FFI layer where the item
-    /// reserves its id at construction and surfaces it as `audioId`
-    /// before insert.
+    /// Append a track with a caller-owned id from [`TrackId::allocate`].
     ///
     /// # Errors
     ///
     /// Returns [`QueueError::Play`] after the resident player is closed.
     pub fn append_with_id<T: Into<TrackSource<S>>>(
-        &self,
+        &mut self,
         id: TrackId,
         source: T,
     ) -> Result<TrackId, QueueError> {
@@ -54,21 +46,18 @@ where
             .map_err(QueueError::from)
     }
 
-    /// Remove all tracks from the queue. Dropping the records aborts
-    /// their in-flight loads.
-    pub fn clear(&self) {
+    pub(crate) fn clear(&mut self) {
         self.command(Self::clear_inner);
     }
 
-    fn clear_inner(&self) {
+    fn clear_inner(&mut self) {
         let ids: Vec<TrackId> = {
-            let _apply = self.lock_select_apply();
             let mut guard = self.lock_tracks_mut();
             let ids = guard.iter().map(|r| r.id).collect();
             guard.clear();
             drop(guard);
 
-            *self.lock_pending_select_mut() = SelectPhase::Idle;
+            self.pending_select = SelectPhase::Idle;
             let mut navigation = self.lock_navigation_mut();
             let repeat = navigation.repeat_mode();
             let order = navigation.playback_order();
@@ -77,43 +66,42 @@ where
             navigation.set_playback_order(order, &[]);
             drop(navigation);
             self.write_cached_position(CachedPosition::Unknown);
-            self.autoplay_target.disarm();
+            self.autoplay_target = None;
             self.player.remove_all_items();
             ids
         };
-        *self.player_rx.lock() = self.bus.subscribe();
+        self.player_rx = self.bus.subscribe();
         for id in ids {
             self.bus.publish(QueueEvent::TrackRemoved { id });
         }
     }
 
-    /// Insert a track after the given id, or at the head when `after` is
-    /// `None`. Loading starts immediately.
+    /// Insert a track after `after`, or at the head when it is absent, as
+    /// [`QueueControl::insert`](super::QueueControl::insert) does, while the
+    /// caller still owns this queue.
     ///
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `after` does not match any
     /// track.
     pub fn insert<T: Into<TrackSource<S>>>(
-        &self,
+        &mut self,
         source: T,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.with_open_result(|queue| {
-            queue.insert_with_id_inner(TrackId::allocate(), source, after)
-        })
+        self.insert_with_id(TrackId::allocate(), source, after)
     }
 
     /// Inserts a resolved track placement into queue state, takes a successor
     /// it displaces off the deck, and starts loading.
     pub(super) fn insert_entry(
-        &self,
+        &mut self,
         id: TrackId,
         source: TrackSource<S>,
         placement: Placement,
     ) -> TrackId {
         let record = TrackRecord::new(id, extract_track_name(&source), source.clone());
-        if self.current().is_none() && self.autoplay_target.arm_if_disarmed(id) {
+        if self.current().is_none() && self.autoplay_target.is_none() {
+            self.autoplay_target = Some(id);
             self.override_pending_select(PendingSelect {
                 id,
                 settings: Transition::None.settings(self.crossfade_settings()),
@@ -154,15 +142,13 @@ where
         id
     }
 
-    /// Insert a track with a caller-supplied id. See
-    /// [`Self::append_with_id`] for why the id MUST come from
-    /// [`TrackId::allocate`].
+    /// Insert a track with a caller-owned id from [`TrackId::allocate`].
     ///
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `after` does not match
     /// any track.
     pub fn insert_with_id<T: Into<TrackSource<S>>>(
-        &self,
+        &mut self,
         id: TrackId,
         source: T,
         after: Option<TrackId>,
@@ -172,7 +158,7 @@ where
     }
 
     fn insert_with_id_inner(
-        &self,
+        &mut self,
         id: TrackId,
         source: TrackSource<S>,
         after: Option<TrackId>,
@@ -191,20 +177,11 @@ where
         Ok(self.insert_entry(id, source, Placement::At(pos)))
     }
 
-    /// Remove a track from the queue by id.
-    ///
-    /// If the removed track is currently playing:
-    /// - with tracks remaining → switches to the next (or previous if
-    ///   we were at the tail) with an immediate cut.
-    /// - with no tracks remaining → pauses the player.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue.
-    pub fn remove(&self, id: TrackId) -> Result<(), QueueError> {
+    pub(crate) fn remove(&mut self, id: TrackId) -> Result<(), QueueError> {
         self.with_open_result(|queue| queue.remove_inner(id))
     }
 
-    fn remove_inner(&self, id: TrackId) -> Result<(), QueueError> {
+    fn remove_inner(&mut self, id: TrackId) -> Result<(), QueueError> {
         let was_current = self.current().map(|e| e.id) == Some(id);
         let playback = if self.player.is_playing() {
             SelectionPlayback::Play
@@ -269,16 +246,11 @@ where
         Ok(())
     }
 
-    /// Replace the entire queue with the given sources.
-    pub fn set_tracks<I, T>(&self, sources: I)
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<TrackSource<S>>,
-    {
+    pub(crate) fn set_tracks(&mut self, sources: Vec<TrackSource<S>>) {
         self.command(|queue| {
             queue.clear_inner();
             for source in sources {
-                queue.insert_entry(TrackId::allocate(), source.into(), Placement::Append);
+                queue.insert_entry(TrackId::allocate(), source, Placement::Append);
             }
         });
     }
@@ -296,7 +268,7 @@ mod tests {
         queue::state::tests::{make_queue, wait_for_queue_event},
     };
 
-    fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
+    fn append(queue: &mut Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue
             .append(source)
             .expect("BUG: open queue must accept a track")
@@ -304,19 +276,19 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn len_is_empty_reflect_append() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         assert!(queue.is_empty());
-        let _ = append(&queue, "https://example.com/a.mp3");
-        let _ = append(&queue, "https://example.com/b.mp3");
+        let _ = append(&mut queue, "https://example.com/a.mp3");
+        let _ = append(&mut queue, "https://example.com/b.mp3");
         assert_eq!(queue.len(), 2);
     }
 
     #[kithara::test(tokio)]
     async fn append_returns_monotonic_ids_and_emits_track_added() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let mut rx = queue.subscribe();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let b = append(&queue, "https://example.com/b.mp3");
+        let a = append(&mut queue, "https://example.com/a.mp3");
+        let b = append(&mut queue, "https://example.com/b.mp3");
         assert_ne!(a, b);
         assert!(a.as_u64() < b.as_u64());
 
@@ -338,9 +310,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn remove_drops_from_queue_and_emits() {
-        let queue = make_queue();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let _b = append(&queue, "https://example.com/b.mp3");
+        let mut queue = make_queue();
+        let a = append(&mut queue, "https://example.com/a.mp3");
+        let _b = append(&mut queue, "https://example.com/b.mp3");
         let mut rx = queue.subscribe();
 
         queue
@@ -358,9 +330,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn clear_empties_queue() {
-        let queue = make_queue();
-        let _a = append(&queue, "https://example.com/a.mp3");
-        let _b = append(&queue, "https://example.com/b.mp3");
+        let mut queue = make_queue();
+        let _a = append(&mut queue, "https://example.com/a.mp3");
+        let _b = append(&mut queue, "https://example.com/b.mp3");
         assert_eq!(queue.len(), 2);
         queue.clear();
         assert_eq!(queue.len(), 0);
@@ -368,7 +340,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn clear_discards_old_eof_before_reinsert() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let old = queue
             .append("https://example.com/old.mp3")
             .expect("open queue accepts a track");
@@ -403,21 +375,25 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn set_tracks_replaces_queue() {
-        let queue = make_queue();
-        let _a = append(&queue, "https://example.com/a.mp3");
-        queue.set_tracks([
-            "https://example.com/1.mp3",
-            "https://example.com/2.mp3",
-            "https://example.com/3.mp3",
-        ]);
+        let mut queue = make_queue();
+        let _a = append(&mut queue, "https://example.com/a.mp3");
+        queue.set_tracks(
+            [
+                "https://example.com/1.mp3",
+                "https://example.com/2.mp3",
+                "https://example.com/3.mp3",
+            ]
+            .map(TrackSource::from)
+            .into(),
+        );
         assert_eq!(queue.len(), 3);
     }
 
     #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
-        let queue = make_queue();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let b = append(&queue, "https://example.com/b.mp3");
+        let mut queue = make_queue();
+        let a = append(&mut queue, "https://example.com/a.mp3");
+        let b = append(&mut queue, "https://example.com/b.mp3");
         let mid = queue
             .insert("https://example.com/mid.mp3", Some(a))
             .expect("BUG: insert relative to existing track");
@@ -428,9 +404,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn track_source_is_keyed_by_id_across_removal() {
-        let queue = make_queue();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let b = append(&queue, "https://example.com/b.mp3");
+        let mut queue = make_queue();
+        let a = append(&mut queue, "https://example.com/a.mp3");
+        let b = append(&mut queue, "https://example.com/b.mp3");
 
         assert_eq!(
             queue

@@ -1,13 +1,11 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-use kithara_play::{
-    InterruptionKind, PlayError, SeekOutcome, SelectionPlayback, SessionDuckingMode, SuccessorLink,
-};
+use kithara_play::{PlayError, SeekOutcome, SelectionPlayback, SuccessorLink};
 use smallvec::SmallVec;
 use tracing::debug;
 
 use super::{
-    QueueControl,
+    Queue, QueueRuntime,
     types::{CachedPosition, PendingSelect, PlaybackView, SelectPhase, Transition},
 };
 use crate::{
@@ -18,16 +16,10 @@ use crate::{
     track::TrackEntry,
 };
 
-impl<S> QueueControl<S>
+impl<S> QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    fn freeze_cached_position(&self) {
-        if let Some(t) = self.player.position_seconds() {
-            self.write_cached_position(CachedPosition::known(t));
-        }
-    }
-
     /// Whether the user has paused playback.
     ///
     /// Reads the Player's explicit paused phase, not its effective rate or
@@ -51,13 +43,51 @@ where
         })
     }
 
+    /// Single coherent read of the player's live playback state.
+    ///
+    /// Pollers (the FFI time thread, `snapshot`) get position, duration,
+    /// decoded frontier, and the playing flag from one call instead of
+    /// several separate accessors. The player-sourced fields come from one
+    /// [`PlaybackSnapshot`](kithara_play::PlaybackSnapshot) via its `From`
+    /// conversion; `position` is then replaced with this queue's cached,
+    /// 0.0-smoothed value.
+    #[must_use]
+    pub fn playback_view(&self) -> PlaybackView {
+        let mut view = self
+            .player
+            .playback_snapshot()
+            .map(PlaybackView::from)
+            .unwrap_or_default();
+        view.position = self.position_seconds();
+        view
+    }
+
+    /// Latest monotonic playback position for the current track in seconds.
+    /// Updated on every tick; skips transient 0.0 samples the engine
+    /// produces on pause/resume so downstream UIs see stable values.
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        self.read_cached_position().into()
+    }
+}
+
+impl<S> Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    fn freeze_cached_position(&self) {
+        if let Some(t) = self.player.position_seconds() {
+            self.write_cached_position(CachedPosition::known(t));
+        }
+    }
+
     /// The successor the queue wants armed behind the current track: the one
     /// navigation offers at its natural end, while the queue advances, no
     /// selection waits for its load, and the cursor stands on the track the
     /// deck plays. Repeating the current track needs no successor.
     fn wanted_successor(&self) -> Option<TrackEntry> {
         if self.action_at_item_end() != ActionAtItemEnd::Advance
-            || matches!(*self.lock_pending_select_mut(), SelectPhase::Pending(_))
+            || matches!(self.pending_select, SelectPhase::Pending(_))
         {
             return None;
         }
@@ -75,7 +105,7 @@ where
     /// one is armed; a crossfade successor is committed once the track ends
     /// within the fade, so the two overlap. A gapless one needs no commit:
     /// the processor plays it on the frame after the current track's last.
-    pub(super) fn reconcile_successor(&self) {
+    pub(super) fn reconcile_successor(&mut self) {
         let settings = self.crossfade_settings();
         let lead = self.config.prefetch_duration.max(settings.duration);
         let time = self.playback_time().filter(|time| time.ends_within(lead));
@@ -135,7 +165,7 @@ where
         }
     }
 
-    fn cross_fade_into(&self, id: TrackId) {
+    fn cross_fade_into(&mut self, id: TrackId) {
         if let Err(error) =
             self.select_with_reason(id, Transition::Crossfade, AdvanceReason::CrossfadePreArm)
         {
@@ -151,66 +181,33 @@ where
         self.set_status(id, TrackStatus::Consumed);
     }
 
-    /// Platform audio-route changed while playback may be active.
-    ///
-    /// Recreates the native output stream below the queue without
-    /// changing queue state, current item, or track loading.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError`] when the underlying player cannot restart
-    /// the active audio route.
-    pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
-        self.with_open_result(|queue| queue.player.invalidate_audio_route(reason))?;
-        Ok(())
-    }
-
-    /// The platform interrupted, or released, the audio output.
-    ///
-    /// Recording the fact is all this does: an interruption leaves the native
-    /// output unscheduled, and restoring it is the route-invalidation path.
-    pub fn notify_interruption(&self, kind: InterruptionKind) {
-        self.command(|queue| queue.player.notify_interruption(kind));
-    }
-
-    /// Pause playback and freeze the queue-visible head position.
-    pub fn pause(&self) {
+    pub(crate) fn pause(&mut self) {
         self.command(Self::pause_inner);
     }
 
-    /// [`Self::pause`] inside the admission its caller holds, as the tick
-    /// does when a drained end pauses the queue.
-    pub(super) fn pause_inner(&self) {
+    /// [`Self::pause`] on an open queue, as the tick does when a drained end
+    /// pauses the queue.
+    pub(super) fn pause_inner(&mut self) {
         self.player.pause();
-        let mut phase = self.lock_pending_select_mut();
-        if let SelectPhase::Pending(mut pending) = *phase {
+        if let SelectPhase::Pending(pending) = &mut self.pending_select {
             pending.playback = SelectionPlayback::Pause;
-            *phase = SelectPhase::Pending(pending);
         }
-        drop(phase);
         self.freeze_cached_position();
     }
 
-    /// Starts what the deck holds, handing it the loaded track it lacks or
-    /// retaining the selection until loading finishes. Reconciliation is
-    /// serialized with load completion.
-    pub fn play(&self) {
+    pub(crate) fn play(&mut self) {
         self.command(Self::play_inner);
     }
 
     /// The track play is about: the pending selection, else the one the deck
     /// holds, else the one the cursor stands on while the deck holds none.
-    fn play_inner(&self) {
-        let mut phase = self.lock_pending_select_mut();
-        if let SelectPhase::Pending(mut pending) = *phase {
+    fn play_inner(&mut self) {
+        if let SelectPhase::Pending(pending) = &mut self.pending_select {
             pending.playback = SelectionPlayback::Play;
-            *phase = SelectPhase::Pending(pending);
         }
-        drop(phase);
         self.player.play();
 
-        let _apply = self.lock_select_apply();
-        let pending = match *self.lock_pending_select_mut() {
+        let pending = match self.pending_select {
             SelectPhase::Pending(pending) => Some(pending),
             SelectPhase::Idle => None,
         };
@@ -258,32 +255,13 @@ where
         }
     }
 
-    /// Single coherent read of the player's live playback state.
-    ///
-    /// Pollers (the FFI time thread, `snapshot`) get position, duration,
-    /// decoded frontier, and the playing flag from one call instead of
-    /// several separate accessors. The player-sourced fields come from one
-    /// [`PlaybackSnapshot`](kithara_play::PlaybackSnapshot) via its `From`
-    /// conversion; `position` is then replaced with this queue's cached,
-    /// 0.0-smoothed value.
-    #[must_use]
-    pub fn playback_view(&self) -> PlaybackView {
-        let mut view = self
-            .player
-            .playback_snapshot()
-            .map(PlaybackView::from)
-            .unwrap_or_default();
-        view.position = self.position_seconds();
-        view
-    }
-
-    pub(super) fn seek_player(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
-        self.with_open_result(|queue| queue.seek_player_inner(seconds))
+    pub(crate) fn seek(&mut self, seconds: f64) -> Result<SeekOutcome, QueueError> {
+        Ok(self.with_open_result(|queue| queue.seek_player(seconds))?)
     }
 
     /// Resumes seeking after the last track plays to natural EOF and the navigation cursor runs off
     /// the end, leaving `current()` at `None`.
-    fn seek_player_inner(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
+    fn seek_player(&mut self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         if self.current().is_none() {
             let id = { self.lock_navigation().last_selected() };
             if let Some(id) = id {
@@ -303,22 +281,15 @@ where
         Ok(outcome)
     }
 
-    /// Lower or restore the whole session output under a competing sound,
-    /// such as a call or a navigation prompt.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError`] when the session rejects the change.
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), QueueError> {
-        self.with_open_result(|queue| queue.player.set_session_ducking(mode))?;
-        Ok(())
+    pub(crate) fn tick(&mut self) -> Result<(), QueueError> {
+        Ok(self.tick_player()?)
     }
 
-    pub(super) fn tick_player(&self) -> Result<(), PlayError> {
+    pub(super) fn tick_player(&mut self) -> Result<(), PlayError> {
         self.with_open_result(Self::tick_player_inner)
     }
 
-    fn tick_player_inner(&self) -> Result<(), PlayError> {
+    fn tick_player_inner(&mut self) -> Result<(), PlayError> {
         self.player.tick()?;
         self.player.process_notifications();
         self.drain_player_events();
@@ -346,51 +317,6 @@ where
         }
         self.write_cached_position(CachedPosition::known(t));
     }
-
-    delegate::delegate! {
-        to self {
-            /// Latest monotonic playback position for the current track in
-            /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
-            /// samples the engine produces on pause/resume so downstream UIs
-            /// see stable values.
-            #[must_use]
-            #[into]
-            #[call(read_cached_position)]
-            pub fn position_seconds(&self) -> Option<f64>;
-
-            /// Seek within the currently-playing track.
-            ///
-            /// Seek-hang detection is not handled here: the audio pipeline's
-            /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
-            /// `Stream::read`, `decode_next_chunk`) already panics with a
-            /// stacktrace and context dump when no progress is observed. Adding
-            /// a second Queue-level watchdog would just duplicate those panics.
-            ///
-            /// Returns the typed [`SeekOutcome`](kithara_play::SeekOutcome) — either
-            /// `Landed` with the requested target (the actual landed position is
-            /// reconciled by the worker after applying the seek; this call returns
-            /// the optimistic outcome) or `PastEof` if the target is beyond the
-            /// known track duration.
-            ///
-            /// # Errors
-            /// Returns [`QueueError::Play`] if the player reports a seek failure.
-            #[expr($.map_err(QueueError::from))]
-            #[call(seek_player)]
-            pub fn seek(&self, seconds: f64) -> Result<SeekOutcome, QueueError>;
-
-            /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
-            /// events: the cursor follows `CurrentItemChanged` to an item the
-            /// deck led on to, which is forwarded as
-            /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged),
-            /// and `ItemDidPlayToEnd` (filtered) acts where the deck led nowhere.
-            ///
-            /// # Errors
-            /// Forwards `PlayError` from `PlayerImpl::tick`.
-            #[expr($.map_err(QueueError::from))]
-            #[call(tick_player)]
-            pub fn tick(&self) -> Result<(), QueueError>;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -408,7 +334,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn spurious_item_did_play_to_end_is_filtered() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let _a = queue.append("https://example.com/a.mp3");
         let _b = queue.append("https://example.com/b.mp3");
 
@@ -433,7 +359,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn eof_after_queue_end_does_not_restart_from_first_track() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let a = TrackId::allocate();
         let b = TrackId::allocate();
         queue.tracks.lock().extend([
@@ -472,7 +398,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn play_retries_the_current_track_after_its_prefetch_failed() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let id = queue
             .append("https://example.com/a.mp3")
             .expect("open queue accepts a track");
@@ -480,7 +406,7 @@ mod tests {
 
         queue.play_inner();
 
-        let SelectPhase::Pending(pending) = *queue.lock_pending_select_mut() else {
+        let SelectPhase::Pending(pending) = queue.pending_select else {
             panic!("play must retain selection while retrying the failed track")
         };
         assert_eq!(pending.id, id);
@@ -491,7 +417,7 @@ mod tests {
     #[case::append(false)]
     #[case::insert(true)]
     async fn play_promotes_the_initial_pending_prefetch(#[case] insert: bool) {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let id = if insert {
             queue.insert("https://example.com/a.mp3", None)
         } else {

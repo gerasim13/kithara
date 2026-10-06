@@ -7,30 +7,18 @@ use tracing::{debug, warn};
 use crate::{
     error::QueueError,
     event::{QueueEvent, TrackStatus},
-    queue::{QueueControl, types::SelectPhase},
+    queue::{Queue, command::QueueCommand, types::SelectPhase},
 };
 
-impl<S> QueueControl<S>
+impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Apply a finished load synchronously, off the runtime.
-    ///
-    /// Takes the admission lock and dispatches through the session's
-    /// synchronous command bridge, so the caller waits for a reply. On a
-    /// runtime worker that wait parks the executor thread.
-    ///
-    /// The lock is held across the whole synchronous block, never across an `.await`, so the
-    /// `Cancelled` re-check and the item selection stay atomic with respect to a concurrent apply.
-    fn apply_loaded(&self, id: TrackId, resource: Resource) {
-        let _admission = self.lock_admission();
+    /// Admit a finished load and apply the selection that waited for it.
+    /// The executor holding the queue runs it as one command, so no select
+    /// interleaves between the `Cancelled` re-check and the selection.
+    pub(in crate::queue) fn apply_loaded(&mut self, id: TrackId, resource: Resource) {
         if self.is_closed() {
-            return;
-        }
-
-        let _apply = self.lock_select_apply();
-
-        if self.player.is_closed() {
             return;
         }
 
@@ -73,21 +61,18 @@ where
         self.apply_pending_selection(id);
     }
 
-    fn apply_pending_selection(&self, id: TrackId) {
-        let selection = {
-            let mut phase = self.pending_select.lock();
-            let selection = match *phase {
-                SelectPhase::Pending(pending) if pending.id == id => {
-                    *phase = SelectPhase::Idle;
-                    Some(pending)
-                }
-                _ => None,
-            };
-            drop(phase);
-            selection
+    fn apply_pending_selection(&mut self, id: TrackId) {
+        let selection = match self.pending_select {
+            SelectPhase::Pending(pending) if pending.id == id => {
+                self.pending_select = SelectPhase::Idle;
+                Some(pending)
+            }
+            _ => None,
         };
 
-        self.autoplay_target.disarm_if_matches(id);
+        if self.autoplay_target == Some(id) {
+            self.autoplay_target = None;
+        }
         let Some(selection) = selection else {
             return;
         };
@@ -109,7 +94,7 @@ where
         let Some(handle) = handle else {
             return;
         };
-        let queue = self.clone();
+        let postbox = self.postbox.clone();
         let watch = self.loader.spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
@@ -119,9 +104,18 @@ where
                     return;
                 }
             };
-            drop(task::spawn_sync(move || {
-                queue.apply_loaded(id, resource);
-            }));
+            if postbox
+                .post(QueueCommand::Loaded {
+                    id,
+                    resource: Box::new(resource),
+                })
+                .is_err()
+            {
+                debug!(
+                    id = id.as_u64(),
+                    "the queue is gone: dropping its finished load"
+                );
+            }
         });
         if let Err(error) = watch {
             warn!(id = id.as_u64(), error = %error, "a finished load has no runtime to apply on");
@@ -145,9 +139,9 @@ mod tests {
     /// and fills only the fields they leave unset from the decoder's tags.
     #[kithara::test(tokio, flash(false))]
     async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelToken) {
-        let queue = make_queue();
+        let mut queue = make_queue();
         let url = "https://example.com/opaque.m3u8";
-        let append = |title: Option<&str>| {
+        let mut append = |title: Option<&str>| {
             let config =
                 ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid source URL"))
                     .store(make_store())
@@ -161,9 +155,11 @@ mod tests {
         };
         let titled = append(Some("Catalogue title"));
         let untitled = append(None);
-        let track = |id| queue.track(id).expect("the track stays queued");
+        let track = |queue: &Queue<crate::test_pools::TestPools>, id| {
+            queue.track(id).expect("the track stays queued")
+        };
         assert_eq!(
-            track(titled).metadata().title.as_deref(),
+            track(&queue, titled).metadata().title.as_deref(),
             Some("Catalogue title")
         );
         let cover = Arc::new(vec![1, 2, 3]);
@@ -176,19 +172,21 @@ mod tests {
             let reader = TestPcmReader::new(spec, 0.01);
             queue.apply_loaded(id, Resource::from_reader(reader, Some(Arc::from(url))));
             assert!(matches!(
-                track(id).status,
+                track(&queue, id).status,
                 TrackStatus::Loaded | TrackStatus::Consumed
             ));
         }
 
-        let admitted = track(titled);
+        let admitted = track(&queue, titled);
         let metadata = admitted.metadata();
         assert_eq!(metadata.title.as_deref(), Some("Catalogue title"));
         assert_eq!(metadata.album.as_deref(), Some("Catalogue album"));
         assert_eq!(metadata.artwork, Some(cover));
-        assert_eq!(track(untitled).metadata().title.as_deref(), Some("Mock"));
-        queue
-            .close()
+        assert_eq!(
+            track(&queue, untitled).metadata().title.as_deref(),
+            Some("Mock")
+        );
+        kithara_play::player::Player::close(&mut queue)
             .expect("close the queue before deferred loads run");
     }
 }

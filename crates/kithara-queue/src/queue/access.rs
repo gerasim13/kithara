@@ -3,14 +3,14 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
 use smallvec::SmallVec;
 
-use super::QueueControl;
+use super::{Queue, QueueRuntime};
 use crate::{
     event::{QueueEvent, QueueRepeatMode},
     navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
     track::{TrackEntry, TrackRecord, TrackSource},
 };
 
-impl<S> QueueControl<S>
+impl<S> QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -38,42 +38,6 @@ where
     pub fn current_index(&self) -> Option<usize> {
         let id = self.player.current_item()?;
         self.lock_tracks().iter().position(|entry| entry.id == id)
-    }
-
-    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
-        self.command(|queue| {
-            queue.config.set_action_at_item_end(action);
-            queue.reconcile_successor();
-            queue
-                .bus
-                .publish(QueueEvent::ActionAtItemEndChanged { action });
-        });
-    }
-
-    pub fn set_playback_order(&self, order: PlaybackOrder) {
-        self.command(|queue| {
-            let ids = queue
-                .tracks()
-                .into_iter()
-                .map(|track| track.id)
-                .collect::<SmallVec<[_; 16]>>();
-            queue.lock_navigation_mut().set_playback_order(order, &ids);
-            queue.reconcile_successor();
-            queue
-                .bus
-                .publish(QueueEvent::PlaybackOrderChanged { order });
-        });
-    }
-
-    /// Set repeat mode.
-    pub fn set_repeat(&self, mode: RepeatMode) {
-        self.command(|queue| {
-            queue.lock_navigation_mut().set_repeat(mode);
-            queue.reconcile_successor();
-            queue.bus.publish(QueueEvent::RepeatModeChanged {
-                mode: map_repeat_mode(mode),
-            });
-        });
     }
 
     /// Subscribe to the unified event stream:
@@ -155,6 +119,46 @@ where
             #[call(lock_tracks)]
             pub fn tracks(&self) -> Vec<TrackEntry>;
         }
+    }
+}
+
+impl<S> Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(crate) fn set_action_at_item_end(&mut self, action: ActionAtItemEnd) {
+        self.command(|queue| {
+            queue.config.set_action_at_item_end(action);
+            queue.reconcile_successor();
+            queue
+                .bus
+                .publish(QueueEvent::ActionAtItemEndChanged { action });
+        });
+    }
+
+    pub(crate) fn set_playback_order(&mut self, order: PlaybackOrder) {
+        self.command(|queue| {
+            let ids = queue
+                .tracks()
+                .into_iter()
+                .map(|track| track.id)
+                .collect::<SmallVec<[_; 16]>>();
+            queue.lock_navigation_mut().set_playback_order(order, &ids);
+            queue.reconcile_successor();
+            queue
+                .bus
+                .publish(QueueEvent::PlaybackOrderChanged { order });
+        });
+    }
+
+    pub(crate) fn set_repeat(&mut self, mode: RepeatMode) {
+        self.command(|queue| {
+            queue.lock_navigation_mut().set_repeat(mode);
+            queue.reconcile_successor();
+            queue.bus.publish(QueueEvent::RepeatModeChanged {
+                mode: map_repeat_mode(mode),
+            });
+        });
     }
 }
 

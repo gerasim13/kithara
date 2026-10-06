@@ -2,10 +2,11 @@ use core::ops::Deref;
 
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
+use kithara_command::{Mailbox, Postbox, mailbox};
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Arc, ExclusiveGate, ExclusiveGuard, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
     tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_play::{
@@ -14,8 +15,9 @@ use kithara_play::{
 };
 
 use super::{
+    command::QueueCommand,
     engine_events::PlayerBusEvent,
-    types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, SelectPhase},
+    types::{AtomicCachedPosition, CachedPosition, SelectPhase},
 };
 use crate::{
     config::QueueConfig,
@@ -24,30 +26,18 @@ use crate::{
     track::{TrackRecord, Tracks},
 };
 
-/// AVQueuePlayer-analogue orchestration facade.
-///
-/// Owns a [`PlayerImpl`] and a private async track loader, plus
-/// queue-level state (ordered tracks, navigation, pending-select).
-/// Publishes [`QueueEvent`](crate::event::QueueEvent) on the shared
-/// [`EventBus`] alongside player / audio / hls / file events so
-/// [`Queue::subscribe`] returns a single unified stream.
+/// What a queue and every [`QueueControl`] of it read: the tracks, the
+/// navigation, the retained config, the cached position and the player's
+/// published state. Only the queue writes them, on the executor that holds
+/// it.
 #[doc(hidden)]
 pub struct QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    pub(super) player: PlayerControl<S>,
     pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
-    pub(super) pending_select: Arc<Mutex<SelectPhase>>,
-    /// Serialises a selection-apply against a concurrent [`Queue::select`]. A track's
-    /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
-    /// mutate the same selection state (pending, current, navigation cursor,
-    /// `TrackStatus::Cancelled`); without a single serialization point the completion
-    /// can observe-not-cancelled then select its track *after* the superseding select
-    /// committed, so the superseded track barges in. Held only across the synchronous
-    /// apply critical section - never across an `.await`. That section waits on the
-    /// player's session, so a contender parks on the gate instead of blocking a lock.
-    pub(super) select_apply: ExclusiveGate,
     /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
     /// load attempt per track). Shared with [`Loader`] through
     /// `Arc<Tracks>`; every status transition goes through
@@ -61,43 +51,50 @@ where
     /// [`CachedPosition`] — [`CachedPosition::Unknown`] before the first
     /// stable sample.
     pub(super) cached_position: AtomicCachedPosition,
-    /// Track whose load completion starts playback: the first one appended
-    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
-    pub(super) autoplay_target: AtomicTrackId,
     /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
     pub(super) bus: EventBus,
     pub(super) config: Arc<QueueConfig<S>>,
-    /// Serializes every state-changing command against terminal close. A command
-    /// waits on the player's session while admitted, so a contender parks on the
-    /// gate instead of blocking a lock.
-    pub(super) admission: ExclusiveGate,
-    /// Subscription to the shared bus; drained in `tick()` to convert
-    /// engine events into queue-level side-effects (auto-advance / current
-    /// track change forwarding).
-    pub(super) player_rx: Mutex<EventReceiver<PlayerBusEvent>>,
 }
 
 /// Cloneable queue command capability without beat-grid identity or topology.
+///
+/// Every command is posted to the queue and waits for its answer, which the
+/// executor holding the queue gives once it drains it; a command posted
+/// before any executor holds the queue waits for one. Once the queue is
+/// dropped a command fails with [`PlayError::Closed`].
 #[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
 pub struct QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) player: PlayerControl<S>,
-    runtime: Arc<QueueRuntime<S>>,
+    pub(super) postbox: Postbox<QueueCommand<S>>,
+    pub(super) runtime: Arc<QueueRuntime<S>>,
 }
 
 /// AVQueuePlayer-analogue orchestration facade.
 ///
-/// Owns the resident player and its canonical synchronization state. Runtime
-/// commands are exposed through a separate cloneable [`QueueControl`].
+/// Owns the resident player and the queue's state, and runs the commands its
+/// [`QueueControl`]s post where an executor holds it. Publishes
+/// [`QueueEvent`](crate::event::QueueEvent) on the shared [`EventBus`]
+/// alongside player / audio / hls / file events so `subscribe` returns a
+/// single unified stream.
 pub struct Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) player: PlayerImpl<S>,
-    pub(super) control: QueueControl<S>,
+    pub(super) resident: PlayerImpl<S>,
+    pub(super) runtime: Arc<QueueRuntime<S>>,
+    pub(super) postbox: Postbox<QueueCommand<S>>,
+    pub(super) mailbox: Mailbox<QueueCommand<S>>,
+    pub(super) pending_select: SelectPhase,
+    /// Track whose load completion starts playback: the first one appended
+    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
+    pub(super) autoplay_target: Option<TrackId>,
+    /// Subscription to the shared bus; drained in `tick()` to convert
+    /// engine events into queue-level side-effects (auto-advance / current
+    /// track change forwarding).
+    pub(super) player_rx: EventReceiver<PlayerBusEvent>,
 }
 
 impl<S> Deref for QueueControl<S>
@@ -115,10 +112,10 @@ impl<S> Deref for Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    type Target = QueueControl<S>;
+    type Target = QueueRuntime<S>;
 
     fn deref(&self) -> &Self::Target {
-        &self.control
+        &self.runtime
     }
 }
 
@@ -167,52 +164,58 @@ where
         navigation.set_playback_order(playback_order, &[]);
         let navigation = Arc::new(Mutex::new(navigation));
         config.navigation = Some(Arc::clone(&navigation));
-        let runtime = Arc::new(QueueRuntime {
-            loader,
-            tracks,
-            bus,
-            config: Arc::new(config),
-            admission: ExclusiveGate::default(),
-            shutdown: cancel,
-            navigation,
-            pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
-            select_apply: ExclusiveGate::default(),
-            player_rx: Mutex::new(player_rx),
-            autoplay_target: AtomicTrackId::disarmed(),
-            cached_position: AtomicCachedPosition::unknown(),
-        });
+        let (postbox, mailbox) = mailbox();
         Self {
-            player,
-            control: QueueControl {
-                runtime,
+            resident: player,
+            runtime: Arc::new(QueueRuntime {
                 player: player_control,
-            },
+                loader,
+                tracks,
+                bus,
+                config: Arc::new(config),
+                shutdown: cancel,
+                navigation,
+                cached_position: AtomicCachedPosition::unknown(),
+            }),
+            postbox,
+            mailbox,
+            pending_select: SelectPhase::Idle,
+            autoplay_target: None,
+            player_rx,
         }
+    }
+
+    pub(in crate::queue) fn command(&mut self, operation: impl FnOnce(&mut Self)) {
+        if !self.is_closed() {
+            operation(self);
+        }
+    }
+
+    pub(in crate::queue) fn with_open<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> T,
+    ) -> Result<T, PlayError> {
+        self.ensure_open()?;
+        Ok(operation(self))
+    }
+
+    pub(in crate::queue) fn with_open_result<T, E>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<PlayError>,
+    {
+        self.ensure_open().map_err(E::from)?;
+        operation(self)
     }
 }
 
-impl<S> QueueControl<S>
+impl<S> QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Close the resident player, then irreversibly cancel queue-owned work.
-    ///
-    /// # Errors
-    ///
-    /// Returns the player detach failure without cancelling the queue token;
-    /// the player control gate is reopened so the owner can retry.
-    pub fn close(&self) -> Result<(), PlayError> {
-        let _admission = self.lock_admission();
-        self.player.close()?;
-        self.shutdown.cancel();
-        Ok(())
-    }
-
-    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
-        let _ = self.with_open(operation);
-    }
-
-    fn ensure_open(&self) -> Result<(), PlayError> {
+    pub(in crate::queue) fn ensure_open(&self) -> Result<(), PlayError> {
         if self.is_closed() {
             Err(PlayError::Closed)
         } else {
@@ -220,34 +223,9 @@ where
         }
     }
 
-    pub(crate) fn invalidate(&self) {
-        self.shutdown.cancel();
-    }
-
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.shutdown.is_cancelled() || self.player.is_closed()
-    }
-
-    pub(in crate::queue) fn with_open<T>(
-        &self,
-        operation: impl FnOnce(&Self) -> T,
-    ) -> Result<T, PlayError> {
-        let _admission = self.lock_admission();
-        self.ensure_open()?;
-        Ok(operation(self))
-    }
-
-    pub(in crate::queue) fn with_open_result<T, E>(
-        &self,
-        operation: impl FnOnce(&Self) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<PlayError>,
-    {
-        let _admission = self.lock_admission();
-        self.ensure_open().map_err(E::from)?;
-        operation(self)
     }
 
     delegate::delegate! {
@@ -264,27 +242,11 @@ where
             #[call(store)]
             pub(super) fn write_cached_position(&self, pos: CachedPosition);
         }
-        to self.admission {
-            #[call(lock)]
-            pub(in crate::queue) fn lock_admission(&self) -> ExclusiveGuard<'_>;
-        }
         to self.navigation {
             #[call(lock)]
             pub(super) fn lock_navigation(&self) -> MutexGuard<'_, NavigationState>;
             #[call(lock)]
             pub(super) fn lock_navigation_mut(&self) -> MutexGuard<'_, NavigationState>;
-        }
-        to self.pending_select {
-            #[call(lock)]
-            pub(in crate::queue) fn lock_pending_select_mut(&self) -> MutexGuard<'_, SelectPhase>;
-        }
-        to self.select_apply {
-            /// Acquire the selection-apply serialization guard (see
-            /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
-            /// `navigation`/`player` in both `select` and the
-            /// `spawn_apply_after_load` completion, so the two cannot interleave.
-            #[call(lock)]
-            pub(in crate::queue) fn lock_select_apply(&self) -> ExclusiveGuard<'_>;
         }
     }
 }
@@ -294,23 +256,26 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     fn drop(&mut self) {
-        self.control.invalidate();
+        self.shutdown.cancel();
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::mpsc::{self, TryRecvError};
+    use std::{
+        sync::mpsc,
+        task::{Wake, Waker},
+    };
 
     use kithara_config::Config;
     use kithara_events::{Envelope, EventReceiver};
     use kithara_platform::{
         thread,
-        time::{Duration, Instant, WallInstant, timeout},
+        time::{Duration, Instant, timeout},
     };
     use kithara_play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, SessionBinding,
-        player::PlayerControlSource,
+        player::{Player, PlayerControlSource},
     };
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
@@ -406,80 +371,63 @@ pub(crate) mod tests {
         assert_eq!(deck, grid_id);
     }
 
+    /// A holder's waker that reports each wake.
+    struct Wakes(mpsc::Sender<()>);
+
+    impl Wake for Wakes {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+
     #[kithara::test]
-    fn queue_control_rejects_mutation_after_close() {
-        let queue = make_queue();
-        let control = queue.control.clone();
+    fn a_control_command_runs_when_the_holder_drains_the_queue() {
+        let mut queue = make_queue();
+        let control = queue.control();
+        let (woke_tx, woke_rx) = mpsc::channel();
+        Player::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
 
-        control.close().expect("unstarted fixture must close");
+        let append = thread::spawn(move || {
+            let appended = control.append("https://example.com/a.mp3");
+            (control, appended)
+        });
+        woke_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a post wakes the holder");
+        assert!(
+            queue.is_empty(),
+            "the command waits for the holder to drain"
+        );
 
-        assert!(control.runtime.shutdown.is_cancelled());
+        Player::drain(&mut queue);
+        let (control, appended) = append.join().expect("append thread must not panic");
+        let id = appended.expect("an open queue appends");
+        assert_eq!(queue.tracks().first().map(|track| track.id), Some(id));
+
+        drop(queue);
         assert!(matches!(
-            control.append("https://example.com/a.mp3"),
+            control.append("https://example.com/b.mp3"),
+            Err(crate::QueueError::Play(PlayError::Closed))
+        ));
+    }
+
+    #[kithara::test]
+    fn a_closed_queue_rejects_mutation() {
+        let mut queue = make_queue();
+
+        Player::close(&mut queue).expect("unstarted fixture must close");
+
+        assert!(queue.shutdown.is_cancelled());
+        assert!(matches!(
+            queue.append("https://example.com/a.mp3"),
             Err(crate::QueueError::Play(PlayError::Closed))
         ));
         assert!(queue.is_empty());
     }
 
     #[kithara::test]
-    fn close_waits_for_an_admitted_queue_mutation() {
-        let queue = make_queue();
-        let deadline = WallInstant::now() + Duration::from_secs(5);
-        let remaining = || deadline.saturating_duration_since(WallInstant::now());
-        let mutation_control = queue.control.clone();
-        let close_control = queue.control.clone();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let (mutation_tx, mutation_rx) = mpsc::channel();
-        let mutation = thread::spawn(move || {
-            let result = mutation_control.with_open(|_| {
-                entered_tx.send(()).expect("test receiver remains alive");
-                release_rx.recv().expect("test sender releases mutation");
-            });
-            mutation_tx
-                .send(result)
-                .expect("test receiver remains alive");
-        });
-
-        entered_rx
-            .recv_timeout(remaining())
-            .expect("mutation must enter the queue admission gate");
-        let (close_started_tx, close_started_rx) = mpsc::channel();
-        let (close_tx, close_rx) = mpsc::channel();
-        let close = thread::spawn(move || {
-            close_started_tx
-                .send(())
-                .expect("test receiver remains alive");
-            close_tx
-                .send(close_control.close())
-                .expect("test receiver remains alive");
-        });
-
-        close_started_rx
-            .recv_timeout(remaining())
-            .expect("close thread must reach the admission attempt");
-        kithara_test_utils::test::wall_sleep(Duration::from_millis(50));
-        assert!(
-            matches!(close_rx.try_recv(), Err(TryRecvError::Empty)),
-            "close must not overtake an admitted queue mutation"
-        );
-        release_tx.send(()).expect("mutation thread remains alive");
-        mutation_rx
-            .recv_timeout(remaining())
-            .expect("mutation must complete after release")
-            .expect("admitted mutation remains open");
-        close_rx
-            .recv_timeout(remaining())
-            .expect("close must complete after the mutation")
-            .expect("unstarted fixture must close");
-        mutation.join().expect("mutation thread must not panic");
-        close.join().expect("close thread must not panic");
-        assert!(queue.is_closed());
-    }
-
-    #[kithara::test]
     fn retained_config_follows_live_queue_controls() {
-        let queue = make_queue();
+        let mut queue = make_queue();
         queue.set_action_at_item_end(ActionAtItemEnd::Pause);
         queue.set_playback_order(PlaybackOrder::Shuffle);
         let mut crossfade = queue.crossfade_settings();
@@ -514,9 +462,6 @@ pub(crate) mod tests {
     #[kithara::test]
     fn select_phase_idle_after_construction() {
         let queue = make_queue();
-        assert!(matches!(
-            *queue.lock_pending_select_mut(),
-            SelectPhase::Idle
-        ));
+        assert!(matches!(queue.pending_select, SelectPhase::Idle));
     }
 }
